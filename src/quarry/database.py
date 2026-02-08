@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
-from ocr.models import Chunk
-from ocr.types import LanceDB
+from quarry.models import Chunk
+from quarry.types import LanceDB
 
 if TYPE_CHECKING:
     import numpy as np

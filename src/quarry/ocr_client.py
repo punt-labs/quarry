@@ -6,9 +6,9 @@ from pathlib import Path
 
 import boto3
 
-from ocr.config import Settings
-from ocr.models import PageContent, PageType
-from ocr.types import S3Client, TextractClient
+from quarry.config import Settings
+from quarry.models import PageContent, PageType
+from quarry.types import S3Client, TextractClient
 
 logger = logging.getLogger(__name__)
 

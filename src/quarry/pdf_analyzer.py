@@ -4,7 +4,7 @@ from pathlib import Path
 
 import fitz
 
-from ocr.models import PageAnalysis, PageType
+from quarry.models import PageAnalysis, PageType
 
 TEXT_THRESHOLD = 50
 

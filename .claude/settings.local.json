@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pdfinfo:*)",
+      "Bash(pdftotext:*)",
+      "Bash(pdfimages:*)",
+      "WebFetch(domain:docs.lancedb.com)",
+      "Bash(git config:*)",
+      "Bash(grep:*)",
+      "Bash(ls:*)",
+      "Bash(aws s3api head-bucket:*)",
+      "Bash(uv sync:*)",
+      "Bash(uv run ruff check:*)",
+      "Bash(uv run ruff format:*)",
+      "Bash(uv run mypy:*)",
+      "Bash(uv run python:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(uv run pytest:*)",
+      "Bash(uv run:*)",
+      "Bash(uv pip install:*)",
+      "Bash(git status:*)",
+      "mcp__ocr-search__search_documents",
+      "mcp__ocr-search__get_page",
+      "Bash(git log:*)",
+      "Bash(bd:*)",
+      "Bash(git remote add:*)",
+      "Bash(git remote set-url:*)",
+      "Bash(git push:*)",
+      "Bash(git mv:*)",
+      "Bash(find:*)"
+    ]
+  }
+}

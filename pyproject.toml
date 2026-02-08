@@ -38,10 +38,10 @@ dev = [
 ]
 
 [project.scripts]
-quarry = "ocr.__main__:app"
+quarry = "quarry.__main__:app"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/ocr"]
+packages = ["src/quarry"]
 
 [tool.hatch.envs.default]
 dependencies = [
@@ -54,10 +54,10 @@ dependencies = [
 
 [tool.hatch.envs.default.scripts]
 test = "pytest {args:tests}"
-test-cov = "pytest --cov=src/ocr --cov-report=term-missing --cov-report=html {args:tests}"
+test-cov = "pytest --cov=src/quarry --cov-report=term-missing --cov-report=html {args:tests}"
 lint = "ruff check ."
 format = "ruff format ."
-type = "mypy src/ocr tests"
+type = "mypy src/quarry tests"
 check = ["lint", "type", "test"]
 check-cov = ["lint", "type", "test-cov"]
 
@@ -104,8 +104,8 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S101", "S106", "S108", "T20", "SLF001", "ARG", "PLC0415"]
-"src/ocr/__main__.py" = ["T20", "FBT"]
-"src/ocr/mcp_server.py" = ["T20", "FBT"]
+"src/quarry/__main__.py" = ["T20", "FBT"]
+"src/quarry/mcp_server.py" = ["T20", "FBT"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -114,7 +114,7 @@ skip-magic-trailing-comma = false
 line-ending = "auto"
 
 [tool.ruff.lint.isort]
-known-first-party = ["ocr"]
+known-first-party = ["quarry"]
 combine-as-imports = true
 
 [tool.mypy]

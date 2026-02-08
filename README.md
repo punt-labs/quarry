@@ -91,7 +91,7 @@ export S3_BUCKET=your-bucket-name
 Add to your Claude Code configuration:
 
 ```bash
-claude mcp add quarry -- uv run --directory /path/to/quarry-mcp python -m ocr mcp
+claude mcp add quarry -- uv run --directory /path/to/quarry-mcp python -m quarry mcp
 ```
 
 After restarting Claude Code, four tools are available:
@@ -272,7 +272,7 @@ First-class support for organizing documents into collections.
 # Run all quality gates
 uv run ruff check .
 uv run ruff format --check .
-uv run mypy src/ocr tests
+uv run mypy src/quarry tests
 uv run pytest
 
 # Auto-format

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from ocr.types import EmbeddingModel
+from quarry.types import EmbeddingModel
 
 if TYPE_CHECKING:
     import numpy as np

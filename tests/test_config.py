@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ocr.config import Settings
+from quarry.config import Settings
 
 
 class TestSettings:

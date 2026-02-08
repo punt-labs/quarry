@@ -7,8 +7,8 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from ocr.config import Settings
-from ocr.models import Chunk, PageAnalysis, PageContent, PageType
+from quarry.config import Settings
+from quarry.models import Chunk, PageAnalysis, PageContent, PageType
 
 
 def _settings() -> Settings:
@@ -34,7 +34,7 @@ def _make_page_content(
 
 class TestIngestDocument:
     def test_file_not_found(self):
-        from ocr.pipeline import ingest_document
+        from quarry.pipeline import ingest_document
 
         db = MagicMock()
         with pytest.raises(FileNotFoundError):
@@ -70,25 +70,25 @@ class TestIngestDocument:
         ]
         vectors = np.zeros((1, 768), dtype=np.float32)
 
-        monkeypatch.setattr("ocr.pipeline.analyze_pdf", lambda _path: analyses)
+        monkeypatch.setattr("quarry.pipeline.analyze_pdf", lambda _path: analyses)
         monkeypatch.setattr(
-            "ocr.pipeline.extract_text_pages",
+            "quarry.pipeline.extract_text_pages",
             lambda _path, _pages, _total: text_pages,
         )
         monkeypatch.setattr(
-            "ocr.pipeline.chunk_pages",
+            "quarry.pipeline.chunk_pages",
             lambda _pages, max_chars, overlap_chars: chunks,
         )
         monkeypatch.setattr(
-            "ocr.pipeline.embed_texts",
+            "quarry.pipeline.embed_texts",
             lambda _texts, model_name: vectors,
         )
         monkeypatch.setattr(
-            "ocr.pipeline.insert_chunks",
+            "quarry.pipeline.insert_chunks",
             lambda _db, _chunks, _vectors: 1,
         )
 
-        from ocr.pipeline import ingest_document
+        from quarry.pipeline import ingest_document
 
         db = MagicMock()
         result = ingest_document(pdf_file, db, _settings())
@@ -121,25 +121,25 @@ class TestIngestDocument:
         ]
         vectors = np.zeros((1, 768), dtype=np.float32)
 
-        monkeypatch.setattr("ocr.pipeline.analyze_pdf", lambda _path: analyses)
+        monkeypatch.setattr("quarry.pipeline.analyze_pdf", lambda _path: analyses)
         monkeypatch.setattr(
-            "ocr.pipeline.ocr_pdf_pages",
+            "quarry.pipeline.ocr_pdf_pages",
             lambda _path, _pages, _total, _settings: ocr_pages,
         )
         monkeypatch.setattr(
-            "ocr.pipeline.chunk_pages",
+            "quarry.pipeline.chunk_pages",
             lambda _pages, max_chars, overlap_chars: chunks,
         )
         monkeypatch.setattr(
-            "ocr.pipeline.embed_texts",
+            "quarry.pipeline.embed_texts",
             lambda _texts, model_name: vectors,
         )
         monkeypatch.setattr(
-            "ocr.pipeline.insert_chunks",
+            "quarry.pipeline.insert_chunks",
             lambda _db, _chunks, _vectors: 1,
         )
 
-        from ocr.pipeline import ingest_document
+        from quarry.pipeline import ingest_document
 
         db = MagicMock()
         result = ingest_document(pdf_file, db, _settings())
@@ -156,17 +156,17 @@ class TestIngestDocument:
         ]
         ocr_pages = [_make_page_content(1, PageType.IMAGE, "")]
 
-        monkeypatch.setattr("ocr.pipeline.analyze_pdf", lambda _path: analyses)
+        monkeypatch.setattr("quarry.pipeline.analyze_pdf", lambda _path: analyses)
         monkeypatch.setattr(
-            "ocr.pipeline.ocr_pdf_pages",
+            "quarry.pipeline.ocr_pdf_pages",
             lambda _path, _pages, _total, _settings: ocr_pages,
         )
         monkeypatch.setattr(
-            "ocr.pipeline.chunk_pages",
+            "quarry.pipeline.chunk_pages",
             lambda _pages, max_chars, overlap_chars: [],
         )
 
-        from ocr.pipeline import ingest_document
+        from quarry.pipeline import ingest_document
 
         db = MagicMock()
         result = ingest_document(pdf_file, db, _settings())
@@ -182,13 +182,13 @@ class TestIngestDocument:
         ]
         text_pages = [_make_page_content(1, PageType.TEXT)]
 
-        monkeypatch.setattr("ocr.pipeline.analyze_pdf", lambda _path: analyses)
+        monkeypatch.setattr("quarry.pipeline.analyze_pdf", lambda _path: analyses)
         monkeypatch.setattr(
-            "ocr.pipeline.extract_text_pages",
+            "quarry.pipeline.extract_text_pages",
             lambda _path, _pages, _total: text_pages,
         )
         monkeypatch.setattr(
-            "ocr.pipeline.chunk_pages",
+            "quarry.pipeline.chunk_pages",
             lambda _pages, max_chars, overlap_chars: [],
         )
 
@@ -198,9 +198,9 @@ class TestIngestDocument:
             delete_called_with.append(name)
             return 0
 
-        monkeypatch.setattr("ocr.pipeline.delete_document", _mock_delete)
+        monkeypatch.setattr("quarry.pipeline.delete_document", _mock_delete)
 
-        from ocr.pipeline import ingest_document
+        from quarry.pipeline import ingest_document
 
         db = MagicMock()
         ingest_document(pdf_file, db, _settings(), overwrite=True)
@@ -212,21 +212,21 @@ class TestIngestDocument:
         pdf_file.write_bytes(b"%PDF-fake")
 
         monkeypatch.setattr(
-            "ocr.pipeline.analyze_pdf",
+            "quarry.pipeline.analyze_pdf",
             lambda _path: [
                 PageAnalysis(page_number=1, page_type=PageType.TEXT, text_length=100)
             ],
         )
         monkeypatch.setattr(
-            "ocr.pipeline.extract_text_pages",
+            "quarry.pipeline.extract_text_pages",
             lambda _path, _pages, _total: [_make_page_content(1, PageType.TEXT)],
         )
         monkeypatch.setattr(
-            "ocr.pipeline.chunk_pages",
+            "quarry.pipeline.chunk_pages",
             lambda _pages, max_chars, overlap_chars: [],
         )
 
-        from ocr.pipeline import ingest_document
+        from quarry.pipeline import ingest_document
 
         messages: list[str] = []
         db = MagicMock()

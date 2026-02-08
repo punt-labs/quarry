@@ -5,8 +5,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from ocr.config import Settings
-from ocr.ocr_client import _parse_textract_results, ocr_pdf_pages
+from quarry.config import Settings
+from quarry.ocr_client import _parse_textract_results, ocr_pdf_pages
 
 
 def _settings() -> Settings:
@@ -117,7 +117,7 @@ class TestOcrPdfPages:
                 return mock_s3
             return mock_textract
 
-        monkeypatch.setattr("ocr.ocr_client.boto3.client", mock_boto3_client)
+        monkeypatch.setattr("quarry.ocr_client.boto3.client", mock_boto3_client)
 
         results = ocr_pdf_pages(
             pdf_file,
@@ -155,7 +155,7 @@ class TestOcrPdfPages:
                 return mock_s3
             return mock_textract
 
-        monkeypatch.setattr("ocr.ocr_client.boto3.client", mock_boto3_client)
+        monkeypatch.setattr("quarry.ocr_client.boto3.client", mock_boto3_client)
 
         results = ocr_pdf_pages(
             pdf_file,
@@ -186,7 +186,7 @@ class TestOcrPdfPages:
                 return mock_s3
             return mock_textract
 
-        monkeypatch.setattr("ocr.ocr_client.boto3.client", mock_boto3_client)
+        monkeypatch.setattr("quarry.ocr_client.boto3.client", mock_boto3_client)
 
         with pytest.raises(RuntimeError, match="failed: Bad input"):
             ocr_pdf_pages(
@@ -216,7 +216,7 @@ class TestOcrPdfPages:
                 return mock_s3
             return mock_textract
 
-        monkeypatch.setattr("ocr.ocr_client.boto3.client", mock_boto3_client)
+        monkeypatch.setattr("quarry.ocr_client.boto3.client", mock_boto3_client)
 
         settings = Settings(
             aws_access_key_id="test",

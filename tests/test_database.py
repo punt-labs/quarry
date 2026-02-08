@@ -9,7 +9,7 @@ import numpy as np
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
-from ocr.database import (
+from quarry.database import (
     delete_document,
     get_db,
     get_page_text,
@@ -17,7 +17,7 @@ from ocr.database import (
     list_documents,
     search,
 )
-from ocr.models import Chunk
+from quarry.models import Chunk
 
 
 def _make_chunk(

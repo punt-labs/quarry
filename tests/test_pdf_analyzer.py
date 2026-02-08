@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from ocr.models import PageType
-from ocr.pdf_analyzer import TEXT_THRESHOLD, analyze_pdf
+from quarry.models import PageType
+from quarry.pdf_analyzer import TEXT_THRESHOLD, analyze_pdf
 
 
 def _mock_page(text: str) -> MagicMock:
@@ -22,7 +22,7 @@ class TestAnalyzePdf:
         mock_doc.__len__ = lambda _: 1
         mock_doc.__getitem__ = lambda _, idx: _mock_page(text)
 
-        with patch("ocr.pdf_analyzer.fitz.open", return_value=mock_doc):
+        with patch("quarry.pdf_analyzer.fitz.open", return_value=mock_doc):
             results = analyze_pdf(pdf_path)
 
         assert len(results) == 1
@@ -38,7 +38,7 @@ class TestAnalyzePdf:
         mock_doc.__len__ = lambda _: 1
         mock_doc.__getitem__ = lambda _, idx: _mock_page("short")
 
-        with patch("ocr.pdf_analyzer.fitz.open", return_value=mock_doc):
+        with patch("quarry.pdf_analyzer.fitz.open", return_value=mock_doc):
             results = analyze_pdf(pdf_path)
 
         assert len(results) == 1
@@ -57,7 +57,7 @@ class TestAnalyzePdf:
         mock_doc.__len__ = lambda _: 3
         mock_doc.__getitem__ = lambda _, idx: pages[idx]
 
-        with patch("ocr.pdf_analyzer.fitz.open", return_value=mock_doc):
+        with patch("quarry.pdf_analyzer.fitz.open", return_value=mock_doc):
             results = analyze_pdf(pdf_path)
 
         assert len(results) == 3
@@ -73,7 +73,7 @@ class TestAnalyzePdf:
         mock_doc.__len__ = lambda _: 2
         mock_doc.__getitem__ = lambda _, idx: _mock_page("short")
 
-        with patch("ocr.pdf_analyzer.fitz.open", return_value=mock_doc):
+        with patch("quarry.pdf_analyzer.fitz.open", return_value=mock_doc):
             results = analyze_pdf(pdf_path)
 
         assert results[0].page_number == 1

@@ -9,10 +9,10 @@ import typer
 from rich.console import Console
 from rich.progress import Progress
 
-from ocr.config import get_settings
-from ocr.database import get_db, list_documents, search
-from ocr.embeddings import embed_query
-from ocr.pipeline import ingest_document
+from quarry.config import get_settings
+from quarry.database import get_db, list_documents, search
+from quarry.embeddings import embed_query
+from quarry.pipeline import ingest_document
 
 app = typer.Typer(help="quarry: extract searchable knowledge from any document")
 console = Console()
@@ -91,7 +91,7 @@ def list_cmd() -> None:
 @app.command()
 def mcp() -> None:
     """Start the MCP server (stdio transport)."""
-    from ocr.mcp_server import main as mcp_main  # noqa: PLC0415
+    from quarry.mcp_server import main as mcp_main  # noqa: PLC0415
 
     mcp_main()
 

@@ -4,8 +4,8 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-import ocr.embeddings as embeddings_mod
-from ocr.embeddings import embed_query, embed_texts
+import quarry.embeddings as embeddings_mod
+from quarry.embeddings import embed_query, embed_texts
 
 
 def _mock_model() -> MagicMock:

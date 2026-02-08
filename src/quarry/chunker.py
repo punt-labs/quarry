@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime
 
-from ocr.models import Chunk, PageContent
+from quarry.models import Chunk, PageContent
 
 SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 

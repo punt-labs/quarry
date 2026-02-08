@@ -6,16 +6,16 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-from ocr.config import Settings, get_settings
-from ocr.database import (
+from quarry.config import Settings, get_settings
+from quarry.database import (
     get_db,
     get_page_text,
     list_documents,
     search,
 )
-from ocr.embeddings import embed_query
-from ocr.pipeline import ingest_document
-from ocr.types import LanceDB
+from quarry.embeddings import embed_query
+from quarry.pipeline import ingest_document
+from quarry.types import LanceDB
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

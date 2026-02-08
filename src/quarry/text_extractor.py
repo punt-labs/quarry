@@ -4,7 +4,7 @@ from pathlib import Path
 
 import fitz
 
-from ocr.models import PageContent, PageType
+from quarry.models import PageContent, PageType
 
 
 def extract_text_pages(

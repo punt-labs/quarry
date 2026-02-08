@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from ocr.models import Chunk, PageAnalysis, PageContent, PageType
+from quarry.models import Chunk, PageAnalysis, PageContent, PageType
 
 
 class TestPageType:

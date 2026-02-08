@@ -4,15 +4,15 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
-from ocr.chunker import chunk_pages
-from ocr.config import Settings
-from ocr.database import delete_document, insert_chunks
-from ocr.embeddings import embed_texts
-from ocr.models import PageContent, PageType
-from ocr.ocr_client import ocr_pdf_pages
-from ocr.pdf_analyzer import analyze_pdf
-from ocr.text_extractor import extract_text_pages
-from ocr.types import LanceDB
+from quarry.chunker import chunk_pages
+from quarry.config import Settings
+from quarry.database import delete_document, insert_chunks
+from quarry.embeddings import embed_texts
+from quarry.models import PageContent, PageType
+from quarry.ocr_client import ocr_pdf_pages
+from quarry.pdf_analyzer import analyze_pdf
+from quarry.text_extractor import extract_text_pages
+from quarry.types import LanceDB
 
 logger = logging.getLogger(__name__)
 
