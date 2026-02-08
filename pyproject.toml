@@ -1,10 +1,6 @@
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
 [project]
 name = "quarry-mcp"
-dynamic = ["version"]
+version = "0.1.0"
 description = "Extract searchable knowledge from any document. Expose it to LLMs via MCP."
 readme = "README.md"
 requires-python = ">=3.13"
@@ -49,33 +45,15 @@ dev = [
 quarry = "quarry.__main__:app"
 
 [project.urls]
-Homepage = "https://github.com/jfreeman/quarry-mcp"
-Repository = "https://github.com/jfreeman/quarry-mcp"
-Issues = "https://github.com/jfreeman/quarry-mcp/issues"
+Homepage = "https://github.com/jmf-pobox/quarry-mcp"
+"Bug Tracker" = "https://github.com/jmf-pobox/quarry-mcp/issues"
 
-[tool.hatch.version]
-path = "src/quarry/__version__.py"
+[build-system]
+requires = ["uv_build>=0.9.14,<0.10.0"]
+build-backend = "uv_build"
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/quarry"]
-
-[tool.hatch.envs.default]
-dependencies = [
-    "ruff>=0.13.0",
-    "mypy>=1.18.1",
-    "pytest>=8.4.2",
-    "pytest-cov>=4.0.0",
-    "pytest-asyncio>=0.23.0",
-]
-
-[tool.hatch.envs.default.scripts]
-test = "pytest {args:tests}"
-test-cov = "pytest --cov=src/quarry --cov-report=term-missing --cov-report=html {args:tests}"
-lint = "ruff check ."
-format = "ruff format ."
-type = "mypy src/quarry tests"
-check = ["lint", "type", "test"]
-check-cov = ["lint", "type", "test-cov"]
+[tool.uv.build-backend]
+module-name = "quarry"
 
 [tool.ruff]
 line-length = 88
