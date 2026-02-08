@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import patch
+
+if TYPE_CHECKING:
+    import pytest
 
 from quarry.doctor import (
     _check_aws_credentials,
@@ -9,6 +14,8 @@ from quarry.doctor import (
     _check_embedding_model,
     _check_imports,
     _check_python_version,
+    _configure_claude_code,
+    _configure_claude_desktop,
     check_environment,
     run_install,
 )
@@ -132,9 +139,106 @@ class TestCheckEnvironment:
         assert check_environment() == 1
 
 
+def _mock_install_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub out MCP configuration for install tests."""
+    import quarry.doctor as doctor_mod
+
+    noop = lambda: doctor_mod.CheckResult(  # noqa: E731
+        name="stub", passed=True, message="mocked"
+    )
+    monkeypatch.setattr(doctor_mod, "_configure_claude_code", noop)
+    monkeypatch.setattr(doctor_mod, "_configure_claude_desktop", noop)
+
+
+class TestConfigureClaudeCode:
+    def test_claude_not_on_path(self, monkeypatch):
+        monkeypatch.setattr("quarry.doctor.shutil.which", lambda _name: None)
+        result = _configure_claude_code()
+        assert result.passed is False
+        assert "not found" in result.message
+
+    def test_claude_mcp_add_succeeds(self, monkeypatch):
+        monkeypatch.setattr(
+            "quarry.doctor.shutil.which", lambda _name: "/usr/bin/claude"
+        )
+        mock_result = type(
+            "CompletedProcess", (), {"returncode": 0, "stdout": "", "stderr": ""}
+        )()
+        monkeypatch.setattr(
+            "quarry.doctor.subprocess.run", lambda *_a, **_kw: mock_result
+        )
+        result = _configure_claude_code()
+        assert result.passed is True
+        assert "configured" in result.message
+
+    def test_claude_mcp_add_already_exists(self, monkeypatch):
+        monkeypatch.setattr(
+            "quarry.doctor.shutil.which", lambda _name: "/usr/bin/claude"
+        )
+        mock_result = type(
+            "CompletedProcess",
+            (),
+            {"returncode": 1, "stdout": "", "stderr": "already exists"},
+        )()
+        monkeypatch.setattr(
+            "quarry.doctor.subprocess.run", lambda *_a, **_kw: mock_result
+        )
+        result = _configure_claude_code()
+        assert result.passed is True
+        assert "already configured" in result.message
+
+    def test_claude_mcp_add_fails(self, monkeypatch):
+        monkeypatch.setattr(
+            "quarry.doctor.shutil.which", lambda _name: "/usr/bin/claude"
+        )
+        mock_result = type(
+            "CompletedProcess",
+            (),
+            {"returncode": 1, "stdout": "", "stderr": "permission denied"},
+        )()
+        monkeypatch.setattr(
+            "quarry.doctor.subprocess.run", lambda *_a, **_kw: mock_result
+        )
+        result = _configure_claude_code()
+        assert result.passed is False
+        assert "permission denied" in result.message
+
+
+class TestConfigureClaudeDesktop:
+    def test_desktop_not_installed(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "quarry.doctor._DESKTOP_CONFIG_PATH",
+            tmp_path / "nonexistent" / "config.json",
+        )
+        result = _configure_claude_desktop()
+        assert result.passed is False
+        assert "not installed" in result.message
+
+    def test_creates_new_config(self, tmp_path, monkeypatch):
+        config_path = tmp_path / "claude_desktop_config.json"
+        monkeypatch.setattr("quarry.doctor._DESKTOP_CONFIG_PATH", config_path)
+        result = _configure_claude_desktop()
+        assert result.passed is True
+        config = json.loads(config_path.read_text())
+        assert config["mcpServers"]["quarry"]["command"] == "uvx"
+        assert config["mcpServers"]["quarry"]["args"] == ["quarry-mcp", "mcp"]
+
+    def test_preserves_existing_servers(self, tmp_path, monkeypatch):
+        config_path = tmp_path / "claude_desktop_config.json"
+        existing = {"mcpServers": {"other": {"command": "npx", "args": ["other"]}}}
+        config_path.write_text(json.dumps(existing))
+        monkeypatch.setattr("quarry.doctor._DESKTOP_CONFIG_PATH", config_path)
+        result = _configure_claude_desktop()
+        assert result.passed is True
+        config = json.loads(config_path.read_text())
+        assert "other" in config["mcpServers"]
+        assert "quarry" in config["mcpServers"]
+
+
 class TestRunInstall:
     def test_creates_data_directory(self, tmp_path, monkeypatch):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _mock_install_mcp(monkeypatch)
         with patch("sentence_transformers.SentenceTransformer") as mock_st:
             mock_st.return_value = None
             result = run_install()
@@ -143,6 +247,7 @@ class TestRunInstall:
 
     def test_downloads_model(self, tmp_path, monkeypatch):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _mock_install_mcp(monkeypatch)
         with patch("sentence_transformers.SentenceTransformer") as mock_st:
             mock_st.return_value = None
             run_install()
@@ -150,6 +255,7 @@ class TestRunInstall:
 
     def test_idempotent(self, tmp_path, monkeypatch):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _mock_install_mcp(monkeypatch)
         data_dir = tmp_path / ".quarry" / "data" / "lancedb"
         data_dir.mkdir(parents=True)
         with patch("sentence_transformers.SentenceTransformer") as mock_st:

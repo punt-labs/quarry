@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
+import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -117,20 +120,83 @@ def _check_imports() -> CheckResult:
     )
 
 
-_MCP_CONFIG = """\
-Add to your MCP client configuration:
+_MCP_SERVER_NAME = "quarry"
+_MCP_COMMAND = "uvx"
+_MCP_ARGS = ["quarry-mcp", "mcp"]
 
-  {
-    "quarry": {
-      "command": "uvx",
-      "args": ["quarry-mcp", "mcp"]
-    }
-  }
-"""
+_DESKTOP_CONFIG_PATH = (
+    Path.home()
+    / "Library"
+    / "Application Support"
+    / "Claude"
+    / "claude_desktop_config.json"
+)
+
+
+def _configure_claude_code() -> CheckResult:
+    """Add quarry MCP server to Claude Code via `claude mcp add`."""
+    claude_path = shutil.which("claude")
+    if claude_path is None:
+        return CheckResult(
+            name="Claude Code MCP",
+            passed=False,
+            message="claude CLI not found on PATH",
+            required=False,
+        )
+    result = subprocess.run(  # noqa: S603
+        [claude_path, "mcp", "add", _MCP_SERVER_NAME, "--", _MCP_COMMAND, *_MCP_ARGS],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        if "already exists" in stderr:
+            return CheckResult(
+                name="Claude Code MCP",
+                passed=True,
+                message="already configured",
+            )
+        return CheckResult(
+            name="Claude Code MCP",
+            passed=False,
+            message=f"claude mcp add failed: {stderr}",
+            required=False,
+        )
+    return CheckResult(
+        name="Claude Code MCP",
+        passed=True,
+        message="configured (scope: local)",
+    )
+
+
+def _configure_claude_desktop() -> CheckResult:
+    """Add quarry MCP server to Claude Desktop config."""
+    config_path = _DESKTOP_CONFIG_PATH
+    if not config_path.parent.exists():
+        return CheckResult(
+            name="Claude Desktop MCP",
+            passed=False,
+            message="Claude Desktop not installed",
+            required=False,
+        )
+
+    server_entry = {"command": _MCP_COMMAND, "args": _MCP_ARGS}
+
+    config = json.loads(config_path.read_text()) if config_path.exists() else {}
+
+    mcp_servers: dict[str, object] = config.setdefault("mcpServers", {})
+    mcp_servers[_MCP_SERVER_NAME] = server_entry
+    config_path.write_text(json.dumps(config, indent=2) + "\n")
+
+    return CheckResult(
+        name="Claude Desktop MCP",
+        passed=True,
+        message=f"configured in {config_path.name} (restart Desktop to activate)",
+    )
 
 
 def run_install() -> int:
-    """Create data directory and download embedding model.
+    """Create data directory, download model, and configure MCP clients.
 
     Returns 0 on success, 1 on failure.
     """
@@ -146,8 +212,11 @@ def run_install() -> int:
     SentenceTransformer("Snowflake/snowflake-arctic-embed-m-v1.5")
     print("  \u2713 snowflake-arctic-embed-m-v1.5 cached")  # noqa: T201
 
-    print()  # noqa: T201
-    print(_MCP_CONFIG)  # noqa: T201
+    print("Configuring MCP clients...")  # noqa: T201
+    for check in [_configure_claude_code(), _configure_claude_desktop()]:
+        symbol = "\u2713" if check.passed else "\u25cb"
+        print(f"  {symbol} {check.name}: {check.message}")  # noqa: T201
+
     return 0
 
 
