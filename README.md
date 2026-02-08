@@ -1,8 +1,8 @@
-# glean
+# quarry-mcp
 
 Extract searchable knowledge from any document. Expose it to LLMs via MCP.
 
-Glean ingests PDFs, images, text files, and audio into a local vector database, then serves semantic search over that content through the [Model Context Protocol](https://modelcontextprotocol.io). Point Claude Code or Claude Desktop at your documents and ask questions.
+Quarry ingests PDFs, images, text files, and audio into a local vector database, then serves semantic search over that content through the [Model Context Protocol](https://modelcontextprotocol.io). Point Claude Code or Claude Desktop at your documents and ask questions.
 
 ## Features
 
@@ -20,8 +20,8 @@ Glean ingests PDFs, images, text files, and audio into a local vector database, 
 
 ```bash
 # Clone and install
-git clone https://github.com/youruser/glean.git
-cd glean
+git clone https://github.com/youruser/quarry-mcp.git
+cd quarry-mcp
 uv sync
 
 # Configure AWS credentials (required for OCR)
@@ -30,13 +30,13 @@ export AWS_SECRET_ACCESS_KEY=your-secret
 export AWS_DEFAULT_REGION=us-east-1
 
 # Ingest a PDF
-uv run glean ingest /path/to/document.pdf
+uv run quarry ingest /path/to/document.pdf
 
 # Search
-uv run glean search "revenue growth in 2024"
+uv run quarry search "revenue growth in 2024"
 
 # List indexed documents
-uv run glean list
+uv run quarry list
 ```
 
 ## Installation
@@ -55,7 +55,7 @@ uv pip install -e ".[dev]"
 
 ### AWS Setup
 
-Glean uses AWS Textract for OCR. Your IAM user needs:
+Quarry uses AWS Textract for OCR. Your IAM user needs:
 
 ```json
 {
@@ -91,7 +91,7 @@ export S3_BUCKET=your-bucket-name
 Add to your Claude Code configuration:
 
 ```bash
-claude mcp add glean -- uv run --directory /path/to/glean python -m ocr mcp
+claude mcp add quarry -- uv run --directory /path/to/quarry-mcp python -m ocr mcp
 ```
 
 After restarting Claude Code, four tools are available:
@@ -110,9 +110,9 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
-    "glean": {
+    "quarry": {
       "command": "uv",
-      "args": ["run", "--directory", "/path/to/glean", "python", "-m", "ocr", "mcp"],
+      "args": ["run", "--directory", "/path/to/quarry-mcp", "python", "-m", "ocr", "mcp"],
       "env": {
         "AWS_ACCESS_KEY_ID": "your-key",
         "AWS_SECRET_ACCESS_KEY": "your-secret",
@@ -128,19 +128,19 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```bash
 # Ingest a document
-uv run glean ingest report.pdf
+uv run quarry ingest report.pdf
 
 # Re-ingest (overwrite existing)
-uv run glean ingest report.pdf --overwrite
+uv run quarry ingest report.pdf --overwrite
 
 # Search across all documents
-uv run glean search "board governance structure"
+uv run quarry search "board governance structure"
 
 # Search with result limit
-uv run glean search "quarterly revenue" -n 5
+uv run quarry search "quarterly revenue" -n 5
 
 # List indexed documents
-uv run glean list
+uv run quarry list
 ```
 
 ### Multiple Indices
@@ -152,12 +152,12 @@ Run separate MCP server instances with different data directories:
   "mcpServers": {
     "legal-docs": {
       "command": "uv",
-      "args": ["run", "--directory", "/path/to/glean", "python", "-m", "ocr", "mcp"],
+      "args": ["run", "--directory", "/path/to/quarry-mcp", "python", "-m", "ocr", "mcp"],
       "env": { "LANCEDB_PATH": "/data/legal/lancedb" }
     },
     "financial-reports": {
       "command": "uv",
-      "args": ["run", "--directory", "/path/to/glean", "python", "-m", "ocr", "mcp"],
+      "args": ["run", "--directory", "/path/to/quarry-mcp", "python", "-m", "ocr", "mcp"],
       "env": { "LANCEDB_PATH": "/data/financial/lancedb" }
     }
   }

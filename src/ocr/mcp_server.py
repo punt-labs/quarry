@@ -20,7 +20,7 @@ from ocr.types import LanceDB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-mcp = FastMCP("glean")
+mcp = FastMCP("quarry-mcp")
 
 
 def _settings() -> Settings:

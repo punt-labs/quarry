@@ -14,7 +14,7 @@ from ocr.database import get_db, list_documents, search
 from ocr.embeddings import embed_query
 from ocr.pipeline import ingest_document
 
-app = typer.Typer(help="glean: extract searchable knowledge from any document")
+app = typer.Typer(help="quarry: extract searchable knowledge from any document")
 console = Console()
 
 

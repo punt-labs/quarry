@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "glean"
+name = "quarry-mcp"
 version = "0.1.0"
 description = "Extract searchable knowledge from any document. Expose it to LLMs via MCP."
 readme = "README.md"
@@ -38,7 +38,7 @@ dev = [
 ]
 
 [project.scripts]
-glean = "ocr.__main__:app"
+quarry = "ocr.__main__:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ocr"]

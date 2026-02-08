@@ -274,58 +274,6 @@ wheels = [
 ]
 
 [[package]]
-name = "glean"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "boto3" },
-    { name = "boto3-stubs", extra = ["s3", "textract"] },
-    { name = "botocore-stubs" },
-    { name = "lancedb" },
-    { name = "mcp" },
-    { name = "numpy" },
-    { name = "pillow" },
-    { name = "pyarrow" },
-    { name = "pydantic" },
-    { name = "pydantic-settings" },
-    { name = "pymupdf" },
-    { name = "rich" },
-    { name = "sentence-transformers" },
-    { name = "typer" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "mypy" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "boto3", specifier = ">=1.40.0" },
-    { name = "boto3-stubs", extras = ["textract", "s3"], specifier = ">=1.40.0" },
-    { name = "botocore-stubs", specifier = ">=1.40.0" },
-    { name = "lancedb", specifier = ">=0.17.0" },
-    { name = "mcp", specifier = ">=1.0.0" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.18.1" },
-    { name = "numpy", specifier = ">=1.26.0" },
-    { name = "pillow", specifier = ">=10.0.0" },
-    { name = "pyarrow", specifier = ">=18.0.0" },
-    { name = "pydantic", specifier = ">=2.0.0" },
-    { name = "pydantic-settings", specifier = ">=2.0.0" },
-    { name = "pymupdf", specifier = ">=1.25.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4.2" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
-    { name = "rich", specifier = ">=13.0.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.13.0" },
-    { name = "sentence-transformers", specifier = ">=3.0.0" },
-    { name = "typer", specifier = ">=0.15.0" },
-]
-provides-extras = ["dev"]
-
-[[package]]
 name = "h11"
 version = "0.16.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1296,6 +1244,58 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/f0/7a/1c7270340330e575b92f397352af856a8c06f230aa3e76f86b39d01b416a/pyyaml-6.0.3-cp314-cp314t-win_amd64.whl", hash = "sha256:4ad1906908f2f5ae4e5a8ddfce73c320c2a1429ec52eafd27138b7f1cbe341c9", size = 174062, upload-time = "2025-09-25T21:32:55.767Z" },
     { url = "https://files.pythonhosted.org/packages/f1/12/de94a39c2ef588c7e6455cfbe7343d3b2dc9d6b6b2f40c4c6565744c873d/pyyaml-6.0.3-cp314-cp314t-win_arm64.whl", hash = "sha256:ebc55a14a21cb14062aa4162f906cd962b28e2e9ea38f9b4391244cd8de4ae0b", size = 149341, upload-time = "2025-09-25T21:32:56.828Z" },
 ]
+
+[[package]]
+name = "quarry-mcp"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "boto3" },
+    { name = "boto3-stubs", extra = ["s3", "textract"] },
+    { name = "botocore-stubs" },
+    { name = "lancedb" },
+    { name = "mcp" },
+    { name = "numpy" },
+    { name = "pillow" },
+    { name = "pyarrow" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "pymupdf" },
+    { name = "rich" },
+    { name = "sentence-transformers" },
+    { name = "typer" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "boto3", specifier = ">=1.40.0" },
+    { name = "boto3-stubs", extras = ["textract", "s3"], specifier = ">=1.40.0" },
+    { name = "botocore-stubs", specifier = ">=1.40.0" },
+    { name = "lancedb", specifier = ">=0.17.0" },
+    { name = "mcp", specifier = ">=1.0.0" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.18.1" },
+    { name = "numpy", specifier = ">=1.26.0" },
+    { name = "pillow", specifier = ">=10.0.0" },
+    { name = "pyarrow", specifier = ">=18.0.0" },
+    { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "pydantic-settings", specifier = ">=2.0.0" },
+    { name = "pymupdf", specifier = ">=1.25.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4.2" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
+    { name = "rich", specifier = ">=13.0.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.13.0" },
+    { name = "sentence-transformers", specifier = ">=3.0.0" },
+    { name = "typer", specifier = ">=0.15.0" },
+]
+provides-extras = ["dev"]
 
 [[package]]
 name = "referencing"
