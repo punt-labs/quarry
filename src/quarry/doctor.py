@@ -110,6 +110,40 @@ def _check_imports() -> CheckResult:
     )
 
 
+_MCP_CONFIG = """\
+Add to your MCP client configuration:
+
+  {
+    "quarry": {
+      "command": "uvx",
+      "args": ["quarry-mcp", "mcp"]
+    }
+  }
+"""
+
+
+def run_install() -> int:
+    """Create data directory and download embedding model.
+
+    Returns 0 on success, 1 on failure.
+    """
+    data_dir = Path.home() / ".quarry" / "data" / "lancedb"
+
+    print("Creating data directory...")  # noqa: T201
+    data_dir.mkdir(parents=True, exist_ok=True)
+    print(f"  \u2713 {data_dir}")  # noqa: T201
+
+    print("Downloading embedding model...")  # noqa: T201
+    from sentence_transformers import SentenceTransformer  # noqa: PLC0415
+
+    SentenceTransformer("Snowflake/snowflake-arctic-embed-m-v1.5")
+    print("  \u2713 snowflake-arctic-embed-m-v1.5 cached")  # noqa: T201
+
+    print()  # noqa: T201
+    print(_MCP_CONFIG)  # noqa: T201
+    return 0
+
+
 def check_environment() -> int:
     """Run all environment checks. Returns 0 if all required pass, 1 otherwise."""
     checks = [

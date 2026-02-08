@@ -10,6 +10,7 @@ from quarry.doctor import (
     _check_imports,
     _check_python_version,
     check_environment,
+    run_install,
 )
 
 
@@ -139,3 +140,30 @@ class TestCheckEnvironment:
         monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
         monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
         assert check_environment() == 1
+
+
+class TestRunInstall:
+    def test_creates_data_directory(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        with patch("sentence_transformers.SentenceTransformer") as mock_st:
+            mock_st.return_value = None
+            result = run_install()
+        assert result == 0
+        assert (tmp_path / ".quarry" / "data" / "lancedb").is_dir()
+
+    def test_downloads_model(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        with patch("sentence_transformers.SentenceTransformer") as mock_st:
+            mock_st.return_value = None
+            run_install()
+        mock_st.assert_called_once_with("Snowflake/snowflake-arctic-embed-m-v1.5")
+
+    def test_idempotent(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        data_dir = tmp_path / ".quarry" / "data" / "lancedb"
+        data_dir.mkdir(parents=True)
+        with patch("sentence_transformers.SentenceTransformer") as mock_st:
+            mock_st.return_value = None
+            result = run_install()
+        assert result == 0
+        assert data_dir.is_dir()
