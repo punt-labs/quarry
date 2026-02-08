@@ -10,7 +10,12 @@ from rich.console import Console
 from rich.progress import Progress
 
 from quarry.config import get_settings
-from quarry.database import get_db, list_documents, search
+from quarry.database import (
+    delete_document as db_delete_document,
+    get_db,
+    list_documents,
+    search,
+)
 from quarry.embeddings import embed_query
 from quarry.pipeline import ingest_document
 
@@ -86,6 +91,21 @@ def list_cmd() -> None:
             f"{doc['indexed_pages']}/{doc['total_pages']} pages, "
             f"{doc['chunk_count']} chunks"
         )
+
+
+@app.command(name="delete")
+def delete_cmd(
+    document_name: Annotated[str, typer.Argument(help="Document name to delete")],
+) -> None:
+    """Delete all indexed data for a document."""
+    settings = get_settings()
+    db = get_db(settings.lancedb_path)
+    deleted = db_delete_document(db, document_name)
+
+    if deleted == 0:
+        print(f"No data found for {document_name!r}")
+    else:
+        print(f"Deleted {deleted} chunks for {document_name!r}")
 
 
 @app.command()

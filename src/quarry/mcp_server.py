@@ -8,6 +8,8 @@ from mcp.server.fastmcp import FastMCP
 
 from quarry.config import Settings, get_settings
 from quarry.database import (
+    count_chunks,
+    delete_document as db_delete_document,
     get_db,
     get_page_text,
     list_documents,
@@ -134,6 +136,52 @@ def get_page(
         return f"No data found for {document_name} page {page_number}"
 
     return f"Document: {document_name}\nPage: {page_number}\n---\n{text}"
+
+
+@mcp.tool()
+def delete_document(document_name: str) -> str:
+    """Delete all indexed data for a document.
+
+    Args:
+        document_name: Document filename (e.g., 'report.pdf').
+    """
+    db = _db()
+    deleted = db_delete_document(db, document_name)
+    return json.dumps(
+        {
+            "document_name": document_name,
+            "chunks_deleted": deleted,
+        },
+        indent=2,
+    )
+
+
+@mcp.tool()
+def status() -> str:
+    """Get database status: document/chunk counts, storage size, and model info."""
+    settings = _settings()
+    db = _db()
+
+    docs = list_documents(db)
+    chunks = count_chunks(db)
+
+    db_size_bytes = (
+        sum(f.stat().st_size for f in settings.lancedb_path.rglob("*") if f.is_file())
+        if settings.lancedb_path.exists()
+        else 0
+    )
+
+    return json.dumps(
+        {
+            "document_count": len(docs),
+            "chunk_count": chunks,
+            "database_path": str(settings.lancedb_path),
+            "database_size_bytes": db_size_bytes,
+            "embedding_model": settings.embedding_model,
+            "embedding_dimension": 768,
+        },
+        indent=2,
+    )
 
 
 def main() -> None:

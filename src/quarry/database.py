@@ -18,6 +18,12 @@ logger = logging.getLogger(__name__)
 
 TABLE_NAME = "ocr_chunks"
 
+
+def _escape_sql(value: str) -> str:
+    """Escape single quotes for LanceDB SQL predicates."""
+    return value.replace("'", "''")
+
+
 SCHEMA = pa.schema(
     [
         pa.field("text", pa.utf8()),
@@ -95,7 +101,7 @@ def search(
     query = table.search(query_vector.tolist()).limit(limit)
 
     if document_filter:
-        query = query.where(f"document_name = '{document_filter}'")
+        query = query.where(f"document_name = '{_escape_sql(document_filter)}'")
 
     return query.to_list()
 
@@ -121,7 +127,10 @@ def get_page_text(
     table = db.open_table(TABLE_NAME)
     results = (
         table.search()
-        .where(f"document_name = '{document_name}' AND page_number = {page_number}")
+        .where(
+            f"document_name = '{_escape_sql(document_name)}'"
+            f" AND page_number = {page_number}"
+        )
         .limit(1)
         .select(["page_raw_text"])
         .to_list()
@@ -186,6 +195,13 @@ def list_documents(db: LanceDB) -> list[dict[str, object]]:
     return docs
 
 
+def count_chunks(db: LanceDB) -> int:
+    """Return the total number of chunks across all documents."""
+    if TABLE_NAME not in db.list_tables().tables:
+        return 0
+    return db.open_table(TABLE_NAME).count_rows()
+
+
 def delete_document(db: LanceDB, document_name: str) -> int:
     """Delete all chunks for a document.
 
@@ -201,7 +217,7 @@ def delete_document(db: LanceDB, document_name: str) -> int:
 
     table = db.open_table(TABLE_NAME)
     before = table.count_rows()
-    table.delete(f"document_name = '{document_name}'")
+    table.delete(f"document_name = '{_escape_sql(document_name)}'")
     after = table.count_rows()
     deleted = before - after
     logger.info("Deleted %d chunks for %s", deleted, document_name)
