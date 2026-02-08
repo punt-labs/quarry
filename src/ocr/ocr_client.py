@@ -1,0 +1,142 @@
+from __future__ import annotations
+
+import logging
+import time
+from pathlib import Path
+
+import boto3
+
+from ocr.config import Settings
+from ocr.models import PageContent, PageType
+from ocr.types import S3Client, TextractClient
+
+logger = logging.getLogger(__name__)
+
+
+def ocr_pdf_pages(
+    pdf_path: Path,
+    page_numbers: list[int],
+    total_pages: int,
+    settings: Settings,
+) -> list[PageContent]:
+    """OCR image-based PDF pages using AWS Textract async API.
+
+    Uploads the full PDF to S3, runs Textract document text detection,
+    then extracts text for the requested pages.
+
+    Args:
+        pdf_path: Path to the PDF file.
+        page_numbers: 1-indexed page numbers that need OCR.
+        total_pages: Total pages in the document.
+        settings: Application settings with AWS config.
+
+    Returns:
+        List of PageContent for each requested page.
+    """
+    s3: S3Client = boto3.client("s3")  # type: ignore[assignment]
+    textract: TextractClient = boto3.client("textract")  # type: ignore[assignment]
+
+    s3_key = f"textract-jobs/{pdf_path.stem}/{pdf_path.name}"
+
+    logger.info("Uploading %s to s3://%s/%s", pdf_path.name, settings.s3_bucket, s3_key)
+    s3.upload_file(str(pdf_path), settings.s3_bucket, s3_key)
+
+    try:
+        page_texts = _run_textract(
+            textract, settings.s3_bucket, s3_key, total_pages, settings
+        )
+    finally:
+        s3.delete_object(Bucket=settings.s3_bucket, Key=s3_key)
+        logger.info("Cleaned up S3 object: %s", s3_key)
+
+    requested = set(page_numbers)
+    results: list[PageContent] = []
+    for page_num, text in sorted(page_texts.items()):
+        if page_num in requested:
+            results.append(
+                PageContent(
+                    document_name=pdf_path.name,
+                    document_path=str(pdf_path.resolve()),
+                    page_number=page_num,
+                    total_pages=total_pages,
+                    text=text,
+                    page_type=PageType.IMAGE,
+                )
+            )
+
+    return results
+
+
+def _run_textract(
+    textract: TextractClient,
+    bucket: str,
+    s3_key: str,
+    total_pages: int,
+    settings: Settings,
+) -> dict[int, str]:
+    """Start Textract async job and poll until complete.
+
+    Returns:
+        Dict mapping 1-indexed page numbers to extracted text.
+    """
+    response = textract.start_document_text_detection(
+        DocumentLocation={"S3Object": {"Bucket": bucket, "Name": s3_key}}
+    )
+    job_id = str(response["JobId"])
+    logger.info("Textract job started: %s (%d pages)", job_id, total_pages)
+
+    elapsed = 0
+    while elapsed < settings.textract_max_wait:
+        time.sleep(settings.textract_poll_interval)
+        elapsed += settings.textract_poll_interval
+
+        result = textract.get_document_text_detection(JobId=job_id)
+        status = str(result["JobStatus"])
+
+        if status == "SUCCEEDED":
+            logger.info("Textract job completed: %s", job_id)
+            return _parse_textract_results(textract, job_id, result)
+
+        if status == "FAILED":
+            message = result.get("StatusMessage", "Unknown error")
+            msg = f"Textract job {job_id} failed: {message}"
+            raise RuntimeError(msg)
+
+        logger.info("Textract job %s: %s (%ds elapsed)", job_id, status, elapsed)
+
+    msg = f"Textract job {job_id} timed out after {settings.textract_max_wait}s"
+    raise TimeoutError(msg)
+
+
+def _parse_textract_results(
+    textract: TextractClient,
+    job_id: str,
+    first_response: dict[str, object],
+) -> dict[int, str]:
+    """Parse all pages of Textract results, handling pagination.
+
+    Returns:
+        Dict mapping 1-indexed page numbers to extracted text.
+    """
+    page_texts: dict[int, list[str]] = {}
+
+    response: dict[str, object] = first_response
+    while True:
+        blocks = response.get("Blocks", [])
+        if isinstance(blocks, list):
+            for block in blocks:
+                if isinstance(block, dict) and block.get("BlockType") == "LINE":
+                    page_num = int(block["Page"])
+                    if page_num not in page_texts:
+                        page_texts[page_num] = []
+                    page_texts[page_num].append(str(block["Text"]))
+
+        next_token = response.get("NextToken")
+        if not next_token:
+            break
+
+        response = textract.get_document_text_detection(
+            JobId=job_id, NextToken=str(next_token)
+        )
+
+    return {page: "\n".join(lines) for page, lines in page_texts.items()}
