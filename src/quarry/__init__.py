@@ -1,5 +1,7 @@
 from __future__ import annotations
 
-from quarry.__version__ import __version__
+from importlib.metadata import version
+
+__version__ = version("quarry-mcp")
 
 __all__ = ["__version__"]
