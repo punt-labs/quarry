@@ -38,35 +38,23 @@ class TestCheckDataDirectory:
 
 
 class TestCheckAwsCredentials:
-    def test_both_set(self, monkeypatch):
+    def test_credentials_via_env(self, monkeypatch):
         monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAIOSFODNN7EXAMPLE")
         monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "wJalrXUtnFEMI/K7MDENG/bPxRfiCY")
         result = _check_aws_credentials()
         assert result.passed is True
         assert "AKIA" in result.message
         assert "MPLE" in result.message
+        assert "env" in result.message.lower() or "via" in result.message.lower()
 
-    def test_key_missing(self, monkeypatch):
-        monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
-        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
-        result = _check_aws_credentials()
-        assert result.passed is False
-        assert "AWS_ACCESS_KEY_ID" in result.message
-
-    def test_secret_missing(self, monkeypatch):
-        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAIOSFODNN7EXAMPLE")
-        monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
-        result = _check_aws_credentials()
-        assert result.passed is False
-        assert "AWS_SECRET_ACCESS_KEY" in result.message
-
-    def test_both_missing(self, monkeypatch):
+    def test_no_credentials(self, monkeypatch):
         monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
         monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
+        monkeypatch.setenv("AWS_CONFIG_FILE", "/dev/null")
+        monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", "/dev/null")
         result = _check_aws_credentials()
         assert result.passed is False
-        assert "AWS_ACCESS_KEY_ID" in result.message
-        assert "AWS_SECRET_ACCESS_KEY" in result.message
+        assert "No credentials" in result.message
 
 
 class TestCheckEmbeddingModel:
@@ -139,6 +127,8 @@ class TestCheckEnvironment:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
         monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
+        monkeypatch.setenv("AWS_CONFIG_FILE", "/dev/null")
+        monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", "/dev/null")
         assert check_environment() == 1
 
 

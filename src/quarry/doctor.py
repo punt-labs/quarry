@@ -47,24 +47,31 @@ def _check_data_directory() -> CheckResult:
 
 
 def _check_aws_credentials() -> CheckResult:
-    key_id = os.environ.get("AWS_ACCESS_KEY_ID", "")
-    secret = os.environ.get("AWS_SECRET_ACCESS_KEY", "")
-    if key_id and secret:
-        masked = key_id[:4] + "****" + key_id[-4:]
+    import botocore.session  # noqa: PLC0415
+
+    session = botocore.session.get_session()
+    try:
+        credentials = session.get_credentials()
+        resolved = credentials.get_frozen_credentials()
+        key = resolved.access_key
+    except Exception:  # noqa: BLE001
         return CheckResult(
             name="AWS credentials",
-            passed=True,
-            message=f"AWS_ACCESS_KEY_ID={masked}",
+            passed=False,
+            message="No credentials found (env vars, ~/.aws/credentials, or IAM role)",
         )
-    missing = []
-    if not key_id:
-        missing.append("AWS_ACCESS_KEY_ID")
-    if not secret:
-        missing.append("AWS_SECRET_ACCESS_KEY")
+    if not key:
+        return CheckResult(
+            name="AWS credentials",
+            passed=False,
+            message="No credentials found (env vars, ~/.aws/credentials, or IAM role)",
+        )
+    masked = key[:4] + "****" + key[-4:]
+    method = getattr(credentials, "method", "unknown")
     return CheckResult(
         name="AWS credentials",
-        passed=False,
-        message=f"Missing: {', '.join(missing)}",
+        passed=True,
+        message=f"{masked} (via {method})",
     )
 
 
