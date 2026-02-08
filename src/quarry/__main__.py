@@ -133,6 +133,24 @@ def delete_cmd(
 
 
 @app.command()
+def install() -> None:
+    """Set up data directory and download embedding model."""
+    from quarry.doctor import run_install  # noqa: PLC0415
+
+    exit_code = run_install()
+    raise typer.Exit(code=exit_code)
+
+
+@app.command()
+def doctor() -> None:
+    """Check environment: Python, AWS, data directory, model, imports."""
+    from quarry.doctor import check_environment  # noqa: PLC0415
+
+    exit_code = check_environment()
+    raise typer.Exit(code=exit_code)
+
+
+@app.command()
 def mcp() -> None:
     """Start the MCP server (stdio transport)."""
     from quarry.mcp_server import main as mcp_main  # noqa: PLC0415
