@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 from quarry.database import (
+    count_chunks,
     delete_document,
     get_db,
     get_page_text,
@@ -153,6 +154,31 @@ class TestListDocuments:
         assert docs == []
 
 
+class TestCountChunks:
+    def test_counts_populated_db(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        chunks = [_make_chunk(chunk_index=i) for i in range(5)]
+        vectors = _random_vectors(5)
+        insert_chunks(db, chunks, vectors)
+        assert count_chunks(db) == 5
+
+    def test_empty_db(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        assert count_chunks(db) == 0
+
+    def test_count_after_delete(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        chunks = [
+            _make_chunk(chunk_index=0, document_name="a.pdf"),
+            _make_chunk(chunk_index=1, document_name="a.pdf"),
+            _make_chunk(chunk_index=0, document_name="b.pdf"),
+        ]
+        vectors = _random_vectors(3)
+        insert_chunks(db, chunks, vectors)
+        delete_document(db, "a.pdf")
+        assert count_chunks(db) == 1
+
+
 class TestDeleteDocument:
     def test_deletes_document(self, tmp_path: Path):
         db = get_db(tmp_path / "db")
@@ -184,3 +210,13 @@ class TestDeleteDocument:
         db = get_db(tmp_path / "db")
         deleted = delete_document(db, "anything.pdf")
         assert deleted == 0
+
+    def test_delete_document_with_single_quote(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        chunks = [_make_chunk(chunk_index=0, document_name="O'Reilly.pdf")]
+        vectors = _random_vectors(1)
+        insert_chunks(db, chunks, vectors)
+
+        deleted = delete_document(db, "O'Reilly.pdf")
+        assert deleted == 1
+        assert list_documents(db) == []
