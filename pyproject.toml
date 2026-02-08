@@ -4,13 +4,20 @@ build-backend = "hatchling.build"
 
 [project]
 name = "quarry-mcp"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Extract searchable knowledge from any document. Expose it to LLMs via MCP."
 readme = "README.md"
 requires-python = ">=3.13"
 license = "MIT"
 authors = [
     { name = "JF", email = "jmf@pobox.com" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Text Processing :: Indexing",
 ]
 dependencies = [
     "boto3>=1.40.0",
@@ -40,6 +47,14 @@ dev = [
 
 [project.scripts]
 quarry = "quarry.__main__:app"
+
+[project.urls]
+Homepage = "https://github.com/jfreeman/quarry-mcp"
+Repository = "https://github.com/jfreeman/quarry-mcp"
+Issues = "https://github.com/jfreeman/quarry-mcp/issues"
+
+[tool.hatch.version]
+path = "src/quarry/__version__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/quarry"]

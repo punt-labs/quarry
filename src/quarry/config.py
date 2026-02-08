@@ -11,9 +11,7 @@ class Settings(BaseSettings):
     aws_default_region: str = "us-east-1"
     s3_bucket: str = "ocr-7f3a1b2e4c5d4e8f9a1b3c5d7e9f2a4b"
 
-    lancedb_path: Path = (
-        Path(__file__).resolve().parent.parent.parent / "data" / "lancedb"
-    )
+    lancedb_path: Path = Path.home() / ".quarry" / "data" / "lancedb"
     embedding_model: str = "Snowflake/snowflake-arctic-embed-m-v1.5"
 
     chunk_max_chars: int = 1800

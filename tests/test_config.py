@@ -2,7 +2,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from quarry import __version__
 from quarry.config import Settings
+
+
+class TestVersion:
+    def test_version_is_string(self):
+        assert isinstance(__version__, str)
+
+    def test_version_format(self):
+        parts = __version__.split(".")
+        assert len(parts) == 3
+        assert all(part.isdigit() for part in parts)
 
 
 class TestSettings:
@@ -36,6 +47,14 @@ class TestSettings:
         settings = Settings()
         assert settings.aws_access_key_id == "env-key"
         assert settings.aws_default_region == "ap-southeast-1"
+
+    def test_default_lancedb_path_under_home(self):
+        settings = Settings(
+            aws_access_key_id="test",
+            aws_secret_access_key="test",
+        )
+        home = Path.home()
+        assert settings.lancedb_path == home / ".quarry" / "data" / "lancedb"
 
     def test_embedding_model_default(self):
         settings = Settings(
