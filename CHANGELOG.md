@@ -10,9 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `quarry doctor` command: checks Python, data directory, AWS credentials, embedding model cache, core imports
 - `quarry install` command: creates `~/.quarry/data/lancedb/`, pre-downloads embedding model, prints MCP config snippet
-- `__version__` module with runtime-importable version string
-- Dynamic version in `pyproject.toml` via hatchling `__version__.py` source
 - PyPI classifiers and `[project.urls]` metadata
+- `docs/TOOL-PyPI.md` publishing checklist (build, test, upload workflow)
 - Standalone image ingestion: PNG, JPEG, TIFF (multi-page), BMP, WebP via `ingest` tool and CLI
 - Sync Textract API (`DetectDocumentText`) for single-page images (no S3 upload needed)
 - BMP/WebP auto-conversion to PNG via Pillow before OCR
@@ -37,6 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `DEBUG` logging to `pdf_analyzer`, `text_extractor`, `text_processor`, and `database` modules
 
 ### Changed
+- Build backend from `hatchling` to `uv_build` (simpler, uv-native)
+- Version via `importlib.metadata.version()` instead of `__version__.py`
 - Default `lancedb_path` from repo-relative (`data/lancedb`) to `~/.quarry/data/lancedb` (works after pip install)
 - `ingest` MCP tool and CLI now accept all supported formats (was PDF-only)
 - Pipeline refactored: `ingest_document` dispatches by format, shared `_chunk_embed_store` eliminates duplication
