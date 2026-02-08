@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import functools
 import json
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated
 
@@ -19,11 +21,31 @@ from quarry.database import (
 from quarry.embeddings import embed_query
 from quarry.pipeline import ingest_document
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 app = typer.Typer(help="quarry: extract searchable knowledge from any document")
 console = Console()
+err_console = Console(stderr=True)
+
+
+def _cli_errors(fn: Callable[..., None]) -> Callable[..., None]:
+    """Catch exceptions at the CLI boundary, log, and exit with code 1."""
+
+    @functools.wraps(fn)
+    def wrapper(*args: object, **kwargs: object) -> None:
+        try:
+            fn(*args, **kwargs)
+        except Exception as exc:
+            logger.exception("Command %s failed", fn.__name__)
+            err_console.print(f"Error: {exc}", style="red")
+            raise typer.Exit(code=1) from exc
+
+    return wrapper
 
 
 @app.command()
+@_cli_errors
 def ingest(
     file_path: Annotated[Path, typer.Argument(help="Path to document file")],
     overwrite: Annotated[
@@ -31,7 +53,6 @@ def ingest(
     ] = False,
 ) -> None:
     """Ingest a document: chunk, embed, and store. Supports PDF, TXT, MD, TEX, DOCX."""
-    logging.basicConfig(level=logging.INFO)
     settings = get_settings()
     db = get_db(settings.lancedb_path)
 
@@ -54,6 +75,7 @@ def ingest(
 
 
 @app.command(name="search")
+@_cli_errors
 def search_cmd(
     query: Annotated[str, typer.Argument(help="Search query")],
     limit: Annotated[int, typer.Option("--limit", "-n", help="Max results")] = 10,
@@ -75,6 +97,7 @@ def search_cmd(
 
 
 @app.command(name="list")
+@_cli_errors
 def list_cmd() -> None:
     """List all indexed documents."""
     settings = get_settings()
@@ -94,6 +117,7 @@ def list_cmd() -> None:
 
 
 @app.command(name="delete")
+@_cli_errors
 def delete_cmd(
     document_name: Annotated[str, typer.Argument(help="Document name to delete")],
 ) -> None:

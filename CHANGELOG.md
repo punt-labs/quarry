@@ -16,7 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `count_chunks` database function for O(1) chunk counting
 - Text processor tests (`test_text_processor.py`)
 - MCP server tests (`test_mcp_server.py`)
+- `NON-FUNCTIONAL-DESIGN.md` defining logging and exception handling standards
 - CHANGELOG.md
+
+### Fixed
+- Resource leak: `fitz.open()` in `pdf_analyzer.py` and `text_extractor.py` now uses context manager
+- MCP tool handlers and CLI commands now catch exceptions at the boundary, log tracebacks, and return user-friendly errors
 
 ### Changed
 - `ingest` MCP tool and CLI now accept all supported formats (was PDF-only)

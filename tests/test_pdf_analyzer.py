@@ -12,6 +12,13 @@ def _mock_page(text: str) -> MagicMock:
     return page
 
 
+def _mock_doc_cm(mock_doc: MagicMock) -> MagicMock:
+    """Make a mock document work as a context manager."""
+    mock_doc.__enter__ = lambda self: self
+    mock_doc.__exit__ = lambda self, *args: None
+    return mock_doc
+
+
 class TestAnalyzePdf:
     def test_text_page(self, tmp_path):
         pdf_path = tmp_path / "test.pdf"
@@ -22,7 +29,9 @@ class TestAnalyzePdf:
         mock_doc.__len__ = lambda _: 1
         mock_doc.__getitem__ = lambda _, idx: _mock_page(text)
 
-        with patch("quarry.pdf_analyzer.fitz.open", return_value=mock_doc):
+        with patch(
+            "quarry.pdf_analyzer.fitz.open", return_value=_mock_doc_cm(mock_doc)
+        ):
             results = analyze_pdf(pdf_path)
 
         assert len(results) == 1
@@ -38,7 +47,9 @@ class TestAnalyzePdf:
         mock_doc.__len__ = lambda _: 1
         mock_doc.__getitem__ = lambda _, idx: _mock_page("short")
 
-        with patch("quarry.pdf_analyzer.fitz.open", return_value=mock_doc):
+        with patch(
+            "quarry.pdf_analyzer.fitz.open", return_value=_mock_doc_cm(mock_doc)
+        ):
             results = analyze_pdf(pdf_path)
 
         assert len(results) == 1
@@ -57,7 +68,9 @@ class TestAnalyzePdf:
         mock_doc.__len__ = lambda _: 3
         mock_doc.__getitem__ = lambda _, idx: pages[idx]
 
-        with patch("quarry.pdf_analyzer.fitz.open", return_value=mock_doc):
+        with patch(
+            "quarry.pdf_analyzer.fitz.open", return_value=_mock_doc_cm(mock_doc)
+        ):
             results = analyze_pdf(pdf_path)
 
         assert len(results) == 3
@@ -73,7 +86,9 @@ class TestAnalyzePdf:
         mock_doc.__len__ = lambda _: 2
         mock_doc.__getitem__ = lambda _, idx: _mock_page("short")
 
-        with patch("quarry.pdf_analyzer.fitz.open", return_value=mock_doc):
+        with patch(
+            "quarry.pdf_analyzer.fitz.open", return_value=_mock_doc_cm(mock_doc)
+        ):
             results = analyze_pdf(pdf_path)
 
         assert results[0].page_number == 1

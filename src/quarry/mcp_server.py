@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import functools
 import json
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
@@ -25,6 +27,20 @@ logger = logging.getLogger(__name__)
 mcp = FastMCP("quarry-mcp")
 
 
+def _handle_errors(fn: Callable[..., str]) -> Callable[..., str]:
+    """Catch exceptions at the MCP boundary, log, and return error string."""
+
+    @functools.wraps(fn)
+    def wrapper(*args: object, **kwargs: object) -> str:
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:
+            logger.exception("Error in %s", fn.__name__)
+            return f"Error: {type(exc).__name__}: {exc}"
+
+    return wrapper
+
+
 def _settings() -> Settings:
     return get_settings()
 
@@ -34,6 +50,7 @@ def _db() -> LanceDB:
 
 
 @mcp.tool()
+@_handle_errors
 def search_documents(
     query: str,
     limit: int = 10,
@@ -81,6 +98,7 @@ def search_documents(
 
 
 @mcp.tool()
+@_handle_errors
 def ingest(
     file_path: str,
     overwrite: bool = False,
@@ -113,6 +131,7 @@ def ingest(
 
 
 @mcp.tool()
+@_handle_errors
 def ingest_text(
     content: str,
     document_name: str,
@@ -148,6 +167,7 @@ def ingest_text(
 
 
 @mcp.tool()
+@_handle_errors
 def get_documents() -> str:
     """List all indexed documents with metadata."""
     db = _db()
@@ -156,6 +176,7 @@ def get_documents() -> str:
 
 
 @mcp.tool()
+@_handle_errors
 def get_page(
     document_name: str,
     page_number: int,
@@ -176,6 +197,7 @@ def get_page(
 
 
 @mcp.tool()
+@_handle_errors
 def delete_document(document_name: str) -> str:
     """Delete all indexed data for a document.
 
@@ -194,6 +216,7 @@ def delete_document(document_name: str) -> str:
 
 
 @mcp.tool()
+@_handle_errors
 def status() -> str:
     """Get database status: document/chunk counts, storage size, and model info."""
     settings = _settings()

@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from quarry.mcp_server import delete_document, ingest_text, status
+from quarry.mcp_server import delete_document, ingest, ingest_text, status
 
 
 def _settings(tmp_path: Path) -> MagicMock:
@@ -130,3 +130,36 @@ class TestStatus:
             result = json.loads(status())
 
         assert result["database_size_bytes"] == 0
+
+
+class TestHandleErrors:
+    def test_returns_error_string_on_exception(self, tmp_path: Path):
+        settings = _settings(tmp_path)
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._db"),
+            patch(
+                "quarry.mcp_server.ingest_document",
+                side_effect=FileNotFoundError("no such file: bad.pdf"),
+            ),
+        ):
+            result = ingest("/tmp/bad.pdf")
+
+        assert result.startswith("Error:")
+        assert "FileNotFoundError" in result
+        assert "bad.pdf" in result
+
+    def test_returns_error_on_value_error(self, tmp_path: Path):
+        settings = _settings(tmp_path)
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._db"),
+            patch(
+                "quarry.mcp_server.pipeline_ingest_text",
+                side_effect=ValueError("bad format hint"),
+            ),
+        ):
+            result = ingest_text("text", "doc.txt")
+
+        assert "ValueError" in result
+        assert "bad format hint" in result

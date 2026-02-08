@@ -12,6 +12,13 @@ def _mock_page(text: str) -> MagicMock:
     return page
 
 
+def _mock_doc_cm(mock_doc: MagicMock) -> MagicMock:
+    """Make a mock document work as a context manager."""
+    mock_doc.__enter__ = lambda self: self
+    mock_doc.__exit__ = lambda self, *args: None
+    return mock_doc
+
+
 class TestExtractTextPages:
     def test_extracts_requested_pages(self, tmp_path):
         pdf_path = tmp_path / "test.pdf"
@@ -25,7 +32,9 @@ class TestExtractTextPages:
         mock_doc = MagicMock()
         mock_doc.__getitem__ = lambda _, idx: pages[idx]
 
-        with patch("quarry.text_extractor.fitz.open", return_value=mock_doc):
+        with patch(
+            "quarry.text_extractor.fitz.open", return_value=_mock_doc_cm(mock_doc)
+        ):
             results = extract_text_pages(pdf_path, [1, 3], total_pages=3)
 
         assert len(results) == 2
@@ -41,7 +50,9 @@ class TestExtractTextPages:
         mock_doc = MagicMock()
         mock_doc.__getitem__ = lambda _, idx: _mock_page("content")
 
-        with patch("quarry.text_extractor.fitz.open", return_value=mock_doc):
+        with patch(
+            "quarry.text_extractor.fitz.open", return_value=_mock_doc_cm(mock_doc)
+        ):
             results = extract_text_pages(pdf_path, [1], total_pages=10)
 
         assert results[0].document_name == "test.pdf"
@@ -55,7 +66,9 @@ class TestExtractTextPages:
         mock_doc = MagicMock()
         mock_doc.__getitem__ = lambda _, idx: _mock_page("  text with spaces  \n")
 
-        with patch("quarry.text_extractor.fitz.open", return_value=mock_doc):
+        with patch(
+            "quarry.text_extractor.fitz.open", return_value=_mock_doc_cm(mock_doc)
+        ):
             results = extract_text_pages(pdf_path, [1], total_pages=1)
 
         assert results[0].text == "text with spaces"
