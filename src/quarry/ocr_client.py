@@ -13,19 +13,20 @@ from quarry.types import S3Client, TextractClient
 logger = logging.getLogger(__name__)
 
 
-def ocr_pdf_pages(
-    pdf_path: Path,
+def ocr_document_via_s3(
+    document_path: Path,
     page_numbers: list[int],
     total_pages: int,
     settings: Settings,
 ) -> list[PageContent]:
-    """OCR image-based PDF pages using AWS Textract async API.
+    """OCR document pages using AWS Textract async API via S3.
 
-    Uploads the full PDF to S3, runs Textract document text detection,
+    Uploads the document to S3, runs Textract text detection,
     then extracts text for the requested pages.
+    Supports PDF and multi-page TIFF.
 
     Args:
-        pdf_path: Path to the PDF file.
+        document_path: Path to the document file (PDF or TIFF).
         page_numbers: 1-indexed page numbers that need OCR.
         total_pages: Total pages in the document.
         settings: Application settings with AWS config.
@@ -40,10 +41,15 @@ def ocr_pdf_pages(
     s3: S3Client = boto3.client("s3")  # type: ignore[assignment]
     textract: TextractClient = boto3.client("textract")  # type: ignore[assignment]
 
-    s3_key = f"textract-jobs/{pdf_path.stem}/{pdf_path.name}"
+    s3_key = f"textract-jobs/{document_path.stem}/{document_path.name}"
 
-    logger.info("Uploading %s to s3://%s/%s", pdf_path.name, settings.s3_bucket, s3_key)
-    s3.upload_file(str(pdf_path), settings.s3_bucket, s3_key)
+    logger.info(
+        "Uploading %s to s3://%s/%s",
+        document_path.name,
+        settings.s3_bucket,
+        s3_key,
+    )
+    s3.upload_file(str(document_path), settings.s3_bucket, s3_key)
 
     try:
         page_texts = _run_textract(
@@ -59,8 +65,8 @@ def ocr_pdf_pages(
         if page_num in requested:
             results.append(
                 PageContent(
-                    document_name=pdf_path.name,
-                    document_path=str(pdf_path.resolve()),
+                    document_name=document_path.name,
+                    document_path=str(document_path.resolve()),
                     page_number=page_num,
                     total_pages=total_pages,
                     text=text,
@@ -69,6 +75,64 @@ def ocr_pdf_pages(
             )
 
     return results
+
+
+def ocr_image_bytes(
+    image_bytes: bytes,
+    document_name: str,
+    document_path: str,
+) -> PageContent:
+    """OCR a single-page image using Textract sync API.
+
+    Uses DetectDocumentText which accepts bytes directly (no S3 needed).
+
+    Args:
+        image_bytes: Image file bytes (JPEG or PNG).
+        document_name: Document name for metadata.
+        document_path: Full path string for metadata.
+
+    Returns:
+        PageContent for the single page.
+
+    Raises:
+        RuntimeError: If Textract returns no text blocks.
+    """
+    textract: TextractClient = boto3.client("textract")  # type: ignore[assignment]
+
+    logger.info("Running sync OCR on %s (%d bytes)", document_name, len(image_bytes))
+    response = textract.detect_document_text(
+        Document={"Bytes": image_bytes},
+    )
+
+    text = _extract_lines_from_blocks(response)
+    logger.info("Sync OCR complete for %s: %d chars", document_name, len(text))
+
+    return PageContent(
+        document_name=document_name,
+        document_path=document_path,
+        page_number=1,
+        total_pages=1,
+        text=text,
+        page_type=PageType.IMAGE,
+    )
+
+
+def _extract_lines_from_blocks(response: dict[str, object]) -> str:
+    """Extract LINE block text from a Textract response.
+
+    Works for both sync and async responses.
+
+    Returns:
+        Lines joined by newlines.
+    """
+    blocks = response.get("Blocks", [])
+    if not isinstance(blocks, list):
+        return ""
+    return "\n".join(
+        str(block["Text"])
+        for block in blocks
+        if isinstance(block, dict) and block.get("BlockType") == "LINE"
+    )
 
 
 def _run_textract(

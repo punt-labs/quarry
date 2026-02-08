@@ -123,7 +123,7 @@ class TestIngestDocument:
 
         monkeypatch.setattr("quarry.pipeline.analyze_pdf", lambda _path: analyses)
         monkeypatch.setattr(
-            "quarry.pipeline.ocr_pdf_pages",
+            "quarry.pipeline.ocr_document_via_s3",
             lambda _path, _pages, _total, _settings: ocr_pages,
         )
         monkeypatch.setattr(
@@ -158,7 +158,7 @@ class TestIngestDocument:
 
         monkeypatch.setattr("quarry.pipeline.analyze_pdf", lambda _path: analyses)
         monkeypatch.setattr(
-            "quarry.pipeline.ocr_pdf_pages",
+            "quarry.pipeline.ocr_document_via_s3",
             lambda _path, _pages, _total, _settings: ocr_pages,
         )
         monkeypatch.setattr(

@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Standalone image ingestion: PNG, JPEG, TIFF (multi-page), BMP, WebP via `ingest` tool and CLI
+- Sync Textract API (`DetectDocumentText`) for single-page images (no S3 upload needed)
+- BMP/WebP auto-conversion to PNG via Pillow before OCR
+- Multi-page TIFF support via async Textract API (same path as PDFs)
+- `image_analyzer` module with format detection and TIFF page counting
 - Text document ingestion: `.txt`, `.md`, `.tex`, `.docx` files via `ingest` tool and CLI
 - Raw text ingestion via `ingest_text` MCP tool (auto-detects markdown/LaTeX/plain)
 - Section-aware splitting: markdown headings, LaTeX `\section`/`\subsection`, blank-line paragraphs, DOCX Heading styles

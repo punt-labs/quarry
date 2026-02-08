@@ -52,6 +52,12 @@ class LanceDB(Protocol):
 
 
 class TextractClient(Protocol):
+    def detect_document_text(
+        self,
+        *,
+        Document: dict[str, object],  # noqa: N803
+    ) -> dict[str, object]: ...
+
     def start_document_text_detection(
         self,
         *,
