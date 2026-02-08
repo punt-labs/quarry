@@ -4,6 +4,19 @@ Extract searchable knowledge from any document. Expose it to LLMs via MCP.
 
 Quarry ingests PDFs, images, text files, and audio into a local vector database, then serves semantic search over that content through the [Model Context Protocol](https://modelcontextprotocol.io). Point Claude Code or Claude Desktop at your documents and ask questions.
 
+## Why Quarry?
+
+If your documents are already machine-readable text (TXT, Markdown, DOCX), [mcp-local-rag](https://github.com/shinpr/mcp-local-rag) is a solid zero-config option — one `npx` command and you're searching.
+
+Quarry exists for documents that aren't text yet:
+
+- **Scanned PDFs** — Board packs, legal filings, archival records. No embedded text, just page images. Quarry classifies each page, routes image pages through AWS Textract OCR, and extracts text from the rest.
+- **Mixed-format PDFs** — Some pages are text, some are scans. Quarry handles both in a single pipeline.
+- **Images** — Photos of whiteboards, receipts, handwritten notes. *(Planned: Epic 3)*
+- **Audio** — Meeting recordings, interviews, podcasts. *(Planned: Epic 4)*
+
+Quarry also preserves full page text alongside chunks, so LLMs can reference surrounding context when a search hit lands mid-page.
+
 ## Features
 
 - **PDF ingestion** with automatic text/image classification per page
