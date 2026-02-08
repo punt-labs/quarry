@@ -2,7 +2,7 @@
 
 Extract searchable knowledge from any document. Expose it to LLMs via MCP.
 
-Quarry ingests PDFs, images, text files, and audio into a local vector database, then serves semantic search over that content through the [Model Context Protocol](https://modelcontextprotocol.io). Point Claude Code or Claude Desktop at your documents and ask questions.
+Quarry ingests PDFs, images, text files, and raw text into a local vector database, then serves semantic search over that content through the [Model Context Protocol](https://modelcontextprotocol.io). Point Claude Code or Claude Desktop at your documents and ask questions.
 
 ## Why Quarry?
 
@@ -12,30 +12,37 @@ Quarry exists for documents that aren't text yet:
 
 - **Scanned PDFs** — Board packs, legal filings, archival records. No embedded text, just page images. Quarry classifies each page, routes image pages through AWS Textract OCR, and extracts text from the rest.
 - **Mixed-format PDFs** — Some pages are text, some are scans. Quarry handles both in a single pipeline.
-- **Images** — Photos of whiteboards, receipts, handwritten notes. *(Planned: Epic 3)*
-- **Audio** — Meeting recordings, interviews, podcasts. *(Planned: Epic 4)*
+- **Images** — Photos of whiteboards, receipts, handwritten notes. PNG, JPG, TIFF (multi-page), BMP, WebP.
+- **Text files** — TXT, Markdown, LaTeX, DOCX. No OCR needed, straight to chunking.
+- **Raw text** — Paste content directly via `ingest_text`. Use this from Claude Desktop for uploaded files.
 
 Quarry also preserves full page text alongside chunks, so LLMs can reference surrounding context when a search hit lands mid-page.
 
 ## Features
 
 - **PDF ingestion** with automatic text/image classification per page
+- **Image ingestion** — PNG, JPG, TIFF (multi-page), BMP, WebP via Textract OCR
+- **Text file ingestion** — TXT, Markdown, LaTeX, DOCX
+- **Raw text ingestion** — ingest content directly without a file on disk
 - **OCR** via AWS Textract for scanned and image-based documents
 - **Text extraction** via PyMuPDF for text-based PDF pages
 - **Sentence-aware chunking** with configurable overlap
 - **Local vector embeddings** using snowflake-arctic-embed-m-v1.5 (768-dim)
 - **LanceDB** for fast, local vector storage (no external database)
-- **MCP server** with 4 tools: `search_documents`, `ingest`, `get_documents`, `get_page`
+- **MCP server** with 7 tools: `search_documents`, `ingest`, `ingest_text`, `get_documents`, `get_page`, `delete_document`, `status`
 - **CLI** for ingestion, search, and document management
 - **Full page text preserved** alongside chunks for LLM reference
 
 ## Quick Start
 
 ```bash
-# Clone and install
-git clone https://github.com/jmf-pobox/quarry-mcp.git
-cd quarry-mcp
-uv sync
+pip install quarry-mcp
+
+# Set up data directory, download embedding model, configure MCP clients
+quarry install
+
+# Check everything is working
+quarry doctor
 
 # Configure AWS credentials (required for OCR)
 export AWS_ACCESS_KEY_ID=your-key
@@ -43,27 +50,32 @@ export AWS_SECRET_ACCESS_KEY=your-secret
 export AWS_DEFAULT_REGION=us-east-1
 
 # Ingest a PDF
-uv run quarry ingest /path/to/document.pdf
+quarry ingest /path/to/document.pdf
 
 # Search
-uv run quarry search "revenue growth in 2024"
+quarry search "revenue growth in 2024"
 
 # List indexed documents
-uv run quarry list
+quarry list
 ```
 
 ## Installation
 
-Requires Python 3.13+ and [uv](https://docs.astral.sh/uv/).
-
 ```bash
-uv sync
+pip install quarry-mcp
+quarry install
 ```
 
-For development:
+`quarry install` creates the data directory (`~/.quarry/data/lancedb/`), downloads the embedding model (~500MB), and configures MCP for Claude Code and Claude Desktop.
 
-```bash
-uv pip install -e ".[dev]"
+Run `quarry doctor` to verify your environment:
+
+```
+  ✓ Python version: 3.13.1
+  ✓ Data directory: /Users/you/.quarry/data/lancedb
+  ✓ AWS credentials: AKIA****YMUH (via shared-credentials-file)
+  ✓ Embedding model: snowflake-arctic-embed-m-v1.5 cached
+  ✓ Core imports: 5 modules OK
 ```
 
 ### AWS Setup
@@ -77,6 +89,7 @@ Quarry uses AWS Textract for OCR. Your IAM user needs:
     {
       "Effect": "Allow",
       "Action": [
+        "textract:DetectDocumentText",
         "textract:StartDocumentTextDetection",
         "textract:GetDocumentTextDetection"
       ],
@@ -91,7 +104,7 @@ Quarry uses AWS Textract for OCR. Your IAM user needs:
 }
 ```
 
-Set your S3 bucket via environment variable or `.env` file:
+Set your S3 bucket:
 
 ```bash
 export S3_BUCKET=your-bucket-name
@@ -99,61 +112,65 @@ export S3_BUCKET=your-bucket-name
 
 ## Usage
 
-### MCP Server (Claude Code)
+### MCP Server
 
-Add to your Claude Code configuration:
+`quarry install` configures both Claude Code and Claude Desktop automatically. To configure manually:
+
+**Claude Code:**
 
 ```bash
-claude mcp add quarry -- uv run --directory /path/to/quarry-mcp python -m quarry mcp
+claude mcp add quarry -- uvx --from quarry-mcp quarry mcp
 ```
 
-After restarting Claude Code, four tools are available:
-
-| Tool | Description |
-|------|-------------|
-| `search_documents` | Semantic search across all indexed documents |
-| `ingest` | OCR and index a new PDF |
-| `get_documents` | List all indexed documents with metadata |
-| `get_page` | Retrieve full OCR text for a specific page |
-
-### MCP Server (Claude Desktop)
-
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
 
 ```json
 {
   "mcpServers": {
     "quarry": {
-      "command": "uv",
-      "args": ["run", "--directory", "/path/to/quarry-mcp", "python", "-m", "ocr", "mcp"],
-      "env": {
-        "AWS_ACCESS_KEY_ID": "your-key",
-        "AWS_SECRET_ACCESS_KEY": "your-secret",
-        "AWS_DEFAULT_REGION": "us-east-1",
-        "S3_BUCKET": "your-bucket"
-      }
+      "command": "/path/to/uvx",
+      "args": ["--from", "quarry-mcp", "quarry", "mcp"]
     }
   }
 }
 ```
 
+Use the absolute path to `uvx` for Desktop (e.g. `/opt/homebrew/bin/uvx`) since Desktop has a limited PATH. `quarry install` resolves this automatically.
+
+### MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `search_documents` | Semantic search across all indexed documents |
+| `ingest` | OCR and index a file (PDF, image, TXT, MD, TEX, DOCX) |
+| `ingest_text` | Index raw text content directly (for uploads or pasted text) |
+| `get_documents` | List all indexed documents with metadata |
+| `get_page` | Retrieve full text for a specific page |
+| `delete_document` | Remove a document and all its chunks |
+| `status` | Database stats: document/chunk counts, storage size, model info |
+
+**Claude Desktop note:** Uploaded files live in a container that Quarry cannot access. For uploaded files, use `ingest_text` with the extracted content. For files on your Mac, provide the local path to `ingest`.
+
 ### CLI
 
 ```bash
-# Ingest a document
-uv run quarry ingest report.pdf
+# Ingest documents
+quarry ingest report.pdf
+quarry ingest whiteboard.jpg
+quarry ingest notes.md
+quarry ingest report.pdf --overwrite
 
-# Re-ingest (overwrite existing)
-uv run quarry ingest report.pdf --overwrite
+# Search
+quarry search "board governance structure"
+quarry search "quarterly revenue" -n 5
 
-# Search across all documents
-uv run quarry search "board governance structure"
+# Manage documents
+quarry list
+quarry delete report.pdf
 
-# Search with result limit
-uv run quarry search "quarterly revenue" -n 5
-
-# List indexed documents
-uv run quarry list
+# Environment
+quarry doctor
+quarry install
 ```
 
 ### Multiple Indices
@@ -164,13 +181,13 @@ Run separate MCP server instances with different data directories:
 {
   "mcpServers": {
     "legal-docs": {
-      "command": "uv",
-      "args": ["run", "--directory", "/path/to/quarry-mcp", "python", "-m", "ocr", "mcp"],
+      "command": "/path/to/uvx",
+      "args": ["--from", "quarry-mcp", "quarry", "mcp"],
       "env": { "LANCEDB_PATH": "/data/legal/lancedb" }
     },
     "financial-reports": {
-      "command": "uv",
-      "args": ["run", "--directory", "/path/to/quarry-mcp", "python", "-m", "ocr", "mcp"],
+      "command": "/path/to/uvx",
+      "args": ["--from", "quarry-mcp", "quarry", "mcp"],
       "env": { "LANCEDB_PATH": "/data/financial/lancedb" }
     }
   }
@@ -179,7 +196,7 @@ Run separate MCP server instances with different data directories:
 
 ## Configuration
 
-All settings are configurable via environment variables or a `.env` file:
+All settings are configurable via environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -187,7 +204,7 @@ All settings are configurable via environment variables or a `.env` file:
 | `AWS_SECRET_ACCESS_KEY` | | AWS secret key |
 | `AWS_DEFAULT_REGION` | `us-east-1` | AWS region |
 | `S3_BUCKET` | `ocr-7f3a1b2e4c5d4e8f9a1b3c5d7e9f2a4b` | S3 bucket for Textract uploads |
-| `LANCEDB_PATH` | `./data/lancedb` | Path to LanceDB storage |
+| `LANCEDB_PATH` | `~/.quarry/data/lancedb` | Path to LanceDB storage |
 | `EMBEDDING_MODEL` | `Snowflake/snowflake-arctic-embed-m-v1.5` | HuggingFace embedding model |
 | `CHUNK_MAX_CHARS` | `1800` | Target max characters per chunk (~450 tokens) |
 | `CHUNK_OVERLAP_CHARS` | `200` | Character overlap between consecutive chunks |
@@ -197,94 +214,31 @@ All settings are configurable via environment variables or a `.env` file:
 ## Architecture
 
 ```
-Input (PDF)
+Input
   │
-  ├─ Text pages ──→ PyMuPDF text extraction
-  │                        │
-  └─ Image pages ─→ S3 upload → Textract async OCR → parse → S3 cleanup
-                           │
-                     Page contents
-                           │
-                     Sentence-aware chunking (with overlap)
-                           │
-                     snowflake-arctic-embed-m-v1.5
-                           │
-                     LanceDB (local vector store)
-                           │
-                  ┌────────┴────────┐
-                  │                 │
-              MCP Server         CLI
-          (stdio transport)   (typer + rich)
+  ├─ PDF ─────────┬─ Text pages ──→ PyMuPDF extraction
+  │               └─ Image pages ─→ S3 → Textract async OCR → S3 cleanup
+  │
+  ├─ Images ──────→ Textract sync OCR (BMP/WebP converted to PNG)
+  │                 TIFF multi-page → S3 → Textract async OCR
+  │
+  ├─ Text files ──→ Direct text extraction (TXT, MD, TEX, DOCX)
+  │
+  └─ Raw text ────→ ingest_text (from uploads, clipboard, etc.)
+                          │
+                    Sentence-aware chunking (with overlap)
+                          │
+                    snowflake-arctic-embed-m-v1.5
+                          │
+                    LanceDB (local vector store)
+                          │
+                 ┌────────┴────────┐
+                 │                 │
+             MCP Server         CLI
+         (stdio transport)   (typer + rich)
 ```
 
 Each chunk stores both its text fragment and the full page raw text, so LLMs can reference surrounding context when a search result is relevant.
-
-## Roadmap
-
-### Epic 1: PDF Pipeline ✓
-
-Core ingestion and search for PDF documents.
-
-- [x] PDF page analysis (text vs image classification)
-- [x] Text extraction via PyMuPDF
-- [x] OCR via AWS Textract (async API with polling)
-- [x] Sentence-aware chunking with configurable overlap
-- [x] Local vector embeddings (snowflake-arctic-embed-m-v1.5)
-- [x] LanceDB vector storage with PyArrow schema
-- [x] MCP server with search, ingest, list, and page retrieval
-- [x] CLI with progress display
-- [x] Test suite (62 tests across 9 modules)
-
-### Epic 2: Text Document Ingestion
-
-Direct ingestion of text-based formats without OCR.
-
-- [ ] Plain text files (.txt)
-- [ ] Markdown (.md)
-- [ ] LaTeX (.tex)
-- [ ] DOCX
-- [ ] String ingestion (raw text/markdown/HTML without a file)
-- [ ] Configurable page/section boundary detection
-
-### Epic 3: Image Format Support
-
-OCR for standalone image files (not wrapped in PDF).
-
-- [ ] Common formats: PNG, JPG, TIFF, BMP, WebP
-- [ ] Single-image and batch ingestion
-- [ ] Image preprocessing for OCR quality (deskew, contrast)
-
-### Epic 4: Audio Transcription
-
-Speech-to-text ingestion for audio content.
-
-- [ ] Audio format support: MP3, WAV, M4A, FLAC
-- [ ] AWS Transcribe or Whisper integration
-- [ ] Speaker diarization
-- [ ] Timestamped chunks for source reference
-
-### Epic 5: Ingestion Quality
-
-Post-processing to improve extracted text quality.
-
-- [ ] LLM-based OCR error correction
-- [ ] Chunk quality scoring and filtering
-- [ ] Duplicate and near-duplicate detection
-- [ ] Table and figure extraction
-
-### Epic 6: Multi-Index Management
-
-First-class support for organizing documents into collections.
-
-- [ ] Named indices with isolated storage
-- [ ] Per-index configuration (embedding model, chunk size)
-- [ ] Cross-index search
-- [ ] Index metadata and statistics
-
-### Standalone Tasks
-
-- [ ] Expose `delete_document` via MCP and CLI
-- [ ] Add `status` tool to MCP server (document/chunk counts, DB size, model info)
 
 ## Development
 
@@ -294,9 +248,6 @@ uv run ruff check .
 uv run ruff format --check .
 uv run mypy src/quarry tests
 uv run pytest
-
-# Auto-format
-uv run ruff format .
 ```
 
 The project enforces strict mypy, comprehensive ruff rules, and requires all tests to pass before every commit.
