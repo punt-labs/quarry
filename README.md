@@ -229,6 +229,8 @@ Direct ingestion of text-based formats without OCR.
 - [ ] Plain text files (.txt)
 - [ ] Markdown (.md)
 - [ ] LaTeX (.tex)
+- [ ] DOCX
+- [ ] String ingestion (raw text/markdown/HTML without a file)
 - [ ] Configurable page/section boundary detection
 
 ### Epic 3: Image Format Support
@@ -265,6 +267,11 @@ First-class support for organizing documents into collections.
 - [ ] Per-index configuration (embedding model, chunk size)
 - [ ] Cross-index search
 - [ ] Index metadata and statistics
+
+### Standalone Tasks
+
+- [ ] Expose `delete_document` via MCP and CLI
+- [ ] Add `status` tool to MCP server (document/chunk counts, DB size, model info)
 
 ## Development
 
