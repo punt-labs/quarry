@@ -20,7 +20,7 @@ Quarry ingests PDFs, images, text files, and audio into a local vector database,
 
 ```bash
 # Clone and install
-git clone https://github.com/youruser/quarry-mcp.git
+git clone https://github.com/jmf-pobox/quarry-mcp.git
 cd quarry-mcp
 uv sync
 
