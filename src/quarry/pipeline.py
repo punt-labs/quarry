@@ -9,7 +9,7 @@ from quarry.config import Settings
 from quarry.database import delete_document, insert_chunks
 from quarry.embeddings import embed_texts
 from quarry.models import PageContent, PageType
-from quarry.ocr_client import ocr_pdf_pages
+from quarry.ocr_client import ocr_document_via_s3
 from quarry.pdf_analyzer import analyze_pdf
 from quarry.text_extractor import extract_text_pages
 from quarry.text_processor import (
@@ -125,7 +125,7 @@ def ingest_pdf(
 
     if image_pages:
         progress("Running OCR on %d pages via Textract", len(image_pages))
-        ocr_results = ocr_pdf_pages(file_path, image_pages, total_pages, settings)
+        ocr_results = ocr_document_via_s3(file_path, image_pages, total_pages, settings)
         all_pages.extend(ocr_results)
 
     all_pages.sort(key=lambda p: p.page_number)

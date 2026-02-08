@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from quarry.config import Settings
-from quarry.ocr_client import _parse_textract_results, ocr_pdf_pages
+from quarry.ocr_client import _parse_textract_results, ocr_document_via_s3
 
 
 def _settings() -> Settings:
@@ -95,7 +95,7 @@ class TestParseTextractResults:
         assert result == {1: "Actual text"}
 
 
-class TestOcrPdfPages:
+class TestOcrDocumentViaS3:
     def test_successful_flow(self, monkeypatch, tmp_path: Path):
         pdf_file = tmp_path / "test.pdf"
         pdf_file.write_bytes(b"%PDF-fake")
@@ -119,7 +119,7 @@ class TestOcrPdfPages:
 
         monkeypatch.setattr("quarry.ocr_client.boto3.client", mock_boto3_client)
 
-        results = ocr_pdf_pages(
+        results = ocr_document_via_s3(
             pdf_file,
             page_numbers=[1, 2],
             total_pages=2,
@@ -157,7 +157,7 @@ class TestOcrPdfPages:
 
         monkeypatch.setattr("quarry.ocr_client.boto3.client", mock_boto3_client)
 
-        results = ocr_pdf_pages(
+        results = ocr_document_via_s3(
             pdf_file,
             page_numbers=[2],
             total_pages=3,
@@ -189,7 +189,7 @@ class TestOcrPdfPages:
         monkeypatch.setattr("quarry.ocr_client.boto3.client", mock_boto3_client)
 
         with pytest.raises(RuntimeError, match="failed: Bad input"):
-            ocr_pdf_pages(
+            ocr_document_via_s3(
                 pdf_file,
                 page_numbers=[1],
                 total_pages=1,
@@ -226,7 +226,7 @@ class TestOcrPdfPages:
         )
 
         with pytest.raises(TimeoutError, match="timed out"):
-            ocr_pdf_pages(
+            ocr_document_via_s3(
                 pdf_file,
                 page_numbers=[1],
                 total_pages=1,
