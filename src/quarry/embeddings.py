@@ -9,6 +9,8 @@ if TYPE_CHECKING:
     import numpy as np
     from numpy.typing import NDArray
 
+    from quarry.config import Settings
+
 logger = logging.getLogger(__name__)
 
 _models: dict[str, EmbeddingModel] = {}
@@ -74,3 +76,32 @@ def embed_query(
         normalize_embeddings=True,
         show_progress_bar=False,
     )
+
+
+class SnowflakeEmbeddingBackend:
+    """Embedding backend using sentence-transformers.
+
+    Satisfies the ``EmbeddingBackend`` protocol.  Delegates to the
+    module-level ``_get_model()`` cache so the model is shared with
+    the free functions during the migration period.
+    """
+
+    def __init__(self, settings: Settings) -> None:
+        self._model_name = settings.embedding_model
+        self._dimension = settings.embedding_dimension
+
+    @property
+    def dimension(self) -> int:
+        return self._dimension
+
+    @property
+    def model_name(self) -> str:
+        return self._model_name
+
+    def embed_texts(self, texts: list[str]) -> NDArray[np.float32]:
+        """Embed a batch of texts. Returns shape (n, dimension)."""
+        return embed_texts(texts, model_name=self._model_name)
+
+    def embed_query(self, query: str) -> NDArray[np.float32]:
+        """Embed a search query. Returns shape (dimension,)."""
+        return embed_query(query, model_name=self._model_name)

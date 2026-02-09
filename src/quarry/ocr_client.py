@@ -221,3 +221,39 @@ def _parse_textract_results(
         )
 
     return {page: "\n".join(lines) for page, lines in page_texts.items()}
+
+
+class TextractOcrBackend:
+    """OCR backend using AWS Textract.
+
+    Satisfies the ``OcrBackend`` protocol.
+    """
+
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+
+    def ocr_document(
+        self,
+        document_path: Path,
+        page_numbers: list[int],
+        total_pages: int,
+        *,
+        document_name: str | None = None,
+    ) -> list[PageContent]:
+        """OCR multiple pages from a document (PDF or TIFF)."""
+        return ocr_document_via_s3(
+            document_path,
+            page_numbers,
+            total_pages,
+            self._settings,
+            document_name=document_name,
+        )
+
+    def ocr_image_bytes(
+        self,
+        image_bytes: bytes,
+        document_name: str,
+        document_path: str,
+    ) -> PageContent:
+        """OCR a single-page image from bytes."""
+        return ocr_image_bytes(image_bytes, document_name, document_path)
