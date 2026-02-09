@@ -29,6 +29,7 @@ from quarry.registry import (
     open_registry,
     register_directory,
 )
+from quarry.sync import sync_all
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -258,6 +259,37 @@ def registrations_cmd() -> None:
 
     for reg in regs:
         print(f"{reg.collection}: {reg.directory}")
+
+
+@app.command(name="sync")
+@_cli_errors
+def sync_cmd(
+    workers: Annotated[
+        int, typer.Option("--workers", "-w", help="Parallel workers")
+    ] = 4,
+) -> None:
+    """Sync all registered directories: ingest new/changed, remove deleted."""
+    settings = get_settings()
+    db = get_db(settings.lancedb_path)
+
+    with Progress(console=console) as progress:
+        task = progress.add_task("Syncing", total=None)
+
+        def on_progress(message: str) -> None:
+            progress.update(task, description=message)
+
+        results = sync_all(
+            db, settings, max_workers=workers, progress_callback=on_progress
+        )
+
+    console.print()
+    for col, res in results.items():
+        console.print(
+            f"{col}: {res.ingested} ingested, {res.deleted} deleted, "
+            f"{res.skipped} unchanged, {res.failed} failed"
+        )
+        for err in res.errors:
+            console.print(f"  error: {err}", style="red")
 
 
 @app.command()

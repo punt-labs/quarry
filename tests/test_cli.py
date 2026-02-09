@@ -258,6 +258,33 @@ class TestRegistrationsCmd:
         assert "No registered directories" in result.output
 
 
+class TestSyncCmd:
+    def test_sync_prints_results(self):
+        from quarry.sync import SyncResult
+
+        mock_results = {
+            "math": SyncResult(
+                collection="math",
+                ingested=3,
+                deleted=1,
+                skipped=5,
+                failed=0,
+            )
+        }
+        settings = _mock_settings()
+        with (
+            patch("quarry.__main__.get_settings", return_value=settings),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.sync_all", return_value=mock_results),
+        ):
+            result = runner.invoke(app, ["sync"])
+
+        assert result.exit_code == 0
+        assert "3 ingested" in result.output
+        assert "1 deleted" in result.output
+        assert "5 unchanged" in result.output
+
+
 class TestCliErrors:
     def test_error_exits_with_code_1(self):
         with (
