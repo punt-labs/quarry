@@ -28,6 +28,7 @@ def _make_chunks(document_name: str, path: str) -> list[Chunk]:
         Chunk(
             document_name=document_name,
             document_path=path,
+            collection="default",
             page_number=1,
             total_pages=1,
             chunk_index=0,
@@ -226,6 +227,7 @@ class TestIngestImageMultiPage:
             Chunk(
                 document_name="scan.tiff",
                 document_path=str(tiff_file),
+                collection="default",
                 page_number=1,
                 total_pages=3,
                 chunk_index=0,

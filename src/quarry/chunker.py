@@ -41,6 +41,7 @@ def chunk_pages(
                 Chunk(
                     document_name=page.document_name,
                     document_path=page.document_path,
+                    collection="default",
                     page_number=page.page_number,
                     total_pages=page.total_pages,
                     chunk_index=chunk_index,

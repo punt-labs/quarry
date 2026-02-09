@@ -32,6 +32,7 @@ class PageContent:
 class Chunk:
     document_name: str
     document_path: str
+    collection: str
     page_number: int
     total_pages: int
     chunk_index: int

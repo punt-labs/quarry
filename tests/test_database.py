@@ -30,6 +30,7 @@ def _make_chunk(
     return Chunk(
         document_name=document_name,
         document_path="/tmp/test.pdf",
+        collection="default",
         page_number=page_number,
         total_pages=5,
         chunk_index=chunk_index,

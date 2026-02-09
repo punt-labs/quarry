@@ -31,6 +31,7 @@ def _schema(embedding_dimension: int = 768) -> pa.Schema:
             pa.field("vector", pa.list_(pa.float32(), embedding_dimension)),
             pa.field("document_name", pa.utf8()),
             pa.field("document_path", pa.utf8()),
+            pa.field("collection", pa.utf8()),
             pa.field("page_number", pa.int32()),
             pa.field("total_pages", pa.int32()),
             pa.field("chunk_index", pa.int32()),

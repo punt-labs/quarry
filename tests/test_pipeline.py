@@ -60,6 +60,7 @@ class TestIngestDocument:
             Chunk(
                 document_name="test.pdf",
                 document_path=str(pdf_file),
+                collection="default",
                 page_number=1,
                 total_pages=2,
                 chunk_index=0,
@@ -111,6 +112,7 @@ class TestIngestDocument:
             Chunk(
                 document_name="test.pdf",
                 document_path=str(pdf_file),
+                collection="default",
                 page_number=1,
                 total_pages=1,
                 chunk_index=0,
@@ -243,6 +245,7 @@ class TestIngestDocument:
             Chunk(
                 document_name="notes.txt",
                 document_path=str(txt_file),
+                collection="default",
                 page_number=1,
                 total_pages=2,
                 chunk_index=0,
@@ -292,6 +295,7 @@ class TestIngestText:
             Chunk(
                 document_name="clip.txt",
                 document_path="<string>",
+                collection="default",
                 page_number=1,
                 total_pages=1,
                 chunk_index=0,

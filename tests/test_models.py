@@ -61,6 +61,7 @@ class TestChunk:
         chunk = Chunk(
             document_name="doc.pdf",
             document_path="/tmp/doc.pdf",
+            collection="default",
             page_number=1,
             total_pages=5,
             chunk_index=0,
@@ -68,6 +69,7 @@ class TestChunk:
             page_raw_text="full page text",
             ingestion_timestamp=now,
         )
+        assert chunk.collection == "default"
         assert chunk.text == "chunk text"
         assert chunk.page_raw_text == "full page text"
         assert chunk.ingestion_timestamp == now
@@ -77,6 +79,7 @@ class TestChunk:
         chunk = Chunk(
             document_name="doc.pdf",
             document_path="/tmp/doc.pdf",
+            collection="default",
             page_number=1,
             total_pages=5,
             chunk_index=0,
