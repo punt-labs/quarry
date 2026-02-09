@@ -22,6 +22,7 @@ _PIL_TO_TEXTRACT: dict[str, str] = {
     "TIFF": "TIFF",
     "BMP": "BMP",
     "WEBP": "WEBP",
+    "MPO": "JPEG",  # iPhone multi-picture; first frame is standard JPEG
 }
 
 
@@ -57,8 +58,11 @@ def analyze_image(image_path: Path) -> ImageAnalysis:
             msg = f"Unsupported image format: {pil_format}"
             raise ValueError(msg)
 
-        page_count = getattr(im, "n_frames", 1)
-        needs_conversion = image_path.suffix.lower() in CONVERTIBLE_FORMATS
+        # MPO frames are alternate camera shots, not document pages
+        page_count = 1 if pil_format == "MPO" else getattr(im, "n_frames", 1)
+        needs_conversion = (
+            image_path.suffix.lower() in CONVERTIBLE_FORMATS or pil_format == "MPO"
+        )
 
         logger.debug(
             "Image %s: format=%s, pages=%d, needs_conversion=%s",

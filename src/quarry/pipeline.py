@@ -312,17 +312,26 @@ def ingest_image(
 
 
 def _prepare_image_bytes(image_path: Path, *, needs_conversion: bool) -> bytes:
-    """Read image bytes, converting BMP/WebP to PNG if needed."""
+    """Read image bytes, converting to a Textract-native format if needed.
+
+    MPO (iPhone multi-picture) is re-encoded as JPEG to avoid PNG size bloat.
+    BMP and WebP are saved as lossless PNG.
+    EXIF orientation is applied before re-encoding to prevent rotated OCR.
+    """
     if not needs_conversion:
         return image_path.read_bytes()
 
     import io  # noqa: PLC0415
 
-    from PIL import Image  # noqa: PLC0415
+    from PIL import Image, ImageOps  # noqa: PLC0415
 
     with Image.open(image_path) as im:
+        transposed = ImageOps.exif_transpose(im)
         buf = io.BytesIO()
-        im.save(buf, format="PNG")
+        if im.format == "MPO":
+            transposed.save(buf, format="JPEG", quality=95)
+        else:
+            transposed.save(buf, format="PNG")
         return buf.getvalue()
 
 

@@ -18,6 +18,13 @@ def _create_image(path: Path, fmt: str) -> None:
     img.save(path, format=fmt)
 
 
+def _create_mpo_image(path: Path) -> None:
+    """Create a minimal MPO (multi-picture) test image."""
+    img1 = Image.new("RGB", (1, 1), color=(255, 0, 0))
+    img2 = Image.new("RGB", (1, 1), color=(0, 255, 0))
+    img1.save(path, format="MPO", save_all=True, append_images=[img2])
+
+
 def _create_multi_page_tiff(path: Path, page_count: int) -> None:
     """Create a multi-page TIFF with the given number of frames."""
     frames = [Image.new("RGB", (1, 1), color=(i, i, i)) for i in range(page_count)]
@@ -63,6 +70,14 @@ class TestAnalyzeImage:
         result = analyze_image(path)
         assert result == ImageAnalysis(
             format="BMP", page_count=1, needs_conversion=True
+        )
+
+    def test_mpo_needs_conversion(self, tmp_path: Path) -> None:
+        path = tmp_path / "photo.jpg"
+        _create_mpo_image(path)
+        result = analyze_image(path)
+        assert result == ImageAnalysis(
+            format="MPO", page_count=1, needs_conversion=True
         )
 
     def test_webp_needs_conversion(self, tmp_path: Path) -> None:
