@@ -35,8 +35,9 @@ Quarry also preserves full page text alongside chunks, so LLMs can reference sur
 - **Sentence-aware chunking** with configurable overlap
 - **Local vector embeddings** using snowflake-arctic-embed-m-v1.5 (768-dim)
 - **LanceDB** for fast, local vector storage (no external database)
-- **MCP server** with 7 tools: `search_documents`, `ingest`, `ingest_text`, `get_documents`, `get_page`, `delete_document`, `status`
-- **CLI** for ingestion, search, and document management
+- **Directory registration and incremental sync** — register directories, detect new/changed/deleted files via mtime+size, re-index in parallel
+- **MCP server** with 11 tools: `search_documents`, `ingest`, `ingest_text`, `get_documents`, `get_page`, `delete_document`, `delete_collection`, `list_collections`, `register_directory`, `deregister_directory`, `sync_all_registrations`, `list_registrations`, `status`
+- **CLI** for ingestion, search, document management, directory registration, and sync
 - **Full page text preserved** alongside chunks for LLM reference
 
 ## Quick Start
@@ -153,7 +154,13 @@ Use the absolute path to `uvx` for Desktop (e.g. `/opt/homebrew/bin/uvx`) since 
 | `get_documents` | List all indexed documents with metadata |
 | `get_page` | Retrieve full text for a specific page |
 | `delete_document` | Remove a document and all its chunks |
-| `status` | Database stats: document/chunk counts, storage size, model info |
+| `delete_collection` | Remove all documents in a collection |
+| `list_collections` | List all collections with document and chunk counts |
+| `register_directory` | Register a directory for incremental sync |
+| `deregister_directory` | Remove a directory registration |
+| `sync_all_registrations` | Sync all registered directories (ingest new/changed, remove deleted) |
+| `list_registrations` | List all registered directories |
+| `status` | Database stats: document/chunk counts, registrations, storage size, model info |
 
 **Claude Desktop note:** Uploaded files live in a container that Quarry cannot access. For uploaded files, use `ingest_text` with the extracted content. For files on your Mac, provide the local path to `ingest`.
 
@@ -173,6 +180,16 @@ quarry search "quarterly revenue" -n 5
 # Manage documents
 quarry list
 quarry delete report.pdf
+quarry collections
+quarry delete-collection math
+
+# Register directories for incremental sync
+quarry register /path/to/courses/ml-101 --collection ml-101
+quarry register /path/to/courses/stats-200
+quarry registrations
+quarry sync
+quarry sync --workers 8
+quarry deregister ml-101
 
 # Environment
 quarry doctor
@@ -214,7 +231,8 @@ All settings are configurable via environment variables:
 | `EMBEDDING_MODEL` | `Snowflake/snowflake-arctic-embed-m-v1.5` | HuggingFace embedding model |
 | `CHUNK_MAX_CHARS` | `1800` | Target max characters per chunk (~450 tokens) |
 | `CHUNK_OVERLAP_CHARS` | `200` | Character overlap between consecutive chunks |
-| `TEXTRACT_POLL_INTERVAL` | `5` | Seconds between Textract status checks |
+| `TEXTRACT_POLL_INITIAL` | `5.0` | Initial seconds between Textract status checks |
+| `TEXTRACT_POLL_MAX` | `30.0` | Maximum polling interval (exponential backoff, 1.5x) |
 | `TEXTRACT_MAX_WAIT` | `900` | Maximum seconds to wait for Textract job |
 
 ## Architecture
@@ -242,6 +260,17 @@ Input
                  │                 │
              MCP Server         CLI
          (stdio transport)   (typer + rich)
+
+Incremental Sync
+  │
+  Directory Registry (SQLite, WAL mode)
+  │
+  ├─ register → track directory + collection mapping
+  ├─ sync ────→ walk directory, compare mtime+size
+  │              ├─ new/changed → ThreadPoolExecutor → ingest pipeline
+  │              ├─ unchanged  → skip
+  │              └─ deleted    → remove from LanceDB + registry
+  └─ deregister → remove tracking + optionally clean data
 ```
 
 Each chunk stores both its text fragment and the full page raw text, so LLMs can reference surrounding context when a search result is relevant.
