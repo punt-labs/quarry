@@ -19,7 +19,8 @@ class Settings(BaseSettings):
     chunk_max_chars: int = 1800
     chunk_overlap_chars: int = 200
 
-    textract_poll_interval: int = 5
+    textract_poll_initial: float = 5.0
+    textract_poll_max: float = 30.0
     textract_max_wait: int = 900
 
     model_config = {"env_file": ".env", "extra": "ignore"}

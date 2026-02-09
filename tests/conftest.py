@@ -34,7 +34,7 @@ def integration_settings(
         aws_access_key_id="test-not-used",
         aws_secret_access_key="test-not-used",
         embedding_model=embedding_model_name,
-        textract_poll_interval=0,
+        textract_poll_initial=0,
     )
 
 
@@ -49,7 +49,7 @@ def aws_settings(embedding_model_name: str, _warm_embedding_model: None) -> Sett
         aws_access_key_id=key_id,
         aws_secret_access_key=secret,
         embedding_model=embedding_model_name,
-        textract_poll_interval=1,
+        textract_poll_initial=1,
     )
 
 

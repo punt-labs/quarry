@@ -158,10 +158,11 @@ def _run_textract(
     job_id = str(response["JobId"])
     logger.info("Textract job started: %s (%d pages)", job_id, total_pages)
 
-    elapsed = 0
+    elapsed = 0.0
+    delay = settings.textract_poll_initial
     while elapsed < settings.textract_max_wait:
-        time.sleep(settings.textract_poll_interval)
-        elapsed += settings.textract_poll_interval
+        time.sleep(delay)
+        elapsed += delay
 
         result = textract.get_document_text_detection(JobId=job_id)
         status = str(result["JobStatus"])
@@ -175,7 +176,8 @@ def _run_textract(
             msg = f"Textract job {job_id} failed: {message}"
             raise RuntimeError(msg)
 
-        logger.info("Textract job %s: %s (%ds elapsed)", job_id, status, elapsed)
+        logger.info("Textract job %s: %s (%.0fs elapsed)", job_id, status, elapsed)
+        delay = min(delay * 1.5, settings.textract_poll_max)
 
     msg = f"Textract job {job_id} timed out after {settings.textract_max_wait}s"
     raise TimeoutError(msg)
