@@ -13,7 +13,39 @@ from quarry.registry import (
     register_directory,
     upsert_file,
 )
-from quarry.sync import compute_sync_plan, discover_files, sync_all, sync_collection
+from quarry.sync import (
+    _is_hidden,
+    compute_sync_plan,
+    discover_files,
+    sync_all,
+    sync_collection,
+)
+
+
+class TestIsHidden:
+    def test_dotfile(self, tmp_path: Path):
+        f = tmp_path / ".DS_Store"
+        assert _is_hidden(f, tmp_path) is True
+
+    def test_resource_fork(self, tmp_path: Path):
+        f = tmp_path / "._report.pdf"
+        assert _is_hidden(f, tmp_path) is True
+
+    def test_normal_file(self, tmp_path: Path):
+        f = tmp_path / "report.pdf"
+        assert _is_hidden(f, tmp_path) is False
+
+    def test_file_in_hidden_dir(self, tmp_path: Path):
+        f = tmp_path / ".Trash" / "photo.jpg"
+        assert _is_hidden(f, tmp_path) is True
+
+    def test_file_in_nested_hidden_dir(self, tmp_path: Path):
+        f = tmp_path / "sub" / ".git" / "config"
+        assert _is_hidden(f, tmp_path) is True
+
+    def test_file_in_normal_subdir(self, tmp_path: Path):
+        f = tmp_path / "sub" / "report.pdf"
+        assert _is_hidden(f, tmp_path) is False
 
 
 class TestDiscoverFiles:
@@ -55,6 +87,40 @@ class TestDiscoverFiles:
         assert result[0].name == "a.pdf"
         assert result[1].name == "z.pdf"
         assert all(p.is_absolute() for p in result)
+
+    def test_skips_resource_fork_files(self, tmp_path: Path):
+        (tmp_path / "report.pdf").touch()
+        (tmp_path / "._report.pdf").touch()
+        result = discover_files(tmp_path, frozenset({".pdf"}))
+        assert len(result) == 1
+        assert result[0].name == "report.pdf"
+
+    def test_skips_trash_directory(self, tmp_path: Path):
+        trash = tmp_path / ".Trash"
+        trash.mkdir()
+        (trash / "deleted.pdf").touch()
+        (tmp_path / "keep.pdf").touch()
+        result = discover_files(tmp_path, frozenset({".pdf"}))
+        assert len(result) == 1
+        assert result[0].name == "keep.pdf"
+
+    def test_skips_dotfiles_in_subdirs(self, tmp_path: Path):
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (sub / "._hidden.pdf").touch()
+        (sub / "visible.pdf").touch()
+        result = discover_files(tmp_path, frozenset({".pdf"}))
+        assert len(result) == 1
+        assert result[0].name == "visible.pdf"
+
+    def test_skips_files_in_hidden_directories(self, tmp_path: Path):
+        hidden = tmp_path / ".git"
+        hidden.mkdir()
+        (hidden / "config.txt").touch()
+        (tmp_path / "notes.txt").touch()
+        result = discover_files(tmp_path, frozenset({".txt"}))
+        assert len(result) == 1
+        assert result[0].name == "notes.txt"
 
 
 class TestComputeSyncPlan:
