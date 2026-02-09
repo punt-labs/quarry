@@ -11,10 +11,12 @@ import typer
 from rich.console import Console
 from rich.progress import Progress
 
+from quarry.collections import derive_collection
 from quarry.config import get_settings
 from quarry.database import (
     delete_document as db_delete_document,
     get_db,
+    list_collections as db_list_collections,
     list_documents,
     search,
 )
@@ -51,10 +53,15 @@ def ingest(
     overwrite: Annotated[
         bool, typer.Option("--overwrite", help="Replace existing data")
     ] = False,
+    collection: Annotated[
+        str, typer.Option("--collection", "-c", help="Collection name")
+    ] = "",
 ) -> None:
     """Ingest a document: chunk, embed, and store. Supports PDF, TXT, MD, TEX, DOCX."""
     settings = get_settings()
     db = get_db(settings.lancedb_path)
+    resolved = file_path.resolve()
+    col = derive_collection(resolved, explicit=collection or None)
 
     with Progress(console=console) as progress:
         task = progress.add_task(f"Processing {file_path.name}", total=None)
@@ -63,10 +70,11 @@ def ingest(
             progress.update(task, description=message)
 
         result = ingest_document(
-            file_path.resolve(),
+            resolved,
             db,
             settings,
             overwrite=overwrite,
+            collection=col,
             progress_callback=on_progress,
         )
 
@@ -79,13 +87,18 @@ def ingest(
 def search_cmd(
     query: Annotated[str, typer.Argument(help="Search query")],
     limit: Annotated[int, typer.Option("--limit", "-n", help="Max results")] = 10,
+    collection: Annotated[
+        str, typer.Option("--collection", "-c", help="Filter by collection")
+    ] = "",
 ) -> None:
     """Search indexed documents."""
     settings = get_settings()
     db = get_db(settings.lancedb_path)
 
     query_vector = embed_query(query, model_name=settings.embedding_model)
-    results = search(db, query_vector, limit=limit)
+    results = search(
+        db, query_vector, limit=limit, collection_filter=collection or None
+    )
 
     for r in results:
         similarity = round(1 - float(str(r.get("_distance", 0))), 4)
@@ -98,11 +111,15 @@ def search_cmd(
 
 @app.command(name="list")
 @_cli_errors
-def list_cmd() -> None:
+def list_cmd(
+    collection: Annotated[
+        str, typer.Option("--collection", "-c", help="Filter by collection")
+    ] = "",
+) -> None:
     """List all indexed documents."""
     settings = get_settings()
     db = get_db(settings.lancedb_path)
-    docs = list_documents(db)
+    docs = list_documents(db, collection_filter=collection or None)
 
     if not docs:
         print("No documents indexed.")
@@ -110,7 +127,7 @@ def list_cmd() -> None:
 
     for doc in docs:
         print(
-            f"{doc['document_name']}: "
+            f"[{doc['collection']}] {doc['document_name']}: "
             f"{doc['indexed_pages']}/{doc['total_pages']} pages, "
             f"{doc['chunk_count']} chunks"
         )
@@ -120,16 +137,39 @@ def list_cmd() -> None:
 @_cli_errors
 def delete_cmd(
     document_name: Annotated[str, typer.Argument(help="Document name to delete")],
+    collection: Annotated[
+        str, typer.Option("--collection", "-c", help="Scope to collection")
+    ] = "",
 ) -> None:
     """Delete all indexed data for a document."""
     settings = get_settings()
     db = get_db(settings.lancedb_path)
-    deleted = db_delete_document(db, document_name)
+    deleted = db_delete_document(db, document_name, collection=collection or None)
 
     if deleted == 0:
         print(f"No data found for {document_name!r}")
     else:
         print(f"Deleted {deleted} chunks for {document_name!r}")
+
+
+@app.command(name="collections")
+@_cli_errors
+def collections_cmd() -> None:
+    """List all collections with document and chunk counts."""
+    settings = get_settings()
+    db = get_db(settings.lancedb_path)
+    cols = db_list_collections(db)
+
+    if not cols:
+        print("No collections found.")
+        return
+
+    for col in cols:
+        print(
+            f"{col['collection']}: "
+            f"{col['document_count']} documents, "
+            f"{col['chunk_count']} chunks"
+        )
 
 
 @app.command()
