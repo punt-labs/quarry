@@ -4,7 +4,17 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from quarry.mcp_server import delete_document, ingest, ingest_text, status
+import numpy as np
+
+from quarry.mcp_server import (
+    delete_document,
+    get_documents,
+    get_page,
+    ingest,
+    ingest_text,
+    search_documents,
+    status,
+)
 
 
 def _settings(tmp_path: Path) -> MagicMock:
@@ -131,6 +141,135 @@ class TestStatus:
             result = json.loads(status())
 
         assert result["database_size_bytes"] == 0
+
+
+class TestSearchDocuments:
+    def test_returns_results(self, tmp_path: Path):
+        settings = _settings(tmp_path)
+        mock_vector = np.zeros(768, dtype=np.float32)
+        mock_results = [
+            {
+                "document_name": "report.pdf",
+                "page_number": 3,
+                "chunk_index": 0,
+                "text": "quarterly revenue grew",
+                "_distance": 0.15,
+            },
+        ]
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._db"),
+            patch("quarry.mcp_server.embed_query", return_value=mock_vector),
+            patch("quarry.mcp_server.search", return_value=mock_results),
+        ):
+            result = json.loads(search_documents("revenue growth"))
+
+        assert result["query"] == "revenue growth"
+        assert result["total_results"] == 1
+        assert result["results"][0]["document_name"] == "report.pdf"
+        assert result["results"][0]["similarity"] == 0.85
+
+    def test_clamps_limit_to_50(self, tmp_path: Path):
+        settings = _settings(tmp_path)
+        mock_vector = np.zeros(768, dtype=np.float32)
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._db"),
+            patch("quarry.mcp_server.embed_query", return_value=mock_vector),
+            patch("quarry.mcp_server.search", return_value=[]) as mock_search,
+        ):
+            search_documents("test", limit=100)
+
+        call_kwargs = mock_search.call_args[1]
+        assert call_kwargs["limit"] == 50
+
+    def test_passes_document_filter(self, tmp_path: Path):
+        settings = _settings(tmp_path)
+        mock_vector = np.zeros(768, dtype=np.float32)
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._db"),
+            patch("quarry.mcp_server.embed_query", return_value=mock_vector),
+            patch("quarry.mcp_server.search", return_value=[]) as mock_search,
+        ):
+            search_documents("test", document_filter="report.pdf")
+
+        call_kwargs = mock_search.call_args[1]
+        assert call_kwargs["document_filter"] == "report.pdf"
+
+    def test_empty_filter_passes_none(self, tmp_path: Path):
+        settings = _settings(tmp_path)
+        mock_vector = np.zeros(768, dtype=np.float32)
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._db"),
+            patch("quarry.mcp_server.embed_query", return_value=mock_vector),
+            patch("quarry.mcp_server.search", return_value=[]) as mock_search,
+        ):
+            search_documents("test", document_filter="")
+
+        call_kwargs = mock_search.call_args[1]
+        assert call_kwargs["document_filter"] is None
+
+
+class TestGetDocuments:
+    def test_returns_document_list(self, tmp_path: Path):
+        settings = _settings(tmp_path)
+        mock_docs = [
+            {"document_name": "a.pdf", "total_pages": 10, "chunk_count": 25},
+            {"document_name": "b.pdf", "total_pages": 5, "chunk_count": 12},
+        ]
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._db"),
+            patch("quarry.mcp_server.list_documents", return_value=mock_docs),
+        ):
+            result = json.loads(get_documents())
+
+        assert result["total_documents"] == 2
+        assert result["documents"][0]["document_name"] == "a.pdf"
+
+    def test_empty_database(self, tmp_path: Path):
+        settings = _settings(tmp_path)
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._db"),
+            patch("quarry.mcp_server.list_documents", return_value=[]),
+        ):
+            result = json.loads(get_documents())
+
+        assert result["total_documents"] == 0
+        assert result["documents"] == []
+
+
+class TestGetPage:
+    def test_returns_page_text(self, tmp_path: Path):
+        settings = _settings(tmp_path)
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._db"),
+            patch(
+                "quarry.mcp_server.get_page_text",
+                return_value="The quick brown fox",
+            ),
+        ):
+            result = get_page("report.pdf", 3)
+
+        assert "report.pdf" in result
+        assert "Page: 3" in result
+        assert "The quick brown fox" in result
+
+    def test_returns_not_found_message(self, tmp_path: Path):
+        settings = _settings(tmp_path)
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._db"),
+            patch("quarry.mcp_server.get_page_text", return_value=None),
+        ):
+            result = get_page("missing.pdf", 99)
+
+        assert "No data found" in result
+        assert "missing.pdf" in result
 
 
 class TestHandleErrors:
