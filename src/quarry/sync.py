@@ -28,11 +28,22 @@ from quarry.types import LanceDB
 logger = logging.getLogger(__name__)
 
 
+def _is_hidden(path: Path, root: Path) -> bool:
+    """True if any component between *root* and *path* starts with a dot."""
+    for parent in path.relative_to(root).parents:
+        if parent.name.startswith("."):
+            return True
+    return path.name.startswith(".")
+
+
 def discover_files(
     directory: Path,
     extensions: frozenset[str],
 ) -> list[Path]:
     """Recursively find files matching *extensions* under *directory*.
+
+    Skips dotfiles, macOS resource forks (``._*``), and files inside
+    hidden directories (``.Trash``, ``.git``, etc.).
 
     Returns absolute paths, sorted for deterministic order.  Uses
     ``absolute()`` rather than ``resolve()`` so that symlinks within
@@ -41,7 +52,9 @@ def discover_files(
     return sorted(
         child.absolute()
         for child in directory.rglob("*")
-        if child.is_file() and child.suffix.lower() in extensions
+        if child.is_file()
+        and child.suffix.lower() in extensions
+        and not _is_hidden(child, directory)
     )
 
 
