@@ -316,20 +316,22 @@ def _prepare_image_bytes(image_path: Path, *, needs_conversion: bool) -> bytes:
 
     MPO (iPhone multi-picture) is re-encoded as JPEG to avoid PNG size bloat.
     BMP and WebP are saved as lossless PNG.
+    EXIF orientation is applied before re-encoding to prevent rotated OCR.
     """
     if not needs_conversion:
         return image_path.read_bytes()
 
     import io  # noqa: PLC0415
 
-    from PIL import Image  # noqa: PLC0415
+    from PIL import Image, ImageOps  # noqa: PLC0415
 
     with Image.open(image_path) as im:
+        transposed = ImageOps.exif_transpose(im)
         buf = io.BytesIO()
         if im.format == "MPO":
-            im.save(buf, format="JPEG", quality=95)
+            transposed.save(buf, format="JPEG", quality=95)
         else:
-            im.save(buf, format="PNG")
+            transposed.save(buf, format="PNG")
         return buf.getvalue()
 
 
