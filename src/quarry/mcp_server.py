@@ -246,7 +246,7 @@ def status() -> str:
             "database_path": str(settings.lancedb_path),
             "database_size_bytes": db_size_bytes,
             "embedding_model": settings.embedding_model,
-            "embedding_dimension": 768,
+            "embedding_dimension": settings.embedding_dimension,
         },
         indent=2,
     )

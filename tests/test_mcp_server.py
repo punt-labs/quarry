@@ -11,6 +11,7 @@ def _settings(tmp_path: Path) -> MagicMock:
     s = MagicMock()
     s.lancedb_path = tmp_path / "lancedb"
     s.embedding_model = "Snowflake/snowflake-arctic-embed-m-v1.5"
+    s.embedding_dimension = 768
     return s
 
 

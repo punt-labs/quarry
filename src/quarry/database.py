@@ -24,19 +24,20 @@ def _escape_sql(value: str) -> str:
     return value.replace("'", "''")
 
 
-SCHEMA = pa.schema(
-    [
-        pa.field("text", pa.utf8()),
-        pa.field("vector", pa.list_(pa.float32(), 768)),
-        pa.field("document_name", pa.utf8()),
-        pa.field("document_path", pa.utf8()),
-        pa.field("page_number", pa.int32()),
-        pa.field("total_pages", pa.int32()),
-        pa.field("chunk_index", pa.int32()),
-        pa.field("page_raw_text", pa.utf8()),
-        pa.field("ingestion_timestamp", pa.timestamp("us", tz="UTC")),
-    ]
-)
+def _schema(embedding_dimension: int = 768) -> pa.Schema:
+    return pa.schema(
+        [
+            pa.field("text", pa.utf8()),
+            pa.field("vector", pa.list_(pa.float32(), embedding_dimension)),
+            pa.field("document_name", pa.utf8()),
+            pa.field("document_path", pa.utf8()),
+            pa.field("page_number", pa.int32()),
+            pa.field("total_pages", pa.int32()),
+            pa.field("chunk_index", pa.int32()),
+            pa.field("page_raw_text", pa.utf8()),
+            pa.field("ingestion_timestamp", pa.timestamp("us", tz="UTC")),
+        ]
+    )
 
 
 def get_db(db_path: Path) -> LanceDB:
@@ -71,7 +72,7 @@ def insert_chunks(
         table = db.open_table(TABLE_NAME)
         table.add(records)
     else:
-        db.create_table(TABLE_NAME, data=records, schema=SCHEMA)
+        db.create_table(TABLE_NAME, data=records, schema=_schema())
 
     logger.info("Inserted %d chunks into %s", len(records), TABLE_NAME)
     return len(records)

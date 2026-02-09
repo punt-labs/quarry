@@ -13,6 +13,7 @@ class Settings(BaseSettings):
 
     lancedb_path: Path = Path.home() / ".quarry" / "data" / "lancedb"
     embedding_model: str = "Snowflake/snowflake-arctic-embed-m-v1.5"
+    embedding_dimension: int = 768
 
     chunk_max_chars: int = 1800
     chunk_overlap_chars: int = 200
