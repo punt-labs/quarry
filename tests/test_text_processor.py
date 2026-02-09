@@ -7,6 +7,7 @@ import pytest
 from quarry.models import PageType
 from quarry.text_processor import (
     SUPPORTED_TEXT_EXTENSIONS,
+    _read_text_with_fallback,
     process_raw_text,
     process_text_file,
 )
@@ -15,6 +16,27 @@ from quarry.text_processor import (
 class TestSupportedExtensions:
     def test_includes_expected(self):
         assert frozenset({".txt", ".md", ".tex", ".docx"}) == SUPPORTED_TEXT_EXTENSIONS
+
+
+class TestReadTextWithFallback:
+    def test_utf8_file(self, tmp_path: Path):
+        f = tmp_path / "utf8.txt"
+        f.write_text("Hello world", encoding="utf-8")
+        assert _read_text_with_fallback(f) == "Hello world"
+
+    def test_latin1_file(self, tmp_path: Path):
+        f = tmp_path / "german.txt"
+        f.write_bytes("Ärger mit Ü".encode("latin-1"))
+        result = _read_text_with_fallback(f)
+        assert "Ärger" in result
+        assert "Ü" in result
+
+    def test_cp1252_file(self, tmp_path: Path):
+        f = tmp_path / "windows.txt"
+        # 0x93/0x94 are left/right double quotes in CP1252
+        f.write_bytes(b"\x93Hello\x94")
+        result = _read_text_with_fallback(f)
+        assert result == "\u201cHello\u201d"
 
 
 class TestProcessTextFile:
@@ -87,6 +109,16 @@ class TestProcessTextFile:
         pages = process_text_file(f)
 
         assert pages == []
+
+    def test_latin1_file_processes_correctly(self, tmp_path: Path):
+        f = tmp_path / "german.txt"
+        f.write_bytes("Über die Brücke.\n\nZweiter Absatz.".encode("latin-1"))
+
+        pages = process_text_file(f)
+
+        assert len(pages) == 2
+        assert "Über" in pages[0].text
+        assert "Brücke" in pages[0].text
 
     def test_whitespace_only_sections_skipped(self, tmp_path: Path):
         f = tmp_path / "spacey.txt"
