@@ -119,6 +119,72 @@ def get_registration(
     )
 
 
+def get_file(conn: sqlite3.Connection, path: str) -> FileRecord | None:
+    """Look up a file record by absolute path."""
+    row = conn.execute(
+        "SELECT path, collection, document_name, mtime, size, ingested_at "
+        "FROM files WHERE path = ?",
+        (path,),
+    ).fetchone()
+    if row is None:
+        return None
+    return FileRecord(
+        path=row[0],
+        collection=row[1],
+        document_name=row[2],
+        mtime=row[3],
+        size=row[4],
+        ingested_at=row[5],
+    )
+
+
+def upsert_file(conn: sqlite3.Connection, record: FileRecord) -> None:
+    """Insert or replace a file record."""
+    conn.execute(
+        "INSERT OR REPLACE INTO files "
+        "(path, collection, document_name, mtime, size, ingested_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (
+            record.path,
+            record.collection,
+            record.document_name,
+            record.mtime,
+            record.size,
+            record.ingested_at,
+        ),
+    )
+    conn.commit()
+
+
+def list_files(
+    conn: sqlite3.Connection,
+    collection: str,
+) -> list[FileRecord]:
+    """Return all file records for a collection."""
+    rows = conn.execute(
+        "SELECT path, collection, document_name, mtime, size, ingested_at "
+        "FROM files WHERE collection = ? ORDER BY path",
+        (collection,),
+    ).fetchall()
+    return [
+        FileRecord(
+            path=r[0],
+            collection=r[1],
+            document_name=r[2],
+            mtime=r[3],
+            size=r[4],
+            ingested_at=r[5],
+        )
+        for r in rows
+    ]
+
+
+def delete_file(conn: sqlite3.Connection, path: str) -> None:
+    """Delete a single file record by path."""
+    conn.execute("DELETE FROM files WHERE path = ?", (path,))
+    conn.commit()
+
+
 def _init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """\

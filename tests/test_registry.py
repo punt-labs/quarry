@@ -6,11 +6,16 @@ from pathlib import Path
 import pytest
 
 from quarry.registry import (
+    FileRecord,
+    delete_file,
     deregister_directory,
+    get_file,
     get_registration,
+    list_files,
     list_registrations,
     open_registry,
     register_directory,
+    upsert_file,
 )
 
 
@@ -137,4 +142,73 @@ class TestListAndGetRegistrations:
     def test_get_registration_not_found(self, tmp_path: Path):
         conn = open_registry(tmp_path / "r.db")
         assert get_registration(conn, "missing") is None
+        conn.close()
+
+
+class TestFileRecordOperations:
+    def _make_record(
+        self,
+        path: str = "/a/b.pdf",
+        collection: str = "c",
+    ) -> FileRecord:
+        return FileRecord(
+            path=path,
+            collection=collection,
+            document_name="b.pdf",
+            mtime=1000.0,
+            size=2048,
+            ingested_at="2025-06-01T00:00:00",
+        )
+
+    def test_upsert_inserts_new(self, tmp_path: Path):
+        conn = open_registry(tmp_path / "r.db")
+        rec = self._make_record()
+        upsert_file(conn, rec)
+        got = get_file(conn, rec.path)
+        assert got is not None
+        assert got.mtime == 1000.0
+        assert got.size == 2048
+        conn.close()
+
+    def test_upsert_updates_existing(self, tmp_path: Path):
+        conn = open_registry(tmp_path / "r.db")
+        rec = self._make_record()
+        upsert_file(conn, rec)
+        updated = FileRecord(
+            path=rec.path,
+            collection=rec.collection,
+            document_name=rec.document_name,
+            mtime=2000.0,
+            size=4096,
+            ingested_at="2025-06-02T00:00:00",
+        )
+        upsert_file(conn, updated)
+        got = get_file(conn, rec.path)
+        assert got is not None
+        assert got.mtime == 2000.0
+        assert got.size == 4096
+        conn.close()
+
+    def test_get_file_not_found(self, tmp_path: Path):
+        conn = open_registry(tmp_path / "r.db")
+        assert get_file(conn, "/nonexistent") is None
+        conn.close()
+
+    def test_list_files_filters_by_collection(self, tmp_path: Path):
+        conn = open_registry(tmp_path / "r.db")
+        upsert_file(conn, self._make_record("/a/1.pdf", "alpha"))
+        upsert_file(conn, self._make_record("/a/2.pdf", "alpha"))
+        upsert_file(conn, self._make_record("/b/3.pdf", "beta"))
+        alpha_files = list_files(conn, "alpha")
+        assert len(alpha_files) == 2
+        beta_files = list_files(conn, "beta")
+        assert len(beta_files) == 1
+        conn.close()
+
+    def test_delete_file_removes_record(self, tmp_path: Path):
+        conn = open_registry(tmp_path / "r.db")
+        rec = self._make_record()
+        upsert_file(conn, rec)
+        delete_file(conn, rec.path)
+        assert get_file(conn, rec.path) is None
         conn.close()
