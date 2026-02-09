@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import asdict
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 
@@ -44,7 +44,7 @@ def get_db(db_path: Path) -> LanceDB:
     import lancedb  # noqa: PLC0415
 
     db_path.mkdir(parents=True, exist_ok=True)
-    return lancedb.connect(str(db_path))  # type: ignore[no-any-return,attr-defined]
+    return cast("LanceDB", lancedb.connect(str(db_path)))  # type: ignore[attr-defined]
 
 
 def insert_chunks(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
+from typing import cast
 
 import boto3
 
@@ -38,8 +39,8 @@ def ocr_document_via_s3(
         RuntimeError: If the Textract job fails.
         TimeoutError: If the Textract job exceeds the configured timeout.
     """
-    s3: S3Client = boto3.client("s3")  # type: ignore[assignment]
-    textract: TextractClient = boto3.client("textract")  # type: ignore[assignment]
+    s3 = cast("S3Client", boto3.client("s3"))
+    textract = cast("TextractClient", boto3.client("textract"))
 
     s3_key = f"textract-jobs/{document_path.stem}/{document_path.name}"
 
@@ -97,7 +98,7 @@ def ocr_image_bytes(
     Raises:
         RuntimeError: If Textract returns no text blocks.
     """
-    textract: TextractClient = boto3.client("textract")  # type: ignore[assignment]
+    textract = cast("TextractClient", boto3.client("textract"))
 
     logger.info("Running sync OCR on %s (%d bytes)", document_name, len(image_bytes))
     response = textract.detect_document_text(
