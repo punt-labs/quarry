@@ -19,6 +19,8 @@ def ocr_document_via_s3(
     page_numbers: list[int],
     total_pages: int,
     settings: Settings,
+    *,
+    document_name: str | None = None,
 ) -> list[PageContent]:
     """OCR document pages using AWS Textract async API via S3.
 
@@ -31,6 +33,8 @@ def ocr_document_via_s3(
         page_numbers: 1-indexed page numbers that need OCR.
         total_pages: Total pages in the document.
         settings: Application settings with AWS config.
+        document_name: Override for stored document name.
+            Defaults to ``document_path.name``.
 
     Returns:
         List of PageContent for each requested page.
@@ -39,6 +43,8 @@ def ocr_document_via_s3(
         RuntimeError: If the Textract job fails.
         TimeoutError: If the Textract job exceeds the configured timeout.
     """
+    doc_name = document_name or document_path.name
+
     s3 = cast("S3Client", boto3.client("s3"))
     textract = cast("TextractClient", boto3.client("textract"))
 
@@ -66,7 +72,7 @@ def ocr_document_via_s3(
         if page_num in requested:
             results.append(
                 PageContent(
-                    document_name=document_path.name,
+                    document_name=doc_name,
                     document_path=str(document_path.resolve()),
                     page_number=page_num,
                     total_pages=total_pages,
@@ -158,10 +164,11 @@ def _run_textract(
     job_id = str(response["JobId"])
     logger.info("Textract job started: %s (%d pages)", job_id, total_pages)
 
-    elapsed = 0
+    elapsed = 0.0
+    delay = max(settings.textract_poll_initial, 0.1)
     while elapsed < settings.textract_max_wait:
-        time.sleep(settings.textract_poll_interval)
-        elapsed += settings.textract_poll_interval
+        time.sleep(delay)
+        elapsed += delay
 
         result = textract.get_document_text_detection(JobId=job_id)
         status = str(result["JobStatus"])
@@ -175,7 +182,8 @@ def _run_textract(
             msg = f"Textract job {job_id} failed: {message}"
             raise RuntimeError(msg)
 
-        logger.info("Textract job %s: %s (%ds elapsed)", job_id, status, elapsed)
+        logger.info("Textract job %s: %s (%.0fs elapsed)", job_id, status, elapsed)
+        delay = min(delay * 1.5, settings.textract_poll_max)
 
     msg = f"Textract job {job_id} timed out after {settings.textract_max_wait}s"
     raise TimeoutError(msg)

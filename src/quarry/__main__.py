@@ -23,6 +23,13 @@ from quarry.database import (
 )
 from quarry.embeddings import embed_query
 from quarry.pipeline import ingest_document
+from quarry.registry import (
+    deregister_directory,
+    list_registrations,
+    open_registry,
+    register_directory,
+)
+from quarry.sync import sync_all
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -187,6 +194,102 @@ def delete_collection_cmd(
         print(f"No data found for collection {collection!r}")
     else:
         print(f"Deleted {deleted} chunks for collection {collection!r}")
+
+
+@app.command()
+@_cli_errors
+def register(
+    directory: Annotated[Path, typer.Argument(help="Directory to register")],
+    collection: Annotated[
+        str,
+        typer.Option("--collection", "-c", help="Collection name (default: dir name)"),
+    ] = "",
+) -> None:
+    """Register a directory for incremental sync."""
+    settings = get_settings()
+    resolved = directory.resolve()
+    col = collection or resolved.name
+    conn = open_registry(settings.registry_path)
+    try:
+        reg = register_directory(conn, resolved, col)
+        print(f"Registered {reg.directory} as collection {reg.collection!r}")
+    finally:
+        conn.close()
+
+
+@app.command()
+@_cli_errors
+def deregister(
+    collection: Annotated[str, typer.Argument(help="Collection to deregister")],
+    keep_data: Annotated[
+        bool,
+        typer.Option("--keep-data", help="Keep indexed data in LanceDB"),
+    ] = False,
+) -> None:
+    """Remove a directory registration. Optionally keep indexed data."""
+    settings = get_settings()
+    conn = open_registry(settings.registry_path)
+    try:
+        doc_names = deregister_directory(conn, collection)
+    finally:
+        conn.close()
+
+    if not keep_data and doc_names:
+        db = get_db(settings.lancedb_path)
+        for name in doc_names:
+            db_delete_document(db, name, collection=collection)
+    removed = len(doc_names)
+    print(f"Deregistered collection {collection!r} ({removed} files)")
+
+
+@app.command(name="registrations")
+@_cli_errors
+def registrations_cmd() -> None:
+    """List all registered directories."""
+    settings = get_settings()
+    conn = open_registry(settings.registry_path)
+    try:
+        regs = list_registrations(conn)
+    finally:
+        conn.close()
+
+    if not regs:
+        print("No registered directories.")
+        return
+
+    for reg in regs:
+        print(f"{reg.collection}: {reg.directory}")
+
+
+@app.command(name="sync")
+@_cli_errors
+def sync_cmd(
+    workers: Annotated[
+        int, typer.Option("--workers", "-w", help="Parallel workers")
+    ] = 4,
+) -> None:
+    """Sync all registered directories: ingest new/changed, remove deleted."""
+    settings = get_settings()
+    db = get_db(settings.lancedb_path)
+
+    with Progress(console=console) as progress:
+        task = progress.add_task("Syncing", total=None)
+
+        def on_progress(message: str) -> None:
+            progress.update(task, description=message)
+
+        results = sync_all(
+            db, settings, max_workers=workers, progress_callback=on_progress
+        )
+
+    console.print()
+    for col, res in results.items():
+        console.print(
+            f"{col}: {res.ingested} ingested, {res.deleted} deleted, "
+            f"{res.skipped} unchanged, {res.failed} failed"
+        )
+        for err in res.errors:
+            console.print(f"  error: {err}", style="red")
 
 
 @app.command()

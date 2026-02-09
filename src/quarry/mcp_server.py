@@ -22,6 +22,13 @@ from quarry.database import (
 )
 from quarry.embeddings import embed_query
 from quarry.pipeline import ingest_document, ingest_text as pipeline_ingest_text
+from quarry.registry import (
+    deregister_directory as registry_deregister,
+    list_registrations as registry_list,
+    open_registry,
+    register_directory as registry_register,
+)
+from quarry.sync import sync_all as engine_sync_all
 from quarry.types import LanceDB
 
 logging.basicConfig(level=logging.INFO)
@@ -273,6 +280,128 @@ def delete_collection(collection: str) -> str:
 
 @mcp.tool()
 @_handle_errors
+def register_directory(directory: str, collection: str = "") -> str:
+    """Register a directory for incremental sync.
+
+    Args:
+        directory: Absolute path to the directory.
+        collection: Collection name. Uses directory name if empty.
+    """
+    settings = _settings()
+    path = Path(directory).resolve()
+    col = collection or path.name
+    conn = open_registry(settings.registry_path)
+    try:
+        reg = registry_register(conn, path, col)
+    finally:
+        conn.close()
+    return json.dumps(
+        {
+            "directory": reg.directory,
+            "collection": reg.collection,
+            "registered_at": reg.registered_at,
+        },
+        indent=2,
+    )
+
+
+@mcp.tool()
+@_handle_errors
+def deregister_directory(
+    collection: str,
+    keep_data: bool = False,
+) -> str:
+    """Remove a directory registration.
+
+    Args:
+        collection: Collection name to deregister.
+        keep_data: If true, keep indexed data in LanceDB.
+    """
+    settings = _settings()
+    conn = open_registry(settings.registry_path)
+    try:
+        doc_names = registry_deregister(conn, collection)
+    finally:
+        conn.close()
+
+    if not keep_data and doc_names:
+        db = _db()
+        for name in doc_names:
+            db_delete_document(db, name, collection=collection)
+
+    return json.dumps(
+        {
+            "collection": collection,
+            "documents_removed": len(doc_names),
+            "data_deleted": not keep_data,
+        },
+        indent=2,
+    )
+
+
+@mcp.tool()
+@_handle_errors
+def sync_all_registrations() -> str:
+    """Sync all registered directories: ingest new/changed, remove deleted."""
+    settings = _settings()
+    db = _db()
+
+    progress_lines: list[str] = []
+    results = engine_sync_all(
+        db,
+        settings,
+        progress_callback=progress_lines.append,
+    )
+
+    summary = {
+        col: {
+            "ingested": res.ingested,
+            "deleted": res.deleted,
+            "skipped": res.skipped,
+            "failed": res.failed,
+            "errors": res.errors,
+        }
+        for col, res in results.items()
+    }
+
+    return json.dumps(
+        {
+            "collections_synced": len(results),
+            "results": summary,
+            "progress": progress_lines,
+        },
+        indent=2,
+    )
+
+
+@mcp.tool()
+@_handle_errors
+def list_registrations() -> str:
+    """List all registered directories."""
+    settings = _settings()
+    conn = open_registry(settings.registry_path)
+    try:
+        regs = registry_list(conn)
+    finally:
+        conn.close()
+    return json.dumps(
+        {
+            "total_registrations": len(regs),
+            "registrations": [
+                {
+                    "directory": r.directory,
+                    "collection": r.collection,
+                    "registered_at": r.registered_at,
+                }
+                for r in regs
+            ],
+        },
+        indent=2,
+    )
+
+
+@mcp.tool()
+@_handle_errors
 def status() -> str:
     """Get database status: document/chunk counts, storage size, and model info."""
     settings = _settings()
@@ -281,6 +410,15 @@ def status() -> str:
     docs = list_documents(db)
     chunks = count_chunks(db)
     cols = db_list_collections(db)
+
+    if settings.registry_path.exists():
+        conn = open_registry(settings.registry_path)
+        try:
+            regs = registry_list(conn)
+        finally:
+            conn.close()
+    else:
+        regs = []
 
     db_size_bytes = (
         sum(f.stat().st_size for f in settings.lancedb_path.rglob("*") if f.is_file())
@@ -293,6 +431,7 @@ def status() -> str:
             "document_count": len(docs),
             "collection_count": len(cols),
             "chunk_count": chunks,
+            "registered_directories": len(regs),
             "database_path": str(settings.lancedb_path),
             "database_size_bytes": db_size_bytes,
             "embedding_model": settings.embedding_model,

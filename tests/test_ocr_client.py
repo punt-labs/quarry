@@ -13,7 +13,7 @@ def _settings() -> Settings:
     return Settings(
         aws_access_key_id="test",
         aws_secret_access_key="test",
-        textract_poll_interval=0,
+        textract_poll_initial=0,
         textract_max_wait=1,
     )
 
@@ -221,7 +221,7 @@ class TestOcrDocumentViaS3:
         settings = Settings(
             aws_access_key_id="test",
             aws_secret_access_key="test",
-            textract_poll_interval=0,
+            textract_poll_initial=0,
             textract_max_wait=0,
         )
 

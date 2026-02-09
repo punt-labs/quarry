@@ -9,19 +9,24 @@ import numpy as np
 from quarry.mcp_server import (
     delete_collection,
     delete_document,
+    deregister_directory,
     get_documents,
     get_page,
     ingest,
     ingest_text,
     list_collections,
+    list_registrations,
+    register_directory,
     search_documents,
     status,
+    sync_all_registrations,
 )
 
 
 def _settings(tmp_path: Path) -> MagicMock:
     s = MagicMock()
     s.lancedb_path = tmp_path / "lancedb"
+    s.registry_path = tmp_path / "registry.db"
     s.embedding_model = "Snowflake/snowflake-arctic-embed-m-v1.5"
     s.embedding_dimension = 768
     return s
@@ -128,21 +133,26 @@ class TestStatus:
         settings = _settings(tmp_path)
         settings.lancedb_path.mkdir(parents=True)
         (settings.lancedb_path / "data.lance").write_bytes(b"x" * 1024)
+        settings.registry_path.touch()
 
         mock_docs = [{"document_name": "a.pdf"}, {"document_name": "b.pdf"}]
         mock_cols = [{"collection": "math", "document_count": 2, "chunk_count": 42}]
+        mock_conn = MagicMock()
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
             patch("quarry.mcp_server.list_documents", return_value=mock_docs),
             patch("quarry.mcp_server.count_chunks", return_value=42),
             patch("quarry.mcp_server.db_list_collections", return_value=mock_cols),
+            patch("quarry.mcp_server.open_registry", return_value=mock_conn),
+            patch("quarry.mcp_server.registry_list", return_value=["fake"]),
         ):
             result = json.loads(status())
 
         assert result["document_count"] == 2
         assert result["collection_count"] == 1
         assert result["chunk_count"] == 42
+        assert result["registered_directories"] == 1
         assert result["database_path"] == str(settings.lancedb_path)
         assert result["database_size_bytes"] == 1024
         assert result["embedding_model"] == "Snowflake/snowflake-arctic-embed-m-v1.5"
@@ -151,24 +161,29 @@ class TestStatus:
     def test_empty_database(self, tmp_path: Path):
         settings = _settings(tmp_path)
         settings.lancedb_path.mkdir(parents=True)
+        settings.registry_path.touch()
 
+        mock_conn = MagicMock()
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
             patch("quarry.mcp_server.list_documents", return_value=[]),
             patch("quarry.mcp_server.count_chunks", return_value=0),
             patch("quarry.mcp_server.db_list_collections", return_value=[]),
+            patch("quarry.mcp_server.open_registry", return_value=mock_conn),
+            patch("quarry.mcp_server.registry_list", return_value=[]),
         ):
             result = json.loads(status())
 
         assert result["document_count"] == 0
         assert result["collection_count"] == 0
         assert result["chunk_count"] == 0
+        assert result["registered_directories"] == 0
         assert result["database_size_bytes"] == 0
 
     def test_nonexistent_db_path(self, tmp_path: Path):
         settings = _settings(tmp_path)
-
+        # registry_path doesn't exist → status() skips open_registry
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
@@ -179,6 +194,7 @@ class TestStatus:
             result = json.loads(status())
 
         assert result["database_size_bytes"] == 0
+        assert result["registered_directories"] == 0
 
 
 class TestSearchDocuments:
@@ -404,3 +420,91 @@ class TestHandleErrors:
 
         assert "ValueError" in result
         assert "bad format hint" in result
+
+
+class TestRegisterDirectory:
+    def test_registers_and_returns_json(self, tmp_path: Path):
+        settings = _settings(tmp_path)
+        d = tmp_path / "course"
+        d.mkdir()
+        with patch("quarry.mcp_server._settings", return_value=settings):
+            result = json.loads(register_directory(str(d), "my-course"))
+        assert result["collection"] == "my-course"
+        assert result["directory"] == str(d.resolve())
+
+    def test_default_collection_from_dir_name(self, tmp_path: Path):
+        settings = _settings(tmp_path)
+        d = tmp_path / "ml-101"
+        d.mkdir()
+        with patch("quarry.mcp_server._settings", return_value=settings):
+            result = json.loads(register_directory(str(d)))
+        assert result["collection"] == "ml-101"
+
+
+class TestDeregisterDirectory:
+    def test_deregisters_and_cleans_data(self, tmp_path: Path):
+        settings = _settings(tmp_path)
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server.open_registry") as mock_open,
+            patch(
+                "quarry.mcp_server.registry_deregister",
+                return_value=["a.pdf", "b.pdf"],
+            ),
+            patch("quarry.mcp_server._db"),
+            patch("quarry.mcp_server.db_delete_document") as mock_del,
+        ):
+            mock_open.return_value = MagicMock()
+            result = json.loads(deregister_directory("math"))
+        assert result["collection"] == "math"
+        assert result["documents_removed"] == 2
+        assert result["data_deleted"] is True
+        assert mock_del.call_count == 2
+
+
+class TestSyncAllRegistrations:
+    def test_returns_sync_results(self, tmp_path: Path):
+        from quarry.sync import SyncResult
+
+        settings = _settings(tmp_path)
+        mock_results = {
+            "math": SyncResult(
+                collection="math",
+                ingested=2,
+                deleted=0,
+                skipped=3,
+                failed=0,
+            ),
+        }
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._db"),
+            patch(
+                "quarry.mcp_server.engine_sync_all",
+                return_value=mock_results,
+            ),
+        ):
+            result = json.loads(sync_all_registrations())
+        assert result["collections_synced"] == 1
+        assert result["results"]["math"]["ingested"] == 2
+        assert result["results"]["math"]["skipped"] == 3
+        assert isinstance(result["progress"], list)
+
+
+class TestListRegistrations:
+    def test_returns_registrations(self, tmp_path: Path):
+        settings = _settings(tmp_path)
+        d = tmp_path / "course"
+        d.mkdir()
+        # Register first
+        with patch("quarry.mcp_server._settings", return_value=settings):
+            register_directory(str(d), "course")
+            result = json.loads(list_registrations())
+        assert result["total_registrations"] == 1
+        assert result["registrations"][0]["collection"] == "course"
+
+    def test_empty(self, tmp_path: Path):
+        settings = _settings(tmp_path)
+        with patch("quarry.mcp_server._settings", return_value=settings):
+            result = json.loads(list_registrations())
+        assert result["total_registrations"] == 0

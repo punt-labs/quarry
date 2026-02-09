@@ -26,9 +26,11 @@ class TestSettings:
         assert settings.s3_bucket == "ocr-7f3a1b2e4c5d4e8f9a1b3c5d7e9f2a4b"
         assert settings.chunk_max_chars == 1800
         assert settings.chunk_overlap_chars == 200
-        assert settings.textract_poll_interval == 5
+        assert settings.textract_poll_initial == 5.0
         assert settings.textract_max_wait == 900
         assert isinstance(settings.lancedb_path, Path)
+        expected = Path.home() / ".quarry" / "data" / "registry.db"
+        assert settings.registry_path == expected
 
     def test_override_via_constructor(self):
         settings = Settings(

@@ -18,4 +18,4 @@ jobs:
         with:
           python-version: "3.13"
       - run: uv sync --frozen --extra dev
-      - run: uv run pytest
+      - run: uv run pytest -m "not slow"

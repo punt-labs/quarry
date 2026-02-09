@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -34,22 +33,27 @@ def integration_settings(
         aws_access_key_id="test-not-used",
         aws_secret_access_key="test-not-used",
         embedding_model=embedding_model_name,
-        textract_poll_interval=0,
+        textract_poll_initial=0,
     )
 
 
 @pytest.fixture()
 def aws_settings(embedding_model_name: str, _warm_embedding_model: None) -> Settings:
-    """Settings with real AWS creds from environment. Skip if not set."""
-    key_id = os.environ.get("AWS_ACCESS_KEY_ID", "")
-    secret = os.environ.get("AWS_SECRET_ACCESS_KEY", "")
-    if not key_id or not secret:
-        pytest.skip("AWS credentials not set in environment")
+    """Settings with real AWS creds. Skip if no credentials available."""
+    import botocore.session
+
+    session = botocore.session.get_session()
+    creds = session.get_credentials()
+    if creds is None:
+        pytest.skip("No AWS credentials available")
+    resolved = creds.get_frozen_credentials()
+    if not resolved.access_key or not resolved.secret_key:
+        pytest.skip("AWS credentials incomplete")
     return Settings(
-        aws_access_key_id=key_id,
-        aws_secret_access_key=secret,
+        aws_access_key_id=resolved.access_key,
+        aws_secret_access_key=resolved.secret_key,
         embedding_model=embedding_model_name,
-        textract_poll_interval=1,
+        textract_poll_initial=1,
     )
 
 

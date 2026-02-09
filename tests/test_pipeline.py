@@ -15,7 +15,7 @@ def _settings() -> Settings:
     return Settings(
         aws_access_key_id="test",
         aws_secret_access_key="test",
-        textract_poll_interval=0,
+        textract_poll_initial=0,
     )
 
 
@@ -74,7 +74,7 @@ class TestIngestDocument:
         monkeypatch.setattr("quarry.pipeline.analyze_pdf", lambda _path: analyses)
         monkeypatch.setattr(
             "quarry.pipeline.extract_text_pages",
-            lambda _path, _pages, _total: text_pages,
+            lambda _path, _pages, _total, **_kw: text_pages,
         )
         monkeypatch.setattr(
             "quarry.pipeline.chunk_pages",
@@ -126,7 +126,7 @@ class TestIngestDocument:
         monkeypatch.setattr("quarry.pipeline.analyze_pdf", lambda _path: analyses)
         monkeypatch.setattr(
             "quarry.pipeline.ocr_document_via_s3",
-            lambda _path, _pages, _total, _settings: ocr_pages,
+            lambda _path, _pages, _total, _settings, **_kw: ocr_pages,
         )
         monkeypatch.setattr(
             "quarry.pipeline.chunk_pages",
@@ -161,7 +161,7 @@ class TestIngestDocument:
         monkeypatch.setattr("quarry.pipeline.analyze_pdf", lambda _path: analyses)
         monkeypatch.setattr(
             "quarry.pipeline.ocr_document_via_s3",
-            lambda _path, _pages, _total, _settings: ocr_pages,
+            lambda _path, _pages, _total, _settings, **_kw: ocr_pages,
         )
         monkeypatch.setattr(
             "quarry.pipeline.chunk_pages",
@@ -187,7 +187,7 @@ class TestIngestDocument:
         monkeypatch.setattr("quarry.pipeline.analyze_pdf", lambda _path: analyses)
         monkeypatch.setattr(
             "quarry.pipeline.extract_text_pages",
-            lambda _path, _pages, _total: text_pages,
+            lambda _path, _pages, _total, **_kw: text_pages,
         )
         monkeypatch.setattr(
             "quarry.pipeline.chunk_pages",
@@ -221,7 +221,7 @@ class TestIngestDocument:
         )
         monkeypatch.setattr(
             "quarry.pipeline.extract_text_pages",
-            lambda _path, _pages, _total: [_make_page_content(1, PageType.TEXT)],
+            lambda _path, _pages, _total, **_kw: [_make_page_content(1, PageType.TEXT)],
         )
         monkeypatch.setattr(
             "quarry.pipeline.chunk_pages",

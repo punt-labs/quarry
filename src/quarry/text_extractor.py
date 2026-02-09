@@ -14,6 +14,8 @@ def extract_text_pages(
     pdf_path: Path,
     page_numbers: list[int],
     total_pages: int,
+    *,
+    document_name: str | None = None,
 ) -> list[PageContent]:
     """Extract text from text-based PDF pages using PyMuPDF.
 
@@ -21,6 +23,8 @@ def extract_text_pages(
         pdf_path: Path to the PDF file.
         page_numbers: 1-indexed page numbers to extract.
         total_pages: Total pages in the document.
+        document_name: Override for stored document name.
+            Defaults to ``pdf_path.name``.
 
     Returns:
         List of PageContent for each requested page.
@@ -28,6 +32,7 @@ def extract_text_pages(
     Raises:
         FileNotFoundError: If pdf_path does not exist.
     """
+    doc_name = document_name or pdf_path.name
     results: list[PageContent] = []
 
     with fitz.open(pdf_path) as doc:
@@ -40,7 +45,7 @@ def extract_text_pages(
             logger.debug("Page %d: %d chars", page_num, len(text))
             results.append(
                 PageContent(
-                    document_name=pdf_path.name,
+                    document_name=doc_name,
                     document_path=str(pdf_path.resolve()),
                     page_number=page_num,
                     total_pages=total_pages,

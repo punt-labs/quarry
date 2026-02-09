@@ -19,7 +19,7 @@ def _settings() -> Settings:
     return Settings(
         aws_access_key_id="test",
         aws_secret_access_key="test",
-        textract_poll_interval=0,
+        textract_poll_initial=0,
     )
 
 
@@ -245,6 +245,7 @@ class TestIngestImageMultiPage:
             page_numbers: list[int],
             total_pages: int,
             settings: Settings,
+            **_kw: object,
         ) -> list[PageContent]:
             s3_calls.append((path, page_numbers, total_pages))
             return ocr_pages
