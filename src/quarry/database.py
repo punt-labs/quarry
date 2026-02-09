@@ -325,3 +325,36 @@ def delete_collection(db: LanceDB, collection: str) -> int:
     deleted = before - after
     logger.info("Deleted %d chunks for collection %s", deleted, collection)
     return deleted
+
+
+def create_collection_index(db: LanceDB) -> None:
+    """Create a BITMAP scalar index on the collection column.
+
+    Speeds up pre-filtering by collection during vector search.
+    Safe to call repeatedly — uses replace=True.
+
+    Args:
+        db: LanceDB connection.
+    """
+    if TABLE_NAME not in db.list_tables().tables:
+        return
+
+    table = db.open_table(TABLE_NAME)
+    table.create_scalar_index("collection", index_type="BITMAP", replace=True)
+    logger.info("Created BITMAP index on collection column")
+
+
+def optimize_table(db: LanceDB) -> None:
+    """Compact table data after bulk inserts.
+
+    Merges small data fragments for better query performance.
+
+    Args:
+        db: LanceDB connection.
+    """
+    if TABLE_NAME not in db.list_tables().tables:
+        return
+
+    table = db.open_table(TABLE_NAME)
+    table.optimize()
+    logger.info("Optimized table %s", TABLE_NAME)

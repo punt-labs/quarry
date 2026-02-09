@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
 from quarry.database import (
     count_chunks,
+    create_collection_index,
     delete_collection,
     delete_document,
     get_db,
@@ -18,6 +19,7 @@ from quarry.database import (
     insert_chunks,
     list_collections,
     list_documents,
+    optimize_table,
     search,
 )
 from quarry.models import Chunk
@@ -397,3 +399,40 @@ class TestDeleteCollection:
         db = get_db(tmp_path / "db")
         deleted = delete_collection(db, "anything")
         assert deleted == 0
+
+
+class TestCreateCollectionIndex:
+    def test_creates_index_on_populated_table(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        chunks = [_make_chunk(chunk_index=i, collection="math") for i in range(3)]
+        vectors = _random_vectors(3)
+        insert_chunks(db, chunks, vectors)
+
+        # Should not raise
+        create_collection_index(db)
+
+        # Search still works after index creation
+        results = search(db, vectors[0], limit=5, collection_filter="math")
+        assert len(results) == 3
+
+    def test_noop_on_empty_db(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        create_collection_index(db)  # No table, no error
+
+
+class TestOptimizeTable:
+    def test_optimizes_populated_table(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        chunks = [_make_chunk(chunk_index=i) for i in range(5)]
+        vectors = _random_vectors(5)
+        insert_chunks(db, chunks, vectors)
+
+        # Should not raise
+        optimize_table(db)
+
+        # Data still accessible
+        assert count_chunks(db) == 5
+
+    def test_noop_on_empty_db(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        optimize_table(db)  # No table, no error

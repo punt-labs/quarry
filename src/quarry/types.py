@@ -26,6 +26,14 @@ class LanceTable(Protocol):
     ) -> LanceQuery: ...
     def count_rows(self, filter: str | None = ...) -> int: ...  # noqa: A002
     def delete(self, predicate: str) -> None: ...
+    def create_scalar_index(
+        self,
+        column: str,
+        *,
+        index_type: str = ...,
+        replace: bool = ...,
+    ) -> None: ...
+    def optimize(self) -> object: ...
 
 
 class LanceQuery(Protocol):
