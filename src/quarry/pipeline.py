@@ -312,7 +312,11 @@ def ingest_image(
 
 
 def _prepare_image_bytes(image_path: Path, *, needs_conversion: bool) -> bytes:
-    """Read image bytes, converting BMP/WebP to PNG if needed."""
+    """Read image bytes, converting to a Textract-native format if needed.
+
+    MPO (iPhone multi-picture) is saved as JPEG to preserve size.
+    BMP and WebP are saved as lossless PNG.
+    """
     if not needs_conversion:
         return image_path.read_bytes()
 
@@ -322,7 +326,10 @@ def _prepare_image_bytes(image_path: Path, *, needs_conversion: bool) -> bytes:
 
     with Image.open(image_path) as im:
         buf = io.BytesIO()
-        im.save(buf, format="PNG")
+        if im.format == "MPO":
+            im.save(buf, format="JPEG", quality=95)
+        else:
+            im.save(buf, format="PNG")
         return buf.getvalue()
 
 

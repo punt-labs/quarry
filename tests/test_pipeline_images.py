@@ -44,6 +44,13 @@ def _create_image(path: Path, fmt: str) -> None:
     img.save(path, format=fmt)
 
 
+def _create_mpo_image(path: Path) -> None:
+    """Create a minimal MPO (multi-picture) test image."""
+    img1 = Image.new("RGB", (1, 1), color=(255, 0, 0))
+    img2 = Image.new("RGB", (1, 1), color=(0, 255, 0))
+    img1.save(path, format="MPO", save_all=True, append_images=[img2])
+
+
 def _create_multi_page_tiff(path: Path, page_count: int) -> None:
     frames = [Image.new("RGB", (1, 1), color=(i, i, i)) for i in range(page_count)]
     frames[0].save(path, format="TIFF", save_all=True, append_images=frames[1:])
@@ -199,6 +206,45 @@ class TestIngestImageSinglePage:
 
         assert result["format"] == "WEBP"
         assert ocr_calls[0][:4] == b"\x89PNG"
+
+    def test_mpo_conversion(self, monkeypatch, tmp_path: Path) -> None:
+        mpo_file = tmp_path / "photo.jpg"
+        _create_mpo_image(mpo_file)
+
+        ocr_calls: list[bytes] = []
+        backend = MagicMock()
+
+        def _ocr_bytes(
+            image_bytes: bytes, document_name: str, document_path: str
+        ) -> PageContent:
+            ocr_calls.append(image_bytes)
+            return PageContent(
+                document_name=document_name,
+                document_path=document_path,
+                page_number=1,
+                total_pages=1,
+                text="ocr text",
+                page_type=PageType.IMAGE,
+            )
+
+        backend.ocr_image_bytes.side_effect = _ocr_bytes
+        monkeypatch.setattr(
+            "quarry.pipeline.get_ocr_backend", lambda _settings: backend
+        )
+        monkeypatch.setattr(
+            "quarry.pipeline.chunk_pages",
+            lambda _pages, max_chars, overlap_chars, **_kw: [],
+        )
+
+        from quarry.pipeline import ingest_document
+
+        db = MagicMock()
+        result = ingest_document(mpo_file, db, _settings())
+
+        assert result["format"] == "MPO"
+        # Verify bytes were converted to JPEG (not PNG)
+        assert len(ocr_calls) == 1
+        assert ocr_calls[0][:2] == b"\xff\xd8"  # JPEG SOI marker
 
     def test_overwrite_deletes_existing(self, monkeypatch, tmp_path: Path) -> None:
         png_file = tmp_path / "photo.png"
