@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-02-08
+
+### Added
+- PEP 561 `py.typed` marker for type-checked package consumers
+- MCP server tests for `search_documents`, `get_documents`, `get_page` tools
+- CLI tests for `list`, `delete`, `search` commands and error handling
+
+### Fixed
+- Embedding model cache now keys by model name (was single global; ignored `model_name` param after first load)
+- Hardcoded `embedding_dimension: 768` extracted to `Settings.embedding_dimension` (single source of truth)
+- `SCHEMA` module-level constant replaced with `_schema()` function accepting dimension parameter
+- `type: ignore[assignment]` on boto3/lancedb calls replaced with explicit `cast()` for clarity
+
+### Changed
+- `.pytest_cache/` added to `.gitignore`
+
 ## [0.1.2] - 2026-02-08
 
 ### Added
