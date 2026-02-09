@@ -11,10 +11,12 @@ if TYPE_CHECKING:
 
 from quarry.database import (
     count_chunks,
+    delete_collection,
     delete_document,
     get_db,
     get_page_text,
     insert_chunks,
+    list_collections,
     list_documents,
     search,
 )
@@ -26,11 +28,12 @@ def _make_chunk(
     chunk_index: int = 0,
     text: str = "test chunk text",
     document_name: str = "test.pdf",
+    collection: str = "default",
 ) -> Chunk:
     return Chunk(
         document_name=document_name,
         document_path="/tmp/test.pdf",
-        collection="default",
+        collection=collection,
         page_number=page_number,
         total_pages=5,
         chunk_index=chunk_index,
@@ -221,3 +224,176 @@ class TestDeleteDocument:
         deleted = delete_document(db, "O'Reilly.pdf")
         assert deleted == 1
         assert list_documents(db) == []
+
+    def test_delete_scoped_to_collection(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        chunks = [
+            _make_chunk(chunk_index=0, document_name="a.pdf", collection="c1"),
+            _make_chunk(chunk_index=0, document_name="a.pdf", collection="c2"),
+        ]
+        vectors = _random_vectors(2)
+        insert_chunks(db, chunks, vectors)
+
+        deleted = delete_document(db, "a.pdf", collection="c1")
+        assert deleted == 1
+        assert count_chunks(db) == 1
+
+
+class TestSearchWithCollection:
+    def test_collection_filter(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        chunks = [
+            _make_chunk(chunk_index=0, text="alpha", collection="math"),
+            _make_chunk(chunk_index=0, text="beta", collection="science"),
+        ]
+        vectors = _random_vectors(2)
+        insert_chunks(db, chunks, vectors)
+
+        results = search(db, vectors[0], limit=10, collection_filter="math")
+        collections = {r["collection"] for r in results}
+        assert collections == {"math"}
+
+    def test_collection_and_document_filter(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        chunks = [
+            _make_chunk(
+                chunk_index=0,
+                document_name="a.pdf",
+                text="one",
+                collection="math",
+            ),
+            _make_chunk(
+                chunk_index=0,
+                document_name="b.pdf",
+                text="two",
+                collection="math",
+            ),
+            _make_chunk(
+                chunk_index=0,
+                document_name="a.pdf",
+                text="three",
+                collection="science",
+            ),
+        ]
+        vectors = _random_vectors(3)
+        insert_chunks(db, chunks, vectors)
+
+        results = search(
+            db,
+            vectors[0],
+            limit=10,
+            document_filter="a.pdf",
+            collection_filter="math",
+        )
+        assert len(results) == 1
+        assert results[0]["collection"] == "math"
+        assert results[0]["document_name"] == "a.pdf"
+
+    def test_no_results_for_unknown_collection(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        chunks = [_make_chunk(chunk_index=0, collection="math")]
+        vectors = _random_vectors(1)
+        insert_chunks(db, chunks, vectors)
+
+        results = search(db, vectors[0], limit=10, collection_filter="unknown")
+        assert results == []
+
+
+class TestListDocumentsWithCollection:
+    def test_filter_by_collection(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        chunks = [
+            _make_chunk(document_name="a.pdf", collection="math"),
+            _make_chunk(document_name="b.pdf", collection="science"),
+        ]
+        vectors = _random_vectors(2)
+        insert_chunks(db, chunks, vectors)
+
+        docs = list_documents(db, collection_filter="math")
+        assert len(docs) == 1
+        assert docs[0]["document_name"] == "a.pdf"
+        assert docs[0]["collection"] == "math"
+
+    def test_includes_collection_in_output(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        chunks = [_make_chunk(document_name="a.pdf", collection="ml-101")]
+        vectors = _random_vectors(1)
+        insert_chunks(db, chunks, vectors)
+
+        docs = list_documents(db)
+        assert docs[0]["collection"] == "ml-101"
+
+
+class TestCountChunksWithCollection:
+    def test_count_filtered(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        chunks = [
+            _make_chunk(chunk_index=0, collection="math"),
+            _make_chunk(chunk_index=1, collection="math"),
+            _make_chunk(chunk_index=0, collection="science"),
+        ]
+        vectors = _random_vectors(3)
+        insert_chunks(db, chunks, vectors)
+
+        assert count_chunks(db, collection_filter="math") == 2
+        assert count_chunks(db, collection_filter="science") == 1
+        assert count_chunks(db) == 3
+
+
+class TestListCollections:
+    def test_lists_collections(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        chunks = [
+            _make_chunk(chunk_index=0, document_name="a.pdf", collection="math"),
+            _make_chunk(chunk_index=1, document_name="a.pdf", collection="math"),
+            _make_chunk(chunk_index=0, document_name="b.pdf", collection="math"),
+            _make_chunk(chunk_index=0, document_name="c.pdf", collection="science"),
+        ]
+        vectors = _random_vectors(4)
+        insert_chunks(db, chunks, vectors)
+
+        cols = list_collections(db)
+        assert len(cols) == 2
+
+        math = next(c for c in cols if c["collection"] == "math")
+        assert math["document_count"] == 2
+        assert math["chunk_count"] == 3
+
+        science = next(c for c in cols if c["collection"] == "science")
+        assert science["document_count"] == 1
+        assert science["chunk_count"] == 1
+
+    def test_empty_db(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        assert list_collections(db) == []
+
+
+class TestDeleteCollection:
+    def test_deletes_collection(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        chunks = [
+            _make_chunk(chunk_index=0, collection="math"),
+            _make_chunk(chunk_index=1, collection="math"),
+            _make_chunk(chunk_index=0, collection="science"),
+        ]
+        vectors = _random_vectors(3)
+        insert_chunks(db, chunks, vectors)
+
+        deleted = delete_collection(db, "math")
+        assert deleted == 2
+        assert count_chunks(db) == 1
+
+    def test_delete_nonexistent_collection(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        chunks = [_make_chunk(collection="math")]
+        vectors = _random_vectors(1)
+        insert_chunks(db, chunks, vectors)
+
+        deleted = delete_collection(db, "unknown")
+        assert deleted == 0
+        assert count_chunks(db) == 1
+
+    def test_delete_empty_db(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        deleted = delete_collection(db, "anything")
+        assert deleted == 0

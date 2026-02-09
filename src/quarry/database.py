@@ -84,6 +84,7 @@ def search(
     query_vector: NDArray[np.float32],
     limit: int = 10,
     document_filter: str | None = None,
+    collection_filter: str | None = None,
 ) -> list[dict[str, object]]:
     """Search for similar chunks using vector similarity.
 
@@ -92,11 +93,17 @@ def search(
         query_vector: Query embedding vector.
         limit: Maximum results to return.
         document_filter: Optional document name filter (exact match).
+        collection_filter: Optional collection name filter (pre-filter).
 
     Returns:
         List of result dicts with text, metadata, and _distance.
     """
-    logger.debug("Search: limit=%d, document_filter=%s", limit, document_filter)
+    logger.debug(
+        "Search: limit=%d, document_filter=%s, collection_filter=%s",
+        limit,
+        document_filter,
+        collection_filter,
+    )
 
     if TABLE_NAME not in db.list_tables().tables:
         logger.debug("Search: table %s not found, returning empty", TABLE_NAME)
@@ -105,8 +112,13 @@ def search(
     table = db.open_table(TABLE_NAME)
     query = table.search(query_vector.tolist()).limit(limit)
 
+    predicates: list[str] = []
     if document_filter:
-        query = query.where(f"document_name = '{_escape_sql(document_filter)}'")
+        predicates.append(f"document_name = '{_escape_sql(document_filter)}'")
+    if collection_filter:
+        predicates.append(f"collection = '{_escape_sql(collection_filter)}'")
+    if predicates:
+        query = query.where(" AND ".join(predicates))
 
     results = query.to_list()
     logger.debug("Search: %d results returned", len(results))
@@ -117,6 +129,7 @@ def get_page_text(
     db: LanceDB,
     document_name: str,
     page_number: int,
+    collection: str | None = None,
 ) -> str | None:
     """Retrieve the full raw text for a specific page.
 
@@ -124,6 +137,7 @@ def get_page_text(
         db: LanceDB connection.
         document_name: Document filename.
         page_number: 1-indexed page number.
+        collection: Optional collection scope.
 
     Returns:
         Raw page text, or None if not found.
@@ -134,16 +148,16 @@ def get_page_text(
         logger.debug("get_page_text: table %s not found", TABLE_NAME)
         return None
 
+    predicate = (
+        f"document_name = '{_escape_sql(document_name)}'"
+        f" AND page_number = {page_number}"
+    )
+    if collection:
+        predicate += f" AND collection = '{_escape_sql(collection)}'"
+
     table = db.open_table(TABLE_NAME)
     results = (
-        table.search()
-        .where(
-            f"document_name = '{_escape_sql(document_name)}'"
-            f" AND page_number = {page_number}"
-        )
-        .limit(1)
-        .select(["page_raw_text"])
-        .to_list()
+        table.search().where(predicate).limit(1).select(["page_raw_text"]).to_list()
     )
 
     if not results:
@@ -152,30 +166,37 @@ def get_page_text(
     return str(results[0]["page_raw_text"])
 
 
-def list_documents(db: LanceDB) -> list[dict[str, object]]:
+def list_documents(
+    db: LanceDB,
+    collection_filter: str | None = None,
+) -> list[dict[str, object]]:
     """List all indexed documents with metadata.
 
+    Args:
+        db: LanceDB connection.
+        collection_filter: Optional collection name filter.
+
     Returns:
-        List of dicts with document_name, document_path, total_pages,
-        chunk_count, and ingestion_timestamp.
+        List of dicts with document_name, document_path, collection,
+        total_pages, chunk_count, and ingestion_timestamp.
     """
     if TABLE_NAME not in db.list_tables().tables:
         return []
 
     table = db.open_table(TABLE_NAME)
-    rows = (
-        table.search()
-        .select(
-            [
-                "document_name",
-                "document_path",
-                "total_pages",
-                "page_number",
-                "ingestion_timestamp",
-            ]
-        )
-        .to_list()
+    query = table.search().select(
+        [
+            "document_name",
+            "document_path",
+            "collection",
+            "total_pages",
+            "page_number",
+            "ingestion_timestamp",
+        ]
     )
+    if collection_filter:
+        query = query.where(f"collection = '{_escape_sql(collection_filter)}'")
+    rows = query.to_list()
 
     if not rows:
         return []
@@ -194,6 +215,7 @@ def list_documents(db: LanceDB) -> list[dict[str, object]]:
             {
                 "document_name": name,
                 "document_path": str(chunks[0]["document_path"]),
+                "collection": str(chunks[0]["collection"]),
                 "total_pages": int(str(chunks[0]["total_pages"])),
                 "chunk_count": len(chunks),
                 "indexed_pages": len(pages),
@@ -206,19 +228,30 @@ def list_documents(db: LanceDB) -> list[dict[str, object]]:
     return docs
 
 
-def count_chunks(db: LanceDB) -> int:
-    """Return the total number of chunks across all documents."""
+def count_chunks(
+    db: LanceDB,
+    collection_filter: str | None = None,
+) -> int:
+    """Return the total number of chunks, optionally filtered by collection."""
     if TABLE_NAME not in db.list_tables().tables:
         return 0
-    return db.open_table(TABLE_NAME).count_rows()
+    table = db.open_table(TABLE_NAME)
+    if collection_filter:
+        return table.count_rows(f"collection = '{_escape_sql(collection_filter)}'")
+    return table.count_rows()
 
 
-def delete_document(db: LanceDB, document_name: str) -> int:
-    """Delete all chunks for a document.
+def delete_document(
+    db: LanceDB,
+    document_name: str,
+    collection: str | None = None,
+) -> int:
+    """Delete all chunks for a document, optionally scoped to a collection.
 
     Args:
         db: LanceDB connection.
         document_name: Document filename to delete.
+        collection: If provided, only delete within this collection.
 
     Returns:
         Number of rows deleted (0 if document not found).
@@ -228,8 +261,67 @@ def delete_document(db: LanceDB, document_name: str) -> int:
 
     table = db.open_table(TABLE_NAME)
     before = table.count_rows()
-    table.delete(f"document_name = '{_escape_sql(document_name)}'")
+    predicate = f"document_name = '{_escape_sql(document_name)}'"
+    if collection:
+        predicate += f" AND collection = '{_escape_sql(collection)}'"
+    table.delete(predicate)
     after = table.count_rows()
     deleted = before - after
     logger.info("Deleted %d chunks for %s", deleted, document_name)
+    return deleted
+
+
+def list_collections(db: LanceDB) -> list[dict[str, object]]:
+    """List all collections with document and chunk counts.
+
+    Returns:
+        List of dicts with collection, document_count, chunk_count.
+    """
+    if TABLE_NAME not in db.list_tables().tables:
+        return []
+
+    table = db.open_table(TABLE_NAME)
+    rows = table.search().select(["collection", "document_name"]).to_list()
+    if not rows:
+        return []
+
+    grouped: dict[str, set[str]] = {}
+    counts: dict[str, int] = {}
+    for row in rows:
+        col = str(row["collection"])
+        if col not in grouped:
+            grouped[col] = set()
+            counts[col] = 0
+        grouped[col].add(str(row["document_name"]))
+        counts[col] += 1
+
+    return [
+        {
+            "collection": col,
+            "document_count": len(docs),
+            "chunk_count": counts[col],
+        }
+        for col, docs in sorted(grouped.items())
+    ]
+
+
+def delete_collection(db: LanceDB, collection: str) -> int:
+    """Delete all chunks in a collection.
+
+    Args:
+        db: LanceDB connection.
+        collection: Collection name to delete.
+
+    Returns:
+        Number of rows deleted.
+    """
+    if TABLE_NAME not in db.list_tables().tables:
+        return 0
+
+    table = db.open_table(TABLE_NAME)
+    before = table.count_rows()
+    table.delete(f"collection = '{_escape_sql(collection)}'")
+    after = table.count_rows()
+    deleted = before - after
+    logger.info("Deleted %d chunks for collection %s", deleted, collection)
     return deleted
