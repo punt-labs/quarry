@@ -8,12 +8,15 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
+from quarry.collections import derive_collection
 from quarry.config import Settings, get_settings
 from quarry.database import (
     count_chunks,
+    delete_collection as db_delete_collection,
     delete_document as db_delete_document,
     get_db,
     get_page_text,
+    list_collections as db_list_collections,
     list_documents,
     search,
 )
@@ -55,6 +58,7 @@ def search_documents(
     query: str,
     limit: int = 10,
     document_filter: str = "",
+    collection: str = "",
 ) -> str:
     """Search indexed documents using semantic similarity.
 
@@ -62,6 +66,7 @@ def search_documents(
         query: Natural language search query.
         limit: Maximum number of results (default 10, max 50).
         document_filter: Optional exact document name to filter by.
+        collection: Optional collection name to search within.
     """
     limit = min(limit, 50)
     settings = _settings()
@@ -74,11 +79,13 @@ def search_documents(
         query_vector,
         limit=limit,
         document_filter=document_filter or None,
+        collection_filter=collection or None,
     )
 
     formatted = [
         {
             "document_name": r["document_name"],
+            "collection": r["collection"],
             "page_number": r["page_number"],
             "chunk_index": r["chunk_index"],
             "text": r["text"],
@@ -102,22 +109,21 @@ def search_documents(
 def ingest(
     file_path: str,
     overwrite: bool = False,
+    collection: str = "",
 ) -> str:
     """Ingest a document: OCR, chunk, embed, and index for search.
 
     Supported formats: PDF, TXT, MD, TEX, DOCX.
 
-    The file_path must exist on the host filesystem where Quarry runs.
-    Container paths (e.g. /mnt/user-data/uploads/) are not accessible.
-    For uploaded files or text already in your context, use ingest_text instead.
-
     Args:
-        file_path: Absolute path to the document file on the host filesystem.
+        file_path: Absolute path to the document file.
         overwrite: If true, replace existing data for this document.
+        collection: Collection name. Auto-derived from parent directory if empty.
     """
     path = Path(file_path)
     settings = _settings()
     db = _db()
+    col = derive_collection(path, explicit=collection or None)
 
     progress_lines: list[str] = []
 
@@ -126,6 +132,7 @@ def ingest(
         db,
         settings,
         overwrite=overwrite,
+        collection=col,
         progress_callback=progress_lines.append,
     )
 
@@ -140,18 +147,16 @@ def ingest_text(
     content: str,
     document_name: str,
     overwrite: bool = False,
+    collection: str = "default",
     format_hint: str = "auto",
 ) -> str:
     """Ingest raw text content: chunk, embed, and index for search.
-
-    Use this for uploaded files, pasted text, or any content already in your
-    context window. This is the preferred tool when the source text is available
-    directly — it skips OCR and file I/O.
 
     Args:
         content: The text content to ingest.
         document_name: Name for the document (e.g., 'notes.md').
         overwrite: If true, replace existing data for this document.
+        collection: Collection name (default: 'default').
         format_hint: Format hint: 'auto', 'plain', 'markdown', 'latex'.
     """
     settings = _settings()
@@ -165,6 +170,7 @@ def ingest_text(
         db,
         settings,
         overwrite=overwrite,
+        collection=collection,
         format_hint=format_hint,
         progress_callback=progress_lines.append,
     )
@@ -176,10 +182,14 @@ def ingest_text(
 
 @mcp.tool()
 @_handle_errors
-def get_documents() -> str:
-    """List all indexed documents with metadata."""
+def get_documents(collection: str = "") -> str:
+    """List all indexed documents with metadata.
+
+    Args:
+        collection: Optional collection name to filter by.
+    """
     db = _db()
-    docs = list_documents(db)
+    docs = list_documents(db, collection_filter=collection or None)
     return json.dumps({"total_documents": len(docs), "documents": docs}, indent=2)
 
 
@@ -188,15 +198,17 @@ def get_documents() -> str:
 def get_page(
     document_name: str,
     page_number: int,
+    collection: str = "",
 ) -> str:
     """Retrieve the full raw OCR text for a specific document page.
 
     Args:
         document_name: Document filename (e.g., 'report.pdf').
         page_number: Page number (1-indexed).
+        collection: Optional collection scope.
     """
     db = _db()
-    text = get_page_text(db, document_name, page_number)
+    text = get_page_text(db, document_name, page_number, collection=collection or None)
 
     if text is None:
         return f"No data found for {document_name} page {page_number}"
@@ -206,17 +218,53 @@ def get_page(
 
 @mcp.tool()
 @_handle_errors
-def delete_document(document_name: str) -> str:
+def delete_document(
+    document_name: str,
+    collection: str = "",
+) -> str:
     """Delete all indexed data for a document.
 
     Args:
         document_name: Document filename (e.g., 'report.pdf').
+        collection: Optional collection scope. If empty, deletes across all collections.
     """
     db = _db()
-    deleted = db_delete_document(db, document_name)
+    deleted = db_delete_document(db, document_name, collection=collection or None)
     return json.dumps(
         {
             "document_name": document_name,
+            "collection": collection or "(all)",
+            "chunks_deleted": deleted,
+        },
+        indent=2,
+    )
+
+
+@mcp.tool()
+@_handle_errors
+def list_collections() -> str:
+    """List all collections with document and chunk counts."""
+    db = _db()
+    cols = db_list_collections(db)
+    return json.dumps(
+        {"total_collections": len(cols), "collections": cols},
+        indent=2,
+    )
+
+
+@mcp.tool()
+@_handle_errors
+def delete_collection(collection: str) -> str:
+    """Delete all indexed data for a collection.
+
+    Args:
+        collection: Collection name to delete.
+    """
+    db = _db()
+    deleted = db_delete_collection(db, collection)
+    return json.dumps(
+        {
+            "collection": collection,
             "chunks_deleted": deleted,
         },
         indent=2,
@@ -232,6 +280,7 @@ def status() -> str:
 
     docs = list_documents(db)
     chunks = count_chunks(db)
+    cols = db_list_collections(db)
 
     db_size_bytes = (
         sum(f.stat().st_size for f in settings.lancedb_path.rglob("*") if f.is_file())
@@ -242,6 +291,7 @@ def status() -> str:
     return json.dumps(
         {
             "document_count": len(docs),
+            "collection_count": len(cols),
             "chunk_count": chunks,
             "database_path": str(settings.lancedb_path),
             "database_size_bytes": db_size_bytes,

@@ -7,11 +7,13 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 
 from quarry.mcp_server import (
+    delete_collection,
     delete_document,
     get_documents,
     get_page,
     ingest,
     ingest_text,
+    list_collections,
     search_documents,
     status,
 )
@@ -62,6 +64,22 @@ class TestIngestText:
         call_kwargs = mock_ingest.call_args[1]
         assert call_kwargs["format_hint"] == "markdown"
 
+    def test_passes_collection(self, tmp_path: Path):
+        settings = _settings(tmp_path)
+        mock_result = {"document_name": "a.txt", "chunks": 1, "sections": 1}
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._db"),
+            patch(
+                "quarry.mcp_server.pipeline_ingest_text",
+                return_value=mock_result,
+            ) as mock_ingest,
+        ):
+            ingest_text("text", "a.txt", collection="ml-101")
+
+        call_kwargs = mock_ingest.call_args[1]
+        assert call_kwargs["collection"] == "ml-101"
+
 
 class TestDeleteDocument:
     def test_deletes_and_returns_count(self, tmp_path: Path):
@@ -73,7 +91,9 @@ class TestDeleteDocument:
         ):
             result = json.loads(delete_document("report.pdf"))
 
-        mock_del.assert_called_once_with(mock_db.return_value, "report.pdf")
+        mock_del.assert_called_once_with(
+            mock_db.return_value, "report.pdf", collection=None
+        )
         assert result["document_name"] == "report.pdf"
         assert result["chunks_deleted"] == 5
 
@@ -88,24 +108,40 @@ class TestDeleteDocument:
 
         assert result["chunks_deleted"] == 0
 
+    def test_scoped_to_collection(self, tmp_path: Path):
+        settings = _settings(tmp_path)
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._db") as mock_db,
+            patch("quarry.mcp_server.db_delete_document", return_value=2) as mock_del,
+        ):
+            result = json.loads(delete_document("report.pdf", collection="math"))
+
+        mock_del.assert_called_once_with(
+            mock_db.return_value, "report.pdf", collection="math"
+        )
+        assert result["collection"] == "math"
+
 
 class TestStatus:
     def test_returns_status_fields(self, tmp_path: Path):
         settings = _settings(tmp_path)
-        # Create a fake DB directory with a file
         settings.lancedb_path.mkdir(parents=True)
         (settings.lancedb_path / "data.lance").write_bytes(b"x" * 1024)
 
         mock_docs = [{"document_name": "a.pdf"}, {"document_name": "b.pdf"}]
+        mock_cols = [{"collection": "math", "document_count": 2, "chunk_count": 42}]
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
             patch("quarry.mcp_server.list_documents", return_value=mock_docs),
             patch("quarry.mcp_server.count_chunks", return_value=42),
+            patch("quarry.mcp_server.db_list_collections", return_value=mock_cols),
         ):
             result = json.loads(status())
 
         assert result["document_count"] == 2
+        assert result["collection_count"] == 1
         assert result["chunk_count"] == 42
         assert result["database_path"] == str(settings.lancedb_path)
         assert result["database_size_bytes"] == 1024
@@ -121,22 +157,24 @@ class TestStatus:
             patch("quarry.mcp_server._db"),
             patch("quarry.mcp_server.list_documents", return_value=[]),
             patch("quarry.mcp_server.count_chunks", return_value=0),
+            patch("quarry.mcp_server.db_list_collections", return_value=[]),
         ):
             result = json.loads(status())
 
         assert result["document_count"] == 0
+        assert result["collection_count"] == 0
         assert result["chunk_count"] == 0
         assert result["database_size_bytes"] == 0
 
     def test_nonexistent_db_path(self, tmp_path: Path):
         settings = _settings(tmp_path)
-        # Do NOT create lancedb_path — it should not exist
 
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
             patch("quarry.mcp_server.list_documents", return_value=[]),
             patch("quarry.mcp_server.count_chunks", return_value=0),
+            patch("quarry.mcp_server.db_list_collections", return_value=[]),
         ):
             result = json.loads(status())
 
@@ -150,6 +188,7 @@ class TestSearchDocuments:
         mock_results = [
             {
                 "document_name": "report.pdf",
+                "collection": "finance",
                 "page_number": 3,
                 "chunk_index": 0,
                 "text": "quarterly revenue grew",
@@ -167,6 +206,7 @@ class TestSearchDocuments:
         assert result["query"] == "revenue growth"
         assert result["total_results"] == 1
         assert result["results"][0]["document_name"] == "report.pdf"
+        assert result["results"][0]["collection"] == "finance"
         assert result["results"][0]["similarity"] == 0.85
 
     def test_clamps_limit_to_50(self, tmp_path: Path):
@@ -211,6 +251,20 @@ class TestSearchDocuments:
         call_kwargs = mock_search.call_args[1]
         assert call_kwargs["document_filter"] is None
 
+    def test_passes_collection_filter(self, tmp_path: Path):
+        settings = _settings(tmp_path)
+        mock_vector = np.zeros(768, dtype=np.float32)
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._db"),
+            patch("quarry.mcp_server.embed_query", return_value=mock_vector),
+            patch("quarry.mcp_server.search", return_value=[]) as mock_search,
+        ):
+            search_documents("test", collection="math")
+
+        call_kwargs = mock_search.call_args[1]
+        assert call_kwargs["collection_filter"] == "math"
+
 
 class TestGetDocuments:
     def test_returns_document_list(self, tmp_path: Path):
@@ -241,6 +295,18 @@ class TestGetDocuments:
         assert result["total_documents"] == 0
         assert result["documents"] == []
 
+    def test_filters_by_collection(self, tmp_path: Path):
+        settings = _settings(tmp_path)
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._db"),
+            patch("quarry.mcp_server.list_documents", return_value=[]) as mock_list,
+        ):
+            get_documents(collection="math")
+
+        call_kwargs = mock_list.call_args[1]
+        assert call_kwargs["collection_filter"] == "math"
+
 
 class TestGetPage:
     def test_returns_page_text(self, tmp_path: Path):
@@ -270,6 +336,41 @@ class TestGetPage:
 
         assert "No data found" in result
         assert "missing.pdf" in result
+
+
+class TestListCollections:
+    def test_returns_collections(self, tmp_path: Path):
+        settings = _settings(tmp_path)
+        mock_cols = [
+            {"collection": "math", "document_count": 5, "chunk_count": 100},
+            {"collection": "science", "document_count": 3, "chunk_count": 60},
+        ]
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._db"),
+            patch("quarry.mcp_server.db_list_collections", return_value=mock_cols),
+        ):
+            result = json.loads(list_collections())
+
+        assert result["total_collections"] == 2
+        assert result["collections"][0]["collection"] == "math"
+
+
+class TestDeleteCollection:
+    def test_deletes_collection(self, tmp_path: Path):
+        settings = _settings(tmp_path)
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._db") as mock_db,
+            patch(
+                "quarry.mcp_server.db_delete_collection", return_value=50
+            ) as mock_del,
+        ):
+            result = json.loads(delete_collection("math"))
+
+        mock_del.assert_called_once_with(mock_db.return_value, "math")
+        assert result["collection"] == "math"
+        assert result["chunks_deleted"] == 50
 
 
 class TestHandleErrors:
