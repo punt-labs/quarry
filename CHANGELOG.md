@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-02-09
+
+### Added
+- Directory registration and incremental sync engine
+- SQLite-backed registry (WAL mode) tracking directories, collections, and file records
+- Delta detection via mtime+size comparison: new, changed, unchanged, deleted
+- Parallel file ingestion during sync via ThreadPoolExecutor (default 4 workers)
+- CLI commands: `register`, `deregister`, `registrations`, `sync`
+- MCP tools: `register_directory`, `deregister_directory`, `sync_all_registrations`, `list_registrations`
+- `delete-collection` CLI command and `delete_collection` MCP tool
+- `list_collections` MCP tool
+- 21 end-to-end integration tests covering all ingestion formats, search, collections, and overwrite
+- `REGISTRY_PATH` configuration variable
+
+### Changed
+- Exponential backoff for Textract polling (start 5s, 1.5x multiplier, cap 30s) replaces fixed interval
+- `status` MCP tool now reports registered directory count
+- MCP tool count: 9 to 13
+
 ## [0.1.3] - 2026-02-08
 
 ### Added
