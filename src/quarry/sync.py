@@ -29,11 +29,8 @@ logger = logging.getLogger(__name__)
 
 
 def _is_hidden(path: Path, root: Path) -> bool:
-    """True if any component between *root* and *path* starts with a dot."""
-    for parent in path.relative_to(root).parents:
-        if parent.name.startswith("."):
-            return True
-    return path.name.startswith(".")
+    """True if any component from *root* to *path* starts with a dot."""
+    return any(part.startswith(".") for part in path.relative_to(root).parts)
 
 
 def discover_files(
