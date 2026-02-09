@@ -52,6 +52,24 @@ Commit message format: `type(scope): description`
 | `docs:` | Documentation |
 | `chore:` | Build, dependencies, CI |
 
+### Issue Tracking with Beads
+
+This project uses **beads** (`bd`) for issue tracking. See `.beads/README.md` for setup.
+
+| Use Beads (`bd`) | Use TodoWrite |
+|------------------|---------------|
+| Multi-session work | Single-session tasks |
+| Work with dependencies | Simple linear execution |
+| Discovered work to track | Immediate TODO items |
+
+```bash
+bd ready                    # Show issues ready to work
+bd show <id>                # View issue details
+bd update <id> --status=in_progress   # Claim work
+bd close <id>               # Mark complete
+bd sync                     # Sync with git remote
+```
+
 ### Session Close Protocol
 
 Before ending any session:
@@ -60,7 +78,7 @@ Before ending any session:
 git status                  # Check for uncommitted work
 git add <files>             # Stage changes
 git commit -m "..."         # Commit
-bd sync                     # Sync beads
+bd sync                     # Sync beads with git
 git push                    # Push to remote
 git status                  # Must show "up to date with origin"
 ```
