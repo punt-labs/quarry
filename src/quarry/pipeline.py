@@ -10,6 +10,7 @@ if TYPE_CHECKING:
 
 from quarry.backends import get_embedding_backend, get_ocr_backend
 from quarry.chunker import chunk_pages
+from quarry.code_processor import SUPPORTED_CODE_EXTENSIONS, process_code_file
 from quarry.config import Settings
 from quarry.database import delete_document, insert_chunks
 from quarry.image_analyzer import (
@@ -29,7 +30,10 @@ from quarry.types import LanceDB
 logger = logging.getLogger(__name__)
 
 SUPPORTED_EXTENSIONS = (
-    frozenset({".pdf"}) | SUPPORTED_TEXT_EXTENSIONS | SUPPORTED_IMAGE_EXTENSIONS
+    frozenset({".pdf"})
+    | SUPPORTED_TEXT_EXTENSIONS
+    | SUPPORTED_IMAGE_EXTENSIONS
+    | SUPPORTED_CODE_EXTENSIONS
 )
 
 
@@ -75,6 +79,17 @@ def ingest_document(
 
     if suffix == ".pdf":
         return ingest_pdf(
+            file_path,
+            db,
+            settings,
+            overwrite=overwrite,
+            collection=collection,
+            document_name=document_name,
+            progress_callback=progress_callback,
+        )
+
+    if suffix in SUPPORTED_CODE_EXTENSIONS:
+        return ingest_code_file(
             file_path,
             db,
             settings,
@@ -234,6 +249,54 @@ def ingest_text_file(
         progress,
         collection=collection,
         extra={"sections": len(pages)},
+    )
+
+
+def ingest_code_file(
+    file_path: Path,
+    db: LanceDB,
+    settings: Settings,
+    *,
+    overwrite: bool = False,
+    collection: str = "default",
+    document_name: str | None = None,
+    progress_callback: Callable[[str], None] | None = None,
+) -> dict[str, object]:
+    """Ingest source code: parse into definitions, chunk, embed, store.
+
+    Uses tree-sitter for language-aware splitting when available.
+
+    Args:
+        file_path: Path to the source code file.
+        db: LanceDB connection.
+        settings: Application settings.
+        overwrite: If True, delete existing data for this document first.
+        collection: Collection name for organizing documents.
+        document_name: Override for the stored document name.
+        progress_callback: Optional callable for progress messages.
+
+    Returns:
+        Dict with ingestion results.
+    """
+    progress = _make_progress(progress_callback)
+    doc_name = document_name or file_path.name
+
+    progress("Parsing: %s", doc_name)
+
+    if overwrite:
+        delete_document(db, doc_name, collection=collection)
+
+    pages = process_code_file(file_path)
+    progress("Definitions: %d", len(pages))
+
+    return _chunk_embed_store(
+        pages,
+        doc_name,
+        db,
+        settings,
+        progress,
+        collection=collection,
+        extra={"definitions": len(pages)},
     )
 
 

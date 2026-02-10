@@ -8,7 +8,7 @@
 
 Extract searchable knowledge from any document. Expose it to LLMs via MCP.
 
-Quarry ingests PDFs, images, text files, and raw text into a local vector database, then serves semantic search over that content through the [Model Context Protocol](https://modelcontextprotocol.io). Point Claude Code or Claude Desktop at your documents and ask questions.
+Quarry ingests PDFs, images, text files, source code, and raw text into a local vector database, then serves semantic search over that content through the [Model Context Protocol](https://modelcontextprotocol.io). Point Claude Code or Claude Desktop at your documents and ask questions.
 
 ## Why Quarry?
 
@@ -20,6 +20,7 @@ Quarry exists for documents that aren't text yet:
 - **Mixed-format PDFs** — Some pages are text, some are scans. Quarry handles both in a single pipeline.
 - **Images** — Photos of whiteboards, receipts, handwritten notes. PNG, JPG, TIFF (multi-page), BMP, WebP.
 - **Text files** — TXT, Markdown, LaTeX, DOCX. No OCR needed, straight to chunking.
+- **Source code** — Python, JavaScript, TypeScript, Rust, Go, Java, C/C++, and 20+ more languages. Tree-sitter splits code into semantic sections (functions, classes, imports).
 - **Raw text** — Paste content directly via `ingest_text`. Use this from Claude Desktop for uploaded files.
 
 Quarry also preserves full page text alongside chunks, so LLMs can reference surrounding context when a search hit lands mid-page.
@@ -29,6 +30,7 @@ Quarry also preserves full page text alongside chunks, so LLMs can reference sur
 - **PDF ingestion** with automatic text/image classification per page
 - **Image ingestion** — PNG, JPG, TIFF (multi-page), BMP, WebP via Textract OCR
 - **Text file ingestion** — TXT, Markdown, LaTeX, DOCX
+- **Source code ingestion** — 30+ languages via tree-sitter AST splitting (Python, JS/TS, Rust, Go, Java, C/C++, Ruby, Swift, Kotlin, and more)
 - **Raw text ingestion** — ingest content directly without a file on disk
 - **OCR** via AWS Textract for scanned and image-based documents
 - **Text extraction** via PyMuPDF for text-based PDF pages
@@ -149,7 +151,7 @@ Use the absolute path to `uvx` for Desktop (e.g. `/opt/homebrew/bin/uvx`) since 
 | Tool | Description |
 |------|-------------|
 | `search_documents` | Semantic search across all indexed documents |
-| `ingest` | OCR and index a file (PDF, image, TXT, MD, TEX, DOCX) |
+| `ingest` | OCR and index a file (PDF, image, TXT, MD, TEX, DOCX, source code) |
 | `ingest_text` | Index raw text content directly (for uploads or pasted text) |
 | `get_documents` | List all indexed documents with metadata |
 | `get_page` | Retrieve full text for a specific page |
@@ -248,6 +250,8 @@ Input
   │                 TIFF multi-page → S3 → Textract async OCR
   │
   ├─ Text files ──→ Direct text extraction (TXT, MD, TEX, DOCX)
+  │
+  ├─ Source code ─→ Tree-sitter AST splitting (30+ languages)
   │
   └─ Raw text ────→ ingest_text (from uploads, clipboard, etc.)
                           │
