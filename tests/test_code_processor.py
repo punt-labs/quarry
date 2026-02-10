@@ -13,7 +13,16 @@ from quarry.code_processor import (
 )
 from quarry.models import PageType
 
-ts = pytest.importorskip("tree_sitter_language_pack")
+try:
+    import tree_sitter_language_pack  # noqa: F401
+
+    _HAS_TREESITTER = True
+except ImportError:
+    _HAS_TREESITTER = False
+
+needs_treesitter = pytest.mark.skipif(
+    not _HAS_TREESITTER, reason="tree-sitter-language-pack not installed"
+)
 
 
 class TestSupportedExtensions:
@@ -28,6 +37,7 @@ class TestSupportedExtensions:
         assert overlap == frozenset(), f"Overlapping extensions: {overlap}"
 
 
+@needs_treesitter
 class TestProcessCodeFile:
     def test_python_functions(self, tmp_path: Path):
         f = tmp_path / "example.py"
@@ -103,6 +113,21 @@ class TestProcessCodeFile:
         assert len(pages) == 2
         assert "function add" in pages[0].text
         assert "function sub" in pages[1].text
+
+    def test_javascript_constants_grouped(self, tmp_path: Path):
+        f = tmp_path / "config.js"
+        f.write_text(
+            'const API_URL = "https://example.com";\n'
+            "const TIMEOUT = 5000;\n\n"
+            "function fetchData() {\n  return fetch(API_URL);\n}\n"
+        )
+
+        pages = process_code_file(f)
+
+        assert len(pages) == 2
+        assert "API_URL" in pages[0].text
+        assert "TIMEOUT" in pages[0].text
+        assert "function fetchData" in pages[1].text
 
     def test_rust_items(self, tmp_path: Path):
         f = tmp_path / "lib.rs"
@@ -181,12 +206,14 @@ class TestTreeSitterEdgeCases:
             result = _split_with_treesitter("def foo(): pass", "python", "test.py")
             assert result is None
 
+    @needs_treesitter
     def test_returns_none_for_unknown_language(self):
         result = _split_with_treesitter(
             "some code", "nonexistent_language_xyz", "test.xyz"
         )
         assert result is None
 
+    @needs_treesitter
     def test_single_function_returns_one_section(self):
         result = _split_with_treesitter(
             "def hello():\n    print('hi')\n", "python", "test.py"
@@ -196,6 +223,7 @@ class TestTreeSitterEdgeCases:
         assert "def hello" in result[0]
 
 
+@needs_treesitter
 class TestImportsGrouped:
     """Imports and small top-level statements should be grouped."""
 

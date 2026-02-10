@@ -63,7 +63,6 @@ SUPPORTED_CODE_EXTENSIONS = frozenset(_CODE_LANGUAGES)
 # requiring per-language configuration.
 _DEFINITION_NODE_TYPES = frozenset(
     {
-        "call",
         "class",
         "class_declaration",
         "class_definition",
@@ -82,7 +81,6 @@ _DEFINITION_NODE_TYPES = frozenset(
         "function_item",
         "impl_item",
         "interface_declaration",
-        "lexical_declaration",
         "method",
         "method_declaration",
         "mod_item",
@@ -171,14 +169,16 @@ def _split_with_treesitter(
         )
         return None
 
-    tree = parser.parse(text.encode())
+    source_bytes = text.encode("utf-8")
+    tree = parser.parse(source_bytes)
     root = tree.root_node
 
     sections: list[str] = []
     pending: list[str] = []
 
     for child in root.children:
-        node_text = text[child.start_byte : child.end_byte].strip()
+        raw = source_bytes[child.start_byte : child.end_byte]
+        node_text = raw.decode("utf-8").strip()
         if not node_text:
             continue
 
