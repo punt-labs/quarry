@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-TABLE_NAME = "ocr_chunks"
+TABLE_NAME = "chunks"
 _table_lock = threading.Lock()
 
 
