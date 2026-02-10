@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -17,6 +18,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 TABLE_NAME = "ocr_chunks"
+_table_lock = threading.Lock()
 
 
 def _escape_sql(value: str) -> str:
@@ -73,7 +75,12 @@ def insert_chunks(
         table = db.open_table(TABLE_NAME)
         table.add(records)
     else:
-        db.create_table(TABLE_NAME, data=records, schema=_schema())
+        with _table_lock:
+            if TABLE_NAME in db.list_tables().tables:
+                table = db.open_table(TABLE_NAME)
+                table.add(records)
+            else:
+                db.create_table(TABLE_NAME, data=records, schema=_schema())
 
     logger.info("Inserted %d chunks into %s", len(records), TABLE_NAME)
     return len(records)
