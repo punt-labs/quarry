@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -436,3 +437,33 @@ class TestOptimizeTable:
     def test_noop_on_empty_db(self, tmp_path: Path):
         db = get_db(tmp_path / "db")
         optimize_table(db)  # No table, no error
+
+
+class TestConcurrentInsert:
+    def test_parallel_insert_on_fresh_db(self, tmp_path: Path):
+        """Multiple threads calling insert_chunks on a fresh DB must not race."""
+        db = get_db(tmp_path / "db")
+        num_workers = 4
+        tasks = [
+            [_make_chunk(chunk_index=i, document_name=f"doc{w}.pdf")]
+            for w in range(num_workers)
+            for i in range(2)
+        ]
+        all_vectors = _random_vectors(len(tasks))
+        task_vectors = [all_vectors[i : i + 1] for i in range(len(tasks))]
+
+        errors: list[Exception] = []
+
+        def _insert(idx: int) -> int:
+            return insert_chunks(db, tasks[idx], task_vectors[idx])
+
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            futures = {executor.submit(_insert, i): i for i in range(len(tasks))}
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(exc)
+
+        assert errors == [], f"Concurrent insert raised: {errors}"
+        assert count_chunks(db) == len(tasks)

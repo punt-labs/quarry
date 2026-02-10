@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -8,7 +9,7 @@ from typing import TYPE_CHECKING, cast
 import pyarrow as pa
 
 from quarry.models import Chunk
-from quarry.types import LanceDB
+from quarry.types import LanceDB, LanceTable
 
 if TYPE_CHECKING:
     import numpy as np
@@ -17,6 +18,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 TABLE_NAME = "ocr_chunks"
+_table_lock = threading.Lock()
 
 
 def _escape_sql(value: str) -> str:
@@ -48,6 +50,28 @@ def get_db(db_path: Path) -> LanceDB:
     return cast("LanceDB", lancedb.connect(str(db_path)))  # type: ignore[attr-defined]
 
 
+def _get_or_create_table(
+    db: LanceDB,
+    records: list[dict[str, object]],
+) -> LanceTable | None:
+    """Return the chunks table, creating it with *records* if needed.
+
+    Returns the table for appending when it already exists, or ``None``
+    when the table was just created (``create_table`` inserts *records*
+    as part of creation).
+
+    Uses double-checked locking to prevent races when multiple threads
+    see a missing table simultaneously.
+    """
+    if TABLE_NAME in db.list_tables().tables:
+        return db.open_table(TABLE_NAME)
+    with _table_lock:
+        if TABLE_NAME in db.list_tables().tables:
+            return db.open_table(TABLE_NAME)
+        db.create_table(TABLE_NAME, data=records, schema=_schema())
+        return None
+
+
 def insert_chunks(
     db: LanceDB,
     chunks: list[Chunk],
@@ -69,11 +93,9 @@ def insert_chunks(
         record["vector"] = vector.tolist()
         records.append(record)
 
-    if TABLE_NAME in db.list_tables().tables:
-        table = db.open_table(TABLE_NAME)
+    table = _get_or_create_table(db, records)
+    if table is not None:
         table.add(records)
-    else:
-        db.create_table(TABLE_NAME, data=records, schema=_schema())
 
     logger.info("Inserted %d chunks into %s", len(records), TABLE_NAME)
     return len(records)
