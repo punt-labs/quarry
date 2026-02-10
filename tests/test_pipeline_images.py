@@ -338,6 +338,109 @@ class TestIngestImageMultiPage:
         assert call_args[0][1] == [1, 2, 3]
 
 
+class TestPrepareImageBytes:
+    def test_small_png_unchanged(self, tmp_path: Path) -> None:
+        """PNG under max_bytes returns raw bytes unmodified."""
+        path = tmp_path / "small.png"
+        _create_image(path, "PNG")
+        raw = path.read_bytes()
+
+        from quarry.pipeline import _prepare_image_bytes
+
+        result = _prepare_image_bytes(
+            path, needs_conversion=False, max_bytes=10_000_000
+        )
+        assert result == raw
+
+    def test_no_limit_returns_raw(self, tmp_path: Path) -> None:
+        """max_bytes=0 skips size checking entirely."""
+        path = tmp_path / "photo.png"
+        _create_image(path, "PNG")
+        raw = path.read_bytes()
+
+        from quarry.pipeline import _prepare_image_bytes
+
+        result = _prepare_image_bytes(path, needs_conversion=False, max_bytes=0)
+        assert result == raw
+
+    def test_oversized_png_reencoded_as_jpeg(self, tmp_path: Path) -> None:
+        """PNG exceeding max_bytes is re-encoded as JPEG."""
+        path = tmp_path / "big.png"
+        # Random noise: PNG can't compress it well, JPEG can
+        rng = np.random.default_rng(42)
+        pixels = rng.integers(0, 256, (500, 500, 3), dtype=np.uint8)
+        img = Image.fromarray(pixels)
+        img.save(path, format="PNG")
+        png_size = path.stat().st_size
+
+        from quarry.pipeline import _prepare_image_bytes
+
+        # Set max_bytes between JPEG size and PNG size
+        result = _prepare_image_bytes(
+            path, needs_conversion=False, max_bytes=png_size - 1
+        )
+        # JPEG magic bytes and smaller than PNG
+        assert result[:2] == b"\xff\xd8"
+        assert len(result) < png_size
+
+    def test_oversized_jpeg_downscaled(self, tmp_path: Path) -> None:
+        """JPEG exceeding max_bytes is downscaled."""
+        path = tmp_path / "big.jpg"
+        # Patterned image that doesn't compress well in JPEG
+        yy, xx = np.indices((3000, 4000))
+        pixels = np.stack([xx % 256, yy % 256, (xx + yy) % 256], axis=-1).astype(
+            np.uint8
+        )
+        img = Image.fromarray(pixels, mode="RGB")
+        img.save(path, format="JPEG", quality=99)
+        jpeg_size = path.stat().st_size
+
+        from quarry.pipeline import _prepare_image_bytes
+
+        # Set max_bytes to force downscaling
+        result = _prepare_image_bytes(
+            path, needs_conversion=False, max_bytes=jpeg_size // 4
+        )
+        assert result[:2] == b"\xff\xd8"  # Still JPEG
+        assert len(result) <= jpeg_size // 4
+
+    def test_conversion_still_works_with_max_bytes(self, tmp_path: Path) -> None:
+        """BMP conversion produces PNG when result fits max_bytes."""
+        path = tmp_path / "scan.bmp"
+        _create_image(path, "BMP")
+
+        from quarry.pipeline import _prepare_image_bytes
+
+        result = _prepare_image_bytes(path, needs_conversion=True, max_bytes=10_000_000)
+        assert result[:4] == b"\x89PNG"
+
+    def test_rgba_png_converts_to_jpeg(self, tmp_path: Path) -> None:
+        """RGBA PNG exceeding max_bytes converts to RGB JPEG."""
+        path = tmp_path / "screenshot.png"
+        rng = np.random.default_rng(99)
+        pixels = rng.integers(0, 256, (500, 500, 4), dtype=np.uint8)
+        img = Image.fromarray(pixels, mode="RGBA")
+        img.save(path, format="PNG")
+        png_size = path.stat().st_size
+
+        from quarry.pipeline import _prepare_image_bytes
+
+        result = _prepare_image_bytes(
+            path, needs_conversion=False, max_bytes=png_size - 1
+        )
+        assert result[:2] == b"\xff\xd8"
+
+    def test_mpo_conversion_with_max_bytes(self, tmp_path: Path) -> None:
+        """MPO still converts to JPEG when max_bytes is set."""
+        path = tmp_path / "photo.jpg"
+        _create_mpo_image(path)
+
+        from quarry.pipeline import _prepare_image_bytes
+
+        result = _prepare_image_bytes(path, needs_conversion=True, max_bytes=10_000_000)
+        assert result[:2] == b"\xff\xd8"
+
+
 class TestIngestImageProgress:
     def test_progress_messages(self, monkeypatch, tmp_path: Path) -> None:
         png_file = tmp_path / "photo.png"

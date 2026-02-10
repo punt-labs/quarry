@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     textract_poll_initial: float = 5.0
     textract_poll_max: float = 30.0
     textract_max_wait: int = 900
+    textract_max_image_bytes: int = 10_485_760  # 10 MiB sync API limit
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

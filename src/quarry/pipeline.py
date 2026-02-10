@@ -3,6 +3,10 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from PIL.Image import Image as PILImage
 
 from quarry.backends import get_embedding_backend, get_ocr_backend
 from quarry.chunker import chunk_pages
@@ -291,7 +295,9 @@ def ingest_image(
         )
 
     image_bytes = _prepare_image_bytes(
-        file_path, needs_conversion=analysis.needs_conversion
+        file_path,
+        needs_conversion=analysis.needs_conversion,
+        max_bytes=settings.textract_max_image_bytes,
     )
     ocr = get_ocr_backend(settings)
     page = ocr.ocr_image_bytes(
@@ -311,28 +317,105 @@ def ingest_image(
     )
 
 
-def _prepare_image_bytes(image_path: Path, *, needs_conversion: bool) -> bytes:
-    """Read image bytes, converting to a Textract-native format if needed.
+def _prepare_image_bytes(
+    image_path: Path,
+    *,
+    needs_conversion: bool,
+    max_bytes: int = 0,
+) -> bytes:
+    """Read image bytes, converting format and/or downscaling as needed.
 
-    MPO (iPhone multi-picture) is re-encoded as JPEG to avoid PNG size bloat.
-    BMP and WebP are saved as lossless PNG.
-    EXIF orientation is applied before re-encoding to prevent rotated OCR.
+    Format conversion: MPO → JPEG, BMP/WebP → PNG, with EXIF transpose.
+    Size reduction: when *max_bytes* > 0 and the encoded image exceeds it,
+    lossless formats are re-encoded as JPEG (quality 95); if still too large,
+    dimensions are halved up to 5 times.
     """
-    if not needs_conversion:
+    if not needs_conversion and max_bytes <= 0:
         return image_path.read_bytes()
 
-    import io  # noqa: PLC0415
+    if not needs_conversion:
+        raw = image_path.read_bytes()
+        if len(raw) <= max_bytes:
+            return raw
 
     from PIL import Image, ImageOps  # noqa: PLC0415
 
     with Image.open(image_path) as im:
-        transposed = ImageOps.exif_transpose(im)
-        buf = io.BytesIO()
+        img = ImageOps.exif_transpose(im)
+
+        out_fmt: str
+        save_kw: dict[str, int]
         if im.format == "MPO":
-            transposed.save(buf, format="JPEG", quality=95)
+            out_fmt, save_kw = "JPEG", {"quality": 95}
+        elif im.format in ("BMP", "WEBP"):
+            out_fmt, save_kw = "PNG", {}
         else:
-            transposed.save(buf, format="PNG")
-        return buf.getvalue()
+            out_fmt, save_kw = im.format or "PNG", {}
+
+        return _encode_image_to_fit(img, out_fmt, save_kw, max_bytes, image_path.name)
+
+
+def _encode_image_to_fit(
+    img: PILImage,
+    out_fmt: str,
+    save_kw: dict[str, int],
+    max_bytes: int,
+    name: str,
+) -> bytes:
+    """Encode image, re-encoding as JPEG and/or downscaling if oversized."""
+    import io  # noqa: PLC0415
+
+    from PIL import Image  # noqa: PLC0415
+
+    buf = io.BytesIO()
+    img.save(buf, format=out_fmt, **save_kw)
+    data = buf.getvalue()
+
+    if max_bytes <= 0 or len(data) <= max_bytes:
+        return data
+
+    # Re-encode as JPEG if not already (much smaller for photos)
+    if out_fmt != "JPEG":
+        out_fmt, save_kw = "JPEG", {"quality": 95}
+        rgb = img.convert("RGB") if img.mode != "RGB" else img
+        buf = io.BytesIO()
+        rgb.save(buf, format=out_fmt, **save_kw)
+        data = buf.getvalue()
+        logger.info("Re-encoded %s as JPEG (%d bytes)", name, len(data))
+        if len(data) <= max_bytes:
+            return data
+        img = rgb
+
+    # Downscale until under limit
+    current = img
+    for _ in range(5):
+        w, h = current.size
+        new_w, new_h = max(1, w // 2), max(1, h // 2)
+        if (new_w, new_h) == (w, h):
+            break
+        current = current.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        buf = io.BytesIO()
+        current.save(buf, format=out_fmt, **save_kw)
+        data = buf.getvalue()
+        logger.info(
+            "Downscaled %s to %dx%d (%d bytes)",
+            name,
+            new_w,
+            new_h,
+            len(data),
+        )
+        if len(data) <= max_bytes:
+            return data
+
+    if max_bytes > 0 and len(data) > max_bytes:
+        logger.warning(
+            "%s still %d bytes after downscaling (limit %d)",
+            name,
+            len(data),
+            max_bytes,
+        )
+
+    return data
 
 
 def _ingest_multipage_image(
