@@ -11,7 +11,7 @@ Categories: `format` (file type support), `provider` (OCR/embedding backends),
 ## [Unreleased]
 
 ### Format
-- Source code ingestion with tree-sitter parsing (30+ languages). Optional: `pip install quarry-mcp[code]`
+- Source code ingestion with tree-sitter parsing (30+ languages, required dependency)
 - `PageType.CODE` enum value for distinguishing code chunks from prose
 
 ### Infra
