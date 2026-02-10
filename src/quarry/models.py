@@ -9,6 +9,7 @@ class PageType(enum.Enum):
     TEXT = "text"
     IMAGE = "image"
     SECTION = "section"
+    CODE = "code"
 
 
 @dataclass(frozen=True)

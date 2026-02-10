@@ -10,6 +10,10 @@ Categories: `format` (file type support), `provider` (OCR/embedding backends),
 
 ## [Unreleased]
 
+### Format
+- Source code ingestion with tree-sitter parsing (30+ languages). Optional: `pip install quarry-mcp[code]`
+- `PageType.CODE` enum value for distinguishing code chunks from prose
+
 ### Infra
 - **Breaking:** Renamed LanceDB table from `ocr_chunks` to `chunks`. Run `quarry sync` after upgrading to re-index.
 - Persistent logging to `~/.quarry/data/quarry.log` with rotation (5 MB, 3 backups)
