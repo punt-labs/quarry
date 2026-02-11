@@ -280,6 +280,15 @@ Incremental Sync
 
 Each chunk stores both its text fragment and the full page raw text, so LLMs can reference surrounding context when a search result is relevant.
 
+## Roadmap
+
+- **Search filters** — filter by content type (`page_type`) and file format (`source_format`) for targeted retrieval
+- **Spreadsheet ingestion** — XLSX, XLS, and CSV via LaTeX tabular serialization
+- **Presentation ingestion** — PPTX slide extraction with speaker notes
+- **Hybrid search** — combine vector similarity with document-level ranking
+- **PII detection** — identify and redact sensitive information before indexing
+- **Local OCR** — alternative to AWS Textract for offline/air-gapped environments
+
 ## Development
 
 ```bash
