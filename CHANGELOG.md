@@ -5,8 +5,12 @@ All notable changes to quarry-mcp will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-Categories: `format` (file type support), `provider` (OCR/embedding backends),
-`tool` (MCP/CLI surface), `pipeline` (ingestion flow), `infra` (schema, build, config).
+Categories: `format` (document types), `transform` (content conversions: OCR, parsing,
+embedding), `connector` (data sources: local FS, cloud), `index` (storage, chunking, sync),
+`query` (search and filtering), `tool` (MCP/CLI surface), `infra` (schema, build, config).
+
+Legacy categories in older entries: `provider` (now `transform`), `pipeline` (now split
+across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 

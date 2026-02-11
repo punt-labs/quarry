@@ -6,41 +6,75 @@
 [![Tests](https://github.com/jmf-pobox/quarry-mcp/actions/workflows/test.yml/badge.svg)](https://github.com/jmf-pobox/quarry-mcp/actions/workflows/test.yml)
 [![Lint](https://github.com/jmf-pobox/quarry-mcp/actions/workflows/lint.yml/badge.svg)](https://github.com/jmf-pobox/quarry-mcp/actions/workflows/lint.yml)
 
-Extract searchable knowledge from any document. Expose it to LLMs via MCP.
+A document intelligence pipeline for LLMs. Ingest anything, search everything.
 
-Quarry ingests PDFs, images, text files, source code, and raw text into a local vector database, then serves semantic search over that content through the [Model Context Protocol](https://modelcontextprotocol.io). Point Claude Code or Claude Desktop at your documents and ask questions.
+Quarry transforms documents into searchable knowledge through format-aware ingestion, intelligent content transformations, local vector indexing, and semantic search — exposed as both an MCP server and a CLI.
 
 ## Why Quarry?
 
-If your documents are already machine-readable text (TXT, Markdown, DOCX), [mcp-local-rag](https://github.com/shinpr/mcp-local-rag) is a solid zero-config option — one `npx` command and you're searching.
+Most RAG tools handle plain text. Quarry handles the full spectrum:
 
-Quarry exists for documents that aren't text yet:
+| Capability | What Quarry does | Typical RAG tool |
+|---|---|---|
+| **Formats** | PDF, images, code, text, spreadsheets (planned) | Text files only |
+| **Transformations** | OCR, tree-sitter AST splitting, LaTeX tabular (planned) | None — expects pre-processed text |
+| **Indexing** | Vector embeddings, incremental sync, collections | Basic embedding |
+| **Query** | Semantic search, format filters (planned), full page context | Vector similarity only |
+| **Interface** | MCP server + CLI | Usually one or the other |
+| **OCR** | Cloud (AWS Textract) today, local (Tesseract) planned | None |
 
-- **Scanned PDFs** — Board packs, legal filings, archival records. No embedded text, just page images. Quarry classifies each page, routes image pages through AWS Textract OCR, and extracts text from the rest.
-- **Mixed-format PDFs** — Some pages are text, some are scans. Quarry handles both in a single pipeline.
-- **Images** — Photos of whiteboards, receipts, handwritten notes. PNG, JPG, TIFF (multi-page), BMP, WebP.
-- **Text files** — TXT, Markdown, LaTeX, DOCX. No OCR needed, straight to chunking.
-- **Source code** — Python, JavaScript, TypeScript, Rust, Go, Java, C/C++, and 20+ more languages. Tree-sitter splits code into semantic sections (functions, classes, imports).
-- **Raw text** — Paste content directly via `ingest_text`. Use this from Claude Desktop for uploaded files.
+Quarry's vision: support both local and cloud backends for each capability. Users with GPUs run everything locally. Others use cloud services. Anyone can mix and match.
 
-Quarry also preserves full page text alongside chunks, so LLMs can reference surrounding context when a search hit lands mid-page.
+## Capabilities
 
-## Features
+### Formats
 
-- **PDF ingestion** with automatic text/image classification per page
-- **Image ingestion** — PNG, JPG, TIFF (multi-page), BMP, WebP via Textract OCR
-- **Text file ingestion** — TXT, Markdown, LaTeX, DOCX
-- **Source code ingestion** — 30+ languages via tree-sitter AST splitting (Python, JS/TS, Rust, Go, Java, C/C++, Ruby, Swift, Kotlin, and more)
-- **Raw text ingestion** — ingest content directly without a file on disk
-- **OCR** via AWS Textract for scanned and image-based documents
-- **Text extraction** via PyMuPDF for text-based PDF pages
-- **Sentence-aware chunking** with configurable overlap
-- **Local vector embeddings** using snowflake-arctic-embed-m-v1.5 (768-dim)
-- **LanceDB** for fast, local vector storage (no external database)
-- **Directory registration and incremental sync** — register directories, detect new/changed/deleted files via mtime+size, re-index in parallel
-- **MCP server** with 13 tools: `search_documents`, `ingest`, `ingest_text`, `get_documents`, `get_page`, `delete_document`, `delete_collection`, `list_collections`, `register_directory`, `deregister_directory`, `sync_all_registrations`, `list_registrations`, `status`
-- **CLI** for ingestion, search, document management, directory registration, and sync
-- **Full page text preserved** alongside chunks for LLM reference
+Quarry ingests these document types today:
+
+- **PDF** — automatic text/image classification per page. Text pages use PyMuPDF; image pages route through OCR.
+- **Images** — PNG, JPG, TIFF (multi-page), BMP, WebP.
+- **Text files** — TXT, Markdown, LaTeX, DOCX. Section-aware splitting by headings and structure.
+- **Source code** — 30+ languages via tree-sitter AST splitting. Functions, classes, and imports become semantic sections.
+- **Raw text** — paste content directly via `ingest_text` for uploads or clipboard.
+
+### Transformations
+
+Each format goes through a content-specific transformation before indexing:
+
+| Source | Transformation | Output |
+|---|---|---|
+| PDF (text pages) | PyMuPDF extraction | Prose chunks |
+| PDF (image pages) | AWS Textract OCR | Prose chunks |
+| Images | AWS Textract OCR | Prose chunks |
+| Text files | Section-aware splitting (headings, `\section{}`, paragraphs) | Section chunks |
+| Source code | Tree-sitter AST parsing (functions, classes, imports) | Code chunks |
+| Spreadsheets (planned) | pandas → LaTeX tabular | Tabular chunks |
+| Presentations (planned) | Slide + speaker notes extraction | Slide chunks |
+
+### Connectors
+
+- **Local filesystem** — ingest individual files or register directories for incremental sync. Detects new, changed, and deleted files via mtime+size comparison. Parallel ingestion via ThreadPoolExecutor.
+- **Google Drive** (planned) — cloud document source.
+
+### Indexing
+
+- **Vector embeddings** — snowflake-arctic-embed-m-v1.5 (768-dim), runs locally.
+- **Sentence-aware chunking** — 1800-char target with 200-char overlap. Preserves sentence boundaries.
+- **Incremental sync** — register directories, sync on demand. Only re-indexes changed files.
+- **Collections** — organize documents by project, topic, or source.
+- **Full page context** — each chunk retains the complete page text for LLM reference.
+
+### Query
+
+- **Semantic search** — vector similarity across all indexed documents.
+- **Collection filtering** — scope searches to specific collections.
+- **Content type and format filters** (planned) — filter by `page_type` (code, text, spreadsheet) or `source_format` (.pdf, .py, .xlsx).
+- **Hybrid search** (planned) — combine vector similarity with document-level ranking.
+
+### Interface
+
+- **MCP server** — 13 tools for ingestion, search, sync, and document management. Works with Claude Code and Claude Desktop.
+- **CLI** — same capabilities via `quarry` command with Rich progress display.
 
 ## Quick Start
 
@@ -151,7 +185,7 @@ Use the absolute path to `uvx` for Desktop (e.g. `/opt/homebrew/bin/uvx`) since 
 | Tool | Description |
 |------|-------------|
 | `search_documents` | Semantic search across all indexed documents |
-| `ingest` | OCR and index a file (PDF, image, TXT, MD, TEX, DOCX, source code) |
+| `ingest` | Ingest a file (PDF, image, text, source code) |
 | `ingest_text` | Index raw text content directly (for uploads or pasted text) |
 | `get_documents` | List all indexed documents with metadata |
 | `get_page` | Retrieve full text for a specific page |
@@ -241,53 +275,57 @@ All settings are configurable via environment variables:
 ## Architecture
 
 ```
-Input
-  │
-  ├─ PDF ─────────┬─ Text pages ──→ PyMuPDF extraction
-  │               └─ Image pages ─→ S3 → Textract async OCR → S3 cleanup
-  │
-  ├─ Images ──────→ Textract sync OCR (BMP/WebP converted to PNG)
-  │                 TIFF multi-page → S3 → Textract async OCR
-  │
-  ├─ Text files ──→ Direct text extraction (TXT, MD, TEX, DOCX)
-  │
-  ├─ Source code ─→ Tree-sitter AST splitting (30+ languages)
-  │
-  └─ Raw text ────→ ingest_text (from uploads, clipboard, etc.)
-                          │
-                    Sentence-aware chunking (with overlap)
-                          │
-                    snowflake-arctic-embed-m-v1.5
-                          │
-                    LanceDB (local vector store)
-                          │
-                 ┌────────┴────────┐
-                 │                 │
-             MCP Server         CLI
-         (stdio transport)   (typer + rich)
-
-Incremental Sync
-  │
-  Directory Registry (SQLite, WAL mode)
-  │
-  ├─ register → track directory + collection mapping
-  ├─ sync ────→ walk directory, compare mtime+size
-  │              ├─ new/changed → ThreadPoolExecutor → ingest pipeline
-  │              ├─ unchanged  → skip
-  │              └─ deleted    → remove from LanceDB + registry
-  └─ deregister → remove tracking + optionally clean data
+Connectors                Formats              Transformations
+  │                         │                        │
+  ├─ Local filesystem       ├─ PDF ──────┬─ text ──→ PyMuPDF extraction
+  │   (register + sync)     │            └─ image ─→ Textract OCR
+  │                         │
+  └─ Google Drive           ├─ Images ─────────────→ Textract OCR
+     (planned)              │
+                            ├─ Text files ─────────→ Section-aware splitting
+                            │
+                            ├─ Source code ─────────→ Tree-sitter AST splitting
+                            │
+                            ├─ Spreadsheets ───────→ LaTeX tabular (planned)
+                            │
+                            └─ Raw text ───────────→ Direct chunking
+                                                         │
+                                                  Indexing
+                                                    │
+                                                    ├─ Sentence-aware chunking
+                                                    ├─ Vector embeddings
+                                                    └─ LanceDB storage
+                                                         │
+                                                  Query
+                                                    │
+                                                    ├─ Semantic search
+                                                    ├─ Collection filtering
+                                                    └─ Format filters (planned)
+                                                         │
+                                                  Interface
+                                                    │
+                                                    ├─ MCP Server (stdio)
+                                                    └─ CLI (typer + rich)
 ```
-
-Each chunk stores both its text fragment and the full page raw text, so LLMs can reference surrounding context when a search result is relevant.
 
 ## Roadmap
 
-- **Search filters** — filter by content type (`page_type`) and file format (`source_format`) for targeted retrieval
-- **Spreadsheet ingestion** — XLSX, XLS, and CSV via LaTeX tabular serialization
-- **Presentation ingestion** — PPTX slide extraction with speaker notes
-- **Hybrid search** — combine vector similarity with document-level ranking
+### Formats
+- **Spreadsheets** — XLSX, XLS, CSV ingestion via LaTeX tabular serialization
+- **Presentations** — PPTX slide extraction with speaker notes
+- **HTML** — web page ingestion with structure-aware splitting
+- **Email** — EML/MBOX with header, body, and attachment extraction
+
+### Transformations
+- **Local OCR** — Tesseract backend for offline/air-gapped environments
 - **PII detection** — identify and redact sensitive information before indexing
-- **Local OCR** — alternative to AWS Textract for offline/air-gapped environments
+
+### Connectors
+- **Google Drive** — cloud document source with incremental sync
+
+### Query
+- **Search filters** — filter by content type and file format for targeted retrieval
+- **Hybrid search** — combine vector similarity with document-level ranking
 
 ## Development
 
