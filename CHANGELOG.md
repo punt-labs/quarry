@@ -14,6 +14,19 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-02-12
+
+### Transform
+- **Local OCR backend** — RapidOCR (PaddleOCR models via ONNX Runtime, CPU-only, ~214 MB). No cloud credentials required.
+- Protocol types (`_OcrEngine`, `_OcrResult`) for RapidOCR — zero `getattr()`, zero `type: ignore`
+- Thread-safe singleton engine initialization via double-checked locking
+
+### Infra
+- **Breaking:** Default `OCR_BACKEND` changed from `textract` to `local`. Set `OCR_BACKEND=textract` to restore previous behavior.
+- New dependencies: `rapidocr>=3.6.0`, `onnxruntime>=1.18.0`, `opencv-python-headless>=4.8.0`
+- `quarry doctor` checks local OCR engine health; AWS credentials now optional
+- 18 unit tests for `ocr_local.py` (100% coverage)
+
 ## [0.3.0] - 2026-02-10
 
 ### Format
