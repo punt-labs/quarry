@@ -162,6 +162,13 @@ class TestLocalOcrBackendPdf:
 
         assert results[0].document_name == "test.pdf"
 
+    def test_rejects_unsupported_extension(self, tmp_path: Path) -> None:
+        docx_path = tmp_path / "file.docx"
+        docx_path.write_bytes(b"fake")
+        backend = LocalOcrBackend(_settings())
+        with pytest.raises(ValueError, match="Unsupported document type"):
+            backend.ocr_document(docx_path, [1], 1)
+
 
 class TestLocalOcrBackendTiff:
     def test_returns_page_content_per_frame(self, tmp_path: Path) -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import logging
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -30,20 +31,24 @@ class _OcrEngine(Protocol):
 
 
 _engine: _OcrEngine | None = None
+_engine_lock = threading.Lock()
 
 
 def _get_engine() -> _OcrEngine:
     """Return a cached RapidOCR engine instance.
 
-    The engine is initialized once per process. ONNX models are bundled
-    in the rapidocr package (~17 MB) and loaded on first call.
+    Thread-safe via double-checked locking. The engine is initialized
+    once per process. ONNX models are bundled in the rapidocr package
+    (~17 MB) and loaded on first call.
     """
     global _engine
     if _engine is None:
-        from rapidocr import RapidOCR  # noqa: PLC0415
+        with _engine_lock:
+            if _engine is None:
+                from rapidocr import RapidOCR  # noqa: PLC0415
 
-        _engine = RapidOCR()
-        logger.info("RapidOCR engine initialized")
+                _engine = RapidOCR()
+                logger.info("RapidOCR engine initialized")
     return _engine
 
 
@@ -123,9 +128,12 @@ class LocalOcrBackend:
             return self._ocr_tiff(
                 document_path, page_numbers, total_pages, doc_name, doc_path
             )
-        return self._ocr_pdf(
-            document_path, page_numbers, total_pages, doc_name, doc_path
-        )
+        if suffix == ".pdf":
+            return self._ocr_pdf(
+                document_path, page_numbers, total_pages, doc_name, doc_path
+            )
+        msg = f"Unsupported document type for OCR: '{suffix}'"
+        raise ValueError(msg)
 
     def ocr_image_bytes(
         self,
