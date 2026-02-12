@@ -23,7 +23,7 @@ def _settings(**overrides: object) -> Settings:
         "textract_max_wait": 1,
     }
     defaults.update(overrides)
-    return Settings(**defaults)  # type: ignore[arg-type]
+    return Settings.model_validate(defaults)
 
 
 class TestGetOcrBackend:
