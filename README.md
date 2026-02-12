@@ -159,7 +159,7 @@ Only needed if you want cloud OCR. Set these environment variables:
 | `AWS_ACCESS_KEY_ID` | | AWS access key |
 | `AWS_SECRET_ACCESS_KEY` | | AWS secret key |
 | `AWS_DEFAULT_REGION` | `us-east-1` | AWS region |
-| `S3_BUCKET` | `ocr-7f3a1b2e4c5d4e8f9a1b3c5d7e9f2a4b` | S3 bucket for Textract uploads |
+| `S3_BUCKET` | | S3 bucket for Textract uploads |
 
 Your IAM user needs `textract:DetectDocumentText`, `textract:StartDocumentTextDetection`, `textract:GetDocumentTextDetection`, and `s3:PutObject/GetObject/DeleteObject` on your bucket.
 
