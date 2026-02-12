@@ -6,6 +6,10 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings
 
+# Pinned git revision for the default embedding model.  Changing this
+# requires a new release so users re-run ``quarry install``.
+EMBEDDING_MODEL_REVISION = "e58a8f756156a1293d763f17e3aae643474e9b8a"
+
 
 class Settings(BaseSettings):
     aws_access_key_id: str = ""

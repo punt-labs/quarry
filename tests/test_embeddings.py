@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 
 import quarry.embeddings as embeddings_mod
+from quarry.config import EMBEDDING_MODEL_REVISION
 from quarry.embeddings import embed_query, embed_texts
 
 
@@ -29,7 +30,11 @@ class TestEmbedTexts:
             result = embed_texts(["a", "b", "c"])
 
         np.testing.assert_array_equal(result, expected)
-        mock_cls.assert_called_once()
+        mock_cls.assert_called_once_with(
+            "Snowflake/snowflake-arctic-embed-m-v1.5",
+            revision=EMBEDDING_MODEL_REVISION,
+            local_files_only=True,
+        )
         model.encode.assert_called_once_with(
             ["a", "b", "c"],
             normalize_embeddings=True,

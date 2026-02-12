@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from quarry.config import EMBEDDING_MODEL_REVISION
 from quarry.types import EmbeddingModel
 
 if TYPE_CHECKING:
@@ -20,8 +21,12 @@ def _get_model(model_name: str) -> EmbeddingModel:
     if model_name not in _models:
         from sentence_transformers import SentenceTransformer  # noqa: PLC0415
 
-        logger.info("Loading embedding model: %s", model_name)
-        _models[model_name] = SentenceTransformer(model_name)
+        logger.info("Loading embedding model: %s (offline)", model_name)
+        _models[model_name] = SentenceTransformer(
+            model_name,
+            revision=EMBEDDING_MODEL_REVISION,
+            local_files_only=True,
+        )
         logger.info("Model loaded")
     return _models[model_name]
 
