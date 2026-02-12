@@ -6,16 +6,17 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings
 
-# Pinned git revision for the default embedding model.  Changing this
-# requires a new release so users re-run ``quarry install``.
-EMBEDDING_MODEL_REVISION = "e58a8f756156a1293d763f17e3aae643474e9b8a"
+ONNX_MODEL_REPO = "Snowflake/snowflake-arctic-embed-m-v1.5"
+ONNX_MODEL_FILE = "onnx/model_int8.onnx"
+ONNX_TOKENIZER_FILE = "tokenizer.json"
+ONNX_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
 
 class Settings(BaseSettings):
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
     aws_default_region: str = "us-east-1"
-    s3_bucket: str = "ocr-7f3a1b2e4c5d4e8f9a1b3c5d7e9f2a4b"
+    s3_bucket: str = ""
 
     lancedb_path: Path = Path.home() / ".quarry" / "data" / "lancedb"
     registry_path: Path = Path.home() / ".quarry" / "data" / "registry.db"

@@ -81,18 +81,16 @@ def _check_aws_credentials() -> CheckResult:
 
 
 def _check_embedding_model() -> CheckResult:
-    model_dir = (
-        Path.home()
-        / ".cache"
-        / "huggingface"
-        / "hub"
-        / "models--Snowflake--snowflake-arctic-embed-m-v1.5"
-    )
-    if model_dir.exists():
+    from huggingface_hub import try_to_load_from_cache  # noqa: PLC0415
+
+    from quarry.config import ONNX_MODEL_FILE, ONNX_MODEL_REPO  # noqa: PLC0415
+
+    cached = try_to_load_from_cache(ONNX_MODEL_REPO, ONNX_MODEL_FILE)
+    if isinstance(cached, str) and Path(cached).exists():
         return CheckResult(
             name="Embedding model",
             passed=True,
-            message="snowflake-arctic-embed-m-v1.5 cached",
+            message="snowflake-arctic-embed-m-v1.5 (ONNX INT8) cached",
         )
     return CheckResult(
         name="Embedding model",
@@ -123,7 +121,8 @@ def _check_local_ocr() -> CheckResult:
 def _check_imports() -> CheckResult:
     modules = [
         "lancedb",
-        "sentence_transformers",
+        "tokenizers",
+        "huggingface_hub",
         "fitz",
         "PIL",
         "boto3",
@@ -241,16 +240,11 @@ def run_install() -> int:
     data_dir.mkdir(parents=True, exist_ok=True)
     print(f"  \u2713 {data_dir}")  # noqa: T201
 
-    print("Downloading embedding model...")  # noqa: T201
-    from sentence_transformers import SentenceTransformer  # noqa: PLC0415
+    print("Downloading embedding model (ONNX)...")  # noqa: T201
+    from quarry.embeddings import _download_model_files  # noqa: PLC0415
 
-    from quarry.config import EMBEDDING_MODEL_REVISION  # noqa: PLC0415
-
-    SentenceTransformer(
-        "Snowflake/snowflake-arctic-embed-m-v1.5",
-        revision=EMBEDDING_MODEL_REVISION,
-    )
-    print("  \u2713 snowflake-arctic-embed-m-v1.5 cached")  # noqa: T201
+    _download_model_files()
+    print("  \u2713 snowflake-arctic-embed-m-v1.5 (INT8 ONNX) cached")  # noqa: T201
 
     print("Configuring MCP clients...")  # noqa: T201
     for check in [_configure_claude_code(), _configure_claude_desktop()]:

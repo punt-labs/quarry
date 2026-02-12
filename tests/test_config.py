@@ -23,7 +23,7 @@ class TestSettings:
             aws_secret_access_key="test",
         )
         assert settings.aws_default_region == "us-east-1"
-        assert settings.s3_bucket == "ocr-7f3a1b2e4c5d4e8f9a1b3c5d7e9f2a4b"
+        assert settings.s3_bucket == ""
         assert settings.chunk_max_chars == 1800
         assert settings.chunk_overlap_chars == 200
         assert settings.textract_poll_initial == 5.0
