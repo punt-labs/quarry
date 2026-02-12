@@ -14,6 +14,13 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-02-12
+
+### Infra
+- Restructure README: Quick Start within first 20 lines, user-focused flow, removed jargon
+- Fix documented mypy command to match CI (`src/ tests/`)
+- Remove misleading `EMBEDDING_MODEL` env var (revision is pinned)
+
 ## [0.4.1] - 2026-02-12
 
 ### Infra
