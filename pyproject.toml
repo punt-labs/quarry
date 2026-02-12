@@ -33,6 +33,9 @@ dependencies = [
     "python-docx>=1.1.0",
     "tree-sitter>=0.23.0",
     "tree-sitter-language-pack>=0.5.0",
+    "rapidocr>=3.6.0",
+    "onnxruntime>=1.18.0",
+    "opencv-python-headless>=4.8.0",
 ]
 
 [project.optional-dependencies]
@@ -158,6 +161,12 @@ module = [
     "rich.*",
     "tree_sitter_language_pack",
     "tree_sitter_language_pack.*",
+    "rapidocr",
+    "rapidocr.*",
+    "onnxruntime",
+    "onnxruntime.*",
+    "cv2",
+    "cv2.*",
 ]
 ignore_missing_imports = true
 
