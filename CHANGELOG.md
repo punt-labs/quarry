@@ -14,6 +14,13 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-02-12
+
+### Infra
+- Pin embedding model to git revision `e58a8f75` for reproducible builds
+- Load model with `local_files_only=True` — eliminates HuggingFace Hub network calls at runtime (4s → 0.6s first load)
+- Runtime fails fast if model not cached (directs user to run `quarry install`)
+
 ## [0.4.0] - 2026-02-12
 
 ### Transform
