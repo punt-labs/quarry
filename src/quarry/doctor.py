@@ -244,7 +244,12 @@ def run_install() -> int:
     print("Downloading embedding model...")  # noqa: T201
     from sentence_transformers import SentenceTransformer  # noqa: PLC0415
 
-    SentenceTransformer("Snowflake/snowflake-arctic-embed-m-v1.5")
+    from quarry.config import EMBEDDING_MODEL_REVISION  # noqa: PLC0415
+
+    SentenceTransformer(
+        "Snowflake/snowflake-arctic-embed-m-v1.5",
+        revision=EMBEDDING_MODEL_REVISION,
+    )
     print("  \u2713 snowflake-arctic-embed-m-v1.5 cached")  # noqa: T201
 
     print("Configuring MCP clients...")  # noqa: T201

@@ -283,7 +283,12 @@ class TestRunInstall:
         with patch("sentence_transformers.SentenceTransformer") as mock_st:
             mock_st.return_value = None
             run_install()
-        mock_st.assert_called_once_with("Snowflake/snowflake-arctic-embed-m-v1.5")
+        from quarry.config import EMBEDDING_MODEL_REVISION
+
+        mock_st.assert_called_once_with(
+            "Snowflake/snowflake-arctic-embed-m-v1.5",
+            revision=EMBEDDING_MODEL_REVISION,
+        )
 
     def test_idempotent(self, tmp_path, monkeypatch):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
