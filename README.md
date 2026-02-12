@@ -6,99 +6,34 @@
 [![Tests](https://github.com/jmf-pobox/quarry-mcp/actions/workflows/test.yml/badge.svg)](https://github.com/jmf-pobox/quarry-mcp/actions/workflows/test.yml)
 [![Lint](https://github.com/jmf-pobox/quarry-mcp/actions/workflows/lint.yml/badge.svg)](https://github.com/jmf-pobox/quarry-mcp/actions/workflows/lint.yml)
 
-A document intelligence pipeline for LLMs. Ingest anything, search everything.
-
-Quarry transforms documents into searchable knowledge through format-aware ingestion, intelligent content transformations, local vector indexing, and semantic search — exposed as both an MCP server and a CLI.
-
-## Why Quarry?
-
-Most RAG tools handle plain text. Quarry handles the full spectrum:
-
-| Capability | What Quarry does | Typical RAG tool |
-|---|---|---|
-| **Formats** | PDF, images, code, text, spreadsheets (planned) | Text files only |
-| **Transformations** | OCR, tree-sitter AST splitting, LaTeX tabular (planned) | None — expects pre-processed text |
-| **Indexing** | Vector embeddings, incremental sync, collections | Basic embedding |
-| **Query** | Semantic search, format filters (planned), full page context | Vector similarity only |
-| **Interface** | MCP server + CLI | Usually one or the other |
-| **OCR** | Local (RapidOCR, offline) and cloud (AWS Textract) | None |
-
-Quarry works out of the box with local capabilities — no cloud accounts or API keys required to get started. For demanding use cases (OCR on scanned documents, large-scale ingestion), cloud backends like AWS Textract are available as drop-in upgrades. The goal: simple enough for non-engineers, complete enough for the most demanding personal knowledge bases.
-
-## Capabilities
-
-### Formats
-
-Quarry ingests these document types today:
-
-- **PDF** — automatic text/image classification per page. Text pages use PyMuPDF; image pages route through OCR.
-- **Images** — PNG, JPG, TIFF (multi-page), BMP, WebP.
-- **Text files** — TXT, Markdown, LaTeX, DOCX. Section-aware splitting by headings and structure.
-- **Source code** — 30+ languages via tree-sitter AST splitting. Functions, classes, and imports become semantic sections.
-- **Raw text** — paste content directly via `ingest_text` for uploads or clipboard.
-
-### Transformations
-
-Each format goes through a content-specific transformation before indexing:
-
-| Source | Transformation | Output |
-|---|---|---|
-| PDF (text pages) | PyMuPDF extraction | Prose chunks |
-| PDF (image pages) | Local OCR (RapidOCR) or AWS Textract | Prose chunks |
-| Images | Local OCR (RapidOCR) or AWS Textract | Prose chunks |
-| Text files | Section-aware splitting (headings, `\section{}`, paragraphs) | Section chunks |
-| Source code | Tree-sitter AST parsing (functions, classes, imports) | Code chunks |
-| Spreadsheets (planned) | pandas → LaTeX tabular | Tabular chunks |
-| Presentations (planned) | Slide + speaker notes extraction | Slide chunks |
-
-### Connectors
-
-- **Local filesystem** — ingest individual files or register directories for incremental sync. Detects new, changed, and deleted files via mtime+size comparison. Parallel ingestion via ThreadPoolExecutor.
-- **Google Drive** (planned) — cloud document source.
-
-### Indexing
-
-- **Vector embeddings** — snowflake-arctic-embed-m-v1.5 (768-dim), runs locally.
-- **Sentence-aware chunking** — 1800-char target with 200-char overlap. Preserves sentence boundaries.
-- **Incremental sync** — register directories, sync on demand. Only re-indexes changed files.
-- **Collections** — organize documents by project, topic, or source.
-- **Full page context** — each chunk retains the complete page text for LLM reference.
-
-### Query
-
-- **Semantic search** — vector similarity across all indexed documents.
-- **Collection filtering** — scope searches to specific collections.
-- **Content type and format filters** (planned) — filter by `page_type` (code, text, spreadsheet) or `source_format` (.pdf, .py, .xlsx).
-- **Hybrid search** (planned) — combine vector similarity with document-level ranking.
-
-### Interface
-
-- **MCP server** — 13 tools for ingestion, search, sync, and document management. Works with Claude Code and Claude Desktop.
-- **CLI** — same capabilities via `quarry` command with Rich progress display.
+Index any document. Search with natural language. Works with Claude Code and Claude Desktop.
 
 ## Quick Start
 
 ```bash
 pip install quarry-mcp
-
-# Set up data directory, download embedding model, configure MCP clients
-quarry install
-
-# Check everything is working
-quarry doctor
-
-# Ingest documents — works locally, no cloud account needed
-quarry ingest notes.md
-quarry ingest src/main.py
-
-# Search
-quarry search "authentication logic"
-
-# List indexed documents
-quarry list
+quarry install          # downloads embedding model (~500MB), configures MCP
+quarry ingest notes.md  # index a file — no cloud account needed
+quarry search "my topic"
 ```
 
-PDF and image OCR works locally out of the box via RapidOCR. For higher accuracy on scanned documents, configure AWS Textract — see [AWS Setup](#aws-setup) below.
+That's it. Quarry works locally out of the box.
+
+## What It Does
+
+Quarry turns documents into searchable knowledge for LLMs. You feed it files, it chunks and embeds them into a local vector database, and exposes semantic search via MCP tools or a CLI.
+
+**Supported formats:** PDF, images (PNG, JPG, TIFF, BMP, WebP), text files (TXT, Markdown, LaTeX, DOCX), and source code (30+ languages).
+
+**How each format is processed:**
+
+| Source | What happens | Result |
+|--------|-------------|--------|
+| PDF (text pages) | Text extraction via PyMuPDF | Prose chunks |
+| PDF (image pages) | OCR (local or cloud) | Prose chunks |
+| Images | OCR (local or cloud) | Prose chunks |
+| Text files | Split by headings / sections / paragraphs | Section chunks |
+| Source code | Tree-sitter AST parsing (functions, classes) | Code chunks |
 
 ## Installation
 
@@ -107,9 +42,9 @@ pip install quarry-mcp
 quarry install
 ```
 
-`quarry install` creates the data directory (`~/.quarry/data/lancedb/`), downloads the embedding model (~500MB), and configures MCP for Claude Code and Claude Desktop.
+`quarry install` creates `~/.quarry/data/`, downloads the embedding model, and writes MCP config for Claude Code and Claude Desktop.
 
-Run `quarry doctor` to verify your environment:
+Verify with `quarry doctor`:
 
 ```
   ✓ Python version: 3.13.1
@@ -120,54 +55,37 @@ Run `quarry doctor` to verify your environment:
   ✓ Core imports: 8 modules OK
 ```
 
-### OCR Backends
+## Usage
 
-Quarry ships with two OCR backends:
-
-| Backend | Set via | Speed | Quality | Setup |
-|---------|---------|-------|---------|-------|
-| **local** (default) | `OCR_BACKEND=local` | ~7-8s/page | Good — reads names, amounts, dates, descriptions accurately. Minor artifacts: occasional fullwidth punctuation, spacing inconsistencies on dense forms. | None |
-| **textract** | `OCR_BACKEND=textract` | ~2-3s/page | Excellent — production-grade character accuracy | AWS credentials + S3 bucket |
-
-The local backend uses RapidOCR (PaddleOCR models via ONNX Runtime, CPU-only, ~214 MB). In testing on a 6-page scanned boatyard invoice, it extracted task descriptions, dollar amounts, labor hours, and addresses accurately enough for semantic search.
-
-### AWS Setup
-
-Optional — only needed if you want Textract OCR quality. Your IAM user needs:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "textract:DetectDocumentText",
-        "textract:StartDocumentTextDetection",
-        "textract:GetDocumentTextDetection"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"],
-      "Resource": "arn:aws:s3:::your-bucket/*"
-    }
-  ]
-}
-```
-
-Set your S3 bucket:
+### CLI
 
 ```bash
-export S3_BUCKET=your-bucket-name
-```
+# Ingest
+quarry ingest report.pdf
+quarry ingest whiteboard.jpg
+quarry ingest src/main.py
+quarry ingest report.pdf --overwrite
 
-## Usage
+# Search
+quarry search "authentication logic"
+quarry search "quarterly revenue" -n 5
+
+# Manage
+quarry list
+quarry delete report.pdf
+quarry collections
+quarry delete-collection math
+
+# Directory sync — register a folder, then sync to pick up changes
+quarry register /path/to/docs --collection my-docs
+quarry sync
+quarry registrations
+quarry deregister my-docs
+```
 
 ### MCP Server
 
-`quarry install` configures both Claude Code and Claude Desktop automatically. To configure manually:
+`quarry install` configures Claude Code and Claude Desktop automatically. Manual setup:
 
 **Claude Code:**
 
@@ -188,63 +106,66 @@ claude mcp add quarry -- uvx --from quarry-mcp quarry mcp
 }
 ```
 
-Use the absolute path to `uvx` for Desktop (e.g. `/opt/homebrew/bin/uvx`) since Desktop has a limited PATH. `quarry install` resolves this automatically.
+Use the absolute path to `uvx` for Desktop (e.g. `/opt/homebrew/bin/uvx`). `quarry install` resolves this automatically.
 
-### MCP Tools
+**Available tools:**
 
 | Tool | Description |
 |------|-------------|
-| `search_documents` | Semantic search across all indexed documents |
+| `search_documents` | Semantic search across indexed documents |
 | `ingest` | Ingest a file (PDF, image, text, source code) |
-| `ingest_text` | Index raw text content directly (for uploads or pasted text) |
-| `get_documents` | List all indexed documents with metadata |
+| `ingest_text` | Index raw text content directly |
+| `get_documents` | List indexed documents with metadata |
 | `get_page` | Retrieve full text for a specific page |
-| `delete_document` | Remove a document and all its chunks |
+| `delete_document` | Remove a document and its chunks |
 | `delete_collection` | Remove all documents in a collection |
-| `list_collections` | List all collections with document and chunk counts |
-| `register_directory` | Register a directory for incremental sync |
+| `list_collections` | List collections with document/chunk counts |
+| `register_directory` | Register a directory for sync |
 | `deregister_directory` | Remove a directory registration |
-| `sync_all_registrations` | Sync all registered directories (ingest new/changed, remove deleted) |
-| `list_registrations` | List all registered directories |
-| `status` | Database stats: document/chunk counts, registrations, storage size, model info |
+| `sync_all_registrations` | Sync all registered directories |
+| `list_registrations` | List registered directories |
+| `status` | Database stats: counts, storage size, model info |
 
-**Claude Desktop note:** Uploaded files live in a container that Quarry cannot access. For uploaded files, use `ingest_text` with the extracted content. For files on your Mac, provide the local path to `ingest`.
+**Claude Desktop note:** Uploaded files live in a sandbox that Quarry cannot access. Use `ingest_text` with extracted content for uploads. For files on your Mac, provide the local path to `ingest`.
 
-### CLI
+## Configuration
 
-```bash
-# Ingest documents
-quarry ingest report.pdf
-quarry ingest whiteboard.jpg
-quarry ingest notes.md
-quarry ingest report.pdf --overwrite
+All settings via environment variables:
 
-# Search
-quarry search "board governance structure"
-quarry search "quarterly revenue" -n 5
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OCR_BACKEND` | `local` | `local` (RapidOCR, offline) or `textract` (AWS) |
+| `LANCEDB_PATH` | `~/.quarry/data/lancedb` | Vector database location |
+| `CHUNK_MAX_CHARS` | `1800` | Target max characters per chunk (~450 tokens) |
+| `CHUNK_OVERLAP_CHARS` | `200` | Overlap between consecutive chunks |
 
-# Manage documents
-quarry list
-quarry delete report.pdf
-quarry collections
-quarry delete-collection math
+### OCR Backends
 
-# Register directories for incremental sync
-quarry register /path/to/courses/ml-101 --collection ml-101
-quarry register /path/to/courses/stats-200
-quarry registrations
-quarry sync
-quarry sync --workers 8
-quarry deregister ml-101
+Quarry ships with two OCR backends:
 
-# Environment
-quarry doctor
-quarry install
-```
+| Backend | Speed | Quality | Setup |
+|---------|-------|---------|-------|
+| **local** (default) | ~7-8s/page | Good for semantic search | None |
+| **textract** | ~2-3s/page | Excellent character accuracy | AWS credentials + S3 bucket |
+
+The local backend uses RapidOCR (PaddleOCR models via ONNX Runtime, CPU-only, ~214 MB). No cloud account needed.
+
+### AWS Textract Setup
+
+Only needed if you want cloud OCR. Set these environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AWS_ACCESS_KEY_ID` | | AWS access key |
+| `AWS_SECRET_ACCESS_KEY` | | AWS secret key |
+| `AWS_DEFAULT_REGION` | `us-east-1` | AWS region |
+| `S3_BUCKET` | `ocr-7f3a1b2e4c5d4e8f9a1b3c5d7e9f2a4b` | S3 bucket for Textract uploads |
+
+Your IAM user needs `textract:DetectDocumentText`, `textract:StartDocumentTextDetection`, `textract:GetDocumentTextDetection`, and `s3:PutObject/GetObject/DeleteObject` on your bucket.
 
 ### Multiple Indices
 
-Run separate MCP server instances with different data directories:
+Run separate MCP instances with different data directories:
 
 ```json
 {
@@ -263,25 +184,14 @@ Run separate MCP server instances with different data directories:
 }
 ```
 
-## Configuration
-
-All settings are configurable via environment variables:
+## Advanced Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OCR_BACKEND` | `local` | OCR backend: `local` (RapidOCR) or `textract` (AWS) |
-| `AWS_ACCESS_KEY_ID` | | AWS access key (textract only) |
-| `AWS_SECRET_ACCESS_KEY` | | AWS secret key (textract only) |
-| `AWS_DEFAULT_REGION` | `us-east-1` | AWS region |
-| `S3_BUCKET` | `ocr-7f3a1b2e4c5d4e8f9a1b3c5d7e9f2a4b` | S3 bucket for Textract uploads |
-| `LANCEDB_PATH` | `~/.quarry/data/lancedb` | Path to LanceDB storage |
-| `EMBEDDING_MODEL` | `Snowflake/snowflake-arctic-embed-m-v1.5` | HuggingFace embedding model |
-| `CHUNK_MAX_CHARS` | `1800` | Target max characters per chunk (~450 tokens) |
-| `CHUNK_OVERLAP_CHARS` | `200` | Character overlap between consecutive chunks |
-| `TEXTRACT_POLL_INITIAL` | `5.0` | Initial seconds between Textract status checks |
-| `TEXTRACT_POLL_MAX` | `30.0` | Maximum polling interval (exponential backoff, 1.5x) |
-| `TEXTRACT_MAX_WAIT` | `900` | Maximum seconds to wait for Textract job |
-| `REGISTRY_PATH` | `~/.quarry/data/registry.db` | Path to directory registration SQLite database |
+| `TEXTRACT_POLL_INITIAL` | `5.0` | Initial Textract polling interval (seconds) |
+| `TEXTRACT_POLL_MAX` | `30.0` | Max polling interval (1.5x exponential backoff) |
+| `TEXTRACT_MAX_WAIT` | `900` | Max wait for Textract job (seconds) |
+| `REGISTRY_PATH` | `~/.quarry/data/registry.db` | Directory sync SQLite database |
 
 ## Architecture
 
@@ -297,21 +207,18 @@ Connectors                Formats              Transformations
                             │
                             ├─ Source code ─────────→ Tree-sitter AST splitting
                             │
-                            ├─ Spreadsheets ───────→ LaTeX tabular (planned)
-                            │
                             └─ Raw text ───────────→ Direct chunking
                                                          │
                                                   Indexing
                                                     │
                                                     ├─ Sentence-aware chunking
-                                                    ├─ Vector embeddings
+                                                    ├─ Vector embeddings (768-dim)
                                                     └─ LanceDB storage
                                                          │
                                                   Query
                                                     │
                                                     ├─ Semantic search
-                                                    ├─ Collection filtering
-                                                    └─ Format filters (planned)
+                                                    └─ Collection filtering
                                                          │
                                                   Interface
                                                     │
@@ -321,33 +228,20 @@ Connectors                Formats              Transformations
 
 ## Roadmap
 
-### Formats
-- **Spreadsheets** — XLSX, XLS, CSV ingestion via LaTeX tabular serialization
-- **Presentations** — PPTX slide extraction with speaker notes
-- **HTML** — web page ingestion with structure-aware splitting
-- **Email** — EML/MBOX with header, body, and attachment extraction
-
-### Transformations
-- **PII detection** — identify and redact sensitive information before indexing
-
-### Connectors
-- **Google Drive** — cloud document source with incremental sync
-
-### Query
-- **Search filters** — filter by content type and file format for targeted retrieval
-- **Hybrid search** — combine vector similarity with document-level ranking
+- Spreadsheets (XLSX, CSV) via tabular serialization
+- Presentations (PPTX) with speaker notes
+- HTML with structure-aware splitting
+- Search filters by content type and file format
+- Google Drive connector
 
 ## Development
 
 ```bash
-# Run all quality gates
 uv run ruff check .
 uv run ruff format --check .
-uv run mypy src/quarry tests
+uv run mypy src/ tests/
 uv run pytest
 ```
-
-The project enforces strict mypy, comprehensive ruff rules, and requires all tests to pass before every commit.
 
 ## License
 

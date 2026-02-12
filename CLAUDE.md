@@ -26,8 +26,7 @@ All code changes go on feature branches. Never commit directly to main.
 ```bash
 git checkout -b feat/short-description main
 # ... work, commit, push ...
-gh pr create --title "feat: description" --body "..."
-# merge via PR, then delete branch
+# create PR via MCP, merge via PR, then delete branch
 ```
 
 | Prefix | Use |
@@ -69,6 +68,12 @@ bd update <id> --status=in_progress   # Claim work
 bd close <id>               # Mark complete
 bd sync                     # Sync with git remote
 ```
+
+### GitHub Operations
+
+Use the GitHub MCP server tools for all GitHub operations: creating PRs, merging PRs, reading PR status/diff/comments, creating/reading issues, searching, and managing releases. Do not use the `gh` CLI.
+
+Git operations (commit, push, branch, checkout, tag) remain via the Bash tool.
 
 ### Session Close Protocol
 
