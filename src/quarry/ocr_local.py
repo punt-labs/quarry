@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import io
 import logging
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 import fitz
 from PIL import Image
@@ -12,10 +14,25 @@ from quarry.models import PageContent, PageType
 
 logger = logging.getLogger(__name__)
 
-_engine: object | None = None
+
+class _OcrResult(Protocol):
+    """Structural type for RapidOCR v3 output."""
+
+    @property
+    def txts(self) -> tuple[str, ...] | None: ...
 
 
-def _get_engine() -> object:
+@runtime_checkable
+class _OcrEngine(Protocol):
+    """Structural type for RapidOCR engine."""
+
+    def __call__(self, img: Image.Image) -> _OcrResult: ...
+
+
+_engine: _OcrEngine | None = None
+
+
+def _get_engine() -> _OcrEngine:
     """Return a cached RapidOCR engine instance.
 
     The engine is initialized once per process. ONNX models are bundled
@@ -30,16 +47,15 @@ def _get_engine() -> object:
     return _engine
 
 
-def _extract_text(result: object) -> str:
-    """Extract text lines from a RapidOCROutput.
+def _extract_text(result: _OcrResult) -> str:
+    """Extract text lines from a RapidOCR output.
 
-    RapidOCR v3 returns an object with a `txts` attribute that is
-    either a tuple of strings (text detected) or None (no text).
+    RapidOCR v3 returns an object with a ``txts`` attribute that is
+    either a tuple of strings (text detected) or ``None`` (no text).
     """
-    txts = getattr(result, "txts", None)
-    if txts is None:
+    if result.txts is None:
         return ""
-    return "\n".join(str(t) for t in txts)
+    return "\n".join(str(t) for t in result.txts)
 
 
 def _render_pdf_page(doc: fitz.Document, page_number: int) -> Image.Image:
@@ -49,138 +65,35 @@ def _render_pdf_page(doc: fitz.Document, page_number: int) -> Image.Image:
     return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
 
 
-def ocr_pdf_pages(
-    pdf_path: Path,
-    page_numbers: list[int],
-    total_pages: int,
-    document_name: str,
-) -> list[PageContent]:
-    """OCR specific pages of a PDF by rendering each to an image.
-
-    Uses PyMuPDF to render pages at 200 DPI, then runs RapidOCR
-    on each rendered image.
-
-    Args:
-        pdf_path: Path to the PDF file.
-        page_numbers: 1-indexed page numbers to OCR.
-        total_pages: Total pages in the document.
-        document_name: Document name for metadata.
-
-    Returns:
-        List of PageContent for each requested page.
-    """
-    engine = _get_engine()
-    results: list[PageContent] = []
-    doc_path = str(pdf_path.resolve())
-
-    with fitz.open(pdf_path) as doc:
-        for page_num in page_numbers:
-            img = _render_pdf_page(doc, page_num)
-            ocr_result = engine(img)  # type: ignore[operator]
-            text = _extract_text(ocr_result)
-            logger.info(
-                "OCR page %d/%d of %s: %d chars",
-                page_num,
-                total_pages,
-                document_name,
-                len(text),
-            )
-            results.append(
-                PageContent(
-                    document_name=document_name,
-                    document_path=doc_path,
-                    page_number=page_num,
-                    total_pages=total_pages,
-                    text=text,
-                    page_type=PageType.IMAGE,
-                )
-            )
-
-    return results
-
-
-def ocr_tiff_pages(
-    tiff_path: Path,
-    page_numbers: list[int],
-    total_pages: int,
-    document_name: str,
-) -> list[PageContent]:
-    """OCR specific frames of a multi-page TIFF.
-
-    Uses PIL to extract individual frames, then runs RapidOCR on each.
-
-    Args:
-        tiff_path: Path to the TIFF file.
-        page_numbers: 1-indexed page numbers to OCR.
-        total_pages: Total pages in the document.
-        document_name: Document name for metadata.
-
-    Returns:
-        List of PageContent for each requested page.
-    """
-    engine = _get_engine()
-    results: list[PageContent] = []
-    doc_path = str(tiff_path.resolve())
-
-    with Image.open(tiff_path) as im:
-        for page_num in page_numbers:
-            im.seek(page_num - 1)
-            frame = im.copy().convert("RGB")
-            ocr_result = engine(frame)  # type: ignore[operator]
-            text = _extract_text(ocr_result)
-            logger.info(
-                "OCR TIFF frame %d/%d of %s: %d chars",
-                page_num,
-                total_pages,
-                document_name,
-                len(text),
-            )
-            results.append(
-                PageContent(
-                    document_name=document_name,
-                    document_path=doc_path,
-                    page_number=page_num,
-                    total_pages=total_pages,
-                    text=text,
-                    page_type=PageType.IMAGE,
-                )
-            )
-
-    return results
-
-
-def ocr_image_from_bytes(
-    image_bytes: bytes,
+def _ocr_pages(
+    pages: Iterator[tuple[int, Image.Image]],
     document_name: str,
     document_path: str,
-) -> PageContent:
-    """OCR a single-page image from bytes.
-
-    Args:
-        image_bytes: Image file bytes (any PIL-supported format).
-        document_name: Document name for metadata.
-        document_path: Full path string for metadata.
-
-    Returns:
-        PageContent for the single page.
-    """
+    total_pages: int,
+) -> list[PageContent]:
+    """OCR a sequence of (page_number, image) pairs."""
     engine = _get_engine()
-    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    ocr_result = engine(img)  # type: ignore[operator]
-    text = _extract_text(ocr_result)
-    logger.info(
-        "OCR image %s: %d chars",
-        document_name,
-        len(text),
-    )
-    return PageContent(
-        document_name=document_name,
-        document_path=document_path,
-        page_number=1,
-        total_pages=1,
-        text=text,
-        page_type=PageType.IMAGE,
-    )
+    results: list[PageContent] = []
+    for page_num, img in pages:
+        text = _extract_text(engine(img))
+        logger.info(
+            "OCR page %d/%d of %s: %d chars",
+            page_num,
+            total_pages,
+            document_name,
+            len(text),
+        )
+        results.append(
+            PageContent(
+                document_name=document_name,
+                document_path=document_path,
+                page_number=page_num,
+                total_pages=total_pages,
+                text=text,
+                page_type=PageType.IMAGE,
+            )
+        )
+    return results
 
 
 class LocalOcrBackend:
@@ -201,13 +114,18 @@ class LocalOcrBackend:
         *,
         document_name: str | None = None,
     ) -> list[PageContent]:
-        """OCR multiple pages from a document (PDF or TIFF)."""
+        """OCR pages from a document (PDF or TIFF)."""
         doc_name = document_name or document_path.name
+        doc_path = str(document_path.resolve())
         suffix = document_path.suffix.lower()
 
         if suffix in (".tif", ".tiff"):
-            return ocr_tiff_pages(document_path, page_numbers, total_pages, doc_name)
-        return ocr_pdf_pages(document_path, page_numbers, total_pages, doc_name)
+            return self._ocr_tiff(
+                document_path, page_numbers, total_pages, doc_name, doc_path
+            )
+        return self._ocr_pdf(
+            document_path, page_numbers, total_pages, doc_name, doc_path
+        )
 
     def ocr_image_bytes(
         self,
@@ -216,4 +134,42 @@ class LocalOcrBackend:
         document_path: str,
     ) -> PageContent:
         """OCR a single-page image from bytes."""
-        return ocr_image_from_bytes(image_bytes, document_name, document_path)
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        text = _extract_text(_get_engine()(img))
+        logger.info("OCR image %s: %d chars", document_name, len(text))
+        return PageContent(
+            document_name=document_name,
+            document_path=document_path,
+            page_number=1,
+            total_pages=1,
+            text=text,
+            page_type=PageType.IMAGE,
+        )
+
+    @staticmethod
+    def _ocr_pdf(
+        pdf_path: Path,
+        page_numbers: list[int],
+        total_pages: int,
+        document_name: str,
+        document_path: str,
+    ) -> list[PageContent]:
+        with fitz.open(pdf_path) as doc:
+            pages = ((num, _render_pdf_page(doc, num)) for num in page_numbers)
+            return _ocr_pages(pages, document_name, document_path, total_pages)
+
+    @staticmethod
+    def _ocr_tiff(
+        tiff_path: Path,
+        page_numbers: list[int],
+        total_pages: int,
+        document_name: str,
+        document_path: str,
+    ) -> list[PageContent]:
+        def frames() -> Iterator[tuple[int, Image.Image]]:
+            with Image.open(tiff_path) as im:
+                for page_num in page_numbers:
+                    im.seek(page_num - 1)
+                    yield page_num, im.copy().convert("RGB")
+
+        return _ocr_pages(frames(), document_name, document_path, total_pages)

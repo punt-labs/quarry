@@ -17,9 +17,6 @@ from quarry.ocr_local import (
     _extract_text,
     _get_engine,
     _render_pdf_page,
-    ocr_image_from_bytes,
-    ocr_pdf_pages,
-    ocr_tiff_pages,
 )
 
 
@@ -31,7 +28,7 @@ def _settings(**overrides: object) -> Settings:
         "textract_max_wait": 1,
     }
     defaults.update(overrides)
-    return Settings(**defaults)  # type: ignore[arg-type]
+    return Settings(**defaults)
 
 
 def _mock_ocr_result(texts: list[str] | None) -> SimpleNamespace:
@@ -87,10 +84,6 @@ class TestExtractText:
         result = _mock_ocr_result(None)
         assert _extract_text(result) == ""
 
-    def test_returns_empty_for_missing_txts(self) -> None:
-        result = SimpleNamespace()
-        assert _extract_text(result) == ""
-
     def test_single_line(self) -> None:
         result = _mock_ocr_result(["Only line"])
         assert _extract_text(result) == "Only line"
@@ -111,12 +104,11 @@ class TestRenderPdfPage:
         with fitz.open(pdf_path) as doc:
             img1 = _render_pdf_page(doc, 1)
             img3 = _render_pdf_page(doc, 3)
-        # Both should render without error
         assert isinstance(img1, Image.Image)
         assert isinstance(img3, Image.Image)
 
 
-class TestOcrPdfPages:
+class TestLocalOcrBackendPdf:
     def test_returns_page_content_per_page(self, tmp_path: Path) -> None:
         pdf_path = _create_pdf(tmp_path, "hello", num_pages=3)
         mock_engine = MagicMock(
@@ -127,7 +119,8 @@ class TestOcrPdfPages:
         )
 
         with patch.object(ocr_local_mod, "_get_engine", return_value=mock_engine):
-            results = ocr_pdf_pages(pdf_path, [1, 3], 3, "doc.pdf")
+            backend = LocalOcrBackend(_settings())
+            results = backend.ocr_document(pdf_path, [1, 3], 3, document_name="doc.pdf")
 
         assert len(results) == 2
         assert results[0].page_number == 1
@@ -143,7 +136,8 @@ class TestOcrPdfPages:
         mock_engine = MagicMock(return_value=_mock_ocr_result(None))
 
         with patch.object(ocr_local_mod, "_get_engine", return_value=mock_engine):
-            results = ocr_pdf_pages(pdf_path, [1], 1, "blank.pdf")
+            backend = LocalOcrBackend(_settings())
+            results = backend.ocr_document(pdf_path, [1], 1, document_name="blank.pdf")
 
         assert len(results) == 1
         assert results[0].text == ""
@@ -153,12 +147,23 @@ class TestOcrPdfPages:
         mock_engine = MagicMock(return_value=_mock_ocr_result(["text"]))
 
         with patch.object(ocr_local_mod, "_get_engine", return_value=mock_engine):
-            results = ocr_pdf_pages(pdf_path, [1], 1, "test.pdf")
+            backend = LocalOcrBackend(_settings())
+            results = backend.ocr_document(pdf_path, [1], 1, document_name="test.pdf")
 
         assert results[0].document_path == str(pdf_path.resolve())
 
+    def test_uses_filename_when_no_name(self, tmp_path: Path) -> None:
+        pdf_path = _create_pdf(tmp_path, "hello")
+        mock_engine = MagicMock(return_value=_mock_ocr_result(["text"]))
 
-class TestOcrTiffPages:
+        with patch.object(ocr_local_mod, "_get_engine", return_value=mock_engine):
+            backend = LocalOcrBackend(_settings())
+            results = backend.ocr_document(pdf_path, [1], 1)
+
+        assert results[0].document_name == "test.pdf"
+
+
+class TestLocalOcrBackendTiff:
     def test_returns_page_content_per_frame(self, tmp_path: Path) -> None:
         tiff_path = _create_tiff(tmp_path, num_frames=3)
         mock_engine = MagicMock(
@@ -169,7 +174,10 @@ class TestOcrTiffPages:
         )
 
         with patch.object(ocr_local_mod, "_get_engine", return_value=mock_engine):
-            results = ocr_tiff_pages(tiff_path, [1, 3], 3, "scan.tiff")
+            backend = LocalOcrBackend(_settings())
+            results = backend.ocr_document(
+                tiff_path, [1, 3], 3, document_name="scan.tiff"
+            )
 
         assert len(results) == 2
         assert results[0].page_number == 1
@@ -177,24 +185,40 @@ class TestOcrTiffPages:
         assert results[1].page_number == 3
         assert results[1].text == "frame 2"
 
+    def test_routes_tif_extension(self, tmp_path: Path) -> None:
+        tiff_path = _create_tiff(tmp_path, num_frames=1)
+        tif_path = tiff_path.rename(tmp_path / "scan.tif")
+        mock_engine = MagicMock(return_value=_mock_ocr_result(["text"]))
+
+        with patch.object(ocr_local_mod, "_get_engine", return_value=mock_engine):
+            backend = LocalOcrBackend(_settings())
+            results = backend.ocr_document(tif_path, [1], 1, document_name="scan.tif")
+
+        assert len(results) == 1
+        assert results[0].document_name == "scan.tif"
+
     def test_handles_no_text_detected(self, tmp_path: Path) -> None:
         tiff_path = _create_tiff(tmp_path, num_frames=1)
         mock_engine = MagicMock(return_value=_mock_ocr_result(None))
 
         with patch.object(ocr_local_mod, "_get_engine", return_value=mock_engine):
-            results = ocr_tiff_pages(tiff_path, [1], 1, "blank.tiff")
+            backend = LocalOcrBackend(_settings())
+            results = backend.ocr_document(
+                tiff_path, [1], 1, document_name="blank.tiff"
+            )
 
         assert len(results) == 1
         assert results[0].text == ""
 
 
-class TestOcrImageFromBytes:
+class TestLocalOcrBackendImageBytes:
     def test_returns_single_page_content(self) -> None:
         png_bytes = _create_png_bytes()
         mock_engine = MagicMock(return_value=_mock_ocr_result(["detected text"]))
 
         with patch.object(ocr_local_mod, "_get_engine", return_value=mock_engine):
-            result = ocr_image_from_bytes(png_bytes, "img.png", "/tmp/img.png")
+            backend = LocalOcrBackend(_settings())
+            result = backend.ocr_image_bytes(png_bytes, "img.png", "/tmp/img.png")
 
         assert result.document_name == "img.png"
         assert result.document_path == "/tmp/img.png"
@@ -208,55 +232,10 @@ class TestOcrImageFromBytes:
         mock_engine = MagicMock(return_value=_mock_ocr_result(None))
 
         with patch.object(ocr_local_mod, "_get_engine", return_value=mock_engine):
-            result = ocr_image_from_bytes(png_bytes, "blank.png", "/tmp/blank.png")
+            backend = LocalOcrBackend(_settings())
+            result = backend.ocr_image_bytes(png_bytes, "blank.png", "/tmp/blank.png")
 
         assert result.text == ""
-
-
-class TestLocalOcrBackend:
-    def test_ocr_document_routes_pdf(self, tmp_path: Path) -> None:
-        pdf_path = _create_pdf(tmp_path, "hello")
-        mock_engine = MagicMock(return_value=_mock_ocr_result(["text"]))
-
-        with patch.object(ocr_local_mod, "_get_engine", return_value=mock_engine):
-            backend = LocalOcrBackend(_settings())
-            results = backend.ocr_document(pdf_path, [1], 1, document_name="doc.pdf")
-
-        assert len(results) == 1
-        assert results[0].document_name == "doc.pdf"
-
-    def test_ocr_document_routes_tiff(self, tmp_path: Path) -> None:
-        tiff_path = _create_tiff(tmp_path, num_frames=1)
-        tiff_path = tiff_path.rename(tmp_path / "scan.tif")
-        mock_engine = MagicMock(return_value=_mock_ocr_result(["text"]))
-
-        with patch.object(ocr_local_mod, "_get_engine", return_value=mock_engine):
-            backend = LocalOcrBackend(_settings())
-            results = backend.ocr_document(tiff_path, [1], 1, document_name="scan.tif")
-
-        assert len(results) == 1
-        assert results[0].document_name == "scan.tif"
-
-    def test_ocr_document_uses_filename_when_no_name(self, tmp_path: Path) -> None:
-        pdf_path = _create_pdf(tmp_path, "hello")
-        mock_engine = MagicMock(return_value=_mock_ocr_result(["text"]))
-
-        with patch.object(ocr_local_mod, "_get_engine", return_value=mock_engine):
-            backend = LocalOcrBackend(_settings())
-            results = backend.ocr_document(pdf_path, [1], 1)
-
-        assert results[0].document_name == "test.pdf"
-
-    def test_ocr_image_bytes_delegates(self) -> None:
-        png_bytes = _create_png_bytes()
-        mock_engine = MagicMock(return_value=_mock_ocr_result(["text"]))
-
-        with patch.object(ocr_local_mod, "_get_engine", return_value=mock_engine):
-            backend = LocalOcrBackend(_settings())
-            result = backend.ocr_image_bytes(png_bytes, "img.png", "/tmp/img.png")
-
-        assert result.document_name == "img.png"
-        assert result.text == "text"
 
 
 class TestGetEngine:
