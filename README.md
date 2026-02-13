@@ -6,7 +6,7 @@
 [![Tests](https://github.com/jmf-pobox/quarry-mcp/actions/workflows/test.yml/badge.svg)](https://github.com/jmf-pobox/quarry-mcp/actions/workflows/test.yml)
 [![Lint](https://github.com/jmf-pobox/quarry-mcp/actions/workflows/lint.yml/badge.svg)](https://github.com/jmf-pobox/quarry-mcp/actions/workflows/lint.yml)
 
-Index any document. Search with natural language. Works with Claude Code and Claude Desktop.
+Unlock the knowledge trapped on your hard drive. Works with Claude Code and Claude Desktop.
 
 ## Quick Start
 
@@ -21,7 +21,9 @@ That's it. Quarry works locally out of the box.
 
 ## What It Does
 
-Quarry turns documents into searchable knowledge for LLMs. You feed it files, it chunks and embeds them into a local vector database, and exposes semantic search via MCP tools or a CLI.
+You have years of knowledge buried in PDFs, scanned documents, notes, spreadsheets, and source code. Quarry extracts that knowledge, makes it searchable by meaning, and gives your LLM access to it.
+
+This is not media search — Quarry doesn't find images or match audio. It reads every document the way you would, extracts the text and structure, and indexes the *knowledge inside*. A scanned whiteboard becomes searchable prose. A spreadsheet becomes structured data an LLM can reason about. Source code becomes semantic units an LLM can reference.
 
 **Supported formats:** PDF, images (PNG, JPG, TIFF, BMP, WebP), text files (TXT, Markdown, LaTeX, DOCX), and source code (30+ languages).
 
@@ -34,6 +36,8 @@ Quarry turns documents into searchable knowledge for LLMs. You feed it files, it
 | Images | OCR (local or cloud) | Prose chunks |
 | Text files | Split by headings / sections / paragraphs | Section chunks |
 | Source code | Tree-sitter AST parsing (functions, classes) | Code chunks |
+
+Every format is converted to text optimized for LLM consumption. Structured formats like spreadsheets are serialized to LaTeX to preserve tabular relationships while remaining token-efficient. The goal is always the same: turn your files into knowledge an LLM can use.
 
 ## Installation
 
@@ -234,7 +238,7 @@ Connectors                Formats              Transformations
 
 ## Roadmap
 
-- Spreadsheets (XLSX, CSV) via tabular serialization
+- Spreadsheets (XLSX, CSV) via LaTeX tabular serialization
 - Presentations (PPTX) with speaker notes
 - HTML with structure-aware splitting
 - Search filters by content type and file format
