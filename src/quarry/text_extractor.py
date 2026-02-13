@@ -34,7 +34,7 @@ def extract_text_pages(
     Raises:
         FileNotFoundError: If pdf_path does not exist.
     """
-    doc_name = document_name or pdf_path.name
+    name = document_name or pdf_path.name
     results: list[PageContent] = []
 
     with fitz.open(pdf_path) as doc:
@@ -47,7 +47,7 @@ def extract_text_pages(
             logger.debug("Page %d: %d chars", page_num, len(text))
             results.append(
                 PageContent(
-                    document_name=doc_name,
+                    document_name=name,
                     document_path=str(pdf_path.resolve()),
                     page_number=page_num,
                     total_pages=total_pages,

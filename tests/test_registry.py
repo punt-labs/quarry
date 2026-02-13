@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from quarry.registry import (
+from quarry.sync_registry import (
     FileRecord,
     delete_file,
     deregister_directory,

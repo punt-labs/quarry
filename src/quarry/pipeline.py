@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from PIL.Image import Image as PILImage
@@ -21,6 +21,7 @@ from quarry.image_analyzer import (
 )
 from quarry.models import PageContent, PageType
 from quarry.pdf_analyzer import analyze_pdf
+from quarry.results import IngestResult
 from quarry.text_extractor import extract_text_pages
 from quarry.text_processor import (
     SUPPORTED_TEXT_EXTENSIONS,
@@ -48,7 +49,7 @@ def ingest_document(
     collection: str = "default",
     document_name: str | None = None,
     progress_callback: Callable[[str], None] | None = None,
-) -> dict[str, object]:
+) -> IngestResult:
     """Ingest a document: dispatch to format-specific handler.
 
     Supported formats: PDF, TXT, MD, TEX, DOCX, PNG, JPEG, TIFF, BMP, WebP.
@@ -136,7 +137,7 @@ def ingest_pdf(
     collection: str = "default",
     document_name: str | None = None,
     progress_callback: Callable[[str], None] | None = None,
-) -> dict[str, object]:
+) -> IngestResult:
     """Ingest a PDF document: analyze, extract/OCR, chunk, embed, store.
 
     Args:
@@ -152,12 +153,12 @@ def ingest_pdf(
         Dict with ingestion results (pages, chunks, etc).
     """
     progress = _make_progress(progress_callback)
-    doc_name = document_name or file_path.name
+    document_name = document_name or file_path.name
 
-    progress("Analyzing: %s", doc_name)
+    progress("Analyzing: %s", document_name)
 
     if overwrite:
-        delete_document(db, doc_name, collection=collection)
+        delete_document(db, document_name, collection=collection)
 
     analyses = analyze_pdf(file_path)
     total_pages = len(analyses)
@@ -177,7 +178,7 @@ def ingest_pdf(
     if text_pages:
         progress("Extracting text from %d pages", len(text_pages))
         extracted = extract_text_pages(
-            file_path, text_pages, total_pages, document_name=doc_name
+            file_path, text_pages, total_pages, document_name=document_name
         )
         all_pages.extend(extracted)
 
@@ -185,7 +186,7 @@ def ingest_pdf(
         progress("Running OCR on %d pages", len(image_pages))
         ocr = get_ocr_backend(settings)
         ocr_results = ocr.ocr_document(
-            file_path, image_pages, total_pages, document_name=doc_name
+            file_path, image_pages, total_pages, document_name=document_name
         )
         all_pages.extend(ocr_results)
 
@@ -193,7 +194,7 @@ def ingest_pdf(
 
     return _chunk_embed_store(
         all_pages,
-        doc_name,
+        document_name,
         db,
         settings,
         progress,
@@ -215,7 +216,7 @@ def ingest_text_file(
     collection: str = "default",
     document_name: str | None = None,
     progress_callback: Callable[[str], None] | None = None,
-) -> dict[str, object]:
+) -> IngestResult:
     """Ingest a text document: read, split into sections, chunk, embed, store.
 
     Supported: .txt, .md, .tex, .docx.
@@ -233,19 +234,19 @@ def ingest_text_file(
         Dict with ingestion results.
     """
     progress = _make_progress(progress_callback)
-    doc_name = document_name or file_path.name
+    document_name = document_name or file_path.name
 
-    progress("Reading: %s", doc_name)
+    progress("Reading: %s", document_name)
 
     if overwrite:
-        delete_document(db, doc_name, collection=collection)
+        delete_document(db, document_name, collection=collection)
 
     pages = process_text_file(file_path)
     progress("Sections: %d", len(pages))
 
     return _chunk_embed_store(
         pages,
-        doc_name,
+        document_name,
         db,
         settings,
         progress,
@@ -263,7 +264,7 @@ def ingest_code_file(
     collection: str = "default",
     document_name: str | None = None,
     progress_callback: Callable[[str], None] | None = None,
-) -> dict[str, object]:
+) -> IngestResult:
     """Ingest source code: parse into definitions, chunk, embed, store.
 
     Uses tree-sitter for language-aware splitting when available.
@@ -281,19 +282,19 @@ def ingest_code_file(
         Dict with ingestion results.
     """
     progress = _make_progress(progress_callback)
-    doc_name = document_name or file_path.name
+    document_name = document_name or file_path.name
 
-    progress("Parsing: %s", doc_name)
+    progress("Parsing: %s", document_name)
 
     if overwrite:
-        delete_document(db, doc_name, collection=collection)
+        delete_document(db, document_name, collection=collection)
 
     pages = process_code_file(file_path)
     progress("Definitions: %d", len(pages))
 
     return _chunk_embed_store(
         pages,
-        doc_name,
+        document_name,
         db,
         settings,
         progress,
@@ -311,14 +312,14 @@ def ingest_image(
     collection: str = "default",
     document_name: str | None = None,
     progress_callback: Callable[[str], None] | None = None,
-) -> dict[str, object]:
+) -> IngestResult:
     """Ingest a standalone image: OCR, chunk, embed, store.
 
     Supported: PNG, JPEG, TIFF (multi-page), BMP, WebP.
-    BMP and WebP are converted to PNG before OCR.
+    BMP and WebP are converted to PNG before OCR (required by most engines).
 
-    Single-page images use the configured OCR backend's sync path.
-    Multi-page TIFFs use the async path (S3 for Textract, local for RapidOCR).
+    Single-page images use the OCR backend's sync API. Multi-page TIFFs use
+    the async API (S3 for cloud backends, local for on-device backends).
 
     Args:
         file_path: Path to image file.
@@ -333,12 +334,12 @@ def ingest_image(
         Dict with ingestion results.
     """
     progress = _make_progress(progress_callback)
-    doc_name = document_name or file_path.name
+    document_name = document_name or file_path.name
 
-    progress("Analyzing image: %s", doc_name)
+    progress("Analyzing image: %s", document_name)
 
     if overwrite:
-        delete_document(db, doc_name, collection=collection)
+        delete_document(db, document_name, collection=collection)
 
     analysis = analyze_image(file_path)
     progress(
@@ -355,7 +356,7 @@ def ingest_image(
             db,
             settings,
             progress,
-            document_name=doc_name,
+            document_name=document_name,
             collection=collection,
         )
 
@@ -367,13 +368,13 @@ def ingest_image(
     ocr = get_ocr_backend(settings)
     page = ocr.ocr_image_bytes(
         image_bytes,
-        document_name=doc_name,
+        document_name=document_name,
         document_path=file_path.resolve(),
     )
 
     return _chunk_embed_store(
         [page],
-        doc_name,
+        document_name,
         db,
         settings,
         progress,
@@ -497,19 +498,19 @@ def _ingest_multipage_image(
     *,
     document_name: str | None = None,
     collection: str = "default",
-) -> dict[str, object]:
+) -> IngestResult:
     """Ingest a multi-page image (TIFF) via the OCR backend's async path."""
-    doc_name = document_name or file_path.name
+    document_name = document_name or file_path.name
     progress("Running OCR on %d pages (async)", page_count)
     all_page_numbers = list(range(1, page_count + 1))
     ocr = get_ocr_backend(settings)
     pages = ocr.ocr_document(
-        file_path, all_page_numbers, page_count, document_name=doc_name
+        file_path, all_page_numbers, page_count, document_name=document_name
     )
 
     return _chunk_embed_store(
         pages,
-        doc_name,
+        document_name,
         db,
         settings,
         progress,
@@ -528,7 +529,7 @@ def ingest_text_content(
     collection: str = "default",
     format_hint: str = "auto",
     progress_callback: Callable[[str], None] | None = None,
-) -> dict[str, object]:
+) -> IngestResult:
     """Ingest raw text: split into sections, chunk, embed, store.
 
     Args:
@@ -587,7 +588,7 @@ def _chunk_embed_store(
     *,
     collection: str = "default",
     extra: dict[str, object],
-) -> dict[str, object]:
+) -> IngestResult:
     """Shared pipeline: chunk pages, embed, store in LanceDB.
 
     Args:
@@ -613,12 +614,15 @@ def _chunk_embed_store(
 
     if not chunks:
         progress("No text found — nothing to index")
-        return {
-            "document_name": document_name,
-            "collection": collection,
-            "chunks": 0,
-            **extra,
-        }
+        return cast(
+            "IngestResult",
+            {
+                "document_name": document_name,
+                "collection": collection,
+                "chunks": 0,
+                **extra,
+            },
+        )
 
     embedder = get_embedding_backend(settings)
     progress("Generating embeddings (%s)", embedder.model_name)
@@ -630,9 +634,12 @@ def _chunk_embed_store(
 
     progress("Done: %d chunks indexed from %s", inserted, document_name)
 
-    return {
-        "document_name": document_name,
-        "collection": collection,
-        "chunks": inserted,
-        **extra,
-    }
+    return cast(
+        "IngestResult",
+        {
+            "document_name": document_name,
+            "collection": collection,
+            "chunks": inserted,
+            **extra,
+        },
+    )

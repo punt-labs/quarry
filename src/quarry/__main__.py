@@ -13,7 +13,7 @@ from rich.progress import Progress
 
 from quarry.backends import get_embedding_backend
 from quarry.collections import derive_collection
-from quarry.config import configure_logging, get_settings
+from quarry.config import configure_logging, load_settings
 from quarry.database import (
     delete_collection as db_delete_collection,
     delete_document as db_delete_document,
@@ -23,15 +23,15 @@ from quarry.database import (
     search,
 )
 from quarry.pipeline import ingest_document
-from quarry.registry import (
+from quarry.sync import sync_all
+from quarry.sync_registry import (
     deregister_directory,
     list_registrations,
     open_registry,
     register_directory,
 )
-from quarry.sync import sync_all
 
-configure_logging(get_settings())
+configure_logging(load_settings())
 logger = logging.getLogger(__name__)
 
 app = typer.Typer(help="quarry: extract searchable knowledge from any document")
@@ -66,7 +66,7 @@ def ingest(
     ] = "",
 ) -> None:
     """Ingest a document: chunk, embed, and store. Supports PDF, TXT, MD, TEX, DOCX."""
-    settings = get_settings()
+    settings = load_settings()
     db = get_db(settings.lancedb_path)
     resolved = file_path.resolve()
     col = derive_collection(resolved, explicit=collection or None)
@@ -100,7 +100,7 @@ def search_cmd(
     ] = "",
 ) -> None:
     """Search indexed documents."""
-    settings = get_settings()
+    settings = load_settings()
     db = get_db(settings.lancedb_path)
 
     query_vector = get_embedding_backend(settings).embed_query(query)
@@ -125,7 +125,7 @@ def list_cmd(
     ] = "",
 ) -> None:
     """List all indexed documents."""
-    settings = get_settings()
+    settings = load_settings()
     db = get_db(settings.lancedb_path)
     docs = list_documents(db, collection_filter=collection or None)
 
@@ -150,7 +150,7 @@ def delete_cmd(
     ] = "",
 ) -> None:
     """Delete all indexed data for a document."""
-    settings = get_settings()
+    settings = load_settings()
     db = get_db(settings.lancedb_path)
     deleted = db_delete_document(db, document_name, collection=collection or None)
 
@@ -164,7 +164,7 @@ def delete_cmd(
 @_cli_errors
 def collections_cmd() -> None:
     """List all collections with document and chunk counts."""
-    settings = get_settings()
+    settings = load_settings()
     db = get_db(settings.lancedb_path)
     cols = db_list_collections(db)
 
@@ -186,7 +186,7 @@ def delete_collection_cmd(
     collection: Annotated[str, typer.Argument(help="Collection name to delete")],
 ) -> None:
     """Delete all indexed data for a collection."""
-    settings = get_settings()
+    settings = load_settings()
     db = get_db(settings.lancedb_path)
     deleted = db_delete_collection(db, collection)
 
@@ -206,7 +206,7 @@ def register(
     ] = "",
 ) -> None:
     """Register a directory for incremental sync."""
-    settings = get_settings()
+    settings = load_settings()
     resolved = directory.resolve()
     col = collection or resolved.name
     conn = open_registry(settings.registry_path)
@@ -227,7 +227,7 @@ def deregister(
     ] = False,
 ) -> None:
     """Remove a directory registration. Optionally keep indexed data."""
-    settings = get_settings()
+    settings = load_settings()
     conn = open_registry(settings.registry_path)
     try:
         doc_names = deregister_directory(conn, collection)
@@ -246,7 +246,7 @@ def deregister(
 @_cli_errors
 def registrations_cmd() -> None:
     """List all registered directories."""
-    settings = get_settings()
+    settings = load_settings()
     conn = open_registry(settings.registry_path)
     try:
         regs = list_registrations(conn)
@@ -269,7 +269,7 @@ def sync_cmd(
     ] = 4,
 ) -> None:
     """Sync all registered directories: ingest new/changed, remove deleted."""
-    settings = get_settings()
+    settings = load_settings()
     db = get_db(settings.lancedb_path)
 
     with Progress(console=console) as progress:

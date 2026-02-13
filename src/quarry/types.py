@@ -114,18 +114,14 @@ class OcrBackend(Protocol):
         total_pages: int,
         *,
         document_name: str | None = None,
-    ) -> list[PageContent]:
-        """OCR multiple pages from a document (PDF or TIFF)."""
-        ...
+    ) -> list[PageContent]: ...
 
     def ocr_image_bytes(
         self,
         image_bytes: bytes,
         document_name: str,
         document_path: Path,
-    ) -> PageContent:
-        """OCR a single-page image from bytes."""
-        ...
+    ) -> PageContent: ...
 
 
 class EmbeddingBackend(Protocol):
@@ -138,9 +134,9 @@ class EmbeddingBackend(Protocol):
     def model_name(self) -> str: ...
 
     def embed_texts(self, texts: list[str]) -> NDArray[np.float32]:
-        """Embed a batch of texts. Returns shape (n, dimension)."""
+        """Returns shape (n, dimension)."""
         ...
 
     def embed_query(self, query: str) -> NDArray[np.float32]:
-        """Embed a search query. Returns shape (dimension,)."""
+        """Returns shape (dimension,)."""
         ...

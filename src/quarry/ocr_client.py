@@ -45,7 +45,7 @@ def ocr_document_via_s3(
         RuntimeError: If the Textract job fails.
         TimeoutError: If the Textract job exceeds the configured timeout.
     """
-    doc_name = document_name or document_path.name
+    document_name = document_name or document_path.name
 
     s3 = cast("S3Client", boto3.client("s3"))
     textract = cast("TextractClient", boto3.client("textract"))
@@ -74,7 +74,7 @@ def ocr_document_via_s3(
         if page_num in requested:
             results.append(
                 PageContent(
-                    document_name=doc_name,
+                    document_name=document_name,
                     document_path=str(document_path.resolve()),
                     page_number=page_num,
                     total_pages=total_pages,

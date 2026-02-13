@@ -1,4 +1,9 @@
-"""Application settings (AWS, embedding, chunking, OCR) and logging config."""
+"""Application settings and logging configuration.
+
+Settings are grouped by concern: AWS (credentials, region, S3), LanceDB paths,
+embedding model (cache key; OnnxEmbeddingBackend uses fixed model), chunking
+params, OCR backend choice, and Textract/async tuning.
+"""
 
 from __future__ import annotations
 
@@ -40,7 +45,8 @@ class Settings(BaseSettings):
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 
-def get_settings() -> Settings:
+def load_settings() -> Settings:
+    """Load application settings. Creates a fresh instance each call (no caching)."""
     return Settings()
 
 

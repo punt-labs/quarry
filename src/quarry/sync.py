@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+from botocore.exceptions import ClientError
+
 from quarry.config import Settings
 from quarry.database import (
     create_collection_index,
@@ -17,7 +19,7 @@ from quarry.database import (
     optimize_table,
 )
 from quarry.pipeline import SUPPORTED_EXTENSIONS, ingest_document
-from quarry.registry import (
+from quarry.sync_registry import (
     FileRecord,
     delete_file,
     list_files,
@@ -135,9 +137,9 @@ def sync_collection(
     Computes the delta, ingests new/changed files in parallel,
     removes deleted files, and updates the registry.
 
-    Catches OSError, ValueError, RuntimeError, TimeoutError for
-    individual file ingest/delete failures so sync continues when
-    one file fails.
+    Catches OSError, ValueError, RuntimeError, TimeoutError, and
+    botocore.exceptions.ClientError (AWS auth/throttling/service) for
+    individual file ingest/delete failures so sync continues when one fails.
     """
 
     def _progress(msg: str) -> None:
@@ -172,7 +174,7 @@ def sync_collection(
             }
             for future in as_completed(futures):
                 fp = futures[future]
-                doc_name = str(fp.relative_to(resolved))
+                document_name = str(fp.relative_to(resolved))
                 try:
                     future.result()
                     stat = fp.stat()
@@ -181,7 +183,7 @@ def sync_collection(
                         FileRecord(
                             path=str(fp),
                             collection=collection,
-                            document_name=doc_name,
+                            document_name=document_name,
                             mtime=stat.st_mtime,
                             size=stat.st_size,
                             ingested_at=datetime.now(UTC).isoformat(),
@@ -189,31 +191,43 @@ def sync_collection(
                         commit=False,
                     )
                     ingested += 1
-                    _progress(f"[{collection}] Ingested {doc_name}")
-                except (OSError, ValueError, RuntimeError, TimeoutError) as exc:
+                    _progress(f"[{collection}] Ingested {document_name}")
+                except (
+                    OSError,
+                    ValueError,
+                    RuntimeError,
+                    TimeoutError,
+                    ClientError,
+                ) as exc:
                     failed += 1
-                    errors.append(f"{doc_name}: {exc}")
-                    logger.exception("Ingest failed for %s", doc_name)
-                    _progress(f"[{collection}] Failed {doc_name}: {exc}")
+                    errors.append(f"{document_name}: {exc}")
+                    logger.exception("Ingest failed for %s", document_name)
+                    _progress(f"[{collection}] Failed {document_name}: {exc}")
 
     # Pre-build lookup for O(1) path resolution during deletes
-    files_by_doc_name: dict[str, list[FileRecord]] = {}
+    files_by_document_name: dict[str, list[FileRecord]] = {}
     for rec in list_files(conn, collection):
-        files_by_doc_name.setdefault(rec.document_name, []).append(rec)
+        files_by_document_name.setdefault(rec.document_name, []).append(rec)
 
     deleted = 0
-    for doc_name in plan.to_delete:
+    for document_name in plan.to_delete:
         try:
-            delete_document(db, doc_name, collection=collection)
-            for rec in files_by_doc_name.get(doc_name, []):
+            delete_document(db, document_name, collection=collection)
+            for rec in files_by_document_name.get(document_name, []):
                 delete_file(conn, rec.path, commit=False)
             deleted += 1
-            _progress(f"[{collection}] Deleted {doc_name}")
-        except (OSError, ValueError, RuntimeError, TimeoutError) as exc:
+            _progress(f"[{collection}] Deleted {document_name}")
+        except (
+            OSError,
+            ValueError,
+            RuntimeError,
+            TimeoutError,
+            ClientError,
+        ) as exc:
             failed += 1
-            errors.append(f"{doc_name}: {exc}")
-            logger.exception("Delete failed for %s", doc_name)
-            _progress(f"[{collection}] Failed to delete {doc_name}: {exc}")
+            errors.append(f"{document_name}: {exc}")
+            logger.exception("Delete failed for %s", document_name)
+            _progress(f"[{collection}] Failed to delete {document_name}: {exc}")
 
     conn.commit()
 

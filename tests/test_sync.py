@@ -5,20 +5,20 @@ import sqlite3
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from quarry.registry import (
-    FileRecord,
-    get_file,
-    list_files,
-    open_registry,
-    register_directory,
-    upsert_file,
-)
 from quarry.sync import (
     _is_hidden,
     compute_sync_plan,
     discover_files,
     sync_all,
     sync_collection,
+)
+from quarry.sync_registry import (
+    FileRecord,
+    get_file,
+    list_files,
+    open_registry,
+    register_directory,
+    upsert_file,
 )
 
 

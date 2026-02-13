@@ -29,7 +29,7 @@ class TestListCmd:
             },
         ]
         with (
-            patch("quarry.__main__.get_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.load_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.list_documents", return_value=mock_docs),
         ):
@@ -43,7 +43,7 @@ class TestListCmd:
 
     def test_filters_by_collection(self):
         with (
-            patch("quarry.__main__.get_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.load_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.list_documents", return_value=[]) as mock_list,
         ):
@@ -54,7 +54,7 @@ class TestListCmd:
 
     def test_empty_database(self):
         with (
-            patch("quarry.__main__.get_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.load_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.list_documents", return_value=[]),
         ):
@@ -67,7 +67,7 @@ class TestListCmd:
 class TestDeleteCmd:
     def test_deletes_document(self):
         with (
-            patch("quarry.__main__.get_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.load_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.db_delete_document", return_value=15),
         ):
@@ -79,7 +79,7 @@ class TestDeleteCmd:
 
     def test_not_found(self):
         with (
-            patch("quarry.__main__.get_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.load_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.db_delete_document", return_value=0),
         ):
@@ -103,7 +103,7 @@ class TestSearchCmd:
             },
         ]
         with (
-            patch("quarry.__main__.get_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.load_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch(
                 "quarry.__main__.get_embedding_backend",
@@ -123,7 +123,7 @@ class TestSearchCmd:
         mock_backend = MagicMock()
         mock_backend.embed_query.return_value = mock_vector
         with (
-            patch("quarry.__main__.get_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.load_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch(
                 "quarry.__main__.get_embedding_backend",
@@ -139,7 +139,7 @@ class TestSearchCmd:
 class TestDeleteCollectionCmd:
     def test_deletes_collection(self):
         with (
-            patch("quarry.__main__.get_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.load_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.db_delete_collection", return_value=50),
         ):
@@ -151,7 +151,7 @@ class TestDeleteCollectionCmd:
 
     def test_not_found(self):
         with (
-            patch("quarry.__main__.get_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.load_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.db_delete_collection", return_value=0),
         ):
@@ -168,7 +168,7 @@ class TestCollectionsCmd:
             {"collection": "science", "document_count": 3, "chunk_count": 60},
         ]
         with (
-            patch("quarry.__main__.get_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.load_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.db_list_collections", return_value=mock_cols),
         ):
@@ -182,7 +182,7 @@ class TestCollectionsCmd:
 
     def test_empty(self):
         with (
-            patch("quarry.__main__.get_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.load_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.db_list_collections", return_value=[]),
         ):
@@ -198,7 +198,7 @@ class TestRegisterCmd:
         d.mkdir()
         settings = _mock_settings()
         settings.registry_path = tmp_path / "registry.db"
-        with patch("quarry.__main__.get_settings", return_value=settings):
+        with patch("quarry.__main__.load_settings", return_value=settings):
             result = runner.invoke(
                 app, ["register", str(d), "--collection", "my-course"]
             )
@@ -210,7 +210,7 @@ class TestRegisterCmd:
         d.mkdir()
         settings = _mock_settings()
         settings.registry_path = tmp_path / "registry.db"
-        with patch("quarry.__main__.get_settings", return_value=settings):
+        with patch("quarry.__main__.load_settings", return_value=settings):
             result = runner.invoke(app, ["register", str(d)])
         assert result.exit_code == 0
         assert "ml-101" in result.output
@@ -221,7 +221,7 @@ class TestDeregisterCmd:
         settings = _mock_settings()
         settings.registry_path = tmp_path / "registry.db"
         with (
-            patch("quarry.__main__.get_settings", return_value=settings),
+            patch("quarry.__main__.load_settings", return_value=settings),
             patch("quarry.__main__.deregister_directory", return_value=["a.pdf"]),
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.db_delete_document"),
@@ -235,7 +235,7 @@ class TestDeregisterCmd:
         settings = _mock_settings()
         settings.registry_path = tmp_path / "registry.db"
         with (
-            patch("quarry.__main__.get_settings", return_value=settings),
+            patch("quarry.__main__.load_settings", return_value=settings),
             patch("quarry.__main__.deregister_directory", return_value=["a.pdf"]),
             patch("quarry.__main__.get_db") as mock_get_db,
             patch("quarry.__main__.db_delete_document") as mock_del,
@@ -253,7 +253,7 @@ class TestRegistrationsCmd:
         settings = _mock_settings()
         settings.registry_path = tmp_path / "registry.db"
         # First register, then list
-        with patch("quarry.__main__.get_settings", return_value=settings):
+        with patch("quarry.__main__.load_settings", return_value=settings):
             runner.invoke(app, ["register", str(d), "--collection", "course"])
             result = runner.invoke(app, ["registrations"])
         assert result.exit_code == 0
@@ -262,7 +262,7 @@ class TestRegistrationsCmd:
     def test_empty(self, tmp_path: Path):
         settings = _mock_settings()
         settings.registry_path = tmp_path / "registry.db"
-        with patch("quarry.__main__.get_settings", return_value=settings):
+        with patch("quarry.__main__.load_settings", return_value=settings):
             result = runner.invoke(app, ["registrations"])
         assert result.exit_code == 0
         assert "No registered directories" in result.output
@@ -283,7 +283,7 @@ class TestSyncCmd:
         }
         settings = _mock_settings()
         with (
-            patch("quarry.__main__.get_settings", return_value=settings),
+            patch("quarry.__main__.load_settings", return_value=settings),
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.sync_all", return_value=mock_results),
         ):
@@ -298,7 +298,7 @@ class TestSyncCmd:
 class TestCliErrors:
     def test_error_exits_with_code_1(self):
         with (
-            patch("quarry.__main__.get_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.load_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch(
                 "quarry.__main__.list_documents",

@@ -2,7 +2,25 @@
 
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import NotRequired, TypedDict
+
+
+class IngestResult(TypedDict):
+    """Result of document ingestion.
+
+    Common fields: document_name, collection, chunks. Format-specific fields
+    (total_pages, sections, format, etc.) are populated per handler.
+    """
+
+    document_name: str
+    collection: str
+    chunks: int
+    total_pages: NotRequired[int]
+    text_pages: NotRequired[int]
+    image_pages: NotRequired[int]
+    sections: NotRequired[int]
+    definitions: NotRequired[int]
+    format: NotRequired[str]
 
 
 class SearchResult(TypedDict):

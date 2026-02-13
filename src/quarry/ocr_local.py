@@ -122,17 +122,17 @@ class LocalOcrBackend:
         document_name: str | None = None,
     ) -> list[PageContent]:
         """OCR pages from a document (PDF or TIFF)."""
-        doc_name = document_name or document_path.name
-        doc_path = str(document_path.resolve())
+        name = document_name or document_path.name
+        path_str = str(document_path.resolve())
         suffix = document_path.suffix.lower()
 
         if suffix in (".tif", ".tiff"):
             return self._ocr_tiff(
-                document_path, page_numbers, total_pages, doc_name, doc_path
+                document_path, page_numbers, total_pages, name, path_str
             )
         if suffix == ".pdf":
             return self._ocr_pdf(
-                document_path, page_numbers, total_pages, doc_name, doc_path
+                document_path, page_numbers, total_pages, name, path_str
             )
         msg = f"Unsupported document type for OCR: '{suffix}'"
         raise ValueError(msg)
