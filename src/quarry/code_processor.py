@@ -7,7 +7,7 @@ from pathlib import Path
 from tree_sitter_language_pack import get_parser
 
 from quarry.models import PageContent, PageType
-from quarry.text_processor import _read_text_with_fallback
+from quarry.text_processor import _read_text_with_fallback, _sections_to_pages
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +136,7 @@ def process_code_file(file_path: Path) -> list[PageContent]:
     if sections is None:
         sections = _fallback_split(text)
 
-    return _sections_to_pages(sections, document_name, document_path)
+    return _sections_to_pages(sections, document_name, document_path, PageType.CODE)
 
 
 def _split_with_treesitter(
@@ -191,23 +191,3 @@ def _fallback_split(text: str) -> list[str]:
     """Split code on blank lines when tree-sitter is unavailable."""
     parts = re.split(r"\n\s*\n", text)
     return [p for p in parts if p.strip()]
-
-
-def _sections_to_pages(
-    sections: list[str],
-    document_name: str,
-    document_path: str,
-) -> list[PageContent]:
-    """Convert section strings to PageContent objects."""
-    total = len(sections)
-    return [
-        PageContent(
-            document_name=document_name,
-            document_path=document_path,
-            page_number=i + 1,
-            total_pages=total,
-            text=section,
-            page_type=PageType.CODE,
-        )
-        for i, section in enumerate(sections)
-    ]

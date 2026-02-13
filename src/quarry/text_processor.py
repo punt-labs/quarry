@@ -128,7 +128,7 @@ def _split_by_format(
         sections = _split_plain(text)
 
     logger.debug("Split %s into %d sections (%s)", document_name, len(sections), fmt)
-    return _sections_to_pages(sections, document_name, document_path)
+    return _sections_to_pages(sections, document_name, document_path, PageType.SECTION)
 
 
 def _split_markdown(text: str) -> list[str]:
@@ -169,13 +169,14 @@ def _process_docx(file_path: Path) -> list[PageContent]:
         sections.append("\n".join(current))
 
     document_path = str(file_path.resolve())
-    return _sections_to_pages(sections, file_path.name, document_path)
+    return _sections_to_pages(sections, file_path.name, document_path, PageType.SECTION)
 
 
 def _sections_to_pages(
     sections: list[str],
     document_name: str,
     document_path: str,
+    page_type: PageType,
 ) -> list[PageContent]:
     """Convert section strings to PageContent objects."""
     total = len(sections)
@@ -186,7 +187,7 @@ def _sections_to_pages(
             page_number=i + 1,
             total_pages=total,
             text=section,
-            page_type=PageType.SECTION,
+            page_type=page_type,
         )
         for i, section in enumerate(sections)
     ]
