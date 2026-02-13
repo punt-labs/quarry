@@ -71,6 +71,8 @@ def search_documents(
     limit: int = 10,
     document_filter: str = "",
     collection: str = "",
+    page_type: str = "",
+    source_format: str = "",
 ) -> str:
     """Search indexed documents using semantic similarity.
 
@@ -79,6 +81,8 @@ def search_documents(
         limit: Maximum number of results (default 10, max 50).
         document_filter: Optional exact document name to filter by.
         collection: Optional collection name to search within.
+        page_type: Optional content type filter (text, code, spreadsheet, etc.).
+        source_format: Optional source format filter (.pdf, .py, .xlsx, etc.).
     """
     limit = min(limit, 50)
     settings = _settings()
@@ -92,6 +96,8 @@ def search_documents(
         limit=limit,
         document_filter=document_filter or None,
         collection_filter=collection or None,
+        page_type_filter=page_type or None,
+        source_format_filter=source_format or None,
     )
 
     formatted = [
@@ -101,6 +107,8 @@ def search_documents(
             "page_number": r["page_number"],
             "chunk_index": r["chunk_index"],
             "text": r["text"],
+            "page_type": r["page_type"],
+            "source_format": r["source_format"],
             "similarity": round(1 - float(str(r.get("_distance", 0))), 4),
         }
         for r in results

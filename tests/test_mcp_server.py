@@ -214,6 +214,8 @@ class TestSearchDocuments:
                 "page_number": 3,
                 "chunk_index": 0,
                 "text": "quarterly revenue grew",
+                "page_type": "text",
+                "source_format": ".pdf",
                 "_distance": 0.15,
             },
         ]
@@ -251,7 +253,15 @@ class TestSearchDocuments:
         call_kwargs = mock_search.call_args[1]
         assert call_kwargs["limit"] == 50
 
-    def test_passes_document_filter(self, tmp_path: Path):
+    def _assert_filter_passthrough(
+        self,
+        tmp_path: Path,
+        tool_kwarg: str,
+        tool_value: str,
+        expected_key: str,
+        expected_value: str | None,
+    ) -> None:
+        """Call search_documents with one filter kwarg, assert it reaches search()."""
         settings = _settings(tmp_path)
         mock_vector = np.zeros(768, dtype=np.float32)
         with (
@@ -263,31 +273,88 @@ class TestSearchDocuments:
             ),
             patch("quarry.mcp_server.search", return_value=[]) as mock_search,
         ):
-            search_documents("test", document_filter="report.pdf")
+            search_documents("test", **{tool_kwarg: tool_value})
 
-        call_kwargs = mock_search.call_args[1]
-        assert call_kwargs["document_filter"] == "report.pdf"
+        assert mock_search.call_args[1][expected_key] == expected_value
+
+    def test_passes_document_filter(self, tmp_path: Path):
+        self._assert_filter_passthrough(
+            tmp_path,
+            "document_filter",
+            "report.pdf",
+            "document_filter",
+            "report.pdf",
+        )
 
     def test_empty_filter_passes_none(self, tmp_path: Path):
-        settings = _settings(tmp_path)
-        mock_vector = np.zeros(768, dtype=np.float32)
-        with (
-            patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.mcp_server._db"),
-            patch(
-                "quarry.mcp_server.get_embedding_backend",
-                return_value=_mock_embedding_backend(mock_vector),
-            ),
-            patch("quarry.mcp_server.search", return_value=[]) as mock_search,
-        ):
-            search_documents("test", document_filter="")
-
-        call_kwargs = mock_search.call_args[1]
-        assert call_kwargs["document_filter"] is None
+        self._assert_filter_passthrough(
+            tmp_path,
+            "document_filter",
+            "",
+            "document_filter",
+            None,
+        )
 
     def test_passes_collection_filter(self, tmp_path: Path):
+        self._assert_filter_passthrough(
+            tmp_path,
+            "collection",
+            "math",
+            "collection_filter",
+            "math",
+        )
+
+    def test_passes_page_type_filter(self, tmp_path: Path):
+        self._assert_filter_passthrough(
+            tmp_path,
+            "page_type",
+            "code",
+            "page_type_filter",
+            "code",
+        )
+
+    def test_empty_page_type_passes_none(self, tmp_path: Path):
+        self._assert_filter_passthrough(
+            tmp_path,
+            "page_type",
+            "",
+            "page_type_filter",
+            None,
+        )
+
+    def test_passes_source_format_filter(self, tmp_path: Path):
+        self._assert_filter_passthrough(
+            tmp_path,
+            "source_format",
+            ".py",
+            "source_format_filter",
+            ".py",
+        )
+
+    def test_empty_source_format_passes_none(self, tmp_path: Path):
+        self._assert_filter_passthrough(
+            tmp_path,
+            "source_format",
+            "",
+            "source_format_filter",
+            None,
+        )
+
+    def test_results_include_metadata_fields(self, tmp_path: Path):
         settings = _settings(tmp_path)
         mock_vector = np.zeros(768, dtype=np.float32)
+        mock_results = [
+            {
+                "document_name": "script.py",
+                "collection": "default",
+                "page_number": 1,
+                "chunk_index": 0,
+                "text": "def main():",
+                "page_type": "code",
+                "source_format": ".py",
+                "_distance": 0.1,
+            }
+        ]
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
@@ -295,12 +362,13 @@ class TestSearchDocuments:
                 "quarry.mcp_server.get_embedding_backend",
                 return_value=_mock_embedding_backend(mock_vector),
             ),
-            patch("quarry.mcp_server.search", return_value=[]) as mock_search,
+            patch("quarry.mcp_server.search", return_value=mock_results),
         ):
-            search_documents("test", collection="math")
+            result = json.loads(search_documents("test"))
 
-        call_kwargs = mock_search.call_args[1]
-        assert call_kwargs["collection_filter"] == "math"
+        r = result["results"][0]
+        assert r["page_type"] == "code"
+        assert r["source_format"] == ".py"
 
 
 class TestGetDocuments:

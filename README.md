@@ -231,6 +231,7 @@ Connectors                Formats              Transformations
                                                   Indexing
                                                     │
                                                     ├─ Sentence-aware chunking
+                                                    ├─ Chunk metadata (page_type, source_format)
                                                     ├─ Vector embeddings (768-dim)
                                                     └─ LanceDB storage
                                                          │
@@ -250,7 +251,7 @@ Connectors                Formats              Transformations
 - Spreadsheets (XLSX, CSV) via LaTeX tabular serialization
 - Presentations (PPTX) with speaker notes
 - HTML with structure-aware splitting
-- Search filters by content type and file format
+- Search filters by content type and file format (schema groundwork complete)
 - Google Drive connector
 
 ## Development

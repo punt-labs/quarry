@@ -14,6 +14,22 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Index
+- **`page_type` and `source_format` chunk metadata** — every chunk now stores its content type (`"text"` or `"code"`) and source format (file extension like `".pdf"`, `".py"`, or `"inline"` for programmatic text). Enables downstream search-by-format filtering.
+- `stored_page_type()` mapping: TEXT/IMAGE/SECTION → `"text"`, CODE → `"code"`
+- Inline content `document_path` changed from `"<string>"` sentinel to empty string
+- **Breaking:** Existing indexes need re-ingestion (`quarry sync`) to populate new columns
+
+### Query
+- **Search metadata filters** — `page_type` and `source_format` are now filterable in both the MCP `search_documents` tool and the `quarry search` CLI command. Filters become LanceDB SQL WHERE clauses for efficient pre-filtering before vector search.
+- `search_documents` results now include `page_type` and `source_format` fields
+- CLI search output shows content type metadata: `[report.pdf p.3 | text/.pdf]`
+
+### Tool
+- `quarry search --page-type code` — filter results by content type
+- `quarry search --source-format .py` — filter results by source format
+- `quarry search --document report.pdf` — filter results by document name (new)
+
 ## [0.5.0] - 2026-02-13
 
 ### Transform
