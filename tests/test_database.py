@@ -306,6 +306,126 @@ class TestSearchWithCollection:
         assert results == []
 
 
+class TestSearchWithMetadataFilters:
+    def test_page_type_filter(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        chunks = [
+            _make_chunk(chunk_index=0, text="prose", page_type="text"),
+            _make_chunk(chunk_index=1, text="python", page_type="code"),
+        ]
+        vectors = _random_vectors(2)
+        insert_chunks(db, chunks, vectors)
+
+        results = search(db, vectors[0], limit=10, page_type_filter="code")
+        page_types = {r["page_type"] for r in results}
+        assert page_types == {"code"}
+
+    def test_source_format_filter(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        chunks = [
+            _make_chunk(
+                chunk_index=0,
+                text="report",
+                source_format=".pdf",
+            ),
+            _make_chunk(
+                chunk_index=1,
+                text="script",
+                source_format=".py",
+            ),
+        ]
+        vectors = _random_vectors(2)
+        insert_chunks(db, chunks, vectors)
+
+        results = search(db, vectors[0], limit=10, source_format_filter=".py")
+        formats = {r["source_format"] for r in results}
+        assert formats == {".py"}
+
+    def test_combined_metadata_filters(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        chunks = [
+            _make_chunk(
+                chunk_index=0,
+                text="py code",
+                page_type="code",
+                source_format=".py",
+            ),
+            _make_chunk(
+                chunk_index=1,
+                text="js code",
+                page_type="code",
+                source_format=".js",
+            ),
+            _make_chunk(
+                chunk_index=2,
+                text="pdf prose",
+                page_type="text",
+                source_format=".pdf",
+            ),
+        ]
+        vectors = _random_vectors(3)
+        insert_chunks(db, chunks, vectors)
+
+        results = search(
+            db,
+            vectors[0],
+            limit=10,
+            page_type_filter="code",
+            source_format_filter=".py",
+        )
+        assert len(results) == 1
+        assert results[0]["page_type"] == "code"
+        assert results[0]["source_format"] == ".py"
+
+    def test_metadata_with_collection_filter(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        chunks = [
+            _make_chunk(
+                chunk_index=0,
+                text="math code",
+                collection="math",
+                page_type="code",
+                source_format=".py",
+            ),
+            _make_chunk(
+                chunk_index=1,
+                text="math prose",
+                collection="math",
+                page_type="text",
+                source_format=".pdf",
+            ),
+            _make_chunk(
+                chunk_index=2,
+                text="sci code",
+                collection="science",
+                page_type="code",
+                source_format=".py",
+            ),
+        ]
+        vectors = _random_vectors(3)
+        insert_chunks(db, chunks, vectors)
+
+        results = search(
+            db,
+            vectors[0],
+            limit=10,
+            collection_filter="math",
+            page_type_filter="code",
+        )
+        assert len(results) == 1
+        assert results[0]["collection"] == "math"
+        assert results[0]["page_type"] == "code"
+
+    def test_no_results_for_unknown_page_type(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        chunks = [_make_chunk(chunk_index=0, page_type="text")]
+        vectors = _random_vectors(1)
+        insert_chunks(db, chunks, vectors)
+
+        results = search(db, vectors[0], limit=10, page_type_filter="spreadsheet")
+        assert results == []
+
+
 class TestListDocumentsWithCollection:
     def test_filter_by_collection(self, tmp_path: Path):
         db = get_db(tmp_path / "db")

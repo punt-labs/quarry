@@ -113,6 +113,8 @@ def search(
     limit: int = 10,
     document_filter: str | None = None,
     collection_filter: str | None = None,
+    page_type_filter: str | None = None,
+    source_format_filter: str | None = None,
 ) -> list[SearchResult]:
     """Search for similar chunks using vector similarity.
 
@@ -122,15 +124,20 @@ def search(
         limit: Maximum results to return.
         document_filter: Optional document name filter (exact match).
         collection_filter: Optional collection name filter (pre-filter).
+        page_type_filter: Optional content type filter (text, code, etc.).
+        source_format_filter: Optional source format filter (.pdf, .py, etc.).
 
     Returns:
         List of result dicts with text, metadata, and _distance.
     """
     logger.debug(
-        "Search: limit=%d, document_filter=%s, collection_filter=%s",
+        "Search: limit=%d, document_filter=%s, collection_filter=%s, "
+        "page_type_filter=%s, source_format_filter=%s",
         limit,
         document_filter,
         collection_filter,
+        page_type_filter,
+        source_format_filter,
     )
 
     if TABLE_NAME not in db.list_tables().tables:
@@ -145,6 +152,10 @@ def search(
         predicates.append(f"document_name = '{_escape_sql(document_filter)}'")
     if collection_filter:
         predicates.append(f"collection = '{_escape_sql(collection_filter)}'")
+    if page_type_filter:
+        predicates.append(f"page_type = '{_escape_sql(page_type_filter)}'")
+    if source_format_filter:
+        predicates.append(f"source_format = '{_escape_sql(source_format_filter)}'")
     if predicates:
         query = query.where(" AND ".join(predicates))
 
