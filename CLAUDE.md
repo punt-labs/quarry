@@ -26,7 +26,7 @@ All code changes go on feature branches. Never commit directly to main.
 ```bash
 git checkout -b feat/short-description main
 # ... work, commit, push ...
-# create PR via MCP, merge via PR, then delete branch
+# create PR, complete code review workflow (see below), merge, then delete branch
 ```
 
 | Prefix | Use |
@@ -74,6 +74,19 @@ bd sync                     # Sync with git remote
 Use the GitHub MCP server tools for all GitHub operations: creating PRs, merging PRs, reading PR status/diff/comments, creating/reading issues, searching, and managing releases. When GitHub MCP is unavailable, the `gh` CLI is acceptable.
 
 Git operations (commit, push, branch, checkout, tag) remain via the Bash tool.
+
+### Pull Request and Code Review Workflow
+
+Do **not** merge immediately after creating a PR. The full flow is:
+
+1. **Create PR** — Push branch, open PR (via MCP or `gh pr create`).
+2. **Trigger GitHub Copilot code review** — Request review so Copilot analyzes the diff.
+3. **Wait for feedback** — Allow time for review comments and suggestions.
+4. **Evaluate feedback** — Read each comment; decide which are valid and actionable.
+5. **Address valid issues** — Commit fixes; push; ensure quality gates pass on each change.
+6. **Merge only when** — All review feedback has been evaluated (addressed or explicitly declined), GitHub Actions are green on the latest commit, and local quality gates (`uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src/ tests/`, `uv run pytest`) run clean.
+
+**Quality gates apply at every step:** Each commit that addresses review feedback must pass both local checks and GitHub Actions. Do not merge if any CI check is failing.
 
 ### Session Close Protocol
 
