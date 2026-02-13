@@ -21,7 +21,10 @@ from quarry.database import (
     list_documents,
     search,
 )
-from quarry.pipeline import ingest_document, ingest_text as pipeline_ingest_text
+from quarry.pipeline import (
+    ingest_document,
+    ingest_text_content as pipeline_ingest_text_content,
+)
 from quarry.registry import (
     deregister_directory as registry_deregister,
     list_registrations as registry_list,
@@ -171,7 +174,7 @@ def ingest_text(
 
     progress_lines: list[str] = []
 
-    result = pipeline_ingest_text(
+    result = pipeline_ingest_text_content(
         content,
         document_name,
         db,

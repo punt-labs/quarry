@@ -5,7 +5,7 @@ from importlib.metadata import version
 from quarry.collections import derive_collection
 from quarry.config import Settings, get_settings
 from quarry.database import get_db, search
-from quarry.pipeline import ingest_document, ingest_text
+from quarry.pipeline import ingest_document, ingest_text_content
 
 __version__ = version("quarry-mcp")
 
@@ -16,6 +16,6 @@ __all__ = [
     "get_db",
     "get_settings",
     "ingest_document",
-    "ingest_text",
+    "ingest_text_content",
     "search",
 ]

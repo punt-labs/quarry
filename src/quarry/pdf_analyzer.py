@@ -9,7 +9,7 @@ from quarry.models import PageAnalysis, PageType
 
 logger = logging.getLogger(__name__)
 
-TEXT_THRESHOLD = 50
+MIN_TEXT_CHARS_FOR_TEXT_PAGE = 50
 
 
 def analyze_pdf(pdf_path: Path) -> list[PageAnalysis]:
@@ -28,14 +28,16 @@ def analyze_pdf(pdf_path: Path) -> list[PageAnalysis]:
             text_length = len(text)
 
             page_type = (
-                PageType.TEXT if text_length >= TEXT_THRESHOLD else PageType.IMAGE
+                PageType.TEXT
+                if text_length >= MIN_TEXT_CHARS_FOR_TEXT_PAGE
+                else PageType.IMAGE
             )
             logger.debug(
                 "Page %d: %s (%d chars, threshold=%d)",
                 page_num + 1,
                 page_type.value,
                 text_length,
-                TEXT_THRESHOLD,
+                MIN_TEXT_CHARS_FOR_TEXT_PAGE,
             )
 
             results.append(

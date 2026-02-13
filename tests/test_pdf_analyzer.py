@@ -3,7 +3,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 from quarry.models import PageType
-from quarry.pdf_analyzer import TEXT_THRESHOLD, analyze_pdf
+from quarry.pdf_analyzer import MIN_TEXT_CHARS_FOR_TEXT_PAGE, analyze_pdf
 
 
 def _mock_page(text: str) -> MagicMock:
@@ -24,7 +24,7 @@ class TestAnalyzePdf:
         pdf_path = tmp_path / "test.pdf"
         pdf_path.touch()
 
-        text = "x" * TEXT_THRESHOLD
+        text = "x" * MIN_TEXT_CHARS_FOR_TEXT_PAGE
         mock_doc = MagicMock()
         mock_doc.__len__ = lambda _: 1
         mock_doc.__getitem__ = lambda _, idx: _mock_page(text)
@@ -36,7 +36,7 @@ class TestAnalyzePdf:
 
         assert len(results) == 1
         assert results[0].page_type == PageType.TEXT
-        assert results[0].text_length == TEXT_THRESHOLD
+        assert results[0].text_length == MIN_TEXT_CHARS_FOR_TEXT_PAGE
         assert results[0].page_number == 1
 
     def test_image_page(self, tmp_path):
