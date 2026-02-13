@@ -14,6 +14,7 @@ from quarry.database import (
     search,
 )
 from quarry.pipeline import ingest_document, ingest_text
+from quarry.results import SearchResult
 from quarry.types import LanceDB
 
 from .conftest import FIXTURES_DIR
@@ -32,7 +33,7 @@ def _search(
     limit: int = 5,
     document_filter: str | None = None,
     collection_filter: str | None = None,
-) -> list[dict[str, object]]:
+) -> list[SearchResult]:
     """Embed a query and search the database."""
     vector = get_embedding_backend(settings).embed_query(query)
     return search(

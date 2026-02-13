@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, cast
 import pyarrow as pa
 
 from quarry.models import Chunk
+from quarry.results import CollectionSummary, DocumentSummary, SearchResult
 from quarry.types import LanceDB, LanceTable
 
 if TYPE_CHECKING:
@@ -107,7 +108,7 @@ def search(
     limit: int = 10,
     document_filter: str | None = None,
     collection_filter: str | None = None,
-) -> list[dict[str, object]]:
+) -> list[SearchResult]:
     """Search for similar chunks using vector similarity.
 
     Args:
@@ -144,7 +145,7 @@ def search(
 
     results = query.to_list()
     logger.debug("Search: %d results returned", len(results))
-    return results
+    return cast("list[SearchResult]", results)
 
 
 def get_page_text(
@@ -191,7 +192,7 @@ def get_page_text(
 def list_documents(
     db: LanceDB,
     collection_filter: str | None = None,
-) -> list[dict[str, object]]:
+) -> list[DocumentSummary]:
     """List all indexed documents with metadata.
 
     Args:
@@ -230,7 +231,7 @@ def list_documents(
             grouped[name] = []
         grouped[name].append(row)
 
-    docs: list[dict[str, object]] = []
+    docs: list[DocumentSummary] = []
     for name, chunks in grouped.items():
         pages = {int(str(c["page_number"])) for c in chunks}
         docs.append(
@@ -293,7 +294,7 @@ def delete_document(
     return deleted
 
 
-def list_collections(db: LanceDB) -> list[dict[str, object]]:
+def list_collections(db: LanceDB) -> list[CollectionSummary]:
     """List all collections with document and chunk counts.
 
     Returns:
