@@ -1,3 +1,5 @@
+"""Directory sync: discover files, compute delta, ingest new/changed, delete removed."""
+
 from __future__ import annotations
 
 import logging
@@ -70,9 +72,11 @@ def compute_sync_plan(
 ) -> SyncPlan:
     """Compare files on disk against the registry to produce a sync plan.
 
-    Returns which files need ingesting (new or changed), which
-    document_names should be deleted (removed from disk), and
-    how many were unchanged.
+    Compares both mtime and size: mtime can change without content change
+    (e.g. touch), and size can change without mtime (rare but possible).
+    Either difference triggers re-ingest. Returns which files need
+    ingesting (new or changed), which document_names should be deleted
+    (removed from disk), and how many were unchanged.
     """
     disk_files = discover_files(directory, extensions)
     disk_paths = {str(p) for p in disk_files}

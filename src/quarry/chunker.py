@@ -1,3 +1,5 @@
+"""Split page text into overlapping chunks for embedding."""
+
 from __future__ import annotations
 
 import re
@@ -76,7 +78,8 @@ def _split_text(
         if current_len + sentence_len > max_chars and current:
             chunks.append(" ".join(current))
             overlap_text = " ".join(current)
-            # Keep tail of previous chunk as overlap
+            # Overlap preserves context across chunk boundaries. Take the tail
+            # of the previous chunk; break at a space to avoid mid-word splits.
             if len(overlap_text) > overlap_chars:
                 tail = overlap_text[-overlap_chars:]
                 space_idx = tail.find(" ")

@@ -1,3 +1,5 @@
+"""OCR backend implementation using RapidOCR (local, no AWS)."""
+
 from __future__ import annotations
 
 import io

@@ -1,3 +1,5 @@
+"""Source code processing: tree-sitter section splitting for 30+ languages."""
+
 from __future__ import annotations
 
 import logging

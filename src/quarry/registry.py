@@ -1,3 +1,5 @@
+"""SQLite registry for sync: registered directories and file state."""
+
 from __future__ import annotations
 
 import sqlite3

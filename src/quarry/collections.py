@@ -1,3 +1,5 @@
+"""Collection name derivation and validation utilities."""
+
 from __future__ import annotations
 
 from pathlib import Path

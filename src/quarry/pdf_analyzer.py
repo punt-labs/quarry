@@ -1,3 +1,5 @@
+"""PDF page classification: text vs image for OCR routing."""
+
 from __future__ import annotations
 
 import logging

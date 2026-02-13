@@ -1,3 +1,5 @@
+"""Extract text pages from PDFs via PyMuPDF."""
+
 from __future__ import annotations
 
 import logging

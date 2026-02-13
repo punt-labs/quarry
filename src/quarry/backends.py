@@ -1,3 +1,5 @@
+"""Factory for OCR and embedding backends with thread-safe caching."""
+
 from __future__ import annotations
 
 import threading

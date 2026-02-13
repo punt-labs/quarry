@@ -1,3 +1,5 @@
+"""Environment diagnostics and install: verify deps, download model, configure."""
+
 from __future__ import annotations
 
 import json

@@ -1,3 +1,5 @@
+"""LanceDB operations: insert chunks, search, list documents and collections."""
+
 from __future__ import annotations
 
 import logging
@@ -61,8 +63,9 @@ def _get_or_create_table(
     when the table was just created (``create_table`` inserts *records*
     as part of creation).
 
-    Uses double-checked locking to prevent races when multiple threads
-    see a missing table simultaneously.
+    Uses double-checked locking: check outside lock for the common case
+    (table exists); only acquire lock when table missing. Prevents races
+    when multiple sync workers try to create the table simultaneously.
     """
     if TABLE_NAME in db.list_tables().tables:
         return db.open_table(TABLE_NAME)

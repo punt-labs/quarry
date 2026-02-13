@@ -1,3 +1,5 @@
+"""Text file processing: section splitting for .txt, .md, .tex, .docx."""
+
 from __future__ import annotations
 
 import logging

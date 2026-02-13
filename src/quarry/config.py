@@ -1,3 +1,5 @@
+"""Application settings (AWS, embedding, chunking, OCR) and logging config."""
+
 from __future__ import annotations
 
 import logging

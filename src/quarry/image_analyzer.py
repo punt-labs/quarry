@@ -1,3 +1,5 @@
+"""Image format detection and conversion requirements for OCR."""
+
 from __future__ import annotations
 
 import logging

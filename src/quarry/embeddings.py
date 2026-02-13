@@ -1,3 +1,5 @@
+"""ONNX-based text embedding for semantic search."""
+
 from __future__ import annotations
 
 import logging
