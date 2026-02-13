@@ -145,7 +145,7 @@ All settings via environment variables:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `OCR_BACKEND` | `local` | `local` (RapidOCR, offline) or `textract` (AWS) |
-| `LANCEDB_PATH` | `~/.quarry/data/lancedb` | Vector database location |
+| `LANCEDB_PATH` | `~/.quarry/data/default/lancedb` | Vector database location (overrides `--db`) |
 | `CHUNK_MAX_CHARS` | `1800` | Target max characters per chunk (~450 tokens) |
 | `CHUNK_OVERLAP_CHARS` | `200` | Overlap between consecutive chunks |
 
@@ -173,26 +173,35 @@ Only needed if you want cloud OCR. Set these environment variables:
 
 Your IAM user needs `textract:DetectDocumentText`, `textract:StartDocumentTextDetection`, `textract:GetDocumentTextDetection`, and `s3:PutObject/GetObject/DeleteObject` on your bucket.
 
-### Multiple Indices
+### Named Databases
 
-Run separate MCP instances with different data directories:
+Use `--db` to keep separate databases for different projects:
+
+```bash
+quarry ingest report.pdf --db work
+quarry ingest paper.pdf --db personal
+quarry search "revenue" --db work
+quarry databases  # list all databases with stats
+```
+
+Each database resolves to `~/.quarry/data/<name>/lancedb` with its own registry. Start an MCP server against a named database:
 
 ```json
 {
   "mcpServers": {
-    "legal-docs": {
+    "work": {
       "command": "/path/to/uvx",
-      "args": ["--from", "quarry-mcp", "quarry", "mcp"],
-      "env": { "LANCEDB_PATH": "/data/legal/lancedb" }
+      "args": ["--from", "quarry-mcp", "quarry", "mcp", "--db", "work"]
     },
-    "financial-reports": {
+    "personal": {
       "command": "/path/to/uvx",
-      "args": ["--from", "quarry-mcp", "quarry", "mcp"],
-      "env": { "LANCEDB_PATH": "/data/financial/lancedb" }
+      "args": ["--from", "quarry-mcp", "quarry", "mcp", "--db", "personal"]
     }
   }
 }
 ```
+
+`LANCEDB_PATH` still works as an override for edge cases.
 
 ## Advanced Configuration
 
@@ -201,7 +210,7 @@ Run separate MCP instances with different data directories:
 | `TEXTRACT_POLL_INITIAL` | `5.0` | Initial Textract polling interval (seconds) |
 | `TEXTRACT_POLL_MAX` | `30.0` | Max polling interval (1.5x exponential backoff) |
 | `TEXTRACT_MAX_WAIT` | `900` | Max wait for Textract job (seconds) |
-| `REGISTRY_PATH` | `~/.quarry/data/registry.db` | Directory sync SQLite database |
+| `REGISTRY_PATH` | `~/.quarry/data/default/registry.db` | Directory sync SQLite database |
 
 ## Architecture
 
