@@ -111,25 +111,18 @@ class OnnxEmbeddingBackend:
         encodings = self._tokenizer.encode_batch(texts)
         input_ids = np.array([e.ids for e in encodings], dtype=np.int64)
         attention_mask = np.array([e.attention_mask for e in encodings], dtype=np.int64)
-        token_type_ids = np.zeros_like(input_ids)
 
-        (hidden_states,) = self._session.run(
+        _token_embeddings, sentence_embedding = self._session.run(
             None,
             {
                 "input_ids": input_ids,
                 "attention_mask": attention_mask,
-                "token_type_ids": token_type_ids,
             },
         )
 
-        # CLS pooling: take the first token's hidden state
-        cls_embeddings: NDArray[np.float32] = hidden_states[:, 0, :]
-
-        # L2 normalize
-        norms = np.linalg.norm(cls_embeddings, axis=1, keepdims=True)
-        norms = np.maximum(norms, 1e-12)
-        normalized: NDArray[np.float32] = cls_embeddings / norms
-        return normalized
+        # Model provides pre-pooled, pre-normalized sentence embeddings
+        result: NDArray[np.float32] = sentence_embedding
+        return result
 
     def embed_query(self, query: str) -> NDArray[np.float32]:
         """Embed a search query. Returns shape (dimension,)."""
