@@ -14,6 +14,18 @@ class PageType(enum.Enum):
     CODE = "code"
 
 
+def stored_page_type(pt: PageType) -> str:
+    """Map a PageType enum to the string stored in LanceDB.
+
+    TEXT, IMAGE, and SECTION all represent prose content and map to
+    ``"text"``.  CODE maps to ``"code"``.  Future values (spreadsheet,
+    presentation, email) will get their own stored strings.
+    """
+    if pt is PageType.CODE:
+        return "code"
+    return "text"
+
+
 @dataclass(frozen=True)
 class PageAnalysis:
     page_number: int
@@ -48,4 +60,6 @@ class Chunk:
     chunk_index: int
     text: str
     page_raw_text: str
+    page_type: str
+    source_format: str
     ingestion_timestamp: datetime

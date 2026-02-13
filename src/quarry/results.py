@@ -38,6 +38,8 @@ class SearchResult(TypedDict):
     chunk_index: int
     text: str
     page_raw_text: str
+    page_type: str
+    source_format: str
     ingestion_timestamp: str
     _distance: float
 
