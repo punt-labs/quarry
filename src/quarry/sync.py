@@ -130,6 +130,10 @@ def sync_collection(
 
     Computes the delta, ingests new/changed files in parallel,
     removes deleted files, and updates the registry.
+
+    Catches OSError, ValueError, RuntimeError, TimeoutError for
+    individual file ingest/delete failures so sync continues when
+    one file fails.
     """
 
     def _progress(msg: str) -> None:
@@ -182,9 +186,10 @@ def sync_collection(
                     )
                     ingested += 1
                     _progress(f"[{collection}] Ingested {doc_name}")
-                except Exception as exc:  # noqa: BLE001
+                except (OSError, ValueError, RuntimeError, TimeoutError) as exc:
                     failed += 1
                     errors.append(f"{doc_name}: {exc}")
+                    logger.exception("Ingest failed for %s", doc_name)
                     _progress(f"[{collection}] Failed {doc_name}: {exc}")
 
     # Pre-build lookup for O(1) path resolution during deletes
@@ -200,9 +205,10 @@ def sync_collection(
                 delete_file(conn, rec.path, commit=False)
             deleted += 1
             _progress(f"[{collection}] Deleted {doc_name}")
-        except Exception as exc:  # noqa: BLE001
+        except (OSError, ValueError, RuntimeError, TimeoutError) as exc:
             failed += 1
             errors.append(f"{doc_name}: {exc}")
+            logger.exception("Delete failed for %s", doc_name)
             _progress(f"[{collection}] Failed to delete {doc_name}: {exc}")
 
     conn.commit()
