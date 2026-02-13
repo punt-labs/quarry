@@ -15,8 +15,9 @@ SUPPORTED_IMAGE_EXTENSIONS = (
     SINGLE_PAGE_FORMATS | MULTI_PAGE_FORMATS | CONVERTIBLE_FORMATS
 )
 
-# Mapping from PIL format names to Textract-compatible format names
-_PIL_TO_TEXTRACT: dict[str, str] = {
+# Mapping from PIL format names to formats accepted by common OCR engines.
+# BMP/WebP require conversion to PNG/JPEG before OCR.
+_PIL_TO_OCR: dict[str, str] = {
     "PNG": "PNG",
     "JPEG": "JPEG",
     "TIFF": "TIFF",
@@ -32,11 +33,14 @@ class ImageAnalysis:
 
     format: str  # PIL format name: "PNG", "JPEG", "TIFF", "BMP", "WEBP"
     page_count: int  # 1 for single-page, N for multi-page TIFF
-    needs_conversion: bool  # True for BMP/WebP (not Textract-native)
+    needs_conversion: bool  # True if must convert to PNG/JPEG for OCR backends
 
 
 def analyze_image(image_path: Path) -> ImageAnalysis:
     """Analyze an image file: detect format and page count.
+
+    needs_conversion is True for BMP/WebP — OCR backends typically
+    require PNG or JPEG; these formats must be converted before OCR.
 
     Args:
         image_path: Path to image file.
@@ -54,7 +58,7 @@ def analyze_image(image_path: Path) -> ImageAnalysis:
 
     with Image.open(image_path) as im:
         pil_format = im.format
-        if pil_format is None or pil_format not in _PIL_TO_TEXTRACT:
+        if pil_format is None or pil_format not in _PIL_TO_OCR:
             msg = f"Unsupported image format: {pil_format}"
             raise ValueError(msg)
 

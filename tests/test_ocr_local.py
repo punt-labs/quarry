@@ -240,7 +240,9 @@ class TestLocalOcrBackendImageBytes:
 
         with patch.object(ocr_local_mod, "_get_engine", return_value=mock_engine):
             backend = LocalOcrBackend(_settings())
-            result = backend.ocr_image_bytes(png_bytes, "blank.png", Path("/tmp/blank.png"))
+            result = backend.ocr_image_bytes(
+                png_bytes, "blank.png", Path("/tmp/blank.png")
+            )
 
         assert result.text == ""
 

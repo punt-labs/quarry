@@ -21,9 +21,16 @@ class PageAnalysis:
 
 @dataclass(frozen=True)
 class PageContent:
+    """Content from one page or logical section of a document.
+
+    For PDFs, page_number and total_pages are physical page indices.
+    For text/code files, they represent logical section indices (e.g.
+    markdown heading, code definition) — "page" means "section" there.
+    """
+
     document_name: str
     document_path: str
-    page_number: int
+    page_number: int  # Physical page (PDF) or logical section index (text/code)
     total_pages: int
     text: str
     page_type: PageType
