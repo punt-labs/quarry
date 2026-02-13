@@ -10,8 +10,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from botocore.exceptions import ClientError
-
 from quarry.config import Settings
 from quarry.database import (
     create_collection_index,
@@ -141,6 +139,9 @@ def sync_collection(
     botocore.exceptions.ClientError (AWS auth/throttling/service) for
     individual file ingest/delete failures so sync continues when one fails.
     """
+    from botocore.exceptions import ClientError  # noqa: PLC0415
+
+    _recoverable = (OSError, ValueError, RuntimeError, TimeoutError, ClientError)
 
     def _progress(msg: str) -> None:
         logger.info(msg)
@@ -192,13 +193,7 @@ def sync_collection(
                     )
                     ingested += 1
                     _progress(f"[{collection}] Ingested {document_name}")
-                except (
-                    OSError,
-                    ValueError,
-                    RuntimeError,
-                    TimeoutError,
-                    ClientError,
-                ) as exc:
+                except _recoverable as exc:
                     failed += 1
                     errors.append(f"{document_name}: {exc}")
                     logger.exception("Ingest failed for %s", document_name)
@@ -217,13 +212,7 @@ def sync_collection(
                 delete_file(conn, rec.path, commit=False)
             deleted += 1
             _progress(f"[{collection}] Deleted {document_name}")
-        except (
-            OSError,
-            ValueError,
-            RuntimeError,
-            TimeoutError,
-            ClientError,
-        ) as exc:
+        except _recoverable as exc:
             failed += 1
             errors.append(f"{document_name}: {exc}")
             logger.exception("Delete failed for %s", document_name)

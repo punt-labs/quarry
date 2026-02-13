@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from PIL.Image import Image as PILImage
@@ -199,11 +199,9 @@ def ingest_pdf(
         settings,
         progress,
         collection=collection,
-        extra={
-            "total_pages": total_pages,
-            "text_pages": len(text_pages),
-            "image_pages": len(image_pages),
-        },
+        total_pages=total_pages,
+        text_pages=len(text_pages),
+        image_pages=len(image_pages),
     )
 
 
@@ -251,7 +249,7 @@ def ingest_text_file(
         settings,
         progress,
         collection=collection,
-        extra={"sections": len(pages)},
+        sections=len(pages),
     )
 
 
@@ -299,7 +297,7 @@ def ingest_code_file(
         settings,
         progress,
         collection=collection,
-        extra={"definitions": len(pages)},
+        definitions=len(pages),
     )
 
 
@@ -379,7 +377,8 @@ def ingest_image(
         settings,
         progress,
         collection=collection,
-        extra={"format": analysis.format, "image_pages": 1},
+        file_format=analysis.format,
+        image_pages=1,
     )
 
 
@@ -515,7 +514,8 @@ def _ingest_multipage_image(
         settings,
         progress,
         collection=collection,
-        extra={"format": "TIFF", "image_pages": page_count},
+        file_format="TIFF",
+        image_pages=page_count,
     )
 
 
@@ -562,7 +562,7 @@ def ingest_text_content(
         settings,
         progress,
         collection=collection,
-        extra={"sections": len(pages)},
+        sections=len(pages),
     )
 
 
@@ -587,22 +587,14 @@ def _chunk_embed_store(
     progress: Callable[..., None],
     *,
     collection: str = "default",
-    extra: dict[str, object],
+    total_pages: int | None = None,
+    text_pages: int | None = None,
+    image_pages: int | None = None,
+    sections: int | None = None,
+    definitions: int | None = None,
+    file_format: str | None = None,
 ) -> IngestResult:
-    """Shared pipeline: chunk pages, embed, store in LanceDB.
-
-    Args:
-        pages: Page contents to process.
-        document_name: Document identifier.
-        db: LanceDB connection.
-        settings: Application settings.
-        progress: Progress reporter.
-        collection: Collection name for the chunks.
-        extra: Additional fields for the result dict.
-
-    Returns:
-        Dict with document_name, collection, chunks count, and extra fields.
-    """
+    """Shared pipeline: chunk pages, embed, store in LanceDB."""
     progress("Chunking")
     chunks = chunk_pages(
         pages,
@@ -612,34 +604,34 @@ def _chunk_embed_store(
     )
     progress("Created %d chunks", len(chunks))
 
-    if not chunks:
+    inserted = 0
+    if chunks:
+        embedder = get_embedding_backend(settings)
+        progress("Generating embeddings (%s)", embedder.model_name)
+        texts = [c.text for c in chunks]
+        vectors = embedder.embed_texts(texts)
+
+        progress("Storing in LanceDB")
+        inserted = insert_chunks(db, chunks, vectors)
+        progress("Done: %d chunks indexed from %s", inserted, document_name)
+    else:
         progress("No text found — nothing to index")
-        return cast(
-            "IngestResult",
-            {
-                "document_name": document_name,
-                "collection": collection,
-                "chunks": 0,
-                **extra,
-            },
-        )
 
-    embedder = get_embedding_backend(settings)
-    progress("Generating embeddings (%s)", embedder.model_name)
-    texts = [c.text for c in chunks]
-    vectors = embedder.embed_texts(texts)
-
-    progress("Storing in LanceDB")
-    inserted = insert_chunks(db, chunks, vectors)
-
-    progress("Done: %d chunks indexed from %s", inserted, document_name)
-
-    return cast(
-        "IngestResult",
-        {
-            "document_name": document_name,
-            "collection": collection,
-            "chunks": inserted,
-            **extra,
-        },
-    )
+    result: IngestResult = {
+        "document_name": document_name,
+        "collection": collection,
+        "chunks": inserted,
+    }
+    if total_pages is not None:
+        result["total_pages"] = total_pages
+    if text_pages is not None:
+        result["text_pages"] = text_pages
+    if image_pages is not None:
+        result["image_pages"] = image_pages
+    if sections is not None:
+        result["sections"] = sections
+    if definitions is not None:
+        result["definitions"] = definitions
+    if file_format is not None:
+        result["format"] = file_format
+    return result
