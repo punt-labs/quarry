@@ -67,12 +67,20 @@ class TestCheckAwsCredentials:
 
 
 class TestCheckEmbeddingModel:
-    def test_model_cached(self, tmp_path):
-        fake_path = str(tmp_path / "model_int8.onnx")
-        (tmp_path / "model_int8.onnx").write_bytes(b"fake")
+    def test_both_files_cached(self, tmp_path):
+        model_path = tmp_path / "model_int8.onnx"
+        tokenizer_path = tmp_path / "tokenizer.json"
+        model_path.write_bytes(b"fake")
+        tokenizer_path.write_bytes(b"fake")
+
+        def _mock_cache(repo_id: str, filename: str, **kwargs: object) -> str:
+            if "model_int8" in filename:
+                return str(model_path)
+            return str(tokenizer_path)
+
         with patch(
             "huggingface_hub.try_to_load_from_cache",
-            return_value=fake_path,
+            side_effect=_mock_cache,
         ):
             result = _check_embedding_model()
         assert result.passed is True
@@ -82,6 +90,23 @@ class TestCheckEmbeddingModel:
         with patch(
             "huggingface_hub.try_to_load_from_cache",
             return_value=None,
+        ):
+            result = _check_embedding_model()
+        assert result.passed is False
+        assert "Not cached" in result.message
+
+    def test_tokenizer_not_cached(self, tmp_path):
+        model_path = tmp_path / "model_int8.onnx"
+        model_path.write_bytes(b"fake")
+
+        def _mock_cache(repo_id: str, filename: str, **kwargs: object) -> str | None:
+            if "model_int8" in filename:
+                return str(model_path)
+            return None
+
+        with patch(
+            "huggingface_hub.try_to_load_from_cache",
+            side_effect=_mock_cache,
         ):
             result = _check_embedding_model()
         assert result.passed is False

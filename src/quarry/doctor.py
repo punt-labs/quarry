@@ -87,12 +87,21 @@ def _check_embedding_model() -> CheckResult:
         ONNX_MODEL_FILE,
         ONNX_MODEL_REPO,
         ONNX_MODEL_REVISION,
+        ONNX_TOKENIZER_FILE,
     )
 
-    cached = try_to_load_from_cache(
+    model_cached = try_to_load_from_cache(
         ONNX_MODEL_REPO, ONNX_MODEL_FILE, revision=ONNX_MODEL_REVISION
     )
-    if isinstance(cached, str) and Path(cached).exists():
+    tokenizer_cached = try_to_load_from_cache(
+        ONNX_MODEL_REPO, ONNX_TOKENIZER_FILE, revision=ONNX_MODEL_REVISION
+    )
+    if (
+        isinstance(model_cached, str)
+        and Path(model_cached).exists()
+        and isinstance(tokenizer_cached, str)
+        and Path(tokenizer_cached).exists()
+    ):
         return CheckResult(
             name="Embedding model",
             passed=True,
