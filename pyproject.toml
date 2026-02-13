@@ -21,7 +21,8 @@ dependencies = [
     "botocore-stubs>=1.40.0",
     "pymupdf>=1.25.0",
     "lancedb>=0.17.0",
-    "sentence-transformers>=3.0.0",
+    "tokenizers>=0.20.0",
+    "huggingface-hub>=0.26.0",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
     "typer>=0.15.0",
@@ -156,6 +157,10 @@ module = [
     "rapidocr.*",
     "onnxruntime",
     "onnxruntime.*",
+    "huggingface_hub",
+    "huggingface_hub.*",
+    "tokenizers",
+    "tokenizers.*",
 ]
 ignore_missing_imports = true
 

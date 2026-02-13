@@ -67,22 +67,48 @@ class TestCheckAwsCredentials:
 
 
 class TestCheckEmbeddingModel:
-    def test_model_cached(self, tmp_path, monkeypatch):
-        model_dir = (
-            tmp_path
-            / ".cache"
-            / "huggingface"
-            / "hub"
-            / "models--Snowflake--snowflake-arctic-embed-m-v1.5"
-        )
-        model_dir.mkdir(parents=True)
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        result = _check_embedding_model()
-        assert result.passed is True
+    def test_both_files_cached(self, tmp_path):
+        model_path = tmp_path / "model_int8.onnx"
+        tokenizer_path = tmp_path / "tokenizer.json"
+        model_path.write_bytes(b"fake")
+        tokenizer_path.write_bytes(b"fake")
 
-    def test_model_not_cached(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        result = _check_embedding_model()
+        def _mock_cache(repo_id: str, filename: str, **kwargs: object) -> str:
+            if "model_int8" in filename:
+                return str(model_path)
+            return str(tokenizer_path)
+
+        with patch(
+            "huggingface_hub.try_to_load_from_cache",
+            side_effect=_mock_cache,
+        ):
+            result = _check_embedding_model()
+        assert result.passed is True
+        assert "ONNX" in result.message
+
+    def test_model_not_cached(self):
+        with patch(
+            "huggingface_hub.try_to_load_from_cache",
+            return_value=None,
+        ):
+            result = _check_embedding_model()
+        assert result.passed is False
+        assert "Not cached" in result.message
+
+    def test_tokenizer_not_cached(self, tmp_path):
+        model_path = tmp_path / "model_int8.onnx"
+        model_path.write_bytes(b"fake")
+
+        def _mock_cache(repo_id: str, filename: str, **kwargs: object) -> str | None:
+            if "model_int8" in filename:
+                return str(model_path)
+            return None
+
+        with patch(
+            "huggingface_hub.try_to_load_from_cache",
+            side_effect=_mock_cache,
+        ):
+            result = _check_embedding_model()
         assert result.passed is False
         assert "Not cached" in result.message
 
@@ -129,14 +155,6 @@ class TestCheckEnvironment:
     def test_returns_zero_when_all_pass(self, tmp_path, monkeypatch):
         data_dir = tmp_path / ".quarry" / "data" / "lancedb"
         data_dir.mkdir(parents=True)
-        model_dir = (
-            tmp_path
-            / ".cache"
-            / "huggingface"
-            / "hub"
-            / "models--Snowflake--snowflake-arctic-embed-m-v1.5"
-        )
-        model_dir.mkdir(parents=True)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAIOSFODNN7EXAMPLE")
         monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
@@ -152,6 +170,11 @@ class TestCheckEnvironment:
             doctor_mod,
             "_check_imports",
             lambda: _ok(name="Core imports", passed=True, message="mocked"),
+        )
+        monkeypatch.setattr(
+            doctor_mod,
+            "_check_embedding_model",
+            lambda: _ok(name="Embedding model", passed=True, message="mocked"),
         )
         assert check_environment() == 0
 
@@ -271,8 +294,8 @@ class TestRunInstall:
     def test_creates_data_directory(self, tmp_path, monkeypatch):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         _mock_install_mcp(monkeypatch)
-        with patch("sentence_transformers.SentenceTransformer") as mock_st:
-            mock_st.return_value = None
+        with patch("quarry.embeddings._download_model_files") as mock_dl:
+            mock_dl.return_value = ("/fake/model.onnx", "/fake/tokenizer.json")
             result = run_install()
         assert result == 0
         assert (tmp_path / ".quarry" / "data" / "lancedb").is_dir()
@@ -280,23 +303,18 @@ class TestRunInstall:
     def test_downloads_model(self, tmp_path, monkeypatch):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         _mock_install_mcp(monkeypatch)
-        with patch("sentence_transformers.SentenceTransformer") as mock_st:
-            mock_st.return_value = None
+        with patch("quarry.embeddings._download_model_files") as mock_dl:
+            mock_dl.return_value = ("/fake/model.onnx", "/fake/tokenizer.json")
             run_install()
-        from quarry.config import EMBEDDING_MODEL_REVISION
-
-        mock_st.assert_called_once_with(
-            "Snowflake/snowflake-arctic-embed-m-v1.5",
-            revision=EMBEDDING_MODEL_REVISION,
-        )
+        mock_dl.assert_called_once()
 
     def test_idempotent(self, tmp_path, monkeypatch):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         _mock_install_mcp(monkeypatch)
         data_dir = tmp_path / ".quarry" / "data" / "lancedb"
         data_dir.mkdir(parents=True)
-        with patch("sentence_transformers.SentenceTransformer") as mock_st:
-            mock_st.return_value = None
+        with patch("quarry.embeddings._download_model_files") as mock_dl:
+            mock_dl.return_value = ("/fake/model.onnx", "/fake/tokenizer.json")
             result = run_install()
         assert result == 0
         assert data_dir.is_dir()

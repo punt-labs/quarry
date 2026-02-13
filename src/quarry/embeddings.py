@@ -3,97 +3,96 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from quarry.config import EMBEDDING_MODEL_REVISION
-from quarry.types import EmbeddingModel
+import numpy as np
+
+from quarry.config import (
+    ONNX_MODEL_FILE,
+    ONNX_MODEL_REPO,
+    ONNX_MODEL_REVISION,
+    ONNX_QUERY_PREFIX,
+    ONNX_TOKENIZER_FILE,
+)
 
 if TYPE_CHECKING:
-    import numpy as np
     from numpy.typing import NDArray
-
-    from quarry.config import Settings
 
 logger = logging.getLogger(__name__)
 
-_models: dict[str, EmbeddingModel] = {}
 
+def _download_model_files() -> tuple[str, str]:
+    """Download ONNX model and tokenizer from HuggingFace Hub.
 
-def _get_model(model_name: str) -> EmbeddingModel:
-    if model_name not in _models:
-        from sentence_transformers import SentenceTransformer  # noqa: PLC0415
-
-        logger.info("Loading embedding model: %s (offline)", model_name)
-        _models[model_name] = SentenceTransformer(
-            model_name,
-            revision=EMBEDDING_MODEL_REVISION,
-            local_files_only=True,
-        )
-        logger.info("Model loaded")
-    return _models[model_name]
-
-
-def embed_texts(
-    texts: list[str],
-    model_name: str = "Snowflake/snowflake-arctic-embed-m-v1.5",
-) -> NDArray[np.float32]:
-    """Generate embeddings for a list of texts.
-
-    Args:
-        texts: Texts to embed.
-        model_name: HuggingFace model identifier.
+    Makes network requests. Used by ``quarry install`` only.
 
     Returns:
-        Array of shape (len(texts), 768) with normalized embeddings.
-
-    Raises:
-        OSError: If the embedding model cannot be loaded or downloaded.
+        Tuple of (model_path, tokenizer_path) as absolute file paths.
     """
-    model = _get_model(model_name)
-    return model.encode(
-        texts,
-        normalize_embeddings=True,
-        show_progress_bar=False,
+    from huggingface_hub import hf_hub_download  # noqa: PLC0415
+
+    model_path = hf_hub_download(
+        repo_id=ONNX_MODEL_REPO,
+        filename=ONNX_MODEL_FILE,
+        revision=ONNX_MODEL_REVISION,
     )
+    tokenizer_path = hf_hub_download(
+        repo_id=ONNX_MODEL_REPO,
+        filename=ONNX_TOKENIZER_FILE,
+        revision=ONNX_MODEL_REVISION,
+    )
+    return model_path, tokenizer_path
 
 
-def embed_query(
-    query: str,
-    model_name: str = "Snowflake/snowflake-arctic-embed-m-v1.5",
-) -> NDArray[np.float32]:
-    """Generate embedding for a search query.
+def _load_model_files() -> tuple[str, str]:
+    """Load ONNX model and tokenizer from local cache.
 
-    snowflake-arctic-embed-m-v1.5 uses query prefixes automatically
-    via the sentence-transformers prompt handling.
-
-    Args:
-        query: Search query text.
-        model_name: HuggingFace model identifier.
+    No network requests. Raises if files are not cached.
 
     Returns:
-        Array of shape (768,) with normalized embedding.
+        Tuple of (model_path, tokenizer_path) as absolute file paths.
 
     Raises:
-        OSError: If the embedding model cannot be loaded or downloaded.
+        OSError: If the model files are not in the local cache.
     """
-    model = _get_model(model_name)
-    return model.encode(
-        query,
-        prompt_name="query",
-        normalize_embeddings=True,
-        show_progress_bar=False,
+    from huggingface_hub import hf_hub_download  # noqa: PLC0415
+
+    model_path = hf_hub_download(
+        repo_id=ONNX_MODEL_REPO,
+        filename=ONNX_MODEL_FILE,
+        revision=ONNX_MODEL_REVISION,
+        local_files_only=True,
     )
+    tokenizer_path = hf_hub_download(
+        repo_id=ONNX_MODEL_REPO,
+        filename=ONNX_TOKENIZER_FILE,
+        revision=ONNX_MODEL_REVISION,
+        local_files_only=True,
+    )
+    return model_path, tokenizer_path
 
 
-class SnowflakeEmbeddingBackend:
-    """Embedding backend using sentence-transformers.
+class OnnxEmbeddingBackend:
+    """Embedding backend using ONNX Runtime directly.
 
-    Satisfies the ``EmbeddingBackend`` protocol.  Delegates to the
-    module-level ``_get_model()`` cache so the model is shared with
-    the free functions during the migration period.
+    Replaces sentence-transformers to eliminate the torch dependency (~2.5 GB).
+    Uses the INT8 quantized ONNX export of snowflake-arctic-embed-m-v1.5.
     """
 
-    def __init__(self, settings: Settings) -> None:
-        self._model_name = settings.embedding_model
-        self._dimension = settings.embedding_dimension
+    def __init__(self) -> None:
+        self._dimension = 768
+
+        model_path, tokenizer_path = _load_model_files()
+
+        from tokenizers import Tokenizer  # noqa: PLC0415
+
+        logger.info("Loading ONNX embedding model: %s", ONNX_MODEL_REPO)
+        self._tokenizer = Tokenizer.from_file(tokenizer_path)
+        self._tokenizer.enable_padding()
+        self._tokenizer.enable_truncation(max_length=512)
+
+        import onnxruntime as ort  # noqa: PLC0415
+
+        self._session = ort.InferenceSession(model_path)
+        logger.info("ONNX embedding model loaded")
 
     @property
     def dimension(self) -> int:
@@ -101,12 +100,37 @@ class SnowflakeEmbeddingBackend:
 
     @property
     def model_name(self) -> str:
-        return self._model_name
+        return ONNX_MODEL_REPO
 
     def embed_texts(self, texts: list[str]) -> NDArray[np.float32]:
         """Embed a batch of texts. Returns shape (n, dimension)."""
-        return embed_texts(texts, model_name=self._model_name)
+        if not texts:
+            return np.empty((0, self._dimension), dtype=np.float32)
+        encodings = self._tokenizer.encode_batch(texts)
+        input_ids = np.array([e.ids for e in encodings], dtype=np.int64)
+        attention_mask = np.array([e.attention_mask for e in encodings], dtype=np.int64)
+        token_type_ids = np.zeros_like(input_ids)
+
+        (hidden_states,) = self._session.run(
+            None,
+            {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "token_type_ids": token_type_ids,
+            },
+        )
+
+        # CLS pooling: take the first token's hidden state
+        cls_embeddings: NDArray[np.float32] = hidden_states[:, 0, :]
+
+        # L2 normalize
+        norms = np.linalg.norm(cls_embeddings, axis=1, keepdims=True)
+        norms = np.maximum(norms, 1e-12)
+        normalized: NDArray[np.float32] = cls_embeddings / norms
+        return normalized
 
     def embed_query(self, query: str) -> NDArray[np.float32]:
         """Embed a search query. Returns shape (dimension,)."""
-        return embed_query(query, model_name=self._model_name)
+        prefixed = ONNX_QUERY_PREFIX + query
+        result: NDArray[np.float32] = self.embed_texts([prefixed])[0]
+        return result

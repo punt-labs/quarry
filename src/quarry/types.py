@@ -11,17 +11,6 @@ if TYPE_CHECKING:
     from quarry.models import PageContent
 
 
-class EmbeddingModel(Protocol):
-    def encode(
-        self,
-        sentences: str | list[str],
-        *,
-        normalize_embeddings: bool = ...,
-        show_progress_bar: bool = ...,
-        prompt_name: str | None = ...,
-    ) -> NDArray[np.float32]: ...
-
-
 class LanceTable(Protocol):
     def add(self, data: list[dict[str, object]]) -> None: ...
     def search(

@@ -49,10 +49,10 @@ def get_embedding_backend(settings: Settings) -> EmbeddingBackend:
         with _lock:
             if key not in _embedding_cache:
                 from quarry.embeddings import (  # noqa: PLC0415
-                    SnowflakeEmbeddingBackend,
+                    OnnxEmbeddingBackend,
                 )
 
-                _embedding_cache[key] = SnowflakeEmbeddingBackend(settings)
+                _embedding_cache[key] = OnnxEmbeddingBackend()
     return _embedding_cache[key]
 
 

@@ -6,10 +6,9 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-import quarry.embeddings as embeddings_mod
 from quarry.backends import clear_caches, get_embedding_backend, get_ocr_backend
 from quarry.config import Settings
-from quarry.embeddings import SnowflakeEmbeddingBackend
+from quarry.embeddings import OnnxEmbeddingBackend
 from quarry.models import PageContent, PageType
 from quarry.ocr_client import TextractOcrBackend
 from quarry.ocr_local import LocalOcrBackend
@@ -53,9 +52,9 @@ class TestGetEmbeddingBackend:
     def setup_method(self) -> None:
         clear_caches()
 
-    def test_returns_snowflake_backend(self) -> None:
+    def test_returns_onnx_backend(self) -> None:
         backend = get_embedding_backend(_settings())
-        assert isinstance(backend, SnowflakeEmbeddingBackend)
+        assert isinstance(backend, OnnxEmbeddingBackend)
 
     def test_exposes_dimension(self) -> None:
         backend = get_embedding_backend(_settings())
@@ -131,35 +130,58 @@ class TestTextractOcrBackend:
         assert result == expected
 
 
-class TestSnowflakeEmbeddingBackend:
+class TestOnnxEmbeddingBackend:
     def setup_method(self) -> None:
         clear_caches()
-        embeddings_mod._models.clear()
 
-    def test_embed_texts_delegates(self) -> None:
-        model = MagicMock()
-        expected = np.random.default_rng(0).standard_normal((3, 768)).astype(np.float32)
-        model.encode.return_value = expected
+    def _mock_onnx(self) -> tuple[MagicMock, MagicMock]:
+        session = MagicMock()
+        session.run.return_value = (
+            np.random.default_rng(0).standard_normal((1, 5, 768)).astype(np.float32),
+        )
+        tokenizer = MagicMock()
+        enc = MagicMock()
+        enc.ids = [101, 2023, 2003, 1037, 102]
+        enc.attention_mask = [1, 1, 1, 1, 1]
+        tokenizer.encode_batch.side_effect = lambda texts: [enc for _ in texts]
+        return session, tokenizer
 
-        with patch("sentence_transformers.SentenceTransformer", return_value=model):
+    def test_embed_texts_returns_correct_shape(self) -> None:
+        session, tokenizer = self._mock_onnx()
+        hidden = (
+            np.random.default_rng(0).standard_normal((3, 5, 768)).astype(np.float32)
+        )
+        session.run.return_value = (hidden,)
+
+        with (
+            patch(
+                "quarry.embeddings._load_model_files",
+                return_value=("/fake/model.onnx", "/fake/tokenizer.json"),
+            ),
+            patch("tokenizers.Tokenizer.from_file", return_value=tokenizer),
+            patch("onnxruntime.InferenceSession", return_value=session),
+        ):
             backend = get_embedding_backend(_settings())
             result = backend.embed_texts(["a", "b", "c"])
 
-        np.testing.assert_array_equal(result, expected)
+        assert result.shape == (3, 768)
 
-    def test_embed_query_delegates(self) -> None:
-        model = MagicMock()
-        expected = np.zeros(768, dtype=np.float32)
-        model.encode.return_value = expected
+    def test_embed_query_applies_prefix(self) -> None:
+        session, tokenizer = self._mock_onnx()
 
-        with patch("sentence_transformers.SentenceTransformer", return_value=model):
+        with (
+            patch(
+                "quarry.embeddings._load_model_files",
+                return_value=("/fake/model.onnx", "/fake/tokenizer.json"),
+            ),
+            patch("tokenizers.Tokenizer.from_file", return_value=tokenizer),
+            patch("onnxruntime.InferenceSession", return_value=session),
+        ):
             backend = get_embedding_backend(_settings())
             result = backend.embed_query("search term")
 
-        np.testing.assert_array_equal(result, expected)
-        model.encode.assert_called_once_with(
-            "search term",
-            prompt_name="query",
-            normalize_embeddings=True,
-            show_progress_bar=False,
+        assert result.shape == (768,)
+        texts = tokenizer.encode_batch.call_args[0][0]
+        assert texts[0].startswith(
+            "Represent this sentence for searching relevant passages: "
         )
