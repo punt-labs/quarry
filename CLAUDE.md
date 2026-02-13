@@ -75,6 +75,14 @@ Use the GitHub MCP server tools for all GitHub operations: creating PRs, merging
 
 Git operations (commit, push, branch, checkout, tag) remain via the Bash tool.
 
+### Pre-PR Checklist
+
+Before creating a PR, verify:
+
+- [ ] **README updated** if user-facing behavior changed (new flags, commands, defaults, config)
+- [ ] **CHANGELOG entry** added for notable changes
+- [ ] **Quality gates pass** — `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src/ tests/`, `uv run pytest`
+
 ### Pull Request and Code Review Workflow
 
 Do **not** merge immediately after creating a PR. The full flow is:
