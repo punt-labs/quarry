@@ -31,7 +31,7 @@ def _check_python_version() -> CheckResult:
 
 
 def _check_data_directory() -> CheckResult:
-    data_dir = Path.home() / ".quarry" / "data" / "lancedb"
+    data_dir = Path.home() / ".quarry" / "data" / "default" / "lancedb"
     if data_dir.exists() and os.access(data_dir, os.W_OK):
         return CheckResult(
             name="Data directory",
@@ -251,7 +251,7 @@ def run_install() -> int:
 
     Returns 0 on success, 1 on failure.
     """
-    data_dir = Path.home() / ".quarry" / "data" / "lancedb"
+    data_dir = Path.home() / ".quarry" / "data" / "default" / "lancedb"
 
     print("Creating data directory...")  # noqa: T201
     data_dir.mkdir(parents=True, exist_ok=True)
