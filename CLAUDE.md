@@ -71,7 +71,7 @@ bd sync                     # Sync with git remote
 
 ### GitHub Operations
 
-Use the GitHub MCP server tools for all GitHub operations: creating PRs, merging PRs, reading PR status/diff/comments, creating/reading issues, searching, and managing releases. Do not use the `gh` CLI.
+Use the GitHub MCP server tools for all GitHub operations: creating PRs, merging PRs, reading PR status/diff/comments, creating/reading issues, searching, and managing releases. When GitHub MCP is unavailable, the `gh` CLI is acceptable.
 
 Git operations (commit, push, branch, checkout, tag) remain via the Bash tool.
 
