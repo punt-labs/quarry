@@ -99,6 +99,8 @@ class TestSearchCmd:
                 "document_name": "report.pdf",
                 "page_number": 3,
                 "text": "quarterly revenue grew 15%",
+                "page_type": "text",
+                "source_format": ".pdf",
                 "_distance": 0.15,
             },
         ]
@@ -116,6 +118,7 @@ class TestSearchCmd:
         assert result.exit_code == 0
         assert "report.pdf" in result.output
         assert "p.3" in result.output
+        assert "text/.pdf" in result.output
         assert "quarterly revenue" in result.output
 
     def test_no_results(self):
@@ -134,6 +137,64 @@ class TestSearchCmd:
             result = runner.invoke(app, ["search", "nonexistent topic"])
 
         assert result.exit_code == 0
+
+    def test_passes_page_type_filter(self):
+        mock_vector = np.zeros(768, dtype=np.float32)
+        mock_backend = MagicMock()
+        mock_backend.embed_query.return_value = mock_vector
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch(
+                "quarry.__main__.get_embedding_backend",
+                return_value=mock_backend,
+            ),
+            patch("quarry.__main__.search", return_value=[]) as mock_search,
+        ):
+            result = runner.invoke(app, ["search", "query", "--page-type", "code"])
+
+        assert result.exit_code == 0
+        call_kwargs = mock_search.call_args[1]
+        assert call_kwargs["page_type_filter"] == "code"
+
+    def test_passes_source_format_filter(self):
+        mock_vector = np.zeros(768, dtype=np.float32)
+        mock_backend = MagicMock()
+        mock_backend.embed_query.return_value = mock_vector
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch(
+                "quarry.__main__.get_embedding_backend",
+                return_value=mock_backend,
+            ),
+            patch("quarry.__main__.search", return_value=[]) as mock_search,
+        ):
+            result = runner.invoke(app, ["search", "query", "--source-format", ".py"])
+
+        assert result.exit_code == 0
+        call_kwargs = mock_search.call_args[1]
+        assert call_kwargs["source_format_filter"] == ".py"
+
+    def test_empty_filters_pass_none(self):
+        mock_vector = np.zeros(768, dtype=np.float32)
+        mock_backend = MagicMock()
+        mock_backend.embed_query.return_value = mock_vector
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch(
+                "quarry.__main__.get_embedding_backend",
+                return_value=mock_backend,
+            ),
+            patch("quarry.__main__.search", return_value=[]) as mock_search,
+        ):
+            result = runner.invoke(app, ["search", "query"])
+
+        assert result.exit_code == 0
+        call_kwargs = mock_search.call_args[1]
+        assert call_kwargs["page_type_filter"] is None
+        assert call_kwargs["source_format_filter"] is None
 
 
 class TestDeleteCollectionCmd:

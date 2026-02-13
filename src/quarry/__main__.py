@@ -113,6 +113,16 @@ def search_cmd(
     collection: Annotated[
         str, typer.Option("--collection", "-c", help="Filter by collection")
     ] = "",
+    page_type: Annotated[
+        str,
+        typer.Option("--page-type", help="Filter by content type (text, code, etc.)"),
+    ] = "",
+    source_format: Annotated[
+        str,
+        typer.Option(
+            "--source-format", help="Filter by source format (.pdf, .py, etc.)"
+        ),
+    ] = "",
     database: DbOption = "",
 ) -> None:
     """Search indexed documents."""
@@ -121,13 +131,20 @@ def search_cmd(
 
     query_vector = get_embedding_backend(settings).embed_query(query)
     results = search(
-        db, query_vector, limit=limit, collection_filter=collection or None
+        db,
+        query_vector,
+        limit=limit,
+        collection_filter=collection or None,
+        page_type_filter=page_type or None,
+        source_format_filter=source_format or None,
     )
 
     for r in results:
         similarity = round(1 - float(str(r.get("_distance", 0))), 4)
+        meta = f"{r['page_type']}/{r['source_format']}"
         print(
-            f"\n[{r['document_name']} p.{r['page_number']}] (similarity: {similarity})"
+            f"\n[{r['document_name']} p.{r['page_number']} | {meta}]"
+            f" (similarity: {similarity})"
         )
         text = str(r["text"])
         print(text[:300])
