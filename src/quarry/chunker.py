@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime
 
-from quarry.models import Chunk, PageContent
+from quarry.models import Chunk, PageContent, stored_page_type
 
 SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 
@@ -15,6 +15,7 @@ def chunk_pages(
     max_chars: int = 1800,
     overlap_chars: int = 200,
     collection: str = "default",
+    source_format: str = "",
 ) -> list[Chunk]:
     """Split page contents into overlapping chunks for embedding.
 
@@ -26,6 +27,8 @@ def chunk_pages(
         max_chars: Target max characters per chunk (~450 tokens).
         overlap_chars: Character overlap between consecutive chunks.
         collection: Collection name for the chunks.
+        source_format: File extension (e.g. ``".pdf"``) or ``"inline"``
+            for programmatically supplied text.
 
     Returns:
         List of Chunk objects ready for embedding.
@@ -51,6 +54,8 @@ def chunk_pages(
                     chunk_index=chunk_index,
                     text=chunk_text,
                     page_raw_text=page.text,
+                    page_type=stored_page_type(page.page_type),
+                    source_format=source_format,
                     ingestion_timestamp=now,
                 )
             )

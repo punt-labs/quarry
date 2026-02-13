@@ -99,7 +99,7 @@ def process_raw_text(
         format_hint = _detect_format(text)
         logger.debug("Auto-detected format: %s", format_hint)
 
-    return _split_by_format(text, format_hint, document_name, "<string>")
+    return _split_by_format(text, format_hint, document_name, "")
 
 
 def _detect_format(text: str) -> str:

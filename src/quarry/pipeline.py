@@ -199,6 +199,7 @@ def ingest_pdf(
         settings,
         progress,
         collection=collection,
+        source_format=".pdf",
         total_pages=total_pages,
         text_pages=len(text_pages),
         image_pages=len(image_pages),
@@ -249,6 +250,7 @@ def ingest_text_file(
         settings,
         progress,
         collection=collection,
+        source_format=file_path.suffix.lower(),
         sections=len(pages),
     )
 
@@ -297,6 +299,7 @@ def ingest_code_file(
         settings,
         progress,
         collection=collection,
+        source_format=file_path.suffix.lower(),
         definitions=len(pages),
     )
 
@@ -377,6 +380,7 @@ def ingest_image(
         settings,
         progress,
         collection=collection,
+        source_format=file_path.suffix.lower(),
         file_format=analysis.format,
         image_pages=1,
     )
@@ -514,6 +518,7 @@ def _ingest_multipage_image(
         settings,
         progress,
         collection=collection,
+        source_format=file_path.suffix.lower(),
         file_format="TIFF",
         image_pages=page_count,
     )
@@ -562,6 +567,7 @@ def ingest_text_content(
         settings,
         progress,
         collection=collection,
+        source_format="inline",
         sections=len(pages),
     )
 
@@ -587,6 +593,7 @@ def _chunk_embed_store(
     progress: Callable[..., None],
     *,
     collection: str = "default",
+    source_format: str = "",
     total_pages: int | None = None,
     text_pages: int | None = None,
     image_pages: int | None = None,
@@ -601,6 +608,7 @@ def _chunk_embed_store(
         max_chars=settings.chunk_max_chars,
         overlap_chars=settings.chunk_overlap_chars,
         collection=collection,
+        source_format=source_format,
     )
     progress("Created %d chunks", len(chunks))
 

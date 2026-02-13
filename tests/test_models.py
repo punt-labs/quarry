@@ -5,13 +5,27 @@ from datetime import UTC, datetime
 
 import pytest
 
-from quarry.models import Chunk, PageAnalysis, PageContent, PageType
+from quarry.models import Chunk, PageAnalysis, PageContent, PageType, stored_page_type
 
 
 class TestPageType:
     def test_values(self):
         assert PageType.TEXT.value == "text"
         assert PageType.IMAGE.value == "image"
+
+
+class TestStoredPageType:
+    def test_text_maps_to_text(self):
+        assert stored_page_type(PageType.TEXT) == "text"
+
+    def test_image_maps_to_text(self):
+        assert stored_page_type(PageType.IMAGE) == "text"
+
+    def test_section_maps_to_text(self):
+        assert stored_page_type(PageType.SECTION) == "text"
+
+    def test_code_maps_to_code(self):
+        assert stored_page_type(PageType.CODE) == "code"
 
 
 class TestPageAnalysis:
@@ -67,11 +81,15 @@ class TestChunk:
             chunk_index=0,
             text="chunk text",
             page_raw_text="full page text",
+            page_type="text",
+            source_format=".pdf",
             ingestion_timestamp=now,
         )
         assert chunk.collection == "default"
         assert chunk.text == "chunk text"
         assert chunk.page_raw_text == "full page text"
+        assert chunk.page_type == "text"
+        assert chunk.source_format == ".pdf"
         assert chunk.ingestion_timestamp == now
 
     def test_frozen(self):
@@ -85,6 +103,8 @@ class TestChunk:
             chunk_index=0,
             text="chunk text",
             page_raw_text="full page text",
+            page_type="text",
+            source_format=".pdf",
             ingestion_timestamp=now,
         )
         with pytest.raises(dataclasses.FrozenInstanceError):

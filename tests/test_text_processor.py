@@ -154,10 +154,10 @@ class TestProcessRawText:
         # With plain hint, splits on blank lines, not headings
         assert len(pages) == 2
 
-    def test_document_path_is_string_marker(self):
+    def test_document_path_is_empty_for_inline(self):
         pages = process_raw_text("Hello.", "test.txt")
 
-        assert pages[0].document_path == "<string>"
+        assert pages[0].document_path == ""
 
     def test_empty_text_produces_no_pages(self):
         pages = process_raw_text("", "empty.txt")

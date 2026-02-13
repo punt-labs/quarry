@@ -93,6 +93,8 @@ class TestIngestDocument:
                 chunk_index=0,
                 text="chunk",
                 page_raw_text="full",
+                page_type="text",
+                source_format=".pdf",
                 ingestion_timestamp=datetime.now(tz=UTC),
             )
         ]
@@ -142,6 +144,8 @@ class TestIngestDocument:
                 chunk_index=0,
                 text="ocr text",
                 page_raw_text="ocr text",
+                page_type="text",
+                source_format=".pdf",
                 ingestion_timestamp=datetime.now(tz=UTC),
             )
         ]
@@ -266,6 +270,8 @@ class TestIngestDocument:
                 chunk_index=0,
                 text="Hello.",
                 page_raw_text="Hello.",
+                page_type="text",
+                source_format=".txt",
                 ingestion_timestamp=datetime.now(tz=UTC),
             )
         ]
@@ -306,13 +312,15 @@ class TestIngestText:
         chunks = [
             Chunk(
                 document_name="clip.txt",
-                document_path="<string>",
+                document_path="",
                 collection="default",
                 page_number=1,
                 total_pages=1,
                 chunk_index=0,
                 text="Hello world",
                 page_raw_text="Hello world",
+                page_type="text",
+                source_format="inline",
                 ingestion_timestamp=datetime.now(tz=UTC),
             )
         ]

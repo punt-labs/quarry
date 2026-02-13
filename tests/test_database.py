@@ -32,6 +32,8 @@ def _make_chunk(
     text: str = "test chunk text",
     document_name: str = "test.pdf",
     collection: str = "default",
+    page_type: str = "text",
+    source_format: str = ".pdf",
 ) -> Chunk:
     return Chunk(
         document_name=document_name,
@@ -42,6 +44,8 @@ def _make_chunk(
         chunk_index=chunk_index,
         text=text,
         page_raw_text=f"raw text page {page_number}",
+        page_type=page_type,
+        source_format=source_format,
         ingestion_timestamp=datetime.now(tz=UTC),
     )
 

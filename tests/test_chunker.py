@@ -103,7 +103,9 @@ class TestChunkPages:
             text="Content here.",
             page_type=PageType.IMAGE,
         )
-        result = chunk_pages([page], max_chars=100, overlap_chars=20)
+        result = chunk_pages(
+            [page], max_chars=100, overlap_chars=20, source_format=".pdf"
+        )
         assert len(result) == 1
         assert result[0].document_name == "report.pdf"
         assert result[0].document_path == "/data/report.pdf"
@@ -114,3 +116,30 @@ class TestChunkPages:
         page = _make_page("Some text.")
         result = chunk_pages([page], max_chars=100, overlap_chars=20)
         assert result[0].ingestion_timestamp is not None
+
+    def test_page_type_mapped_from_page_content(self):
+        text_page = _make_page("Text content.")
+        code_page = PageContent(
+            document_name="main.py",
+            document_path="/tmp/main.py",
+            page_number=1,
+            total_pages=1,
+            text="def foo(): pass",
+            page_type=PageType.CODE,
+        )
+        text_result = chunk_pages([text_page], max_chars=100, overlap_chars=20)
+        code_result = chunk_pages([code_page], max_chars=100, overlap_chars=20)
+        assert text_result[0].page_type == "text"
+        assert code_result[0].page_type == "code"
+
+    def test_source_format_propagated(self):
+        page = _make_page("Some text.")
+        result = chunk_pages(
+            [page], max_chars=100, overlap_chars=20, source_format=".md"
+        )
+        assert result[0].source_format == ".md"
+
+    def test_source_format_defaults_to_empty(self):
+        page = _make_page("Some text.")
+        result = chunk_pages([page], max_chars=100, overlap_chars=20)
+        assert result[0].source_format == ""

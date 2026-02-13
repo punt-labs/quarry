@@ -34,6 +34,8 @@ def _make_chunks(document_name: str, path: str) -> list[Chunk]:
             chunk_index=0,
             text="ocr text",
             page_raw_text="ocr text",
+            page_type="text",
+            source_format=".png",
             ingestion_timestamp=datetime.now(tz=UTC),
         )
     ]
@@ -297,6 +299,8 @@ class TestIngestImageMultiPage:
                 chunk_index=0,
                 text="page 1 text",
                 page_raw_text="page 1 text",
+                page_type="text",
+                source_format=".tiff",
                 ingestion_timestamp=datetime.now(tz=UTC),
             )
         ]

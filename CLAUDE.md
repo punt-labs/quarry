@@ -62,12 +62,41 @@ This project uses **beads** (`bd`) for issue tracking. See `.beads/README.md` fo
 | Discovered work to track | Immediate TODO items |
 
 ```bash
-bd ready                    # Show issues ready to work
+bd ready --limit=99         # Show ALL issues ready to work
 bd show <id>                # View issue details
 bd update <id> --status=in_progress   # Claim work
 bd close <id>               # Mark complete
 bd sync                     # Sync with git remote
 ```
+
+### Workflow Tiers
+
+Match the workflow to the bead's scope. The deciding factor is **design ambiguity**, not size.
+
+| Tier | Tool | When | Tracking |
+|------|------|------|----------|
+| **T1: Forge** | `/feature-forge` | Epics, cross-cutting work, competing design approaches | Beads with dependencies |
+| **T2: Feature Dev** | `/feature-dev` | Features, multi-file, clear goal but needs exploration | Beads + TodoWrite (internal) |
+| **T3: Direct** | Plan mode or manual | Tasks, bugs, obvious implementation path | Beads |
+
+**Decision flow:**
+
+1. Is there design ambiguity needing multi-perspective input? → **T1: Forge**
+2. Does it touch multiple files and benefit from codebase exploration? → **T2: Feature Dev**
+3. Otherwise → **T3: Direct** (plan mode if >3 files, manual if fewer)
+
+**Bead type mapping:**
+
+| Bead Scope | Default Tier | Override When |
+|------------|-------------|---------------|
+| Epic (multi-bead, dependencies) | T1: Forge | Design decisions already settled → T2 |
+| Feature (new capability) | T2: Feature Dev | Cross-cutting with design ambiguity → T1 |
+| Task (focused, single-concern) | T3: Direct | Scope expands during work → escalate to T2 |
+| Bug | T3: Direct | Root-cause unclear across subsystems → T2 |
+
+**Escalation only goes up.** If T3 reveals unexpected scope, escalate to T2. If T2 reveals competing design approaches, escalate to T1. Never demote mid-flight.
+
+**Ralph-loop** is a tool *within* tiers, not a tier itself. Use it in any tier when a sub-task has clear, testable success criteria and may need iteration.
 
 ### GitHub Operations
 

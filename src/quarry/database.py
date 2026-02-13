@@ -41,6 +41,8 @@ def _schema(embedding_dimension: int = 768) -> pa.Schema:
             pa.field("total_pages", pa.int32()),
             pa.field("chunk_index", pa.int32()),
             pa.field("page_raw_text", pa.utf8()),
+            pa.field("page_type", pa.utf8()),
+            pa.field("source_format", pa.utf8()),
             pa.field("ingestion_timestamp", pa.timestamp("us", tz="UTC")),
         ]
     )
