@@ -10,8 +10,11 @@ from quarry.embeddings import OnnxEmbeddingBackend
 def _mock_session() -> MagicMock:
     """Create a mock ONNX InferenceSession that returns zeros."""
     session = MagicMock()
-    # Shape: (batch, seq_len, hidden_dim) — CLS token at index 0
-    session.run.return_value = (np.zeros((1, 5, 768), dtype=np.float32),)
+    # Model returns (token_embeddings, sentence_embedding)
+    session.run.return_value = (
+        np.zeros((1, 5, 768), dtype=np.float32),
+        np.zeros((1, 768), dtype=np.float32),
+    )
     return session
 
 
@@ -45,10 +48,10 @@ class TestEmbedTexts:
     def test_returns_embeddings(self):
         session = _mock_session()
         tokenizer = _mock_tokenizer()
-        hidden = (
-            np.random.default_rng(0).standard_normal((3, 5, 768)).astype(np.float32)
-        )
-        session.run.return_value = (hidden,)
+        rng = np.random.default_rng(0)
+        token_emb = rng.standard_normal((3, 5, 768)).astype(np.float32)
+        sentence_emb = rng.standard_normal((3, 768)).astype(np.float32)
+        session.run.return_value = (token_emb, sentence_emb)
 
         p1, p2, p3 = _patch_onnx_backend(session, tokenizer)
         with p1, p2, p3:
@@ -56,27 +59,23 @@ class TestEmbedTexts:
             result = backend.embed_texts(["a", "b", "c"])
 
         assert result.shape == (3, 768)
-        # Verify normalization: each vector should have unit norm
-        norms = np.linalg.norm(result, axis=1)
-        np.testing.assert_allclose(norms, 1.0, atol=1e-6)
+        # Result should be the sentence_embedding output directly
+        np.testing.assert_array_equal(result, sentence_emb)
 
-    def test_cls_pooling(self):
-        """Verify CLS token (index 0) is used for pooling."""
+    def test_uses_sentence_embedding_not_token_embeddings(self):
+        """Verify the model's sentence_embedding output is used directly."""
         session = _mock_session()
         tokenizer = _mock_tokenizer()
-        hidden = np.zeros((1, 5, 768), dtype=np.float32)
-        # Set CLS token to a known vector
-        hidden[0, 0, :] = 1.0
-        session.run.return_value = (hidden,)
+        token_emb = np.ones((1, 5, 768), dtype=np.float32)
+        sentence_emb = np.full((1, 768), 0.5, dtype=np.float32)
+        session.run.return_value = (token_emb, sentence_emb)
 
         p1, p2, p3 = _patch_onnx_backend(session, tokenizer)
         with p1, p2, p3:
             backend = OnnxEmbeddingBackend()
             result = backend.embed_texts(["test"])
 
-        # After normalization, should be 1/sqrt(768) in each dimension
-        expected_val = 1.0 / np.sqrt(768)
-        np.testing.assert_allclose(result[0], expected_val, atol=1e-6)
+        np.testing.assert_array_equal(result[0], sentence_emb[0])
 
     def test_empty_texts_returns_empty_array(self):
         session = _mock_session()

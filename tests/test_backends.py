@@ -56,8 +56,10 @@ def _embedding_backend_patches() -> tuple[
 ]:
     """Patches so get_embedding_backend() works without downloaded ONNX model."""
     session = MagicMock()
+    rng = np.random.default_rng(0)
     session.run.return_value = (
-        np.random.default_rng(0).standard_normal((1, 5, 768)).astype(np.float32),
+        rng.standard_normal((1, 5, 768)).astype(np.float32),
+        rng.standard_normal((1, 768)).astype(np.float32),
     )
     tokenizer = MagicMock()
     enc = MagicMock()
@@ -192,8 +194,10 @@ class TestOnnxEmbeddingBackend:
 
     def _mock_onnx(self) -> tuple[MagicMock, MagicMock]:
         session = MagicMock()
+        rng = np.random.default_rng(0)
         session.run.return_value = (
-            np.random.default_rng(0).standard_normal((1, 5, 768)).astype(np.float32),
+            rng.standard_normal((1, 5, 768)).astype(np.float32),
+            rng.standard_normal((1, 768)).astype(np.float32),
         )
         tokenizer = MagicMock()
         enc = MagicMock()
@@ -204,10 +208,10 @@ class TestOnnxEmbeddingBackend:
 
     def test_embed_texts_returns_correct_shape(self) -> None:
         session, tokenizer = self._mock_onnx()
-        hidden = (
-            np.random.default_rng(0).standard_normal((3, 5, 768)).astype(np.float32)
-        )
-        session.run.return_value = (hidden,)
+        rng = np.random.default_rng(0)
+        token_emb = rng.standard_normal((3, 5, 768)).astype(np.float32)
+        sentence_emb = rng.standard_normal((3, 768)).astype(np.float32)
+        session.run.return_value = (token_emb, sentence_emb)
 
         with (
             patch(
