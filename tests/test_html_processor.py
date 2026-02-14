@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 
-from quarry.models import PageType
 from quarry.html_processor import (
     SUPPORTED_HTML_EXTENSIONS,
     _extract_title,
@@ -13,6 +12,7 @@ from quarry.html_processor import (
     _strip_boilerplate,
     process_html_file,
 )
+from quarry.models import PageType
 
 
 class TestSupportedExtensions:
@@ -93,9 +93,7 @@ class TestExtractTitle:
     def test_strips_whitespace(self):
         from bs4 import BeautifulSoup
 
-        soup = BeautifulSoup(
-            "<title>  Spaced Title  </title>", "html.parser"
-        )
+        soup = BeautifulSoup("<title>  Spaced Title  </title>", "html.parser")
         assert _extract_title(soup) == "Spaced Title"
 
     def test_no_title_returns_empty(self):
@@ -123,8 +121,7 @@ class TestHtmlToMarkdown:
 
     def test_tables(self):
         md = _html_to_markdown(
-            "<table><tr><th>A</th><th>B</th></tr>"
-            "<tr><td>1</td><td>2</td></tr></table>"
+            "<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>"
         )
         assert "A" in md
         assert "B" in md
@@ -166,9 +163,7 @@ class TestProcessHTMLFile:
 
     def test_metadata(self, tmp_path: Path):
         f = tmp_path / "article.html"
-        f.write_text(
-            "<html><body><h1>Title</h1><p>Content.</p></body></html>"
-        )
+        f.write_text("<html><body><h1>Title</h1><p>Content.</p></body></html>")
 
         pages = process_html_file(f)
 
@@ -253,9 +248,7 @@ class TestProcessHTMLFile:
 
     def test_html_entities_decoded(self, tmp_path: Path):
         f = tmp_path / "entities.html"
-        f.write_text(
-            "<html><body><p>Price: &lt;$100 &amp; worth it</p></body></html>"
-        )
+        f.write_text("<html><body><p>Price: &lt;$100 &amp; worth it</p></body></html>")
 
         pages = process_html_file(f)
 
@@ -288,9 +281,7 @@ class TestProcessHTMLFile:
 
     def test_special_chars_in_content(self, tmp_path: Path):
         f = tmp_path / "special.html"
-        f.write_text(
-            "<html><body><p>Revenue was $4.2M (12% growth)</p></body></html>"
-        )
+        f.write_text("<html><body><p>Revenue was $4.2M (12% growth)</p></body></html>")
 
         pages = process_html_file(f)
 
@@ -353,9 +344,7 @@ class TestProcessHTMLFileEdgeCases:
 
     def test_encoding_fallback(self, tmp_path: Path):
         f = tmp_path / "cp1252.html"
-        f.write_bytes(
-            b"<html><body><p>\x93Smart quotes\x94 here</p></body></html>"
-        )
+        f.write_bytes(b"<html><body><p>\x93Smart quotes\x94 here</p></body></html>")
 
         pages = process_html_file(f)
 

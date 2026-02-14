@@ -15,6 +15,10 @@ from quarry.chunker import chunk_pages
 from quarry.code_processor import SUPPORTED_CODE_EXTENSIONS, process_code_file
 from quarry.config import Settings
 from quarry.database import delete_document, insert_chunks
+from quarry.html_processor import (
+    SUPPORTED_HTML_EXTENSIONS,
+    process_html_file,
+)
 from quarry.image_analyzer import (
     SUPPORTED_IMAGE_EXTENSIONS,
     analyze_image,
@@ -22,10 +26,6 @@ from quarry.image_analyzer import (
 from quarry.models import PageContent, PageType
 from quarry.pdf_analyzer import analyze_pdf
 from quarry.results import IngestResult
-from quarry.html_processor import (
-    SUPPORTED_HTML_EXTENSIONS,
-    process_html_file,
-)
 from quarry.spreadsheet_processor import (
     SUPPORTED_SPREADSHEET_EXTENSIONS,
     process_spreadsheet_file,

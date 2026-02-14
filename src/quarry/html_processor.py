@@ -114,6 +114,4 @@ def process_html_file(
         return []
 
     document_path = str(file_path.resolve())
-    return _sections_to_pages(
-        sections, resolved_name, document_path, PageType.SECTION
-    )
+    return _sections_to_pages(sections, resolved_name, document_path, PageType.SECTION)

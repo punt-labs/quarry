@@ -336,6 +336,45 @@ class TestIngestDocument:
         assert result["chunks"] == 1
         assert result["sheets"] == 1
 
+    def test_dispatches_html_file(self, monkeypatch, tmp_path: Path):
+        html_file = tmp_path / "article.html"
+        html_file.write_text("<html><body><h1>Title</h1><p>Content.</p></body></html>")
+
+        chunks = [
+            Chunk(
+                document_name="article.html",
+                document_path=str(html_file),
+                collection="default",
+                page_number=1,
+                total_pages=1,
+                chunk_index=0,
+                text="Title Content.",
+                page_raw_text="Title Content.",
+                page_type="text",
+                source_format=".html",
+                ingestion_timestamp=datetime.now(tz=UTC),
+            )
+        ]
+        vectors = np.zeros((1, 768), dtype=np.float32)
+
+        monkeypatch.setattr(
+            "quarry.pipeline.chunk_pages",
+            lambda _pages, max_chars, overlap_chars, **_kw: chunks,
+        )
+        _mock_embedding_backend(monkeypatch, vectors)
+        monkeypatch.setattr(
+            "quarry.pipeline.insert_chunks",
+            lambda _db, _chunks, _vectors: 1,
+        )
+
+        from quarry.pipeline import ingest_document
+
+        db = MagicMock()
+        result = ingest_document(html_file, db, _settings())
+
+        assert result["document_name"] == "article.html"
+        assert result["chunks"] == 1
+
     def test_unsupported_format_raises(self, tmp_path: Path):
         zip_file = tmp_path / "archive.zip"
         zip_file.write_bytes(b"PK\x03\x04")
