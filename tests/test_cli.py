@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -369,12 +370,15 @@ class TestSyncCmd:
 
 
 class TestDatabasesCmd:
-    def test_lists_databases(self, tmp_path: Path):
+    def _setup_databases(self, tmp_path: Path) -> MagicMock:
         settings = _mock_settings()
         settings.quarry_root = tmp_path
-        # Create two database dirs with lancedb subdirs
         (tmp_path / "default" / "lancedb").mkdir(parents=True)
         (tmp_path / "work" / "lancedb").mkdir(parents=True)
+        return settings
+
+    def test_lists_databases(self, tmp_path: Path):
+        settings = self._setup_databases(tmp_path)
         with (
             patch(
                 "quarry.__main__._resolved_settings",
@@ -399,6 +403,40 @@ class TestDatabasesCmd:
             result = runner.invoke(app, ["databases"])
         assert result.exit_code == 0
         assert "No databases found" in result.output
+
+    def test_json_output(self, tmp_path: Path):
+        settings = self._setup_databases(tmp_path)
+        with (
+            patch(
+                "quarry.__main__._resolved_settings",
+                return_value=settings,
+            ),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.list_documents", return_value=[]),
+        ):
+            result = runner.invoke(app, ["databases", "--json"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert isinstance(data, list)
+        assert len(data) == 2
+        assert data[0]["name"] == "default"
+        assert data[1]["name"] == "work"
+        assert data[0]["document_count"] == 0
+        assert "size_bytes" in data[0]
+        assert "size_description" in data[0]
+
+    def test_json_empty(self, tmp_path: Path):
+        settings = _mock_settings()
+        settings.quarry_root = tmp_path / "nonexistent"
+        with patch(
+            "quarry.__main__._resolved_settings",
+            return_value=settings,
+        ):
+            result = runner.invoke(app, ["databases", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data == []
 
 
 class TestDbOption:
@@ -572,7 +610,7 @@ class TestDatabasesCmdSizeFormatting:
         ):
             result = runner.invoke(app, ["databases"])
         assert result.exit_code == 0
-        assert "KB" in result.output
+        assert "512 bytes" in result.output
 
     def test_skips_non_database_dirs(self, tmp_path: Path):
         settings = _mock_settings()

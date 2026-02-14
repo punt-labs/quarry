@@ -62,3 +62,12 @@ class CollectionSummary(TypedDict):
     collection: str
     document_count: int
     chunk_count: int
+
+
+class DatabaseSummary(TypedDict):
+    """Summary of a named database from the databases command."""
+
+    name: str
+    document_count: int
+    size_bytes: int
+    size_description: str
