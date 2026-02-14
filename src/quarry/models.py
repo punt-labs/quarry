@@ -13,6 +13,7 @@ class PageType(enum.Enum):
     SECTION = "section"
     CODE = "code"
     SPREADSHEET = "spreadsheet"
+    PRESENTATION = "presentation"
 
 
 def stored_page_type(pt: PageType) -> str:
@@ -20,11 +21,12 @@ def stored_page_type(pt: PageType) -> str:
 
     TEXT, IMAGE, and SECTION all represent prose content and map to
     ``"text"``.  CODE maps to ``"code"``.  SPREADSHEET maps to
-    ``"spreadsheet"``.
+    ``"spreadsheet"``.  PRESENTATION maps to ``"presentation"``.
     """
     mapping: dict[PageType, str] = {
         PageType.CODE: "code",
         PageType.SPREADSHEET: "spreadsheet",
+        PageType.PRESENTATION: "presentation",
     }
     return mapping.get(pt, "text")
 
@@ -43,6 +45,7 @@ class PageContent:
     For PDFs, page_number and total_pages are physical page indices.
     For text/code files, they represent logical section indices (e.g.
     markdown heading, code definition) — "page" means "section" there.
+    For presentations, each slide is one page.
     """
 
     document_name: str
