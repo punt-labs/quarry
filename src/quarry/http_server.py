@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import signal
+import threading
 import time
 from functools import cached_property
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -134,7 +135,7 @@ class QuarryHTTPHandler(BaseHTTPRequestHandler):
 
         limit_str = self._param(params, "limit", "10")
         try:
-            limit = min(int(limit_str), 50)
+            limit = max(1, min(int(limit_str), 50))
         except ValueError:
             limit = 10
 
@@ -257,12 +258,18 @@ def serve(settings: Settings, port: int = 0) -> None:
     server = QuarryHTTPServer(("127.0.0.1", port), ctx)
     actual_port = server.server_address[1]
 
-    _write_port_file(port_path, actual_port)
+    try:
+        _write_port_file(port_path, actual_port)
+    except Exception:
+        logger.exception("Failed to write port file: %s", port_path)
+        server.server_close()
+        raise
 
     def _shutdown(signum: int, _frame: object) -> None:
         logger.info("Received signal %d, shutting down", signum)
         _remove_port_file(port_path)
-        server.shutdown()
+        # Run shutdown in a thread to avoid deadlocking serve_forever()
+        threading.Thread(target=server.shutdown, daemon=True).start()
 
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)

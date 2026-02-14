@@ -107,7 +107,6 @@ ignore = [
 "tests/*" = ["S101", "S106", "S108", "T20", "SLF001", "ARG", "PLC0415", "A002"]
 "src/quarry/__main__.py" = ["T20", "FBT"]
 "src/quarry/mcp_server.py" = ["T20", "FBT"]
-"src/quarry/http_server.py" = ["FBT"]
 
 [tool.ruff.format]
 quote-style = "double"

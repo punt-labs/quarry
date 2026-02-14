@@ -54,7 +54,7 @@ Server lifecycle:
   1. Parse --port (default: 0 = OS assigns), --db
   2. Load settings, initialize embedding backend (model loads here)
   3. Write port to ~/.quarry/data/<db>/serve.port
-  4. Start aiohttp server on localhost:<port>
+  4. Start stdlib http.server on localhost:<port>
   5. On SIGTERM/SIGINT: delete serve.port, shutdown gracefully
 ```
 
@@ -196,7 +196,7 @@ class SearchViewModel {
 
 ### Testing Strategy
 - **Python (ocr repo)**: Integration tests for HTTP server endpoints using
-  `aiohttp.test_utils`. Test search, documents, collections, status, health.
+  stdlib `urllib` client. Test search, documents, collections, status, health.
   Mock LanceDB for unit tests.
 - **Swift (quarry-menubar)**: Unit tests for QuarryClient (mock URLProtocol),
   DaemonManager (mock Process), SearchViewModel (mock QuarryClient).
@@ -212,7 +212,7 @@ class SearchViewModel {
 
 **Phase A: Python HTTP Server (ocr repo)**
 
-1. **Add `quarry serve` HTTP server** — New `http_server.py` with aiohttp,
+1. **Add `quarry serve` HTTP server** — New `http_server.py` with stdlib `http.server`,
    endpoints for /health, /search, /documents, /collections, /status.
    Port file management. SIGTERM handling. `__main__.py` gets `serve` command.
    Priority: P1, Type: feature.

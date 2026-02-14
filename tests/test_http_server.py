@@ -148,6 +148,13 @@ class TestSearch:
         _, kwargs = mock_search.call_args
         assert kwargs["limit"] == 50
 
+    def test_search_negative_limit_clamped_to_1(self, server_url: str):
+        with patch("quarry.http_server.search", return_value=[]) as mock_search:
+            _get(f"{server_url}/search?q=hello&limit=-5")
+
+        _, kwargs = mock_search.call_args
+        assert kwargs["limit"] == 1
+
     def test_search_with_collection_filter(self, server_url: str):
         with patch("quarry.http_server.search", return_value=[]) as mock_search:
             _get(f"{server_url}/search?q=hello&collection=research")
