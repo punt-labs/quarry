@@ -525,7 +525,7 @@ def _ingest_multipage_image(
 
 
 def ingest_content(
-    text: str,
+    content: str,
     document_name: str,
     db: LanceDB,
     settings: Settings,
@@ -535,10 +535,10 @@ def ingest_content(
     format_hint: str = "auto",
     progress_callback: Callable[[str], None] | None = None,
 ) -> IngestResult:
-    """Ingest raw text: split into sections, chunk, embed, store.
+    """Ingest inline content: split into sections, chunk, embed, store.
 
     Args:
-        text: Raw text content.
+        content: The text content to ingest.
         document_name: Name for the document.
         db: LanceDB connection.
         settings: Application settings.
@@ -557,7 +557,7 @@ def ingest_content(
     if overwrite:
         delete_document(db, document_name, collection=collection)
 
-    pages = process_raw_text(text, document_name, format_hint=format_hint)
+    pages = process_raw_text(content, document_name, format_hint=format_hint)
     progress("Sections: %d", len(pages))
 
     return _chunk_embed_store(
