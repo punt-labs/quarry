@@ -122,9 +122,10 @@ class OnnxEmbeddingBackend:
 
         if n > 256:
             logger.warning(
-                "Large embedding request (%d texts). "
-                "Consider chunking at the document level.",
+                "Large embedding request (%d texts, %d batches). "
+                "This document is unusually large; embedding will be slow.",
                 n,
+                n_batches,
             )
 
         parts: list[NDArray[np.float32]] = []
