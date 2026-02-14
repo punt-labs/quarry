@@ -5,6 +5,7 @@
 [![Python 3.13+](https://img.shields.io/pypi/pyversions/quarry-mcp)](https://pypi.org/project/quarry-mcp/)
 [![Tests](https://github.com/jmf-pobox/quarry-mcp/actions/workflows/test.yml/badge.svg)](https://github.com/jmf-pobox/quarry-mcp/actions/workflows/test.yml)
 [![Lint](https://github.com/jmf-pobox/quarry-mcp/actions/workflows/lint.yml/badge.svg)](https://github.com/jmf-pobox/quarry-mcp/actions/workflows/lint.yml)
+[![codecov](https://codecov.io/gh/jmf-pobox/quarry-mcp/graph/badge.svg)](https://codecov.io/gh/jmf-pobox/quarry-mcp)
 
 Unlock the knowledge trapped on your hard drive. Works with Claude Code and Claude Desktop.
 
@@ -246,6 +247,35 @@ Connectors                Formats              Transformations
                                                     └─ CLI (typer + rich)
 ```
 
+## Library API
+
+Quarry is fully typed (`py.typed`) and can be used as a Python library:
+
+```python
+from pathlib import Path
+from quarry import Settings, get_db, ingest_content, ingest_document, search
+from quarry.backends import get_embedding_backend
+
+# Load settings from environment variables
+settings = Settings()
+db = get_db(settings.lancedb_path)
+
+# Ingest a file
+result = ingest_document(Path("report.pdf"), db, settings, collection="work")
+
+# Ingest inline content
+result = ingest_content("Quarterly revenue was $4.2M.", "notes.txt", db, settings)
+
+# Search
+backend = get_embedding_backend(settings)
+vector = backend.embed("revenue figures")
+results = search(db, vector, limit=5, collection_filter="work")
+for r in results:
+    print(r["text"], r["_distance"])
+```
+
+The public API surface is in `quarry/__init__.py`. Pipeline functions accept a `progress_callback: Callable[[str], None]` for status updates during ingestion.
+
 ## Roadmap
 
 - Spreadsheets (XLSX, CSV) via LaTeX tabular serialization
@@ -264,6 +294,16 @@ uv run ruff format --check .
 uv run mypy src/ tests/
 uv run pytest
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, architecture, and how to add new formats.
+
+## Documentation
+
+- [Changelog](CHANGELOG.md)
+- [Search Quality and Tuning](docs/SEARCH-TUNING.md)
+- [Backend Abstraction Design](docs/BACKEND-ABSTRACTION.md)
+- [Non-Functional Design](docs/NON-FUNCTIONAL-DESIGN.md)
+- [PR/FAQ](prfaq.pdf) -- product vision and positioning
 
 ## License
 
