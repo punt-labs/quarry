@@ -1,0 +1,622 @@
+\documentclass[11pt,letterpaper]{article}
+
+% ── Geometry ──────────────────────────────────────────────────────────────────
+\usepackage[margin=1in]{geometry}
+
+% ── Pagination ────────────────────────────────────────────────────────────────
+\widowpenalty=10000          % No widow lines (last line alone at page top)
+\clubpenalty=10000           % No orphan lines (first line alone at page bottom)
+\brokenpenalty=10000         % No hyphenated words across page breaks
+\raggedbottom                % Allow uneven page bottoms rather than stretching
+
+% ── Fonts ─────────────────────────────────────────────────────────────────────
+\usepackage[T1]{fontenc}
+\usepackage{newpxtext}     % Palatino-based serif (TeX Gyre Pagella)
+\usepackage{newpxmath}     % Matching math font
+
+% ── Colors ────────────────────────────────────────────────────────────────────
+\usepackage[dvipsnames]{xcolor}
+\definecolor{SectionBlue}{HTML}{1B3A5C}
+\definecolor{AccentGray}{HTML}{4A4A4A}
+\definecolor{QuoteBorder}{HTML}{8B9DAF}
+\definecolor{RiskRed}{HTML}{C0392B}
+\definecolor{RiskAmber}{HTML}{E67E22}
+\definecolor{RiskGreen}{HTML}{27AE60}
+\definecolor{BoxBg}{HTML}{F7F8FA}
+
+% ── Tables ────────────────────────────────────────────────────────────────────
+\usepackage{booktabs}
+\usepackage{tabularx}
+
+% ── Boxes ─────────────────────────────────────────────────────────────────────
+\usepackage[framemethod=tikz]{mdframed}
+
+% ── Lists ─────────────────────────────────────────────────────────────────────
+\usepackage{enumitem}
+
+% ── Hyperlinks ────────────────────────────────────────────────────────────────
+\usepackage{hyperref}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=SectionBlue,
+  urlcolor=SectionBlue,
+  pdfauthor={JM Freeman},
+  pdftitle={Quarry --- PR/FAQ},
+  pdfsubject={Working Backwards --- Product Discovery},
+}
+
+% ── Section styling ───────────────────────────────────────────────────────────
+\usepackage{titlesec}
+\titleformat{\section}
+  {\Large\bfseries\color{SectionBlue}}
+  {}
+  {0pt}
+  {}
+  [\vspace{-0.5em}\textcolor{QuoteBorder}{\rule{\textwidth}{0.4pt}}]
+
+\titleformat{\subsection}
+  {\large\bfseries\color{AccentGray}}
+  {}
+  {0pt}
+  {}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% Custom environments
+% ══════════════════════════════════════════════════════════════════════════════
+
+% ── \prsection{title} — styled press release section header ──────────────────
+\newcommand{\prsection}[1]{%
+  \vspace{1em}%
+  {\large\bfseries\color{SectionBlue}#1}%
+  \vspace{0.3em}\par%
+}
+
+% ── customerquote — indented, italic customer quote ──────────────────────────
+\newmdenv[
+  topline=false,
+  bottomline=false,
+  rightline=false,
+  linewidth=3pt,
+  linecolor=QuoteBorder,
+  backgroundcolor=BoxBg,
+  innerleftmargin=12pt,
+  innerrightmargin=12pt,
+  innertopmargin=8pt,
+  innerbottommargin=8pt,
+  skipabove=\baselineskip,
+  skipbelow=\baselineskip,
+]{customerquote}
+
+% ── spokespersonquote — indented spokesperson quote ──────────────────────────
+\newmdenv[
+  topline=false,
+  bottomline=false,
+  rightline=false,
+  linewidth=3pt,
+  linecolor=SectionBlue,
+  backgroundcolor=BoxBg,
+  innerleftmargin=12pt,
+  innerrightmargin=12pt,
+  innertopmargin=8pt,
+  innerbottommargin=8pt,
+  skipabove=\baselineskip,
+  skipbelow=\baselineskip,
+]{spokespersonquote}
+
+% ── faqpair — Q&A pair with bold question ────────────────────────────────────
+\newenvironment{faqpair}[1]{%
+  \vspace{0.5em}%
+  \noindent\textbf{\color{SectionBlue}Q: #1}\par%
+  \vspace{0.2em}%
+  \begin{adjustwidth}{1em}{0pt}%
+}{%
+  \end{adjustwidth}%
+  \vspace{0.5em}%
+}
+
+% ── riskmatrix — four-risks assessment table ─────────────────────────────────
+\newcommand{\riskmatrix}[4]{%
+  \vspace{1em}%
+  \begin{mdframed}[
+    linewidth=0.5pt,
+    linecolor=QuoteBorder,
+    backgroundcolor=BoxBg,
+    innerleftmargin=10pt,
+    innerrightmargin=10pt,
+    innertopmargin=10pt,
+    innerbottommargin=10pt,
+  ]
+  {\bfseries\color{SectionBlue}Four Risks Assessment}\par
+  \vspace{0.5em}
+  \begin{tabularx}{\linewidth}{@{}l X@{}}
+    \toprule
+    \textbf{Risk} & \textbf{Assessment} \\
+    \midrule
+    \textbf{Value}       & #1 \\
+    \textbf{Usability}   & #2 \\
+    \textbf{Feasibility} & #3 \\
+    \textbf{Viability}   & #4 \\
+    \bottomrule
+  \end{tabularx}
+  \end{mdframed}
+  \vspace{1em}%
+}
+
+% ── adjustwidth (for faqpair indentation) ────────────────────────────────────
+\usepackage{changepage}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% Document
+% ══════════════════════════════════════════════════════════════════════════════
+
+\begin{document}
+
+% ── Title block ───────────────────────────────────────────────────────────────
+\begin{center}
+  {\LARGE\bfseries\color{SectionBlue} Quarry} \\[0.5em]
+  {\large\color{AccentGray} Your LLM can finally search your hard drive} \\[1.5em]
+  {\small\color{AccentGray} February 2026 \quad|\quad JM Freeman \quad|\quad Open Source}
+\end{center}
+
+\vspace{1em}
+\textcolor{QuoteBorder}{\rule{\textwidth}{0.8pt}}
+\vspace{1em}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% PRESS RELEASE
+% ══════════════════════════════════════════════════════════════════════════════
+
+\section*{Press Release}
+
+\prsection{Summary}
+
+Today, the Quarry project announced the general availability of Quarry, a free,
+open-source tool that gives Claude instant access to everything on your computer.
+Quarry indexes PDFs, scanned documents, notes, source code, and images into a
+local semantic search engine, then exposes that knowledge to Claude Code, Claude
+Desktop, and Claude CoWork through the Model Context Protocol. Unlike uploading
+files to Projects or pointing your LLM at folders, Quarry lets Claude search
+your entire knowledge base by meaning---across every format, with no manual
+organization required.
+
+\prsection{Problem}
+
+People who use Claude for serious work---refactoring codebases, analyzing
+research, drafting from reference materials---hit the same wall every session.
+They spend 5--15 minutes gathering context before they can ask their real
+question. They upload PDFs to Projects. They copy-paste from old documents. They
+point Claude Code at directories and hope the right files get picked up. When the
+context window fills, they start over.
+
+The frustration compounds. A developer with ten years of reference PDFs, design
+documents, and archived codebases cannot make any of that knowledge available to
+Claude without manually curating it first. A researcher with hundreds of papers
+must decide which three are relevant before the conversation starts. The LLM is
+powerful, but it can only reason about what it can see---and most of what you know
+is invisible to it, trapped in files you haven't opened in months.
+
+\prsection{Solution}
+
+Quarry works in three steps: install, ingest, search. Run
+\texttt{pip install quarry-mcp} and \texttt{quarry install}. Point it at your
+files---\texttt{quarry ingest report.pdf}, or register an entire directory with
+\texttt{quarry register \texttildelow/Documents/research}. From that moment,
+Claude can search your indexed knowledge semantically, finding relevant passages
+by meaning rather than keywords.
+
+Every format is handled automatically. Text PDFs are extracted. Scanned documents
+and images are OCR'd---locally, with no cloud account. Source code is parsed into
+semantic units using Tree-sitter. Markdown, LaTeX, and DOCX files are split by
+section structure. The result is the same: chunks of knowledge that Claude can
+retrieve and reason about, with metadata indicating the document, page, content
+type, and source format.
+
+Because Quarry runs entirely on your machine, your documents never leave your
+laptop. There is no cloud service, no API key to manage, no subscription. The
+vector database, the embedding model, and the OCR engine all run locally.
+
+\prsection{Customer Quote}
+
+\begin{customerquote}
+\textit{``I have eight years of architecture decision records, design docs, and
+reference papers on this laptop. Before Quarry, Claude couldn't see any of it.
+I'd spend the first ten minutes of every session uploading the three PDFs I
+thought were relevant---and half the time I picked the wrong ones. Now I just
+ask my question and Claude finds what it needs. Last week it pulled a constraint
+from a 2019 design doc I'd completely forgotten about. That one save paid for
+the twenty minutes it took to set up.''}
+
+\raggedleft --- \textbf{Sarah Lindqvist}, Staff Engineer at a Series C startup
+\end{customerquote}
+
+\prsection{Getting Started}
+
+Getting started takes under five minutes and requires no accounts, API keys, or
+configuration:
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Install:} \texttt{pip install quarry-mcp \&\& quarry install}
+        downloads the embedding model and configures Claude Code and Claude
+        Desktop automatically.
+  \item \textbf{Ingest:} \texttt{quarry register \texttildelow/Documents/work
+        \&\& quarry sync} indexes an entire directory. Or ingest individual files
+        with \texttt{quarry ingest report.pdf}.
+  \item \textbf{Search:} Open Claude Code or Claude Desktop and ask a question.
+        Claude calls Quarry's search tool automatically---your indexed documents
+        are now part of every conversation.
+\end{enumerate}
+
+There is no cloud account to create, no API key to configure, and no subscription
+to manage. Everything runs on your machine.
+
+\prsection{Spokesperson Quote}
+
+\begin{spokespersonquote}
+``The bottleneck for LLM-assisted work isn't the model---it's the context. People
+have years of accumulated knowledge on their hard drives, and none of it is
+accessible to their LLM. We built Quarry because we believe the knowledge you
+already have should be available in every conversation, without you having to
+remember where it is or manually upload it. The Model Context Protocol made this
+possible: Quarry doesn't just index your files, it makes them a native part of
+how Claude thinks.''
+
+\raggedleft --- \textbf{JM Freeman}, Creator of Quarry
+\end{spokespersonquote}
+
+\prsection{Call to Action}
+
+Quarry is available now at \url{https://pypi.org/project/quarry-mcp/} and
+\url{https://github.com/jmf-pobox/quarry-mcp}. It is free, open source (MIT
+license), and always will be. Install it with \texttt{pip install quarry-mcp},
+run \texttt{quarry install}, and start searching.
+
+\newpage
+
+% ══════════════════════════════════════════════════════════════════════════════
+% FREQUENTLY ASKED QUESTIONS
+% ══════════════════════════════════════════════════════════════════════════════
+
+\section*{Frequently Asked Questions}
+
+% ── External FAQs (Customer-facing) ──────────────────────────────────────────
+
+\subsection*{External FAQs}
+
+\begin{faqpair}{What is Quarry and who is it for?}
+  Quarry is a local semantic search engine for your files that integrates with
+  Claude through MCP. It is for people who use Claude Code, Claude Desktop, or
+  Claude CoWork for real work---writing, coding, research, analysis---and are
+  tired of manually uploading files or organizing context folders before every
+  session. If you have documents on your hard drive that you wish Claude could
+  see, Quarry is for you.
+\end{faqpair}
+
+\begin{faqpair}{How is this different from uploading files to Claude Projects?}
+  Projects require you to select and upload files before every conversation. You
+  choose which documents are relevant, the context window limits how many you can
+  include, and when you start a new conversation, you start from scratch. Quarry
+  inverts this: you index your files once, and Claude searches them on demand
+  during any conversation. You don't decide what's relevant---Claude does, by
+  searching semantically across everything you've indexed. There is no context
+  window limit because Quarry returns only the relevant passages, not entire
+  files.
+\end{faqpair}
+
+\begin{faqpair}{How is this different from pointing Claude Code at a folder?}
+  When Claude Code reads a directory, it sees file contents but has no semantic
+  index. It reads files sequentially, consuming context window with every file it
+  opens. For a folder with 50 documents, Claude Code might exhaust its context
+  before finding the relevant passage. Quarry pre-indexes the content and returns
+  only the matching chunks, leaving the context window available for reasoning
+  rather than reading.
+\end{faqpair}
+
+\begin{faqpair}{What file formats does Quarry support?}
+  PDF (both text and scanned/image pages), images (PNG, JPG, TIFF, BMP, WebP),
+  text files (Markdown, LaTeX, plain text, DOCX), and source code in 30+
+  languages. Every format is converted to text optimized for LLM consumption.
+  Scanned documents and images are OCR'd locally---no cloud account needed.
+\end{faqpair}
+
+\begin{faqpair}{Does my data leave my computer?}
+  No. Quarry runs entirely on your machine. The vector database (LanceDB), the
+  embedding model (snowflake-arctic-embed-m-v1.5 via ONNX Runtime), and the OCR
+  engine (RapidOCR) all run locally. No data is sent to any cloud service. The
+  only optional cloud component is AWS Textract for higher-quality OCR of
+  degraded scans, and that is opt-in.
+\end{faqpair}
+
+\begin{faqpair}{How much does it cost?}
+  Free. Quarry is open source under the MIT license. There is no paid tier, no
+  usage limits, and no telemetry. The embedding model download is approximately
+  500\,MB; after that, everything runs offline.
+\end{faqpair}
+
+\begin{faqpair}{Can I use Quarry with tools other than Claude?}
+  Quarry exposes a standard MCP server over stdio. Any MCP-compatible client can
+  use it. Today that includes Claude Code, Claude Desktop, and Claude CoWork.
+  As other LLM tools adopt MCP, Quarry will work with them without modification.
+  The CLI also works standalone for direct search without any LLM.
+\end{faqpair}
+
+\begin{faqpair}{How does search quality compare to keyword search (Spotlight, grep)?}
+  Quarry uses semantic search: it finds passages by meaning, not by matching
+  words. Searching for ``authentication logic'' will find a function called
+  \texttt{verify\_credentials} even though the words don't overlap. This is
+  the same retrieval approach used by commercial RAG systems, running locally
+  with a 768-dimension embedding model.
+\end{faqpair}
+
+% ── Internal FAQs (Business-facing) ──────────────────────────────────────────
+
+\subsection*{Internal FAQs}
+
+\subsubsection*{Value \& Market}
+
+\begin{faqpair}{What is the total addressable market?}
+  Bottoms-up: Anthropic reported over 1 million Claude Code users as of early
+  2025. Claude Desktop and Claude CoWork add to this base. Among these users,
+  the power-user segment---those who have moved beyond simple Q\&A to using
+  Claude for complex, multi-document work---is the target. Conservatively
+  estimating this at 10--20\% of Claude tool users gives a TAM of hundreds of
+  thousands of individuals who would benefit from local document search. Because
+  Quarry is free, TAM is measured in adoption rather than revenue. Success means
+  becoming the default way Claude users make their local files accessible.
+\end{faqpair}
+
+\begin{faqpair}{What evidence do we have that users want this?}
+  Three categories of evidence:
+
+  \textbf{Behavioral:} Claude Desktop's Projects feature exists specifically
+  because users want to give Claude access to their documents. The friction of
+  uploading files and the context window limits are well-documented pain points
+  in the Claude community. Users routinely ask in forums how to make Claude
+  ``see'' their local files.
+
+  \textbf{Competitive:} Multiple RAG-as-a-service startups (Rewind AI,
+  Recall.ai, Mem) have raised significant funding on the premise that personal
+  knowledge should be searchable by AI. These products validate the demand but
+  require cloud accounts and subscriptions.
+
+  \textbf{Adjacent:} Obsidian's plugin ecosystem shows that knowledge workers
+  will invest significant effort to make their notes searchable by AI. Quarry
+  eliminates the need for a specific note-taking app by working with any file
+  format.
+\end{faqpair}
+
+\begin{faqpair}{Who are the competitors and why will we win?}
+  \textbf{Claude Projects / file uploads:} The incumbent workflow. Quarry wins
+  by eliminating the manual step entirely---index once, search forever, across
+  all conversations.
+
+  \textbf{Claude Code folder access:} Reads files but lacks semantic indexing.
+  Quarry wins on efficiency: returns relevant chunks instead of consuming context
+  window reading entire files.
+
+  \textbf{macOS Spotlight:} System-level keyword search. Quarry wins on semantic
+  matching and LLM integration---Spotlight can't find ``authentication logic'' in
+  a function called \texttt{verify\_credentials}.
+
+  \textbf{RAG frameworks (LangChain, LlamaIndex):} Powerful but require
+  pipeline assembly, configuration, and Python expertise. Quarry wins on
+  simplicity: three commands, zero configuration, works out of the box.
+
+  \textbf{Cloud knowledge products (Rewind, Mem):} Require accounts,
+  subscriptions, and sending data to third-party servers. Quarry wins on privacy,
+  cost (free), and MCP-native integration.
+
+  Structural advantage: Quarry's MCP integration means it is a native part of
+  how Claude works, not an external tool that requires explicit invocation.
+  Competitors would need to adopt MCP to match this, and by then Quarry will be
+  the established default.
+\end{faqpair}
+
+\begin{faqpair}{What is the user acquisition strategy?}
+  Three channels:
+
+  \textbf{PyPI discoverability:} Users searching for ``claude mcp'' or ``local
+  RAG'' find Quarry on PyPI.
+
+  \textbf{Claude community:} Documentation, forum posts, and word-of-mouth
+  among Claude Code and Desktop users. The ``quarry install'' command
+  auto-configures MCP, reducing the setup barrier to near zero.
+
+  \textbf{GitHub organic:} The repository demonstrates engineering quality
+  (comprehensive tests, strict typing, clean architecture) that attracts
+  contributors and stars, improving discoverability.
+
+  A planned macOS menu bar companion app would surface Quarry to non-CLI users,
+  expanding reach beyond the developer audience.
+\end{faqpair}
+
+\subsubsection*{Technical}
+
+\begin{faqpair}{What are the major technical risks?}
+  \textbf{Embedding model quality (medium risk):} The snowflake-arctic-embed-m-v1.5
+  model (768 dimensions, 512 token context) performs well for general text but
+  may underperform on domain-specific content (medical, legal, financial jargon).
+  Mitigation: the backend abstraction allows swapping models without code
+  changes. A future model upgrade is a configuration change, not an architecture
+  change.
+
+  \textbf{OCR accuracy on degraded scans (low risk):} The local RapidOCR backend
+  produces good-enough text for semantic search but lower character accuracy than
+  cloud OCR. Mitigation: Textract backend available for users who need higher
+  fidelity. Semantic search is tolerant of OCR errors because it matches by
+  meaning, not exact characters.
+
+  \textbf{LanceDB scalability (low risk):} LanceDB is designed for local,
+  single-user workloads. At tens of thousands of documents, query latency and
+  index size may become concerns. Mitigation: the database abstraction allows
+  migration to a different backend if needed, and named databases allow
+  partitioning by project.
+\end{faqpair}
+
+\begin{faqpair}{What dependencies exist on external systems?}
+  \textbf{MCP protocol:} Quarry depends on the MCP specification remaining
+  stable and on Claude clients continuing to support MCP tool servers. Risk is
+  low: Anthropic is investing heavily in MCP as a standard, and multiple
+  third-party clients now support it.
+
+  \textbf{Embedding model hosting:} The ONNX model is downloaded from
+  Hugging Face Hub at install time. If the model is removed from the Hub,
+  existing installations continue to work (model is cached locally), but new
+  installations would need a mirror. Mitigation: model is pinned to a specific
+  git revision for reproducibility.
+
+  \textbf{Tree-sitter grammars:} Source code parsing depends on Tree-sitter
+  grammar packages. These are mature, widely-used open-source projects with
+  low risk of abandonment.
+
+  No runtime cloud dependencies exist for the default configuration. Quarry
+  operates fully offline after installation.
+\end{faqpair}
+
+\begin{faqpair}{What is the development timeline and current status?}
+  Quarry is live on PyPI. Current capabilities:
+
+  \textbf{Shipped:} PDF ingestion (text + OCR), image OCR, text file parsing,
+  source code parsing (30+ languages via Tree-sitter), semantic search with
+  metadata filtering, directory sync, named databases, MCP server, CLI.
+
+  \textbf{Next (Q1 2026):} Spreadsheet ingestion (XLSX via LaTeX
+  serialization), presentation ingestion (PPTX), HTML parsing.
+
+  \textbf{Future:} macOS menu bar app, Google Drive connector, incremental
+  re-indexing on file change (\texttt{quarry sync --watch}).
+\end{faqpair}
+
+\begin{faqpair}{What is the scaling story?}
+  Quarry is designed for personal-scale workloads: thousands to tens of thousands
+  of documents on a single machine. LanceDB handles this efficiently with
+  on-disk storage and approximate nearest neighbor search.
+
+  At 100K+ documents, the main bottleneck would be initial embedding time (the
+  ONNX model processes \texttildelow50 chunks/second on CPU). Query latency
+  remains fast because LanceDB uses IVF-PQ indexing.
+
+  Quarry deliberately does not target multi-user or server deployments. The
+  architecture assumes a single user on a single machine, which simplifies
+  everything from concurrency to data privacy.
+\end{faqpair}
+
+\subsubsection*{Business}
+
+\begin{faqpair}{What is the revenue model?}
+  There is none. Quarry is free, open-source software under the MIT license.
+  The project exists to solve a real problem for the Claude user community and
+  to demonstrate that local, privacy-preserving AI tooling can be simple and
+  high-quality. Value is measured in adoption and community contribution, not
+  revenue.
+\end{faqpair}
+
+\begin{faqpair}{What are the key metrics for success?}
+  \begin{itemize}[leftmargin=1.5em, nosep]
+    \item \textbf{PyPI installs:} Monthly download count as a proxy for adoption.
+          Target: 1{,}000 monthly installs within 6 months of launch.
+    \item \textbf{GitHub stars:} Community interest signal.
+          Target: 500 stars within 6 months.
+    \item \textbf{Active MCP connections:} Users who have Quarry configured as an
+          MCP server in Claude Code or Desktop (not directly measurable without
+          telemetry, but inferable from support requests and community engagement).
+    \item \textbf{Contributor count:} External contributors submitting PRs.
+          Target: 5+ contributors within the first year.
+    \item \textbf{Format coverage:} Percentage of common document formats
+          supported. Target: PDF, images, text, code, XLSX, PPTX, HTML by end of
+          Q2 2026.
+  \end{itemize}
+\end{faqpair}
+
+\begin{faqpair}{Why now? What has changed?}
+  Three converging shifts:
+
+  \textbf{MCP maturity:} The Model Context Protocol shipped in late 2024 and
+  is now supported by Claude Code, Claude Desktop, and Claude CoWork. For the
+  first time, a local tool can be a native part of an LLM's reasoning process,
+  not just an external API the user invokes manually.
+
+  \textbf{Local inference viability:} ONNX Runtime, quantized embedding models,
+  and efficient vector databases (LanceDB) have made it feasible to run a
+  complete semantic search pipeline on a laptop CPU without GPU, in under a
+  second per query.
+
+  \textbf{LLM power-user emergence:} A critical mass of users have moved beyond
+  ChatGPT-style Q\&A to using LLMs for complex, multi-document tasks. These
+  users are actively looking for ways to feed more context to their LLM and are
+  frustrated by the manual overhead of doing so.
+\end{faqpair}
+
+\begin{faqpair}{What are we not building?}
+  \begin{itemize}[leftmargin=1.5em, nosep]
+    \item \textbf{A cloud service.} Quarry will never require an account,
+          subscription, or data upload. Local-first is a permanent design
+          constraint, not a temporary limitation.
+    \item \textbf{A multi-user platform.} No authentication, no access control,
+          no shared databases. Quarry is a single-user tool for a single machine.
+    \item \textbf{Media search.} Quarry does not find images by visual content
+          or match audio. It extracts \emph{text} from every format and indexes
+          the knowledge inside.
+    \item \textbf{A note-taking app.} Quarry indexes existing files. It does not
+          provide an editor, a tagging system, or a filing structure.
+    \item \textbf{A general-purpose RAG framework.} No pipeline assembly, no
+          pluggable retrievers, no chain-of-thought orchestration. Quarry is
+          deliberately opinionated and zero-configuration.
+  \end{itemize}
+\end{faqpair}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% FOUR RISKS ASSESSMENT
+% ══════════════════════════════════════════════════════════════════════════════
+
+\section*{Risk Assessment}
+
+\begin{faqpair}{Value --- Will users adopt this?}
+  \textcolor{RiskAmber}{\textbf{Medium risk.}} The demand is proven: Claude
+  Projects and file uploads exist because users asked for a way to use their
+  local files with AI. Forums and communities are full of people asking ``is
+  there an easier way to give Claude access to my documents?'' Quarry is a
+  direct answer to that question.
+
+  The risk is not demand---it is \emph{discovery and activation}. Nobody will
+  search for ``MCP-based local semantic search.'' They will search for ``how to
+  use my files with Claude without uploading them.'' Quarry must be present
+  where those questions are asked---Reddit, Claude community forums, Stack
+  Overflow---with a one-sentence answer: ``Stop uploading files. Install Quarry,
+  index once, search forever.''
+
+  Activation risk is also real. A user who indexes one file will not see the
+  value. The ``wow'' moment---Claude retrieving a document the user forgot they
+  had---requires enough indexed content to make semantic search surprising and
+  useful. The onboarding must encourage bulk ingestion (directory registration)
+  over single-file ingest.
+
+  The macOS menu bar app is the highest-leverage item on the roadmap for reducing
+  both risks: it widens the audience beyond CLI users and makes Quarry's
+  retrieval visible, creating shareable moments that drive word-of-mouth.
+\end{faqpair}
+
+\begin{faqpair}{Usability --- Can users figure out how to use it?}
+  \textcolor{RiskGreen}{\textbf{Low risk.}} Three commands to value:
+  \texttt{pip install}, \texttt{quarry install}, \texttt{quarry ingest}.
+  Auto-configures MCP for Claude Code and Desktop. No accounts, no API keys, no
+  configuration files. The CLI follows standard Unix conventions. Once set up,
+  the user does nothing---Claude invokes Quarry automatically during
+  conversations.
+\end{faqpair}
+
+\begin{faqpair}{Feasibility --- Can we build it?}
+  \textcolor{RiskGreen}{\textbf{Low risk.}} The product is already built and
+  live on PyPI. Core pipeline (ingest, embed, search, MCP server) is shipped and
+  tested with 366 passing tests and strict type checking. Remaining roadmap items
+  (XLSX, PPTX, menu bar app) are additive features, not architectural risks.
+\end{faqpair}
+
+\begin{faqpair}{Viability --- Does it work as a project?}
+  \textcolor{RiskGreen}{\textbf{Low risk.}} No revenue model to validate.
+  Infrastructure cost is zero (runs on the user's machine). Development cost is
+  the maintainer's time. MIT license eliminates legal risk. The project is
+  compatible with Anthropic's ecosystem strategy and creates value for the Claude
+  user community.
+\end{faqpair}
+
+\end{document}

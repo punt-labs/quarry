@@ -251,8 +251,10 @@ Connectors                Formats              Transformations
 - Spreadsheets (XLSX, CSV) via LaTeX tabular serialization
 - Presentations (PPTX) with speaker notes
 - HTML with structure-aware splitting
-- Search filters by content type and file format (schema groundwork complete)
+- macOS menu bar companion app
 - Google Drive connector
+
+For product vision and positioning, see [PR/FAQ](prfaq.pdf).
 
 ## Development
 
