@@ -507,9 +507,16 @@ run \texttt{quarry install}, and start searching.
   of documents on a single machine. LanceDB handles this efficiently with
   on-disk storage and approximate nearest neighbor search.
 
-  At 100K+ documents, the main bottleneck would be initial embedding time (the
-  ONNX model processes \texttildelow50 chunks/second on CPU). Query latency
-  remains fast because LanceDB uses IVF-PQ indexing.
+  Initial indexing is the main time investment. The ONNX embedding model
+  processes \texttildelow8 chunks/second per thread on an M2 CPU; with two
+  concurrent workers, a 10{,}000-file directory (\texttildelow70{,}000 chunks)
+  takes roughly 1.5--2 hours. This is comparable to macOS Spotlight, which
+  re-indexes for hours after a long offline period. Files are queryable as
+  they are indexed---the user does not wait for the full sync to complete.
+  Subsequent syncs are incremental and fast (only new or changed files).
+
+  Query latency remains fast regardless of database size because LanceDB uses
+  IVF-PQ indexing.
 
   Quarry deliberately does not target multi-user or server deployments. The
   architecture assumes a single user on a single machine, which simplifies
