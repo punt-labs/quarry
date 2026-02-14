@@ -18,4 +18,9 @@ jobs:
         with:
           python-version: "3.13"
       - run: uv sync --frozen --extra dev
-      - run: uv run pytest -m "not slow"
+      - run: uv run pytest -m "not slow" --cov=quarry --cov-report=xml
+      - uses: codecov/codecov-action@v5
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          files: coverage.xml
+          fail_ci_if_not_token: false
