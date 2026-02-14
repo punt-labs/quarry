@@ -355,8 +355,12 @@ def ingest_spreadsheet(
     if overwrite:
         delete_document(db, document_name, collection=collection)
 
-    pages = process_spreadsheet_file(file_path, max_chars=settings.chunk_max_chars)
-    progress("Sheets: %d sections", len(pages))
+    pages, sheet_count = process_spreadsheet_file(
+        file_path,
+        max_chars=settings.chunk_max_chars,
+        document_name=document_name,
+    )
+    progress("Sheets: %d, sections: %d", sheet_count, len(pages))
 
     return _chunk_embed_store(
         pages,
@@ -366,7 +370,7 @@ def ingest_spreadsheet(
         progress,
         collection=collection,
         source_format=file_path.suffix.lower(),
-        sheets=len(pages),
+        sheets=sheet_count,
     )
 
 

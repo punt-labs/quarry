@@ -143,8 +143,9 @@ class TestProcessSpreadsheetCSV:
         f = tmp_path / "data.csv"
         f.write_text("Name,Age\nAlice,30\nBob,25\n")
 
-        pages = process_spreadsheet_file(f)
+        pages, sheet_count = process_spreadsheet_file(f)
 
+        assert sheet_count == 1
         assert len(pages) == 1
         assert pages[0].page_type == PageType.SPREADSHEET
         assert pages[0].document_name == "data.csv"
@@ -156,7 +157,7 @@ class TestProcessSpreadsheetCSV:
         f = tmp_path / "test.csv"
         f.write_text("A,B\n1,2\n")
 
-        pages = process_spreadsheet_file(f)
+        pages, _ = process_spreadsheet_file(f)
 
         assert pages[0].document_path == str(f.resolve())
         assert pages[0].page_number == 1
@@ -166,13 +167,15 @@ class TestProcessSpreadsheetCSV:
         f = tmp_path / "empty.csv"
         f.write_text("")
 
-        assert process_spreadsheet_file(f) == []
+        pages, sheet_count = process_spreadsheet_file(f)
+        assert pages == []
+        assert sheet_count == 0
 
     def test_header_only_csv(self, tmp_path: Path):
         f = tmp_path / "header.csv"
         f.write_text("A,B,C\n")
 
-        pages = process_spreadsheet_file(f)
+        pages, _ = process_spreadsheet_file(f)
 
         assert len(pages) == 1
         assert "A & B & C" in pages[0].text
@@ -181,7 +184,7 @@ class TestProcessSpreadsheetCSV:
         f = tmp_path / "special.csv"
         f.write_text('Item,Price\nWidget,"$100"\n')
 
-        pages = process_spreadsheet_file(f)
+        pages, _ = process_spreadsheet_file(f)
 
         assert r"\$100" in pages[0].text
 
@@ -190,8 +193,9 @@ class TestProcessSpreadsheetCSV:
         f = tmp_path / "large.csv"
         f.write_text("\n".join(rows) + "\n")
 
-        pages = process_spreadsheet_file(f, max_chars=300)
+        pages, sheet_count = process_spreadsheet_file(f, max_chars=300)
 
+        assert sheet_count == 1
         assert len(pages) > 1
         for page in pages:
             assert "Name & Value" in page.text
@@ -200,10 +204,18 @@ class TestProcessSpreadsheetCSV:
         f = tmp_path / "data.csv"
         f.write_text("A\n1\n")
 
-        pages = process_spreadsheet_file(f)
+        pages, _ = process_spreadsheet_file(f)
 
         # Single-sheet files should not have sheet name prefix
         assert "% Sheet" not in pages[0].text
+
+    def test_csv_document_name_override(self, tmp_path: Path):
+        f = tmp_path / "data.csv"
+        f.write_text("A\n1\n")
+
+        pages, _ = process_spreadsheet_file(f, document_name="subdir/data.csv")
+
+        assert pages[0].document_name == "subdir/data.csv"
 
 
 class TestProcessSpreadsheetXLSX:
@@ -219,8 +231,9 @@ class TestProcessSpreadsheetXLSX:
         ws.append(["Bob", 25])
         wb.save(f)
 
-        pages = process_spreadsheet_file(f)
+        pages, sheet_count = process_spreadsheet_file(f)
 
+        assert sheet_count == 1
         assert len(pages) == 1
         assert pages[0].page_type == PageType.SPREADSHEET
         assert pages[0].document_name == "data.xlsx"
@@ -245,8 +258,9 @@ class TestProcessSpreadsheetXLSX:
 
         wb.save(f)
 
-        pages = process_spreadsheet_file(f)
+        pages, sheet_count = process_spreadsheet_file(f)
 
+        assert sheet_count == 2
         assert len(pages) == 2
         assert "% Sheet: Sales" in pages[0].text
         assert "% Sheet: Costs" in pages[1].text
@@ -258,7 +272,8 @@ class TestProcessSpreadsheetXLSX:
         wb = openpyxl.Workbook()
         wb.save(f)
 
-        assert process_spreadsheet_file(f) == []
+        pages, _sheet_count = process_spreadsheet_file(f)
+        assert pages == []
 
     def test_xlsx_with_none_cells(self, tmp_path: Path):
         import openpyxl
@@ -271,7 +286,7 @@ class TestProcessSpreadsheetXLSX:
         ws.append([1, None, 3])
         wb.save(f)
 
-        pages = process_spreadsheet_file(f)
+        pages, _ = process_spreadsheet_file(f)
 
         assert len(pages) == 1
         # None cells should be empty strings
@@ -290,7 +305,7 @@ class TestProcessSpreadsheetXLSX:
         ws["C2"] = "=A2+B2"
         wb.save(f)
 
-        pages = process_spreadsheet_file(f)
+        pages, _ = process_spreadsheet_file(f)
 
         # data_only=True means formulas show cached value or None
         assert len(pages) == 1
@@ -315,12 +330,28 @@ class TestProcessSpreadsheetXLSX:
         ws3.append(["3"])
         wb.save(f)
 
-        pages = process_spreadsheet_file(f)
+        pages, sheet_count = process_spreadsheet_file(f)
 
+        assert sheet_count == 3
         assert len(pages) == 3
         for i, page in enumerate(pages):
             assert page.page_number == i + 1
             assert page.total_pages == 3
+
+    def test_xlsx_document_name_override(self, tmp_path: Path):
+        import openpyxl
+
+        f = tmp_path / "data.xlsx"
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        assert ws is not None
+        ws.append(["A"])
+        ws.append(["1"])
+        wb.save(f)
+
+        pages, _ = process_spreadsheet_file(f, document_name="subdir/data.xlsx")
+
+        assert pages[0].document_name == "subdir/data.xlsx"
 
 
 class TestProcessSpreadsheetErrors:

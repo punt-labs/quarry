@@ -155,7 +155,8 @@ def process_spreadsheet_file(
     file_path: Path,
     *,
     max_chars: int = 1800,
-) -> list[PageContent]:
+    document_name: str | None = None,
+) -> tuple[list[PageContent], int]:
     """Read a spreadsheet and convert each sheet to LaTeX tabular sections.
 
     Each worksheet becomes one or more sections.  Large sheets are split
@@ -164,9 +165,12 @@ def process_spreadsheet_file(
     Args:
         file_path: Path to spreadsheet file (``.xlsx`` or ``.csv``).
         max_chars: Maximum characters per section before row-group splitting.
+        document_name: Override for the stored document name. Defaults to
+            ``file_path.name``.
 
     Returns:
-        List of PageContent objects, one per section/row-group.
+        Tuple of (pages, sheet_count) where pages is a list of PageContent
+        objects and sheet_count is the number of worksheets/files processed.
 
     Raises:
         ValueError: If file extension is not a supported spreadsheet format.
@@ -174,17 +178,18 @@ def process_spreadsheet_file(
     suffix = file_path.suffix.lower()
 
     if suffix == ".xlsx":
-        sheets = _read_xlsx(file_path)
+        raw_sheets = _read_xlsx(file_path)
     elif suffix == ".csv":
-        sheets = _read_csv(file_path)
+        raw_sheets = _read_csv(file_path)
     else:
         msg = f"Unsupported spreadsheet format: {suffix}"
         raise ValueError(msg)
 
-    multi_sheet = len(sheets) > 1
+    multi_sheet = len(raw_sheets) > 1
+    sheet_count = len(raw_sheets)
     sections: list[str] = []
 
-    for sheet_name, headers, rows in sheets:
+    for sheet_name, headers, rows in raw_sheets:
         if not headers:
             continue
         name = sheet_name if multi_sheet else None
@@ -192,10 +197,11 @@ def process_spreadsheet_file(
         sections.extend(sheet_sections)
 
     if not sections:
-        return []
+        return [], sheet_count
 
-    document_name = file_path.name
+    resolved_name = document_name or file_path.name
     document_path = str(file_path.resolve())
-    return _sections_to_pages(
-        sections, document_name, document_path, PageType.SPREADSHEET
+    pages = _sections_to_pages(
+        sections, resolved_name, document_path, PageType.SPREADSHEET
     )
+    return pages, sheet_count
