@@ -550,7 +550,7 @@ class TestIngestCmd:
                 return_value=mock_result,
             ),
         ):
-            result = runner.invoke(app, ["ingest", str(f)])
+            result = runner.invoke(app, ["ingest-file", str(f)])
         assert result.exit_code == 0
         assert "doc.txt" in result.output
 
@@ -569,7 +569,7 @@ class TestIngestCmd:
                 return_value={"chunks": 1},
             ),
         ):
-            result = runner.invoke(app, ["ingest", str(f), "--db", "work"])
+            result = runner.invoke(app, ["ingest-file", str(f), "--db", "work"])
         assert result.exit_code == 0
         assert mock_resolve.call_args[0][1] == "work"
 

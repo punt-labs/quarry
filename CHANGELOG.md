@@ -26,6 +26,7 @@ across `transform`, `index`, and `connector`).
 - CLI search output shows content type metadata: `[report.pdf p.3 | text/.pdf]`
 
 ### Tool
+- **Breaking:** `ingest` CLI command renamed to `ingest-file`; `ingest` and `ingest_text` MCP tools renamed to `ingest_file` and `ingest_content`. Clarifies that the distinction is input mechanism (file path vs inline content), not content type.
 - `quarry search --page-type code` — filter results by content type
 - `quarry search --source-format .py` — filter results by source format
 - `quarry search --document report.pdf` — filter results by document name (new)

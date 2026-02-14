@@ -524,7 +524,7 @@ def _ingest_multipage_image(
     )
 
 
-def ingest_text_content(
+def ingest_content(
     text: str,
     document_name: str,
     db: LanceDB,

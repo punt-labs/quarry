@@ -69,9 +69,9 @@ def _cli_errors(fn: Callable[..., None]) -> Callable[..., None]:
     return wrapper
 
 
-@app.command()
+@app.command(name="ingest-file")
 @_cli_errors
-def ingest(
+def ingest_file(
     file_path: Annotated[Path, typer.Argument(help="Path to document file")],
     overwrite: Annotated[
         bool, typer.Option("--overwrite", help="Replace existing data")
@@ -81,7 +81,10 @@ def ingest(
     ] = "",
     database: DbOption = "",
 ) -> None:
-    """Ingest a document: chunk, embed, and store. Supports PDF, TXT, MD, TEX, DOCX."""
+    """Ingest a document from a file path.
+
+    Supports PDF, TXT, MD, TEX, DOCX.
+    """
     settings = _resolved_settings(database)
     db = get_db(settings.lancedb_path)
     resolved = file_path.resolve()

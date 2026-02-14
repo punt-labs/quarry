@@ -336,10 +336,10 @@ class TestIngestText:
             lambda _db, _chunks, _vectors: 1,
         )
 
-        from quarry.pipeline import ingest_text_content
+        from quarry.pipeline import ingest_content
 
         db = MagicMock()
-        result = ingest_text_content("Hello world", "clip.txt", db, _settings())
+        result = ingest_content("Hello world", "clip.txt", db, _settings())
 
         assert result["document_name"] == "clip.txt"
         assert result["chunks"] == 1
@@ -359,10 +359,10 @@ class TestIngestText:
 
         monkeypatch.setattr("quarry.pipeline.delete_document", _mock_delete)
 
-        from quarry.pipeline import ingest_text_content
+        from quarry.pipeline import ingest_content
 
         db = MagicMock()
-        ingest_text_content("text", "doc.txt", db, _settings(), overwrite=True)
+        ingest_content("text", "doc.txt", db, _settings(), overwrite=True)
 
         assert delete_called == ["doc.txt"]
 
@@ -372,9 +372,9 @@ class TestIngestText:
             lambda _pages, max_chars, overlap_chars, **_kw: [],
         )
 
-        from quarry.pipeline import ingest_text_content
+        from quarry.pipeline import ingest_content
 
         db = MagicMock()
-        result = ingest_text_content("", "empty.txt", db, _settings())
+        result = ingest_content("", "empty.txt", db, _settings())
 
         assert result["chunks"] == 0

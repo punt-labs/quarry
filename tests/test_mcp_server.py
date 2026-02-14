@@ -12,8 +12,8 @@ from quarry.mcp_server import (
     deregister_directory,
     get_documents,
     get_page,
-    ingest,
-    ingest_text as mcp_ingest_text,
+    ingest_content as mcp_ingest_content,
+    ingest_file,
     list_collections,
     list_registrations,
     register_directory,
@@ -40,11 +40,11 @@ class TestIngestText:
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
             patch(
-                "quarry.mcp_server.pipeline_ingest_text_content",
+                "quarry.mcp_server.pipeline_ingest_content",
                 return_value=mock_result,
             ) as mock_ingest,
         ):
-            result = mcp_ingest_text("# Hello\nWorld", "notes.md")
+            result = mcp_ingest_content("# Hello\nWorld", "notes.md")
 
         mock_ingest.assert_called_once()
         call_args = mock_ingest.call_args
@@ -60,11 +60,11 @@ class TestIngestText:
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
             patch(
-                "quarry.mcp_server.pipeline_ingest_text_content",
+                "quarry.mcp_server.pipeline_ingest_content",
                 return_value=mock_result,
             ) as mock_ingest,
         ):
-            mcp_ingest_text("text", "a.txt", format_hint="markdown")
+            mcp_ingest_content("text", "a.txt", format_hint="markdown")
 
         call_kwargs = mock_ingest.call_args[1]
         assert call_kwargs["format_hint"] == "markdown"
@@ -76,11 +76,11 @@ class TestIngestText:
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
             patch(
-                "quarry.mcp_server.pipeline_ingest_text_content",
+                "quarry.mcp_server.pipeline_ingest_content",
                 return_value=mock_result,
             ) as mock_ingest,
         ):
-            mcp_ingest_text("text", "a.txt", collection="ml-101")
+            mcp_ingest_content("text", "a.txt", collection="ml-101")
 
         call_kwargs = mock_ingest.call_args[1]
         assert call_kwargs["collection"] == "ml-101"
@@ -489,7 +489,7 @@ class TestHandleErrors:
                 side_effect=FileNotFoundError("no such file: bad.pdf"),
             ),
         ):
-            result = ingest("/tmp/bad.pdf")
+            result = ingest_file("/tmp/bad.pdf")
 
         assert result.startswith("Error:")
         assert "FileNotFoundError" in result
@@ -501,11 +501,11 @@ class TestHandleErrors:
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
             patch(
-                "quarry.mcp_server.pipeline_ingest_text_content",
+                "quarry.mcp_server.pipeline_ingest_content",
                 side_effect=ValueError("bad format hint"),
             ),
         ):
-            result = mcp_ingest_text("text", "doc.txt")
+            result = mcp_ingest_content("text", "doc.txt")
 
         assert "ValueError" in result
         assert "bad format hint" in result

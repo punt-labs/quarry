@@ -22,8 +22,8 @@ from quarry.database import (
     search,
 )
 from quarry.pipeline import (
+    ingest_content as pipeline_ingest_content,
     ingest_document,
-    ingest_text_content as pipeline_ingest_text_content,
 )
 from quarry.sync import sync_all as engine_sync_all
 from quarry.sync_registry import (
@@ -126,12 +126,12 @@ def search_documents(
 
 @mcp.tool()
 @_handle_errors
-def ingest(
+def ingest_file(
     file_path: str,
     overwrite: bool = False,
     collection: str = "",
 ) -> str:
-    """Ingest a document: OCR, chunk, embed, and index for search.
+    """Ingest a document from a file path: OCR, chunk, embed, and index for search.
 
     Supported formats: PDF, TXT, MD, TEX, DOCX.
 
@@ -163,14 +163,17 @@ def ingest(
 
 @mcp.tool()
 @_handle_errors
-def ingest_text(
+def ingest_content(
     content: str,
     document_name: str,
     overwrite: bool = False,
     collection: str = "default",
     format_hint: str = "auto",
 ) -> str:
-    """Ingest raw text content: chunk, embed, and index for search.
+    """Ingest inline text content: chunk, embed, and index for search.
+
+    Use this instead of ingest_file when you have the text content directly
+    (e.g., clipboard, API response, or sandbox-uploaded files in Claude Desktop).
 
     Args:
         content: The text content to ingest.
@@ -184,7 +187,7 @@ def ingest_text(
 
     progress_lines: list[str] = []
 
-    result = pipeline_ingest_text_content(
+    result = pipeline_ingest_content(
         content,
         document_name,
         db,

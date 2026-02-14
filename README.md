@@ -13,7 +13,7 @@ Unlock the knowledge trapped on your hard drive. Works with Claude Code and Clau
 ```bash
 pip install quarry-mcp
 quarry install          # downloads embedding model (~500MB), configures MCP
-quarry ingest notes.md  # index a file — no cloud account needed
+quarry ingest-file notes.md  # index a file — no cloud account needed
 quarry search "my topic"
 ```
 
@@ -65,10 +65,10 @@ Verify with `quarry doctor`:
 
 ```bash
 # Ingest
-quarry ingest report.pdf
-quarry ingest whiteboard.jpg
-quarry ingest src/main.py
-quarry ingest report.pdf --overwrite
+quarry ingest-file report.pdf
+quarry ingest-file whiteboard.jpg
+quarry ingest-file src/main.py
+quarry ingest-file report.pdf --overwrite
 
 # Search
 quarry search "authentication logic"
@@ -119,8 +119,8 @@ Use the absolute path to `uvx` for Desktop (e.g. `/opt/homebrew/bin/uvx`). `quar
 | **Search** | |
 | `search_documents` | Semantic search across indexed documents |
 | **Ingestion** | |
-| `ingest` | Ingest a file (PDF, image, text, source code) |
-| `ingest_text` | Index raw text content directly |
+| `ingest_file` | Ingest a file (PDF, image, text, source code) |
+| `ingest_content` | Ingest inline text content directly |
 | **Documents** | |
 | `get_documents` | List indexed documents with metadata |
 | `get_page` | Retrieve full text for a specific page |
@@ -136,7 +136,7 @@ Use the absolute path to `uvx` for Desktop (e.g. `/opt/homebrew/bin/uvx`). `quar
 | **System** | |
 | `status` | Database stats: counts, storage size, model info |
 
-**Claude Desktop note:** Uploaded files live in a sandbox that Quarry cannot access. Use `ingest_text` with extracted content for uploads. For files on your Mac, provide the local path to `ingest`.
+**Claude Desktop note:** Uploaded files live in a sandbox that Quarry cannot access. Use `ingest_content` with extracted content for uploads. For files on your Mac, provide the local path to `ingest_file`.
 
 ## Configuration
 
@@ -178,8 +178,8 @@ Your IAM user needs `textract:DetectDocumentText`, `textract:StartDocumentTextDe
 Use `--db` to keep separate databases for different projects:
 
 ```bash
-quarry ingest report.pdf --db work
-quarry ingest paper.pdf --db personal
+quarry ingest-file report.pdf --db work
+quarry ingest-file paper.pdf --db personal
 quarry search "revenue" --db work
 quarry databases  # list all databases with stats
 ```
