@@ -133,8 +133,8 @@ def ingest_file(
 ) -> str:
     """Ingest a document from a file path: OCR, chunk, embed, and index for search.
 
-    Supported formats: PDF, images (JPG, PNG, TIFF, HEIC), TXT, MD, TEX, DOCX,
-    and source code files.
+    Supported formats: PDF, images (JPG, PNG, TIFF, HEIC), spreadsheets (XLSX, CSV),
+    TXT, MD, TEX, DOCX, and source code files.
 
     Args:
         file_path: Path to the document file.

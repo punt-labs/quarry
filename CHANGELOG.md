@@ -14,6 +14,10 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Format
+- **XLSX and CSV spreadsheet ingestion** — spreadsheets are serialized to LaTeX tabular format for LLM-native consumption. Large sheets are split into row groups with column headers repeated in each section. New `spreadsheet_processor.py` module; new `openpyxl` dependency.
+- `SPREADSHEET` page type added; `stored_page_type()` maps it to `"spreadsheet"`
+
 ### Index
 - **`page_type` and `source_format` chunk metadata** — every chunk now stores its content type (`"text"` or `"code"`) and source format (file extension like `".pdf"`, `".py"`, or `"inline"` for programmatic text). Enables downstream search-by-format filtering.
 - `stored_page_type()` mapping: TEXT/IMAGE/SECTION → `"text"`, CODE → `"code"`
