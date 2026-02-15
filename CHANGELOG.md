@@ -21,6 +21,7 @@ across `transform`, `index`, and `connector`).
 - **PPTX presentation ingestion** — each slide becomes one chunk containing the title, body text, tables as LaTeX tabular, and speaker notes (after `---` separator). Empty slides are skipped. New `presentation_processor.py` module; new `python-pptx` dependency.
 - `PRESENTATION` page type added; `stored_page_type()` maps it to `"presentation"`
 - LaTeX table utilities (`escape_latex`, `rows_to_latex`) extracted to shared `latex_utils.py` module for reuse by spreadsheet and presentation processors
+- **URL webpage ingestion** — fetch any HTTP(S) URL, strip boilerplate, and index for semantic search. Available via `quarry ingest-url` CLI command and `ingest_url` MCP tool. HTML processing reuses the existing pipeline; no new dependencies.
 
 ### Index
 - **`page_type` and `source_format` chunk metadata** — every chunk now stores its content type (`"text"` or `"code"`) and source format (file extension like `".pdf"`, `".py"`, or `"inline"` for programmatic text). Enables downstream search-by-format filtering.
