@@ -22,7 +22,7 @@ from quarry.database import (
     list_documents,
     search,
 )
-from quarry.pipeline import ingest_document
+from quarry.pipeline import ingest_document, ingest_url
 from quarry.results import DatabaseSummary
 from quarry.sync import sync_all
 from quarry.sync_registry import (
@@ -103,6 +103,49 @@ def ingest_file(
             settings,
             overwrite=overwrite,
             collection=col,
+            progress_callback=on_progress,
+        )
+
+    console.print()
+    console.print(json.dumps(result, indent=2))
+
+
+@app.command(name="ingest-url")
+@_cli_errors
+def ingest_url_cmd(
+    url: Annotated[str, typer.Argument(help="HTTP(S) URL to fetch and ingest")],
+    overwrite: Annotated[
+        bool, typer.Option("--overwrite", help="Replace existing data")
+    ] = False,
+    collection: Annotated[
+        str, typer.Option("--collection", "-c", help="Collection name")
+    ] = "default",
+    name: Annotated[
+        str, typer.Option("--name", "-n", help="Document name (defaults to URL)")
+    ] = "",
+    database: DbOption = "",
+) -> None:
+    """Fetch a webpage and ingest its content.
+
+    Downloads the HTML from the given URL, strips boilerplate (nav, scripts,
+    etc.), converts to Markdown, and indexes the text for semantic search.
+    """
+    settings = _resolved_settings(database)
+    db = get_db(settings.lancedb_path)
+
+    with Progress(console=console) as progress:
+        task = progress.add_task(f"Fetching {url}", total=None)
+
+        def on_progress(message: str) -> None:
+            progress.update(task, description=message)
+
+        result = ingest_url(
+            url,
+            db,
+            settings,
+            overwrite=overwrite,
+            collection=collection,
+            document_name=name or None,
             progress_callback=on_progress,
         )
 

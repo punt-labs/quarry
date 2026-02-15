@@ -55,38 +55,33 @@ def _has_markdown_headings(text: str) -> bool:
     return False
 
 
-def process_html_file(file_path: Path) -> list[PageContent]:
-    """Parse an HTML file into Markdown sections for embedding.
+def process_html_text(
+    html: str,
+    document_name: str,
+    document_path: str,
+) -> list[PageContent]:
+    """Parse raw HTML into Markdown sections for embedding.
 
     Strategy:
-      1. Read with encoding fallback (UTF-8 / CP1252 / Latin-1).
-      2. Parse with BeautifulSoup.
-      3. Extract ``<title>`` text.
-      4. Remove boilerplate tags (script, style, nav, etc.).
-      5. Convert cleaned body to Markdown via markdownify.
-      6. Prepend title as ``# Heading`` only if the body has no headings.
-      7. Split on Markdown headings, or fall back to blank-line paragraphs.
+      1. Parse with BeautifulSoup.
+      2. Extract ``<title>`` text.
+      3. Remove boilerplate tags (script, style, nav, etc.).
+      4. Convert cleaned body to Markdown via markdownify.
+      5. Prepend title as ``# Heading`` only if the body has no headings.
+      6. Split on Markdown headings, or fall back to blank-line paragraphs.
 
     Args:
-        file_path: Path to ``.html`` or ``.htm`` file.
+        html: Raw HTML content.
+        document_name: Identifier stored with each chunk.
+        document_path: Source location (file path or URL).
 
     Returns:
         List of PageContent objects, one per section.  Empty list when the
-        file contains no extractable content.
-
-    Raises:
-        ValueError: If file extension is not a supported HTML format.
+        HTML contains no extractable content.
     """
-    suffix = file_path.suffix.lower()
-    if suffix not in SUPPORTED_HTML_EXTENSIONS:
-        msg = f"Unsupported HTML format: {suffix}"
-        raise ValueError(msg)
-
-    document_name = file_path.name
     logger.debug("Processing HTML: %s", document_name)
 
-    html_text = _read_text_with_fallback(file_path)
-    soup = BeautifulSoup(html_text, "html.parser")
+    soup = BeautifulSoup(html, "html.parser")
 
     title = _extract_title(soup)
     _strip_boilerplate(soup)
@@ -107,5 +102,29 @@ def process_html_file(file_path: Path) -> list[PageContent]:
     if not sections:
         return []
 
-    document_path = str(file_path.resolve())
     return _sections_to_pages(sections, document_name, document_path, PageType.SECTION)
+
+
+def process_html_file(file_path: Path) -> list[PageContent]:
+    """Parse an HTML file into Markdown sections for embedding.
+
+    Reads the file with encoding fallback, then delegates to
+    :func:`process_html_text`.
+
+    Args:
+        file_path: Path to ``.html`` or ``.htm`` file.
+
+    Returns:
+        List of PageContent objects, one per section.  Empty list when the
+        file contains no extractable content.
+
+    Raises:
+        ValueError: If file extension is not a supported HTML format.
+    """
+    suffix = file_path.suffix.lower()
+    if suffix not in SUPPORTED_HTML_EXTENSIONS:
+        msg = f"Unsupported HTML format: {suffix}"
+        raise ValueError(msg)
+
+    html_text = _read_text_with_fallback(file_path)
+    return process_html_text(html_text, file_path.name, str(file_path.resolve()))

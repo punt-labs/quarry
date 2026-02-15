@@ -24,6 +24,7 @@ from quarry.database import (
 from quarry.pipeline import (
     ingest_content as pipeline_ingest_content,
     ingest_document,
+    ingest_url as pipeline_ingest_url,
 )
 from quarry.sync import sync_all as engine_sync_all
 from quarry.sync_registry import (
@@ -196,6 +197,46 @@ def ingest_content(
         overwrite=overwrite,
         collection=collection,
         format_hint=format_hint,
+        progress_callback=progress_lines.append,
+    )
+
+    progress_lines.append("")
+    progress_lines.append(f"Result: {json.dumps(result, indent=2)}")
+    return "\n".join(progress_lines)
+
+
+@mcp.tool()
+@_handle_errors
+def ingest_url(
+    url: str,
+    overwrite: bool = False,
+    collection: str = "default",
+    document_name: str = "",
+) -> str:
+    """Fetch a webpage and ingest its content for search.
+
+    Downloads the HTML, strips boilerplate (nav, scripts, etc.), converts to
+    Markdown, and indexes the text. Use this for documentation pages, blog
+    posts, or any web content you want to search semantically.
+
+    Args:
+        url: HTTP(S) URL to fetch.
+        overwrite: If true, replace existing data for this URL.
+        collection: Collection name (default: 'default').
+        document_name: Override for stored name. Defaults to the URL.
+    """
+    settings = _settings()
+    db = _db()
+
+    progress_lines: list[str] = []
+
+    result = pipeline_ingest_url(
+        url,
+        db,
+        settings,
+        overwrite=overwrite,
+        collection=collection,
+        document_name=document_name or None,
         progress_callback=progress_lines.append,
     )
 

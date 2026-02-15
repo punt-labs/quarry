@@ -26,7 +26,7 @@ You have years of knowledge buried in PDFs, scanned documents, notes, spreadshee
 
 This is not media search — Quarry doesn't find images or match audio. It reads every document the way you would, extracts the text and structure, and indexes the *knowledge inside*. A scanned whiteboard becomes searchable prose. A spreadsheet becomes structured data an LLM can reason about. Source code becomes semantic units an LLM can reference.
 
-**Supported formats:** PDF, images (PNG, JPG, TIFF, BMP, WebP), presentations (PPTX), spreadsheets (XLSX, CSV), HTML, text files (TXT, Markdown, LaTeX, DOCX), and source code (30+ languages).
+**Supported formats:** PDF, images (PNG, JPG, TIFF, BMP, WebP), presentations (PPTX), spreadsheets (XLSX, CSV), HTML, webpages (via URL), text files (TXT, Markdown, LaTeX, DOCX), and source code (30+ languages).
 
 **How each format is processed:**
 
@@ -73,6 +73,7 @@ quarry ingest-file report.pdf
 quarry ingest-file whiteboard.jpg
 quarry ingest-file src/main.py
 quarry ingest-file report.pdf --overwrite
+quarry ingest-url https://docs.python.org/3/library/urllib.request.html
 
 # Search
 quarry search "authentication logic"
@@ -134,6 +135,7 @@ Use the absolute path to `uvx` for Desktop (e.g. `/opt/homebrew/bin/uvx`). `quar
 | **Ingestion** | |
 | `ingest_file` | Ingest a file (PDF, image, text, source code) |
 | `ingest_content` | Ingest inline text content directly |
+| `ingest_url` | Fetch a webpage and ingest its content |
 | **Documents** | |
 | `get_documents` | List indexed documents with metadata |
 | `get_page` | Retrieve full text for a specific page |

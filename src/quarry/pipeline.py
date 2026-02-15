@@ -18,6 +18,7 @@ from quarry.database import delete_document, insert_chunks
 from quarry.html_processor import (
     SUPPORTED_HTML_EXTENSIONS,
     process_html_file,
+    process_html_text,
 )
 from quarry.image_analyzer import (
     SUPPORTED_IMAGE_EXTENSIONS,
@@ -768,6 +769,103 @@ def ingest_content(
         progress,
         collection=collection,
         source_format="inline",
+        sections=len(pages),
+    )
+
+
+def _fetch_url(url: str, *, timeout: int = 30) -> str:
+    """Fetch a URL and return the response body as text.
+
+    Raises:
+        ValueError: If the URL is not HTTP(S) or the response is not HTML.
+        OSError: On network errors.
+    """
+    import urllib.request  # noqa: PLC0415
+    from urllib.error import HTTPError, URLError  # noqa: PLC0415
+
+    if not url.startswith(("http://", "https://")):
+        msg = f"Only HTTP(S) URLs are supported: {url}"
+        raise ValueError(msg)
+
+    request = urllib.request.Request(  # noqa: S310
+        url,
+        headers={
+            "User-Agent": "quarry-mcp/1.0 (+https://github.com/jmf-pobox/quarry-mcp)"
+        },
+    )
+    _allowed_media_types = {"text/html", "application/xhtml+xml"}
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as resp:  # noqa: S310
+            final_url: str = resp.geturl()
+            if not final_url.startswith(("http://", "https://")):
+                msg = f"Redirect left HTTP(S): {final_url}"
+                raise ValueError(msg)
+            content_type: str = resp.headers.get("Content-Type", "")
+            media_type = content_type.split(";", 1)[0].strip().lower()
+            if media_type and media_type not in _allowed_media_types:
+                msg = f"URL returned non-HTML content: {content_type}"
+                raise ValueError(msg)
+            charset = resp.headers.get_content_charset() or "utf-8"
+            body: bytes = resp.read()
+            return body.decode(charset, errors="replace")
+    except HTTPError as exc:
+        msg = f"HTTP {exc.code} fetching {url}"
+        raise ValueError(msg) from exc
+    except URLError as exc:
+        msg = f"Cannot reach {url}: {exc.reason}"
+        raise OSError(msg) from exc
+
+
+def ingest_url(
+    url: str,
+    db: LanceDB,
+    settings: Settings,
+    *,
+    overwrite: bool = False,
+    collection: str = "default",
+    document_name: str | None = None,
+    timeout: int = 30,
+    progress_callback: Callable[[str], None] | None = None,
+) -> IngestResult:
+    """Fetch a URL, extract text from HTML, chunk, embed, store.
+
+    Args:
+        url: HTTP(S) URL to fetch.
+        db: LanceDB connection.
+        settings: Application settings.
+        overwrite: If True, delete existing data for this URL first.
+        collection: Collection name for organizing documents.
+        document_name: Override for the stored document name. Defaults to URL.
+        timeout: HTTP request timeout in seconds.
+        progress_callback: Optional callable for progress messages.
+
+    Returns:
+        Dict with ingestion results.
+
+    Raises:
+        ValueError: If URL is invalid, unreachable, or returns non-HTML.
+    """
+    progress = _make_progress(progress_callback)
+    document_name = document_name or url
+
+    progress("Fetching: %s", url)
+    html = _fetch_url(url, timeout=timeout)
+    progress("Fetched %d characters", len(html))
+
+    if overwrite:
+        delete_document(db, document_name, collection=collection)
+
+    pages = process_html_text(html, document_name, url)
+    progress("Sections: %d", len(pages))
+
+    return _chunk_embed_store(
+        pages,
+        document_name,
+        db,
+        settings,
+        progress,
+        collection=collection,
+        source_format=".html",
         sections=len(pages),
     )
 
