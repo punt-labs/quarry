@@ -1,6 +1,6 @@
 [project]
 name = "quarry-mcp"
-version = "0.5.0"
+version = "0.6.0"
 description = "Extract searchable knowledge from any document. Expose it to LLMs via MCP."
 readme = "README.md"
 requires-python = ">=3.13"

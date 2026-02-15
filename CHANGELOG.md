@@ -14,31 +14,29 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
-### Transform
-- **SageMaker embedding backend** — offloads `embed_texts()` to a SageMaker Serverless endpoint for cloud-speed batch ingestion. `embed_query()` stays local via ONNX for sub-millisecond search latency. Same model (snowflake-arctic-embed-m-v1.5) on both paths; vectors are compatible.
-
-### Index
-- **Auto-workers for sync** — `quarry sync` auto-selects 4 parallel workers when a cloud backend (Textract or SageMaker) is active, 1 otherwise. Explicit `--workers` still overrides.
-
-### Infra
-- `EMBEDDING_BACKEND` setting (`onnx` | `sagemaker`) with factory dispatch in `backends.py`
-- `SAGEMAKER_ENDPOINT_NAME` setting for SageMaker endpoint configuration
-- `SageMakerRuntimeClient` and `ReadableBody` protocols in `types.py`
-- `quarry doctor` checks SageMaker endpoint availability when configured
-- CloudFormation template (`infra/sagemaker-embedding.yaml`) for Serverless endpoint deployment
+## [0.6.0] - 2026-02-15
 
 ### Format
 - **XLSX and CSV spreadsheet ingestion** — spreadsheets are serialized to LaTeX tabular format for LLM-native consumption. Large sheets are split into row groups with column headers repeated in each section. New `spreadsheet_processor.py` module; new `openpyxl` dependency.
-- `SPREADSHEET` page type added; `stored_page_type()` maps it to `"spreadsheet"`
 - **HTML ingestion** — HTML files are parsed with BeautifulSoup, boilerplate stripped (nav, footer, scripts, etc.), and converted to Markdown via markdownify. Sections split on headings with paragraph fallback. New `html_processor.py` module; new `beautifulsoup4` and `markdownify` dependencies.
 - **PPTX presentation ingestion** — each slide becomes one chunk containing the title, body text, tables as LaTeX tabular, and speaker notes (after `---` separator). Empty slides are skipped. New `presentation_processor.py` module; new `python-pptx` dependency.
-- `PRESENTATION` page type added; `stored_page_type()` maps it to `"presentation"`
-- LaTeX table utilities (`escape_latex`, `rows_to_latex`) extracted to shared `latex_utils.py` module for reuse by spreadsheet and presentation processors
 - **URL webpage ingestion** — fetch any HTTP(S) URL, strip boilerplate, and index for semantic search. Available via `quarry ingest-url` CLI command and `ingest_url` MCP tool. HTML processing reuses the existing pipeline; no new dependencies.
+- `SPREADSHEET` and `PRESENTATION` page types added
+- LaTeX table utilities (`escape_latex`, `rows_to_latex`) extracted to shared `latex_utils.py` module for reuse by spreadsheet and presentation processors
+
+### Transform
+- **SageMaker embedding backend** — offloads `embed_texts()` to a SageMaker endpoint for cloud-accelerated batch ingestion. `embed_query()` stays local via ONNX for sub-millisecond search latency. Same model (snowflake-arctic-embed-m-v1.5) on both paths; vectors are compatible.
+- **Custom SageMaker inference handler** — server-side CLS-token pooling + L2 normalization reduces response size from ~67 MB to ~140 KB per batch of 32 texts
+- **Batched ONNX inference** — `embed_texts()` now processes in batches of 256, preventing OOM on large documents
+- Fixed ONNX model to use `sentence_embedding` output (was using wrong output index); removed unnecessary `token_type_ids` input
+
+### Connector
+- **`quarry serve` HTTP server** — lightweight HTTP API for integration with external clients (e.g. menu bar app). Supports search, ingest, document listing, and collection management.
 
 ### Index
-- **`page_type` and `source_format` chunk metadata** — every chunk now stores its content type (`"text"` or `"code"`) and source format (file extension like `".pdf"`, `".py"`, or `"inline"` for programmatic text). Enables downstream search-by-format filtering.
-- `stored_page_type()` mapping: TEXT/IMAGE/SECTION → `"text"`, CODE → `"code"`
+- **Named databases** — `--db <name>` flag on all CLI commands isolates collections into separate LanceDB instances under `~/.quarry/data/<name>/`. MCP `db_name` parameter provides the same capability.
+- **`page_type` and `source_format` chunk metadata** — every chunk now stores its content type (`"text"`, `"code"`, `"spreadsheet"`, `"presentation"`) and source format (file extension like `".pdf"`, `".py"`, or `"inline"` for programmatic text). Enables search-by-format filtering.
+- **Auto-workers for sync** — `quarry sync` auto-selects 4 parallel workers when a cloud backend (Textract or SageMaker) is active, 1 otherwise. Explicit `--workers` still overrides.
 - Inline content `document_path` changed from `"<string>"` sentinel to empty string
 - **Breaking:** Existing indexes need re-ingestion (`quarry sync`) to populate new columns
 
@@ -51,7 +49,20 @@ across `transform`, `index`, and `connector`).
 - **Breaking:** `ingest` CLI command renamed to `ingest-file`; `ingest` and `ingest_text` MCP tools renamed to `ingest_file` and `ingest_content`. Clarifies that the distinction is input mechanism (file path vs inline content), not content type.
 - `quarry search --page-type code` — filter results by content type
 - `quarry search --source-format .py` — filter results by source format
-- `quarry search --document report.pdf` — filter results by document name (new)
+- `quarry search --document report.pdf` — filter results by document name
+- `quarry databases --json` — machine-readable output for scripting
+- `quarry doctor` and `quarry install` UX improvements: better error messages, progress indicators
+
+### Infra
+- `EMBEDDING_BACKEND` setting (`onnx` | `sagemaker`) with factory dispatch in `backends.py`
+- `SAGEMAKER_ENDPOINT_NAME` setting for SageMaker endpoint configuration
+- `SageMakerRuntimeClient` and `ReadableBody` protocols in `types.py`
+- `quarry doctor` checks SageMaker endpoint availability when configured
+- CloudFormation templates for SageMaker Serverless and Realtime endpoint deployment (`infra/sagemaker-serverless.yaml`, `infra/sagemaker-realtime.yaml`)
+- `infra/manage-stack.sh` deploy/destroy/status script with region-aware bucket naming
+- IAM policy template (`docs/quarry-iam-policy.json`) and AWS setup guide (`docs/AWS-SETUP.md`)
+- Test environment isolation — autouse fixture strips `.envrc` env vars from pydantic-settings
+- 549 tests across 25 modules
 
 ## [0.5.0] - 2026-02-13
 
