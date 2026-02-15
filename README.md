@@ -198,13 +198,11 @@ Your IAM user needs `textract:DetectDocumentText`, `textract:StartDocumentTextDe
 
 Only needed if you want cloud-accelerated embedding for large batch ingestion. Search always uses local ONNX regardless of this setting.
 
-1. Deploy the endpoint:
+1. Deploy the endpoint (requires AWS credentials with admin access):
 
 ```bash
-aws cloudformation deploy \
-  --template-file infra/sagemaker-embedding.yaml \
-  --stack-name quarry-embedding \
-  --capabilities CAPABILITY_NAMED_IAM
+./infra/manage-stack.sh deploy              # serverless (default, pay-per-request)
+./infra/manage-stack.sh deploy realtime     # persistent instance (~$0.12/hr)
 ```
 
 2. Configure quarry:
@@ -214,13 +212,13 @@ aws cloudformation deploy \
 | `EMBEDDING_BACKEND` | `onnx` | Set to `sagemaker` to use cloud embedding for ingestion |
 | `SAGEMAKER_ENDPOINT_NAME` | | Endpoint name (e.g. `quarry-embedding`) |
 
-3. Verify:
+3. Tear down when not in use:
 
 ```bash
-quarry doctor  # should show SageMaker endpoint InService
+./infra/manage-stack.sh destroy
 ```
 
-The endpoint uses Serverless inference and scales to zero when idle. `quarry sync` auto-selects 4 parallel workers when a cloud backend is active.
+The serverless endpoint scales to zero when idle — you only pay per inference request. The management script packages a custom inference handler, uploads it to S3, and deploys the CloudFormation stack. See [docs/AWS-SETUP.md](docs/AWS-SETUP.md) for IAM setup.
 
 ### Named Databases
 
