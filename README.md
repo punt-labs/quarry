@@ -87,43 +87,50 @@ All checks passed.
 
 ## Usage
 
-### CLI
+Quarry exposes the same operations through both a CLI and MCP tools. The CLI is for terminal use; MCP tools are what Claude Code and Claude Desktop call on your behalf.
+
+| Operation | CLI | MCP tool |
+|-----------|-----|----------|
+| **Search** | | |
+| Semantic search | `quarry search "query"` | `search_documents` |
+| **Ingestion** | | |
+| Ingest a file | `quarry ingest-file <path>` | `ingest_file` |
+| Ingest a URL | `quarry ingest-url <url>` | `ingest_url` |
+| Ingest inline text | — | `ingest_content` |
+| **Documents** | | |
+| List documents | `quarry list` | `get_documents` |
+| Get page text | — | `get_page` |
+| Delete a document | `quarry delete <name>` | `delete_document` |
+| **Collections** | | |
+| List collections | `quarry collections` | `list_collections` |
+| Delete a collection | `quarry delete-collection <name>` | `delete_collection` |
+| **Directory sync** | | |
+| Register a directory | `quarry register <path>` | `register_directory` |
+| Sync all registrations | `quarry sync` | `sync_all_registrations` |
+| List registrations | `quarry registrations` | `list_registrations` |
+| Deregister | `quarry deregister <name>` | `deregister_directory` |
+| **System** | | |
+| Database status | — | `status` |
+| List databases | `quarry databases` | — |
+| Install / setup | `quarry install` | — |
+| Health check | `quarry doctor` | — |
+| HTTP API server | `quarry serve` | — |
+| MCP server | `quarry mcp` | — |
+
+### CLI options
+
+Common flags available on most commands:
 
 ```bash
-# Ingest
-quarry ingest-file report.pdf
-quarry ingest-file whiteboard.jpg
-quarry ingest-file src/main.py
-quarry ingest-file report.pdf --overwrite
-quarry ingest-url https://docs.python.org/3/library/urllib.request.html
-
-# Search
-quarry search "authentication logic"
-quarry search "quarterly revenue" -n 5
-quarry search "test coverage" --page-type code
-quarry search "revenue" --source-format .xlsx
-
-# Manage
-quarry list
-quarry delete report.pdf
-quarry collections
-quarry delete-collection math
-quarry databases                    # list all named databases with stats
-
-# Directory sync — register a folder, then sync to pick up changes
-quarry register /path/to/docs --collection my-docs
-quarry sync                         # ingest new/changed, remove deleted
-quarry registrations
-quarry deregister my-docs
-
-# System
-quarry install                      # download model, configure MCP
-quarry doctor                       # check environment health
-quarry serve                        # start HTTP API for quarry-menubar
-quarry mcp                          # start MCP server (stdio)
+quarry ingest-file report.pdf --overwrite        # replace existing data
+quarry ingest-file report.pdf --db work          # target a named database
+quarry search "revenue" -n 5                     # limit results
+quarry search "tests" --page-type code           # filter by content type
+quarry search "revenue" --source-format .xlsx    # filter by source format
+quarry register /path/to/docs --collection docs  # explicit collection name
 ```
 
-### MCP Server
+### MCP setup
 
 `quarry install` configures Claude Code and Claude Desktop automatically. Manual setup:
 
@@ -147,31 +154,6 @@ claude mcp add quarry -- uvx --from quarry-mcp quarry mcp
 ```
 
 Use the absolute path to `uvx` for Desktop (e.g. `/opt/homebrew/bin/uvx`). `quarry install` resolves this automatically.
-
-**Available tools:**
-
-| Tool | Description |
-|------|-------------|
-| **Search** | |
-| `search_documents` | Semantic search across indexed documents |
-| **Ingestion** | |
-| `ingest_file` | Ingest a file (PDF, image, text, source code) |
-| `ingest_content` | Ingest inline text content directly |
-| `ingest_url` | Fetch a webpage and ingest its content |
-| **Documents** | |
-| `get_documents` | List indexed documents with metadata |
-| `get_page` | Retrieve full text for a specific page |
-| `delete_document` | Remove a document and its chunks |
-| **Collections** | |
-| `list_collections` | List collections with document/chunk counts |
-| `delete_collection` | Remove all documents in a collection |
-| **Directory sync** | |
-| `register_directory` | Register a directory for sync |
-| `deregister_directory` | Remove a directory registration |
-| `sync_all_registrations` | Sync all registered directories |
-| `list_registrations` | List registered directories |
-| **System** | |
-| `status` | Database stats: counts, storage size, model info |
 
 **Claude Desktop note:** Uploaded files live in a sandbox that Quarry cannot access. Use `ingest_content` with extracted content for uploads. For files on your Mac, provide the local path to `ingest_file`.
 
