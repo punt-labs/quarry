@@ -10,6 +10,7 @@ import pytest
 from quarry.backends import clear_caches, get_embedding_backend, get_ocr_backend
 from quarry.config import Settings
 from quarry.embeddings import OnnxEmbeddingBackend
+from quarry.embeddings_sagemaker import SageMakerEmbeddingBackend
 from quarry.models import PageContent, PageType
 from quarry.ocr_client import TextractOcrBackend
 from quarry.ocr_local import LocalOcrBackend
@@ -105,6 +106,33 @@ class TestGetEmbeddingBackend:
             first = get_embedding_backend(settings)
             second = get_embedding_backend(settings)
         assert first is second
+
+    def test_returns_sagemaker_backend(self) -> None:
+        p1, p2, p3 = _embedding_backend_patches()
+        with p1, p2, p3, patch("boto3.client"):
+            backend = get_embedding_backend(
+                _settings(
+                    embedding_backend="sagemaker",
+                    sagemaker_endpoint_name="test-ep",
+                )
+            )
+        assert isinstance(backend, SageMakerEmbeddingBackend)
+
+    def test_unknown_embedding_backend_raises(self) -> None:
+        with pytest.raises(ValueError, match="Unknown embedding backend: 'nope'"):
+            get_embedding_backend(_settings(embedding_backend="nope"))
+
+    def test_cache_distinguishes_backends(self) -> None:
+        p1, p2, p3 = _embedding_backend_patches()
+        with p1, p2, p3, patch("boto3.client"):
+            onnx = get_embedding_backend(_settings(embedding_backend="onnx"))
+            sm = get_embedding_backend(
+                _settings(
+                    embedding_backend="sagemaker",
+                    sagemaker_endpoint_name="test-ep",
+                )
+            )
+        assert type(onnx) is not type(sm)
 
 
 class TestClearCaches:
