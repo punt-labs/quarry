@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import logging
 import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,6 +20,34 @@ class CheckResult:
     passed: bool
     message: str
     required: bool = True
+
+
+def _quarry_version() -> str:
+    from importlib.metadata import version  # noqa: PLC0415
+
+    return version("quarry-mcp")
+
+
+@contextlib.contextmanager
+def _quiet_logging() -> Iterator[None]:
+    """Temporarily suppress third-party logging during checks.
+
+    RapidOCR adds its own StreamHandler that writes to stderr during init.
+    Setting root logger level isn't enough — we must redirect stderr to
+    suppress output from handlers created after our context enters.
+    """
+    root = logging.getLogger()
+    previous_level = root.level
+    root.setLevel(logging.CRITICAL)
+    devnull = open(os.devnull, "w")  # noqa: SIM115, PTH123
+    old_stderr = sys.stderr
+    sys.stderr = devnull
+    try:
+        yield
+    finally:
+        sys.stderr = old_stderr
+        devnull.close()
+        root.setLevel(previous_level)
 
 
 def _check_python_version() -> CheckResult:
@@ -104,10 +135,14 @@ def _check_embedding_model() -> CheckResult:
         and isinstance(tokenizer_cached, str)
         and Path(tokenizer_cached).exists()
     ):
+        model_size = Path(model_cached).stat().st_size
         return CheckResult(
             name="Embedding model",
             passed=True,
-            message="snowflake-arctic-embed-m-v1.5 (ONNX INT8) cached",
+            message=(
+                "snowflake-arctic-embed-m-v1.5 (ONNX INT8) cached"
+                f" ({_human_size(model_size)})"
+            ),
         )
     return CheckResult(
         name="Embedding model",
@@ -164,6 +199,34 @@ def _check_imports() -> CheckResult:
         passed=False,
         message=f"Failed: {', '.join(failed)}",
     )
+
+
+def _check_storage() -> CheckResult:
+    """Report database storage size."""
+    data_dir = Path.home() / ".quarry" / "data"
+    if not data_dir.exists():
+        return CheckResult(
+            name="Storage",
+            passed=True,
+            message="no data yet",
+            required=False,
+        )
+    total = sum(f.stat().st_size for f in data_dir.rglob("*") if f.is_file())
+    return CheckResult(
+        name="Storage",
+        passed=True,
+        message=f"{_human_size(total)} in {data_dir}",
+        required=False,
+    )
+
+
+def _human_size(nbytes: int) -> str:
+    """Format byte count as human-readable string."""
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if nbytes < 1024 or unit == "TB":
+            return f"{nbytes:.1f} {unit}" if nbytes >= 10 else f"{nbytes:.2f} {unit}"
+        nbytes /= 1024  # type: ignore[assignment]
+    return f"{nbytes:.1f} TB"  # unreachable but satisfies type checker
 
 
 _MCP_SERVER_NAME = "quarry"
@@ -246,50 +309,160 @@ def _configure_claude_desktop() -> CheckResult:
     )
 
 
+def _check_claude_code_mcp() -> CheckResult:
+    """Check whether quarry MCP is configured in Claude Code (read-only)."""
+    claude_path = shutil.which("claude")
+    if claude_path is None:
+        return CheckResult(
+            name="Claude Code MCP",
+            passed=False,
+            message="claude CLI not found on PATH",
+            required=False,
+        )
+    result = subprocess.run(  # noqa: S603
+        [claude_path, "mcp", "list"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return CheckResult(
+            name="Claude Code MCP",
+            passed=False,
+            message="could not list MCP servers (run 'quarry install')",
+            required=False,
+        )
+    if _MCP_SERVER_NAME in result.stdout:
+        return CheckResult(
+            name="Claude Code MCP",
+            passed=True,
+            message="configured",
+        )
+    return CheckResult(
+        name="Claude Code MCP",
+        passed=False,
+        message="not configured (run 'quarry install')",
+        required=False,
+    )
+
+
+def _check_claude_desktop_mcp() -> CheckResult:
+    """Check whether quarry MCP is configured in Claude Desktop (read-only)."""
+    config_path = _DESKTOP_CONFIG_PATH
+    if not config_path.parent.exists():
+        return CheckResult(
+            name="Claude Desktop MCP",
+            passed=False,
+            message="Claude Desktop not installed",
+            required=False,
+        )
+    if not config_path.exists():
+        return CheckResult(
+            name="Claude Desktop MCP",
+            passed=False,
+            message="no config file (run 'quarry install')",
+            required=False,
+        )
+    try:
+        config = json.loads(config_path.read_text())
+        servers = config.get("mcpServers", {})
+        if _MCP_SERVER_NAME in servers:
+            return CheckResult(
+                name="Claude Desktop MCP",
+                passed=True,
+                message="configured",
+            )
+        return CheckResult(
+            name="Claude Desktop MCP",
+            passed=False,
+            message="not configured (run 'quarry install')",
+            required=False,
+        )
+    except (json.JSONDecodeError, OSError) as exc:
+        return CheckResult(
+            name="Claude Desktop MCP",
+            passed=False,
+            message=f"config error: {exc}",
+            required=False,
+        )
+
+
+def _print_check(check: CheckResult) -> None:
+    """Print a single check result with appropriate symbol."""
+    if check.passed:
+        symbol = "\u2713"
+    elif check.required:
+        symbol = "\u2717"
+    else:
+        symbol = "\u25cb"
+    print(f"  {symbol} {check.name}: {check.message}")  # noqa: T201
+
+
 def run_install() -> int:
     """Create data directory, download model, and configure MCP clients.
 
     Returns 0 on success, 1 on failure.
     """
+    print(f"quarry-mcp {_quarry_version()}")  # noqa: T201
+    print()  # noqa: T201
+
+    failed = False
+
+    # Step 1: data directory
     data_dir = Path.home() / ".quarry" / "data" / "default" / "lancedb"
+    print("[1/3] Creating data directory...")  # noqa: T201
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True)
+        print(f"  \u2713 {data_dir}")  # noqa: T201
+    except OSError as exc:
+        print(f"  \u2717 Failed to create {data_dir}: {exc}")  # noqa: T201
+        failed = True
 
-    print("Creating data directory...")  # noqa: T201
-    data_dir.mkdir(parents=True, exist_ok=True)
-    print(f"  \u2713 {data_dir}")  # noqa: T201
+    # Step 2: embedding model
+    print("[2/3] Downloading embedding model...")  # noqa: T201
+    try:
+        from quarry.embeddings import _download_model_files  # noqa: PLC0415
 
-    print("Downloading embedding model (ONNX)...")  # noqa: T201
-    from quarry.embeddings import _download_model_files  # noqa: PLC0415
+        _download_model_files()
+        print("  \u2713 snowflake-arctic-embed-m-v1.5 (INT8 ONNX) cached")  # noqa: T201
+    except Exception as exc:  # noqa: BLE001
+        print(f"  \u2717 Model download failed: {exc}")  # noqa: T201
+        failed = True
 
-    _download_model_files()
-    print("  \u2713 snowflake-arctic-embed-m-v1.5 (INT8 ONNX) cached")  # noqa: T201
-
-    print("Configuring MCP clients...")  # noqa: T201
+    # Step 3: MCP clients
+    print("[3/3] Configuring MCP clients...")  # noqa: T201
     for check in [_configure_claude_code(), _configure_claude_desktop()]:
-        symbol = "\u2713" if check.passed else "\u25cb"
-        print(f"  {symbol} {check.name}: {check.message}")  # noqa: T201
+        _print_check(check)
 
-    return 0
+    # Verification
+    print()  # noqa: T201
+    print("Verifying installation...")  # noqa: T201
+    exit_code = check_environment(_skip_header=True)
+    if failed:
+        return 1
+    return exit_code
 
 
-def check_environment() -> int:
+def check_environment(*, _skip_header: bool = False) -> int:
     """Run all environment checks. Returns 0 if all required pass, 1 otherwise."""
-    checks = [
-        _check_python_version(),
-        _check_data_directory(),
-        _check_local_ocr(),
-        _check_aws_credentials(),
-        _check_embedding_model(),
-        _check_imports(),
-    ]
+    if not _skip_header:
+        print(f"quarry-mcp {_quarry_version()}")  # noqa: T201
+        print()  # noqa: T201
+
+    with _quiet_logging():
+        checks = [
+            _check_python_version(),
+            _check_data_directory(),
+            _check_local_ocr(),
+            _check_aws_credentials(),
+            _check_embedding_model(),
+            _check_imports(),
+            _check_claude_code_mcp(),
+            _check_claude_desktop_mcp(),
+            _check_storage(),
+        ]
 
     for check in checks:
-        if check.passed:
-            symbol = "\u2713"
-        elif check.required:
-            symbol = "\u2717"
-        else:
-            symbol = "\u25cb"
-        print(f"  {symbol} {check.name}: {check.message}")  # noqa: T201
+        _print_check(check)
 
     required_failures = [c for c in checks if c.required and not c.passed]
     if required_failures:
