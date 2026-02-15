@@ -316,8 +316,13 @@ def registrations_cmd(
 @_cli_errors
 def sync_cmd(
     workers: Annotated[
-        int, typer.Option("--workers", "-w", help="Parallel workers")
-    ] = 2,
+        int,
+        typer.Option(
+            "--workers",
+            "-w",
+            help="Parallel workers (>1 helps when using cloud OCR)",
+        ),
+    ] = 1,
     database: DbOption = "",
 ) -> None:
     """Sync all registered directories: ingest new/changed, remove deleted."""

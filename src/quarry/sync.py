@@ -127,7 +127,7 @@ def sync_collection(
     settings: Settings,
     conn: sqlite3.Connection,
     *,
-    max_workers: int = 2,
+    max_workers: int = 1,
     progress_callback: Callable[[str], None] | None = None,
 ) -> SyncResult:
     """Sync a single registered directory with LanceDB.
@@ -234,7 +234,7 @@ def sync_all(
     db: LanceDB,
     settings: Settings,
     *,
-    max_workers: int = 2,
+    max_workers: int = 1,
     progress_callback: Callable[[str], None] | None = None,
 ) -> dict[str, SyncResult]:
     """Sync all registered directories.
