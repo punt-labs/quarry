@@ -257,7 +257,7 @@ Connectors                Formats              Transformations
                                                     │
                                                     ├─ Sentence-aware chunking
                                                     ├─ Chunk metadata (page_type, source_format)
-                                                    ├─ Vector embeddings (768-dim, ONNX Runtime)
+                                                    ├─ Vector embeddings (768-dim, local ONNX or SageMaker)
                                                     └─ LanceDB storage
                                                          │
                                                   Query
@@ -305,6 +305,7 @@ The public API surface is in `quarry/__init__.py`. Pipeline functions accept a `
 ## Roadmap
 
 - [macOS menu bar companion app](https://github.com/jmf-pobox/quarry-menubar) — native macOS search interface (in development)
+- Cloud embedding backend (SageMaker) — same model on GPU for fast batch ingestion, local ONNX for queries
 - Google Drive connector
 - `quarry sync --watch` for live filesystem monitoring
 - PII detection and redaction
