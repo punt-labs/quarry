@@ -174,12 +174,14 @@ All settings via environment variables:
 
 Quarry ships with two OCR backends:
 
-| Backend | Speed | Quality | Setup |
-|---------|-------|---------|-------|
-| **local** (default) | ~7-8s/page | Good for semantic search | None |
-| **textract** | ~2-3s/page | Excellent character accuracy | AWS credentials + S3 bucket |
+| Backend | Per-page OCR | End-to-end ingestion | Quality | Setup |
+|---------|-------------|---------------------|---------|-------|
+| **local** (default) | ~7-8s/page | Faster overall | Good for semantic search | None |
+| **textract** | ~2-3s/page | Slower (network overhead) | Excellent character accuracy | AWS credentials + S3 bucket |
 
 The local backend uses RapidOCR (PaddleOCR models via ONNX Runtime, CPU-only, ~214 MB). No cloud account needed.
+
+**When to use Textract:** Degraded scans, faxes, or low-resolution images where RapidOCR struggles. For clean digital PDFs and presentations, local OCR produces identical search results (see [Benchmarks](#benchmarks)).
 
 ### AWS Textract Setup
 
@@ -189,14 +191,14 @@ Only needed if you want cloud OCR. Set these environment variables:
 |----------|---------|-------------|
 | `AWS_ACCESS_KEY_ID` | | AWS access key |
 | `AWS_SECRET_ACCESS_KEY` | | AWS secret key |
-| `AWS_DEFAULT_REGION` | `us-east-1` | AWS region |
-| `S3_BUCKET` | | S3 bucket for Textract uploads |
+| `AWS_DEFAULT_REGION` | `us-east-1` | AWS region (must match S3 bucket region) |
+| `S3_BUCKET` | | S3 bucket for Textract uploads (must be in `AWS_DEFAULT_REGION`) |
 
-Your IAM user needs `textract:DetectDocumentText`, `textract:StartDocumentTextDetection`, `textract:GetDocumentTextDetection`, and `s3:PutObject/GetObject/DeleteObject` on your bucket.
+Your IAM user needs `textract:DetectDocumentText`, `textract:StartDocumentTextDetection`, `textract:GetDocumentTextDetection`, and `s3:PutObject/GetObject/DeleteObject` on your bucket. All AWS resources (S3 bucket, SageMaker endpoint) must be in the same region. See [docs/AWS-SETUP.md](docs/AWS-SETUP.md) for full setup including IAM policy and region strategy.
 
 ### SageMaker Embedding Setup
 
-Only needed if you want cloud-accelerated embedding for large batch ingestion. Search always uses local ONNX regardless of this setting.
+Optional cloud embedding for ingestion. Search always uses local ONNX regardless of this setting. Local ONNX embedding sustains ~11 chunks/s on a laptop — sufficient for most workloads. SageMaker is designed for large-scale batch ingestion (thousands of files) where parallelism across workers offsets the network overhead. For small-to-medium collections, local is faster (see [Benchmarks](#benchmarks)).
 
 1. Deploy the endpoint (requires AWS credentials with admin access):
 
@@ -211,6 +213,7 @@ Only needed if you want cloud-accelerated embedding for large batch ingestion. S
 |----------|---------|-------------|
 | `EMBEDDING_BACKEND` | `onnx` | Set to `sagemaker` to use cloud embedding for ingestion |
 | `SAGEMAKER_ENDPOINT_NAME` | | Endpoint name (e.g. `quarry-embedding`) |
+| `AWS_DEFAULT_REGION` | `us-east-1` | Must match the endpoint's deployed region |
 
 3. Tear down when not in use:
 
@@ -218,7 +221,7 @@ Only needed if you want cloud-accelerated embedding for large batch ingestion. S
 ./infra/manage-stack.sh destroy
 ```
 
-The serverless endpoint scales to zero when idle — you only pay per inference request. The management script packages a custom inference handler, uploads it to S3, and deploys the CloudFormation stack. See [docs/AWS-SETUP.md](docs/AWS-SETUP.md) for IAM setup.
+The serverless endpoint scales to zero when idle — you only pay per inference request. The realtime endpoint (~$0.12/hr) eliminates cold starts for sustained workloads. The management script packages a custom inference handler (CLS-token pooling + L2 normalization), uploads it to S3, and deploys the CloudFormation stack. See [docs/AWS-SETUP.md](docs/AWS-SETUP.md) for IAM setup and region strategy.
 
 ### Named Databases
 
@@ -261,6 +264,31 @@ Each database resolves to `~/.quarry/data/<name>/lancedb` with its own registry.
 | `SAGEMAKER_ENDPOINT_NAME` | | SageMaker endpoint for cloud embedding |
 | `EMBEDDING_MODEL` | `Snowflake/snowflake-arctic-embed-m-v1.5` | Embedding model identifier (cache key) |
 | `EMBEDDING_DIMENSION` | `768` | Embedding vector dimension |
+
+## Benchmarks
+
+Tested on 19 files (~44 MB) of university course material: clean digital PDFs and PPTX presentations. Single-threaded ingestion, M-series Mac.
+
+### Ingestion speed
+
+| Configuration | Time | vs Local |
+|--------------|------|----------|
+| **Local** (RapidOCR + ONNX) | **107s** | 1x |
+| Cloud (Textract + SageMaker serverless) | 983s | 9.2x slower |
+| Cloud (Textract + SageMaker realtime) | 658s | 6.1x slower |
+
+### Search quality
+
+Five test queries across both configurations returned **identical top-1 results**. Similarity scores differed by 0.003-0.04 between local INT8 and cloud FP32 embeddings — negligible for retrieval ranking.
+
+### When cloud backends help
+
+| Scenario | Recommendation |
+|----------|---------------|
+| Clean digital PDFs, presentations, text | **Local.** Faster, free, same search quality. |
+| Degraded scans, faxes, low-resolution images | **Textract.** Better character accuracy on noisy input. |
+| Thousands of files, batch ingestion | **SageMaker realtime.** Parallelism across workers offsets overhead at scale. |
+| Small-to-medium collections (<100 files) | **Local.** Cloud overhead dominates at this scale. |
 
 ## Architecture
 
@@ -357,6 +385,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, architecture, and how to add n
 ## Documentation
 
 - [Changelog](CHANGELOG.md)
+- [AWS Setup Guide](docs/AWS-SETUP.md) -- IAM, S3, SageMaker deployment, region strategy
 - [Search Quality and Tuning](docs/SEARCH-TUNING.md)
 - [Backend Abstraction Design](docs/BACKEND-ABSTRACTION.md)
 - [Non-Functional Design](docs/NON-FUNCTIONAL-DESIGN.md)
