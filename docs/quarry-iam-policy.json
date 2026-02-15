@@ -28,7 +28,7 @@
         "sagemaker:DescribeEndpoint",
         "sagemaker:InvokeEndpoint"
       ],
-      "Resource": "arn:aws:sagemaker:YOUR-REGION:YOUR-ACCOUNT-ID:endpoint/quarry-embedding"
+      "Resource": "arn:aws:sagemaker:*:YOUR-ACCOUNT-ID:endpoint/quarry-embedding"
     }
   ]
 }

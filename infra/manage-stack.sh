@@ -9,19 +9,24 @@
 set -euo pipefail
 
 STACK_NAME="quarry-embedding"
-REGION="${QUARRY_DEPLOY_REGION:-us-west-1}"
 PROFILE="${QUARRY_DEPLOY_PROFILE:-admin}"
 INFRA_DIR="$(cd "$(dirname "$0")" && pwd)"
 S3_KEY="sagemaker/quarry-embedding/model.tar.gz"
 
+# Region: use QUARRY_DEPLOY_REGION, fall back to AWS_DEFAULT_REGION, then us-east-1.
+# This ensures the SageMaker endpoint deploys to the same region as your Textract
+# S3 bucket and app runtime, avoiding cross-region mismatches.
+REGION="${QUARRY_DEPLOY_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
+
 ensure_bucket() {
   # S3 bucket for model artifacts (must be in the same region as the endpoint).
-  # Set QUARRY_MODEL_BUCKET or the script auto-creates one from your account ID.
+  # Set QUARRY_MODEL_BUCKET or the script auto-creates a region-specific one.
   if [ -n "${QUARRY_MODEL_BUCKET:-}" ]; then
     S3_BUCKET="$QUARRY_MODEL_BUCKET"
   else
     ACCOUNT_ID=$(aws sts get-caller-identity --profile "$PROFILE" --query Account --output text)
-    S3_BUCKET="quarry-models-${ACCOUNT_ID}"
+    # Include region in bucket name so each region gets its own artifact bucket.
+    S3_BUCKET="quarry-models-${REGION}-${ACCOUNT_ID}"
     if ! aws s3api head-bucket --bucket "$S3_BUCKET" --region "$REGION" --profile "$PROFILE" 2>/dev/null; then
       echo "Creating S3 bucket $S3_BUCKET in $REGION..."
       if [ "$REGION" = "us-east-1" ]; then
@@ -36,15 +41,14 @@ ensure_bucket() {
 
 upload_inference_code() {
   echo "Packaging custom inference handler..."
-  local tmptar
-  tmptar="$(mktemp /tmp/quarry-model-XXXXXX.tar.gz)"
-  trap 'rm -f "$tmptar"' EXIT
-  tar -czf "$tmptar" -C "$INFRA_DIR/sagemaker-inference" code/
+  TMPTAR="$(mktemp /tmp/quarry-model-XXXXXX).tar.gz"
+  trap 'rm -f "$TMPTAR"' EXIT
+  tar -czf "$TMPTAR" -C "$INFRA_DIR/sagemaker-inference" code/
   echo "Uploading to s3://$S3_BUCKET/$S3_KEY..."
-  aws s3 cp "$tmptar" "s3://$S3_BUCKET/$S3_KEY" \
+  aws s3 cp "$TMPTAR" "s3://$S3_BUCKET/$S3_KEY" \
     --region "$REGION" \
     --profile "$PROFILE"
-  rm -f "$tmptar"
+  rm -f "$TMPTAR"
   trap - EXIT
 }
 
@@ -124,6 +128,11 @@ case "${1:-}" in
     echo "  deploy [serverless|realtime]  Deploy the SageMaker endpoint (default: serverless)"
     echo "  destroy                       Delete the stack and all resources"
     echo "  status                        Show current stack status"
+    echo ""
+    echo "Environment variables:"
+    echo "  QUARRY_DEPLOY_REGION   Deploy region (default: \$AWS_DEFAULT_REGION or us-east-1)"
+    echo "  QUARRY_DEPLOY_PROFILE  AWS CLI profile (default: admin)"
+    echo "  QUARRY_MODEL_BUCKET    S3 bucket for model artifacts (auto-created if unset)"
     echo ""
     echo "Extra Key=Value pairs after mode are appended to --parameter-overrides."
     echo ""

@@ -2,6 +2,25 @@
 
 Quarry works fully offline with local OCR and ONNX embedding. AWS is only needed for cloud-accelerated OCR (Textract) and cloud-accelerated embedding (SageMaker). This guide walks you through creating a dedicated IAM user with least-privilege permissions.
 
+## Region Strategy
+
+All AWS resources must be in the **same region**. Quarry uses `AWS_DEFAULT_REGION` for both Textract and SageMaker at runtime. The deploy script (`manage-stack.sh`) inherits this same variable by default.
+
+Pick one region and use it everywhere:
+
+```bash
+export AWS_DEFAULT_REGION="us-west-2"   # or whichever region you prefer
+```
+
+| Resource | Controlled By | Must Match |
+|----------|--------------|------------|
+| Textract API calls | `AWS_DEFAULT_REGION` | S3 bucket region |
+| S3 bucket for Textract | Created in your chosen region | `AWS_DEFAULT_REGION` |
+| SageMaker endpoint | `QUARRY_DEPLOY_REGION` (defaults to `AWS_DEFAULT_REGION`) | `AWS_DEFAULT_REGION` |
+| SageMaker model artifacts bucket | Auto-created by `manage-stack.sh` in deploy region | SageMaker endpoint region |
+
+If you see `AccessDeniedException` or `endpoint not found` errors, check that all resources are in the same region.
+
 ## 1. Create an IAM User
 
 Sign in to the AWS Console as root, then:
@@ -22,55 +41,35 @@ Set them in your shell profile (`~/.zshrc` or `~/.bashrc`):
 ```bash
 export AWS_ACCESS_KEY_ID="AKIA..."
 export AWS_SECRET_ACCESS_KEY="..."
-export AWS_DEFAULT_REGION="us-east-1"
+export AWS_DEFAULT_REGION="us-west-2"
 ```
 
 ## 3. Attach Permissions
 
-Create a custom policy with only what quarry needs. Go to **IAM → Policies → Create policy**, switch to JSON, and paste:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "TextractOCR",
-      "Effect": "Allow",
-      "Action": [
-        "textract:DetectDocumentText",
-        "textract:StartDocumentTextDetection",
-        "textract:GetDocumentTextDetection"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Sid": "S3ForTextract",
-      "Effect": "Allow",
-      "Action": [
-        "s3:PutObject",
-        "s3:GetObject",
-        "s3:DeleteObject"
-      ],
-      "Resource": "arn:aws:s3:::YOUR-BUCKET-NAME/*"
-    },
-    {
-      "Sid": "SageMakerEmbedding",
-      "Effect": "Allow",
-      "Action": [
-        "sagemaker:DescribeEndpoint",
-        "sagemaker:InvokeEndpoint"
-      ],
-      "Resource": "arn:aws:sagemaker:us-east-1:YOUR-ACCOUNT-ID:endpoint/quarry-embedding"
-    }
-  ]
-}
-```
+Create a custom policy with only what quarry needs. Go to **IAM → Policies → Create policy**, switch to JSON, and paste the contents of [`quarry-iam-policy.json`](quarry-iam-policy.json).
 
 Replace `YOUR-BUCKET-NAME` with your S3 bucket and `YOUR-ACCOUNT-ID` with your 12-digit AWS account ID (visible in the top-right of the console).
 
 Name the policy `quarry-app-policy`, then attach it to the `quarry-app` user via **Users → quarry-app → Permissions → Add permissions → Attach policies directly**.
 
-## 4. Deploy the SageMaker Endpoint (One-Time)
+## 4. Create an S3 Bucket for Textract
+
+Textract's async API requires an S3 bucket in the same region:
+
+```bash
+aws s3api create-bucket \
+  --bucket YOUR-BUCKET-NAME \
+  --region us-west-2 \
+  --create-bucket-configuration LocationConstraint=us-west-2
+```
+
+Set `S3_BUCKET` in your environment:
+
+```bash
+export S3_BUCKET="YOUR-BUCKET-NAME"
+```
+
+## 5. Deploy the SageMaker Endpoint (One-Time)
 
 The management script creates IAM roles and SageMaker resources. Run this from your **root account** (or a user with `AdministratorAccess`) since the `quarry-app` user intentionally lacks these broad permissions:
 
@@ -79,7 +78,12 @@ The management script creates IAM roles and SageMaker resources. Run this from y
 ./infra/manage-stack.sh deploy realtime     # persistent instance (~$0.12/hr)
 ```
 
-The script auto-creates an S3 bucket for model artifacts, packages the custom inference handler, and deploys the CloudFormation stack. After this completes (~5-10 min), the `quarry-app` user can invoke the endpoint.
+The script:
+- Inherits `AWS_DEFAULT_REGION` from your environment (so it deploys to the same region as Textract)
+- Auto-creates an S3 bucket for model artifacts in that region
+- Packages the custom inference handler and deploys the CloudFormation stack
+
+After this completes (~5-10 min), the `quarry-app` user can invoke the endpoint.
 
 Tear down when not in use:
 
@@ -87,7 +91,7 @@ Tear down when not in use:
 ./infra/manage-stack.sh destroy
 ```
 
-## 5. Verify
+## 6. Verify
 
 ```bash
 # Source your credentials, then:
@@ -106,8 +110,8 @@ Expected output includes:
 | Feature | Env Vars | Permissions |
 |---------|----------|-------------|
 | Local OCR + ONNX embedding | None | None |
-| Textract OCR | `OCR_BACKEND=textract`, `S3_BUCKET` | TextractOCR + S3ForTextract |
-| SageMaker embedding | `EMBEDDING_BACKEND=sagemaker`, `SAGEMAKER_ENDPOINT_NAME` | SageMakerEmbedding |
+| Textract OCR | `OCR_BACKEND=textract`, `S3_BUCKET`, `AWS_DEFAULT_REGION` | TextractOCR + S3ForTextract |
+| SageMaker embedding | `EMBEDDING_BACKEND=sagemaker`, `SAGEMAKER_ENDPOINT_NAME`, `AWS_DEFAULT_REGION` | SageMakerEmbedding |
 
 You can enable features incrementally. Start with local-only, add Textract when you need better OCR quality, add SageMaker when batch ingestion speed matters.
 
@@ -116,5 +120,5 @@ You can enable features incrementally. Start with local-only, add Textract when 
 - **Lock down your root account**: Enable MFA on root (IAM → Security credentials → MFA). Use root only for billing and account-level changes.
 - **Rotate keys periodically**: IAM → Users → quarry-app → Security credentials → rotate access keys every 90 days.
 - **Never commit credentials**: Quarry reads from environment variables only. Keep them in your shell profile or a secrets manager, never in `.env` files checked into git.
-- **Scope the S3 bucket**: The policy above limits S3 access to one bucket. Create a dedicated bucket (e.g. `quarry-textract-uploads`) rather than granting access to existing buckets.
+- **Scope the S3 bucket**: The policy limits S3 access to one bucket. Create a dedicated bucket rather than granting access to existing buckets.
 - **Scope the SageMaker resource**: The policy ARN is scoped to the specific endpoint name. If you change the endpoint name in the CloudFormation parameters, update the policy to match.
