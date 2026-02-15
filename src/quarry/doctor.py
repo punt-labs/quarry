@@ -222,8 +222,8 @@ def _check_storage() -> CheckResult:
 
 def _human_size(nbytes: int) -> str:
     """Format byte count as human-readable string."""
-    for unit in ("B", "KB", "MB", "GB"):
-        if nbytes < 1024 or unit == "GB":
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if nbytes < 1024 or unit == "TB":
             return f"{nbytes:.1f} {unit}" if nbytes >= 10 else f"{nbytes:.2f} {unit}"
         nbytes /= 1024  # type: ignore[assignment]
     return f"{nbytes:.1f} TB"  # unreachable but satisfies type checker
@@ -436,16 +436,17 @@ def run_install() -> int:
     # Verification
     print()  # noqa: T201
     print("Verifying installation...")  # noqa: T201
-    exit_code = check_environment()
+    exit_code = check_environment(_skip_header=True)
     if failed:
         return 1
     return exit_code
 
 
-def check_environment() -> int:
+def check_environment(*, _skip_header: bool = False) -> int:
     """Run all environment checks. Returns 0 if all required pass, 1 otherwise."""
-    print(f"quarry-mcp {_quarry_version()}")  # noqa: T201
-    print()  # noqa: T201
+    if not _skip_header:
+        print(f"quarry-mcp {_quarry_version()}")  # noqa: T201
+        print()  # noqa: T201
 
     with _quiet_logging():
         checks = [

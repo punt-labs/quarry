@@ -327,7 +327,7 @@ def _mock_install_deps(monkeypatch: MP) -> None:
     )
     monkeypatch.setattr(doctor_mod, "_configure_claude_code", noop)
     monkeypatch.setattr(doctor_mod, "_configure_claude_desktop", noop)
-    monkeypatch.setattr(doctor_mod, "check_environment", lambda: 0)
+    monkeypatch.setattr(doctor_mod, "check_environment", lambda **_kw: 0)
 
 
 class TestConfigureClaudeCode:

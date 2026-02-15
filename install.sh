@@ -79,12 +79,15 @@ fi
 
 info "Installing quarry-mcp..."
 
-if uv tool install quarry-mcp 2>&1 | grep -q "already installed"; then
-    # Upgrade if already installed
-    uv tool upgrade quarry-mcp
+INSTALL_OUTPUT=$(uv tool install quarry-mcp 2>&1) || true
+if echo "$INSTALL_OUTPUT" | grep -q "already installed"; then
+    uv tool upgrade quarry-mcp || fail "Failed to upgrade quarry-mcp"
     ok "quarry-mcp upgraded"
-else
+elif echo "$INSTALL_OUTPUT" | grep -q "Installed"; then
     ok "quarry-mcp installed"
+else
+    echo "$INSTALL_OUTPUT"
+    fail "Failed to install quarry-mcp"
 fi
 
 # Verify quarry is on PATH
