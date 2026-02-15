@@ -87,7 +87,7 @@ All checks passed.
 
 ## Usage
 
-Quarry exposes the same operations through both a CLI and MCP tools. The CLI is for terminal use; MCP tools are what Claude Code and Claude Desktop call on your behalf.
+Quarry exposes most operations through both a CLI and MCP tools, with gaps shown as `—` below. The CLI is for terminal use; MCP tools are what Claude Code and Claude Desktop call on your behalf.
 
 | Operation | CLI | MCP tool |
 |-----------|-----|----------|
@@ -108,7 +108,7 @@ Quarry exposes the same operations through both a CLI and MCP tools. The CLI is 
 | Register a directory | `quarry register <path>` | `register_directory` |
 | Sync all registrations | `quarry sync` | `sync_all_registrations` |
 | List registrations | `quarry registrations` | `list_registrations` |
-| Deregister | `quarry deregister <name>` | `deregister_directory` |
+| Deregister | `quarry deregister <collection>` | `deregister_directory` |
 | **System** | | |
 | Database status | — | `status` |
 | List databases | `quarry databases` | — |
@@ -117,17 +117,15 @@ Quarry exposes the same operations through both a CLI and MCP tools. The CLI is 
 | HTTP API server | `quarry serve` | — |
 | MCP server | `quarry mcp` | — |
 
-### CLI options
-
-Common flags available on most commands:
+### CLI examples
 
 ```bash
-quarry ingest-file report.pdf --overwrite        # replace existing data
-quarry ingest-file report.pdf --db work          # target a named database
-quarry search "revenue" -n 5                     # limit results
-quarry search "tests" --page-type code           # filter by content type
-quarry search "revenue" --source-format .xlsx    # filter by source format
-quarry register /path/to/docs --collection docs  # explicit collection name
+quarry ingest-file report.pdf --overwrite          # replace existing data
+quarry ingest-file report.pdf --db work            # target a named database
+quarry search "revenue" --limit 5                  # limit results
+quarry search "tests" --page-type code             # filter by content type
+quarry search "revenue" --source-format .xlsx      # filter by source format
+quarry register /path/to/docs --collection docs    # explicit collection name
 ```
 
 ### MCP setup
