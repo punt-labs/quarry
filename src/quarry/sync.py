@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Final
+
+import pathspec
 
 from quarry.config import Settings
 from quarry.database import (
@@ -29,10 +33,34 @@ from quarry.types import LanceDB
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_IGNORE_PATTERNS: Final[list[str]] = [
+    "__pycache__/",
+    "*.pyc",
+    "node_modules/",
+    ".venv/",
+    "venv/",
+    ".tox/",
+    ".nox/",
+    ".eggs/",
+    "*.egg-info/",
+    "dist/",
+    "build/",
+    ".DS_Store",
+]
 
-def _is_hidden(path: Path, root: Path) -> bool:
-    """True if any component from *root* to *path* starts with a dot."""
-    return any(part.startswith(".") for part in path.relative_to(root).parts)
+
+def _load_ignore_spec(directory: Path) -> pathspec.PathSpec:
+    """Build a PathSpec from ``.gitignore``, ``.quarryignore``, and defaults.
+
+    Reads ignore files from the root of *directory* only.  Patterns use
+    standard ``.gitignore`` syntax (``gitignore``).
+    """
+    lines: list[str] = list(_DEFAULT_IGNORE_PATTERNS)
+    for name in (".gitignore", ".quarryignore"):
+        ignore_path = directory / name
+        if ignore_path.is_file():
+            lines.extend(ignore_path.read_text().splitlines())
+    return pathspec.PathSpec.from_lines("gitignore", lines)
 
 
 def discover_files(
@@ -41,6 +69,8 @@ def discover_files(
 ) -> list[Path]:
     """Recursively find files matching *extensions* under *directory*.
 
+    Respects ``.gitignore``, ``.quarryignore``, and hardcoded ignore
+    patterns (``venv/``, ``node_modules/``, ``__pycache__/``, etc.).
     Skips dotfiles, macOS resource forks (``._*``), and files inside
     hidden directories (``.Trash``, ``.git``, etc.).
 
@@ -48,13 +78,32 @@ def discover_files(
     ``absolute()`` rather than ``resolve()`` so that symlinks within
     the tree keep their in-tree path (``relative_to`` stays valid).
     """
-    return sorted(
-        child.absolute()
-        for child in directory.rglob("*")
-        if child.is_file()
-        and child.suffix.lower() in extensions
-        and not _is_hidden(child, directory)
-    )
+    spec = _load_ignore_spec(directory)
+    result: list[Path] = []
+
+    for dirpath_str, dirnames, filenames in os.walk(directory):
+        dirpath = Path(dirpath_str)
+        rel_dir = dirpath.relative_to(directory)
+
+        # Prune hidden and ignored directories (in-place for os.walk)
+        dirnames[:] = sorted(
+            d
+            for d in dirnames
+            if not d.startswith(".") and not spec.match_file(str(rel_dir / d) + "/")
+        )
+
+        for filename in sorted(filenames):
+            if filename.startswith((".", "._")):
+                continue
+            filepath = dirpath / filename
+            if filepath.suffix.lower() not in extensions:
+                continue
+            rel_path = str(filepath.relative_to(directory))
+            if spec.match_file(rel_path):
+                continue
+            result.append(filepath.absolute())
+
+    return result
 
 
 @dataclass(frozen=True)
