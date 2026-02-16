@@ -175,6 +175,17 @@ Quarry works with zero configuration. These environment variables are available 
 
 For advanced settings (Textract polling, embedding model, paths), see [Advanced Configuration](docs/ADVANCED-CONFIG.md).
 
+## Menu Bar App (macOS)
+
+[Quarry Menu Bar](https://github.com/jmf-pobox/quarry-menubar) is a native macOS companion app that puts your knowledge base one click away. It sits in the menu bar and lets you search across all your indexed documents without switching apps.
+
+- Semantic search with instant results
+- Switch between named databases
+- Syntax-highlighted results for code, Markdown, and prose
+- Detail view with full page context
+
+The app manages its own `quarry serve` process automatically — no manual server setup needed. Requires macOS 14 (Sonoma) or later and `quarry-mcp` installed.
+
 ## Cloud Backends (Optional)
 
 Quarry works entirely offline by default. Cloud backends are available for specialized use cases.
@@ -206,7 +217,6 @@ Deploy with `./infra/manage-stack.sh deploy`. See [docs/AWS-SETUP.md](docs/AWS-S
 
 ## Roadmap
 
-- [macOS menu bar companion app](https://github.com/jmf-pobox/quarry-menubar) — native macOS search interface (in development)
 - Google Drive connector
 - `quarry sync --watch` for live filesystem monitoring
 - PII detection and redaction
