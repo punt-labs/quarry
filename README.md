@@ -29,108 +29,96 @@ quarry install          # downloads embedding model (~500MB), configures MCP
 Then start using it:
 
 ```bash
-quarry ingest-file notes.md  # index a file — no cloud account needed
-quarry search "my topic"
+quarry ingest-file notes.md      # index a file — no cloud account needed
+quarry search "my topic"         # search by meaning, not keywords
 ```
 
-That's it. Quarry works locally out of the box.
+That's it. Quarry works locally out of the box — no API keys, no cloud, no setup beyond `quarry install`.
 
-## What It Does
+## What You Can Do
 
-You have years of knowledge buried in PDFs, scanned documents, notes, spreadsheets, and source code. Quarry extracts that knowledge, makes it searchable by meaning, and gives your LLM access to it.
+**Index anything you have.** PDFs, scanned documents, images, spreadsheets, presentations, source code, Markdown, LaTeX, DOCX, HTML, and webpages. Quarry reads each format the way you would and extracts the knowledge inside.
 
-This is not media search — Quarry doesn't find images or match audio. It reads every document the way you would, extracts the text and structure, and indexes the *knowledge inside*. A scanned whiteboard becomes searchable prose. A spreadsheet becomes structured data an LLM can reason about. Source code becomes semantic units an LLM can reference.
+**Search by meaning.** "What did the Q3 report say about margins?" finds relevant passages even if they never use the word "margins." This is semantic search — it understands what you mean, not just what you typed.
 
-**Supported formats:** PDF, images (PNG, JPG, TIFF, BMP, WebP), presentations (PPTX), spreadsheets (XLSX, CSV), HTML, webpages (via URL), text files (TXT, Markdown, LaTeX, DOCX), and source code (30+ languages).
+**Give your LLM access.** As an MCP server, Quarry lets Claude Code and Claude Desktop search your indexed documents directly. Ask Claude about something in your files and it pulls the relevant context automatically.
 
-**How each format is processed:**
+**Keep things organized.** Named databases separate work from personal. Directory sync watches your folders and re-indexes when files change. Collections group documents within a database.
 
-| Source | What happens | Result |
-|--------|-------------|--------|
-| PDF (text pages) | Text extraction via PyMuPDF | Prose chunks |
-| PDF (image pages) | OCR (local or cloud) | Prose chunks |
-| Images | OCR (local or cloud) | Prose chunks |
-| Spreadsheets | LaTeX tabular serialization via openpyxl | Tabular chunks |
-| HTML | Boilerplate stripping, Markdown conversion | Section chunks |
-| Presentations | Slide-per-chunk with tables as LaTeX via python-pptx | Slide chunks |
-| Text files | Split by headings / sections / paragraphs | Section chunks |
-| Source code | Tree-sitter AST parsing (functions, classes) | Code chunks |
+## Supported Formats
 
-Every format is converted to text optimized for LLM consumption. Structured formats like spreadsheets and presentation tables are serialized to LaTeX to preserve tabular relationships while remaining token-efficient. The goal is always the same: turn your files into knowledge an LLM can use.
+| Source | What happens |
+|--------|-------------|
+| PDF (text pages) | Text extraction via PyMuPDF |
+| PDF (image pages) | OCR (local, offline) |
+| Images (PNG, JPG, TIFF, BMP, WebP) | OCR (local, offline) |
+| Spreadsheets (XLSX, CSV) | Tabular serialization preserving structure |
+| Presentations (PPTX) | Slide-per-chunk with tables and speaker notes |
+| HTML / webpages | Boilerplate stripping, converted to Markdown |
+| Text files (TXT, MD, LaTeX, DOCX) | Split by headings, sections, or paragraphs |
+| Source code (30+ languages) | AST parsing into functions and classes |
 
-## Installation
+## CLI Reference
 
 ```bash
-pip install quarry-mcp
-quarry install
+# Ingest
+quarry ingest-file report.pdf                  # index a file
+quarry ingest-file report.pdf --overwrite      # replace existing data
+quarry ingest-url https://example.com/page     # index a webpage
+
+# Search
+quarry search "revenue trends"                 # semantic search
+quarry search "revenue" --limit 5              # limit results
+quarry search "tests" --page-type code         # only code results
+quarry search "revenue" --source-format .xlsx  # only spreadsheet results
+quarry search "deploy" --document README.md    # search within one document
+
+# Manage documents
+quarry list                                    # list indexed documents
+quarry delete report.pdf                       # remove a document
+quarry collections                             # list collections
+
+# Directory sync
+quarry register ~/Documents/notes              # watch a directory
+quarry sync                                    # re-index all registered directories
+quarry registrations                           # list registered directories
+quarry deregister notes                        # stop watching
+
+# System
+quarry doctor                                  # health check
+quarry databases                               # list all databases with stats
+quarry serve                                   # start HTTP API server
 ```
 
-`quarry install` creates `~/.quarry/data/`, downloads the embedding model, and writes MCP config for Claude Code and Claude Desktop.
+## Named Databases
 
-Verify with `quarry doctor`:
-
-```
-quarry-mcp 0.5.0
-
-  ✓ Python version: 3.13.1
-  ✓ Data directory: /Users/you/.quarry/data/default/lancedb
-  ✓ Local OCR: RapidOCR engine OK
-  ○ AWS credentials: Not configured (optional — needed for OCR_BACKEND=textract)
-  ✓ Embedding model: snowflake-arctic-embed-m-v1.5 (ONNX INT8) cached (67.73 MB)
-  ✓ Core imports: 9 modules OK
-  ✓ Claude Code MCP: configured
-  ✓ Claude Desktop MCP: configured
-  ✓ Storage: 42.5 MB in /Users/you/.quarry/data
-
-All checks passed.
-```
-
-## Usage
-
-Quarry exposes most operations through both a CLI and MCP tools, with gaps shown as `—` below. The CLI is for terminal use; MCP tools are what Claude Code and Claude Desktop call on your behalf.
-
-| Operation | CLI | MCP tool |
-|-----------|-----|----------|
-| **Search** | | |
-| Semantic search | `quarry search "query"` | `search_documents` |
-| **Ingestion** | | |
-| Ingest a file | `quarry ingest-file <path>` | `ingest_file` |
-| Ingest a URL | `quarry ingest-url <url>` | `ingest_url` |
-| Ingest inline text | — | `ingest_content` |
-| **Documents** | | |
-| List documents | `quarry list` | `get_documents` |
-| Get page text | — | `get_page` |
-| Delete a document | `quarry delete <name>` | `delete_document` |
-| **Collections** | | |
-| List collections | `quarry collections` | `list_collections` |
-| Delete a collection | `quarry delete-collection <name>` | `delete_collection` |
-| **Directory sync** | | |
-| Register a directory | `quarry register <path>` | `register_directory` |
-| Sync all registrations | `quarry sync` | `sync_all_registrations` |
-| List registrations | `quarry registrations` | `list_registrations` |
-| Deregister | `quarry deregister <collection>` | `deregister_directory` |
-| **System** | | |
-| Database status | — | `status` |
-| List databases | `quarry databases` | — |
-| Install / setup | `quarry install` | — |
-| Health check | `quarry doctor` | — |
-| HTTP API server | `quarry serve` | — |
-| MCP server | `quarry mcp` | — |
-
-### CLI examples
+Keep separate databases for different purposes:
 
 ```bash
-quarry ingest-file report.pdf --overwrite          # replace existing data
-quarry ingest-file report.pdf --db work            # target a named database
-quarry search "revenue" --limit 5                  # limit results
-quarry search "tests" --page-type code             # filter by content type
-quarry search "revenue" --source-format .xlsx      # filter by source format
-quarry register /path/to/docs --collection docs    # explicit collection name
+quarry ingest-file report.pdf --db work
+quarry ingest-file recipe.md --db personal
+quarry search "revenue" --db work
+quarry databases                               # list all databases
 ```
 
-### MCP setup
+Each database is fully isolated — its own vector index and sync registry. The default database is called `default`.
 
-`quarry install` configures Claude Code and Claude Desktop automatically. Manual setup:
+You can run separate MCP servers for different databases:
+
+```json
+{
+  "mcpServers": {
+    "work": {
+      "command": "/path/to/uvx",
+      "args": ["--from", "quarry-mcp", "quarry", "mcp", "--db", "work"]
+    }
+  }
+}
+```
+
+## MCP Setup
+
+`quarry install` configures Claude Code and Claude Desktop automatically. To set up manually:
 
 **Claude Code:**
 
@@ -153,216 +141,68 @@ claude mcp add quarry -- uvx --from quarry-mcp quarry mcp
 
 Use the absolute path to `uvx` for Desktop (e.g. `/opt/homebrew/bin/uvx`). `quarry install` resolves this automatically.
 
-**Claude Desktop note:** Uploaded files live in a sandbox that Quarry cannot access. Use `ingest_content` with extracted content for uploads. For files on your Mac, provide the local path to `ingest_file`.
+**Claude Desktop note:** Uploaded files live in a sandbox that Quarry cannot access. Use `ingest_content` (the MCP tool for inline text) for uploaded content. For files on your Mac, provide the local path to `ingest_file`.
+
+### MCP Tools
+
+| Tool | What it does |
+|------|-------------|
+| `search_documents` | Semantic search with optional filters |
+| `ingest_file` | Index a file by path |
+| `ingest_url` | Fetch and index a webpage |
+| `ingest_content` | Index inline text (for uploads, clipboard, etc.) |
+| `get_documents` | List indexed documents |
+| `get_page` | Get raw text for a specific page |
+| `delete_document` | Remove a document |
+| `list_collections` | List collections |
+| `delete_collection` | Remove a collection |
+| `register_directory` | Register a directory for sync |
+| `deregister_directory` | Remove a directory registration |
+| `sync_all_registrations` | Re-index all registered directories |
+| `list_registrations` | List registered directories |
+| `status` | Database stats |
 
 ## Configuration
 
-All settings via environment variables:
+Quarry works with zero configuration. These environment variables are available for customization:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OCR_BACKEND` | `local` | `local` (RapidOCR, offline) or `textract` (AWS) |
-| `EMBEDDING_BACKEND` | `onnx` | `onnx` (local, offline) or `sagemaker` (AWS) |
+| `OCR_BACKEND` | `local` | `local` (offline, no setup) or `textract` (AWS, better for degraded scans) |
 | `QUARRY_ROOT` | `~/.quarry/data` | Base directory for all databases and logs |
-| `LANCEDB_PATH` | `~/.quarry/data/default/lancedb` | Vector database location (overrides `--db`) |
-| `REGISTRY_PATH` | `~/.quarry/data/default/registry.db` | Directory sync SQLite database |
-| `LOG_PATH` | `~/.quarry/data/quarry.log` | Log file location (rotating, 5 MB max) |
-| `CHUNK_MAX_CHARS` | `1800` | Target max characters per chunk (~450 tokens) |
+| `CHUNK_MAX_CHARS` | `1800` | Max characters per chunk (~450 tokens) |
 | `CHUNK_OVERLAP_CHARS` | `200` | Overlap between consecutive chunks |
 
-### OCR Backends
+For advanced settings (Textract polling, embedding model, paths), see [Advanced Configuration](docs/ADVANCED-CONFIG.md).
 
-Quarry ships with two OCR backends:
+## Cloud Backends (Optional)
 
-| Backend | Per-page OCR | End-to-end ingestion | Quality | Setup |
-|---------|-------------|---------------------|---------|-------|
-| **local** (default) | ~7-8s/page | Faster overall | Good for semantic search | None |
-| **textract** | ~2-3s/page | Slower (network overhead) | Excellent character accuracy | AWS credentials + S3 bucket |
+Quarry works entirely offline by default. Cloud backends are available for specialized use cases.
 
-The local backend uses RapidOCR (PaddleOCR models via ONNX Runtime, CPU-only, ~214 MB). No cloud account needed.
+### AWS Textract (OCR)
 
-**When to use Textract:** Degraded scans, faxes, or low-resolution images where RapidOCR struggles. For clean digital PDFs and presentations, local OCR produces identical search results (see [Benchmarks](#benchmarks)).
-
-### AWS Textract Setup
-
-Only needed if you want cloud OCR. Set these environment variables:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `AWS_ACCESS_KEY_ID` | | AWS access key |
-| `AWS_SECRET_ACCESS_KEY` | | AWS secret key |
-| `AWS_DEFAULT_REGION` | `us-east-1` | AWS region (must match S3 bucket region) |
-| `S3_BUCKET` | | S3 bucket for Textract uploads (must be in `AWS_DEFAULT_REGION`) |
-
-Your IAM user needs `textract:DetectDocumentText`, `textract:StartDocumentTextDetection`, `textract:GetDocumentTextDetection`, and `s3:PutObject/GetObject/DeleteObject` on your bucket. All AWS resources (S3 bucket, SageMaker endpoint) must be in the same region. See [docs/AWS-SETUP.md](docs/AWS-SETUP.md) for full setup including IAM policy and region strategy.
-
-### SageMaker Embedding Setup
-
-Optional cloud embedding for ingestion. Search always uses local ONNX regardless of this setting. Local ONNX embedding sustains ~11 chunks/s on a laptop — sufficient for most workloads. SageMaker is designed for large-scale batch ingestion (thousands of files) where parallelism across workers offsets the network overhead. For small-to-medium collections, local is faster (see [Benchmarks](#benchmarks)).
-
-1. Deploy the endpoint (requires an AWS CLI profile with admin access):
+Better character accuracy on degraded scans, faxes, and low-resolution images. For clean digital documents, local OCR produces equivalent search results.
 
 ```bash
-./infra/manage-stack.sh deploy              # serverless (default, pay-per-request)
-./infra/manage-stack.sh deploy realtime     # persistent instance (~$0.12/hr)
+export OCR_BACKEND=textract
+export AWS_ACCESS_KEY_ID=...
+export AWS_SECRET_ACCESS_KEY=...
+export AWS_DEFAULT_REGION=us-east-1
+export S3_BUCKET=my-bucket
 ```
 
-The script uses the `QUARRY_DEPLOY_PROFILE` env var (default: `admin`). Set it to match your AWS CLI profile name if different.
+See [docs/AWS-SETUP.md](docs/AWS-SETUP.md) for IAM policies and full setup.
 
-2. Configure quarry:
+### SageMaker Embedding
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `EMBEDDING_BACKEND` | `onnx` | Set to `sagemaker` to use cloud embedding for ingestion |
-| `SAGEMAKER_ENDPOINT_NAME` | | Endpoint name (e.g. `quarry-embedding`) |
-| `AWS_DEFAULT_REGION` | `us-east-1` | Must match the endpoint's deployed region |
-
-3. Tear down when not in use:
+Cloud-accelerated embedding for large-scale batch ingestion (thousands of files). Search always uses the local model regardless of this setting.
 
 ```bash
-./infra/manage-stack.sh destroy
+export EMBEDDING_BACKEND=sagemaker
+export SAGEMAKER_ENDPOINT_NAME=quarry-embedding
 ```
 
-The serverless endpoint scales to zero when idle — you only pay per inference request. The realtime endpoint (~$0.12/hr) eliminates cold starts for sustained workloads. The management script packages a custom inference handler (CLS-token pooling + L2 normalization), uploads it to S3, and deploys the CloudFormation stack. See [docs/AWS-SETUP.md](docs/AWS-SETUP.md) for IAM setup and region strategy.
-
-### Named Databases
-
-Use `--db` to keep separate databases for different projects:
-
-```bash
-quarry ingest-file report.pdf --db work
-quarry ingest-file paper.pdf --db personal
-quarry search "revenue" --db work
-quarry databases  # list all databases with stats
-```
-
-Each database resolves to `~/.quarry/data/<name>/lancedb` with its own registry. Start an MCP server against a named database:
-
-```json
-{
-  "mcpServers": {
-    "work": {
-      "command": "/path/to/uvx",
-      "args": ["--from", "quarry-mcp", "quarry", "mcp", "--db", "work"]
-    },
-    "personal": {
-      "command": "/path/to/uvx",
-      "args": ["--from", "quarry-mcp", "quarry", "mcp", "--db", "personal"]
-    }
-  }
-}
-```
-
-`LANCEDB_PATH` still works as an override for edge cases.
-
-## Advanced Configuration
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `TEXTRACT_POLL_INITIAL` | `5.0` | Initial Textract polling interval (seconds) |
-| `TEXTRACT_POLL_MAX` | `30.0` | Max polling interval (1.5x exponential backoff) |
-| `TEXTRACT_MAX_WAIT` | `900` | Max wait for Textract job (seconds) |
-| `TEXTRACT_MAX_IMAGE_BYTES` | `10485760` | Max image size for Textract sync API (10 MB) |
-| `SAGEMAKER_ENDPOINT_NAME` | | SageMaker endpoint for cloud embedding |
-| `EMBEDDING_MODEL` | `Snowflake/snowflake-arctic-embed-m-v1.5` | Embedding model identifier (cache key) |
-| `EMBEDDING_DIMENSION` | `768` | Embedding vector dimension |
-
-## Benchmarks
-
-Tested on 19 files (~44 MB) of university course material: clean digital PDFs and PPTX presentations. Single-threaded ingestion, M-series Mac.
-
-### Ingestion speed
-
-| Configuration | Time | vs Local |
-|--------------|------|----------|
-| **Local** (RapidOCR + ONNX) | **107s** | 1x |
-| Cloud (Textract + SageMaker serverless) | 983s | 9.2x slower |
-| Cloud (Textract + SageMaker realtime) | 658s | 6.1x slower |
-
-### Search quality
-
-Five test queries across both configurations returned **identical top-1 results**. Similarity scores differed by 0.003-0.04 between local INT8 and cloud FP32 embeddings — negligible for retrieval ranking.
-
-### When cloud backends help
-
-| Scenario | Recommendation |
-|----------|---------------|
-| Clean digital PDFs, presentations, text | **Local.** Faster, free, same search quality. |
-| Degraded scans, faxes, low-resolution images | **Textract.** Better character accuracy on noisy input. |
-| Thousands of files, batch ingestion | **SageMaker realtime.** Parallelism across workers offsets overhead at scale. |
-| Small-to-medium collections (<100 files) | **Local.** Cloud overhead dominates at this scale. |
-
-## Architecture
-
-```
-Connectors                Formats              Transformations
-  │                         │                        │
-  └─ Local filesystem       ├─ PDF ──────┬─ text ──→ PyMuPDF extraction
-      (register + sync)     │            └─ image ─→ OCR (local or Textract)
-                            │
-                            ├─ Images ─────────────→ OCR (local or Textract)
-                            │
-                            ├─ Spreadsheets ───────→ LaTeX tabular serialization
-                            │
-                            ├─ Presentations ──────→ Slide extraction + LaTeX tables
-                            │
-                            ├─ HTML ───────────────→ Boilerplate stripping + Markdown
-                            │
-                            ├─ Text files ─────────→ Section-aware splitting
-                            │   (TXT, MD, LaTeX, DOCX)
-                            │
-                            ├─ Source code ─────────→ Tree-sitter AST splitting
-                            │
-                            └─ Raw text ───────────→ Direct chunking
-                                                         │
-                                                  Indexing
-                                                    │
-                                                    ├─ Sentence-aware chunking
-                                                    ├─ Chunk metadata (page_type, source_format)
-                                                    ├─ Embedding (local ONNX or SageMaker cloud)
-                                                    └─ LanceDB storage
-                                                         │
-                                                  Query
-                                                    │
-                                                    ├─ Semantic search
-                                                    ├─ Collection filtering
-                                                    └─ Format filtering (page_type, source_format)
-                                                         │
-                                                  Interface
-                                                    │
-                                                    ├─ MCP Server (stdio)
-                                                    ├─ CLI (typer + rich)
-                                                    └─ HTTP API (for quarry-menubar)
-```
-
-## Library API
-
-Quarry is fully typed (`py.typed`) and can be used as a Python library:
-
-```python
-from pathlib import Path
-from quarry import Settings, get_db, ingest_content, ingest_document, search
-from quarry.backends import get_embedding_backend
-
-# Load settings from environment variables
-settings = Settings()
-db = get_db(settings.lancedb_path)
-
-# Ingest a file
-result = ingest_document(Path("report.pdf"), db, settings, collection="work")
-
-# Ingest inline content
-result = ingest_content("Quarterly revenue was $4.2M.", "notes.txt", db, settings)
-
-# Search
-backend = get_embedding_backend(settings)
-vector = backend.embed_query("revenue figures")
-results = search(db, vector, limit=5, collection_filter="work")
-for r in results:
-    print(r["text"], r["_distance"])
-```
-
-The public API surface is in `quarry/__init__.py`. Pipeline functions accept a `progress_callback: Callable[[str], None]` for status updates during ingestion.
+Deploy with `./infra/manage-stack.sh deploy`. See [docs/AWS-SETUP.md](docs/AWS-SETUP.md) for details.
 
 ## Roadmap
 
@@ -379,19 +219,19 @@ For product vision and positioning, see [PR/FAQ](prfaq.pdf).
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src/ tests/
-uv run pytest
+uv run pytest                  # 549 tests across 25 modules
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, architecture, and how to add new formats.
+Quarry is fully typed (`py.typed`) and can be used as a Python library. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, architecture, and how to add new formats.
 
 ## Documentation
 
 - [Changelog](CHANGELOG.md)
-- [AWS Setup Guide](docs/AWS-SETUP.md) -- IAM, S3, SageMaker deployment, region strategy
+- [AWS Setup Guide](docs/AWS-SETUP.md) — IAM, S3, SageMaker deployment
 - [Search Quality and Tuning](docs/SEARCH-TUNING.md)
 - [Backend Abstraction Design](docs/BACKEND-ABSTRACTION.md)
 - [Non-Functional Design](docs/NON-FUNCTIONAL-DESIGN.md)
-- [PR/FAQ](prfaq.pdf) -- product vision and positioning
+- [PR/FAQ](prfaq.pdf) — product vision and positioning
 
 ## License
 
