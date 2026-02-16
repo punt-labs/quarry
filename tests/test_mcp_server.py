@@ -15,11 +15,13 @@ from quarry.mcp_server import (
     ingest_content as mcp_ingest_content,
     ingest_file,
     list_collections,
+    list_databases,
     list_registrations,
     register_directory,
     search_documents,
     status,
     sync_all_registrations,
+    use_database,
 )
 
 
@@ -630,5 +632,151 @@ class TestDbNamePropagation:
                 mock_resolve.return_value = _settings(tmp_path)
                 mcp_mod._settings()
             assert mock_resolve.call_args[0][1] is None
+        finally:
+            mcp_mod._db_name = original
+
+
+class TestListDatabases:
+    def test_returns_databases(self, tmp_path: Path):
+        settings = _settings(tmp_path)
+        settings.quarry_root = tmp_path
+        mock_dbs = [
+            {
+                "name": "default",
+                "document_count": 5,
+                "size_bytes": 1024,
+                "size_description": "1.0 KB",
+            },
+            {
+                "name": "coding",
+                "document_count": 100,
+                "size_bytes": 52428800,
+                "size_description": "50.0 MB",
+            },
+        ]
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server.discover_databases", return_value=mock_dbs),
+        ):
+            result = json.loads(list_databases())
+
+        assert result["total_databases"] == 2
+        assert result["databases"][0]["name"] == "default"
+        assert result["databases"][1]["name"] == "coding"
+
+    def test_includes_current_database(self, tmp_path: Path):
+        import quarry.mcp_server as mcp_mod
+
+        settings = _settings(tmp_path)
+        settings.quarry_root = tmp_path
+        original = mcp_mod._db_name
+        try:
+            mcp_mod._db_name = "work"
+            with (
+                patch("quarry.mcp_server._settings", return_value=settings),
+                patch("quarry.mcp_server.discover_databases", return_value=[]),
+            ):
+                result = json.loads(list_databases())
+            assert result["current_database"] == "work"
+        finally:
+            mcp_mod._db_name = original
+
+    def test_default_when_no_db_name(self, tmp_path: Path):
+        import quarry.mcp_server as mcp_mod
+
+        settings = _settings(tmp_path)
+        settings.quarry_root = tmp_path
+        original = mcp_mod._db_name
+        try:
+            mcp_mod._db_name = None
+            with (
+                patch("quarry.mcp_server._settings", return_value=settings),
+                patch("quarry.mcp_server.discover_databases", return_value=[]),
+            ):
+                result = json.loads(list_databases())
+            assert result["current_database"] == "default"
+        finally:
+            mcp_mod._db_name = original
+
+    def test_empty_root(self, tmp_path: Path):
+        settings = _settings(tmp_path)
+        settings.quarry_root = tmp_path
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server.discover_databases", return_value=[]),
+        ):
+            result = json.loads(list_databases())
+        assert result["total_databases"] == 0
+        assert result["databases"] == []
+
+
+class TestUseDatabase:
+    def test_switches_database(self, tmp_path: Path):
+        import quarry.mcp_server as mcp_mod
+
+        settings = _settings(tmp_path)
+        original = mcp_mod._db_name
+        try:
+            mcp_mod._db_name = None
+            with patch("quarry.mcp_server._settings", return_value=settings):
+                result = json.loads(use_database("coding"))
+            assert result["previous_database"] == "default"
+            assert result["current_database"] == "coding"
+            assert mcp_mod._db_name == "coding"
+        finally:
+            mcp_mod._db_name = original
+
+    def test_switches_back_to_default(self, tmp_path: Path):
+        import quarry.mcp_server as mcp_mod
+
+        settings = _settings(tmp_path)
+        original = mcp_mod._db_name
+        try:
+            mcp_mod._db_name = "coding"
+            with patch("quarry.mcp_server._settings", return_value=settings):
+                result = json.loads(use_database("default"))
+            assert result["previous_database"] == "coding"
+            assert result["current_database"] == "default"
+            assert mcp_mod._db_name is None
+        finally:
+            mcp_mod._db_name = original
+
+    def test_returns_database_path(self, tmp_path: Path):
+        import quarry.mcp_server as mcp_mod
+
+        settings = _settings(tmp_path)
+        original = mcp_mod._db_name
+        try:
+            mcp_mod._db_name = None
+            with patch("quarry.mcp_server._settings", return_value=settings):
+                result = json.loads(use_database("work"))
+            assert "database_path" in result
+        finally:
+            mcp_mod._db_name = original
+
+    def test_switch_between_named_databases(self, tmp_path: Path):
+        import quarry.mcp_server as mcp_mod
+
+        settings = _settings(tmp_path)
+        original = mcp_mod._db_name
+        try:
+            mcp_mod._db_name = "coding"
+            with patch("quarry.mcp_server._settings", return_value=settings):
+                result = json.loads(use_database("work"))
+            assert result["previous_database"] == "coding"
+            assert result["current_database"] == "work"
+            assert mcp_mod._db_name == "work"
+        finally:
+            mcp_mod._db_name = original
+
+    def test_invalid_name_does_not_corrupt_state(self, tmp_path: Path):
+        import quarry.mcp_server as mcp_mod
+
+        original = mcp_mod._db_name
+        try:
+            mcp_mod._db_name = "good"
+            result = use_database("../evil")
+            assert "Error" in result
+            assert mcp_mod._db_name == "good"
         finally:
             mcp_mod._db_name = original

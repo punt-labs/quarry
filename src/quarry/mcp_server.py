@@ -15,6 +15,7 @@ from quarry.database import (
     count_chunks,
     delete_collection as db_delete_collection,
     delete_document as db_delete_document,
+    discover_databases,
     get_db,
     get_page_text,
     list_collections as db_list_collections,
@@ -494,6 +495,55 @@ def status() -> str:
             "database_size_bytes": db_size_bytes,
             "embedding_model": settings.embedding_model,
             "embedding_dimension": settings.embedding_dimension,
+        },
+        indent=2,
+    )
+
+
+@mcp.tool()
+@_handle_errors
+def list_databases() -> str:
+    """List all named databases with document counts and storage size.
+
+    Discovers databases under the quarry data root directory.
+    Each database is a named directory containing a LanceDB store.
+    """
+    settings = _settings()
+    databases = discover_databases(settings.quarry_root)
+    return json.dumps(
+        {
+            "current_database": _db_name or "default",
+            "total_databases": len(databases),
+            "databases": databases,
+        },
+        indent=2,
+    )
+
+
+@mcp.tool()
+@_handle_errors
+def use_database(name: str) -> str:
+    """Switch to a different named database for subsequent operations.
+
+    All tools (search, ingest, sync, etc.) will use the selected database
+    until changed again. Use list_databases to see available databases.
+
+    Args:
+        name: Database name (e.g., 'coding', 'work'). Use 'default' for
+              the default database.
+    """
+    global _db_name
+    previous = _db_name or "default"
+    new_name = name if name != "default" else None
+    # Validate before mutating: resolve_db_paths raises ValueError for
+    # names containing path separators or traversal segments.
+    test_settings = resolve_db_paths(load_settings(), new_name)
+    _db_name = new_name
+    return json.dumps(
+        {
+            "previous_database": previous,
+            "current_database": name,
+            "database_path": str(test_settings.lancedb_path),
         },
         indent=2,
     )

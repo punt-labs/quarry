@@ -17,13 +17,13 @@ from quarry.config import Settings, configure_logging, load_settings, resolve_db
 from quarry.database import (
     delete_collection as db_delete_collection,
     delete_document as db_delete_document,
+    discover_databases,
     get_db,
     list_collections as db_list_collections,
     list_documents,
     search,
 )
 from quarry.pipeline import ingest_document, ingest_url
-from quarry.results import DatabaseSummary
 from quarry.sync import sync_all
 from quarry.sync_registry import (
     deregister_directory,
@@ -414,40 +414,6 @@ def sync_cmd(
             console.print(f"  error: {err}", style="red")
 
 
-def _format_size(size_bytes: int) -> str:
-    """Human-readable size string from byte count."""
-    if size_bytes >= 1_048_576:
-        return f"{size_bytes / 1_048_576:.1f} MB"
-    if size_bytes >= 1024:
-        return f"{size_bytes / 1024:.1f} KB"
-    if size_bytes == 1:
-        return "1 byte"
-    return f"{size_bytes} bytes"
-
-
-def _discover_databases(root: Path) -> list[DatabaseSummary]:
-    """Scan *root* for named databases and return structured summaries."""
-    results: list[DatabaseSummary] = []
-    if not root.exists():
-        return results
-    for entry in sorted(root.iterdir()):
-        lance_dir = entry / "lancedb"
-        if not entry.is_dir() or not lance_dir.exists():
-            continue
-        db = get_db(lance_dir)
-        docs = list_documents(db)
-        size_bytes = sum(f.stat().st_size for f in lance_dir.rglob("*") if f.is_file())
-        results.append(
-            DatabaseSummary(
-                name=entry.name,
-                document_count=len(docs),
-                size_bytes=size_bytes,
-                size_description=_format_size(size_bytes),
-            )
-        )
-    return results
-
-
 @app.command(name="databases")
 @_cli_errors
 def databases_cmd(
@@ -459,7 +425,7 @@ def databases_cmd(
 ) -> None:
     """List named databases with document counts and storage size."""
     settings = _resolved_settings(database)
-    databases = _discover_databases(settings.quarry_root)
+    databases = discover_databases(settings.quarry_root)
 
     if output_json:
         console.print(json.dumps(databases, indent=2))
