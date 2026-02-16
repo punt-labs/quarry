@@ -8,7 +8,7 @@ All settings are environment variables read via pydantic-settings. See the main 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `QUARRY_ROOT` | `~/.quarry/data` | Base directory for all databases and logs |
+| `QUARRY_ROOT` | `~/.quarry/data` | Base directory for all databases. Does not relocate `LOG_PATH`. |
 | `LANCEDB_PATH` | `~/.quarry/data/default/lancedb` | Vector database location (overrides `--db`) |
 | `REGISTRY_PATH` | `~/.quarry/data/default/registry.db` | Directory sync SQLite database |
 | `LOG_PATH` | `~/.quarry/data/quarry.log` | Log file (rotating, 5 MB, 3 backups) |

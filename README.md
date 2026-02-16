@@ -50,8 +50,8 @@ That's it. Quarry works locally out of the box — no API keys, no cloud, no set
 | Source | What happens |
 |--------|-------------|
 | PDF (text pages) | Text extraction via PyMuPDF |
-| PDF (image pages) | OCR (local, offline) |
-| Images (PNG, JPG, TIFF, BMP, WebP) | OCR (local, offline) |
+| PDF (image pages) | OCR (local by default; optional cloud backend) |
+| Images (PNG, JPG, TIFF, BMP, WebP) | OCR (local by default; optional cloud backend) |
 | Spreadsheets (XLSX, CSV) | Tabular serialization preserving structure |
 | Presentations (PPTX) | Slide-per-chunk with tables and speaker notes |
 | HTML / webpages | Boilerplate stripping, converted to Markdown |
@@ -169,7 +169,7 @@ Quarry works with zero configuration. These environment variables are available 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `OCR_BACKEND` | `local` | `local` (offline, no setup) or `textract` (AWS, better for degraded scans) |
-| `QUARRY_ROOT` | `~/.quarry/data` | Base directory for all databases and logs |
+| `QUARRY_ROOT` | `~/.quarry/data` | Base directory for all databases (log path configured separately via `LOG_PATH`) |
 | `CHUNK_MAX_CHARS` | `1800` | Max characters per chunk (~450 tokens) |
 | `CHUNK_OVERLAP_CHARS` | `200` | Overlap between consecutive chunks |
 
@@ -219,7 +219,7 @@ For product vision and positioning, see [PR/FAQ](prfaq.pdf).
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src/ tests/
-uv run pytest                  # 549 tests across 25 modules
+uv run pytest                  # run the test suite
 ```
 
 Quarry is fully typed (`py.typed`) and can be used as a Python library. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, architecture, and how to add new formats.
