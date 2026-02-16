@@ -47,15 +47,26 @@ def _download_model_files() -> tuple[str, str]:
 
 
 def _load_model_files() -> tuple[str, str]:
-    """Load ONNX model and tokenizer from local cache.
+    """Load ONNX model and tokenizer, downloading if not cached.
 
-    No network requests. Raises if files are not cached.
+    Tries local cache first (no network). Falls back to downloading
+    from HuggingFace Hub if the files are missing. This makes
+    ``quarry install`` optional — the model is fetched on first use.
 
     Returns:
         Tuple of (model_path, tokenizer_path) as absolute file paths.
+    """
+    try:
+        return _load_local_model_files()
+    except OSError:
+        logger.info("Embedding model not cached — downloading (~500 MB)")
+        return _download_model_files()
 
-    Raises:
-        OSError: If the model files are not in the local cache.
+
+def _load_local_model_files() -> tuple[str, str]:
+    """Load ONNX model and tokenizer from local cache only.
+
+    No network requests. Raises ``OSError`` if files are not cached.
     """
     from huggingface_hub import hf_hub_download  # noqa: PLC0415
 
