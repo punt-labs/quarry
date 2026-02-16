@@ -11,7 +11,12 @@ from typing import TYPE_CHECKING, cast
 import pyarrow as pa
 
 from quarry.models import Chunk
-from quarry.results import CollectionSummary, DocumentSummary, SearchResult
+from quarry.results import (
+    CollectionSummary,
+    DatabaseSummary,
+    DocumentSummary,
+    SearchResult,
+)
 from quarry.types import LanceDB, LanceTable
 
 if TYPE_CHECKING:
@@ -397,3 +402,39 @@ def optimize_table(db: LanceDB) -> None:
     table = db.open_table(TABLE_NAME)
     table.optimize()
     logger.info("Optimized table %s", TABLE_NAME)
+
+
+def format_size(size_bytes: int) -> str:
+    """Human-readable size string from byte count."""
+    if size_bytes >= 1_048_576:
+        return f"{size_bytes / 1_048_576:.1f} MB"
+    if size_bytes >= 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    if size_bytes == 1:
+        return "1 byte"
+    return f"{size_bytes} bytes"
+
+
+def discover_databases(root: Path) -> list[DatabaseSummary]:
+    """Scan *root* for named databases and return structured summaries."""
+    results: list[DatabaseSummary] = []
+    if not root.exists():
+        return results
+    for entry in sorted(root.iterdir()):
+        lance_dir = entry / "lancedb"
+        if not entry.is_dir() or not lance_dir.exists():
+            continue
+        db = get_db(lance_dir)
+        docs = list_documents(db)
+        size_bytes = sum(
+            f.stat().st_size for f in lance_dir.rglob("*") if f.is_file()
+        )
+        results.append(
+            DatabaseSummary(
+                name=entry.name,
+                document_count=len(docs),
+                size_bytes=size_bytes,
+                size_description=format_size(size_bytes),
+            )
+        )
+    return results
