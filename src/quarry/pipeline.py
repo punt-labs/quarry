@@ -789,9 +789,7 @@ def _fetch_url(url: str, *, timeout: int = 30) -> str:
 
     request = urllib.request.Request(  # noqa: S310
         url,
-        headers={
-            "User-Agent": "quarry/1.0 (+https://github.com/punt-labs/quarry)"
-        },
+        headers={"User-Agent": "quarry/1.0 (+https://github.com/punt-labs/quarry)"},
     )
     _allowed_media_types = {"text/html", "application/xhtml+xml"}
     try:
