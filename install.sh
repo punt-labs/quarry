@@ -19,10 +19,10 @@ YELLOW='\033[0;33m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-info()  { printf '%s==>%s %s\n' "$BOLD" "$NC" "$1"; }
-ok()    { printf '  %s✓%s %s\n' "$GREEN" "$NC" "$1"; }
-warn()  { printf '  %s○%s %s\n' "$YELLOW" "$NC" "$1"; }
-fail()  { printf '  %s✗%s %s\n' "$RED" "$NC" "$1"; exit 1; }
+info()  { printf '%b==>%b %s\n' "$BOLD" "$NC" "$1"; }
+ok()    { printf '  %b✓%b %s\n' "$GREEN" "$NC" "$1"; }
+warn()  { printf '  %b○%b %s\n' "$YELLOW" "$NC" "$1"; }
+fail()  { printf '  %b✗%b %s\n' "$RED" "$NC" "$1"; exit 1; }
 
 # --- Step 1: Python ---------------------------------------------------------
 
@@ -117,7 +117,7 @@ echo ""
 
 # --- Done --------------------------------------------------------------------
 
-printf '\n%s%squarry-mcp is ready!%s\n' "$GREEN" "$BOLD" "$NC"
+printf '\n%b%bquarry-mcp is ready!%b\n' "$GREEN" "$BOLD" "$NC"
 echo ""
 echo "Quick start:"
 echo "  quarry ingest-file notes.md      # index a file"
