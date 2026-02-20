@@ -5,10 +5,14 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+permissions: {}
+
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
       - name: Validate tag ref
         run: |
