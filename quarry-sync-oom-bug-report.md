@@ -45,13 +45,14 @@ Total: **1,187 chunks** being embedded concurrently with no batching. ONNX Runti
 
 `/Library/Logs/DiagnosticReports/JetsamEvent-2026-02-14-110027.ips`:
 
-```
+```text
 largestProcess: python3.13
 
 python3.13  PID 12112  rpages=4,344,914  (66.3 GB resident)  CPU time: 4788s  State: active
 ```
 
 System memory at crash:
+
 - **Free**: 69 MB (4,426 pages)
 - **Compressor**: 12.5 GB (maxed out)
 - **Reason**: `vm-compressor-space-shortage` on 120+ killed processes
@@ -99,6 +100,7 @@ def embed_texts(self, texts: list[str]) -> NDArray[np.float32]:
 ```
 
 With batch size 32:
+
 - Attention per layer: `32 x 12 x 512 x 512 x 4 = 402 MB`
 - 4 concurrent threads: ~1.6 GB total — well within 24 GB
 

@@ -45,7 +45,7 @@ communicates via HTTP/JSON.
 
 **How it works**:
 
-```
+```text
 ┌──────────────────────┐     HTTP/JSON      ┌─────────────────────┐
 │  quarry-menubar      │ ◄─────────────────► │  quarry serve       │
 │  (SwiftUI macOS app) │   localhost:PORT    │  (Python HTTP API)  │
@@ -85,31 +85,31 @@ communicates via HTTP/JSON.
 
 ### P1 — Should Have
 
-6. **Collection filter**: As a user, I can filter search results by collection using
+1. **Collection filter**: As a user, I can filter search results by collection using
    a dropdown or chip selector alongside the search field.
 
-7. **Keyboard navigation**: As a user, I navigate results with arrow keys, press
+2. **Keyboard navigation**: As a user, I navigate results with arrow keys, press
    Enter to open/copy, Tab to move between search field and filters.
 
-8. **Login item**: As a user, I can enable "launch at login" so the app is always
+3. **Login item**: As a user, I can enable "launch at login" so the app is always
    available.
 
-9. **Database selector**: As a user with multiple named databases (`quarry --db`), I
+4. **Database selector**: As a user with multiple named databases (`quarry --db`), I
    can switch between them from a menu.
 
 ### P2 — Nice to Have
 
-10. **Status indicator**: The menu bar icon shows a subtle badge when the backend is
+1. **Status indicator**: The menu bar icon shows a subtle badge when the backend is
     loading or unavailable.
 
-11. **Recent searches**: The panel shows my recent search queries for quick re-search.
+2. **Recent searches**: The panel shows my recent search queries for quick re-search.
 
-12. **Source format icons**: Results show icons for the source format (PDF, markdown,
+3. **Source format icons**: Results show icons for the source format (PDF, markdown,
     code, etc.) using SF Symbols.
 
 ## Interaction Model
 
-```
+```text
 Click menu bar icon OR press Cmd+Shift+Q
     │
     ▼
@@ -153,6 +153,7 @@ Automatic dark/light mode.
 ### Repository: `quarry-menubar`
 
 New GitHub repository under `punt-labs`. Separate from the `ocr` (quarry) repo because:
+
 - Different language (Swift vs Python)
 - Different build toolchain (Xcode vs uv/hatch)
 - Different release cadence
@@ -162,7 +163,7 @@ New GitHub repository under `punt-labs`. Separate from the `ocr` (quarry) repo b
 
 Add a `quarry serve` command:
 
-```
+```bash
 quarry serve [--port PORT] [--db NAME]
 ```
 
@@ -194,7 +195,7 @@ quarry serve [--port PORT] [--db NAME]
 
 Project structure:
 
-```
+```text
 quarry-menubar/
 ├── project.yml            # XcodeGen config
 ├── Makefile               # generate, build, test, format, lint
@@ -237,6 +238,7 @@ quarry-menubar/
 ## Scope Boundaries
 
 **In scope (v1)**:
+
 - Search panel with results
 - Global hotkey
 - Backend process management
@@ -245,6 +247,7 @@ quarry-menubar/
 - macOS 14+ (Sonoma)
 
 **Explicitly out of scope (v1)**:
+
 - Document ingestion from the menu bar app
 - Collection management (create, delete)
 - Settings UI beyond hotkey configuration

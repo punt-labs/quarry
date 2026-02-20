@@ -12,16 +12,19 @@ Quarry splits documents into overlapping chunks before embedding. Two environmen
 ### When to Adjust
 
 **Increase `CHUNK_MAX_CHARS`** (e.g. 3000-4000) when:
+
 - Documents have long, self-contained sections (legal contracts, academic papers)
 - Search queries are broad and you want more context per result
 - You're ingesting source code with large functions
 
 **Decrease `CHUNK_MAX_CHARS`** (e.g. 800-1200) when:
+
 - Documents are dense and each paragraph covers a distinct topic
 - Search queries are specific and you want precise matches
 - You need to stay well within the embedding model's 512-token window
 
 **Increase `CHUNK_OVERLAP_CHARS`** (e.g. 400) when:
+
 - Important information spans paragraph boundaries
 - You're seeing relevant results cut off mid-thought
 
@@ -44,6 +47,7 @@ For semantic search, OCR accuracy matters less than you might expect. The embedd
 ## Embedding Model
 
 Quarry uses **snowflake-arctic-embed-m-v1.5** via ONNX Runtime:
+
 - 768-dimensional vectors
 - 512-token context window
 - Asymmetric retrieval: queries are prefixed with a search instruction, documents are not

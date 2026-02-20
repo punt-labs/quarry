@@ -1,0 +1,10 @@
+{
+  // Disable line length — tables, URLs, and pattern descriptions routinely exceed any limit
+  "MD013": false,
+  // Disable table column style — compact pipes are fine
+  "MD060": false,
+  // Allow duplicate headings under different parents (CHANGELOG, ADR patterns)
+  "MD024": { "siblings_only": true },
+  // Allow img and p elements — needed for README screenshot layouts with width/align
+  "MD033": { "allowed_elements": ["img", "p"] }
+}

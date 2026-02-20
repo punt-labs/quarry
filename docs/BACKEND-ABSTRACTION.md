@@ -120,6 +120,7 @@ def get_embedding_backend(settings: Settings) -> EmbeddingBackend:
 ```
 
 Adding a new OCR backend requires:
+
 1. `src/quarry/ocr_tesseract.py` — implements `OcrBackend`
 2. One `case "tesseract":` branch in `get_ocr_backend()`
 3. Optional dependency group in `pyproject.toml`
@@ -162,7 +163,7 @@ ocr_results = ocr.ocr_document(
 
 ## Module Layout (delta from current)
 
-```
+```text
 src/quarry/
   types.py        MODIFY  add OcrBackend + EmbeddingBackend protocols
   backends.py     NEW     factory functions (~40 lines)
@@ -245,7 +246,7 @@ local = ["punt-quarry[ocr-tesseract,transcription]"]
 
 When someone wants to add a new backend:
 
-```
+```text
 1. Create src/quarry/ocr_<name>.py
    - Define a class with ocr_document() and ocr_image_bytes() methods
    - It structurally satisfies OcrBackend protocol (no import needed)
@@ -257,4 +258,4 @@ When someone wants to add a new backend:
 4. Add tests in tests/test_ocr_<name>.py
 ```
 
-No changes to pipeline.py, mcp_server.py, __main__.py, or any existing backend.
+No changes to pipeline.py, mcp_server.py, **main**.py, or any existing backend.

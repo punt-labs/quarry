@@ -30,12 +30,14 @@ Follow the protocol in CLAUDE.md. The short version:
 2. **Quality gates** must pass (ruff, mypy, pytest)
 3. **Close beads** for finished work (`bd close <id>`)
 4. **Push to remote** — work is NOT complete until `git push` succeeds:
+
    ```bash
    git pull --rebase
    bd sync
    git push
    git status  # MUST show "up to date with origin"
    ```
+
 5. **Hand off** — provide context for next session
 
 **PR workflow (see CLAUDE.md):** Do NOT merge a PR immediately. Trigger GitHub Copilot code review, wait for feedback, evaluate and address valid issues, ensure quality gates pass, then merge.

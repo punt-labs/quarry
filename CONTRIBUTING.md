@@ -41,6 +41,7 @@ The pipeline dispatches by file extension in `pipeline.py:ingest_document()`. To
 2. **Register the extension** in the processor's `SUPPORTED_*_EXTENSIONS` frozenset, or create a new one and add it to `SUPPORTED_EXTENSIONS` in `pipeline.py`.
 
 3. **Add a dispatch branch** in `ingest_document()` following the existing pattern:
+
    ```python
    if suffix in SUPPORTED_NEW_EXTENSIONS:
        return ingest_new_format(file_path, db, settings, ...)
@@ -54,7 +55,7 @@ The pipeline dispatches by file extension in `pipeline.py:ingest_document()`. To
 
 Quarry's pipeline has four stages:
 
-```
+```text
 Input -> Pages -> Chunks -> Vectors -> LanceDB
 ```
 

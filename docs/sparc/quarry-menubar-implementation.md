@@ -3,10 +3,12 @@
 ## S — Specification
 
 ### Problem
+
 Quarry search is invisible to non-CLI users. A macOS menu bar app surfaces it with a
 global hotkey, making retrieval instant and shareable.
 
 ### Success Criteria
+
 - Global hotkey summons search panel in < 100ms
 - First search result appears in < 1s (warm backend)
 - Cold start to ready in < 5s
@@ -14,6 +16,7 @@ global hotkey, making retrieval instant and shareable.
 - All SwiftLint/SwiftFormat/tests pass
 
 ### Constraints
+
 - macOS 14+ (Sonoma) — MenuBarExtra .window style
 - Swift 5.9+, SwiftUI
 - No external dependencies beyond HotKey (global shortcut)
@@ -26,7 +29,7 @@ global hotkey, making retrieval instant and shareable.
 
 ### Python: `quarry serve` HTTP endpoints
 
-```
+```python
 # New file: src/quarry/http_server.py
 
 GET /health
@@ -60,7 +63,7 @@ Server lifecycle:
 
 ### Swift: Core flow
 
-```
+```swift
 // App launch
 QuarryMenuBarApp:
   1. Initialize DaemonManager
@@ -93,7 +96,7 @@ DaemonManager:
 
 ### Two Repositories
 
-```
+```text
 ocr/                          (existing quarry Python repo)
 ├── src/quarry/
 │   ├── http_server.py        ← NEW: HTTP server entry point
@@ -127,7 +130,7 @@ quarry-menubar/               (new Swift repo)
 
 ### Data Flow
 
-```
+```text
 User → Hotkey/Click → SearchPanel → SearchViewModel
                                          │
                                     debounce 300ms
@@ -176,6 +179,7 @@ class SearchViewModel {
 ## R — Refinement
 
 ### Edge Cases
+
 - **quarry not in PATH**: DaemonManager searches common locations:
   `~/.local/bin/quarry`, `~/.cargo/bin/quarry`, `/usr/local/bin/quarry`,
   and checks if `python3 -m quarry` works as fallback.
@@ -189,12 +193,14 @@ class SearchViewModel {
   just truncated semantic matching.
 
 ### Error Handling
+
 - HTTP errors → QuarryClient throws typed errors → SearchViewModel shows message
 - Process crash → DaemonManager auto-restarts (max 3 attempts, then show error)
 - No database → Status endpoint returns zero counts → empty state view
 - Network timeout → 5s timeout on search, 2s on health check
 
 ### Testing Strategy
+
 - **Python (ocr repo)**: Integration tests for HTTP server endpoints using
   stdlib `urllib` client. Test search, documents, collections, status, health.
   Mock LanceDB for unit tests.
@@ -210,7 +216,7 @@ class SearchViewModel {
 
 #### Epic: quarry-9z5 (existing — macOS menu bar companion app)
 
-**Phase A: Python HTTP Server (ocr repo)**
+#### Phase A: Python HTTP Server (ocr repo)
 
 1. **Add `quarry serve` HTTP server** — New `http_server.py` with stdlib `http.server`,
    endpoints for /health, /search, /documents, /collections, /status.
@@ -221,46 +227,46 @@ class SearchViewModel {
    embedded backend (using test fixtures). Test port file lifecycle, graceful
    shutdown. Priority: P1, Type: task.
 
-**Phase B: Swift Project Scaffold (quarry-menubar repo)**
+#### Phase B: Swift Project Scaffold (quarry-menubar repo)
 
-3. **Create quarry-menubar GitHub repo** — Initialize repo, XcodeGen project.yml,
+1. **Create quarry-menubar GitHub repo** — Initialize repo, XcodeGen project.yml,
    Makefile (generate, build, test, format, lint), CLAUDE.md, .swiftformat,
    .swiftlint.yml. Empty app target + test target. Priority: P1, Type: task.
 
-4. **QuarryClient HTTP client** — URLSession-based client implementing
+2. **QuarryClient HTTP client** — URLSession-based client implementing
    QuarryClientProtocol. Codable models for all response types. Error handling.
    Unit tests with mock URLProtocol. Priority: P1, Type: task.
 
-5. **DaemonManager process lifecycle** — Spawn quarry serve, monitor health,
+3. **DaemonManager process lifecycle** — Spawn quarry serve, monitor health,
    restart on crash, shutdown on quit. Port file discovery. Unit tests.
    Priority: P1, Type: task.
 
-**Phase C: Search UI (quarry-menubar repo)**
+#### Phase C: Search UI (quarry-menubar repo)
 
-6. **MenuBarExtra app shell** — QuarryMenuBarApp with MenuBarExtra(.window),
+1. **MenuBarExtra app shell** — QuarryMenuBarApp with MenuBarExtra(.window),
    status bar icon, LSUIElement=true, DaemonManager initialization.
    Priority: P1, Type: feature.
 
-7. **SearchPanel + SearchViewModel** — Search text field with debounce, results
+2. **SearchPanel + SearchViewModel** — Search text field with debounce, results
    list, loading/empty/error states. MVVM with @Observable.
    Priority: P1, Type: feature.
 
-8. **ResultRow + ResultDetail views** — Result display with document name,
+3. **ResultRow + ResultDetail views** — Result display with document name,
    snippet, similarity, collection tag. Detail view with full text and
    copy/reveal-in-Finder actions. Priority: P1, Type: task.
 
-**Phase D: Global Hotkey + Polish**
+#### Phase D: Global Hotkey + Polish
 
-9. **HotkeyManager global shortcut** — HotKey package integration,
+1. **HotkeyManager global shortcut** — HotKey package integration,
    Cmd+Shift+Q default, toggle panel visibility. Priority: P1, Type: feature.
 
-10. **Empty/error state views** — All states from PRD: no database, empty
+2. **Empty/error state views** — All states from PRD: no database, empty
     database, backend starting, backend crashed, no results, Python not found.
     Priority: P1, Type: task.
 
 ### Dependencies
 
-```
+```text
 1 (quarry serve)
   └─► 2 (tests for serve)
   └─► 4 (QuarryClient — needs serve API to exist)
