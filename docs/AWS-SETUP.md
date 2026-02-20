@@ -85,6 +85,7 @@ QUARRY_DEPLOY_PROFILE=default ./infra/manage-stack.sh deploy
 ```
 
 The script:
+
 - Inherits `AWS_DEFAULT_REGION` from your environment (so it deploys to the same region as Textract)
 - Auto-creates an S3 bucket for model artifacts in that region
 - Packages the custom inference handler and deploys the CloudFormation stack
@@ -106,7 +107,7 @@ quarry doctor
 
 Expected output includes:
 
-```
+```text
   ✓ AWS credentials: AKIA**** (via explicit-keys)
   ✓ SageMaker endpoint: quarry-embedding (InService)
 ```

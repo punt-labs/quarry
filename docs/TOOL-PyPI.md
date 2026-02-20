@@ -82,7 +82,7 @@ uvx twine upload dist/*
 
 ## 8. Verify on PyPI
 
-- Check: https://pypi.org/project/punt-quarry/
+- Check: <https://pypi.org/project/punt-quarry/>
 - Install in a fresh environment:
 
 ```sh
@@ -103,7 +103,7 @@ gh release create vX.Y.Z --title "vX.Y.Z" --notes "Release notes here.
 PyPI: https://pypi.org/project/punt-quarry/X.Y.Z/"
 ```
 
-Verify the release appears on the repo homepage: https://github.com/punt-labs/quarry
+Verify the release appears on the repo homepage: <https://github.com/punt-labs/quarry>
 
 ---
 

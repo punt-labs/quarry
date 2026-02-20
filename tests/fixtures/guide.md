@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD025 -->
 # Machine Learning
 
 Machine learning is a branch of artificial intelligence that enables systems to learn patterns from data without being explicitly programmed. Supervised learning algorithms train on labeled datasets, mapping inputs to known outputs through techniques like linear regression, decision trees, and neural networks. Deep learning, a subset of machine learning, uses multi-layered neural networks to extract hierarchical features from raw data, achieving state-of-the-art results in image recognition, natural language processing, and speech synthesis.

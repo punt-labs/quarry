@@ -1,0 +1,12 @@
+{
+  "ignores": [".beads/", ".claude/", ".venv/"],
+  "overrides": [
+    {
+      "files": ["tests/fixtures/*.md"],
+      "config": {
+        // Test fixtures intentionally use multiple h1 headings
+        "MD025": false
+      }
+    }
+  ]
+}
