@@ -53,7 +53,7 @@ Commit message format: `type(scope): description`
 
 ### Issue Tracking with Beads
 
-This project uses **beads** (`bd`) for issue tracking. See `.beads/README.md` for setup.
+This project uses **beads** (`bd`) for issue tracking. See `.beads/README.md` for setup. If an issue discovered here affects multiple repos or requires a standards change, escalate to a [punt-kit bead](https://github.com/punt-labs/punt-kit) instead (see [bead placement scheme](../CLAUDE.md#where-to-create-a-bead)).
 
 | Use Beads (`bd`) | Use TodoWrite |
 |------------------|---------------|
