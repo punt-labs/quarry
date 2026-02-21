@@ -1,128 +1,110 @@
-#!/usr/bin/env bash
-# punt-quarry installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/main/install.sh | bash
-#
-# What this does:
-#   1. Checks Python 3.13+ is available
-#   2. Installs uv if not present (official installer)
-#   3. Installs punt-quarry via uv
-#   4. Runs quarry install (downloads model, configures MCP)
-#   5. Runs quarry doctor (verifies everything)
+#!/bin/sh
+# Install quarry — local semantic search for Claude Code and Claude Desktop.
+# Usage: curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/main/install.sh | sh
+set -eu
 
-set -euo pipefail
+# --- Colors (disabled when not a terminal) ---
+if [ -t 1 ]; then
+  BOLD='\033[1m' GREEN='\033[32m' YELLOW='\033[33m' NC='\033[0m'
+else
+  BOLD='' GREEN='' YELLOW='' NC=''
+fi
 
-# --- Helpers ----------------------------------------------------------------
+info() { printf '%b==>%b %s\n' "$BOLD" "$NC" "$1"; }
+ok()   { printf '  %b✓%b %s\n' "$GREEN" "$NC" "$1"; }
+fail() { printf '  %b✗%b %s\n' "$YELLOW" "$NC" "$1"; exit 1; }
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-BOLD='\033[1m'
-NC='\033[0m'
+PACKAGE="punt-quarry"
+BINARY="quarry"
 
-info()  { printf '%b==>%b %s\n' "$BOLD" "$NC" "$1"; }
-ok()    { printf '  %b✓%b %s\n' "$GREEN" "$NC" "$1"; }
-warn()  { printf '  %b○%b %s\n' "$YELLOW" "$NC" "$1"; }
-fail()  { printf '  %b✗%b %s\n' "$RED" "$NC" "$1"; exit 1; }
-
-# --- Step 1: Python ---------------------------------------------------------
+# --- Step 1: Python ---
 
 info "Checking Python..."
 
-if command -v python3 &>/dev/null; then
-    PYTHON=python3
-elif command -v python &>/dev/null; then
-    PYTHON=python
+if command -v python3 >/dev/null 2>&1; then
+  PYTHON=python3
+elif command -v python >/dev/null 2>&1; then
+  PYTHON=python
 else
-    fail "Python not found. Install Python 3.13+ from https://python.org"
+  fail "Python not found. Install Python 3.13+ from https://python.org"
 fi
 
-PY_VERSION=$($PYTHON -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-PY_MAJOR=$($PYTHON -c 'import sys; print(sys.version_info.major)')
-PY_MINOR=$($PYTHON -c 'import sys; print(sys.version_info.minor)')
+PY_MAJOR=$("$PYTHON" -c 'import sys; print(sys.version_info.major)')
+PY_MINOR=$("$PYTHON" -c 'import sys; print(sys.version_info.minor)')
 
 if [ "$PY_MAJOR" -lt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 13 ]; }; then
-    fail "Python $PY_VERSION found, but 3.13+ is required"
+  fail "Python ${PY_MAJOR}.${PY_MINOR} found, but 3.13+ is required"
 fi
 
-ok "Python $PY_VERSION ($($PYTHON --version 2>&1))"
+ok "Python ${PY_MAJOR}.${PY_MINOR}"
 
-# --- Step 2: uv -------------------------------------------------------------
+# --- Step 2: uv ---
 
 info "Checking uv..."
 
-if command -v uv &>/dev/null; then
-    ok "uv $(uv --version 2>&1 | head -1) already installed"
+if command -v uv >/dev/null 2>&1; then
+  ok "uv already installed"
 else
-    info "Installing uv..."
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    # Source the env so uv is on PATH for this session
-    if [ -f "$HOME/.local/bin/env" ]; then
-        # shellcheck source=/dev/null
-        . "$HOME/.local/bin/env"
-    elif [ -f "$HOME/.cargo/env" ]; then
-        # shellcheck source=/dev/null
-        . "$HOME/.cargo/env"
-    fi
-    if command -v uv &>/dev/null; then
-        ok "uv installed"
-    else
-        export PATH="$HOME/.local/bin:$PATH"
-        if command -v uv &>/dev/null; then
-            ok "uv installed (added ~/.local/bin to PATH)"
-        else
-            fail "uv install succeeded but 'uv' not found on PATH. Restart your shell and re-run."
-        fi
-    fi
+  info "Installing uv..."
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  if [ -f "$HOME/.local/bin/env" ]; then
+    # shellcheck source=/dev/null
+    . "$HOME/.local/bin/env"
+  elif [ -f "$HOME/.cargo/env" ]; then
+    # shellcheck source=/dev/null
+    . "$HOME/.cargo/env"
+  fi
+  export PATH="$HOME/.local/bin:$PATH"
+  if ! command -v uv >/dev/null 2>&1; then
+    fail "uv install succeeded but 'uv' not found on PATH. Restart your shell and re-run."
+  fi
+  ok "uv installed"
 fi
 
-# --- Step 3: punt-quarry -----------------------------------------------------
+# --- Step 3: punt-quarry ---
 
-info "Installing punt-quarry..."
+info "Installing $PACKAGE..."
 
-INSTALL_OUTPUT=$(uv tool install punt-quarry 2>&1) || true
-if echo "$INSTALL_OUTPUT" | grep -q "already installed"; then
-    uv tool upgrade punt-quarry || fail "Failed to upgrade punt-quarry"
-    ok "punt-quarry upgraded"
-elif echo "$INSTALL_OUTPUT" | grep -q "Installed"; then
-    ok "punt-quarry installed"
+INSTALL_OUTPUT="$(uv tool install "$PACKAGE" 2>&1)" || true
+if printf '%s' "$INSTALL_OUTPUT" | grep -q "already installed"; then
+  uv tool upgrade "$PACKAGE" || fail "Failed to upgrade $PACKAGE"
+  ok "$PACKAGE upgraded"
+elif printf '%s' "$INSTALL_OUTPUT" | grep -q "Installed"; then
+  ok "$PACKAGE installed"
 else
-    echo "$INSTALL_OUTPUT"
-    fail "Failed to install punt-quarry"
+  printf '%s\n' "$INSTALL_OUTPUT"
+  fail "Failed to install $PACKAGE"
 fi
 
-# Verify quarry is on PATH
-if ! command -v quarry &>/dev/null; then
-    # uv tool installs to ~/.local/bin by default
-    export PATH="$HOME/.local/bin:$PATH"
-    if ! command -v quarry &>/dev/null; then
-        fail "punt-quarry installed but 'quarry' not found on PATH. Run: export PATH=\"\$HOME/.local/bin:\$PATH\""
-    fi
+if ! command -v "$BINARY" >/dev/null 2>&1; then
+  export PATH="$HOME/.local/bin:$PATH"
+  if ! command -v "$BINARY" >/dev/null 2>&1; then
+    fail "$PACKAGE installed but '$BINARY' not found on PATH"
+  fi
 fi
 
-ok "quarry $(quarry --version 2>&1 || echo 'installed')"
+ok "$BINARY $(command -v "$BINARY")"
 
-# --- Step 4: quarry install --------------------------------------------------
+# --- Step 4: quarry install (model download + MCP registration) ---
 
 info "Setting up quarry (downloading model, configuring MCP)..."
-echo ""
-quarry install
-echo ""
+printf '\n'
+"$BINARY" install
+printf '\n'
 
-# --- Step 5: quarry doctor ---------------------------------------------------
+# --- Step 5: quarry doctor ---
 
-info "Final verification..."
-echo ""
-quarry doctor
-echo ""
+info "Verifying installation..."
+printf '\n'
+"$BINARY" doctor
+printf '\n'
 
-# --- Done --------------------------------------------------------------------
+# --- Done ---
 
-printf '\n%b%bpunt-quarry is ready!%b\n' "$GREEN" "$BOLD" "$NC"
-echo ""
-echo "Quick start:"
-echo "  quarry ingest-file notes.md      # index a file"
-echo "  quarry search \"my topic\"          # semantic search"
-echo "  quarry ingest-url https://...     # index a webpage"
-echo ""
-echo "Claude Code and Claude Desktop are configured automatically."
-echo "Restart Claude Desktop if it was running during install."
+printf '%b%b%s is ready!%b\n\n' "$GREEN" "$BOLD" "$PACKAGE" "$NC"
+printf 'Quick start:\n'
+printf '  quarry ingest-file notes.md      # index a file\n'
+printf '  quarry search "my topic"          # semantic search\n'
+printf '  quarry ingest-url https://...     # index a webpage\n\n'
+printf 'Claude Code and Claude Desktop are configured automatically.\n'
+printf 'Restart Claude Desktop if it was running during install.\n\n'
