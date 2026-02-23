@@ -25,6 +25,7 @@ from quarry.database import (
 from quarry.pipeline import (
     ingest_content as pipeline_ingest_content,
     ingest_document,
+    ingest_sitemap as pipeline_ingest_sitemap,
     ingest_url as pipeline_ingest_url,
 )
 from quarry.sync import sync_all as engine_sync_all
@@ -238,6 +239,59 @@ def ingest_url(
         overwrite=overwrite,
         collection=collection,
         document_name=document_name or None,
+        progress_callback=progress_lines.append,
+    )
+
+    progress_lines.append("")
+    progress_lines.append(f"Result: {json.dumps(result, indent=2)}")
+    return "\n".join(progress_lines)
+
+
+@mcp.tool()
+@_handle_errors
+def ingest_sitemap(
+    url: str,
+    collection: str = "",
+    include_patterns: str = "",
+    exclude_patterns: str = "",
+    limit: int = 0,
+    overwrite: bool = False,
+    workers: int = 4,
+) -> str:
+    """Crawl a sitemap and ingest all discovered URLs.
+
+    Parses the sitemap XML, discovers all page URLs (following sitemap
+    indexes recursively), applies include/exclude filters, skips pages
+    unchanged since last ingest (via <lastmod>), and ingests the rest
+    in parallel.
+
+    Args:
+        url: Sitemap URL (e.g., https://docs.example.com/sitemap.xml).
+        collection: Collection name. Defaults to sitemap URL domain.
+        include_patterns: Comma-separated URL path globs to include.
+        exclude_patterns: Comma-separated URL path globs to exclude.
+        limit: Max URLs to ingest (0 = no limit).
+        overwrite: Force re-ingest regardless of lastmod.
+        workers: Parallel fetch workers (default 4).
+    """
+    settings = _settings()
+    db = _db()
+
+    include = [p.strip() for p in include_patterns.split(",") if p.strip()] or None
+    exclude = [p.strip() for p in exclude_patterns.split(",") if p.strip()] or None
+
+    progress_lines: list[str] = []
+
+    result = pipeline_ingest_sitemap(
+        url,
+        db,
+        settings,
+        collection=collection,
+        include=include,
+        exclude=exclude,
+        limit=limit,
+        overwrite=overwrite,
+        workers=workers,
         progress_callback=progress_lines.append,
     )
 

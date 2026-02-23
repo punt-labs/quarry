@@ -51,6 +51,10 @@
       "description": "Fetch and index a webpage"
     },
     {
+      "name": "ingest_sitemap",
+      "description": "Crawl a sitemap and ingest all discovered URLs"
+    },
+    {
       "name": "ingest_content",
       "description": "Index inline text (for uploads, clipboard, etc.)"
     },

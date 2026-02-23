@@ -23,7 +23,7 @@ from quarry.database import (
     list_documents,
     search,
 )
-from quarry.pipeline import ingest_document, ingest_url
+from quarry.pipeline import ingest_document, ingest_sitemap, ingest_url
 from quarry.sync import sync_all
 from quarry.sync_registry import (
     deregister_directory,
@@ -151,6 +151,68 @@ def ingest_url_cmd(
 
     console.print()
     console.print(json.dumps(result, indent=2))
+
+
+@app.command(name="ingest-sitemap")
+@_cli_errors
+def ingest_sitemap_cmd(
+    url: Annotated[str, typer.Argument(help="Sitemap URL to crawl")],
+    collection: Annotated[
+        str, typer.Option("--collection", "-c", help="Collection name (default: domain)")
+    ] = "",
+    include: Annotated[
+        list[str] | None,
+        typer.Option("--include", help="URL path glob to include (repeatable)"),
+    ] = None,
+    exclude: Annotated[
+        list[str] | None,
+        typer.Option("--exclude", help="URL path glob to exclude (repeatable)"),
+    ] = None,
+    limit: Annotated[
+        int, typer.Option("--limit", help="Max URLs to ingest (0 = no limit)")
+    ] = 0,
+    overwrite: Annotated[
+        bool, typer.Option("--overwrite", help="Force re-ingest regardless of lastmod")
+    ] = False,
+    workers: Annotated[
+        int, typer.Option("--workers", "-w", help="Parallel fetch workers")
+    ] = 4,
+    database: DbOption = "",
+) -> None:
+    """Crawl a sitemap and ingest all discovered URLs.
+
+    Parses the sitemap XML, discovers all page URLs (following sitemap
+    indexes recursively), applies include/exclude URL path filters, skips
+    pages unchanged since last ingest (via <lastmod>), and ingests the
+    rest in parallel.
+    """
+    settings = _resolved_settings(database)
+    db = get_db(settings.lancedb_path)
+
+    with Progress(console=console) as progress:
+        task = progress.add_task(f"Crawling {url}", total=None)
+
+        def on_progress(message: str) -> None:
+            progress.update(task, description=message)
+
+        result = ingest_sitemap(
+            url,
+            db,
+            settings,
+            collection=collection,
+            include=include,
+            exclude=exclude,
+            limit=limit,
+            overwrite=overwrite,
+            workers=workers,
+            progress_callback=on_progress,
+        )
+
+    console.print()
+    console.print(json.dumps(result, indent=2))
+    if result["errors"]:
+        for err in result["errors"]:
+            err_console.print(f"  {err}", style="red")
 
 
 @app.command(name="search")
