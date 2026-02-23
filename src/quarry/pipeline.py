@@ -919,9 +919,7 @@ def ingest_sitemap(
     total_discovered = len(entries)
     progress("Discovered %d URLs", total_discovered)
 
-    filtered = filter_entries(
-        entries, include=include, exclude=exclude, limit=limit
-    )
+    filtered = filter_entries(entries, include=include, exclude=exclude, limit=limit)
     after_filter = len(filtered)
     progress("After filtering: %d URLs", after_filter)
 
@@ -938,7 +936,7 @@ def ingest_sitemap(
     for entry in filtered:
         existing_ts = existing_timestamps.get(entry.loc)
         if existing_ts and not overwrite and entry.lastmod is not None:
-            from datetime import datetime, timezone  # noqa: PLC0415
+            from datetime import UTC, datetime  # noqa: PLC0415
 
             try:
                 # ingestion_timestamp is ISO format from LanceDB
@@ -946,7 +944,7 @@ def ingest_sitemap(
                     str(existing_ts).replace("Z", "+00:00")
                 )
                 if existing_dt.tzinfo is None:
-                    existing_dt = existing_dt.replace(tzinfo=timezone.utc)
+                    existing_dt = existing_dt.replace(tzinfo=UTC)
                 if entry.lastmod <= existing_dt:
                     skipped += 1
                     continue
@@ -987,9 +985,7 @@ def ingest_sitemap(
                     logger.exception("Failed to ingest %s", page_url)
                     progress("Failed %s: %s", page_url, exc)
 
-    progress(
-        "Done: %d ingested, %d skipped, %d failed", ingested, skipped, failed
-    )
+    progress("Done: %d ingested, %d skipped, %d failed", ingested, skipped, failed)
 
     return SitemapResult(
         sitemap_url=url,

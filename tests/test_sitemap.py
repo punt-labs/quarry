@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -14,7 +15,6 @@ from quarry.sitemap import (
     filter_entries,
     parse_sitemap,
 )
-
 
 # ---------------------------------------------------------------------------
 # Sitemap XML parsing
@@ -54,7 +54,7 @@ class TestParseSitemap:
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url><loc>https://example.com/no-date</loc></url>
 </urlset>"""
-        entries, children = parse_sitemap(xml)
+        entries, _ = parse_sitemap(xml)
         assert len(entries) == 1
         assert entries[0].loc == "https://example.com/no-date"
         assert entries[0].lastmod is None
@@ -77,7 +77,7 @@ class TestParseSitemap:
 <urlset>
   <url><loc>https://example.com/no-ns</loc></url>
 </urlset>"""
-        entries, children = parse_sitemap(xml)
+        entries, _ = parse_sitemap(xml)
         assert len(entries) == 1
         assert entries[0].loc == "https://example.com/no-ns"
 
@@ -150,7 +150,6 @@ class TestDiscoverUrls:
 
     @patch("quarry.sitemap.fetch_sitemap")
     def test_respects_max_depth(self, mock_fetch: MagicMock) -> None:
-        # Create a chain: index -> index -> urlset
         index1 = """\
 <?xml version="1.0" encoding="UTF-8"?>
 <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
@@ -159,12 +158,11 @@ class TestDiscoverUrls:
         index2 = """\
 <?xml version="1.0" encoding="UTF-8"?>
 <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <sitemap><loc>https://example.com/sitemap-final.xml</loc></sitemap>
+  <sitemap><loc>https://example.com/final.xml</loc></sitemap>
 </sitemapindex>"""
         mock_fetch.side_effect = [index1, index2]
 
-        # max_depth=1 means: depth 0 (index1) ok, depth 1 (index2) ok,
-        # but depth 2 (sitemap-final) exceeds limit
+        # depth 0 (index1), depth 1 (index2), depth 2 (final) exceeds
         entries = discover_urls("https://example.com/sitemap.xml", max_depth=1)
         assert entries == []
         assert mock_fetch.call_count == 2
@@ -215,15 +213,18 @@ class TestDiscoverUrls:
 # ---------------------------------------------------------------------------
 
 
+_FILTER_ENTRIES: list[SitemapEntry] = [
+    SitemapEntry(loc="https://example.com/docs/api", lastmod=None),
+    SitemapEntry(loc="https://example.com/docs/guide", lastmod=None),
+    SitemapEntry(loc="https://example.com/blog/post1", lastmod=None),
+    SitemapEntry(loc="https://example.com/docs/v1/old", lastmod=None),
+]
+
+
 class TestFilterEntries:
     """Test include/exclude glob and limit filtering."""
 
-    _entries = [
-        SitemapEntry(loc="https://example.com/docs/api", lastmod=None),
-        SitemapEntry(loc="https://example.com/docs/guide", lastmod=None),
-        SitemapEntry(loc="https://example.com/blog/post1", lastmod=None),
-        SitemapEntry(loc="https://example.com/docs/v1/old", lastmod=None),
-    ]
+    _entries: ClassVar[list[SitemapEntry]] = _FILTER_ENTRIES
 
     def test_include_matches_path(self) -> None:
         result = filter_entries(self._entries, include=["/docs/*"])
@@ -240,7 +241,9 @@ class TestFilterEntries:
 
     def test_exclude_takes_precedence(self) -> None:
         result = filter_entries(
-            self._entries, include=["/docs/*"], exclude=["/docs/v1/*"]
+            self._entries,
+            include=["/docs/*"],
+            exclude=["/docs/v1/*"],
         )
         locs = [e.loc for e in result]
         assert "https://example.com/docs/api" in locs
@@ -252,7 +255,10 @@ class TestFilterEntries:
 
     def test_combined_include_exclude_limit(self) -> None:
         result = filter_entries(
-            self._entries, include=["/docs/*"], exclude=["/docs/v1/*"], limit=1
+            self._entries,
+            include=["/docs/*"],
+            exclude=["/docs/v1/*"],
+            limit=1,
         )
         assert len(result) == 1
         assert result[0].loc == "https://example.com/docs/api"
@@ -266,13 +272,19 @@ class TestFilterEntries:
 # Dedup (lastmod vs ingestion_timestamp) via full pipeline
 # ---------------------------------------------------------------------------
 
+_MOCK_RESULT: dict[str, object] = {
+    "document_name": "p",
+    "collection": "c",
+    "chunks": 1,
+}
+
 
 class TestIngestSitemapDedup:
     """Test lastmod-based deduplication in ingest_sitemap."""
 
     @patch("quarry.pipeline.ingest_url")
     @patch("quarry.pipeline.list_documents")
-    @patch("quarry.pipeline.discover_urls")
+    @patch("quarry.sitemap.discover_urls")
     def test_skips_when_lastmod_older(
         self,
         mock_discover: MagicMock,
@@ -284,10 +296,9 @@ class TestIngestSitemapDedup:
         mock_discover.return_value = [
             SitemapEntry(
                 loc="https://example.com/page1",
-                lastmod=datetime(2025, 1, 1, tzinfo=timezone.utc),
+                lastmod=datetime(2025, 1, 1, tzinfo=UTC),
             ),
         ]
-        # Document was ingested after lastmod
         mock_list_docs.return_value = [
             {
                 "document_name": "https://example.com/page1",
@@ -295,13 +306,10 @@ class TestIngestSitemapDedup:
             }
         ]
 
-        settings = MagicMock()
-        db = MagicMock()
-
         result = ingest_sitemap(
             "https://example.com/sitemap.xml",
-            db,
-            settings,
+            MagicMock(),
+            MagicMock(),
             collection="test",
         )
 
@@ -311,7 +319,7 @@ class TestIngestSitemapDedup:
 
     @patch("quarry.pipeline.ingest_url")
     @patch("quarry.pipeline.list_documents")
-    @patch("quarry.pipeline.discover_urls")
+    @patch("quarry.sitemap.discover_urls")
     def test_ingests_when_lastmod_newer(
         self,
         mock_discover: MagicMock,
@@ -323,7 +331,7 @@ class TestIngestSitemapDedup:
         mock_discover.return_value = [
             SitemapEntry(
                 loc="https://example.com/page1",
-                lastmod=datetime(2025, 12, 1, tzinfo=timezone.utc),
+                lastmod=datetime(2025, 12, 1, tzinfo=UTC),
             ),
         ]
         mock_list_docs.return_value = [
@@ -332,15 +340,12 @@ class TestIngestSitemapDedup:
                 "ingestion_timestamp": "2025-01-01T00:00:00+00:00",
             }
         ]
-        mock_ingest.return_value = {"document_name": "p", "collection": "c", "chunks": 1}
-
-        settings = MagicMock()
-        db = MagicMock()
+        mock_ingest.return_value = _MOCK_RESULT
 
         result = ingest_sitemap(
             "https://example.com/sitemap.xml",
-            db,
-            settings,
+            MagicMock(),
+            MagicMock(),
             collection="test",
         )
 
@@ -349,7 +354,7 @@ class TestIngestSitemapDedup:
 
     @patch("quarry.pipeline.ingest_url")
     @patch("quarry.pipeline.list_documents")
-    @patch("quarry.pipeline.discover_urls")
+    @patch("quarry.sitemap.discover_urls")
     def test_ingests_when_no_existing_doc(
         self,
         mock_discover: MagicMock,
@@ -361,19 +366,16 @@ class TestIngestSitemapDedup:
         mock_discover.return_value = [
             SitemapEntry(
                 loc="https://example.com/new-page",
-                lastmod=datetime(2025, 1, 1, tzinfo=timezone.utc),
+                lastmod=datetime(2025, 1, 1, tzinfo=UTC),
             ),
         ]
         mock_list_docs.return_value = []
-        mock_ingest.return_value = {"document_name": "p", "collection": "c", "chunks": 1}
-
-        settings = MagicMock()
-        db = MagicMock()
+        mock_ingest.return_value = _MOCK_RESULT
 
         result = ingest_sitemap(
             "https://example.com/sitemap.xml",
-            db,
-            settings,
+            MagicMock(),
+            MagicMock(),
             collection="test",
         )
 
@@ -382,7 +384,7 @@ class TestIngestSitemapDedup:
 
     @patch("quarry.pipeline.ingest_url")
     @patch("quarry.pipeline.list_documents")
-    @patch("quarry.pipeline.discover_urls")
+    @patch("quarry.sitemap.discover_urls")
     def test_overwrite_bypasses_dedup(
         self,
         mock_discover: MagicMock,
@@ -394,7 +396,7 @@ class TestIngestSitemapDedup:
         mock_discover.return_value = [
             SitemapEntry(
                 loc="https://example.com/page1",
-                lastmod=datetime(2025, 1, 1, tzinfo=timezone.utc),
+                lastmod=datetime(2025, 1, 1, tzinfo=UTC),
             ),
         ]
         mock_list_docs.return_value = [
@@ -403,15 +405,12 @@ class TestIngestSitemapDedup:
                 "ingestion_timestamp": "2025-06-01T00:00:00+00:00",
             }
         ]
-        mock_ingest.return_value = {"document_name": "p", "collection": "c", "chunks": 1}
-
-        settings = MagicMock()
-        db = MagicMock()
+        mock_ingest.return_value = _MOCK_RESULT
 
         result = ingest_sitemap(
             "https://example.com/sitemap.xml",
-            db,
-            settings,
+            MagicMock(),
+            MagicMock(),
             collection="test",
             overwrite=True,
         )
@@ -421,7 +420,7 @@ class TestIngestSitemapDedup:
 
     @patch("quarry.pipeline.ingest_url")
     @patch("quarry.pipeline.list_documents")
-    @patch("quarry.pipeline.discover_urls")
+    @patch("quarry.sitemap.discover_urls")
     def test_no_lastmod_always_ingests(
         self,
         mock_discover: MagicMock,
@@ -433,22 +432,18 @@ class TestIngestSitemapDedup:
         mock_discover.return_value = [
             SitemapEntry(loc="https://example.com/page1", lastmod=None),
         ]
-        # Existing doc, but entry has no lastmod — can't compare, so ingest
         mock_list_docs.return_value = [
             {
                 "document_name": "https://example.com/page1",
                 "ingestion_timestamp": "2025-06-01T00:00:00+00:00",
             }
         ]
-        mock_ingest.return_value = {"document_name": "p", "collection": "c", "chunks": 1}
-
-        settings = MagicMock()
-        db = MagicMock()
+        mock_ingest.return_value = _MOCK_RESULT
 
         result = ingest_sitemap(
             "https://example.com/sitemap.xml",
-            db,
-            settings,
+            MagicMock(),
+            MagicMock(),
             collection="test",
         )
 
@@ -514,7 +509,7 @@ class TestIngestSitemapIntegration:
                 collection="docs",
             )
 
-        assert result["sitemap_url"] == "https://docs.example.com/sitemap.xml"
+        assert result["sitemap_url"] == ("https://docs.example.com/sitemap.xml")
         assert result["collection"] == "docs"
         assert result["total_discovered"] == 2
         assert result["ingested"] == 2
@@ -538,9 +533,7 @@ class TestIngestSitemapIntegration:
   <url><loc>https://example.com/blog/post</loc></url>
 </urlset>"""
         mock_fetch_sitemap.return_value = sitemap_xml
-        mock_fetch_url.return_value = (
-            "<html><body><p>Content.</p></body></html>"
-        )
+        mock_fetch_url.return_value = "<html><body><p>Content.</p></body></html>"
 
         settings = MagicMock()
         settings.chunk_max_chars = 1800
@@ -576,32 +569,29 @@ class TestIngestSitemapIntegration:
 
     @patch("quarry.pipeline.ingest_url")
     @patch("quarry.pipeline.list_documents")
-    @patch("quarry.pipeline.discover_urls")
+    @patch("quarry.sitemap.discover_urls")
     def test_default_collection_from_domain(
         self,
         mock_discover: MagicMock,
         mock_list_docs: MagicMock,
-        mock_ingest: MagicMock,
+        _mock_ingest: MagicMock,
     ) -> None:
         from quarry.pipeline import ingest_sitemap
 
         mock_discover.return_value = []
         mock_list_docs.return_value = []
 
-        settings = MagicMock()
-        db = MagicMock()
-
         result = ingest_sitemap(
             "https://docs.python.org/sitemap.xml",
-            db,
-            settings,
+            MagicMock(),
+            MagicMock(),
         )
 
         assert result["collection"] == "docs.python.org"
 
     @patch("quarry.pipeline.ingest_url")
     @patch("quarry.pipeline.list_documents")
-    @patch("quarry.pipeline.discover_urls")
+    @patch("quarry.sitemap.discover_urls")
     def test_handles_ingest_failure(
         self,
         mock_discover: MagicMock,
@@ -616,21 +606,24 @@ class TestIngestSitemapIntegration:
         ]
         mock_list_docs.return_value = []
 
-        def _side_effect(url: str, *args: object, **kwargs: object) -> dict[str, object]:
+        def _side_effect(
+            url: str, *args: object, **kwargs: object
+        ) -> dict[str, object]:
             if "bad" in url:
                 msg = "HTTP 500"
                 raise ValueError(msg)
-            return {"document_name": url, "collection": "test", "chunks": 1}
+            return {
+                "document_name": url,
+                "collection": "test",
+                "chunks": 1,
+            }
 
         mock_ingest.side_effect = _side_effect
 
-        settings = MagicMock()
-        db = MagicMock()
-
         result = ingest_sitemap(
             "https://example.com/sitemap.xml",
-            db,
-            settings,
+            MagicMock(),
+            MagicMock(),
             collection="test",
         )
 

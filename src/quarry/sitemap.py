@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from fnmatch import fnmatch
 from urllib.parse import urlparse
 
@@ -98,7 +98,7 @@ def _parse_lastmod(text: str) -> datetime | None:
         try:
             dt = datetime.strptime(text, fmt)
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
+                dt = dt.replace(tzinfo=UTC)
             return dt
         except ValueError:
             continue
@@ -111,6 +111,33 @@ def _parse_lastmod(text: str) -> datetime | None:
     return None
 
 
+def _extract_child_urls(root: ET.Element, sitemap_tag: str, loc_tag: str) -> list[str]:
+    """Extract child sitemap URLs from a <sitemapindex> element."""
+    children: list[str] = []
+    for sitemap_el in root.findall(sitemap_tag):
+        loc_el = sitemap_el.find(loc_tag)
+        if loc_el is not None and loc_el.text:
+            children.append(loc_el.text.strip())
+    return children
+
+
+def _extract_entries(
+    root: ET.Element, url_tag: str, loc_tag: str, lastmod_tag: str
+) -> list[SitemapEntry]:
+    """Extract URL entries from a <urlset> element."""
+    entries: list[SitemapEntry] = []
+    for url_el in root.findall(url_tag):
+        loc_el = url_el.find(loc_tag)
+        if loc_el is None or not loc_el.text:
+            continue
+        lastmod: datetime | None = None
+        lastmod_el = url_el.find(lastmod_tag)
+        if lastmod_el is not None and lastmod_el.text:
+            lastmod = _parse_lastmod(lastmod_el.text)
+        entries.append(SitemapEntry(loc=loc_el.text.strip(), lastmod=lastmod))
+    return entries
+
+
 def parse_sitemap(xml_text: str) -> tuple[list[SitemapEntry], list[str]]:
     """Parse sitemap XML into URL entries and child sitemap URLs.
 
@@ -120,48 +147,20 @@ def parse_sitemap(xml_text: str) -> tuple[list[SitemapEntry], list[str]]:
     root = ET.fromstring(xml_text)  # noqa: S314
     tag = root.tag
 
-    entries: list[SitemapEntry] = []
-    children: list[str] = []
-
+    # With namespace
     if tag == _SITEMAPINDEX_TAG:
-        for sitemap_el in root.findall(_SITEMAP_TAG):
-            loc_el = sitemap_el.find(_LOC_TAG)
-            if loc_el is not None and loc_el.text:
-                children.append(loc_el.text.strip())
-    elif tag == _URLSET_TAG:
-        for url_el in root.findall(_URL_TAG):
-            loc_el = url_el.find(_LOC_TAG)
-            if loc_el is None or not loc_el.text:
-                continue
-            lastmod: datetime | None = None
-            lastmod_el = url_el.find(_LASTMOD_TAG)
-            if lastmod_el is not None and lastmod_el.text:
-                lastmod = _parse_lastmod(lastmod_el.text)
-            entries.append(SitemapEntry(loc=loc_el.text.strip(), lastmod=lastmod))
-    else:
-        # Try without namespace (some sitemaps omit it)
-        if root.tag == "sitemapindex":
-            for sitemap_el in root.findall("sitemap"):
-                loc_el = sitemap_el.find("loc")
-                if loc_el is not None and loc_el.text:
-                    children.append(loc_el.text.strip())
-        elif root.tag == "urlset":
-            for url_el in root.findall("url"):
-                loc_el = url_el.find("loc")
-                if loc_el is None or not loc_el.text:
-                    continue
-                lastmod = None
-                lastmod_el = url_el.find("lastmod")
-                if lastmod_el is not None and lastmod_el.text:
-                    lastmod = _parse_lastmod(lastmod_el.text)
-                entries.append(
-                    SitemapEntry(loc=loc_el.text.strip(), lastmod=lastmod)
-                )
-        else:
-            msg = f"Unknown sitemap root element: {root.tag}"
-            raise ValueError(msg)
+        return [], _extract_child_urls(root, _SITEMAP_TAG, _LOC_TAG)
+    if tag == _URLSET_TAG:
+        return _extract_entries(root, _URL_TAG, _LOC_TAG, _LASTMOD_TAG), []
 
-    return entries, children
+    # Without namespace (some sitemaps omit it)
+    if tag == "sitemapindex":
+        return [], _extract_child_urls(root, "sitemap", "loc")
+    if tag == "urlset":
+        return _extract_entries(root, "url", "loc", "lastmod"), []
+
+    msg = f"Unknown sitemap root element: {tag}"
+    raise ValueError(msg)
 
 
 def discover_urls(

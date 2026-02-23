@@ -158,7 +158,8 @@ def ingest_url_cmd(
 def ingest_sitemap_cmd(
     url: Annotated[str, typer.Argument(help="Sitemap URL to crawl")],
     collection: Annotated[
-        str, typer.Option("--collection", "-c", help="Collection name (default: domain)")
+        str,
+        typer.Option("--collection", "-c", help="Collection name (default: domain)"),
     ] = "",
     include: Annotated[
         list[str] | None,
