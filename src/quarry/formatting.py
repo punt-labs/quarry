@@ -174,6 +174,8 @@ def format_table(specs: list[ColumnSpec], rows: list[list[str]]) -> str:
 
 
 # Data tool formatters ────────────────────────────────────────────────────────
+# Mapping[str, Any]: data arrives from LanceDB row dicts, TypedDicts, and
+# JSON-like structures with no single typed schema at this formatting boundary.
 
 
 def format_search_results(query: str, results: Sequence[Mapping[str, Any]]) -> str:
@@ -286,7 +288,7 @@ def format_registrations(regs: Sequence[Mapping[str, Any]]) -> str:
         [
             r.get("collection", "?"),
             r.get("directory", "?"),
-            r.get("registered_at", "?")[:10],
+            (r.get("registered_at") or "?")[:10],
         ]
         for r in regs
     ]

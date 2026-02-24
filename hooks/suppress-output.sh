@@ -12,8 +12,11 @@
 # Supports both prod (mcp__plugin_quarry_quarry__*) and dev
 # (mcp__plugin_quarry-dev_quarry__*) tool prefixes by extracting the
 # bare tool name via ${TOOL##*__}.
-
-set -euo pipefail
+#
+# Note: no `set -euo pipefail` — hooks must degrade gracefully on
+# malformed input rather than failing the tool call. Matches biff's
+# approach. Panel line counts for data tools are approximate when
+# table cells wrap across multiple lines.
 
 INPUT=$(cat)
 TOOL=$(echo "$INPUT" | jq -r '.tool_name')
