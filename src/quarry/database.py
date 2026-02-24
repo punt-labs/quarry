@@ -28,6 +28,11 @@ logger = logging.getLogger(__name__)
 TABLE_NAME = "chunks"
 _table_lock = threading.Lock()
 
+# table.search() without a vector defaults to a limited scan (typically 10
+# rows).  Non-vector filtered queries must set an explicit limit large enough
+# to cover the full table so the WHERE clause is evaluated against every row.
+_FULL_SCAN_LIMIT = 1_000_000
+
 
 def _escape_sql(value: str) -> str:
     """Escape single quotes for LanceDB SQL predicates."""
@@ -201,7 +206,11 @@ def get_page_text(
 
     table = db.open_table(TABLE_NAME)
     results = (
-        table.search().where(predicate).limit(1).select(["page_raw_text"]).to_list()
+        table.search()
+        .where(predicate)
+        .limit(_FULL_SCAN_LIMIT)
+        .select(["page_raw_text"])
+        .to_list()
     )
 
     if not results:
@@ -228,15 +237,19 @@ def list_documents(
         return []
 
     table = db.open_table(TABLE_NAME)
-    query = table.search().select(
-        [
-            "document_name",
-            "document_path",
-            "collection",
-            "total_pages",
-            "page_number",
-            "ingestion_timestamp",
-        ]
+    query = (
+        table.search()
+        .limit(_FULL_SCAN_LIMIT)
+        .select(
+            [
+                "document_name",
+                "document_path",
+                "collection",
+                "total_pages",
+                "page_number",
+                "ingestion_timestamp",
+            ]
+        )
     )
     if collection_filter:
         query = query.where(f"collection = '{_escape_sql(collection_filter)}'")
@@ -325,7 +338,12 @@ def list_collections(db: LanceDB) -> list[CollectionSummary]:
         return []
 
     table = db.open_table(TABLE_NAME)
-    rows = table.search().select(["collection", "document_name"]).to_list()
+    rows = (
+        table.search()
+        .limit(_FULL_SCAN_LIMIT)
+        .select(["collection", "document_name"])
+        .to_list()
+    )
     if not rows:
         return []
 
