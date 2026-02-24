@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import functools
-import json
 import logging
 from collections.abc import Callable
 from pathlib import Path
@@ -22,6 +21,21 @@ from quarry.database import (
     list_documents,
     search,
 )
+from quarry.formatting import (
+    format_collections,
+    format_databases,
+    format_delete_summary,
+    format_deregister_summary,
+    format_documents,
+    format_ingest_summary,
+    format_register_summary,
+    format_registrations,
+    format_search_results,
+    format_sitemap_summary,
+    format_status,
+    format_switch_summary,
+    format_sync_summary,
+)
 from quarry.pipeline import (
     ingest_content as pipeline_ingest_content,
     ingest_document,
@@ -40,7 +54,17 @@ from quarry.types import LanceDB
 configure_logging(load_settings())
 logger = logging.getLogger(__name__)
 
-mcp = FastMCP("punt-quarry")
+mcp = FastMCP(
+    "punt-quarry",
+    instructions=(
+        "Quarry is a local semantic search engine for your knowledge base. "
+        "Use these tools to ingest, search, and manage documents.\n\n"
+        "All quarry tool output is pre-formatted plain text using unicode "
+        "characters for alignment. Always emit quarry output verbatim \u2014 "
+        "never reformat, never convert to markdown tables, never wrap "
+        "in code fences or boxes."
+    ),
+)
 
 _db_name: str | None = None
 
@@ -117,14 +141,7 @@ def search_documents(
         for r in results
     ]
 
-    return json.dumps(
-        {
-            "query": query,
-            "total_results": len(formatted),
-            "results": formatted,
-        },
-        indent=2,
-    )
+    return format_search_results(query, formatted)
 
 
 @mcp.tool()
@@ -149,20 +166,15 @@ def ingest_file(
     db = _db()
     col = derive_collection(path, explicit=collection or None)
 
-    progress_lines: list[str] = []
-
     result = ingest_document(
         path,
         db,
         settings,
         overwrite=overwrite,
         collection=col,
-        progress_callback=progress_lines.append,
     )
 
-    progress_lines.append("")
-    progress_lines.append(f"Result: {json.dumps(result, indent=2)}")
-    return "\n".join(progress_lines)
+    return format_ingest_summary(result)
 
 
 @mcp.tool()
@@ -189,8 +201,6 @@ def ingest_content(
     settings = _settings()
     db = _db()
 
-    progress_lines: list[str] = []
-
     result = pipeline_ingest_content(
         content,
         document_name,
@@ -199,12 +209,9 @@ def ingest_content(
         overwrite=overwrite,
         collection=collection,
         format_hint=format_hint,
-        progress_callback=progress_lines.append,
     )
 
-    progress_lines.append("")
-    progress_lines.append(f"Result: {json.dumps(result, indent=2)}")
-    return "\n".join(progress_lines)
+    return format_ingest_summary(result)
 
 
 @mcp.tool()
@@ -230,8 +237,6 @@ def ingest_url(
     settings = _settings()
     db = _db()
 
-    progress_lines: list[str] = []
-
     result = pipeline_ingest_url(
         url,
         db,
@@ -239,12 +244,9 @@ def ingest_url(
         overwrite=overwrite,
         collection=collection,
         document_name=document_name or None,
-        progress_callback=progress_lines.append,
     )
 
-    progress_lines.append("")
-    progress_lines.append(f"Result: {json.dumps(result, indent=2)}")
-    return "\n".join(progress_lines)
+    return format_ingest_summary(result)
 
 
 @mcp.tool()
@@ -282,8 +284,6 @@ def ingest_sitemap(
     include = [p.strip() for p in include_patterns.split(",") if p.strip()] or None
     exclude = [p.strip() for p in exclude_patterns.split(",") if p.strip()] or None
 
-    progress_lines: list[str] = []
-
     result = pipeline_ingest_sitemap(
         url,
         db,
@@ -295,12 +295,9 @@ def ingest_sitemap(
         overwrite=overwrite,
         workers=workers,
         delay=delay,
-        progress_callback=progress_lines.append,
     )
 
-    progress_lines.append("")
-    progress_lines.append(f"Result: {json.dumps(result, indent=2)}")
-    return "\n".join(progress_lines)
+    return format_sitemap_summary(result)
 
 
 @mcp.tool()
@@ -313,7 +310,7 @@ def get_documents(collection: str = "") -> str:
     """
     db = _db()
     docs = list_documents(db, collection_filter=collection or None)
-    return json.dumps({"total_documents": len(docs), "documents": docs}, indent=2)
+    return format_documents(docs)
 
 
 @mcp.tool()
@@ -353,14 +350,7 @@ def delete_document(
     """
     db = _db()
     deleted = db_delete_document(db, document_name, collection=collection or None)
-    return json.dumps(
-        {
-            "document_name": document_name,
-            "collection": collection or "(all)",
-            "chunks_deleted": deleted,
-        },
-        indent=2,
-    )
+    return format_delete_summary("document", document_name, deleted)
 
 
 @mcp.tool()
@@ -369,10 +359,7 @@ def list_collections() -> str:
     """List all collections with document and chunk counts."""
     db = _db()
     cols = db_list_collections(db)
-    return json.dumps(
-        {"total_collections": len(cols), "collections": cols},
-        indent=2,
-    )
+    return format_collections(cols)
 
 
 @mcp.tool()
@@ -385,13 +372,7 @@ def delete_collection(collection: str) -> str:
     """
     db = _db()
     deleted = db_delete_collection(db, collection)
-    return json.dumps(
-        {
-            "collection": collection,
-            "chunks_deleted": deleted,
-        },
-        indent=2,
-    )
+    return format_delete_summary("collection", collection, deleted)
 
 
 @mcp.tool()
@@ -411,14 +392,7 @@ def register_directory(directory: str, collection: str = "") -> str:
         reg = registry_register(conn, path, col)
     finally:
         conn.close()
-    return json.dumps(
-        {
-            "directory": reg.directory,
-            "collection": reg.collection,
-            "registered_at": reg.registered_at,
-        },
-        indent=2,
-    )
+    return format_register_summary(reg.directory, reg.collection)
 
 
 @mcp.tool()
@@ -445,13 +419,10 @@ def deregister_directory(
         for name in doc_names:
             db_delete_document(db, name, collection=collection)
 
-    return json.dumps(
-        {
-            "collection": collection,
-            "documents_removed": len(doc_names),
-            "data_deleted": not keep_data,
-        },
-        indent=2,
+    return format_deregister_summary(
+        collection,
+        len(doc_names),
+        data_deleted=not keep_data,
     )
 
 
@@ -462,12 +433,7 @@ def sync_all_registrations() -> str:
     settings = _settings()
     db = _db()
 
-    progress_lines: list[str] = []
-    results = engine_sync_all(
-        db,
-        settings,
-        progress_callback=progress_lines.append,
-    )
+    results = engine_sync_all(db, settings)
 
     summary = {
         col: {
@@ -480,13 +446,8 @@ def sync_all_registrations() -> str:
         for col, res in results.items()
     }
 
-    return json.dumps(
-        {
-            "collections_synced": len(results),
-            "results": summary,
-            "progress": progress_lines,
-        },
-        indent=2,
+    return format_sync_summary(
+        {"collections_synced": len(results), "results": summary},
     )
 
 
@@ -500,19 +461,15 @@ def list_registrations() -> str:
         regs = registry_list(conn)
     finally:
         conn.close()
-    return json.dumps(
-        {
-            "total_registrations": len(regs),
-            "registrations": [
-                {
-                    "directory": r.directory,
-                    "collection": r.collection,
-                    "registered_at": r.registered_at,
-                }
-                for r in regs
-            ],
-        },
-        indent=2,
+    return format_registrations(
+        [
+            {
+                "directory": r.directory,
+                "collection": r.collection,
+                "registered_at": r.registered_at,
+            }
+            for r in regs
+        ]
     )
 
 
@@ -542,7 +499,7 @@ def status() -> str:
         else 0
     )
 
-    return json.dumps(
+    return format_status(
         {
             "document_count": len(docs),
             "collection_count": len(cols),
@@ -551,9 +508,7 @@ def status() -> str:
             "database_path": str(settings.lancedb_path),
             "database_size_bytes": db_size_bytes,
             "embedding_model": settings.embedding_model,
-            "embedding_dimension": settings.embedding_dimension,
-        },
-        indent=2,
+        }
     )
 
 
@@ -567,14 +522,7 @@ def list_databases() -> str:
     """
     settings = _settings()
     databases = discover_databases(settings.quarry_root)
-    return json.dumps(
-        {
-            "current_database": _db_name or "default",
-            "total_databases": len(databases),
-            "databases": databases,
-        },
-        indent=2,
-    )
+    return format_databases(databases, current=_db_name or "default")
 
 
 @mcp.tool()
@@ -596,14 +544,7 @@ def use_database(name: str) -> str:
     # names containing path separators or traversal segments.
     test_settings = resolve_db_paths(load_settings(), new_name)
     _db_name = new_name
-    return json.dumps(
-        {
-            "previous_database": previous,
-            "current_database": name,
-            "database_path": str(test_settings.lancedb_path),
-        },
-        indent=2,
-    )
+    return format_switch_summary(previous, name, str(test_settings.lancedb_path))
 
 
 def main(db_name: str | None = None) -> None:
