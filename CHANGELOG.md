@@ -14,6 +14,13 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-02-24
+
+### Infra
+
+- **MCP smoke test script** — `docs/MCP-SMOKE-TEST.md` provides an 11-step manual verification for all MCP tools inside Claude Code (sitemap crawl, dedup, search, ingest, delete, cleanup)
+- Updated PR/FAQ: 596 tests, URL/sitemap ingestion in shipped features, fixed quarry-menubar GitHub org
+
 ## [0.8.0] - 2026-02-23
 
 ### Connector
