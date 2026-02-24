@@ -14,6 +14,25 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-02-23
+
+### Connector
+
+- **Sitemap crawling** — `quarry ingest-sitemap <url>` discovers all URLs from XML sitemaps (following `<sitemapindex>` recursively), applies include/exclude URL path glob filters, and ingests pages in parallel. `<lastmod>`-based dedup skips unchanged pages on re-crawl. Rate limiting with configurable delay + random jitter avoids crawl blocking.
+
+### Tool
+
+- `ingest-sitemap` CLI command with `--include`, `--exclude`, `--limit`, `--workers`, `--delay` options
+- `ingest_sitemap` MCP tool with comma-separated pattern strings
+- Gzip-compressed sitemap support (`.xml.gz`)
+
+### Infra
+
+- **PyPI package renamed** from `quarry-mcp` to `punt-quarry` (aligns with punt-labs naming convention). Install with `uv tool install punt-quarry`.
+- Resilient child sitemap fetching — parse errors in one child sitemap no longer abort entire discovery
+- Worker count validation — `workers=0` or negative values clamped to 1
+- 596 tests across 30 modules
+
 ## [0.7.0] - 2026-02-15
 
 ### Index
