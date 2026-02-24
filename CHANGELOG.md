@@ -14,6 +14,14 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-02-24
+
+### Infra
+
+- **Dual command path** — SessionStart hook deploys commands to `~/.claude/commands/` for top-level access (`/find`, `/ingest`, etc.) alongside namespaced `quarry:*` versions. Auto-allows MCP tool permissions on first run. Follows punt-kit dual-command-path pattern.
+- **Plugin rename** — Fixed plugin name from `quarry-dev` to `quarry` so marketplace shows the correct name.
+- **Removed stale manifest.json** — Old marketplace manifest was blocking plugin commands from loading.
+
 ## [0.9.0] - 2026-02-24
 
 ### Tool

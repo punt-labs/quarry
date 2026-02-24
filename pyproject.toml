@@ -1,6 +1,6 @@
 [project]
 name = "punt-quarry"
-version = "0.9.0"
+version = "0.9.1"
 description = "Extract searchable knowledge from any document. Expose it to LLMs via MCP."
 readme = "README.md"
 requires-python = ">=3.13"
