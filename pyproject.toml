@@ -52,6 +52,7 @@ dev = [
     "pytest>=8.4.2",
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=6.0.0",
+    "pytest-timeout>=2.3.0",
 ]
 
 [project.scripts]
@@ -188,6 +189,7 @@ minversion = "8.0"
 addopts = "-ra -q -m 'not slow'"
 testpaths = ["tests"]
 asyncio_mode = "auto"
+timeout = 30
 markers = ["slow: marks tests as slow (run with -m slow)"]
 
 [tool.coverage.run]

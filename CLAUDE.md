@@ -14,6 +14,7 @@ I am a principal engineer. Every change I make leaves the codebase in a better s
 - **Immutable data models.** `@dataclass(frozen=True)` or pydantic with immutability.
 - **Latest Python.** Target 3.13+. Use modern PEP conventions (`Annotated`, `type` statements, `X | Y` unions).
 - **Quality gates pass before every commit.** `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src/ tests/`, `uv run pytest`. Zero violations, zero errors, all tests green.
+- **Running tests.** The full test suite (600+ tests) needs `timeout=300000` on the Bash tool (5 minutes). During development, prefer targeted tests for files you changed: `uv run pytest tests/test_foo.py -v`. Never retry a command that produces no output — diagnose first.
 - **Double quotes.** Line length 88. Ruff with comprehensive rules.
 - **AWS credentials from environment variables only.** No profiles, no `.env` files committed, no hardcoded keys.
 
