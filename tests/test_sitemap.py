@@ -887,3 +887,33 @@ class TestIngestAuto:
 
         call_kwargs = mock_ingest_sitemap.call_args
         assert call_kwargs.kwargs["collection"] == "my-docs"
+
+    @patch("quarry.pipeline.ingest_sitemap")
+    def test_explicit_sitemap_url_skips_discovery(
+        self,
+        mock_ingest_sitemap: MagicMock,
+    ) -> None:
+        from quarry.pipeline import ingest_auto
+
+        mock_ingest_sitemap.return_value = {
+            "sitemap_url": "https://example.com/sitemap.xml",
+            "collection": "example.com",
+            "total_discovered": 10,
+            "after_filter": 10,
+            "ingested": 10,
+            "skipped": 0,
+            "failed": 0,
+            "errors": [],
+        }
+
+        result = ingest_auto(
+            "https://example.com/sitemap.xml",
+            MagicMock(),
+            MagicMock(),
+        )
+
+        assert "sitemap_url" in result
+        # Called ingest_sitemap directly with the URL, no include filter
+        mock_ingest_sitemap.assert_called_once()
+        call_kwargs = mock_ingest_sitemap.call_args
+        assert "include" not in call_kwargs.kwargs

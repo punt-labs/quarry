@@ -1088,6 +1088,26 @@ def ingest_auto(
     if not collection:
         collection = parsed.hostname or "default"
 
+    # If the URL itself is a sitemap, skip discovery and crawl directly.
+    path_lower = parsed.path.lower()
+    is_sitemap = (
+        path_lower.endswith(("sitemap.xml", "sitemap.xml.gz"))
+        or "/sitemap" in path_lower
+    )
+    if is_sitemap:
+        progress("URL is a sitemap, crawling directly")
+        return ingest_sitemap(
+            url,
+            db,
+            settings,
+            collection=collection,
+            overwrite=overwrite,
+            workers=workers,
+            delay=delay,
+            timeout=timeout,
+            progress_callback=progress_callback,
+        )
+
     progress("Probing %s://%s for sitemap", parsed.scheme, parsed.netloc)
     sitemap_urls = discover_sitemap(url, timeout=timeout)
 
@@ -1106,7 +1126,7 @@ def ingest_auto(
     # Derive include filter from input URL path
     path = parsed.path.rstrip("/")
     include: list[str] | None = None
-    if path and path != "/":
+    if path:
         include = [path, f"{path}/*"]
 
     sitemap_url = sitemap_urls[0]
