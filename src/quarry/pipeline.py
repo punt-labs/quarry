@@ -977,6 +977,8 @@ def _bulk_ingest_entries(
                     page_url,
                     db,
                     settings,
+                    # Always replace existing chunks for URLs that passed dedup.
+                    # The dedup logic above already skipped unchanged URLs.
                     overwrite=True,
                     collection=collection,
                     document_name=doc_name,
