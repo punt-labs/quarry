@@ -131,7 +131,8 @@ Once configured, Claude Code can call these tools on your behalf:
 | `search_documents` | Semantic search with optional filters |
 | `ingest_file` | Index a file by path |
 | `ingest_url` | Fetch and index a webpage |
-| `ingest_sitemap` | Crawl a sitemap and ingest all discovered URLs |
+| `ingest_auto` | Smart URL ingestion: auto-discovers sitemaps, bulk-crawls or single-page |
+| `ingest_sitemap` | Crawl a specific sitemap URL |
 | `ingest_content` | Index inline text (for uploads, clipboard, etc.) |
 | `get_documents` | List indexed documents |
 | `get_page` | Get raw text for a specific page |

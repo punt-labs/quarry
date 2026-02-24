@@ -14,6 +14,18 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-02-24
+
+### Connector
+
+- **Smart URL ingestion** — `ingest_auto` auto-discovers sitemaps via [ultimate-sitemap-parser](https://github.com/mediacloud/ultimate-sitemap-parser) (robots.txt, well-known locations, recursive indexes, XML/RSS/Atom/plain text formats). Falls back to single-page ingestion when no sitemap found. Discovery errors gracefully degrade to single-page mode.
+- **Sitemap parsing via USP** — Replaced hand-rolled XML parser with USP for robust handling of malformed content, gzipped sitemaps, and sitemap indexes. Net -286 lines.
+
+### Tool
+
+- **`/ingest` handles directories** — `/ingest ~/path/to/dir` now routes to `register_directory` + sync instead of failing with "unsupported file format".
+- **`ingest_auto` MCP tool** — New tool that subsumes `ingest_url` and `ingest_sitemap` for URL inputs. All `/ingest <url>` commands route here.
+
 ## [0.9.1] - 2026-02-24
 
 ### Infra
