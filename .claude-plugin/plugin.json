@@ -1,0 +1,16 @@
+{
+  "name": "quarry-dev",
+  "description": "Local semantic search MCP server for Claude Code",
+  "version": "0.8.1",
+  "author": {
+    "name": "Punt Labs",
+    "email": "hello@punt-labs.com"
+  },
+  "mcpServers": {
+    "quarry": {
+      "type": "stdio",
+      "command": "quarry",
+      "args": ["mcp"]
+    }
+  }
+}
