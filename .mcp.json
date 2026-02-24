@@ -1,9 +1,3 @@
 {
-  "mcpServers": {
-    "claude-flow": {
-      "command": "claude-flow",
-      "args": ["mcp", "start"],
-      "env": {}
-    }
-  }
+  "mcpServers": {}
 }
