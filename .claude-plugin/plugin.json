@@ -1,6 +1,6 @@
 {
   "name": "quarry-dev",
-  "description": "Local semantic search MCP server for Claude Code",
+  "description": "Local semantic search for Claude Code: /find, /ingest, /explain, /source, /quarry",
   "version": "0.8.1",
   "author": {
     "name": "Punt Labs",

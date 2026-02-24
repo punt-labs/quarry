@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -31,13 +30,19 @@ def _settings(tmp_path: Path) -> MagicMock:
     s.registry_path = tmp_path / "registry.db"
     s.embedding_model = "Snowflake/snowflake-arctic-embed-m-v1.5"
     s.embedding_dimension = 768
+    s.quarry_root = tmp_path
     return s
 
 
 class TestIngestText:
-    def test_calls_pipeline_and_returns_progress(self, tmp_path: Path):
+    def test_calls_pipeline_and_returns_summary(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
-        mock_result = {"document_name": "notes.md", "chunks": 3, "sections": 2}
+        mock_result = {
+            "document_name": "notes.md",
+            "chunks": 3,
+            "collection": "default",
+            "sections": 2,
+        }
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
@@ -53,11 +58,16 @@ class TestIngestText:
         assert call_args[0][0] == "# Hello\nWorld"
         assert call_args[0][1] == "notes.md"
         assert "notes.md" in result
-        assert "chunks" in result
+        assert "3 chunks" in result
 
-    def test_passes_format_hint(self, tmp_path: Path):
+    def test_passes_format_hint(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
-        mock_result = {"document_name": "a.txt", "chunks": 1, "sections": 1}
+        mock_result = {
+            "document_name": "a.txt",
+            "chunks": 1,
+            "collection": "default",
+            "sections": 1,
+        }
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
@@ -71,9 +81,14 @@ class TestIngestText:
         call_kwargs = mock_ingest.call_args[1]
         assert call_kwargs["format_hint"] == "markdown"
 
-    def test_passes_collection(self, tmp_path: Path):
+    def test_passes_collection(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
-        mock_result = {"document_name": "a.txt", "chunks": 1, "sections": 1}
+        mock_result = {
+            "document_name": "a.txt",
+            "chunks": 1,
+            "collection": "ml-101",
+            "sections": 1,
+        }
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
@@ -89,49 +104,49 @@ class TestIngestText:
 
 
 class TestDeleteDocument:
-    def test_deletes_and_returns_count(self, tmp_path: Path):
+    def test_deletes_and_returns_summary(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db") as mock_db,
             patch("quarry.mcp_server.db_delete_document", return_value=5) as mock_del,
         ):
-            result = json.loads(delete_document("report.pdf"))
+            result = delete_document("report.pdf")
 
         mock_del.assert_called_once_with(
             mock_db.return_value, "report.pdf", collection=None
         )
-        assert result["document_name"] == "report.pdf"
-        assert result["chunks_deleted"] == 5
+        assert "report.pdf" in result
+        assert "5 chunks" in result
 
-    def test_returns_zero_for_missing(self, tmp_path: Path):
+    def test_returns_zero_for_missing(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
             patch("quarry.mcp_server.db_delete_document", return_value=0),
         ):
-            result = json.loads(delete_document("nonexistent.pdf"))
+            result = delete_document("nonexistent.pdf")
 
-        assert result["chunks_deleted"] == 0
+        assert "0 chunks" in result
 
-    def test_scoped_to_collection(self, tmp_path: Path):
+    def test_scoped_to_collection(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db") as mock_db,
             patch("quarry.mcp_server.db_delete_document", return_value=2) as mock_del,
         ):
-            result = json.loads(delete_document("report.pdf", collection="math"))
+            result = delete_document("report.pdf", collection="math")
 
         mock_del.assert_called_once_with(
             mock_db.return_value, "report.pdf", collection="math"
         )
-        assert result["collection"] == "math"
+        assert "report.pdf" in result
 
 
 class TestStatus:
-    def test_returns_status_fields(self, tmp_path: Path):
+    def test_returns_status_fields(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         settings.lancedb_path.mkdir(parents=True)
         (settings.lancedb_path / "data.lance").write_bytes(b"x" * 1024)
@@ -149,18 +164,19 @@ class TestStatus:
             patch("quarry.mcp_server.open_registry", return_value=mock_conn),
             patch("quarry.mcp_server.registry_list", return_value=["fake"]),
         ):
-            result = json.loads(status())
+            result = status()
 
-        assert result["document_count"] == 2
-        assert result["collection_count"] == 1
-        assert result["chunk_count"] == 42
-        assert result["registered_directories"] == 1
-        assert result["database_path"] == str(settings.lancedb_path)
-        assert result["database_size_bytes"] == 1024
-        assert result["embedding_model"] == "Snowflake/snowflake-arctic-embed-m-v1.5"
-        assert result["embedding_dimension"] == 768
+        assert "Documents:" in result
+        assert "2" in result
+        assert "Collections:" in result
+        assert "1" in result
+        assert "Chunks:" in result
+        assert "42" in result
+        assert "Directories:" in result
+        assert str(settings.lancedb_path) in result
+        assert "snowflake-arctic-embed-m-v1.5" in result
 
-    def test_empty_database(self, tmp_path: Path):
+    def test_empty_database(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         settings.lancedb_path.mkdir(parents=True)
         settings.registry_path.touch()
@@ -175,15 +191,14 @@ class TestStatus:
             patch("quarry.mcp_server.open_registry", return_value=mock_conn),
             patch("quarry.mcp_server.registry_list", return_value=[]),
         ):
-            result = json.loads(status())
+            result = status()
 
-        assert result["document_count"] == 0
-        assert result["collection_count"] == 0
-        assert result["chunk_count"] == 0
-        assert result["registered_directories"] == 0
-        assert result["database_size_bytes"] == 0
+        assert "Documents:      0" in result
+        assert "Collections:    0" in result
+        assert "Chunks:         0" in result
+        assert "Directories:    0" in result
 
-    def test_nonexistent_db_path(self, tmp_path: Path):
+    def test_nonexistent_db_path(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         # registry_path doesn't exist → status() skips open_registry
         with (
@@ -193,10 +208,9 @@ class TestStatus:
             patch("quarry.mcp_server.count_chunks", return_value=0),
             patch("quarry.mcp_server.db_list_collections", return_value=[]),
         ):
-            result = json.loads(status())
+            result = status()
 
-        assert result["database_size_bytes"] == 0
-        assert result["registered_directories"] == 0
+        assert "Directories:    0" in result
 
 
 def _mock_embedding_backend(mock_vector: np.ndarray) -> MagicMock:
@@ -206,7 +220,7 @@ def _mock_embedding_backend(mock_vector: np.ndarray) -> MagicMock:
 
 
 class TestSearchDocuments:
-    def test_returns_results(self, tmp_path: Path):
+    def test_returns_results(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         mock_vector = np.zeros(768, dtype=np.float32)
         mock_results = [
@@ -230,15 +244,16 @@ class TestSearchDocuments:
             ),
             patch("quarry.mcp_server.search", return_value=mock_results),
         ):
-            result = json.loads(search_documents("revenue growth"))
+            result = search_documents("revenue growth")
 
-        assert result["query"] == "revenue growth"
-        assert result["total_results"] == 1
-        assert result["results"][0]["document_name"] == "report.pdf"
-        assert result["results"][0]["collection"] == "finance"
-        assert result["results"][0]["similarity"] == 0.85
+        assert "revenue growth" in result
+        assert "1 result" in result
+        assert "report.pdf" in result
+        assert "p3" in result
+        assert "0.85" in result
+        assert "quarterly revenue grew" in result
 
-    def test_clamps_limit_to_50(self, tmp_path: Path):
+    def test_clamps_limit_to_50(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         mock_vector = np.zeros(768, dtype=np.float32)
         with (
@@ -279,7 +294,7 @@ class TestSearchDocuments:
 
         assert mock_search.call_args[1][expected_key] == expected_value
 
-    def test_passes_document_filter(self, tmp_path: Path):
+    def test_passes_document_filter(self, tmp_path: Path) -> None:
         self._assert_filter_passthrough(
             tmp_path,
             "document_filter",
@@ -288,7 +303,7 @@ class TestSearchDocuments:
             "report.pdf",
         )
 
-    def test_empty_filter_passes_none(self, tmp_path: Path):
+    def test_empty_filter_passes_none(self, tmp_path: Path) -> None:
         self._assert_filter_passthrough(
             tmp_path,
             "document_filter",
@@ -297,7 +312,7 @@ class TestSearchDocuments:
             None,
         )
 
-    def test_passes_collection_filter(self, tmp_path: Path):
+    def test_passes_collection_filter(self, tmp_path: Path) -> None:
         self._assert_filter_passthrough(
             tmp_path,
             "collection",
@@ -306,7 +321,7 @@ class TestSearchDocuments:
             "math",
         )
 
-    def test_passes_page_type_filter(self, tmp_path: Path):
+    def test_passes_page_type_filter(self, tmp_path: Path) -> None:
         self._assert_filter_passthrough(
             tmp_path,
             "page_type",
@@ -315,7 +330,7 @@ class TestSearchDocuments:
             "code",
         )
 
-    def test_empty_page_type_passes_none(self, tmp_path: Path):
+    def test_empty_page_type_passes_none(self, tmp_path: Path) -> None:
         self._assert_filter_passthrough(
             tmp_path,
             "page_type",
@@ -324,7 +339,7 @@ class TestSearchDocuments:
             None,
         )
 
-    def test_passes_source_format_filter(self, tmp_path: Path):
+    def test_passes_source_format_filter(self, tmp_path: Path) -> None:
         self._assert_filter_passthrough(
             tmp_path,
             "source_format",
@@ -333,7 +348,7 @@ class TestSearchDocuments:
             ".py",
         )
 
-    def test_empty_source_format_passes_none(self, tmp_path: Path):
+    def test_empty_source_format_passes_none(self, tmp_path: Path) -> None:
         self._assert_filter_passthrough(
             tmp_path,
             "source_format",
@@ -342,7 +357,7 @@ class TestSearchDocuments:
             None,
         )
 
-    def test_results_include_metadata_fields(self, tmp_path: Path):
+    def test_results_include_metadata_fields(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         mock_vector = np.zeros(768, dtype=np.float32)
         mock_results = [
@@ -366,43 +381,52 @@ class TestSearchDocuments:
             ),
             patch("quarry.mcp_server.search", return_value=mock_results),
         ):
-            result = json.loads(search_documents("test"))
+            result = search_documents("test")
 
-        r = result["results"][0]
-        assert r["page_type"] == "code"
-        assert r["source_format"] == ".py"
+        assert "script.py" in result
+        assert "def main():" in result
 
 
 class TestGetDocuments:
-    def test_returns_document_list(self, tmp_path: Path):
+    def test_returns_document_table(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         mock_docs = [
-            {"document_name": "a.pdf", "total_pages": 10, "chunk_count": 25},
-            {"document_name": "b.pdf", "total_pages": 5, "chunk_count": 12},
+            {
+                "document_name": "a.pdf",
+                "collection": "math",
+                "total_pages": 10,
+                "chunk_count": 25,
+            },
+            {
+                "document_name": "b.pdf",
+                "collection": "math",
+                "total_pages": 5,
+                "chunk_count": 12,
+            },
         ]
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
             patch("quarry.mcp_server.list_documents", return_value=mock_docs),
         ):
-            result = json.loads(get_documents())
+            result = get_documents()
 
-        assert result["total_documents"] == 2
-        assert result["documents"][0]["document_name"] == "a.pdf"
+        assert "a.pdf" in result
+        assert "b.pdf" in result
+        assert "DOCUMENT" in result
 
-    def test_empty_database(self, tmp_path: Path):
+    def test_empty_database(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
             patch("quarry.mcp_server.list_documents", return_value=[]),
         ):
-            result = json.loads(get_documents())
+            result = get_documents()
 
-        assert result["total_documents"] == 0
-        assert result["documents"] == []
+        assert "No documents" in result
 
-    def test_filters_by_collection(self, tmp_path: Path):
+    def test_filters_by_collection(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
@@ -416,7 +440,7 @@ class TestGetDocuments:
 
 
 class TestGetPage:
-    def test_returns_page_text(self, tmp_path: Path):
+    def test_returns_page_text(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
@@ -432,7 +456,7 @@ class TestGetPage:
         assert "Page: 3" in result
         assert "The quick brown fox" in result
 
-    def test_returns_not_found_message(self, tmp_path: Path):
+    def test_returns_not_found_message(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
@@ -446,7 +470,7 @@ class TestGetPage:
 
 
 class TestListCollections:
-    def test_returns_collections(self, tmp_path: Path):
+    def test_returns_collections(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         mock_cols = [
             {"collection": "math", "document_count": 5, "chunk_count": 100},
@@ -457,14 +481,15 @@ class TestListCollections:
             patch("quarry.mcp_server._db"),
             patch("quarry.mcp_server.db_list_collections", return_value=mock_cols),
         ):
-            result = json.loads(list_collections())
+            result = list_collections()
 
-        assert result["total_collections"] == 2
-        assert result["collections"][0]["collection"] == "math"
+        assert "math" in result
+        assert "science" in result
+        assert "COLLECTION" in result
 
 
 class TestDeleteCollection:
-    def test_deletes_collection(self, tmp_path: Path):
+    def test_deletes_collection(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
@@ -473,15 +498,15 @@ class TestDeleteCollection:
                 "quarry.mcp_server.db_delete_collection", return_value=50
             ) as mock_del,
         ):
-            result = json.loads(delete_collection("math"))
+            result = delete_collection("math")
 
         mock_del.assert_called_once_with(mock_db.return_value, "math")
-        assert result["collection"] == "math"
-        assert result["chunks_deleted"] == 50
+        assert "math" in result
+        assert "50 chunks" in result
 
 
 class TestHandleErrors:
-    def test_returns_error_string_on_exception(self, tmp_path: Path):
+    def test_returns_error_string_on_exception(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
@@ -497,7 +522,7 @@ class TestHandleErrors:
         assert "FileNotFoundError" in result
         assert "bad.pdf" in result
 
-    def test_returns_error_on_value_error(self, tmp_path: Path):
+    def test_returns_error_on_value_error(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
@@ -514,26 +539,26 @@ class TestHandleErrors:
 
 
 class TestRegisterDirectory:
-    def test_registers_and_returns_json(self, tmp_path: Path):
+    def test_registers_and_returns_summary(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         d = tmp_path / "course"
         d.mkdir()
         with patch("quarry.mcp_server._settings", return_value=settings):
-            result = json.loads(register_directory(str(d), "my-course"))
-        assert result["collection"] == "my-course"
-        assert result["directory"] == str(d.resolve())
+            result = register_directory(str(d), "my-course")
+        assert "my-course" in result
+        assert str(d.resolve()) in result
 
-    def test_default_collection_from_dir_name(self, tmp_path: Path):
+    def test_default_collection_from_dir_name(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         d = tmp_path / "ml-101"
         d.mkdir()
         with patch("quarry.mcp_server._settings", return_value=settings):
-            result = json.loads(register_directory(str(d)))
-        assert result["collection"] == "ml-101"
+            result = register_directory(str(d))
+        assert "ml-101" in result
 
 
 class TestDeregisterDirectory:
-    def test_deregisters_and_cleans_data(self, tmp_path: Path):
+    def test_deregisters_and_cleans_data(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
@@ -546,15 +571,14 @@ class TestDeregisterDirectory:
             patch("quarry.mcp_server.db_delete_document") as mock_del,
         ):
             mock_open.return_value = MagicMock()
-            result = json.loads(deregister_directory("math"))
-        assert result["collection"] == "math"
-        assert result["documents_removed"] == 2
-        assert result["data_deleted"] is True
+            result = deregister_directory("math")
+        assert "math" in result
+        assert "2 docs removed" in result
         assert mock_del.call_count == 2
 
 
 class TestSyncAllRegistrations:
-    def test_returns_sync_results(self, tmp_path: Path):
+    def test_returns_sync_summary(self, tmp_path: Path) -> None:
         from quarry.sync import SyncResult
 
         settings = _settings(tmp_path)
@@ -575,34 +599,33 @@ class TestSyncAllRegistrations:
                 return_value=mock_results,
             ),
         ):
-            result = json.loads(sync_all_registrations())
-        assert result["collections_synced"] == 1
-        assert result["results"]["math"]["ingested"] == 2
-        assert result["results"]["math"]["skipped"] == 3
-        assert isinstance(result["progress"], list)
+            result = sync_all_registrations()
+        assert "Synced 1 collection" in result
+        assert "2 ingested" in result
+        assert "3 skipped" in result
 
 
 class TestListRegistrations:
-    def test_returns_registrations(self, tmp_path: Path):
+    def test_returns_registrations(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         d = tmp_path / "course"
         d.mkdir()
         # Register first
         with patch("quarry.mcp_server._settings", return_value=settings):
             register_directory(str(d), "course")
-            result = json.loads(list_registrations())
-        assert result["total_registrations"] == 1
-        assert result["registrations"][0]["collection"] == "course"
+            result = list_registrations()
+        assert "course" in result
+        assert "COLLECTION" in result
 
-    def test_empty(self, tmp_path: Path):
+    def test_empty(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         with patch("quarry.mcp_server._settings", return_value=settings):
-            result = json.loads(list_registrations())
-        assert result["total_registrations"] == 0
+            result = list_registrations()
+        assert "No registered directories" in result
 
 
 class TestDbNamePropagation:
-    def test_settings_uses_db_name(self, tmp_path: Path):
+    def test_settings_uses_db_name(self, tmp_path: Path) -> None:
         """Verify _settings() calls resolve_db_paths with the module _db_name."""
         import quarry.mcp_server as mcp_mod
 
@@ -619,7 +642,7 @@ class TestDbNamePropagation:
         finally:
             mcp_mod._db_name = original
 
-    def test_settings_default_none(self, tmp_path: Path):
+    def test_settings_default_none(self, tmp_path: Path) -> None:
         """Without db_name set, resolve_db_paths receives None."""
         import quarry.mcp_server as mcp_mod
 
@@ -637,9 +660,8 @@ class TestDbNamePropagation:
 
 
 class TestListDatabases:
-    def test_returns_databases(self, tmp_path: Path):
+    def test_returns_databases(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
-        settings.quarry_root = tmp_path
         mock_dbs = [
             {
                 "name": "default",
@@ -658,60 +680,62 @@ class TestListDatabases:
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server.discover_databases", return_value=mock_dbs),
         ):
-            result = json.loads(list_databases())
+            result = list_databases()
 
-        assert result["total_databases"] == 2
-        assert result["databases"][0]["name"] == "default"
-        assert result["databases"][1]["name"] == "coding"
+        assert "default" in result
+        assert "coding" in result
+        assert "DATABASE" in result
 
-    def test_includes_current_database(self, tmp_path: Path):
+    def test_marks_current_database(self, tmp_path: Path) -> None:
         import quarry.mcp_server as mcp_mod
 
         settings = _settings(tmp_path)
-        settings.quarry_root = tmp_path
+        mock_dbs = [
+            {"name": "work", "document_count": 0, "size_bytes": 0},
+        ]
         original = mcp_mod._db_name
         try:
             mcp_mod._db_name = "work"
             with (
                 patch("quarry.mcp_server._settings", return_value=settings),
-                patch("quarry.mcp_server.discover_databases", return_value=[]),
+                patch("quarry.mcp_server.discover_databases", return_value=mock_dbs),
             ):
-                result = json.loads(list_databases())
-            assert result["current_database"] == "work"
+                result = list_databases()
+            assert "* work" in result
         finally:
             mcp_mod._db_name = original
 
-    def test_default_when_no_db_name(self, tmp_path: Path):
+    def test_default_when_no_db_name(self, tmp_path: Path) -> None:
         import quarry.mcp_server as mcp_mod
 
         settings = _settings(tmp_path)
-        settings.quarry_root = tmp_path
+        mock_dbs = [
+            {"name": "default", "document_count": 0, "size_bytes": 0},
+        ]
         original = mcp_mod._db_name
         try:
             mcp_mod._db_name = None
             with (
                 patch("quarry.mcp_server._settings", return_value=settings),
-                patch("quarry.mcp_server.discover_databases", return_value=[]),
+                patch("quarry.mcp_server.discover_databases", return_value=mock_dbs),
             ):
-                result = json.loads(list_databases())
-            assert result["current_database"] == "default"
+                result = list_databases()
+            assert "* default" in result
         finally:
             mcp_mod._db_name = original
 
-    def test_empty_root(self, tmp_path: Path):
+    def test_empty_root(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
-        settings.quarry_root = tmp_path
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server.discover_databases", return_value=[]),
         ):
-            result = json.loads(list_databases())
-        assert result["total_databases"] == 0
-        assert result["databases"] == []
+            result = list_databases()
+        assert "No databases" in result
 
 
 class TestUseDatabase:
-    def test_switches_database(self, tmp_path: Path):
+    def test_switches_database(self, tmp_path: Path) -> None:
         import quarry.mcp_server as mcp_mod
 
         settings = _settings(tmp_path)
@@ -719,14 +743,14 @@ class TestUseDatabase:
         try:
             mcp_mod._db_name = None
             with patch("quarry.mcp_server._settings", return_value=settings):
-                result = json.loads(use_database("coding"))
-            assert result["previous_database"] == "default"
-            assert result["current_database"] == "coding"
+                result = use_database("coding")
+            assert "default" in result
+            assert "coding" in result
             assert mcp_mod._db_name == "coding"
         finally:
             mcp_mod._db_name = original
 
-    def test_switches_back_to_default(self, tmp_path: Path):
+    def test_switches_back_to_default(self, tmp_path: Path) -> None:
         import quarry.mcp_server as mcp_mod
 
         settings = _settings(tmp_path)
@@ -734,27 +758,25 @@ class TestUseDatabase:
         try:
             mcp_mod._db_name = "coding"
             with patch("quarry.mcp_server._settings", return_value=settings):
-                result = json.loads(use_database("default"))
-            assert result["previous_database"] == "coding"
-            assert result["current_database"] == "default"
+                result = use_database("default")
+            assert "coding" in result
+            assert "default" in result
             assert mcp_mod._db_name is None
         finally:
             mcp_mod._db_name = original
 
-    def test_returns_database_path(self, tmp_path: Path):
+    def test_returns_database_path(self, tmp_path: Path) -> None:
         import quarry.mcp_server as mcp_mod
 
-        settings = _settings(tmp_path)
         original = mcp_mod._db_name
         try:
             mcp_mod._db_name = None
-            with patch("quarry.mcp_server._settings", return_value=settings):
-                result = json.loads(use_database("work"))
-            assert "database_path" in result
+            result = use_database("work")
+            assert "lancedb" in result
         finally:
             mcp_mod._db_name = original
 
-    def test_switch_between_named_databases(self, tmp_path: Path):
+    def test_switch_between_named_databases(self, tmp_path: Path) -> None:
         import quarry.mcp_server as mcp_mod
 
         settings = _settings(tmp_path)
@@ -762,14 +784,14 @@ class TestUseDatabase:
         try:
             mcp_mod._db_name = "coding"
             with patch("quarry.mcp_server._settings", return_value=settings):
-                result = json.loads(use_database("work"))
-            assert result["previous_database"] == "coding"
-            assert result["current_database"] == "work"
+                result = use_database("work")
+            assert "coding" in result
+            assert "work" in result
             assert mcp_mod._db_name == "work"
         finally:
             mcp_mod._db_name = original
 
-    def test_invalid_name_does_not_corrupt_state(self, tmp_path: Path):
+    def test_invalid_name_does_not_corrupt_state(self, tmp_path: Path) -> None:
         import quarry.mcp_server as mcp_mod
 
         original = mcp_mod._db_name
