@@ -128,6 +128,35 @@ class TestGetPageText:
         text = get_page_text(db, "test.pdf", 1)
         assert text is None
 
+    def test_finds_page_in_large_table(self, tmp_path: Path):
+        """Regression: get_page_text must find rows even when the table has
+        many chunks.  Without an explicit full-scan limit, LanceDB's default
+        scan limit causes lookups to miss rows that appear later in the table.
+        """
+        db = get_db(tmp_path / "db")
+        # Insert enough chunks to exceed LanceDB's default scan limit.
+        # The target page goes last so it's only found with a full scan.
+        n_filler = 20
+        fillers = [
+            _make_chunk(
+                page_number=i + 1,
+                chunk_index=i,
+                document_name="filler.pdf",
+            )
+            for i in range(n_filler)
+        ]
+        target = _make_chunk(
+            page_number=456,
+            chunk_index=n_filler,
+            document_name="big.pdf",
+        )
+        all_chunks = [*fillers, target]
+        vectors = _random_vectors(len(all_chunks))
+        insert_chunks(db, all_chunks, vectors)
+
+        text = get_page_text(db, "big.pdf", 456)
+        assert text == "raw text page 456"
+
 
 class TestListDocuments:
     def test_lists_documents(self, tmp_path: Path):
