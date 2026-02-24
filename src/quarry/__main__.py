@@ -571,10 +571,11 @@ def _run_hook(handler: Callable[[dict[str, object]], dict[str, object]]) -> None
         raw = sys.stdin.read()
         payload: dict[str, object] = json.loads(raw) if raw.strip() else {}
         result = handler(payload)
-        if result:
-            sys.stdout.write(json.dumps(result))
+        sys.stdout.write(json.dumps(result))
+        sys.stdout.write("\n")
     except Exception:
         logger.exception("Hook %s failed (fail-open)", handler.__name__)
+        sys.stdout.write("{}\n")
 
 
 @hooks_app.command(name="session-start")

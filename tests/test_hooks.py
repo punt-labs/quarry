@@ -43,20 +43,24 @@ class TestHookCLI:
     def test_session_start_accepts_empty_stdin(self) -> None:
         result = runner.invoke(app, ["hooks", "session-start"], input="")
         assert result.exit_code == 0
+        assert json.loads(result.output) == {}
 
     def test_session_start_accepts_json_stdin(self) -> None:
         payload = json.dumps({"session_id": "abc"})
         result = runner.invoke(app, ["hooks", "session-start"], input=payload)
         assert result.exit_code == 0
+        assert json.loads(result.output) == {}
 
     def test_post_web_fetch_accepts_json_stdin(self) -> None:
         payload = json.dumps({"tool_input": {"url": "https://example.com"}})
         result = runner.invoke(app, ["hooks", "post-web-fetch"], input=payload)
         assert result.exit_code == 0
+        assert json.loads(result.output) == {}
 
     def test_pre_compact_accepts_empty_stdin(self) -> None:
         result = runner.invoke(app, ["hooks", "pre-compact"], input="")
         assert result.exit_code == 0
+        assert json.loads(result.output) == {}
 
     def test_hooks_help(self) -> None:
         result = runner.invoke(app, ["hooks", "--help"])
@@ -68,3 +72,4 @@ class TestHookCLI:
     def test_invalid_json_is_fail_open(self) -> None:
         result = runner.invoke(app, ["hooks", "session-start"], input="not json{{{")
         assert result.exit_code == 0
+        assert json.loads(result.output) == {}
