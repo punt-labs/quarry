@@ -36,6 +36,8 @@ configure_logging(load_settings())
 logger = logging.getLogger(__name__)
 
 app = typer.Typer(help="quarry: extract searchable knowledge from any document")
+hooks_app = typer.Typer(help="Claude Code hook handlers (called by hook scripts)")
+app.add_typer(hooks_app, name="hooks")
 console = Console()
 err_console = Console(stderr=True)
 
@@ -552,6 +554,52 @@ def mcp(
     from quarry.mcp_server import main as mcp_main  # noqa: PLC0415
 
     mcp_main(db_name=database or None)
+
+
+# ---------------------------------------------------------------------------
+# Hook subcommands — called by Claude Code hook scripts.
+# All hooks are fail-open: exceptions are caught, logged, and the process
+# exits 0 so Claude Code is never blocked.
+# ---------------------------------------------------------------------------
+
+
+def _run_hook(handler: Callable[[dict[str, object]], dict[str, object]]) -> None:
+    """Read stdin JSON, call *handler*, write stdout JSON.  Fail-open."""
+    import sys  # noqa: PLC0415
+
+    try:
+        raw = sys.stdin.read()
+        payload: dict[str, object] = json.loads(raw) if raw.strip() else {}
+        result = handler(payload)
+        sys.stdout.write(json.dumps(result))
+        sys.stdout.write("\n")
+    except Exception:
+        logger.exception("Hook %s failed (fail-open)", handler.__name__)
+        sys.stdout.write("{}\n")
+
+
+@hooks_app.command(name="session-start")
+def hook_session_start() -> None:
+    """SessionStart: auto-register and sync the current repo."""
+    from quarry.hooks import handle_session_start  # noqa: PLC0415
+
+    _run_hook(handle_session_start)
+
+
+@hooks_app.command(name="post-web-fetch")
+def hook_post_web_fetch() -> None:
+    """PostToolUse on WebFetch: auto-ingest fetched URLs."""
+    from quarry.hooks import handle_post_web_fetch  # noqa: PLC0415
+
+    _run_hook(handle_post_web_fetch)
+
+
+@hooks_app.command(name="pre-compact")
+def hook_pre_compact() -> None:
+    """PreCompact: capture compaction summaries."""
+    from quarry.hooks import handle_pre_compact  # noqa: PLC0415
+
+    _run_hook(handle_pre_compact)
 
 
 if __name__ == "__main__":
