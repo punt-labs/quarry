@@ -14,6 +14,31 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-02-25
+
+### Tool
+
+- **Automagic knowledge capture** — Claude Code plugin hooks now automatically capture knowledge without manual indexing:
+  - **Session start** — auto-registers the project directory and runs incremental sync on every session. Returns context to Claude about what's indexed.
+  - **Post web fetch** — every URL Claude fetches is auto-ingested into a `web-captures` collection for later semantic search.
+  - **Pre-compact** — conversation transcript is captured into `session-notes` before context compaction, so decisions and discoveries survive across sessions.
+- **Per-project hook configuration** — `.claude/quarry.local.md` YAML frontmatter lets users selectively disable individual hooks (`session_sync`, `web_fetch`, `compaction`). All hooks default to enabled.
+- **Hooks CLI dispatcher** — `quarry hooks {session-start,post-web-fetch,pre-compact}` subcommands read JSON from stdin, call the handler, and write JSON to stdout. Fail-open: always exits 0 and emits `{}` on error.
+
+### Index
+
+- **Collection name disambiguation** — when auto-registering a project whose leaf directory name collides with an existing collection, quarry appends the parent directory name (e.g. `myproject-mine`) or a hash suffix as fallback.
+
+### Infra
+
+- **pyyaml** added as runtime dependency (hook configuration parsing)
+- **types-PyYAML** added as dev dependency
+
+### Fixed
+
+- **document_name mismatch in format processors** — `document_name` is now threaded through all format processors so ingested documents use the caller-provided name instead of deriving it from the file path (#60)
+- **get_page scan limit** — non-vector LanceDB queries now use an explicit scan limit to avoid silently truncating results (#61)
+
 ## [0.9.2] - 2026-02-24
 
 ### Connector

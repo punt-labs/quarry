@@ -22,7 +22,7 @@ Attach a document to your conversation and ask Claude to index it:
 
 That's it. Everything runs locally — no API keys, no cloud accounts. The embedding model (~500 MB) downloads automatically on first use.
 
-### Claude Code / CLI
+### Claude Code
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/0cbb5e3/install.sh | sh
@@ -51,13 +51,6 @@ sh install.sh
 
 </details>
 
-Then start using it:
-
-```bash
-quarry ingest-file notes.md      # index a file
-quarry search "my topic"         # search by meaning, not keywords
-```
-
 ## What You Can Do
 
 **Index anything you have.** PDFs, scanned documents, images, spreadsheets, presentations, source code, Markdown, LaTeX, DOCX, HTML, and webpages. Quarry reads each format the way you would and extracts the knowledge inside.
@@ -81,13 +74,18 @@ quarry search "my topic"         # search by meaning, not keywords
 | Text files (TXT, MD, LaTeX, DOCX) | Split by headings, sections, or paragraphs |
 | Source code (30+ languages) | AST parsing into functions and classes |
 
-## Using with Claude Desktop
+## Claude Desktop
 
-The easiest way to install is the [**.mcpb file**](https://github.com/punt-labs/quarry/releases/latest/download/punt-quarry.mcpb) — download and double-click. Claude Desktop handles the rest.
+The easiest way to install is the [**.mcpb file**](https://github.com/punt-labs/quarry/releases/latest/download/punt-quarry.mcpb) — download and double-click. Claude Desktop handles the rest. Alternatively, `quarry install` (from the CLI) configures Claude Desktop automatically.
 
-Alternatively, `quarry install` (from the CLI) also configures Claude Desktop automatically.
+Once installed, Claude can search, index, and manage your documents through conversation. Ask it to index a file, search your knowledge base, or crawl a documentation site — Quarry handles the rest behind the scenes.
 
-**Manual setup** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+**Note:** Uploaded files in Claude Desktop live in a sandbox that Quarry cannot access. Use `ingest_content` for uploaded content, or provide local file paths to `ingest_file`.
+
+<details>
+<summary>Manual MCP setup</summary>
+
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
@@ -102,59 +100,25 @@ Alternatively, `quarry install` (from the CLI) also configures Claude Desktop au
 
 Use the absolute path to `uvx` (e.g. `/opt/homebrew/bin/uvx`). `quarry install` resolves this automatically.
 
-**Note:** Uploaded files in Claude Desktop live in a sandbox that Quarry cannot access. Use `ingest_content` for uploaded content, or provide local file paths to `ingest_file`.
+</details>
 
-### Menu Bar App (macOS)
+## Claude Code
 
-[Quarry Menu Bar](https://github.com/punt-labs/quarry-menubar) is a native macOS companion app that puts your knowledge base one click away. It sits in the menu bar and lets you search across all your indexed documents without switching apps.
-
-- Semantic search with instant results
-- Switch between named databases
-- Syntax-highlighted results for code, Markdown, and prose
-- Detail view with full page context
-
-The app manages its own `quarry serve` process automatically — no manual server setup needed. Requires macOS 14 (Sonoma) or later and `punt-quarry` installed.
-
-## Using with Claude Code
-
-`quarry install` configures Claude Code automatically. To set up manually:
+`quarry install` configures Claude Code automatically, or set up manually:
 
 ```bash
 claude mcp add quarry -- uvx --from punt-quarry quarry mcp
 ```
 
-Once configured, Claude Code can call these tools on your behalf:
+### Automagic Mode (Plugin)
 
-| Tool | What it does |
-|------|-------------|
-| `search_documents` | Semantic search with optional filters |
-| `ingest_file` | Index a file by path |
-| `ingest_url` | Fetch and index a webpage |
-| `ingest_auto` | Smart URL ingestion: auto-discovers sitemaps, bulk-crawls or single-page |
-| `ingest_sitemap` | Crawl a specific sitemap URL |
-| `ingest_content` | Index inline text (for uploads, clipboard, etc.) |
-| `get_documents` | List indexed documents |
-| `get_page` | Get raw text for a specific page |
-| `delete_document` | Remove a document |
-| `list_collections` | List collections |
-| `delete_collection` | Remove a collection |
-| `register_directory` | Register a directory for sync |
-| `deregister_directory` | Remove a directory registration |
-| `sync_all_registrations` | Re-index all registered directories |
-| `list_registrations` | List registered directories |
-| `list_databases` | List named databases |
-| `use_database` | Switch to a different database |
-| `status` | Database stats |
+When installed as a Claude Code plugin (`claude plugin install quarry@punt-labs`), Quarry captures knowledge automatically — no manual indexing needed:
 
-### Automagic Mode (Claude Code Plugin)
-
-When installed as a Claude Code plugin, Quarry captures knowledge automatically via hooks — no manual indexing needed:
-
-| Hook | What happens |
-|------|-------------|
-| **Session start** | Registers the current project directory and runs an incremental sync. Claude gets context about what's indexed. |
-| **Web fetch** | Every URL Claude fetches is auto-ingested into a `web-captures` collection for later search. |
-| **Pre-compact** | Before context compaction, the conversation transcript is captured into `session-notes` so decisions and discoveries survive across sessions. |
+| What happens | When |
+|-------------|------|
+| **Your project is indexed** | Every session starts with an incremental sync of your project directory. Claude knows what's in your codebase. |
+| **Web pages are saved** | Every URL Claude fetches is auto-ingested into a `web-captures` collection for later search. |
+| **Conversations are preserved** | Before context compaction, the transcript is captured into `session-notes` so decisions and discoveries survive across sessions. |
 
 Each hook can be individually disabled per project by creating `.claude/quarry.local.md`:
 
@@ -167,9 +131,22 @@ auto_capture:
 ---
 ```
 
-All hooks default to enabled. This is opt-in and additive — Quarry works the same way without the plugin, you just manage ingestion manually via the CLI or MCP tools.
+All hooks default to enabled. Automagic mode is additive — Quarry works the same way without the plugin, you just manage ingestion manually.
 
-## CLI Reference
+## Menu Bar App (macOS)
+
+[Quarry Menu Bar](https://github.com/punt-labs/quarry-menubar) is a native macOS companion app that puts your knowledge base one click away. It sits in the menu bar and lets you search across all your indexed documents without switching apps.
+
+- Semantic search with instant results
+- Switch between named databases
+- Syntax-highlighted results for code, Markdown, and prose
+- Detail view with full page context
+
+Everything you index — whether through Claude Desktop, Claude Code, or the CLI — is searchable from the menu bar. The app manages its own `quarry serve` process automatically. Requires macOS 14 (Sonoma) or later and `punt-quarry` installed.
+
+## CLI
+
+The CLI gives you direct control over indexing and search. Everything Claude can do through MCP tools, you can do from the terminal.
 
 ```bash
 # Ingest
@@ -203,7 +180,7 @@ quarry databases                               # list all databases with stats
 quarry serve                                   # start HTTP API server
 ```
 
-## Named Databases
+### Named Databases
 
 Keep separate databases for different purposes:
 
@@ -270,6 +247,31 @@ export SAGEMAKER_ENDPOINT_NAME=quarry-embedding
 ```
 
 Deploy with `./infra/manage-stack.sh deploy`. See [docs/AWS-SETUP.md](docs/AWS-SETUP.md) for details.
+
+## MCP Tools Reference
+
+Both Claude Desktop and Claude Code access Quarry through these MCP tools. You don't call these directly — Claude uses them on your behalf.
+
+| Tool | What it does |
+|------|-------------|
+| `search_documents` | Semantic search with optional filters |
+| `ingest_file` | Index a file by path |
+| `ingest_url` | Fetch and index a webpage |
+| `ingest_auto` | Smart URL ingestion: auto-discovers sitemaps, bulk-crawls or single-page |
+| `ingest_sitemap` | Crawl a specific sitemap URL |
+| `ingest_content` | Index inline text (for uploads, clipboard, etc.) |
+| `get_documents` | List indexed documents |
+| `get_page` | Get raw text for a specific page |
+| `delete_document` | Remove a document |
+| `list_collections` | List collections |
+| `delete_collection` | Remove a collection |
+| `register_directory` | Register a directory for sync |
+| `deregister_directory` | Remove a directory registration |
+| `sync_all_registrations` | Re-index all registered directories |
+| `list_registrations` | List registered directories |
+| `list_databases` | List named databases |
+| `use_database` | Switch to a different database |
+| `status` | Database stats |
 
 ## Roadmap
 
