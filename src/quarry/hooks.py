@@ -17,7 +17,8 @@ import sqlite3
 from pathlib import Path
 
 from quarry.config import Settings, load_settings, resolve_db_paths
-from quarry.database import get_db
+from quarry.database import get_db, list_documents
+from quarry.pipeline import ingest_url
 from quarry.sync import SyncResult, sync_collection
 from quarry.sync_registry import (
     DirectoryRegistration,
@@ -26,6 +27,7 @@ from quarry.sync_registry import (
     open_registry,
     register_directory,
 )
+from quarry.types import LanceDB
 
 logger = logging.getLogger(__name__)
 
@@ -136,13 +138,55 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
         conn.close()
 
 
+_WEB_CAPTURES_COLLECTION = "web-captures"
+
+
+def _extract_url(payload: dict[str, object]) -> str | None:
+    """Extract the fetched URL from a PostToolUse WebFetch payload."""
+    tool_input = payload.get("tool_input")
+    if isinstance(tool_input, dict):
+        url = tool_input.get("url")
+        if isinstance(url, str) and url.startswith(("http://", "https://")):
+            return url
+    return None
+
+
+def _is_already_ingested(url: str, db: LanceDB) -> bool:
+    """Check if *url* is already in the web-captures collection."""
+    docs = list_documents(db, collection_filter=_WEB_CAPTURES_COLLECTION)
+    return any(d["document_name"] == url for d in docs)
+
+
 def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     """Handle PostToolUse on WebFetch.
 
-    Future: extract the fetched URL and queue it for background ingestion
-    into the web-captures collection.
+    Extracts the fetched URL and ingests it into the ``web-captures``
+    collection.  Skips URLs that are already ingested (dedup by
+    document_name).
     """
-    logger.debug("post-web-fetch hook received payload: %s", payload)
+    url = _extract_url(payload)
+    if not url:
+        logger.debug("post-web-fetch: no valid URL in payload, skipping")
+        return {}
+
+    settings = _resolve_settings()
+    db = get_db(settings.lancedb_path)
+
+    if _is_already_ingested(url, db):
+        logger.debug("post-web-fetch: already ingested %s, skipping", url)
+        return {}
+
+    result = ingest_url(
+        url,
+        db,
+        settings,
+        collection=_WEB_CAPTURES_COLLECTION,
+    )
+    logger.info(
+        "post-web-fetch: ingested %s (%d chunks)",
+        url,
+        result["chunks"],
+    )
     return {}
 
 

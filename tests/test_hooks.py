@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 
 from quarry.__main__ import app
 from quarry.hooks import (
+    _extract_url,
     _find_registration,
     _format_context,
     _unique_collection_name,
@@ -261,20 +262,82 @@ class TestHandleSessionStart:
         assert "myproject-mine" in collections
 
 
-class TestOtherHandlers:
-    """post-web-fetch and pre-compact remain stubs."""
+class TestExtractUrl:
+    def test_extracts_url_from_tool_input(self) -> None:
+        payload: dict[str, object] = {"tool_input": {"url": "https://example.com/docs"}}
+        assert _extract_url(payload) == "https://example.com/docs"
 
-    def test_post_web_fetch_returns_dict(self) -> None:
+    def test_returns_none_for_missing_tool_input(self) -> None:
+        assert _extract_url({}) is None
+
+    def test_returns_none_for_non_dict_tool_input(self) -> None:
+        assert _extract_url({"tool_input": "not a dict"}) is None
+
+    def test_returns_none_for_non_http_url(self) -> None:
+        payload: dict[str, object] = {"tool_input": {"url": "ftp://x.com"}}
+        assert _extract_url(payload) is None
+
+    def test_returns_none_for_missing_url(self) -> None:
+        payload: dict[str, object] = {"tool_input": {"other": "value"}}
+        assert _extract_url(payload) is None
+
+
+class TestHandlePostWebFetch:
+    def test_no_url_returns_empty(self) -> None:
         result = handle_post_web_fetch({})
-        assert isinstance(result, dict)
+        assert result == {}
+
+    def test_ingests_new_url(self) -> None:
+        payload: dict[str, object] = {"tool_input": {"url": "https://example.com/page"}}
+        mock_ingest_result = {
+            "document_name": "https://example.com/page",
+            "collection": "web-captures",
+            "chunks": 5,
+        }
+
+        with (
+            patch(
+                "quarry.hooks._resolve_settings",
+                return_value=MagicMock(),
+            ),
+            patch("quarry.hooks.get_db", return_value=MagicMock()),
+            patch("quarry.hooks._is_already_ingested", return_value=False),
+            patch(
+                "quarry.hooks.ingest_url",
+                return_value=mock_ingest_result,
+            ) as mock_ingest,
+        ):
+            result = handle_post_web_fetch(payload)
+
+        assert result == {}
+        mock_ingest.assert_called_once()
+        call_kwargs = mock_ingest.call_args
+        assert call_kwargs[0][0] == "https://example.com/page"
+        assert call_kwargs[1]["collection"] == "web-captures"
+
+    def test_skips_already_ingested_url(self) -> None:
+        payload: dict[str, object] = {"tool_input": {"url": "https://example.com/old"}}
+
+        with (
+            patch(
+                "quarry.hooks._resolve_settings",
+                return_value=MagicMock(),
+            ),
+            patch("quarry.hooks.get_db", return_value=MagicMock()),
+            patch("quarry.hooks._is_already_ingested", return_value=True),
+            patch("quarry.hooks.ingest_url") as mock_ingest,
+        ):
+            result = handle_post_web_fetch(payload)
+
+        assert result == {}
+        mock_ingest.assert_not_called()
+
+
+class TestPreCompact:
+    """pre-compact remains a stub."""
 
     def test_pre_compact_returns_dict(self) -> None:
         result = handle_pre_compact({})
-        assert isinstance(result, dict)
-
-    def test_handlers_accept_arbitrary_payload(self) -> None:
-        payload: dict[str, object] = {"tool_name": "WebFetch", "url": "https://x.com"}
-        result = handle_post_web_fetch(payload)
         assert isinstance(result, dict)
 
 
