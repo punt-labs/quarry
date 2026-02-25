@@ -1,7 +1,7 @@
 {
   "name": "quarry",
   "description": "Local semantic search for Claude Code: /find, /ingest, /explain, /source, /quarry",
-  "version": "0.9.3",
+  "version": "0.10.0",
   "author": {
     "name": "Punt Labs",
     "email": "hello@punt-labs.com"
