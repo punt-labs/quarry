@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 
 from quarry.__main__ import app
 from quarry.hooks import (
+    _extract_transcript_text,
     _extract_url,
     _find_registration,
     _format_context,
@@ -333,12 +334,186 @@ class TestHandlePostWebFetch:
         mock_ingest.assert_not_called()
 
 
-class TestPreCompact:
-    """pre-compact remains a stub."""
+class TestExtractTranscriptText:
+    def _write_transcript(self, path: Path, records: list[dict[str, object]]) -> None:
+        lines = [json.dumps(r) for r in records]
+        path.write_text("\n".join(lines))
 
-    def test_pre_compact_returns_dict(self) -> None:
+    def test_extracts_user_and_assistant_text(self, tmp_path: Path) -> None:
+        transcript = tmp_path / "session.jsonl"
+        self._write_transcript(
+            transcript,
+            [
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "Hello"}],
+                    },
+                },
+                {
+                    "type": "assistant",
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "Hi there"}],
+                    },
+                },
+            ],
+        )
+        text = _extract_transcript_text(str(transcript))
+        assert "[user] Hello" in text
+        assert "[assistant] Hi there" in text
+
+    def test_skips_non_conversation_records(self, tmp_path: Path) -> None:
+        transcript = tmp_path / "session.jsonl"
+        self._write_transcript(
+            transcript,
+            [
+                {"type": "file-history-snapshot", "snapshot": {}},
+                {"type": "system", "message": {"role": "system"}},
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "Real"}],
+                    },
+                },
+            ],
+        )
+        text = _extract_transcript_text(str(transcript))
+        assert "[user] Real" in text
+        assert "snapshot" not in text
+        assert "system" not in text
+
+    def test_skips_tool_use_blocks(self, tmp_path: Path) -> None:
+        transcript = tmp_path / "session.jsonl"
+        self._write_transcript(
+            transcript,
+            [
+                {
+                    "type": "assistant",
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "tool_use", "name": "Bash"},
+                            {"type": "text", "text": "Done"},
+                        ],
+                    },
+                },
+            ],
+        )
+        text = _extract_transcript_text(str(transcript))
+        assert "[assistant] Done" in text
+        assert "Bash" not in text
+
+    def test_returns_empty_for_nonexistent_file(self) -> None:
+        assert _extract_transcript_text("/nonexistent/path.jsonl") == ""
+
+    def test_returns_empty_for_empty_file(self, tmp_path: Path) -> None:
+        transcript = tmp_path / "empty.jsonl"
+        transcript.write_text("")
+        assert _extract_transcript_text(str(transcript)) == ""
+
+    def test_respects_char_limit(self, tmp_path: Path) -> None:
+        transcript = tmp_path / "big.jsonl"
+        # Each entry is "[user] " + 200 "a"s = 207 chars.
+        # 5000 entries = 1,035,000 chars of content alone.
+        big_text = "a" * 200
+        records = [
+            json.dumps(
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": [{"type": "text", "text": big_text}],
+                    },
+                }
+            )
+            for _ in range(5000)
+        ]
+        transcript.write_text("\n".join(records))
+
+        from quarry.hooks import _MAX_TRANSCRIPT_CHARS
+
+        text = _extract_transcript_text(str(transcript))
+        # Total includes "\n\n" separators between entries, so allow
+        # a small margin above the content limit.
+        assert len(text) < _MAX_TRANSCRIPT_CHARS * 1.02
+
+    def test_returns_empty_for_unreadable_file(self, tmp_path: Path) -> None:
+        transcript = tmp_path / "binary.jsonl"
+        transcript.write_bytes(b"\x80\x81\x82\xff\xfe")
+        assert _extract_transcript_text(str(transcript)) == ""
+
+
+class TestHandlePreCompact:
+    def test_no_transcript_returns_empty(self) -> None:
         result = handle_pre_compact({})
-        assert isinstance(result, dict)
+        assert result == {}
+
+    def test_no_session_id_returns_empty(self, tmp_path: Path) -> None:
+        result = handle_pre_compact({"transcript_path": str(tmp_path / "t.jsonl")})
+        assert result == {}
+
+    def test_ingests_transcript(self, tmp_path: Path) -> None:
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(
+            json.dumps(
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "Build a feature"}],
+                    },
+                }
+            )
+        )
+
+        mock_result = {
+            "document_name": "session-abc12345-20260224T120000",
+            "collection": "session-notes",
+            "chunks": 1,
+        }
+
+        with (
+            patch(
+                "quarry.hooks._resolve_settings",
+                return_value=MagicMock(),
+            ),
+            patch("quarry.hooks.get_db", return_value=MagicMock()),
+            patch(
+                "quarry.hooks.ingest_content",
+                return_value=mock_result,
+            ) as mock_ingest,
+        ):
+            result = handle_pre_compact(
+                {
+                    "transcript_path": str(transcript),
+                    "session_id": "abc12345-full-id",
+                }
+            )
+
+        assert result == {}
+        mock_ingest.assert_called_once()
+        call_args = mock_ingest.call_args
+        assert "Build a feature" in call_args[0][0]  # content
+        assert call_args[0][1].startswith("session-abc12345")  # doc name
+        assert call_args[1]["collection"] == "session-notes"
+
+    def test_empty_transcript_skips_ingestion(self, tmp_path: Path) -> None:
+        transcript = tmp_path / "empty.jsonl"
+        transcript.write_text("")
+
+        with patch("quarry.hooks.ingest_content") as mock_ingest:
+            result = handle_pre_compact(
+                {
+                    "transcript_path": str(transcript),
+                    "session_id": "abc123",
+                }
+            )
+
+        assert result == {}
+        mock_ingest.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

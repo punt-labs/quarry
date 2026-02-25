@@ -18,7 +18,7 @@ from pathlib import Path
 
 from quarry.config import Settings, load_settings, resolve_db_paths
 from quarry.database import get_db, list_documents
-from quarry.pipeline import ingest_url
+from quarry.pipeline import ingest_content, ingest_url
 from quarry.sync import SyncResult, sync_collection
 from quarry.sync_registry import (
     DirectoryRegistration,
@@ -190,11 +190,110 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     return {}
 
 
+_SESSION_NOTES_COLLECTION = "session-notes"
+
+_MAX_TRANSCRIPT_CHARS = 500_000
+
+
+def _extract_message_text(record: dict[str, object]) -> str | None:
+    """Extract text from a single transcript record, or None if not a message."""
+    record_type = record.get("type", "")
+    if record_type not in ("user", "assistant"):
+        return None
+    message = record.get("message")
+    if not isinstance(message, dict):
+        return None
+    role = message.get("role", record_type)
+    content = message.get("content")
+    if not isinstance(content, list):
+        return None
+    texts = [
+        block["text"].strip()
+        for block in content
+        if isinstance(block, dict)
+        and block.get("type") == "text"
+        and isinstance(block.get("text"), str)
+        and str(block["text"]).strip()
+    ]
+    if not texts:
+        return None
+    return f"[{role}] {' '.join(texts)}"
+
+
+def _extract_transcript_text(transcript_path: str) -> str:
+    """Read a Claude Code transcript JSONL and extract conversation text.
+
+    Extracts user and assistant messages, prefixing each with the role.
+    Skips tool-use content blocks, file snapshots, and system messages.
+    """
+    import json as _json  # noqa: PLC0415
+
+    path = Path(transcript_path)
+    if not path.is_file():
+        return ""
+
+    try:
+        raw = path.read_text()
+    except (OSError, UnicodeDecodeError):
+        logger.warning("pre-compact: could not read transcript %s", path)
+        return ""
+
+    parts: list[str] = []
+    total_chars = 0
+    for line in raw.splitlines():
+        try:
+            obj = _json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        entry = _extract_message_text(obj)
+        if entry:
+            entry_len = len(entry)
+            if total_chars + entry_len >= _MAX_TRANSCRIPT_CHARS:
+                break
+            parts.append(entry)
+            total_chars += entry_len
+    return "\n\n".join(parts)
+
+
 def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
     """Handle PreCompact hook.
 
-    Future: capture the compaction summary as a searchable document
-    in the session-notes collection.
+    Reads the conversation transcript before compaction and ingests it
+    as a searchable document in the ``session-notes`` collection.
+    Each compaction creates a new document keyed by session ID and
+    timestamp.
     """
-    logger.debug("pre-compact hook received payload: %s", payload)
+    transcript_path = str(payload.get("transcript_path", ""))
+    session_id = str(payload.get("session_id", ""))
+    if not transcript_path or not session_id:
+        logger.debug("pre-compact: missing transcript_path or session_id")
+        return {}
+
+    text = _extract_transcript_text(transcript_path)
+    if not text:
+        logger.debug("pre-compact: no conversation text found")
+        return {}
+
+    from datetime import UTC, datetime  # noqa: PLC0415
+
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
+    document_name = f"session-{session_id[:8]}-{timestamp}"
+
+    settings = _resolve_settings()
+    db = get_db(settings.lancedb_path)
+
+    result = ingest_content(
+        text,
+        document_name,
+        db,
+        settings,
+        collection=_SESSION_NOTES_COLLECTION,
+        format_hint="markdown",
+    )
+    logger.info(
+        "pre-compact: captured %s (%d chunks, %d chars)",
+        document_name,
+        result["chunks"],
+        len(text),
+    )
     return {}

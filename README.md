@@ -5,7 +5,6 @@
 [![Python 3.13+](https://img.shields.io/pypi/pyversions/punt-quarry)](https://pypi.org/project/punt-quarry/)
 [![Tests](https://github.com/punt-labs/quarry/actions/workflows/test.yml/badge.svg)](https://github.com/punt-labs/quarry/actions/workflows/test.yml)
 [![Lint](https://github.com/punt-labs/quarry/actions/workflows/lint.yml/badge.svg)](https://github.com/punt-labs/quarry/actions/workflows/lint.yml)
-[![codecov](https://codecov.io/gh/punt-labs/quarry/graph/badge.svg)](https://codecov.io/gh/punt-labs/quarry)
 
 Unlock the knowledge trapped on your hard drive. Works with Claude Desktop, Claude Code, and the macOS menu bar.
 
@@ -146,6 +145,18 @@ Once configured, Claude Code can call these tools on your behalf:
 | `list_databases` | List named databases |
 | `use_database` | Switch to a different database |
 | `status` | Database stats |
+
+### Automagic Mode (Claude Code Plugin)
+
+When installed as a Claude Code plugin, Quarry captures knowledge automatically via hooks — no manual indexing needed:
+
+| Hook | What happens |
+|------|-------------|
+| **Session start** | Registers the current project directory and runs an incremental sync. Claude gets context about what's indexed. |
+| **Web fetch** | Every URL Claude fetches is auto-ingested into a `web-captures` collection for later search. |
+| **Pre-compact** | Before context compaction, the conversation transcript is captured into `session-notes` so decisions and discoveries survive across sessions. |
+
+This is opt-in and additive. Quarry works the same way without the plugin — you just manage ingestion manually via the CLI or MCP tools.
 
 ## CLI Reference
 
