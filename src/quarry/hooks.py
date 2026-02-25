@@ -232,19 +232,26 @@ def _extract_transcript_text(transcript_path: str) -> str:
     if not path.is_file():
         return ""
 
+    try:
+        raw = path.read_text()
+    except (OSError, UnicodeDecodeError):
+        logger.warning("pre-compact: could not read transcript %s", path)
+        return ""
+
     parts: list[str] = []
     total_chars = 0
-    for line in path.read_text().splitlines():
-        if total_chars >= _MAX_TRANSCRIPT_CHARS:
-            break
+    for line in raw.splitlines():
         try:
             obj = _json.loads(line)
         except (ValueError, TypeError):
             continue
         entry = _extract_message_text(obj)
         if entry:
+            entry_len = len(entry)
+            if total_chars + entry_len >= _MAX_TRANSCRIPT_CHARS:
+                break
             parts.append(entry)
-            total_chars += len(entry)
+            total_chars += entry_len
     return "\n\n".join(parts)
 
 

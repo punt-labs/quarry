@@ -414,6 +414,37 @@ class TestExtractTranscriptText:
         transcript.write_text("")
         assert _extract_transcript_text(str(transcript)) == ""
 
+    def test_respects_char_limit(self, tmp_path: Path) -> None:
+        transcript = tmp_path / "big.jsonl"
+        # Each entry is "[user] " + 200 "a"s = 207 chars.
+        # 5000 entries = 1,035,000 chars of content alone.
+        big_text = "a" * 200
+        records = [
+            json.dumps(
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": [{"type": "text", "text": big_text}],
+                    },
+                }
+            )
+            for _ in range(5000)
+        ]
+        transcript.write_text("\n".join(records))
+
+        from quarry.hooks import _MAX_TRANSCRIPT_CHARS
+
+        text = _extract_transcript_text(str(transcript))
+        # Total includes "\n\n" separators between entries, so allow
+        # a small margin above the content limit.
+        assert len(text) < _MAX_TRANSCRIPT_CHARS * 1.02
+
+    def test_returns_empty_for_unreadable_file(self, tmp_path: Path) -> None:
+        transcript = tmp_path / "binary.jsonl"
+        transcript.write_bytes(b"\x80\x81\x82\xff\xfe")
+        assert _extract_transcript_text(str(transcript)) == ""
+
 
 class TestHandlePreCompact:
     def test_no_transcript_returns_empty(self) -> None:
