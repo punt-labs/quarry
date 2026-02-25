@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 
 from quarry.__main__ import app
 from quarry.hooks import (
+    HookConfig,
     _extract_transcript_text,
     _extract_url,
     _find_registration,
@@ -18,6 +19,7 @@ from quarry.hooks import (
     handle_post_web_fetch,
     handle_pre_compact,
     handle_session_start,
+    load_hook_config,
 )
 from quarry.sync import SyncResult
 from quarry.sync_registry import (
@@ -110,6 +112,105 @@ class TestFormatContext:
         result = SyncResult("col", ingested=0, deleted=0, skipped=0, failed=0)
         ctx = _format_context("col", "/p", result)
         assert "empty" in ctx
+
+
+# ---------------------------------------------------------------------------
+# Hook configuration tests
+# ---------------------------------------------------------------------------
+
+
+class TestLoadHookConfig:
+    def test_defaults_when_file_missing(self, tmp_path: Path) -> None:
+        config = load_hook_config(str(tmp_path))
+        assert config == HookConfig()
+        assert config.session_sync is True
+        assert config.web_fetch is True
+        assert config.compaction is True
+
+    def test_disables_session_sync(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / ".claude"
+        config_dir.mkdir()
+        (config_dir / "quarry.local.md").write_text(
+            "---\nauto_capture:\n  session_sync: false\n---\n"
+        )
+        config = load_hook_config(str(tmp_path))
+        assert config.session_sync is False
+        assert config.web_fetch is True
+        assert config.compaction is True
+
+    def test_disables_web_fetch(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / ".claude"
+        config_dir.mkdir()
+        (config_dir / "quarry.local.md").write_text(
+            "---\nauto_capture:\n  web_fetch: false\n---\n"
+        )
+        config = load_hook_config(str(tmp_path))
+        assert config.session_sync is True
+        assert config.web_fetch is False
+
+    def test_disables_compaction(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / ".claude"
+        config_dir.mkdir()
+        (config_dir / "quarry.local.md").write_text(
+            "---\nauto_capture:\n  compaction: false\n---\n"
+        )
+        config = load_hook_config(str(tmp_path))
+        assert config.compaction is False
+
+    def test_disables_all(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / ".claude"
+        config_dir.mkdir()
+        (config_dir / "quarry.local.md").write_text(
+            "---\nauto_capture:\n"
+            "  session_sync: false\n"
+            "  web_fetch: false\n"
+            "  compaction: false\n"
+            "---\n"
+        )
+        config = load_hook_config(str(tmp_path))
+        assert config.session_sync is False
+        assert config.web_fetch is False
+        assert config.compaction is False
+
+    def test_invalid_yaml_returns_defaults(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / ".claude"
+        config_dir.mkdir()
+        (config_dir / "quarry.local.md").write_text("---\n: : :\n---\n")
+        config = load_hook_config(str(tmp_path))
+        assert config == HookConfig()
+
+    def test_no_frontmatter_returns_defaults(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / ".claude"
+        config_dir.mkdir()
+        (config_dir / "quarry.local.md").write_text("Just markdown, no frontmatter.")
+        config = load_hook_config(str(tmp_path))
+        assert config == HookConfig()
+
+    def test_missing_auto_capture_returns_defaults(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / ".claude"
+        config_dir.mkdir()
+        (config_dir / "quarry.local.md").write_text("---\nother_key: value\n---\n")
+        config = load_hook_config(str(tmp_path))
+        assert config == HookConfig()
+
+    def test_non_dict_auto_capture_returns_defaults(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / ".claude"
+        config_dir.mkdir()
+        (config_dir / "quarry.local.md").write_text(
+            "---\nauto_capture: just a string\n---\n"
+        )
+        config = load_hook_config(str(tmp_path))
+        assert config == HookConfig()
+
+    def test_markdown_content_after_frontmatter(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / ".claude"
+        config_dir.mkdir()
+        (config_dir / "quarry.local.md").write_text(
+            "---\nauto_capture:\n  web_fetch: false\n---\n"
+            "# Notes\nSome project notes here.\n"
+        )
+        config = load_hook_config(str(tmp_path))
+        assert config.web_fetch is False
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +321,17 @@ class TestHandleSessionStart:
         ctx = str(output["additionalContext"])
         assert "search_documents" in ctx or "quarry MCP" in ctx
 
+    def test_disabled_by_config(self, tmp_path: Path) -> None:
+        project = tmp_path / "myproject"
+        project.mkdir()
+        config_dir = project / ".claude"
+        config_dir.mkdir()
+        (config_dir / "quarry.local.md").write_text(
+            "---\nauto_capture:\n  session_sync: false\n---\n"
+        )
+        result = handle_session_start({"cwd": str(project)})
+        assert result == {}
+
     def test_disambiguates_on_collection_name_collision(self, tmp_path: Path) -> None:
         """Two directories with the same leaf name get distinct collections."""
         settings = MagicMock()
@@ -287,6 +399,23 @@ class TestHandlePostWebFetch:
     def test_no_url_returns_empty(self) -> None:
         result = handle_post_web_fetch({})
         assert result == {}
+
+    def test_disabled_by_config(self, tmp_path: Path) -> None:
+        project = tmp_path / "myproject"
+        project.mkdir()
+        config_dir = project / ".claude"
+        config_dir.mkdir()
+        (config_dir / "quarry.local.md").write_text(
+            "---\nauto_capture:\n  web_fetch: false\n---\n"
+        )
+        payload: dict[str, object] = {
+            "cwd": str(project),
+            "tool_input": {"url": "https://example.com/page"},
+        }
+        with patch("quarry.hooks.ingest_url") as mock_ingest:
+            result = handle_post_web_fetch(payload)
+        assert result == {}
+        mock_ingest.assert_not_called()
 
     def test_ingests_new_url(self) -> None:
         payload: dict[str, object] = {"tool_input": {"url": "https://example.com/page"}}
@@ -450,6 +579,36 @@ class TestHandlePreCompact:
     def test_no_transcript_returns_empty(self) -> None:
         result = handle_pre_compact({})
         assert result == {}
+
+    def test_disabled_by_config(self, tmp_path: Path) -> None:
+        project = tmp_path / "myproject"
+        project.mkdir()
+        config_dir = project / ".claude"
+        config_dir.mkdir()
+        (config_dir / "quarry.local.md").write_text(
+            "---\nauto_capture:\n  compaction: false\n---\n"
+        )
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(
+            json.dumps(
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "Hello"}],
+                    },
+                }
+            )
+        )
+        payload: dict[str, object] = {
+            "cwd": str(project),
+            "transcript_path": str(transcript),
+            "session_id": "abc123",
+        }
+        with patch("quarry.hooks.ingest_content") as mock_ingest:
+            result = handle_pre_compact(payload)
+        assert result == {}
+        mock_ingest.assert_not_called()
 
     def test_no_session_id_returns_empty(self, tmp_path: Path) -> None:
         result = handle_pre_compact({"transcript_path": str(tmp_path / "t.jsonl")})

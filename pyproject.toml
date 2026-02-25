@@ -43,6 +43,7 @@ dependencies = [
     "markdownify>=0.14.0",
     "pathspec>=0.12.0",
     "ultimate-sitemap-parser>=1.8.0",
+    "pyyaml>=6.0.0",
 ]
 
 [project.optional-dependencies]
@@ -53,6 +54,7 @@ dev = [
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=6.0.0",
     "pytest-timeout>=2.3.0",
+    "types-PyYAML>=6.0.0",
 ]
 
 [project.scripts]
