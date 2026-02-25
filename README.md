@@ -156,7 +156,18 @@ When installed as a Claude Code plugin, Quarry captures knowledge automatically 
 | **Web fetch** | Every URL Claude fetches is auto-ingested into a `web-captures` collection for later search. |
 | **Pre-compact** | Before context compaction, the conversation transcript is captured into `session-notes` so decisions and discoveries survive across sessions. |
 
-This is opt-in and additive. Quarry works the same way without the plugin — you just manage ingestion manually via the CLI or MCP tools.
+Each hook can be individually disabled per project by creating `.claude/quarry.local.md`:
+
+```yaml
+---
+auto_capture:
+  session_sync: false
+  web_fetch: false
+  compaction: false
+---
+```
+
+All hooks default to enabled. This is opt-in and additive — Quarry works the same way without the plugin, you just manage ingestion manually via the CLI or MCP tools.
 
 ## CLI Reference
 
