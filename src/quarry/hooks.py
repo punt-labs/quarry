@@ -13,6 +13,7 @@ Hook events:
 from __future__ import annotations
 
 import logging
+import sqlite3
 from pathlib import Path
 
 from quarry.config import Settings, load_settings, resolve_db_paths
@@ -20,6 +21,7 @@ from quarry.database import get_db
 from quarry.sync import SyncResult, sync_collection
 from quarry.sync_registry import (
     DirectoryRegistration,
+    get_registration,
     list_registrations,
     open_registry,
     register_directory,
@@ -60,6 +62,31 @@ def _format_context(collection: str, directory: str, result: SyncResult) -> str:
     return "\n".join(parts)
 
 
+def _unique_collection_name(
+    conn: sqlite3.Connection,
+    directory: Path,
+) -> str:
+    """Derive a collection name that doesn't collide with existing ones.
+
+    Prefers ``directory.name``.  If that's taken (another directory with the
+    same leaf name), appends the parent directory name to disambiguate:
+    ``leaf-parent``.
+    """
+    candidate = directory.name
+    if get_registration(conn, candidate) is None:
+        return candidate
+    # Disambiguate with parent directory name.
+    parent = directory.parent.name or "root"
+    candidate = f"{directory.name}-{parent}"
+    if get_registration(conn, candidate) is None:
+        return candidate
+    # Last resort: use the full resolved path hash suffix.
+    import hashlib  # noqa: PLC0415
+
+    suffix = hashlib.sha256(str(directory).encode()).hexdigest()[:8]
+    return f"{directory.name}-{suffix}"
+
+
 def _resolve_settings() -> Settings:
     """Load settings resolved for the default database."""
     return resolve_db_paths(load_settings(), None)
@@ -90,7 +117,7 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
         if existing:
             collection = existing.collection
         else:
-            collection = directory.name
+            collection = _unique_collection_name(conn, directory)
             register_directory(conn, directory, collection)
             logger.info("session-start: registered %s as '%s'", directory, collection)
 
