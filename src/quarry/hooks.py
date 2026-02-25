@@ -58,13 +58,20 @@ def load_hook_config(cwd: str) -> HookConfig:
     except (OSError, UnicodeDecodeError):
         return HookConfig()
 
-    # Parse YAML frontmatter between --- delimiters.
-    if not text.startswith("---"):
+    # Parse YAML frontmatter between --- delimiter lines.
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
         return HookConfig()
-    end = text.find("---", 3)
-    if end == -1:
+
+    end_index = None
+    for i, line in enumerate(lines[1:], start=1):
+        if line.strip() == "---":
+            end_index = i
+            break
+
+    if end_index is None:
         return HookConfig()
-    frontmatter = text[3:end].strip()
+    frontmatter = "\n".join(lines[1:end_index]).strip()
 
     import yaml  # noqa: PLC0415
 
@@ -81,10 +88,14 @@ def load_hook_config(cwd: str) -> HookConfig:
     if not isinstance(auto, dict):
         return HookConfig()
 
+    session_sync_val = auto.get("session_sync", True)
+    web_fetch_val = auto.get("web_fetch", True)
+    compaction_val = auto.get("compaction", True)
+
     return HookConfig(
-        session_sync=bool(auto.get("session_sync", True)),
-        web_fetch=bool(auto.get("web_fetch", True)),
-        compaction=bool(auto.get("compaction", True)),
+        session_sync=session_sync_val if isinstance(session_sync_val, bool) else True,
+        web_fetch=web_fetch_val if isinstance(web_fetch_val, bool) else True,
+        compaction=compaction_val if isinstance(compaction_val, bool) else True,
     )
 
 
@@ -157,7 +168,8 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
     field) with quarry and runs an incremental sync.  Returns
     ``additionalContext`` so Claude knows quarry is available.
     """
-    cwd = str(payload.get("cwd", ""))
+    cwd_obj = payload.get("cwd")
+    cwd = cwd_obj if isinstance(cwd_obj, str) else ""
     if not cwd:
         logger.debug("session-start: no cwd in payload, skipping")
         return {}
@@ -225,7 +237,8 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     collection.  Skips URLs that are already ingested (dedup by
     document_name).
     """
-    cwd = str(payload.get("cwd", ""))
+    cwd_obj = payload.get("cwd")
+    cwd = cwd_obj if isinstance(cwd_obj, str) else ""
     if cwd:
         config = load_hook_config(cwd)
         if not config.web_fetch:
@@ -331,7 +344,8 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
     Each compaction creates a new document keyed by session ID and
     timestamp.
     """
-    cwd = str(payload.get("cwd", ""))
+    cwd_obj = payload.get("cwd")
+    cwd = cwd_obj if isinstance(cwd_obj, str) else ""
     if cwd:
         config = load_hook_config(cwd)
         if not config.compaction:
