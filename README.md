@@ -1,10 +1,9 @@
 # punt-quarry
 
+[![License](https://img.shields.io/github/license/punt-labs/quarry)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/punt-labs/quarry/test.yml?label=CI)](https://github.com/punt-labs/quarry/actions/workflows/test.yml)
 [![PyPI](https://img.shields.io/pypi/v/punt-quarry)](https://pypi.org/project/punt-quarry/)
-[![GitHub release](https://img.shields.io/github/v/release/punt-labs/quarry)](https://github.com/punt-labs/quarry/releases)
-[![Python 3.13+](https://img.shields.io/pypi/pyversions/punt-quarry)](https://pypi.org/project/punt-quarry/)
-[![Tests](https://github.com/punt-labs/quarry/actions/workflows/test.yml/badge.svg)](https://github.com/punt-labs/quarry/actions/workflows/test.yml)
-[![Lint](https://github.com/punt-labs/quarry/actions/workflows/lint.yml/badge.svg)](https://github.com/punt-labs/quarry/actions/workflows/lint.yml)
+[![Python](https://img.shields.io/pypi/pyversions/punt-quarry)](https://pypi.org/project/punt-quarry/)
 
 Unlock the knowledge trapped on your hard drive. Works with Claude Desktop, Claude Code, and the macOS menu bar.
 
