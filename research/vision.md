@@ -200,6 +200,18 @@ This works because:
 
 This would not scale to large teams (hundreds of session notes per week, merge traffic on the shadow branch) but works well for 2-5 people. The simplest possible collaboration model.
 
+## Force Multiplier for Design Tools
+
+Quarry's ambient knowledge isn't just for code sessions. Punt Labs' own products generate high-value design artifacts that are currently locked inside single conversations:
+
+**PR/FAQ (`prfaq`).** The Working Backwards process produces press releases, FAQs, risk assessments, competitive analysis, and customer evidence — all in LaTeX. A `/prfaq:meeting` generates multi-persona debate transcripts with specific critiques and verdicts. Today, these artifacts live in one `.tex` file and the conversation that produced them evaporates. With quarry learning enabled, the meeting transcript, the researcher's evidence gathering, and the iterative feedback rounds all become searchable. Six months later: `quarry search "what was the value risk for quarry"` returns the exact meeting debate.
+
+**Z Specifications (`z-spec`).** Formal specifications capture design invariants, state schemas, and operation contracts — the most precise expression of intent in the entire stack. The `/z:elaborate` skill produces narrative explanations of why each constraint exists. The `/z:partition` skill derives test cases from the spec. These are design decisions in their purest form. If quarry captures the conversations where specs are debated, refined, and validated, you get a searchable history of *why* invariants exist — not just what they are.
+
+**The pattern.** Any tool that produces design artifacts (PRDs, specifications, architecture decisions, risk assessments) generates knowledge that's worth more over time than in the moment. The PR/FAQ you wrote six months ago is valuable when scoping the next product. The Z spec constraints you debated inform the next system's design. Quarry turns ephemeral design conversations into persistent, searchable institutional knowledge.
+
+This also means quarry's recall hooks should be aware of these tools. When a user starts a `/prfaq` session, the SessionStart briefing should include: "You have 3 previous PR/FAQ documents indexed. Previous competitive analysis and customer evidence are searchable." The design tools become cumulative rather than starting from zero each time.
+
 ## Open Questions
 
 1. **PreCompact data availability.** What exactly is available in the PreCompact hook's stdin? The conversation transcript? A summary? We need the raw transcript — quarry can chunk and embed it directly. If only a summary is available, that works too but with less granularity.
