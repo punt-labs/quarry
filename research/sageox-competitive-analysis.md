@@ -92,6 +92,17 @@ This would not scale to large teams (git repos with thousands of markdown files 
 
 This is not on the roadmap. It is noted here as a potential direction if team sharing becomes a priority.
 
+## What the Product Actually Is
+
+SageOx's [ox CLI](https://github.com/sageox/ox) is open source (Go). Looking at a real PR ([sageox/ox#4](https://github.com/sageox/ox/pull/4)), the product surface is two links in the PR body:
+
+- **Discussion:** `sageox.ai/team/.../recordings/rec_...` — a recording of the conversation that led to the change
+- **Session:** `sageox.ai/repo/.../sessions/2026-02-17.../view` — the agent session that produced the code
+
+That's the core mechanism. Record the conversation, record the session, link them in the PR. The hosted web UI lets the team browse and inspect these artifacts, but the capture itself is just logging.
+
+For quarry, the equivalent is: PreCompact hook captures the conversation transcript, tags it with commit hashes from the session, session note gets indexed. `quarry search "why did we replace flock with socket ping"` returns the answer. No hosted platform, no web UI. Just a searchable local document that got created automatically.
+
 ## Provenance Is Not Hard
 
 The sharp distinction between "knowledge tools" and "provenance tools" is overstated. Provenance is just: save the conversation, save the commit, link them.
