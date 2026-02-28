@@ -14,6 +14,17 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-02-28
+
+### Infra
+
+- Installer rewritten to use marketplace plugin install pattern
+- Installer auto-installs Python 3.13 via `uv python install` when system Python is too old (Ubuntu 24.04 ships 3.12)
+- Installer checks for git before marketplace operations, failing fast with a clear message instead of opaque errors
+- Installer uses uninstall-before-install for idempotency (`claude plugin update` is unreliable)
+- Installer adds read-after-write verification after plugin install
+- Installer output helpers normalized to standard `▶ ✓ ! ✗` format
+
 ## [0.10.0] - 2026-02-25
 
 ### Tool
