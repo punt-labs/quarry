@@ -114,13 +114,13 @@ claude mcp add quarry -- uvx --from punt-quarry quarry mcp
 
 As an MCP server, Quarry is a tool you call — `/find`, `/ingest`, explicit commands. As a Claude Code plugin, Quarry changes how Claude Code itself works. The host becomes knowledge-aware.
 
-**Learning.** Knowledge flows through every session and normally evaporates — web research, document reads, debugging discoveries, architectural decisions. The plugin captures this passively. Hooks detect knowledge-generating events, write to a staging queue, and `quarry learn` processes the queue in the background. You work normally; the knowledge base grows.
+**Learning.** Knowledge flows through every session and normally evaporates — web research, document reads, debugging discoveries, architectural decisions. The plugin will capture this passively. Hooks detect knowledge-generating events, write to a staging queue, and `quarry learn` processes the queue in the background. You work normally; the knowledge base grows.
 
-**Recall.** Having the knowledge isn't enough if Claude doesn't know to look there. The plugin injects a knowledge briefing at session start and nudges Claude before web searches that overlap with locally indexed content. The second time you research something, it's instant.
+**Recall.** Having the knowledge isn't enough if Claude doesn't know to look there. The plugin will inject a knowledge briefing at session start and nudge Claude before web searches that overlap with locally indexed content. The second time you research something, it's instant.
 
-Control how much the plugin captures with `/quarry learn`:
+The plugin will offer three capture levels via `/quarry learn`:
 
-```
+```text
 /quarry learn off   — No passive capture (default without plugin)
 /quarry learn on    — Capture web research + compaction transcripts
 /quarry learn all   — Also capture document reads, agent findings, session digests
@@ -135,7 +135,7 @@ Control how much the plugin captures with `/quarry learn`:
 | **Documents indexed** | Non-code files Claude reads (PDFs, images) are queued | `all` |
 | **Agent findings saved** | Research subagent results are captured | `all` |
 
-All learning hooks are fail-open (quarry crashing never breaks Claude Code) and non-blocking (hooks write to a staging queue, ingestion is async). Recall hooks are read-only and always active.
+All learning hooks are designed to be fail-open (quarry crashing never breaks Claude Code) and non-blocking (hooks write to a staging queue, ingestion is async). Recall hooks are read-only and always active.
 
 For the full architecture, see [research/vision.md](research/vision.md).
 

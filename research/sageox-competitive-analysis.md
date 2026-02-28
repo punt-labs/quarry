@@ -1,7 +1,7 @@
 # SageOx Competitive Analysis
 
 **Date:** 2026-02-28
-**Source:** https://sageox.ai
+**Source:** <https://sageox.ai>
 **Purpose:** Understand where quarry sits relative to SageOx in the agent memory space
 
 ## What SageOx Does
@@ -74,7 +74,7 @@ The competitive disadvantage is collaboration. Today, quarry has no mechanism fo
 
 Quarry could support small-team sharing by storing raw captured content (markdown files, URL lists) in a git repository. Each team member's quarry instance would vectorize the content locally using their own embedding model. The flow:
 
-```
+```text
 Developer A captures web research → markdown written to shared repo
 Developer A commits and pushes
 Developer B pulls → quarry sync picks up new files → vectorized locally

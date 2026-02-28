@@ -78,7 +78,7 @@ This mirrors how an experienced developer works: before Googling something, they
 
 All learning hooks write to `.quarry/staging/`, never ingest directly:
 
-```
+```text
 .quarry/staging/
   urls                  # One URL per line, appended by PostToolUse hooks
   files                 # One absolute path per line, appended by Read hook
@@ -108,7 +108,7 @@ learn: "on"              # off | on | all
 
 **`/quarry learn` command** (parallels `/notify y|c|n`):
 
-```
+```text
 /quarry learn off   — No passive capture (current behavior)
 /quarry learn on    — Capture web research + compaction transcripts
 /quarry learn all   — Also capture document reads, agent findings, session digests
@@ -172,7 +172,7 @@ Entire.io uses this pattern: session metadata lives on `entire/checkpoints/v1`, 
 
 Quarry could do the same:
 
-```
+```text
 quarry/knowledge/v1          # shadow branch, never checked out
   web-captures/
     2026-02-28-lancedb-api.md
