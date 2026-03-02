@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/punt-quarry)](https://pypi.org/project/punt-quarry/)
 [![Working Backwards](https://img.shields.io/badge/Working_Backwards-hypothesis-lightgrey)](./prfaq.pdf)
 
-Unlock the knowledge trapped on your hard drive. Works with Claude Desktop, Claude Code, and the macOS menu bar.
+Local semantic search across your documents. Works with Claude Desktop, Claude Code, and the macOS menu bar.
 
 ## Quick Start
 
@@ -53,9 +53,9 @@ sh install.sh
 
 ## What You Can Do
 
-**Index anything you have.** PDFs, scanned documents, images, spreadsheets, presentations, source code, Markdown, LaTeX, DOCX, HTML, and webpages. Quarry reads each format the way you would and extracts the knowledge inside.
+**Index anything you have.** PDFs, scanned documents, images, spreadsheets, presentations, source code, Markdown, LaTeX, DOCX, HTML, and webpages. Quarry parses each format natively — text extraction, OCR, tabular serialization, AST parsing — and indexes the content for semantic search.
 
-**Search by meaning.** "What did the Q3 report say about margins?" finds relevant passages even if they never use the word "margins." This is semantic search — it understands what you mean, not just what you typed.
+**Search by meaning.** Retrieval is by meaning, not keyword — a query about "margins" finds passages about profitability even if they never use that word.
 
 **Give your LLM access.** As an MCP server, Quarry lets Claude Desktop and Claude Code search your indexed documents directly. Ask Claude about something in your files and it pulls the relevant context automatically.
 
