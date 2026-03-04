@@ -16,4 +16,4 @@ Search the knowledge base to find relevant content, then provide a clear explana
 
 2. Using the search results, provide a clear, concise explanation of the document or topic. If results span multiple documents, synthesize across them. Cite specific documents and page numbers in your explanation.
 
-3. If no results are found, say so and suggest the user ingest the relevant content first with `/ingest`.
+3. If no results are found, say so and suggest the user ingest the relevant content first with `/ingest-dev`.

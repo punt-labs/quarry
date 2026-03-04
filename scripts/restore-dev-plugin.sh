@@ -38,4 +38,11 @@ fi
 
 git -C "$REPO_ROOT" add "$PLUGIN_JSON"
 git -C "$REPO_ROOT" add commands/ 2>/dev/null || true
+
+# Skip commit if nothing changed (already in dev state)
+if git -C "$REPO_ROOT" diff --cached --quiet; then
+  echo "No changes to restore; working tree already matches dev state."
+  exit 0
+fi
+
 git -C "$REPO_ROOT" commit --no-verify -m "chore: restore dev plugin state"

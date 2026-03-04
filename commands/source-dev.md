@@ -16,4 +16,4 @@ Search the knowledge base to identify where specific information comes from.
 
 2. From the results, identify the source document(s) and cite them clearly: document name, page number, and the relevant excerpt. Focus on identifying WHERE the information comes from, not explaining it.
 
-3. If no results are found, say so and suggest the user ingest the relevant content first with `/ingest`.
+3. If no results are found, say so and suggest the user ingest the relevant content first with `/ingest-dev`.

@@ -4,7 +4,9 @@ set -euo pipefail
 PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SETTINGS="$HOME/.claude/settings.json"
 COMMANDS_DIR="$HOME/.claude/commands"
-TOOL_PATTERN="mcp__plugin_quarry_quarry__"
+# Derive tool pattern from plugin name (supports quarry-dev and quarry)
+PLUGIN_NAME="$(python3 -c "import json; print(json.load(open('${PLUGIN_ROOT}/.claude-plugin/plugin.json'))['name'])")"
+TOOL_PATTERN="mcp__plugin_${PLUGIN_NAME}_quarry__"
 
 ACTIONS=()
 
@@ -27,9 +29,9 @@ fi
 if command -v jq &>/dev/null && [[ -f "$SETTINGS" ]]; then
   if ! jq -e ".permissions.allow // [] | map(select(contains(\"$TOOL_PATTERN\"))) | length > 0" "$SETTINGS" >/dev/null 2>&1; then
     TMPFILE="$(mktemp)"
-    jq '.permissions.allow = (.permissions.allow // []) + ["mcp__plugin_quarry_quarry__*"]' "$SETTINGS" > "$TMPFILE"
+    jq --arg pat "${TOOL_PATTERN}*" '.permissions.allow = (.permissions.allow // []) + [$pat]' "$SETTINGS" > "$TMPFILE"
     mv "$TMPFILE" "$SETTINGS"
-    ACTIONS+=("Auto-allowed quarry MCP tools in permissions")
+    ACTIONS+=("Auto-allowed ${PLUGIN_NAME} MCP tools in permissions")
   fi
 fi
 
