@@ -25,7 +25,7 @@ That's it. Everything runs locally — no API keys, no cloud accounts. The embed
 ### Claude Code
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/0e4e6d1/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/2fe8299/install.sh | sh
 ```
 
 <details>
@@ -43,7 +43,7 @@ quarry doctor
 <summary>Verify before running</summary>
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/0e4e6d1/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/2fe8299/install.sh -o install.sh
 shasum -a 256 install.sh
 cat install.sh
 sh install.sh
@@ -114,11 +114,19 @@ claude mcp add quarry -- uvx --from punt-quarry quarry mcp
 
 As an MCP server, Quarry is a tool you call — `/find`, `/ingest`, explicit commands. As a Claude Code plugin, Quarry changes how Claude Code itself works. The host becomes knowledge-aware.
 
-**Learning.** Knowledge flows through every session and normally evaporates — web research, document reads, debugging discoveries, architectural decisions. The plugin will capture this passively. Hooks detect knowledge-generating events, write to a staging queue, and `quarry learn` processes the queue in the background. You work normally; the knowledge base grows.
+**Learning.** Knowledge flows through every session and normally evaporates — web research, document reads, debugging discoveries, architectural decisions. The plugin captures this passively. Hooks detect knowledge-generating events and ingest them automatically. You work normally; the knowledge base grows.
+
+Three hooks are shipped today:
+
+- **Session start** — auto-registers the project directory so new files are indexed on sync.
+- **Post web fetch** — every URL Claude fetches is auto-ingested into the knowledge base.
+- **Pre-compact** — conversation transcript is captured before context compaction, preserving discoveries that would otherwise be lost.
+
+Per-project hook configuration via `.claude/quarry.local.md` YAML frontmatter lets you selectively disable individual hooks. All hooks are fail-open (quarry crashing never breaks Claude Code) and non-blocking.
 
 **Recall.** Having the knowledge isn't enough if Claude doesn't know to look there. The plugin will inject a knowledge briefing at session start and nudge Claude before web searches that overlap with locally indexed content. The second time you research something, it's instant.
 
-The plugin will offer three capture levels via `/quarry learn`:
+**Roadmap.** The full ambient knowledge architecture adds config-driven capture levels and recall hooks:
 
 ```text
 /quarry learn off   — No passive capture (default without plugin)
@@ -126,16 +134,15 @@ The plugin will offer three capture levels via `/quarry learn`:
 /quarry learn all   — Also capture document reads, agent findings, session digests
 ```
 
-| What happens | When | Mode |
-|-------------|------|------|
-| **Knowledge briefing** | Session start — Claude knows what's in your knowledge base | Always |
-| **Local-first nudge** | Before web search — suggests checking quarry for familiar topics | Always |
-| **Web pages saved** | URLs Claude fetches are queued for background ingestion | `on` |
-| **Conversations preserved** | Before context compaction, the transcript is captured | `on` |
-| **Documents indexed** | Non-code files Claude reads (PDFs, images) are queued | `all` |
-| **Agent findings saved** | Research subagent results are captured | `all` |
-
-All learning hooks are designed to be fail-open (quarry crashing never breaks Claude Code) and non-blocking (hooks write to a staging queue, ingestion is async). Recall hooks are read-only and always active.
+| What happens | When | Status |
+|-------------|------|--------|
+| **Web pages saved** | URLs Claude fetches are auto-ingested | Shipped |
+| **Conversations preserved** | Before context compaction, the transcript is captured | Shipped |
+| **Project directory registered** | Session start auto-registers the project | Shipped |
+| **Knowledge briefing** | Session start — Claude knows what's in your knowledge base | Planned |
+| **Local-first nudge** | Before web search — suggests checking quarry for familiar topics | Planned |
+| **Documents indexed** | Non-code files Claude reads (PDFs, images) are queued | Planned |
+| **Agent findings saved** | Research subagent results are captured | Planned |
 
 For the full architecture, see [research/vision.md](research/vision.md).
 
