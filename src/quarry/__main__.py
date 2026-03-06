@@ -343,20 +343,37 @@ def list_documents_cmd(
 @app.command(name="delete")
 @_cli_errors
 def delete_cmd(
-    document_name: Annotated[str, typer.Argument(help="Document name to delete")],
+    name: Annotated[str, typer.Argument(help="Document or collection name to delete")],
+    kind: Annotated[
+        str,
+        typer.Option("--type", "-t", help="What to delete: 'document' or 'collection'"),
+    ] = "document",
     collection: Annotated[
-        str, typer.Option("--collection", "-c", help="Scope to collection")
+        str,
+        typer.Option("--collection", "-c", help="Scope to collection (documents only)"),
     ] = "",
 ) -> None:
-    """Delete all indexed data for a document."""
+    """Delete indexed data for a document or collection."""
     settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
-    deleted = db_delete_document(db, document_name, collection=collection or None)
+
+    if kind == "collection":
+        deleted = db_delete_collection(db, name)
+        label = f"collection {name!r}"
+    elif kind == "document":
+        deleted = db_delete_document(db, name, collection=collection or None)
+        label = name
+    else:
+        err_console.print(
+            f"Error: unknown type {kind!r}. Use 'document' or 'collection'.",
+            style="red",
+        )
+        raise typer.Exit(code=1)
 
     if deleted == 0:
-        print(f"No data found for {document_name!r}")
+        print(f"No data found for {label!r}")
     else:
-        print(f"Deleted {deleted} chunks for {document_name!r}")
+        print(f"Deleted {deleted} chunks for {label!r}")
 
 
 @list_app.command(name="collections")
@@ -377,22 +394,6 @@ def list_collections_cmd() -> None:
             f"{col['document_count']} documents, "
             f"{col['chunk_count']} chunks"
         )
-
-
-@app.command(name="delete-collection")
-@_cli_errors
-def delete_collection_cmd(
-    collection: Annotated[str, typer.Argument(help="Collection name to delete")],
-) -> None:
-    """Delete all indexed data for a collection."""
-    settings = _resolved_settings()
-    db = get_db(settings.lancedb_path)
-    deleted = db_delete_collection(db, collection)
-
-    if deleted == 0:
-        print(f"No data found for collection {collection!r}")
-    else:
-        print(f"Deleted {deleted} chunks for collection {collection!r}")
 
 
 @app.command()

@@ -230,7 +230,7 @@ class TestDeleteCollectionCmd:
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.db_delete_collection", return_value=50),
         ):
-            result = runner.invoke(app, ["delete-collection", "math"])
+            result = runner.invoke(app, ["delete", "math", "--type", "collection"])
 
         assert result.exit_code == 0
         assert "Deleted 50 chunks" in result.output
@@ -242,7 +242,7 @@ class TestDeleteCollectionCmd:
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.db_delete_collection", return_value=0),
         ):
-            result = runner.invoke(app, ["delete-collection", "unknown"])
+            result = runner.invoke(app, ["delete", "unknown", "--type", "collection"])
 
         assert result.exit_code == 0
         assert "No data found" in result.output

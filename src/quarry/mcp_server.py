@@ -301,32 +301,24 @@ def get_page(
 
 @mcp.tool()
 @_handle_errors
-def delete_document(
-    document_name: str,
+def delete(
+    name: str,
+    kind: str = "document",
     collection: str = "",
 ) -> str:
-    """Delete all indexed data for a document.
+    """Delete indexed data for a document or collection.
 
     Args:
-        document_name: Document filename (e.g., 'report.pdf').
-        collection: Optional collection scope. If empty, deletes across all collections.
+        name: Document filename or collection name to delete.
+        kind: What to delete — "document" or "collection".
+        collection: Optional collection scope (only for kind="document").
     """
     db = _db()
-    deleted = db_delete_document(db, document_name, collection=collection or None)
-    return format_delete_summary("document", document_name, deleted)
-
-
-@mcp.tool()
-@_handle_errors
-def delete_collection(collection: str) -> str:
-    """Delete all indexed data for a collection.
-
-    Args:
-        collection: Collection name to delete.
-    """
-    db = _db()
-    deleted = db_delete_collection(db, collection)
-    return format_delete_summary("collection", collection, deleted)
+    if kind == "collection":
+        deleted = db_delete_collection(db, name)
+        return format_delete_summary("collection", name, deleted)
+    deleted = db_delete_document(db, name, collection=collection or None)
+    return format_delete_summary("document", name, deleted)
 
 
 @mcp.tool()

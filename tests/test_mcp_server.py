@@ -6,8 +6,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 
 from quarry.mcp_server import (
-    delete_collection,
-    delete_document,
+    delete,
     deregister_directory,
     find,
     get_page,
@@ -108,7 +107,7 @@ class TestDeleteDocument:
             patch("quarry.mcp_server._db") as mock_db,
             patch("quarry.mcp_server.db_delete_document", return_value=5) as mock_del,
         ):
-            result = delete_document("report.pdf")
+            result = delete("report.pdf")
 
         mock_del.assert_called_once_with(
             mock_db.return_value, "report.pdf", collection=None
@@ -123,7 +122,7 @@ class TestDeleteDocument:
             patch("quarry.mcp_server._db"),
             patch("quarry.mcp_server.db_delete_document", return_value=0),
         ):
-            result = delete_document("nonexistent.pdf")
+            result = delete("nonexistent.pdf")
 
         assert "0 chunks" in result
 
@@ -134,7 +133,7 @@ class TestDeleteDocument:
             patch("quarry.mcp_server._db") as mock_db,
             patch("quarry.mcp_server.db_delete_document", return_value=2) as mock_del,
         ):
-            result = delete_document("report.pdf", collection="math")
+            result = delete("report.pdf", collection="math")
 
         mock_del.assert_called_once_with(
             mock_db.return_value, "report.pdf", collection="math"
@@ -495,7 +494,7 @@ class TestDeleteCollection:
                 "quarry.mcp_server.db_delete_collection", return_value=50
             ) as mock_del,
         ):
-            result = delete_collection("math")
+            result = delete("math", kind="collection")
 
         mock_del.assert_called_once_with(mock_db.return_value, "math")
         assert "math" in result
