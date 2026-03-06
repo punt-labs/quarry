@@ -190,7 +190,6 @@ reportMissingTypeStubs = false
 reportUnknownLambdaType = false
 reportUnknownMemberType = false
 reportUnknownParameterType = false
-reportMissingParameterType = false
 reportUnknownVariableType = false
 reportUnknownArgumentType = false
 
@@ -199,6 +198,7 @@ reportUnknownArgumentType = false
 root = "tests"
 reportPrivateUsage = false
 reportUnusedFunction = false
+reportMissingParameterType = false
 
 [tool.pytest.ini_options]
 minversion = "8.0"
