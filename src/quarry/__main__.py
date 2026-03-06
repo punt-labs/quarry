@@ -21,10 +21,12 @@ from quarry.database import (
     delete_document as db_delete_document,
     discover_databases,
     get_db,
+    get_page_text,
     list_collections as db_list_collections,
     list_documents,
     search,
 )
+from quarry.formatting import format_document_detail
 from quarry.pipeline import ingest_auto, ingest_content, ingest_document
 from quarry.sync import sync_all
 from quarry.sync_registry import (
@@ -338,6 +340,45 @@ def list_documents_cmd(
             f"{doc['indexed_pages']}/{doc['total_pages']} pages, "
             f"{doc['chunk_count']} chunks"
         )
+
+
+@app.command(name="show")
+@_cli_errors
+def show_cmd(
+    document_name: Annotated[str, typer.Argument(help="Document name")],
+    page: Annotated[
+        int | None,
+        typer.Option("--page", "-p", help="Page number to display"),
+    ] = None,
+    collection: Annotated[
+        str,
+        typer.Option("--collection", "-c", help="Scope to collection"),
+    ] = "",
+) -> None:
+    """Show document metadata or a specific page's text."""
+    settings = _resolved_settings()
+    db = get_db(settings.lancedb_path)
+
+    if page is not None:
+        text = get_page_text(db, document_name, page, collection=collection or None)
+        if text is None:
+            err_console.print(
+                f"No data found for {document_name!r} page {page}",
+                style="red",
+            )
+            raise typer.Exit(code=1)
+        print(f"Document: {document_name}")
+        print(f"Page: {page}")
+        print("---")
+        print(text)
+        return
+
+    docs = list_documents(db, collection_filter=collection or None)
+    match = [d for d in docs if d["document_name"] == document_name]
+    if not match:
+        err_console.print(f"Document {document_name!r} not found", style="red")
+        raise typer.Exit(code=1)
+    print(format_document_detail(match[0]))
 
 
 @app.command(name="delete")

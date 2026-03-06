@@ -78,6 +78,56 @@ class TestListDocumentsCmd:
         assert result.exit_code == 1
 
 
+class TestShowCmd:
+    def test_show_page(self):
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch(
+                "quarry.__main__.get_page_text",
+                return_value="Hello world",
+            ),
+        ):
+            result = runner.invoke(app, ["show", "report.pdf", "--page", "2"])
+
+        assert result.exit_code == 0
+        assert "report.pdf" in result.output
+        assert "Page: 2" in result.output
+        assert "Hello world" in result.output
+
+    def test_show_metadata(self):
+        mock_doc = {
+            "document_name": "report.pdf",
+            "document_path": "/docs/report.pdf",
+            "collection": "math",
+            "total_pages": 10,
+            "chunk_count": 42,
+            "indexed_pages": 10,
+            "ingestion_timestamp": "2026-01-01T00:00:00",
+        }
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.list_documents", return_value=[mock_doc]),
+        ):
+            result = runner.invoke(app, ["show", "report.pdf"])
+
+        assert result.exit_code == 0
+        assert "report.pdf" in result.output
+        assert "math" in result.output
+
+    def test_show_not_found(self):
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.list_documents", return_value=[]),
+        ):
+            result = runner.invoke(app, ["show", "missing.pdf"])
+
+        assert result.exit_code == 1
+        assert "not found" in result.output
+
+
 class TestDeleteCmd:
     def test_deletes_document(self):
         with (

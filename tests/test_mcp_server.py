@@ -9,11 +9,11 @@ from quarry.mcp_server import (
     delete,
     deregister_directory,
     find,
-    get_page,
     ingest,
     list_resources as mcp_list,
     register_directory,
     remember as mcp_remember,
+    show,
     status,
     sync_all_registrations,
     use_database,
@@ -435,7 +435,7 @@ class TestListDocuments:
         assert call_kwargs["collection_filter"] == "math"
 
 
-class TestGetPage:
+class TestShow:
     def test_returns_page_text(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         with (
@@ -446,7 +446,7 @@ class TestGetPage:
                 return_value="The quick brown fox",
             ),
         ):
-            result = get_page("report.pdf", 3)
+            result = show("report.pdf", page_number=3)
 
         assert "report.pdf" in result
         assert "Page: 3" in result
@@ -459,10 +459,43 @@ class TestGetPage:
             patch("quarry.mcp_server._db"),
             patch("quarry.mcp_server.get_page_text", return_value=None),
         ):
-            result = get_page("missing.pdf", 99)
+            result = show("missing.pdf", page_number=99)
 
         assert "No data found" in result
         assert "missing.pdf" in result
+
+    def test_returns_metadata_without_page(self, tmp_path: Path) -> None:
+        settings = _settings(tmp_path)
+        mock_doc = {
+            "document_name": "report.pdf",
+            "document_path": "/docs/report.pdf",
+            "collection": "math",
+            "total_pages": 10,
+            "chunk_count": 42,
+            "indexed_pages": 10,
+            "ingestion_timestamp": "2026-01-01T00:00:00",
+        }
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._db"),
+            patch("quarry.mcp_server.list_documents", return_value=[mock_doc]),
+        ):
+            result = show("report.pdf")
+
+        assert "report.pdf" in result
+        assert "math" in result
+        assert "10" in result
+
+    def test_metadata_not_found(self, tmp_path: Path) -> None:
+        settings = _settings(tmp_path)
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._db"),
+            patch("quarry.mcp_server.list_documents", return_value=[]),
+        ):
+            result = show("missing.pdf")
+
+        assert "not found" in result
 
 
 class TestListCollections:

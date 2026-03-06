@@ -227,6 +227,20 @@ def format_documents(docs: Sequence[Mapping[str, Any]]) -> str:
     return format_table(specs, rows)
 
 
+def format_document_detail(doc: Mapping[str, Any]) -> str:
+    """Format single document metadata for show command."""
+    lines = [
+        f"Document: {doc.get('document_name', '?')}",
+        f"Collection: {doc.get('collection', '?')}",
+        f"Pages: {doc.get('total_pages', 0)}",
+        f"Chunks: {doc.get('chunk_count', 0)}",
+        f"Indexed: {doc.get('ingestion_timestamp', '?')}",
+    ]
+    if doc.get("document_path"):
+        lines.append(f"Path: {doc['document_path']}")
+    return "\n".join(lines)
+
+
 def format_collections(cols: Sequence[Mapping[str, Any]]) -> str:
     """Format collection listing as a table."""
     if not cols:

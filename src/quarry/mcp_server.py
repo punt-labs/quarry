@@ -26,6 +26,7 @@ from quarry.formatting import (
     format_databases,
     format_delete_summary,
     format_deregister_summary,
+    format_document_detail,
     format_documents,
     format_ingest_summary,
     format_register_summary,
@@ -278,25 +279,36 @@ def list_resources(
 
 @mcp.tool()
 @_handle_errors
-def get_page(
+def show(
     document_name: str,
-    page_number: int,
+    page_number: int = 0,
     collection: str = "",
 ) -> str:
-    """Retrieve the full raw OCR text for a specific document page.
+    """Show document metadata or retrieve a specific page's text.
+
+    Without page_number: shows document metadata (pages, chunks, collection).
+    With page_number: shows the full text for that page.
 
     Args:
         document_name: Document filename (e.g., 'report.pdf').
-        page_number: Page number (1-indexed).
+        page_number: Page number (1-indexed). 0 means show metadata only.
         collection: Optional collection scope.
     """
     db = _db()
-    text = get_page_text(db, document_name, page_number, collection=collection or None)
 
-    if text is None:
-        return f"No data found for {document_name} page {page_number}"
+    if page_number > 0:
+        text = get_page_text(
+            db, document_name, page_number, collection=collection or None
+        )
+        if text is None:
+            return f"No data found for {document_name} page {page_number}"
+        return f"Document: {document_name}\nPage: {page_number}\n---\n{text}"
 
-    return f"Document: {document_name}\nPage: {page_number}\n---\n{text}"
+    docs = list_documents(db, collection_filter=collection or None)
+    match = [d for d in docs if d["document_name"] == document_name]
+    if not match:
+        return f"Document {document_name!r} not found"
+    return format_document_detail(match[0])
 
 
 @mcp.tool()
