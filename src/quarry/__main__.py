@@ -99,12 +99,33 @@ def main_callback(
 
 
 def _emit(data: object, text: str = "") -> None:
-    """Output helper: JSON when --json is active, otherwise text."""
+    """Output helper: JSON when --json is active, otherwise text.
+
+    When ``--json`` is set, *data* is serialised to stdout as a single JSON
+    line.  Otherwise *text* is printed (if non-empty).  Commands should always
+    pass both a structured payload and a human-readable string.
+    """
     if _json_output:
         json.dump(data, sys.stdout)
         sys.stdout.write("\n")
     elif text:
         print(text)
+
+
+def _progress(
+    label: str,
+) -> tuple[Progress | None, Callable[[str], None] | None]:
+    """Return a (progress, callback) pair.  Both are None in JSON mode."""
+    if _json_output:
+        return None, None
+    p = Progress(console=console)
+    p.start()
+    task = p.add_task(label, total=None)
+
+    def on_progress(message: str) -> None:
+        p.update(task, description=message)
+
+    return p, on_progress
 
 
 def _resolved_settings(db: str = "") -> Settings:
@@ -160,23 +181,20 @@ def ingest_cmd(
     is_url = source.startswith(("http://", "https://"))
 
     if is_url:
-        with Progress(console=console) as progress:
-            task = progress.add_task(f"Fetching {source}", total=None)
+        progress, cb = _progress(f"Fetching {source}")
+        result = ingest_auto(
+            source,
+            db,
+            settings,
+            overwrite=overwrite,
+            collection=collection,
+            progress_callback=cb,
+        )
+        if progress is not None:
+            progress.stop()
+            console.print()
 
-            def on_url_progress(message: str) -> None:
-                progress.update(task, description=message)
-
-            result = ingest_auto(
-                source,
-                db,
-                settings,
-                overwrite=overwrite,
-                collection=collection,
-                progress_callback=on_url_progress,
-            )
-
-        console.print()
-        console.print(json.dumps(result, indent=2))
+        _emit(result, json.dumps(result, indent=2))
         errors: list[str] = result.get("errors", [])  # type: ignore[assignment]
         for err in errors:
             err_console.print(f"  {err}", style="red")
@@ -191,23 +209,20 @@ def ingest_cmd(
             raise typer.Exit(code=1)
         col = derive_collection(file_path, explicit=collection or None)
 
-        with Progress(console=console) as progress:
-            task = progress.add_task(f"Processing {file_path.name}", total=None)
+        progress, cb = _progress(f"Processing {file_path.name}")
+        result = ingest_document(
+            file_path,
+            db,
+            settings,
+            overwrite=overwrite,
+            collection=col,
+            progress_callback=cb,
+        )
+        if progress is not None:
+            progress.stop()
+            console.print()
 
-            def on_file_progress(message: str) -> None:
-                progress.update(task, description=message)
-
-            result = ingest_document(
-                file_path,
-                db,
-                settings,
-                overwrite=overwrite,
-                collection=col,
-                progress_callback=on_file_progress,
-            )
-
-        console.print()
-        console.print(json.dumps(result, indent=2))
+        _emit(result, json.dumps(result, indent=2))
 
 
 @app.command()
@@ -264,7 +279,7 @@ def remember(
         format_hint=format_hint,
     )
 
-    console.print(json.dumps(result, indent=2))
+    _emit(result, json.dumps(result, indent=2))
 
 
 @app.command(name="find")
@@ -304,15 +319,30 @@ def find_cmd(
         source_format_filter=source_format or None,
     )
 
+    json_results = []
+    lines: list[str] = []
     for r in results:
         similarity = round(1 - float(str(r.get("_distance", 0))), 4)
         meta = f"{r['page_type']}/{r['source_format']}"
-        print(
+        lines.append(
             f"\n[{r['document_name']} p.{r['page_number']} | {meta}]"
             f" (similarity: {similarity})"
         )
         text = str(r["text"])
-        print(text[:300])
+        lines.append(text[:300])
+        json_results.append(
+            {
+                "document_name": r["document_name"],
+                "page_number": r["page_number"],
+                "page_type": r["page_type"],
+                "source_format": r["source_format"],
+                "similarity": similarity,
+                "text": text,
+                "collection": r.get("collection", ""),
+            }
+        )
+
+    _emit(json_results, "\n".join(lines))
 
 
 list_app = typer.Typer(
@@ -346,16 +376,17 @@ def list_documents_cmd(
     db = get_db(settings.lancedb_path)
     docs = list_documents(db, collection_filter=collection or None)
 
-    if not docs:
-        print("No documents indexed.")
-        return
-
-    for doc in docs:
-        print(
+    text = (
+        "\n".join(
             f"[{doc['collection']}] {doc['document_name']}: "
             f"{doc['indexed_pages']}/{doc['total_pages']} pages, "
             f"{doc['chunk_count']} chunks"
+            for doc in docs
         )
+        if docs
+        else "No documents indexed."
+    )
+    _emit(docs, text)
 
 
 @app.command(name="show")
@@ -383,10 +414,10 @@ def show_cmd(
                 style="red",
             )
             raise typer.Exit(code=1)
-        print(f"Document: {document_name}")
-        print(f"Page: {page}")
-        print("---")
-        print(text)
+        _emit(
+            {"document_name": document_name, "page": page, "text": text},
+            f"Document: {document_name}\nPage: {page}\n---\n{text}",
+        )
         return
 
     docs = list_documents(db, collection_filter=collection or None)
@@ -394,7 +425,7 @@ def show_cmd(
     if not match:
         err_console.print(f"Document {document_name!r} not found", style="red")
         raise typer.Exit(code=1)
-    print(format_document_detail(match[0]))
+    _emit(match[0], format_document_detail(match[0]))
 
 
 @app.command(name="status")
@@ -423,19 +454,16 @@ def status_cmd() -> None:
         else 0
     )
 
-    print(
-        format_status(
-            {
-                "document_count": len(docs),
-                "collection_count": len(cols),
-                "chunk_count": chunks,
-                "registered_directories": len(regs),
-                "database_path": str(settings.lancedb_path),
-                "database_size_bytes": db_size_bytes,
-                "embedding_model": settings.embedding_model,
-            }
-        )
-    )
+    data = {
+        "document_count": len(docs),
+        "collection_count": len(cols),
+        "chunk_count": chunks,
+        "registered_directories": len(regs),
+        "database_path": str(settings.lancedb_path),
+        "database_size_bytes": db_size_bytes,
+        "embedding_model": settings.embedding_model,
+    }
+    _emit(data, format_status(data))
 
 
 @app.command(name="use")
@@ -451,7 +479,7 @@ def use_cmd(
     # Validate the name before persisting.
     resolve_db_paths(load_settings(), name if name != "default" else None)
     write_default_db(name)
-    print(f"Default database set to {name!r}")
+    _emit({"database": name}, f"Default database set to {name!r}")
 
 
 @app.command(name="delete")
@@ -485,9 +513,12 @@ def delete_cmd(
         raise typer.Exit(code=1)
 
     if deleted == 0:
-        print(f"No data found for {label}")
+        _emit({"deleted": 0, "name": name, "type": kind}, f"No data found for {label}")
     else:
-        print(f"Deleted {deleted} chunks for {label}")
+        _emit(
+            {"deleted": deleted, "name": name, "type": kind},
+            f"Deleted {deleted} chunks for {label}",
+        )
 
 
 @list_app.command(name="collections")
@@ -498,16 +529,17 @@ def list_collections_cmd() -> None:
     db = get_db(settings.lancedb_path)
     cols = db_list_collections(db)
 
-    if not cols:
-        print("No collections found.")
-        return
-
-    for col in cols:
-        print(
+    text = (
+        "\n".join(
             f"{col['collection']}: "
             f"{col['document_count']} documents, "
             f"{col['chunk_count']} chunks"
+            for col in cols
         )
+        if cols
+        else "No collections found."
+    )
+    _emit(cols, text)
 
 
 @app.command()
@@ -526,7 +558,10 @@ def register(
     conn = open_registry(settings.registry_path)
     try:
         reg = register_directory(conn, resolved, col)
-        print(f"Registered {reg.directory} as collection {reg.collection!r}")
+        _emit(
+            {"directory": str(reg.directory), "collection": reg.collection},
+            f"Registered {reg.directory} as collection {reg.collection!r}",
+        )
     finally:
         conn.close()
 
@@ -553,7 +588,10 @@ def deregister(
         for name in doc_names:
             db_delete_document(db, name, collection=collection)
     removed = len(doc_names)
-    print(f"Deregistered collection {collection!r} ({removed} files)")
+    _emit(
+        {"collection": collection, "removed": removed},
+        f"Deregistered collection {collection!r} ({removed} files)",
+    )
 
 
 @list_app.command(name="registrations")
@@ -567,12 +605,15 @@ def list_registrations_cmd() -> None:
     finally:
         conn.close()
 
-    if not regs:
-        print("No registered directories.")
-        return
-
-    for reg in regs:
-        print(f"{reg.collection}: {reg.directory}")
+    json_data = [
+        {"collection": reg.collection, "directory": str(reg.directory)} for reg in regs
+    ]
+    text = (
+        "\n".join(f"{reg.collection}: {reg.directory}" for reg in regs)
+        if regs
+        else "No registered directories."
+    )
+    _emit(json_data, text)
 
 
 _CLOUD_BACKENDS = frozenset({"textract", "sagemaker"})
@@ -610,27 +651,40 @@ def sync_cmd(
     logger.info("Using %d sync workers", effective_workers)
     db = get_db(settings.lancedb_path)
 
-    with Progress(console=console) as progress:
-        task = progress.add_task("Syncing", total=None)
+    progress, cb = _progress("Syncing")
+    results = sync_all(
+        db,
+        settings,
+        max_workers=effective_workers,
+        progress_callback=cb,
+    )
 
-        def on_progress(message: str) -> None:
-            progress.update(task, description=message)
+    if progress is not None:
+        progress.stop()
+        console.print()
 
-        results = sync_all(
-            db,
-            settings,
-            max_workers=effective_workers,
-            progress_callback=on_progress,
-        )
+    json_data = {
+        col: {
+            "ingested": res.ingested,
+            "deleted": res.deleted,
+            "skipped": res.skipped,
+            "failed": res.failed,
+            "errors": res.errors,
+        }
+        for col, res in results.items()
+    }
 
-    console.print()
+    lines: list[str] = []
     for col, res in results.items():
-        console.print(
+        line = (
             f"{col}: {res.ingested} ingested, {res.deleted} deleted, "
             f"{res.skipped} unchanged, {res.failed} failed"
         )
-        for err in res.errors:
-            console.print(f"  error: {err}", style="red")
+        if res.errors:
+            line += "\n" + "\n".join(f"  error: {e}" for e in res.errors)
+        lines.append(line)
+
+    _emit(json_data, "\n".join(lines))
 
 
 @list_app.command(name="databases")
@@ -640,20 +694,16 @@ def list_databases_cmd() -> None:
     settings = _resolved_settings()
     databases = discover_databases(settings.quarry_root)
 
-    if _json_output:
-        json.dump(databases, sys.stdout)
-        sys.stdout.write("\n")
-        return
-
-    if not databases:
-        print("No databases found.")
-        return
-
-    for db_info in databases:
-        print(
+    text = (
+        "\n".join(
             f"{db_info['name']}: {db_info['document_count']} documents, "
             f"{db_info['size_description']}"
+            for db_info in databases
         )
+        if databases
+        else "No databases found."
+    )
+    _emit(databases, text)
 
 
 @app.command()

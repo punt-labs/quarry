@@ -900,3 +900,347 @@ class TestCliErrors:
             result = runner.invoke(app, ["list"])
 
         assert result.exit_code == 1
+
+
+class TestJsonOutput:
+    """Every user-facing command must produce valid JSON when --json is set."""
+
+    def test_find_json(self):
+        _reset_globals()
+        mock_backend = MagicMock()
+        mock_backend.embed_query.return_value = np.zeros(768, dtype=np.float32)
+        mock_results = [
+            {
+                "document_name": "report.pdf",
+                "page_number": 3,
+                "text": "revenue grew",
+                "page_type": "text",
+                "source_format": ".pdf",
+                "_distance": 0.15,
+                "collection": "default",
+            },
+        ]
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch(
+                "quarry.__main__.get_embedding_backend",
+                return_value=mock_backend,
+            ),
+            patch("quarry.__main__.search", return_value=mock_results),
+        ):
+            result = runner.invoke(app, ["--json", "find", "revenue"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert isinstance(data, list)
+        assert len(data) == 1
+        assert data[0]["document_name"] == "report.pdf"
+        assert data[0]["page_number"] == 3
+        assert "similarity" in data[0]
+        assert data[0]["text"] == "revenue grew"
+
+    def test_find_json_empty(self):
+        _reset_globals()
+        mock_backend = MagicMock()
+        mock_backend.embed_query.return_value = np.zeros(768, dtype=np.float32)
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch(
+                "quarry.__main__.get_embedding_backend",
+                return_value=mock_backend,
+            ),
+            patch("quarry.__main__.search", return_value=[]),
+        ):
+            result = runner.invoke(app, ["--json", "find", "query"])
+
+        assert result.exit_code == 0
+        assert json.loads(result.output) == []
+
+    def test_list_documents_json(self):
+        _reset_globals()
+        mock_docs = [
+            {
+                "document_name": "a.pdf",
+                "collection": "default",
+                "indexed_pages": 5,
+                "total_pages": 5,
+                "chunk_count": 10,
+            },
+        ]
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.list_documents", return_value=mock_docs),
+        ):
+            result = runner.invoke(app, ["--json", "list", "documents"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert isinstance(data, list)
+        assert data[0]["document_name"] == "a.pdf"
+
+    def test_list_documents_json_empty(self):
+        _reset_globals()
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.list_documents", return_value=[]),
+        ):
+            result = runner.invoke(app, ["--json", "list", "documents"])
+
+        assert result.exit_code == 0
+        assert json.loads(result.output) == []
+
+    def test_show_page_json(self):
+        _reset_globals()
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.get_page_text", return_value="Hello world"),
+        ):
+            result = runner.invoke(app, ["--json", "show", "report.pdf", "--page", "2"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["document_name"] == "report.pdf"
+        assert data["page"] == 2
+        assert data["text"] == "Hello world"
+
+    def test_show_metadata_json(self):
+        _reset_globals()
+        mock_doc = {
+            "document_name": "report.pdf",
+            "document_path": "/docs/report.pdf",
+            "collection": "math",
+            "total_pages": 10,
+            "chunk_count": 42,
+            "indexed_pages": 10,
+            "ingestion_timestamp": "2026-01-01T00:00:00",
+        }
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.list_documents", return_value=[mock_doc]),
+        ):
+            result = runner.invoke(app, ["--json", "show", "report.pdf"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["document_name"] == "report.pdf"
+        assert data["collection"] == "math"
+
+    def test_status_json(self):
+        _reset_globals()
+        mock_settings = _mock_settings()
+        mock_settings.registry_path.exists.return_value = False
+        mock_settings.lancedb_path.exists.return_value = False
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=mock_settings),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.list_documents", return_value=[]),
+            patch("quarry.__main__.count_chunks", return_value=0),
+            patch("quarry.__main__.db_list_collections", return_value=[]),
+        ):
+            result = runner.invoke(app, ["--json", "status"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["document_count"] == 0
+        assert data["chunk_count"] == 0
+        assert "database_path" in data
+
+    def test_use_json(self):
+        _reset_globals()
+        with (
+            patch("quarry.__main__.resolve_db_paths", return_value=_mock_settings()),
+            patch("quarry.__main__.write_default_db"),
+        ):
+            result = runner.invoke(app, ["--json", "use", "work"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["database"] == "work"
+
+    def test_delete_json(self):
+        _reset_globals()
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.db_delete_document", return_value=15),
+        ):
+            result = runner.invoke(app, ["--json", "delete", "report.pdf"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["deleted"] == 15
+        assert data["name"] == "report.pdf"
+        assert data["type"] == "document"
+
+    def test_delete_collection_json(self):
+        _reset_globals()
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.db_delete_collection", return_value=50),
+        ):
+            result = runner.invoke(
+                app, ["--json", "delete", "math", "--type", "collection"]
+            )
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["deleted"] == 50
+        assert data["type"] == "collection"
+
+    def test_list_collections_json(self):
+        _reset_globals()
+        mock_cols = [
+            {"collection": "math", "document_count": 5, "chunk_count": 100},
+        ]
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.db_list_collections", return_value=mock_cols),
+        ):
+            result = runner.invoke(app, ["--json", "list", "collections"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert isinstance(data, list)
+        assert data[0]["collection"] == "math"
+
+    def test_register_json(self, tmp_path: Path):
+        _reset_globals()
+        d = tmp_path / "course"
+        d.mkdir()
+        settings = _mock_settings()
+        settings.registry_path = tmp_path / "registry.db"
+        with patch("quarry.__main__._resolved_settings", return_value=settings):
+            result = runner.invoke(
+                app, ["--json", "register", str(d), "--collection", "my-course"]
+            )
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["collection"] == "my-course"
+        assert "directory" in data
+
+    def test_deregister_json(self, tmp_path: Path):
+        _reset_globals()
+        settings = _mock_settings()
+        settings.registry_path = tmp_path / "registry.db"
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=settings),
+            patch("quarry.__main__.deregister_directory", return_value=["a.pdf"]),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.db_delete_document"),
+        ):
+            result = runner.invoke(app, ["--json", "deregister", "math"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["collection"] == "math"
+        assert data["removed"] == 1
+
+    def test_list_registrations_json(self, tmp_path: Path):
+        _reset_globals()
+        d = tmp_path / "course"
+        d.mkdir()
+        settings = _mock_settings()
+        settings.registry_path = tmp_path / "registry.db"
+        with patch("quarry.__main__._resolved_settings", return_value=settings):
+            runner.invoke(app, ["register", str(d), "--collection", "course"])
+            _reset_globals()
+            result = runner.invoke(app, ["--json", "list", "registrations"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert isinstance(data, list)
+        assert len(data) == 1
+        assert data[0]["collection"] == "course"
+
+    def test_sync_json(self):
+        _reset_globals()
+        from quarry.sync import SyncResult
+
+        mock_results = {
+            "math": SyncResult(
+                collection="math",
+                ingested=3,
+                deleted=1,
+                skipped=5,
+                failed=0,
+            )
+        }
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.sync_all", return_value=mock_results),
+        ):
+            result = runner.invoke(app, ["--json", "sync"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "math" in data
+        assert data["math"]["ingested"] == 3
+        assert data["math"]["deleted"] == 1
+
+    def test_ingest_file_json(self, tmp_path: Path):
+        _reset_globals()
+        f = tmp_path / "doc.txt"
+        f.write_text("hello")
+        mock_result = {"document_name": "doc.txt", "chunks": 1}
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.ingest_document", return_value=mock_result),
+        ):
+            result = runner.invoke(app, ["--json", "ingest", str(f)])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["document_name"] == "doc.txt"
+
+    def test_ingest_url_json(self):
+        _reset_globals()
+        mock_result = {"document_name": "example.com", "chunks": 5}
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.ingest_auto", return_value=mock_result),
+        ):
+            result = runner.invoke(
+                app, ["--json", "ingest", "https://example.com/docs"]
+            )
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["document_name"] == "example.com"
+
+    def test_remember_json(self):
+        _reset_globals()
+        mock_result = {"document_name": "notes.md", "chunks": 2}
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.ingest_content", return_value=mock_result),
+        ):
+            result = runner.invoke(
+                app,
+                ["--json", "remember", "--name", "notes.md"],
+                input="some content",
+            )
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["document_name"] == "notes.md"
+
+    def test_version_json(self):
+        _reset_globals()
+        result = runner.invoke(app, ["--json", "version"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "version" in data
