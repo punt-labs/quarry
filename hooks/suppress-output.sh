@@ -62,12 +62,13 @@ if [[ "$TOOL_NAME" == "list" ]]; then
     }'
   else
     COUNT=$(printf '%s\n' "$RESULT" | tail -n +2 | wc -l | tr -d ' ')
-    # Detect kind from header line
+    # Detect kind from first column in header (after ▶ prefix)
     LABEL="items"
-    if [[ "$FIRST_LINE" == *"DIRECTORY"* ]]; then LABEL="registrations"
-    elif [[ "$FIRST_LINE" == *"DATABASE"* ]]; then LABEL="databases"
-    elif [[ "$FIRST_LINE" == *"DOCUMENT"* ]]; then LABEL="documents"
-    elif [[ "$FIRST_LINE" == *"COLLECTION"* ]]; then LABEL="collections"
+    HEADER="${FIRST_LINE#*▶  }"
+    if [[ "$HEADER" == DIRECTORY* ]]; then LABEL="registrations"
+    elif [[ "$HEADER" == DATABASE* ]]; then LABEL="databases"
+    elif [[ "$HEADER" == DOCUMENT\ * ]]; then LABEL="documents"
+    elif [[ "$HEADER" == COLLECTION* ]]; then LABEL="collections"
     fi
     jq -n --arg summary "${COUNT} ${LABEL}" --arg ctx "$RESULT" '{
       hookSpecificOutput: {
