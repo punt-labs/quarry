@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import functools
+import importlib.metadata
 import json
 import logging
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated
@@ -41,19 +43,69 @@ app.add_typer(hooks_app, name="hooks")
 console = Console()
 err_console = Console(stderr=True)
 
-DbOption = Annotated[
-    str,
-    typer.Option(
-        "--db",
-        help="Named database (default: 'default'). "
-        "Resolves to ~/.quarry/data/<name>/lancedb.",
-    ),
-]
+# Global state set by @app.callback
+_json_output: bool = False
+_verbose: bool = False
+_quiet: bool = False
+_global_db: str = ""
+
+
+@app.callback(invoke_without_command=True)
+def main_callback(
+    ctx: typer.Context,
+    output_json: Annotated[
+        bool,
+        typer.Option("--json", help="Output as JSON."),
+    ] = False,
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-v", help="Verbose output."),
+    ] = False,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Suppress non-essential output."),
+    ] = False,
+    database: Annotated[
+        str,
+        typer.Option(
+            "--db",
+            help="Named database (default: 'default'). "
+            "Resolves to ~/.quarry/data/<name>/lancedb.",
+        ),
+    ] = "",
+) -> None:
+    """quarry: extract searchable knowledge from any document."""
+    global _json_output, _verbose, _quiet, _global_db
+    if verbose and quiet:
+        err_console.print("Error: --verbose and --quiet are mutually exclusive.")
+        raise typer.Exit(code=1)
+    _json_output = output_json
+    _verbose = verbose
+    _quiet = quiet
+    _global_db = database
+    if ctx.invoked_subcommand is None:
+        # No subcommand → show help
+        ctx.get_help()
+        raise typer.Exit(code=0)
+
+
+def _emit(data: object, text: str = "") -> None:
+    """Output helper: JSON when --json is active, otherwise text."""
+    if _json_output:
+        json.dump(data, sys.stdout)
+        sys.stdout.write("\n")
+    elif text:
+        print(text)
 
 
 def _resolved_settings(db: str = "") -> Settings:
-    """Load settings with --db resolution applied."""
-    return resolve_db_paths(load_settings(), db or None)
+    """Load settings with --db resolution applied.
+
+    Uses the per-command ``db`` argument if provided, otherwise falls back
+    to the global ``--db`` flag.
+    """
+    effective = db or _global_db
+    return resolve_db_paths(load_settings(), effective or None)
 
 
 def _cli_errors(fn: Callable[..., None]) -> Callable[..., None]:
@@ -81,14 +133,13 @@ def ingest_file(
     collection: Annotated[
         str, typer.Option("--collection", "-c", help="Collection name")
     ] = "",
-    database: DbOption = "",
 ) -> None:
     """Ingest a document from a file path.
 
     Supports PDF, images (PNG, JPG, TIFF, BMP, WebP), presentations (PPTX),
     spreadsheets (XLSX, CSV), HTML, TXT, MD, TEX, DOCX, and source code files.
     """
-    settings = _resolved_settings(database)
+    settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
     resolved = file_path.resolve()
     col = derive_collection(resolved, explicit=collection or None)
@@ -125,14 +176,13 @@ def ingest_url_cmd(
     name: Annotated[
         str, typer.Option("--name", "-n", help="Document name (defaults to URL)")
     ] = "",
-    database: DbOption = "",
 ) -> None:
     """Fetch a webpage and ingest its content.
 
     Downloads the HTML from the given URL, strips boilerplate (nav, scripts,
     etc.), converts to Markdown, and indexes the text for semantic search.
     """
-    settings = _resolved_settings(database)
+    settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
 
     with Progress(console=console) as progress:
@@ -184,7 +234,6 @@ def ingest_sitemap_cmd(
         float,
         typer.Option("--delay", help="Base delay between fetches in seconds"),
     ] = 0.5,
-    database: DbOption = "",
 ) -> None:
     """Crawl a sitemap and ingest all discovered URLs.
 
@@ -193,7 +242,7 @@ def ingest_sitemap_cmd(
     pages unchanged since last ingest (via <lastmod>), and ingests the
     rest in parallel.
     """
-    settings = _resolved_settings(database)
+    settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
 
     with Progress(console=console) as progress:
@@ -244,10 +293,9 @@ def search_cmd(
             "--source-format", help="Filter by source format (.pdf, .py, etc.)"
         ),
     ] = "",
-    database: DbOption = "",
 ) -> None:
     """Search indexed documents."""
-    settings = _resolved_settings(database)
+    settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
 
     query_vector = get_embedding_backend(settings).embed_query(query)
@@ -278,10 +326,9 @@ def list_cmd(
     collection: Annotated[
         str, typer.Option("--collection", "-c", help="Filter by collection")
     ] = "",
-    database: DbOption = "",
 ) -> None:
     """List all indexed documents."""
-    settings = _resolved_settings(database)
+    settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
     docs = list_documents(db, collection_filter=collection or None)
 
@@ -304,10 +351,9 @@ def delete_cmd(
     collection: Annotated[
         str, typer.Option("--collection", "-c", help="Scope to collection")
     ] = "",
-    database: DbOption = "",
 ) -> None:
     """Delete all indexed data for a document."""
-    settings = _resolved_settings(database)
+    settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
     deleted = db_delete_document(db, document_name, collection=collection or None)
 
@@ -319,11 +365,9 @@ def delete_cmd(
 
 @app.command(name="collections")
 @_cli_errors
-def collections_cmd(
-    database: DbOption = "",
-) -> None:
+def collections_cmd() -> None:
     """List all collections with document and chunk counts."""
-    settings = _resolved_settings(database)
+    settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
     cols = db_list_collections(db)
 
@@ -343,10 +387,9 @@ def collections_cmd(
 @_cli_errors
 def delete_collection_cmd(
     collection: Annotated[str, typer.Argument(help="Collection name to delete")],
-    database: DbOption = "",
 ) -> None:
     """Delete all indexed data for a collection."""
-    settings = _resolved_settings(database)
+    settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
     deleted = db_delete_collection(db, collection)
 
@@ -364,10 +407,9 @@ def register(
         str,
         typer.Option("--collection", "-c", help="Collection name (default: dir name)"),
     ] = "",
-    database: DbOption = "",
 ) -> None:
     """Register a directory for incremental sync."""
-    settings = _resolved_settings(database)
+    settings = _resolved_settings()
     resolved = directory.resolve()
     col = collection or resolved.name
     conn = open_registry(settings.registry_path)
@@ -386,10 +428,9 @@ def deregister(
         bool,
         typer.Option("--keep-data", help="Keep indexed data in LanceDB"),
     ] = False,
-    database: DbOption = "",
 ) -> None:
     """Remove a directory registration. Optionally keep indexed data."""
-    settings = _resolved_settings(database)
+    settings = _resolved_settings()
     conn = open_registry(settings.registry_path)
     try:
         doc_names = deregister_directory(conn, collection)
@@ -406,11 +447,9 @@ def deregister(
 
 @app.command(name="registrations")
 @_cli_errors
-def registrations_cmd(
-    database: DbOption = "",
-) -> None:
+def registrations_cmd() -> None:
     """List all registered directories."""
-    settings = _resolved_settings(database)
+    settings = _resolved_settings()
     conn = open_registry(settings.registry_path)
     try:
         regs = list_registrations(conn)
@@ -453,10 +492,9 @@ def sync_cmd(
             help="Parallel workers (auto: 4 for cloud backends, 1 for local)",
         ),
     ] = None,
-    database: DbOption = "",
 ) -> None:
     """Sync all registered directories: ingest new/changed, remove deleted."""
-    settings = _resolved_settings(database)
+    settings = _resolved_settings()
     effective_workers = workers if workers is not None else _auto_workers(settings)
     logger.info("Using %d sync workers", effective_workers)
     db = get_db(settings.lancedb_path)
@@ -486,19 +524,14 @@ def sync_cmd(
 
 @app.command(name="databases")
 @_cli_errors
-def databases_cmd(
-    database: DbOption = "",
-    output_json: Annotated[
-        bool,
-        typer.Option("--json", help="Output as JSON array."),
-    ] = False,
-) -> None:
+def databases_cmd() -> None:
     """List named databases with document counts and storage size."""
-    settings = _resolved_settings(database)
+    settings = _resolved_settings()
     databases = discover_databases(settings.quarry_root)
 
-    if output_json:
-        console.print(json.dumps(databases, indent=2))
+    if _json_output:
+        json.dump(databases, sys.stdout)
+        sys.stdout.write("\n")
         return
 
     if not databases:
@@ -537,23 +570,27 @@ def serve(
         int,
         typer.Option("--port", "-p", help="Port to bind (0 = OS-assigned)"),
     ] = 0,
-    database: DbOption = "",
 ) -> None:
     """Start the HTTP API server for quarry-menubar."""
     from quarry.http_server import serve as http_serve  # noqa: PLC0415
 
-    settings = _resolved_settings(database)
+    settings = _resolved_settings()
     http_serve(settings, port=port)
 
 
 @app.command()
-def mcp(
-    database: DbOption = "",
-) -> None:
+def mcp() -> None:
     """Start the MCP server (stdio transport)."""
     from quarry.mcp_server import main as mcp_main  # noqa: PLC0415
 
-    mcp_main(db_name=database or None)
+    mcp_main(db_name=_global_db or None)
+
+
+@app.command()
+def version() -> None:
+    """Print the quarry version."""
+    ver = importlib.metadata.version("punt-quarry")
+    _emit({"version": ver}, ver)
 
 
 # ---------------------------------------------------------------------------

@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 from typer.testing import CliRunner
 
+import quarry.__main__ as cli_mod
 from quarry.__main__ import app
 
 runner = CliRunner()
@@ -16,6 +17,14 @@ def _mock_settings() -> MagicMock:
     s = MagicMock()
     s.embedding_model = "Snowflake/snowflake-arctic-embed-m-v1.5"
     return s
+
+
+def _reset_globals() -> None:
+    """Reset CLI globals between tests."""
+    cli_mod._json_output = False
+    cli_mod._verbose = False
+    cli_mod._quiet = False
+    cli_mod._global_db = ""
 
 
 class TestListCmd:
@@ -405,6 +414,7 @@ class TestDatabasesCmd:
         assert "No databases found" in result.output
 
     def test_json_output(self, tmp_path: Path):
+        _reset_globals()
         settings = self._setup_databases(tmp_path)
         with (
             patch(
@@ -414,7 +424,7 @@ class TestDatabasesCmd:
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.list_documents", return_value=[]),
         ):
-            result = runner.invoke(app, ["databases", "--json"])
+            result = runner.invoke(app, ["--json", "databases"])
 
         assert result.exit_code == 0
         data = json.loads(result.output)
@@ -427,22 +437,24 @@ class TestDatabasesCmd:
         assert "size_description" in data[0]
 
     def test_json_empty(self, tmp_path: Path):
+        _reset_globals()
         settings = _mock_settings()
         settings.quarry_root = tmp_path / "nonexistent"
         with patch(
             "quarry.__main__._resolved_settings",
             return_value=settings,
         ):
-            result = runner.invoke(app, ["databases", "--json"])
+            result = runner.invoke(app, ["--json", "databases"])
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert data == []
 
 
 class TestDbOption:
-    """Verify --db flag is parsed and forwarded to resolve_db_paths."""
+    """Verify --db global flag is parsed and forwarded to resolve_db_paths."""
 
     def test_list_passes_db_to_resolver(self):
+        _reset_globals()
         with (
             patch("quarry.__main__.load_settings", return_value=_mock_settings()),
             patch(
@@ -452,12 +464,13 @@ class TestDbOption:
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.list_documents", return_value=[]),
         ):
-            result = runner.invoke(app, ["list", "--db", "work"])
+            result = runner.invoke(app, ["--db", "work", "list"])
         assert result.exit_code == 0
         mock_resolve.assert_called_once()
         assert mock_resolve.call_args[0][1] == "work"
 
     def test_search_passes_db_to_resolver(self):
+        _reset_globals()
         mock_backend = MagicMock()
         mock_backend.embed_query.return_value = np.zeros(768, dtype=np.float32)
         with (
@@ -473,11 +486,12 @@ class TestDbOption:
             ),
             patch("quarry.__main__.search", return_value=[]),
         ):
-            result = runner.invoke(app, ["search", "query", "--db", "work"])
+            result = runner.invoke(app, ["--db", "work", "search", "query"])
         assert result.exit_code == 0
         assert mock_resolve.call_args[0][1] == "work"
 
     def test_delete_passes_db_to_resolver(self):
+        _reset_globals()
         with (
             patch("quarry.__main__.load_settings", return_value=_mock_settings()),
             patch(
@@ -487,11 +501,12 @@ class TestDbOption:
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.db_delete_document", return_value=0),
         ):
-            result = runner.invoke(app, ["delete", "x.pdf", "--db", "work"])
+            result = runner.invoke(app, ["--db", "work", "delete", "x.pdf"])
         assert result.exit_code == 0
         assert mock_resolve.call_args[0][1] == "work"
 
     def test_collections_passes_db_to_resolver(self):
+        _reset_globals()
         with (
             patch("quarry.__main__.load_settings", return_value=_mock_settings()),
             patch(
@@ -501,11 +516,12 @@ class TestDbOption:
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.db_list_collections", return_value=[]),
         ):
-            result = runner.invoke(app, ["collections", "--db", "work"])
+            result = runner.invoke(app, ["--db", "work", "collections"])
         assert result.exit_code == 0
         assert mock_resolve.call_args[0][1] == "work"
 
     def test_default_db_passes_none(self):
+        _reset_globals()
         with (
             patch("quarry.__main__.load_settings", return_value=_mock_settings()),
             patch(
@@ -517,21 +533,6 @@ class TestDbOption:
         ):
             runner.invoke(app, ["list"])
         assert mock_resolve.call_args[0][1] is None
-
-    def test_db_after_subcommand_works(self):
-        """Regression: --db must work after the subcommand name."""
-        with (
-            patch("quarry.__main__.load_settings", return_value=_mock_settings()),
-            patch(
-                "quarry.__main__.resolve_db_paths",
-                return_value=_mock_settings(),
-            ) as mock_resolve,
-            patch("quarry.__main__.get_db"),
-            patch("quarry.__main__.list_documents", return_value=[]),
-        ):
-            result = runner.invoke(app, ["list", "--db", "personal"])
-        assert result.exit_code == 0
-        assert mock_resolve.call_args[0][1] == "personal"
 
 
 class TestIngestCmd:
@@ -555,6 +556,7 @@ class TestIngestCmd:
         assert "doc.txt" in result.output
 
     def test_ingest_passes_db(self, tmp_path: Path):
+        _reset_globals()
         f = tmp_path / "doc.txt"
         f.write_text("hello")
         with (
@@ -569,7 +571,7 @@ class TestIngestCmd:
                 return_value={"chunks": 1},
             ),
         ):
-            result = runner.invoke(app, ["ingest-file", str(f), "--db", "work"])
+            result = runner.invoke(app, ["--db", "work", "ingest-file", str(f)])
         assert result.exit_code == 0
         assert mock_resolve.call_args[0][1] == "work"
 
@@ -664,6 +666,51 @@ class TestAutoWorkers:
             {"ocr_backend": "textract", "embedding_backend": "sagemaker"}
         )
         assert _auto_workers(settings) == 4
+
+
+class TestVersionCmd:
+    def test_prints_version(self):
+        _reset_globals()
+        result = runner.invoke(app, ["version"])
+        assert result.exit_code == 0
+        # Should output a version string like "0.10.1"
+        assert "." in result.output.strip()
+
+    def test_json_version(self):
+        _reset_globals()
+        result = runner.invoke(app, ["--json", "version"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "version" in data
+
+
+class TestGlobalFlags:
+    def test_verbose_quiet_mutually_exclusive(self):
+        _reset_globals()
+        result = runner.invoke(app, ["--verbose", "--quiet", "version"])
+        assert result.exit_code == 1
+
+    def test_verbose_sets_global(self):
+        _reset_globals()
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.list_documents", return_value=[]),
+        ):
+            result = runner.invoke(app, ["--verbose", "list"])
+        assert result.exit_code == 0
+        assert cli_mod._verbose is True
+
+    def test_quiet_sets_global(self):
+        _reset_globals()
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.list_documents", return_value=[]),
+        ):
+            result = runner.invoke(app, ["--quiet", "list"])
+        assert result.exit_code == 0
+        assert cli_mod._quiet is True
 
 
 class TestCliErrors:
