@@ -193,7 +193,10 @@ reportUnknownParameterType = false
 reportMissingParameterType = false
 reportUnknownVariableType = false
 reportUnknownArgumentType = false
-# Internal cross-module imports use _-prefixed helpers
+
+# Tests legitimately import _-prefixed internals and have pytest-discovered fixtures
+[[tool.pyright.executionEnvironments]]
+root = "tests"
 reportPrivateUsage = false
 reportUnusedFunction = false
 

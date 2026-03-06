@@ -7,9 +7,9 @@ import pytest
 from quarry.models import PageType
 from quarry.text_processor import (
     SUPPORTED_TEXT_EXTENSIONS,
-    _read_text_with_fallback,
     process_raw_text,
     process_text_file,
+    read_text_with_fallback,
 )
 
 
@@ -22,12 +22,12 @@ class TestReadTextWithFallback:
     def test_utf8_file(self, tmp_path: Path):
         f = tmp_path / "utf8.txt"
         f.write_text("Hello world", encoding="utf-8")
-        assert _read_text_with_fallback(f) == "Hello world"
+        assert read_text_with_fallback(f) == "Hello world"
 
     def test_latin1_file(self, tmp_path: Path):
         f = tmp_path / "german.txt"
         f.write_bytes("Ärger mit Ü".encode("latin-1"))
-        result = _read_text_with_fallback(f)
+        result = read_text_with_fallback(f)
         assert "Ärger" in result
         assert "Ü" in result
 
@@ -35,7 +35,7 @@ class TestReadTextWithFallback:
         f = tmp_path / "windows.txt"
         # 0x93/0x94 are left/right double quotes in CP1252
         f.write_bytes(b"\x93Hello\x94")
-        result = _read_text_with_fallback(f)
+        result = read_text_with_fallback(f)
         assert result == "\u201cHello\u201d"
 
 

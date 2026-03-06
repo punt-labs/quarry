@@ -10,10 +10,10 @@ from markdownify import markdownify
 
 from quarry.models import PageContent, PageType
 from quarry.text_processor import (
-    _read_text_with_fallback,
-    _sections_to_pages,
-    _split_markdown,
-    _split_plain,
+    read_text_with_fallback,
+    sections_to_pages,
+    split_markdown,
+    split_plain,
 )
 
 logger = logging.getLogger(__name__)
@@ -95,14 +95,14 @@ def process_html_text(
 
     # Choose splitting strategy based on content structure.
     if _has_markdown_headings(markdown):
-        sections = _split_markdown(markdown)
+        sections = split_markdown(markdown)
     else:
-        sections = _split_plain(markdown)
+        sections = split_plain(markdown)
 
     if not sections:
         return []
 
-    return _sections_to_pages(sections, document_name, document_path, PageType.SECTION)
+    return sections_to_pages(sections, document_name, document_path, PageType.SECTION)
 
 
 def process_html_file(
@@ -133,5 +133,5 @@ def process_html_file(
         raise ValueError(msg)
 
     resolved_name = document_name or file_path.name
-    html_text = _read_text_with_fallback(file_path)
+    html_text = read_text_with_fallback(file_path)
     return process_html_text(html_text, resolved_name, str(file_path.resolve()))

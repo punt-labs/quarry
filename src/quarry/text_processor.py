@@ -24,7 +24,7 @@ _TEXT_FORMATS: dict[str, str] = {
 SUPPORTED_TEXT_EXTENSIONS = frozenset(_TEXT_FORMATS)
 
 
-def _read_text_with_fallback(file_path: Path) -> str:
+def read_text_with_fallback(file_path: Path) -> str:
     """Read a text file, trying UTF-8 then CP1252 then Latin-1.
 
     CP1252 (Windows-1252) is a superset of Latin-1 that correctly
@@ -83,7 +83,7 @@ def process_text_file(
     if fmt == "docx":
         return _process_docx(file_path, document_name=resolved_name)
 
-    text = _read_text_with_fallback(file_path)
+    text = read_text_with_fallback(file_path)
     return _split_by_format(text, fmt, resolved_name, str(file_path.resolve()))
 
 
@@ -130,17 +130,17 @@ def _split_by_format(
 ) -> list[PageContent]:
     """Split text into sections based on format."""
     if fmt == "markdown":
-        sections = _split_markdown(text)
+        sections = split_markdown(text)
     elif fmt == "latex":
         sections = _split_latex(text)
     else:
-        sections = _split_plain(text)
+        sections = split_plain(text)
 
     logger.debug("Split %s into %d sections (%s)", document_name, len(sections), fmt)
-    return _sections_to_pages(sections, document_name, document_path, PageType.SECTION)
+    return sections_to_pages(sections, document_name, document_path, PageType.SECTION)
 
 
-def _split_markdown(text: str) -> list[str]:
+def split_markdown(text: str) -> list[str]:
     """Split markdown on heading lines (any level)."""
     parts = MD_HEADER.split(text)
     return [p for p in parts if p.strip()]
@@ -152,7 +152,7 @@ def _split_latex(text: str) -> list[str]:
     return [p for p in parts if p.strip()]
 
 
-def _split_plain(text: str) -> list[str]:
+def split_plain(text: str) -> list[str]:
     """Split plain text on blank lines (paragraph boundaries)."""
     parts = BLANK_LINE_SPLIT.split(text)
     return [p for p in parts if p.strip()]
@@ -185,10 +185,10 @@ def _process_docx(
 
     resolved_name = document_name or file_path.name
     document_path = str(file_path.resolve())
-    return _sections_to_pages(sections, resolved_name, document_path, PageType.SECTION)
+    return sections_to_pages(sections, resolved_name, document_path, PageType.SECTION)
 
 
-def _sections_to_pages(
+def sections_to_pages(
     sections: list[str],
     document_name: str,
     document_path: str,

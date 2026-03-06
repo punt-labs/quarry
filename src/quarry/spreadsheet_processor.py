@@ -9,7 +9,7 @@ from pathlib import Path
 
 from quarry.latex_utils import rows_to_latex
 from quarry.models import PageContent, PageType
-from quarry.text_processor import _read_text_with_fallback, _sections_to_pages
+from quarry.text_processor import read_text_with_fallback, sections_to_pages
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,7 @@ def _read_csv(
     file_path: Path,
 ) -> list[tuple[str, list[str], list[list[str]]]]:
     """Read a CSV file into a single ``(name, headers, rows)`` tuple."""
-    text = _read_text_with_fallback(file_path)
+    text = read_text_with_fallback(file_path)
     reader = csv.reader(io.StringIO(text))
     all_rows = list(reader)
 
@@ -148,7 +148,7 @@ def process_spreadsheet_file(
 
     resolved_name = document_name or file_path.name
     document_path = str(file_path.resolve())
-    pages = _sections_to_pages(
+    pages = sections_to_pages(
         sections, resolved_name, document_path, PageType.SPREADSHEET
     )
     return pages, sheet_count

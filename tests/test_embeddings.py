@@ -183,7 +183,7 @@ class TestAutoDownloadFallback:
                 "quarry.embeddings._load_local_model_files",
                 return_value=("/cached/model.onnx", "/cached/tokenizer.json"),
             ) as local_mock,
-            patch("quarry.embeddings._download_model_files") as download_mock,
+            patch("quarry.embeddings.download_model_files") as download_mock,
         ):
             result = _load_model_files()
 
@@ -199,7 +199,7 @@ class TestAutoDownloadFallback:
                 side_effect=OSError("not cached"),
             ),
             patch(
-                "quarry.embeddings._download_model_files",
+                "quarry.embeddings.download_model_files",
                 return_value=("/downloaded/model.onnx", "/downloaded/tokenizer.json"),
             ) as download_mock,
         ):

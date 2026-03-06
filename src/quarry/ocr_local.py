@@ -36,7 +36,7 @@ _engine: _OcrEngine | None = None
 _engine_lock = threading.Lock()
 
 
-def _get_engine() -> _OcrEngine:
+def get_engine() -> _OcrEngine:
     """Return a cached RapidOCR engine instance.
 
     Thread-safe via double-checked locking. The engine is initialized
@@ -82,7 +82,7 @@ def _ocr_pages(
     total_pages: int,
 ) -> list[PageContent]:
     """OCR a sequence of (page_number, image) pairs."""
-    engine = _get_engine()
+    engine = get_engine()
     results: list[PageContent] = []
     for page_num, img in pages:
         text = _extract_text(engine(img))
@@ -148,7 +148,7 @@ class LocalOcrBackend:
     ) -> PageContent:
         """OCR a single-page image from bytes."""
         img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        text = _extract_text(_get_engine()(img))
+        text = _extract_text(get_engine()(img))
         logger.info("OCR image %s: %d chars", document_name, len(text))
         return PageContent(
             document_name=document_name,

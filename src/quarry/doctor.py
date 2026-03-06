@@ -154,9 +154,9 @@ def _check_embedding_model() -> CheckResult:
 def _check_local_ocr() -> CheckResult:
     """Check that the local OCR engine (RapidOCR) can initialize."""
     try:
-        from quarry.ocr_local import _get_engine  # noqa: PLC0415
+        from quarry.ocr_local import get_engine  # noqa: PLC0415
 
-        _get_engine()
+        get_engine()
         return CheckResult(
             name="Local OCR",
             passed=True,
@@ -464,9 +464,9 @@ def run_install() -> int:
     # Step 2: embedding model
     print("[2/3] Downloading embedding model...")  # noqa: T201
     try:
-        from quarry.embeddings import _download_model_files  # noqa: PLC0415
+        from quarry.embeddings import download_model_files  # noqa: PLC0415
 
-        _download_model_files()
+        download_model_files()
         print("  \u2713 snowflake-arctic-embed-m-v1.5 (INT8 ONNX) cached")  # noqa: T201
     except Exception as exc:  # noqa: BLE001
         print(f"  \u2717 Model download failed: {exc}")  # noqa: T201
