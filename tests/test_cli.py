@@ -622,6 +622,7 @@ class TestDbOption:
                 "quarry.__main__.resolve_db_paths",
                 return_value=_mock_settings(),
             ) as mock_resolve,
+            patch("quarry.__main__.read_default_db", return_value=None),
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.list_documents", return_value=[]),
         ):

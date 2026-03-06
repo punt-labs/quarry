@@ -123,6 +123,8 @@ def _cli_errors(fn: Callable[..., None]) -> Callable[..., None]:
     def wrapper(*args: object, **kwargs: object) -> None:
         try:
             fn(*args, **kwargs)
+        except (SystemExit, KeyboardInterrupt, typer.Exit):
+            raise
         except Exception as exc:
             logger.exception("Command %s failed", fn.__name__)
             err_console.print(f"Error: {exc}", style="red")
