@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import threading
 from collections.abc import Callable
 from pathlib import Path
 
@@ -24,18 +25,13 @@ from quarry.database import (
 from quarry.formatting import (
     format_collections,
     format_databases,
-    format_delete_summary,
-    format_deregister_summary,
     format_document_detail,
     format_documents,
-    format_ingest_summary,
     format_register_summary,
     format_registrations,
     format_search_results,
-    format_sitemap_summary,
     format_status,
     format_switch_summary,
-    format_sync_summary,
 )
 from quarry.pipeline import (
     ingest_auto as pipeline_ingest_auto,
@@ -91,6 +87,18 @@ def _db() -> LanceDB:
     return get_db(_settings().lancedb_path)
 
 
+def _background(fn: Callable[..., object], *args: object, **kwargs: object) -> None:
+    """Run *fn* in a daemon thread.  Exceptions are logged, not raised."""
+
+    def _target() -> None:
+        try:
+            fn(*args, **kwargs)
+        except Exception:
+            logger.exception("Background task %s failed", fn.__name__)
+
+    threading.Thread(target=_target, daemon=True).start()
+
+
 @mcp.tool()
 @_handle_errors
 def find(
@@ -144,6 +152,22 @@ def find(
     return format_search_results(query, formatted)
 
 
+def _do_ingest(source: str, overwrite: bool, collection: str) -> None:
+    """Blocking ingest — runs in background thread."""
+    settings = _settings()
+    db = _db()
+
+    if source.startswith(("http://", "https://")):
+        pipeline_ingest_auto(
+            source, db, settings, overwrite=overwrite, collection=collection or ""
+        )
+        return
+
+    path = Path(source)
+    col = derive_collection(path, explicit=collection or None)
+    ingest_document(path, db, settings, overwrite=overwrite, collection=col)
+
+
 @mcp.tool()
 @_handle_errors
 def ingest(
@@ -160,36 +184,36 @@ def ingest(
     (PPTX), spreadsheets (XLSX, CSV), HTML, TXT, MD, TEX, DOCX, and source
     code files.
 
+    Returns immediately — ingestion runs in the background.
+
     Args:
         source: File path or HTTP(S) URL to ingest.
         overwrite: If true, replace existing data.
         collection: Collection name. Auto-derived if empty.
     """
+    _background(_do_ingest, source, overwrite, collection)
+    return f"\u25b6  Ingesting {source} (background)"
+
+
+def _do_remember(
+    content: str,
+    document_name: str,
+    overwrite: bool,
+    collection: str,
+    format_hint: str,
+) -> None:
+    """Blocking remember — runs in background thread."""
     settings = _settings()
     db = _db()
-
-    if source.startswith(("http://", "https://")):
-        result = pipeline_ingest_auto(
-            source,
-            db,
-            settings,
-            overwrite=overwrite,
-            collection=collection or "",
-        )
-        if "sitemap_url" in result:
-            return format_sitemap_summary(result)
-        return format_ingest_summary(result)
-
-    path = Path(source)
-    col = derive_collection(path, explicit=collection or None)
-    result = ingest_document(
-        path,
+    pipeline_ingest_content(
+        content,
+        document_name,
         db,
         settings,
         overwrite=overwrite,
-        collection=col,
+        collection=collection,
+        format_hint=format_hint,
     )
-    return format_ingest_summary(result)
 
 
 @mcp.tool()
@@ -206,6 +230,8 @@ def remember(
     Use this instead of ingest when you have the text content directly
     (e.g., clipboard, API response, or sandbox-uploaded files in Claude Desktop).
 
+    Returns immediately — indexing runs in the background.
+
     Args:
         content: The text content to remember.
         document_name: Name for the document (e.g., 'notes.md').
@@ -213,20 +239,10 @@ def remember(
         collection: Collection name (default: 'default').
         format_hint: Format hint: 'auto', 'plain', 'markdown', 'latex'.
     """
-    settings = _settings()
-    db = _db()
-
-    result = pipeline_ingest_content(
-        content,
-        document_name,
-        db,
-        settings,
-        overwrite=overwrite,
-        collection=collection,
-        format_hint=format_hint,
+    _background(
+        _do_remember, content, document_name, overwrite, collection, format_hint
     )
-
-    return format_ingest_summary(result)
+    return f"\u25b6  Remembering {document_name} (background)"
 
 
 @mcp.tool(name="list")
@@ -311,6 +327,15 @@ def show(
     return format_document_detail(match[0])
 
 
+def _do_delete(name: str, kind: str, collection: str) -> None:
+    """Blocking delete — runs in background thread."""
+    db = _db()
+    if kind == "collection":
+        db_delete_collection(db, name)
+    else:
+        db_delete_document(db, name, collection=collection or None)
+
+
 @mcp.tool()
 @_handle_errors
 def delete(
@@ -320,6 +345,8 @@ def delete(
 ) -> str:
     """Delete indexed data for a document or collection.
 
+    Returns immediately — deletion runs in the background.
+
     Args:
         name: Document filename or collection name to delete.
         kind: What to delete — "document" or "collection".
@@ -327,12 +354,20 @@ def delete(
     """
     if kind not in ("document", "collection"):
         return f"Invalid kind {kind!r}. Must be 'document' or 'collection'."
-    db = _db()
-    if kind == "collection":
-        deleted = db_delete_collection(db, name)
-        return format_delete_summary("collection", name, deleted)
-    deleted = db_delete_document(db, name, collection=collection or None)
-    return format_delete_summary("document", name, deleted)
+    _background(_do_delete, name, kind, collection)
+    return f"\u25b6  Deleting {kind} {name!r} (background)"
+
+
+def _do_register(directory: str, collection: str) -> None:
+    """Blocking register — runs in background thread."""
+    settings = _settings()
+    path = Path(directory).resolve()
+    col = collection or path.name
+    conn = open_registry(settings.registry_path)
+    try:
+        registry_register(conn, path, col)
+    finally:
+        conn.close()
 
 
 @mcp.tool()
@@ -340,33 +375,20 @@ def delete(
 def register_directory(directory: str, collection: str = "") -> str:
     """Register a directory for incremental sync.
 
+    Returns immediately — registration runs in the background.
+
     Args:
         directory: Absolute path to the directory.
         collection: Collection name. Uses directory name if empty.
     """
-    settings = _settings()
     path = Path(directory).resolve()
     col = collection or path.name
-    conn = open_registry(settings.registry_path)
-    try:
-        reg = registry_register(conn, path, col)
-    finally:
-        conn.close()
-    return format_register_summary(reg.directory, reg.collection)
+    _background(_do_register, directory, collection)
+    return format_register_summary(str(path), col)
 
 
-@mcp.tool()
-@_handle_errors
-def deregister_directory(
-    collection: str,
-    keep_data: bool = False,
-) -> str:
-    """Remove a directory registration.
-
-    Args:
-        collection: Collection name to deregister.
-        keep_data: If true, keep indexed data in LanceDB.
-    """
+def _do_deregister(collection: str, keep_data: bool) -> None:
+    """Blocking deregister — runs in background thread."""
     settings = _settings()
     conn = open_registry(settings.registry_path)
     try:
@@ -379,36 +401,41 @@ def deregister_directory(
         for name in doc_names:
             db_delete_document(db, name, collection=collection)
 
-    return format_deregister_summary(
-        collection,
-        len(doc_names),
-        data_deleted=not keep_data,
-    )
+
+@mcp.tool()
+@_handle_errors
+def deregister_directory(
+    collection: str,
+    keep_data: bool = False,
+) -> str:
+    """Remove a directory registration.
+
+    Returns immediately — deregistration runs in the background.
+
+    Args:
+        collection: Collection name to deregister.
+        keep_data: If true, keep indexed data in LanceDB.
+    """
+    _background(_do_deregister, collection, keep_data)
+    return f"\u25b6  Deregistering {collection!r} (background)"
+
+
+def _do_sync() -> None:
+    """Blocking sync — runs in background thread."""
+    settings = _settings()
+    db = _db()
+    engine_sync_all(db, settings)
 
 
 @mcp.tool()
 @_handle_errors
 def sync_all_registrations() -> str:
-    """Sync all registered directories: ingest new/changed, remove deleted."""
-    settings = _settings()
-    db = _db()
+    """Sync all registered directories: ingest new/changed, remove deleted.
 
-    results = engine_sync_all(db, settings)
-
-    summary = {
-        col: {
-            "ingested": res.ingested,
-            "deleted": res.deleted,
-            "skipped": res.skipped,
-            "failed": res.failed,
-            "errors": res.errors,
-        }
-        for col, res in results.items()
-    }
-
-    return format_sync_summary(
-        {"collections_synced": len(results), "results": summary},
-    )
+    Returns immediately — sync runs in the background.
+    """
+    _background(_do_sync)
+    return "\u25b6  Syncing all registrations (background)"
 
 
 @mcp.tool()
