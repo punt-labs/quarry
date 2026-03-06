@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-03-06
+
 ### Tool
 
 - **CLI/MCP surface rework** — unified verbs across CLI, MCP tools, and slash commands:
@@ -31,6 +33,8 @@ across `transform`, `index`, and `connector`).
 
 ### Infra
 
+- **Pyright strict mode** — zero errors under strict type checking. Cross-module helpers renamed to drop `_` prefix (reserved for module-private). Test-only suppressions scoped via execution environments. (#79)
+- **Doctor subprocess timeout** — `quarry doctor` Claude Code MCP check now has a 10s timeout instead of blocking indefinitely (#79)
 - **Installer stdin fix** — `install.sh` no longer consumes stdin when piped via `curl | sh`, preventing silent hangs during interactive prompts
 - **Doctor exit code** — `quarry doctor` no longer aborts the installer when it reports warnings (#71)
 - Development status classifier updated from Alpha to Beta
