@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 from quarry import __version__
-from quarry.config import Settings, resolve_db_paths
+from quarry.config import Settings, read_default_db, resolve_db_paths, write_default_db
 
 
 class TestVersion:
@@ -131,3 +132,28 @@ class TestResolveDbPaths:
 
         with pytest.raises(ValueError, match="Invalid database name"):
             resolve_db_paths(settings, db_name="..")
+
+
+class TestPersistentDb:
+    def test_write_and_read(self, tmp_path):
+        config_file = tmp_path / "config.toml"
+        with patch("quarry.config._CONFIG_PATH", config_file):
+            write_default_db("work")
+            assert read_default_db() == "work"
+
+    def test_read_missing_file(self, tmp_path):
+        config_file = tmp_path / "nonexistent" / "config.toml"
+        with patch("quarry.config._CONFIG_PATH", config_file):
+            assert read_default_db() is None
+
+    def test_read_default_returns_none(self, tmp_path):
+        config_file = tmp_path / "config.toml"
+        with patch("quarry.config._CONFIG_PATH", config_file):
+            write_default_db("default")
+            assert read_default_db() is None
+
+    def test_write_creates_parent_dirs(self, tmp_path):
+        config_file = tmp_path / "nested" / "dir" / "config.toml"
+        with patch("quarry.config._CONFIG_PATH", config_file):
+            write_default_db("coding")
+            assert config_file.exists()

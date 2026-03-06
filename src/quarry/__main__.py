@@ -15,7 +15,14 @@ from rich.progress import Progress
 
 from quarry.backends import get_embedding_backend
 from quarry.collections import derive_collection
-from quarry.config import Settings, configure_logging, load_settings, resolve_db_paths
+from quarry.config import (
+    Settings,
+    configure_logging,
+    load_settings,
+    read_default_db,
+    resolve_db_paths,
+    write_default_db,
+)
 from quarry.database import (
     count_chunks,
     delete_collection as db_delete_collection,
@@ -104,10 +111,9 @@ def _emit(data: object, text: str = "") -> None:
 def _resolved_settings(db: str = "") -> Settings:
     """Load settings with --db resolution applied.
 
-    Uses the per-command ``db`` argument if provided, otherwise falls back
-    to the global ``--db`` flag.
+    Priority: per-command ``db`` > global ``--db`` flag > persistent default.
     """
-    effective = db or _global_db
+    effective = db or _global_db or read_default_db()
     return resolve_db_paths(load_settings(), effective or None)
 
 
@@ -421,6 +427,22 @@ def status_cmd() -> None:
             }
         )
     )
+
+
+@app.command(name="use")
+@_cli_errors
+def use_cmd(
+    name: Annotated[str, typer.Argument(help="Database name (e.g., 'coding', 'work')")],
+) -> None:
+    """Set the persistent default database for subsequent commands.
+
+    Use 'default' to reset to the default database. The --db flag
+    overrides this per-call.
+    """
+    # Validate the name before persisting.
+    resolve_db_paths(load_settings(), name if name != "default" else None)
+    write_default_db(name)
+    print(f"Default database set to {name!r}")
 
 
 @app.command(name="delete")

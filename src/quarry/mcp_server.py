@@ -448,7 +448,7 @@ def status() -> str:
     )
 
 
-@mcp.tool()
+@mcp.tool(name="use")
 @_handle_errors
 def use_database(name: str) -> str:
     """Switch to a different named database for subsequent operations.

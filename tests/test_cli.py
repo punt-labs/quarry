@@ -147,6 +147,28 @@ class TestStatusCmd:
         assert "Chunks" in result.output
 
 
+class TestUseCmd:
+    def test_sets_default_db(self):
+        with (
+            patch("quarry.__main__.resolve_db_paths", return_value=_mock_settings()),
+            patch("quarry.__main__.write_default_db") as mock_write,
+        ):
+            result = runner.invoke(app, ["use", "work"])
+
+        assert result.exit_code == 0
+        assert "work" in result.output
+        mock_write.assert_called_once_with("work")
+
+    def test_invalid_db_name(self):
+        with patch(
+            "quarry.__main__.resolve_db_paths",
+            side_effect=ValueError("Invalid database name"),
+        ):
+            result = runner.invoke(app, ["use", "../escape"])
+
+        assert result.exit_code == 1
+
+
 class TestDeleteCmd:
     def test_deletes_document(self):
         with (

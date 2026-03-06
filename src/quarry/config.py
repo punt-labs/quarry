@@ -79,6 +79,31 @@ def resolve_db_paths(settings: Settings, db_name: str | None = None) -> Settings
     )
 
 
+_CONFIG_PATH = Path.home() / ".quarry" / "config.toml"
+
+
+def read_default_db() -> str | None:
+    """Read the persistent default database name from config file."""
+    if not _CONFIG_PATH.exists():
+        return None
+    text = _CONFIG_PATH.read_text()
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("database"):
+            _, _, value = line.partition("=")
+            value = value.strip().strip('"').strip("'")
+            if value and value != "default":
+                return value
+    return None
+
+
+def write_default_db(name: str) -> None:
+    """Write the persistent default database name to config file."""
+    _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    content = f'[default]\ndatabase = "{name}"\n'
+    _CONFIG_PATH.write_text(content)
+
+
 def load_settings() -> Settings:
     """Load application settings. Creates a fresh instance each call (no caching)."""
     return Settings()
