@@ -694,7 +694,7 @@ def mcp() -> None:
     """Start the MCP server (stdio transport)."""
     from quarry.mcp_server import main as mcp_main  # noqa: PLC0415
 
-    mcp_main(db_name=_global_db or None)
+    mcp_main(db_name=_global_db or read_default_db())
 
 
 @app.command()
