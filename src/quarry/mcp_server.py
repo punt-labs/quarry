@@ -325,6 +325,8 @@ def delete(
         kind: What to delete — "document" or "collection".
         collection: Optional collection scope (only for kind="document").
     """
+    if kind not in ("document", "collection"):
+        return f"Invalid kind {kind!r}. Must be 'document' or 'collection'."
     db = _db()
     if kind == "collection":
         deleted = db_delete_collection(db, name)
