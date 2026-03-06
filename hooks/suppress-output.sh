@@ -46,8 +46,14 @@ if [[ "$TOOL_NAME" == "find" ]]; then
   exit 0
 fi
 
-if [[ "$TOOL_NAME" == "get_documents" ]]; then
-  if [[ "$RESULT" == "No documents" ]]; then
+if [[ "$TOOL_NAME" == "list" ]]; then
+  FIRST_LINE=$(printf '%s' "$RESULT" | head -1)
+  # Empty results for each kind
+  if [[ "$RESULT" == "No documents" ]] || \
+     [[ "$RESULT" == "No collections" ]] || \
+     [[ "$RESULT" == "No databases" ]] || \
+     [[ "$RESULT" == "No registered directories" ]] || \
+     [[ "$FIRST_LINE" == "Error:"* ]]; then
     jq -n --arg r "$RESULT" '{
       hookSpecificOutput: {
         hookEventName: "PostToolUse",
@@ -56,70 +62,13 @@ if [[ "$TOOL_NAME" == "get_documents" ]]; then
     }'
   else
     COUNT=$(printf '%s\n' "$RESULT" | tail -n +2 | wc -l | tr -d ' ')
-    jq -n --arg summary "${COUNT} documents" --arg ctx "$RESULT" '{
-      hookSpecificOutput: {
-        hookEventName: "PostToolUse",
-        updatedMCPToolOutput: $summary,
-        additionalContext: $ctx
-      }
-    }'
-  fi
-  exit 0
-fi
-
-if [[ "$TOOL_NAME" == "list_collections" ]]; then
-  if [[ "$RESULT" == "No collections" ]]; then
-    jq -n --arg r "$RESULT" '{
-      hookSpecificOutput: {
-        hookEventName: "PostToolUse",
-        updatedMCPToolOutput: $r
-      }
-    }'
-  else
-    COUNT=$(printf '%s\n' "$RESULT" | tail -n +2 | wc -l | tr -d ' ')
-    jq -n --arg summary "${COUNT} collections" --arg ctx "$RESULT" '{
-      hookSpecificOutput: {
-        hookEventName: "PostToolUse",
-        updatedMCPToolOutput: $summary,
-        additionalContext: $ctx
-      }
-    }'
-  fi
-  exit 0
-fi
-
-if [[ "$TOOL_NAME" == "list_databases" ]]; then
-  if [[ "$RESULT" == "No databases" ]]; then
-    jq -n --arg r "$RESULT" '{
-      hookSpecificOutput: {
-        hookEventName: "PostToolUse",
-        updatedMCPToolOutput: $r
-      }
-    }'
-  else
-    COUNT=$(printf '%s\n' "$RESULT" | tail -n +2 | wc -l | tr -d ' ')
-    jq -n --arg summary "${COUNT} databases" --arg ctx "$RESULT" '{
-      hookSpecificOutput: {
-        hookEventName: "PostToolUse",
-        updatedMCPToolOutput: $summary,
-        additionalContext: $ctx
-      }
-    }'
-  fi
-  exit 0
-fi
-
-if [[ "$TOOL_NAME" == "list_registrations" ]]; then
-  if [[ "$RESULT" == "No registered directories" ]]; then
-    jq -n --arg r "$RESULT" '{
-      hookSpecificOutput: {
-        hookEventName: "PostToolUse",
-        updatedMCPToolOutput: $r
-      }
-    }'
-  else
-    COUNT=$(printf '%s\n' "$RESULT" | tail -n +2 | wc -l | tr -d ' ')
-    jq -n --arg summary "${COUNT} registrations" --arg ctx "$RESULT" '{
+    # Detect kind from header line
+    LABEL="items"
+    if [[ "$FIRST_LINE" == *"DOCUMENT"* ]]; then LABEL="documents"; fi
+    if [[ "$FIRST_LINE" == *"COLLECTION"* ]]; then LABEL="collections"; fi
+    if [[ "$FIRST_LINE" == *"DATABASE"* ]]; then LABEL="databases"; fi
+    if [[ "$FIRST_LINE" == *"DIRECTORY"* ]]; then LABEL="registrations"; fi
+    jq -n --arg summary "${COUNT} ${LABEL}" --arg ctx "$RESULT" '{
       hookSpecificOutput: {
         hookEventName: "PostToolUse",
         updatedMCPToolOutput: $summary,
@@ -141,9 +90,9 @@ if [[ "$TOOL_NAME" == "status" ]]; then
   exit 0
 fi
 
-if [[ "$TOOL_NAME" == "get_page" ]]; then
+if [[ "$TOOL_NAME" == "show" ]]; then
   FIRST_LINE=$(printf '%s' "$RESULT" | head -1)
-  if [[ "$FIRST_LINE" == "No data found"* ]]; then
+  if [[ "$FIRST_LINE" == "No data found"* ]] || [[ "$FIRST_LINE" == "Document"*"not found"* ]]; then
     jq -n --arg r "$FIRST_LINE" '{
       hookSpecificOutput: {
         hookEventName: "PostToolUse",
@@ -152,8 +101,14 @@ if [[ "$TOOL_NAME" == "get_page" ]]; then
     }'
   else
     DOC=$(printf '%s' "$RESULT" | head -1 | sed 's/Document: //')
-    PAGE=$(printf '%s' "$RESULT" | sed -n '2p' | sed 's/Page: //')
-    jq -n --arg summary "${DOC} page ${PAGE}" --arg ctx "$RESULT" '{
+    SECOND_LINE=$(printf '%s' "$RESULT" | sed -n '2p')
+    if [[ "$SECOND_LINE" == "Page:"* ]]; then
+      PAGE="${SECOND_LINE#Page: }"
+      SUMMARY="${DOC} page ${PAGE}"
+    else
+      SUMMARY="${DOC}"
+    fi
+    jq -n --arg summary "$SUMMARY" --arg ctx "$RESULT" '{
       hookSpecificOutput: {
         hookEventName: "PostToolUse",
         updatedMCPToolOutput: $summary,
