@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import functools
 import logging
-import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
@@ -86,8 +86,11 @@ def _db() -> LanceDB:
     return get_db(_settings().lancedb_path)
 
 
+_executor = ThreadPoolExecutor(max_workers=4)
+
+
 def _background(fn: Callable[..., object], *args: object, **kwargs: object) -> None:
-    """Run *fn* in a daemon thread.  Exceptions are logged, not raised."""
+    """Run *fn* in the bounded thread pool.  Exceptions are logged, not raised."""
 
     def _target() -> None:
         try:
@@ -95,7 +98,7 @@ def _background(fn: Callable[..., object], *args: object, **kwargs: object) -> N
         except Exception:
             logger.exception("Background task %s failed", fn.__name__)
 
-    threading.Thread(target=_target, daemon=True).start()
+    _executor.submit(_target)
 
 
 @mcp.tool()

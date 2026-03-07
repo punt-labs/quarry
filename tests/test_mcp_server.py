@@ -46,8 +46,7 @@ class TestRemember:
             result = mcp_remember("# Hello\nWorld", "notes.md")
             assert "notes.md" in result
             assert "background" in result
-            started.wait(timeout=2)
-            assert started.is_set()
+            assert started.wait(timeout=2), "background thread did not run"
 
     def test_passes_format_hint(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
@@ -61,7 +60,7 @@ class TestRemember:
             ) as mock_ingest,
         ):
             mcp_remember("text", "a.txt", format_hint="markdown")
-            done.wait(timeout=2)
+            assert done.wait(timeout=2), "background thread did not run"
             call_kwargs = mock_ingest.call_args[1]
             assert call_kwargs["format_hint"] == "markdown"
 
@@ -77,7 +76,7 @@ class TestRemember:
             ) as mock_ingest,
         ):
             mcp_remember("text", "a.txt", collection="ml-101")
-            done.wait(timeout=2)
+            assert done.wait(timeout=2), "background thread did not run"
             call_kwargs = mock_ingest.call_args[1]
             assert call_kwargs["collection"] == "ml-101"
 
@@ -97,8 +96,7 @@ class TestDeleteDocument:
             result = delete("report.pdf")
             assert "report.pdf" in result
             assert "background" in result
-            done.wait(timeout=2)
-            assert done.is_set()
+            assert done.wait(timeout=2), "background thread did not run"
 
     def test_invalid_kind(self) -> None:
         result = delete("x", kind="bogus")
@@ -116,7 +114,7 @@ class TestDeleteDocument:
             ) as mock_del,
         ):
             result = delete("report.pdf", collection="math")
-            done.wait(timeout=2)
+            assert done.wait(timeout=2), "background thread did not run"
             mock_del.assert_called_once()
             assert mock_del.call_args[1]["collection"] == "math"
             assert "report.pdf" in result
@@ -511,7 +509,7 @@ class TestDeleteCollection:
             ) as mock_del,
         ):
             result = delete("math", kind="collection")
-            done.wait(timeout=2)
+            assert done.wait(timeout=2), "background thread did not run"
             mock_del.assert_called_once()
             assert "math" in result
             assert "background" in result
@@ -551,13 +549,16 @@ class TestHandleErrors:
                 "quarry.mcp_server.pipeline_ingest_content",
                 side_effect=_failing_ingest,
             ),
+            patch("quarry.mcp_server.logger") as mock_logger,
         ):
             result = mcp_remember("text", "doc.txt")
-            done.wait(timeout=2)
+            assert done.wait(timeout=2), "background thread did not run"
 
         # Tool itself returned successfully (optimistic response)
         assert "doc.txt" in result
         assert "background" in result
+        # Background exception was logged via logger.exception
+        mock_logger.exception.assert_called_once()
 
 
 class TestRegisterDirectory:
