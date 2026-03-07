@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -31,114 +32,92 @@ def _settings(tmp_path: Path) -> MagicMock:
 
 
 class TestRemember:
-    def test_calls_pipeline_and_returns_summary(self, tmp_path: Path) -> None:
+    def test_returns_immediately_with_background(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
-        mock_result = {
-            "document_name": "notes.md",
-            "chunks": 3,
-            "collection": "default",
-            "sections": 2,
-        }
+        started = threading.Event()
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
             patch(
                 "quarry.mcp_server.pipeline_ingest_content",
-                return_value=mock_result,
-            ) as mock_ingest,
+                side_effect=lambda *a, **kw: started.set(),
+            ),
         ):
             result = mcp_remember("# Hello\nWorld", "notes.md")
-
-        mock_ingest.assert_called_once()
-        call_args = mock_ingest.call_args
-        assert call_args[0][0] == "# Hello\nWorld"
-        assert call_args[0][1] == "notes.md"
-        assert "notes.md" in result
-        assert "3 chunks" in result
+            assert "notes.md" in result
+            assert "background" in result
+            assert started.wait(timeout=2), "background thread did not run"
 
     def test_passes_format_hint(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
-        mock_result = {
-            "document_name": "a.txt",
-            "chunks": 1,
-            "collection": "default",
-            "sections": 1,
-        }
+        done = threading.Event()
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
             patch(
                 "quarry.mcp_server.pipeline_ingest_content",
-                return_value=mock_result,
+                side_effect=lambda *a, **kw: done.set(),
             ) as mock_ingest,
         ):
             mcp_remember("text", "a.txt", format_hint="markdown")
-
-        call_kwargs = mock_ingest.call_args[1]
-        assert call_kwargs["format_hint"] == "markdown"
+            assert done.wait(timeout=2), "background thread did not run"
+            call_kwargs = mock_ingest.call_args[1]
+            assert call_kwargs["format_hint"] == "markdown"
 
     def test_passes_collection(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
-        mock_result = {
-            "document_name": "a.txt",
-            "chunks": 1,
-            "collection": "ml-101",
-            "sections": 1,
-        }
+        done = threading.Event()
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
             patch(
                 "quarry.mcp_server.pipeline_ingest_content",
-                return_value=mock_result,
+                side_effect=lambda *a, **kw: done.set(),
             ) as mock_ingest,
         ):
             mcp_remember("text", "a.txt", collection="ml-101")
-
-        call_kwargs = mock_ingest.call_args[1]
-        assert call_kwargs["collection"] == "ml-101"
+            assert done.wait(timeout=2), "background thread did not run"
+            call_kwargs = mock_ingest.call_args[1]
+            assert call_kwargs["collection"] == "ml-101"
 
 
 class TestDeleteDocument:
-    def test_deletes_and_returns_summary(self, tmp_path: Path) -> None:
+    def test_returns_immediately_with_background(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
-        with (
-            patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.mcp_server._db") as mock_db,
-            patch("quarry.mcp_server.db_delete_document", return_value=5) as mock_del,
-        ):
-            result = delete("report.pdf")
-
-        mock_del.assert_called_once_with(
-            mock_db.return_value, "report.pdf", collection=None
-        )
-        assert "report.pdf" in result
-        assert "5 chunks" in result
-
-    def test_returns_zero_for_missing(self, tmp_path: Path) -> None:
-        settings = _settings(tmp_path)
+        done = threading.Event()
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
-            patch("quarry.mcp_server.db_delete_document", return_value=0),
+            patch(
+                "quarry.mcp_server.db_delete_document",
+                side_effect=lambda *a, **kw: done.set(),
+            ),
         ):
-            result = delete("nonexistent.pdf")
+            result = delete("report.pdf")
+            assert "report.pdf" in result
+            assert "background" in result
+            assert done.wait(timeout=2), "background thread did not run"
 
-        assert "0 chunks" in result
+    def test_invalid_kind(self) -> None:
+        result = delete("x", kind="bogus")
+        assert "Invalid kind" in result
 
     def test_scoped_to_collection(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
+        done = threading.Event()
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.mcp_server._db") as mock_db,
-            patch("quarry.mcp_server.db_delete_document", return_value=2) as mock_del,
+            patch("quarry.mcp_server._db"),
+            patch(
+                "quarry.mcp_server.db_delete_document",
+                side_effect=lambda *a, **kw: done.set(),
+            ) as mock_del,
         ):
             result = delete("report.pdf", collection="math")
-
-        mock_del.assert_called_once_with(
-            mock_db.return_value, "report.pdf", collection="math"
-        )
-        assert "report.pdf" in result
+            assert done.wait(timeout=2), "background thread did not run"
+            mock_del.assert_called_once()
+            assert mock_del.call_args[1]["collection"] == "math"
+            assert "report.pdf" in result
 
 
 class TestStatus:
@@ -518,129 +497,143 @@ class TestListCollections:
 
 
 class TestDeleteCollection:
-    def test_deletes_collection(self, tmp_path: Path) -> None:
+    def test_deletes_collection_in_background(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
+        done = threading.Event()
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.mcp_server._db") as mock_db,
+            patch("quarry.mcp_server._db"),
             patch(
-                "quarry.mcp_server.db_delete_collection", return_value=50
+                "quarry.mcp_server.db_delete_collection",
+                side_effect=lambda *a, **kw: done.set(),
             ) as mock_del,
         ):
             result = delete("math", kind="collection")
-
-        mock_del.assert_called_once_with(mock_db.return_value, "math")
-        assert "math" in result
-        assert "50 chunks" in result
+            assert done.wait(timeout=2), "background thread did not run"
+            mock_del.assert_called_once()
+            assert "math" in result
+            assert "background" in result
 
 
 class TestHandleErrors:
-    def test_returns_error_string_on_exception(self, tmp_path: Path) -> None:
+    def test_returns_error_on_background_spawn_failure(self, tmp_path: Path) -> None:
+        """_handle_errors catches exceptions before background spawn."""
         settings = _settings(tmp_path)
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
             patch(
-                "quarry.mcp_server.ingest_document",
-                side_effect=FileNotFoundError("no such file: bad.pdf"),
+                "quarry.mcp_server._background",
+                side_effect=RuntimeError("thread pool exhausted"),
             ),
         ):
             result = ingest("/tmp/bad.pdf")
 
         assert result.startswith("Error:")
-        assert "FileNotFoundError" in result
-        assert "bad.pdf" in result
+        assert "RuntimeError" in result
 
-    def test_returns_error_on_value_error(self, tmp_path: Path) -> None:
+    def test_background_thread_logs_exception(self, tmp_path: Path) -> None:
+        """Exceptions inside the background thread are logged, not raised."""
         settings = _settings(tmp_path)
+        done = threading.Event()
+
+        def _failing_ingest(*args: object, **kwargs: object) -> None:
+            done.set()
+            msg = "bad format hint"
+            raise ValueError(msg)
+
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
             patch(
                 "quarry.mcp_server.pipeline_ingest_content",
-                side_effect=ValueError("bad format hint"),
+                side_effect=_failing_ingest,
             ),
+            patch("quarry.mcp_server.logger") as mock_logger,
         ):
             result = mcp_remember("text", "doc.txt")
+            assert done.wait(timeout=2), "background thread did not run"
 
-        assert "ValueError" in result
-        assert "bad format hint" in result
+        # Tool itself returned successfully (optimistic response)
+        assert "doc.txt" in result
+        assert "background" in result
+        # Background exception was logged via logger.exception
+        mock_logger.exception.assert_called_once()
 
 
 class TestRegisterDirectory:
-    def test_registers_and_returns_summary(self, tmp_path: Path) -> None:
+    def test_returns_summary_immediately(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
+        done = threading.Event()
         d = tmp_path / "course"
         d.mkdir()
-        with patch("quarry.mcp_server._settings", return_value=settings):
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch(
+                "quarry.mcp_server._background",
+                side_effect=lambda *a, **kw: done.set(),
+            ),
+        ):
             result = register_directory(str(d), "my-course")
         assert "my-course" in result
+        assert "background" in result
         assert str(d.resolve()) in result
+        assert done.is_set()
 
     def test_default_collection_from_dir_name(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         d = tmp_path / "ml-101"
         d.mkdir()
-        with patch("quarry.mcp_server._settings", return_value=settings):
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._background"),
+        ):
             result = register_directory(str(d))
         assert "ml-101" in result
 
 
 class TestDeregisterDirectory:
-    def test_deregisters_and_cleans_data(self, tmp_path: Path) -> None:
+    def test_returns_immediately_with_background(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.mcp_server.open_registry") as mock_open,
-            patch(
-                "quarry.mcp_server.registry_deregister",
-                return_value=["a.pdf", "b.pdf"],
-            ),
             patch("quarry.mcp_server._db"),
-            patch("quarry.mcp_server.db_delete_document") as mock_del,
+            patch("quarry.mcp_server._background") as mock_bg,
         ):
-            mock_open.return_value = MagicMock()
             result = deregister_directory("math")
         assert "math" in result
-        assert "2 docs removed" in result
-        assert mock_del.call_count == 2
+        assert "background" in result
+        mock_bg.assert_called_once()
 
 
 class TestSyncAllRegistrations:
-    def test_returns_sync_summary(self, tmp_path: Path) -> None:
-        from quarry.sync import SyncResult
-
+    def test_returns_immediately_with_background(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
-        mock_results = {
-            "math": SyncResult(
-                collection="math",
-                ingested=2,
-                deleted=0,
-                skipped=3,
-                failed=0,
-            ),
-        }
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
-            patch(
-                "quarry.mcp_server.engine_sync_all",
-                return_value=mock_results,
-            ),
+            patch("quarry.mcp_server._background") as mock_bg,
         ):
             result = sync_all_registrations()
-        assert "Synced 1 collection" in result
-        assert "2 ingested" in result
-        assert "3 skipped" in result
+        assert "Syncing" in result
+        assert "background" in result
+        mock_bg.assert_called_once()
 
 
 class TestListRegistrations:
     def test_returns_registrations(self, tmp_path: Path) -> None:
+        from quarry.sync_registry import open_registry, register_directory as reg_dir
+
         settings = _settings(tmp_path)
         d = tmp_path / "course"
         d.mkdir()
+        # Register directly (not via fire-and-forget MCP tool)
+        conn = open_registry(settings.registry_path)
+        try:
+            reg_dir(conn, d, "course")
+        finally:
+            conn.close()
         with patch("quarry.mcp_server._settings", return_value=settings):
-            register_directory(str(d), "course")
             result = mcp_list("registrations")
         assert "course" in result
         assert "COLLECTION" in result
