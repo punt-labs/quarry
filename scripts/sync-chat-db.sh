@@ -16,11 +16,13 @@
 #   - For full coverage: cd public-website && npx astro build (renders HTML pages)
 
 set -euo pipefail
+shopt -s nullglob
 
 WORKSPACE="${QUARRY_WORKSPACE:-$HOME/Coding/punt-labs}"
 APP="quarry"
 TARBALL="/tmp/chat-lancedb.tar.gz"
 REMOTE_PATH="/data/default"
+SCRATCH="${WORKSPACE}/.tmp"
 
 echo "=== Rebuilding chat database ==="
 quarry use chat
@@ -81,28 +83,30 @@ done
 
 echo ""
 echo "--- Research files ---"
-# Use python3 to handle filenames with spaces safely
+# Use python3 to handle filenames with spaces safely.
+# Covers both top-level research/ and per-project */research/ directories.
 python3 -c "
 import subprocess, pathlib
-for ext in ('*.md', '*.pdf', '*.docx'):
-    for f in sorted(pathlib.Path('.').glob(f'*/research/{ext}')):
-        proj = f.parts[0]
-        r = subprocess.run(
-            ['quarry', 'ingest', str(f), '--collection', proj, '--overwrite'],
-            capture_output=True, text=True,
-        )
-        for line in r.stdout.splitlines():
-            if line.startswith('Done:'):
-                print(line)
-                break
+for pattern in ('research/{ext}', '*/research/{ext}'):
+    for ext in ('*.md', '*.pdf', '*.docx'):
+        for f in sorted(pathlib.Path('.').glob(pattern.format(ext=ext))):
+            proj = f.parts[0] if len(f.parts) > 2 else 'workspace'
+            r = subprocess.run(
+                ['quarry', 'ingest', str(f), '--collection', proj, '--overwrite'],
+                capture_output=True, text=True,
+            )
+            for line in r.stdout.splitlines():
+                if line.startswith('Done:'):
+                    print(line)
+                    break
 "
 
 echo ""
 echo "--- Project data (JSON→markdown) ---"
-TMPDIR="${WORKSPACE}/.tmp"
-mkdir -p "$TMPDIR"
-python3 -c "
-import json, pathlib
+mkdir -p "$SCRATCH"
+SCRATCH_DIR="$SCRATCH" python3 -c "
+import json, pathlib, os
+out = pathlib.Path(os.environ['SCRATCH_DIR'])
 data = json.loads(pathlib.Path('public-website/src/data/projects.json').read_text())
 lines = ['# Punt Labs Projects\n']
 for p in data:
@@ -118,14 +122,15 @@ for p in data:
     if p.get('installCommand'):
         lines.append(f\"**Install:** \`{p['installCommand']}\`\")
     lines.append('')
-pathlib.Path('${TMPDIR}/projects-catalog.md').write_text('\n'.join(lines))
+(out / 'projects-catalog.md').write_text('\n'.join(lines))
 "
-quarry ingest "$TMPDIR/projects-catalog.md" --collection public-website --overwrite 2>&1 | grep "^Done:" || true
+quarry ingest "$SCRATCH/projects-catalog.md" --collection public-website --overwrite 2>&1 | grep "^Done:" || true
 
 echo ""
 echo "--- Technology radar (JSON→markdown) ---"
-python3 -c "
-import json, pathlib
+SCRATCH_DIR="$SCRATCH" python3 -c "
+import json, pathlib, os
+out = pathlib.Path(os.environ['SCRATCH_DIR'])
 data = json.loads(pathlib.Path('public-website/src/data/radar.json').read_text())
 quadrant_names = {q['id']: q['name'] for q in data.get('quadrants', [])}
 ring_names = {r['id']: r['name'] for r in data.get('rings', [])}
@@ -140,9 +145,9 @@ for entry in data.get('entries', []):
     if desc:
         lines.append(desc)
     lines.append('')
-pathlib.Path('${TMPDIR}/technology-radar.md').write_text('\n'.join(lines))
+(out / 'technology-radar.md').write_text('\n'.join(lines))
 "
-quarry ingest "$TMPDIR/technology-radar.md" --collection public-website --overwrite 2>&1 | grep "^Done:" || true
+quarry ingest "$SCRATCH/technology-radar.md" --collection public-website --overwrite 2>&1 | grep "^Done:" || true
 
 echo ""
 echo "--- Website pages (rendered HTML) ---"
@@ -213,4 +218,4 @@ fi
 echo ""
 echo "=== Done ==="
 rm -f "$TARBALL"
-rm -f "$WORKSPACE/.tmp/projects-catalog.md" "$WORKSPACE/.tmp/technology-radar.md"
+rm -f "$SCRATCH/projects-catalog.md" "$SCRATCH/technology-radar.md"
