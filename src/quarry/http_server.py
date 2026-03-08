@@ -40,19 +40,22 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_CORS_HEADERS = {
-    "Access-Control-Allow-Origin": "http://localhost",
-    "Access-Control-Allow-Methods": "GET, OPTIONS",
-    "Access-Control-Allow-Headers": "Authorization, Content-Type",
-}
+_DEFAULT_CORS_ORIGINS = frozenset({"http://localhost"})
 
 
 class _QuarryContext:
     """Shared state for the HTTP server: settings, database, embeddings."""
 
-    def __init__(self, settings: Settings, *, api_key: str | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        api_key: str | None = None,
+        cors_origins: frozenset[str] | None = None,
+    ) -> None:
         self._settings = settings
         self.api_key = api_key
+        self.cors_origins = cors_origins or _DEFAULT_CORS_ORIGINS
 
     @cached_property
     def db(self) -> LanceDB:
@@ -118,9 +121,24 @@ class QuarryHTTPHandler(BaseHTTPRequestHandler):
 
         return True
 
+    def _cors_headers(self) -> dict[str, str]:
+        """Build CORS headers, reflecting the Origin if it's in the allow list.
+
+        Always emits ``Vary: Origin`` so caches key on origin regardless of
+        match — prevents a non-CORS cached response from being served to a
+        valid CORS request.
+        """
+        origin = self.headers.get("Origin", "")
+        headers: dict[str, str] = {"Vary": "Origin"}
+        if origin in self.server.ctx.cors_origins:
+            headers["Access-Control-Allow-Origin"] = origin
+            headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+            headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
+        return headers
+
     def do_OPTIONS(self) -> None:
         self.send_response(204)
-        for key, value in _CORS_HEADERS.items():
+        for key, value in self._cors_headers().items():
             self.send_header(key, value)
         self.end_headers()
 
@@ -160,7 +178,7 @@ class QuarryHTTPHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        for key, value in _CORS_HEADERS.items():
+        for key, value in self._cors_headers().items():
             self.send_header(key, value)
         self.end_headers()
         self.wfile.write(body)
@@ -291,7 +309,13 @@ def _remove_port_file(port_path: Path) -> None:
         logger.warning("Could not remove port file: %s", port_path)
 
 
-def serve(settings: Settings, port: int = 0, *, api_key: str | None = None) -> None:
+def serve(
+    settings: Settings,
+    port: int = 0,
+    *,
+    api_key: str | None = None,
+    cors_origins: frozenset[str] | None = None,
+) -> None:
     """Start the HTTP server. Blocks until shutdown signal.
 
     Args:
@@ -299,10 +323,11 @@ def serve(settings: Settings, port: int = 0, *, api_key: str | None = None) -> N
         port: Port to bind (0 = OS-assigned).
         api_key: Optional Bearer token. When set, all GET endpoints except
             /health require ``Authorization: Bearer <key>``.
+        cors_origins: Allowed CORS origins. Defaults to ``http://localhost``.
     """
     port_path = settings.lancedb_path.parent / "serve.port"
 
-    ctx = _QuarryContext(settings, api_key=api_key)
+    ctx = _QuarryContext(settings, api_key=api_key, cors_origins=cors_origins)
     # Eagerly load embedding model so cold-start happens before serving
     logger.info("Loading embedding model...")
     _ = ctx.embedder

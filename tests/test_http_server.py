@@ -100,7 +100,9 @@ class TestHealth:
         assert data["uptime_seconds"] >= 0
 
     def test_cors_headers(self, server_url: str):
-        with urlopen(f"{server_url}/health", timeout=5) as resp:  # noqa: S310
+        req = Request(f"{server_url}/health")  # noqa: S310
+        req.add_header("Origin", "http://localhost")
+        with urlopen(req, timeout=5) as resp:  # noqa: S310
             assert resp.headers["Access-Control-Allow-Origin"] == "http://localhost"
 
 
@@ -288,11 +290,91 @@ class TestOptionsPreflightCors:
         resp.close()
 
     def test_cors_allows_authorization_header(self, server_url: str):
-        resp = _get_response(f"{server_url}/health", method="OPTIONS")
+        resp = _get_with_origin(
+            f"{server_url}/health", "http://localhost", method="OPTIONS"
+        )
         allow_headers = resp.headers.get("Access-Control-Allow-Headers", "")
         resp.close()
         tokens = [h.strip().lower() for h in allow_headers.split(",")]
         assert "authorization" in tokens
+
+
+def _get_with_origin(url: str, origin: str, method: str = "GET") -> HTTPResponse:
+    """Send a request with an Origin header, return raw response."""
+    req = Request(url, method=method)  # noqa: S310
+    req.add_header("Origin", origin)
+    resp: HTTPResponse = urlopen(req, timeout=5)  # noqa: S310  # type: ignore[assignment]
+    return resp
+
+
+class TestCorsOrigins:
+    """Test configurable CORS origin reflection."""
+
+    @pytest.fixture()
+    def cors_server_url(self, tmp_path: Path):
+        settings = _mock_settings(tmp_path)
+        ctx = _QuarryContext(
+            settings,
+            cors_origins=frozenset(
+                {
+                    "https://punt-labs.com",
+                    "http://localhost:4321",
+                }
+            ),
+        )
+        ctx.__dict__["db"] = _SHARED_DB
+        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+
+        server = QuarryHTTPServer(("127.0.0.1", 0), ctx)
+        port = server.server_address[1]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        yield f"http://127.0.0.1:{port}"
+        server.shutdown()
+        server.server_close()
+
+    def test_matching_origin_reflected(self, cors_server_url: str):
+        resp = _get_with_origin(f"{cors_server_url}/health", "https://punt-labs.com")
+        assert resp.headers["Access-Control-Allow-Origin"] == "https://punt-labs.com"
+        assert resp.headers["Vary"] == "Origin"
+        resp.close()
+
+    def test_second_origin_reflected(self, cors_server_url: str):
+        resp = _get_with_origin(f"{cors_server_url}/health", "http://localhost:4321")
+        assert resp.headers["Access-Control-Allow-Origin"] == "http://localhost:4321"
+        resp.close()
+
+    def test_non_matching_origin_no_cors_headers(self, cors_server_url: str):
+        resp = _get_with_origin(f"{cors_server_url}/health", "https://evil.com")
+        assert resp.headers.get("Access-Control-Allow-Origin") is None
+        assert resp.headers.get("Access-Control-Allow-Methods") is None
+        assert resp.headers.get("Access-Control-Allow-Headers") is None
+        assert resp.headers["Vary"] == "Origin"
+        resp.close()
+
+    def test_no_origin_header_no_cors_headers(self, cors_server_url: str):
+        resp = _get_response(f"{cors_server_url}/health")
+        assert resp.headers.get("Access-Control-Allow-Origin") is None
+        assert resp.headers.get("Access-Control-Allow-Methods") is None
+        assert resp.headers.get("Access-Control-Allow-Headers") is None
+        assert resp.headers["Vary"] == "Origin"
+        resp.close()
+
+    def test_options_reflects_matching_origin(self, cors_server_url: str):
+        resp = _get_with_origin(
+            f"{cors_server_url}/health",
+            "https://punt-labs.com",
+            method="OPTIONS",
+        )
+        assert resp.status == 204
+        assert resp.headers["Access-Control-Allow-Origin"] == "https://punt-labs.com"
+        resp.close()
+
+    def test_default_server_allows_localhost(self, server_url: str):
+        """Default fixture has no cors_origins — falls back to http://localhost."""
+        resp = _get_with_origin(f"{server_url}/health", "http://localhost")
+        assert resp.headers["Access-Control-Allow-Origin"] == "http://localhost"
+        resp.close()
 
 
 # --- API key auth tests ---

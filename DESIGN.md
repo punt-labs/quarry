@@ -146,6 +146,10 @@ snowflake-arctic-embed-m-v1.5: 768-dimensional, 512 token context. Auto-download
 - **Empty key = no auth** — `QUARRY_API_KEY=""` is treated as unset, preventing accidental trivial bypass.
 - **No auth when omitted** — local use (menu bar, CLI) requires no key. Auth is opt-in for production deployment.
 
+### Configurable CORS Origins
+
+`--cors-origin` (repeatable) controls `Access-Control-Allow-Origin`. The server reflects the request's `Origin` header only when it matches the allow list, and adds `Vary: Origin` to signal cacheability varies by origin. When no `Origin` header is present (e.g. non-browser clients), no CORS headers are emitted. Defaults to `http://localhost` for backward compatibility with quarry-menubar.
+
 ### Log Redaction (CWE-532)
 
 Access logs redact query strings from request lines. The `_redact_query_string` method parses HTTP request lines (`GET /path?q=secret HTTP/1.1`) to strip the query while preserving the method, path, and HTTP version. The `_handle_search` handler logs only result count, never the raw query. Error handlers use `urlparse().path` to strip queries.

@@ -735,12 +735,20 @@ def serve(
             help="Require Bearer token auth on all endpoints except /health.",
         ),
     ] = None,
+    cors_origin: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--cors-origin",
+            help="Allowed CORS origin (repeatable). Default: http://localhost.",
+        ),
+    ] = None,
 ) -> None:
     """Start the HTTP API server."""
     from quarry.http_server import serve as http_serve  # noqa: PLC0415
 
     settings = _resolved_settings()
-    http_serve(settings, port=port, api_key=api_key)
+    origins = frozenset(cors_origin) if cors_origin else None
+    http_serve(settings, port=port, api_key=api_key, cors_origins=origins)
 
 
 @app.command()
