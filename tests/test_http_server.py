@@ -262,17 +262,21 @@ class TestLogRedaction:
             == "GET /health HTTP/1.1"
         )
 
-    def test_search_does_not_log_query_text(self, server_url: str, caplog: pytest.LogCaptureFixture):
+    def test_search_does_not_log_query_text(
+        self,
+        server_url: str,
+        caplog: pytest.LogCaptureFixture,
+    ):
         """Ensure the raw search query never appears in INFO logs."""
-        secret = "my-super-secret-search-term"
+        needle = "my-super-needle-search-term"
         with patch("quarry.http_server.search", return_value=[]):
             import logging
 
             with caplog.at_level(logging.INFO, logger="quarry.http_server"):
-                _get(f"{server_url}/search?q={secret}")
+                _get(f"{server_url}/search?q={needle}")
 
         for record in caplog.records:
-            assert secret not in record.getMessage(), (
+            assert needle not in record.getMessage(), (
                 f"Raw query leaked into log: {record.getMessage()}"
             )
 
