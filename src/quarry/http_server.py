@@ -1,8 +1,9 @@
-"""Lightweight HTTP server exposing Quarry search over localhost.
+"""Threaded HTTP server exposing Quarry search over localhost.
 
-Designed for the quarry-menubar macOS companion app. Uses the standard
-library ``http.server`` with zero additional dependencies — the single
-client and fast operations (embed + search < 100ms) don't require async.
+Designed for the quarry-menubar macOS companion app and production
+deployment. Uses the standard library ``http.server`` with
+``ThreadingHTTPServer`` for concurrent request handling — each request
+gets its own thread, so a slow embedding doesn't block other clients.
 
 Lifecycle:
     1. ``quarry serve`` loads settings + embedding model (cold start)
@@ -20,7 +21,7 @@ import signal
 import threading
 import time
 from functools import cached_property
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlparse
@@ -286,8 +287,14 @@ class QuarryHTTPHandler(BaseHTTPRequestHandler):
         )
 
 
-class QuarryHTTPServer(HTTPServer):
-    """HTTPServer subclass carrying shared Quarry context."""
+class QuarryHTTPServer(ThreadingHTTPServer):
+    """Threaded HTTPServer subclass carrying shared Quarry context.
+
+    Each request is handled in its own daemon thread, so a slow embedding
+    or search on one request doesn't block others.
+    """
+
+    daemon_threads = True
 
     def __init__(self, address: tuple[str, int], ctx: _QuarryContext) -> None:
         self.ctx = ctx
@@ -328,9 +335,11 @@ def serve(
     port_path = settings.lancedb_path.parent / "serve.port"
 
     ctx = _QuarryContext(settings, api_key=api_key, cors_origins=cors_origins)
-    # Eagerly load embedding model so cold-start happens before serving
+    # Eagerly initialize cached properties before serving — cached_property
+    # is not thread-safe, so all shared state must be resolved single-threaded.
     logger.info("Loading embedding model...")
     _ = ctx.embedder
+    _ = ctx.db
     logger.info("Embedding model ready")
 
     server = QuarryHTTPServer(("127.0.0.1", port), ctx)
