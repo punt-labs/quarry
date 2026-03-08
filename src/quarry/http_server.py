@@ -100,7 +100,7 @@ class QuarryHTTPHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def log_message(self, format: str, *args: object) -> None:  # noqa: A002
-        logger.debug(format, *args)
+        logger.info(format, *args)
 
     def _ctx(self) -> _QuarryContext:
         return self.server.ctx
@@ -168,6 +168,7 @@ class QuarryHTTPHandler(BaseHTTPRequestHandler):
             for r in results
         ]
 
+        logger.info("Search query=%r results=%d", query, len(formatted))
         self._send_json(
             {
                 "query": query,
