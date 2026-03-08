@@ -196,6 +196,8 @@ quarry list databases                          # list all databases
 quarry doctor                                  # health check
 quarry serve                                   # start HTTP API server
 quarry serve --api-key $QUARRY_API_KEY         # with Bearer token auth
+quarry serve --cors-origin https://punt-labs.com  # allow specific origin
+quarry serve --cors-origin https://a.com --cors-origin https://b.com  # multiple
 ```
 
 ### Named Databases
