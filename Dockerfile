@@ -7,7 +7,7 @@ FROM python:3.13-slim AS deps
 
 WORKDIR /app
 RUN pip install --no-cache-dir uv==0.7.13
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev --no-install-project
 COPY src/ src/
 RUN uv sync --frozen --no-dev
