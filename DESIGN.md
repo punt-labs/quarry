@@ -146,6 +146,10 @@ snowflake-arctic-embed-m-v1.5: 768-dimensional, 512 token context. Auto-download
 - **Empty key = no auth** — `QUARRY_API_KEY=""` is treated as unset, preventing accidental trivial bypass.
 - **No auth when omitted** — local use (menu bar, CLI) requires no key. Auth is opt-in for production deployment.
 
+### Threaded Request Handling
+
+`QuarryHTTPServer` extends `ThreadingHTTPServer` — each request gets its own daemon thread. This prevents a slow embedding (the dominant latency) from blocking other clients. Thread safety relies on immutable shared state: `_QuarryContext` fields are set once at startup, LanceDB handles concurrent reads internally, and ONNX Runtime sessions are thread-safe for inference. Alternative considered: uvicorn/starlette (async) — rejected as unnecessary complexity for 5 synchronous endpoints with no I/O multiplexing benefit.
+
 ### Configurable CORS Origins
 
 `--cors-origin` (repeatable) controls `Access-Control-Allow-Origin`. The server reflects the request's `Origin` header only when it matches the allow list, and adds `Vary: Origin` to signal cacheability varies by origin. When no `Origin` header is present (e.g. non-browser clients), no CORS headers are emitted. Defaults to `http://localhost` for backward compatibility with quarry-menubar.
