@@ -106,6 +106,39 @@ class TestHealth:
             assert resp.headers["Access-Control-Allow-Origin"] == "http://localhost"
 
 
+class TestConcurrency:
+    """Verify the server handles concurrent requests without serializing."""
+
+    def test_concurrent_requests_overlap(self, server_url: str):
+        """Two slow requests should complete in less than 2x a single request."""
+        import concurrent.futures
+        import time
+
+        delay = 0.3  # seconds each handler sleeps
+
+        def slow_search(*_args: object, **_kwargs: object) -> list[object]:
+            time.sleep(delay)
+            return []
+
+        with (
+            patch("quarry.http_server.search", side_effect=slow_search),
+            concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool,
+        ):
+            start = time.monotonic()
+            futures = [
+                pool.submit(_get, f"{server_url}/search?q=a"),
+                pool.submit(_get, f"{server_url}/search?q=b"),
+            ]
+            for f in concurrent.futures.as_completed(futures):
+                f.result()
+            elapsed = time.monotonic() - start
+
+        # If serialized, elapsed >= 2 * delay. If concurrent, elapsed ~= delay.
+        assert elapsed < 2 * delay, (
+            f"Requests serialized: {elapsed:.2f}s >= {2 * delay:.2f}s"
+        )
+
+
 class TestSearch:
     def test_missing_query_returns_400(self, server_url: str):
         status = _get_status(f"{server_url}/search")
