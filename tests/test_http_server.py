@@ -243,6 +243,44 @@ class TestPortFile:
         assert port_path.exists()
 
 
+class TestLogRedaction:
+    """Verify query strings are stripped from access logs (CWE-532)."""
+
+    def test_redact_strips_query_preserves_http_version(self):
+        from quarry.http_server import QuarryHTTPHandler
+
+        assert (
+            QuarryHTTPHandler._redact_query_string("GET /search?q=secret HTTP/1.1")
+            == "GET /search HTTP/1.1"
+        )
+
+    def test_redact_preserves_path_without_query(self):
+        from quarry.http_server import QuarryHTTPHandler
+
+        assert (
+            QuarryHTTPHandler._redact_query_string("GET /health HTTP/1.1")
+            == "GET /health HTTP/1.1"
+        )
+
+    def test_search_does_not_log_query_text(
+        self,
+        server_url: str,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        """Ensure the raw search query never appears in INFO logs."""
+        needle = "my-super-needle-search-term"
+        with patch("quarry.http_server.search", return_value=[]):
+            import logging
+
+            with caplog.at_level(logging.INFO):
+                _get(f"{server_url}/search?q={needle}")
+
+        for record in caplog.records:
+            assert needle not in record.getMessage(), (
+                f"Raw query leaked into log: {record.getMessage()}"
+            )
+
+
 class TestOptionsPreflightCors:
     def test_options_returns_204(self, server_url: str):
         resp = _get_response(f"{server_url}/health", method="OPTIONS")
