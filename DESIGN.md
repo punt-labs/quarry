@@ -135,6 +135,21 @@ snowflake-arctic-embed-m-v1.5: 768-dimensional, 512 token context. Auto-download
 - Runs efficiently on CPU (no GPU required)
 - Permissive license (Apache 2.0)
 
+### Bearer Token Authentication
+
+`quarry serve --api-key` (or `QUARRY_API_KEY` env var) gates all HTTP endpoints except `/health` behind `Authorization: Bearer <key>`. Design choices:
+
+- **`/health` is exempt** — load balancers and uptime monitors need unauthenticated health checks.
+- **OPTIONS is exempt** — CORS preflight requests don't carry auth headers.
+- **`hmac.compare_digest`** for token comparison — prevents timing attacks.
+- **Case-insensitive scheme** — `Bearer`, `bearer`, `BEARER` all accepted per RFC 7235.
+- **Empty key = no auth** — `QUARRY_API_KEY=""` is treated as unset, preventing accidental trivial bypass.
+- **No auth when omitted** — local use (menu bar, CLI) requires no key. Auth is opt-in for production deployment.
+
+### Log Redaction (CWE-532)
+
+Access logs redact query strings from request lines. The `_redact_query_string` method parses HTTP request lines (`GET /path?q=secret HTTP/1.1`) to strip the query while preserving the method, path, and HTTP version. The `_handle_search` handler logs only result count, never the raw query. Error handlers use `urlparse().path` to strip queries.
+
 ### Single Table Design
 
 All chunks live in one LanceDB table (`chunks`). Document and collection boundaries are columns, not separate tables. This simplifies cross-document search and avoids table proliferation. Filtering by document/collection/page_type/source_format uses LanceDB's built-in filter predicates on the vector search.

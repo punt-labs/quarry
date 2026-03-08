@@ -195,6 +195,7 @@ quarry version                                 # show version
 quarry list databases                          # list all databases
 quarry doctor                                  # health check
 quarry serve                                   # start HTTP API server
+quarry serve --api-key $QUARRY_API_KEY         # with Bearer token auth
 ```
 
 ### Named Databases
@@ -230,6 +231,7 @@ Quarry works with zero configuration. These environment variables are available 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `QUARRY_API_KEY` | *(none)* | Bearer token for `quarry serve`. When set, all endpoints except `/health` require `Authorization: Bearer <key>` |
 | `OCR_BACKEND` | `local` | `local` (offline, no setup) or `textract` (AWS, better for degraded scans) |
 | `QUARRY_ROOT` | `~/.quarry/data` | Base directory for all databases (log path configured separately via `LOG_PATH`) |
 | `CHUNK_MAX_CHARS` | `1800` | Max characters per chunk (~450 tokens) |
