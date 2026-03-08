@@ -90,7 +90,7 @@ class QuarryHTTPHandler(BaseHTTPRequestHandler):
         try:
             handler(params)
         except Exception:
-            logger.exception("Error handling %s", self.path)
+            logger.exception("Error handling %s", urlparse(self.path).path)
             self._send_json({"error": "Internal server error"}, status=500)
 
     def do_OPTIONS(self) -> None:
@@ -101,8 +101,9 @@ class QuarryHTTPHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: object) -> None:  # noqa: A002
         # Redact query strings from access logs to avoid leaking user input
-        # (CWE-532). BaseHTTPRequestHandler passes the full request line
-        # (e.g. "GET /search?q=secret HTTP/1.1") as the first positional arg.
+        # (CWE-532). BaseHTTPRequestHandler may include the full request line
+        # (e.g. "GET /search?q=secret HTTP/1.1") among these positional args,
+        # so we defensively redact query strings from all string arguments.
         redacted_args = tuple(
             self._redact_query_string(a) if isinstance(a, str) else a for a in args
         )
@@ -110,10 +111,21 @@ class QuarryHTTPHandler(BaseHTTPRequestHandler):
 
     @staticmethod
     def _redact_query_string(value: str) -> str:
-        """Strip query parameters from request line strings."""
-        if "?" in value:
-            return value[: value.index("?")]
-        return value
+        """Strip query parameters from request line strings.
+
+        Preserves HTTP version in request lines (e.g. "GET /path HTTP/1.1").
+        """
+        if "?" not in value:
+            return value
+
+        # Handle HTTP request line: "<METHOD> <TARGET> HTTP/<VERSION>"
+        parts = value.split(" ")
+        if len(parts) == 3 and parts[2].startswith("HTTP/"):
+            method, target, version = parts
+            return f"{method} {target.split('?', 1)[0]} {version}"
+
+        # Fallback: drop everything after the first "?"
+        return value.split("?", 1)[0]
 
     def _ctx(self) -> _QuarryContext:
         return self.server.ctx

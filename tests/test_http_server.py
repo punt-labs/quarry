@@ -246,12 +246,12 @@ class TestPortFile:
 class TestLogRedaction:
     """Verify query strings are stripped from access logs (CWE-532)."""
 
-    def test_redact_strips_query_string(self):
+    def test_redact_strips_query_preserves_http_version(self):
         from quarry.http_server import QuarryHTTPHandler
 
         assert (
             QuarryHTTPHandler._redact_query_string("GET /search?q=secret HTTP/1.1")
-            == "GET /search"
+            == "GET /search HTTP/1.1"
         )
 
     def test_redact_preserves_path_without_query(self):
@@ -272,7 +272,7 @@ class TestLogRedaction:
         with patch("quarry.http_server.search", return_value=[]):
             import logging
 
-            with caplog.at_level(logging.INFO, logger="quarry.http_server"):
+            with caplog.at_level(logging.INFO):
                 _get(f"{server_url}/search?q={needle}")
 
         for record in caplog.records:
