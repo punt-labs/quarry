@@ -286,3 +286,110 @@ class TestOptionsPreflightCors:
         resp = _get_response(f"{server_url}/health", method="OPTIONS")
         assert resp.status == 204
         resp.close()
+
+
+# --- API key auth tests ---
+
+_TEST_API_KEY = "test-key-for-auth-testing"
+
+
+@pytest.fixture()
+def auth_server_url(tmp_path: Path):
+    """Start a test HTTP server with API key auth enabled."""
+    settings = _mock_settings(tmp_path)
+    ctx = _QuarryContext(settings, api_key=_TEST_API_KEY)
+    ctx.__dict__["db"] = _SHARED_DB
+    ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+
+    server = QuarryHTTPServer(("127.0.0.1", 0), ctx)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    yield f"http://127.0.0.1:{port}"
+
+    server.shutdown()
+    server.server_close()
+
+
+def _get_with_auth(
+    url: str, api_key: str | None = None
+) -> dict[str, Any]:
+    """GET with optional Bearer auth."""
+    req = Request(url)  # noqa: S310
+    if api_key is not None:
+        req.add_header("Authorization", f"Bearer {api_key}")
+    with urlopen(req, timeout=5) as resp:  # noqa: S310
+        body: dict[str, Any] = json.loads(resp.read())
+        return body
+
+
+def _get_status_with_auth(
+    url: str, api_key: str | None = None
+) -> int:
+    """GET with optional Bearer auth, return status code."""
+    req = Request(url)  # noqa: S310
+    if api_key is not None:
+        req.add_header("Authorization", f"Bearer {api_key}")
+    try:
+        with urlopen(req, timeout=5) as resp:  # noqa: S310
+            status: int = resp.status
+            return status
+    except HTTPError as exc:
+        return exc.code
+
+
+class TestApiKeyAuth:
+    """Test Bearer token authentication on the HTTP server."""
+
+    def test_health_exempt_without_key(self, auth_server_url: str):
+        data = _get_with_auth(f"{auth_server_url}/health")
+        assert data["status"] == "ok"
+
+    def test_search_rejected_without_key(self, auth_server_url: str):
+        status = _get_status_with_auth(f"{auth_server_url}/search?q=test")
+        assert status == 401
+
+    def test_search_rejected_with_wrong_key(self, auth_server_url: str):
+        status = _get_status_with_auth(
+            f"{auth_server_url}/search?q=test", api_key="wrong-key"
+        )
+        assert status == 401
+
+    def test_search_allowed_with_correct_key(self, auth_server_url: str):
+        with patch("quarry.http_server.search", return_value=[]):
+            data = _get_with_auth(
+                f"{auth_server_url}/search?q=test",
+                api_key=_TEST_API_KEY,
+            )
+        assert data["query"] == "test"
+
+    def test_documents_rejected_without_key(self, auth_server_url: str):
+        status = _get_status_with_auth(f"{auth_server_url}/documents")
+        assert status == 401
+
+    def test_documents_allowed_with_key(self, auth_server_url: str):
+        with patch("quarry.http_server.list_documents", return_value=[]):
+            data = _get_with_auth(
+                f"{auth_server_url}/documents",
+                api_key=_TEST_API_KEY,
+            )
+        assert data["total_documents"] == 0
+
+    def test_no_auth_required_when_key_not_configured(
+        self, server_url: str
+    ):
+        """The default server_url fixture has no api_key — all open."""
+        with patch("quarry.http_server.search", return_value=[]):
+            data = _get(f"{server_url}/search?q=test")
+        assert data["query"] == "test"
+
+    def test_malformed_auth_header_rejected(self, auth_server_url: str):
+        req = Request(f"{auth_server_url}/search?q=test")  # noqa: S310
+        req.add_header("Authorization", "Basic dXNlcjpwYXNz")
+        try:
+            urlopen(req, timeout=5)  # noqa: S310
+            status = 200
+        except HTTPError as exc:
+            status = exc.code
+        assert status == 401

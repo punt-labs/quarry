@@ -727,12 +727,20 @@ def serve(
         int,
         typer.Option("--port", "-p", help="Port to bind (0 = OS-assigned)"),
     ] = 0,
+    api_key: Annotated[
+        str | None,
+        typer.Option(
+            "--api-key",
+            envvar="QUARRY_API_KEY",
+            help="Require Bearer token auth on all endpoints except /health.",
+        ),
+    ] = None,
 ) -> None:
-    """Start the HTTP API server for quarry-menubar."""
+    """Start the HTTP API server."""
     from quarry.http_server import serve as http_serve  # noqa: PLC0415
 
     settings = _resolved_settings()
-    http_serve(settings, port=port)
+    http_serve(settings, port=port, api_key=api_key)
 
 
 @app.command()

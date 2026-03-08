@@ -13,6 +13,7 @@ Lifecycle:
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import signal
@@ -49,8 +50,9 @@ _CORS_HEADERS = {
 class _QuarryContext:
     """Shared state for the HTTP server: settings, database, embeddings."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, *, api_key: str | None = None) -> None:
         self._settings = settings
+        self.api_key = api_key
 
     @cached_property
     def db(self) -> LanceDB:
@@ -70,9 +72,14 @@ class QuarryHTTPHandler(BaseHTTPRequestHandler):
 
     server: QuarryHTTPServer  # pyright: ignore[reportIncompatibleVariableOverride]
 
+    _AUTH_EXEMPT_PATHS = frozenset({"/health"})
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         params = parse_qs(parsed.query)
+
+        if not self._check_auth(parsed.path):
+            return
 
         routes: dict[str, Any] = {
             "/health": self._handle_health,
@@ -92,6 +99,24 @@ class QuarryHTTPHandler(BaseHTTPRequestHandler):
         except Exception:
             logger.exception("Error handling %s", urlparse(self.path).path)
             self._send_json({"error": "Internal server error"}, status=500)
+
+    def _check_auth(self, path: str) -> bool:
+        """Verify Bearer token if api_key is configured. Returns True if ok."""
+        api_key = self.server.ctx.api_key
+        if api_key is None or path in self._AUTH_EXEMPT_PATHS:
+            return True
+
+        auth_header = self.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            self._send_json({"error": "Unauthorized"}, status=401)
+            return False
+
+        token = auth_header[len("Bearer "):]
+        if not hmac.compare_digest(token, api_key):
+            self._send_json({"error": "Unauthorized"}, status=401)
+            return False
+
+        return True
 
     def do_OPTIONS(self) -> None:
         self.send_response(204)
@@ -266,16 +291,18 @@ def _remove_port_file(port_path: Path) -> None:
         logger.warning("Could not remove port file: %s", port_path)
 
 
-def serve(settings: Settings, port: int = 0) -> None:
+def serve(settings: Settings, port: int = 0, *, api_key: str | None = None) -> None:
     """Start the HTTP server. Blocks until shutdown signal.
 
     Args:
         settings: Resolved application settings.
         port: Port to bind (0 = OS-assigned).
+        api_key: Optional Bearer token. When set, all endpoints except
+            /health require ``Authorization: Bearer <key>``.
     """
     port_path = settings.lancedb_path.parent / "serve.port"
 
-    ctx = _QuarryContext(settings)
+    ctx = _QuarryContext(settings, api_key=api_key)
     # Eagerly load embedding model so cold-start happens before serving
     logger.info("Loading embedding model...")
     _ = ctx.embedder
