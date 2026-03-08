@@ -148,6 +148,54 @@ git status                  # Must show "up to date with origin"
 
 Work is NOT complete until `git push` succeeds.
 
+## Fly.io Deployment
+
+Quarry serves the punt-labs.com chat widget's RAG backend at `quarry.fly.dev`.
+
+### Infrastructure
+
+- **Region:** `iad` (Washington DC)
+- **Machine:** `shared-cpu-2x`, 512 MB RAM
+- **Volume:** `quarry_data` mounted at `/data` (persistent LanceDB storage)
+- **Auth:** `QUARRY_API_KEY` set via `fly secrets` (also in macOS Keychain as `quarry-api-key`)
+- **Auto-stop:** Machine stops after idle; auto-starts on request
+
+### Database Sync (Local → Fly)
+
+The `chat` database is a curated subset of the `punt-labs` database containing READMEs, DESIGN.md, CHANGELOGs, prfaq PDFs, and blog posts from all projects. It serves the chat widget at punt-labs.com.
+
+```bash
+# 1. Rebuild the chat database locally (if content changed)
+quarry use chat
+cd ~/Coding/punt-labs
+for f in */README.md; do quarry ingest "$f" --collection "$(dirname "$f")" --overwrite; done
+for f in */DESIGN.md; do quarry ingest "$f" --collection "$(dirname "$f")" --overwrite; done
+for f in */CHANGELOG.md; do quarry ingest "$f" --collection "$(dirname "$f")" --overwrite; done
+for f in */prfaq.pdf; do quarry ingest "$f" --collection "$(dirname "$f")" --overwrite; done
+for f in public-website/src/content/blog/*.md; do quarry ingest "$f" --collection public-website --overwrite; done
+
+# 2. Create tarball (COPYFILE_DISABLE suppresses macOS ._* resource forks)
+COPYFILE_DISABLE=1 tar czf /tmp/chat-lancedb.tar.gz -C ~/.quarry/data/chat lancedb
+
+# 3. Upload to Fly
+fly sftp shell -a quarry <<< "put /tmp/chat-lancedb.tar.gz /data/chat-lancedb.tar.gz"
+
+# 4. Extract on Fly (wake machine first if auto-stopped)
+curl -s https://quarry.fly.dev/health  # wake machine
+fly ssh console -a quarry -C "rm -rf /data/default/lancedb && tar xzf /data/chat-lancedb.tar.gz -C /data/default/ && rm /data/chat-lancedb.tar.gz"
+
+# 5. Restart to pick up new data
+fly machine restart <machine-id> -a quarry
+
+# 6. Verify
+curl -s "https://quarry.fly.dev/search?q=test&limit=1" \
+  -H "Authorization: Bearer $(security find-generic-password -a quarry -s quarry-api-key -w)"
+```
+
+### API Key
+
+Stored in macOS Keychain (`security find-generic-password -a quarry -s quarry-api-key -w`) and available via `.envrc`. Also set as a Fly secret and Vercel env var.
+
 # Agent Instructions
 
 This project follows [Punt Labs standards](https://github.com/punt-labs/punt-kit).
