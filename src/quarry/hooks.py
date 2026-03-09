@@ -228,8 +228,9 @@ def _extract_web_fetch_content(payload: dict[str, object]) -> str | None:
     """Extract already-fetched content from a PostToolUse WebFetch payload.
 
     The ``tool_response`` field is a JSON-encoded string containing the
-    fetched HTML/text.  Using this avoids a second network fetch (and
-    eliminates SSRF risk since quarry never makes the request itself).
+    fetched HTML/text.  When present and valid, using this avoids a second
+    network fetch and reduces SSRF exposure by not issuing an additional
+    request from quarry itself on that code path.
     """
     import json as _json  # noqa: PLC0415
 
@@ -284,7 +285,7 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
         logger.debug("post-web-fetch: already ingested %s, skipping", url)
         return {}
 
-    # Prefer already-fetched content from tool_response (no SSRF risk).
+    # Prefer already-fetched content from tool_response (avoids extra fetch).
     # Trade-off: chunks are tagged source_format="inline" instead of ".html"
     # since we strip HTML before ingestion. The URL is preserved as
     # document_name, which is the primary identifier in search results.
