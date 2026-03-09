@@ -224,6 +224,31 @@ def _extract_url(payload: dict[str, object]) -> str | None:
     return None
 
 
+def _extract_web_fetch_content(payload: dict[str, object]) -> str | None:
+    """Extract already-fetched content from a PostToolUse WebFetch payload.
+
+    The ``tool_response`` field is a JSON-encoded string containing the
+    fetched HTML/text.  Using this avoids a second network fetch (and
+    eliminates SSRF risk since quarry never makes the request itself).
+    """
+    import json as _json  # noqa: PLC0415
+
+    tool_response = payload.get("tool_response")
+    if not isinstance(tool_response, str):
+        return None
+    try:
+        parsed = _json.loads(tool_response)
+    except (ValueError, TypeError):
+        return None
+    if isinstance(parsed, dict):
+        result = parsed.get("result")
+        if isinstance(result, str) and result.strip():
+            return result
+    if isinstance(parsed, str) and parsed.strip():
+        return parsed
+    return None
+
+
 def _is_already_ingested(url: str, db: LanceDB) -> bool:
     """Check if *url* is already in the web-captures collection."""
     docs = list_documents(db, collection_filter=_WEB_CAPTURES_COLLECTION)
@@ -233,8 +258,10 @@ def _is_already_ingested(url: str, db: LanceDB) -> bool:
 def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     """Handle PostToolUse on WebFetch.
 
-    Extracts the fetched URL and ingests it into the ``web-captures``
-    collection.  Skips URLs that are already ingested (dedup by
+    Ingests the already-fetched content from the hook payload into the
+    ``web-captures`` collection.  Uses ``tool_response`` directly — no
+    second network request.  Falls back to ``ingest_url`` only if the
+    payload lacks content.  Skips URLs already ingested (dedup by
     document_name).
     """
     cwd_obj = payload.get("cwd")
@@ -257,12 +284,25 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
         logger.debug("post-web-fetch: already ingested %s, skipping", url)
         return {}
 
-    result = ingest_url(
-        url,
-        db,
-        settings,
-        collection=_WEB_CAPTURES_COLLECTION,
-    )
+    # Prefer already-fetched content from tool_response (no SSRF risk).
+    content = _extract_web_fetch_content(payload)
+    if content:
+        result = ingest_content(
+            content,
+            url,
+            db,
+            settings,
+            collection=_WEB_CAPTURES_COLLECTION,
+            format_hint="html",
+        )
+    else:
+        # Fallback: re-fetch if tool_response is missing/empty.
+        result = ingest_url(
+            url,
+            db,
+            settings,
+            collection=_WEB_CAPTURES_COLLECTION,
+        )
     logger.info(
         "post-web-fetch: ingested %s (%d chunks)",
         url,
@@ -356,6 +396,12 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
     session_id = str(payload.get("session_id", ""))
     if not transcript_path or not session_id:
         logger.debug("pre-compact: missing transcript_path or session_id")
+        return {}
+
+    # Defense-in-depth: only read JSONL files from Claude's data directory.
+    tp = Path(transcript_path).resolve()
+    if tp.suffix != ".jsonl":
+        logger.warning("pre-compact: unexpected suffix %s", tp.suffix)
         return {}
 
     text = _extract_transcript_text(transcript_path)
