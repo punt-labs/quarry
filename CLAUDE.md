@@ -131,7 +131,7 @@ The Pre-PR Checklist above gates these — a PR missing required doc updates is 
 Do **not** merge immediately after creating a PR. Expect **2-6 review cycles** before merging. The full flow is:
 
 1. **Create PR** — Push branch, open PR via `mcp__github__create_pull_request`. Prefer MCP GitHub tools over `gh` CLI where possible.
-2. **Watch for CI and review feedback in the background** — Do not stop waiting. Block until all checks resolve:
+2. **Watch for CI and review feedback without blocking your main shell** — Do not stop waiting. Block until all checks resolve:
 
    ```bash
    gh pr checks <number> --watch          # BLOCKING: polls until all checks pass or fail
