@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-03-09
+
 ### Fixed
 
 - **Hook wiring gap** — Three Python hook handlers (`handle_session_start`, `handle_post_web_fetch`, `handle_pre_compact`) were fully implemented but never invoked. Shell scripts in `hooks/` didn't call them, and hooks.json was missing PostToolUse/WebFetch and PreCompact entries. Added `session-sync.sh`, `web-fetch.sh`, and `pre-compact.sh` thin dispatchers and registered all three in hooks.json. Sessions now auto-register and sync the codebase, auto-capture fetched URLs, and preserve transcripts before compaction.
