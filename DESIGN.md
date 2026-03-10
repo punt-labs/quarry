@@ -292,6 +292,6 @@ Quarry is the right home because:
 
 ## Test Architecture
 
-794 tests total. 772 run by default; 22 integration tests require live AWS credentials and are deselected by default (`-m "not integration"`).
+896 tests total. 874 run by default; 22 integration tests require live AWS credentials and are deselected by default (`-m "not integration"`).
 
 Test files mirror source modules: `test_pipeline.py`, `test_database.py`, `test_mcp_server.py`, etc. Tests mock at the boundary (database, backends, filesystem) using `unittest.mock.patch`. The MCP server tests verify both synchronous tool behavior and background thread execution using `threading.Event` for synchronization.
