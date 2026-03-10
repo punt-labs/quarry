@@ -7,6 +7,8 @@ advisory hint strings.  No I/O, no side effects, fully deterministic.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
+from typing import Protocol
 
 from quarry.hint_accumulator import ToolEvent
 
@@ -14,25 +16,19 @@ from quarry.hint_accumulator import ToolEvent
 # Instant rules — fire on the current command alone
 # ---------------------------------------------------------------------------
 
-_INSTANT_RULES: list[tuple[re.Pattern[str], str]] = [
-    (
-        re.compile(r"git\s+add\s+(-A|\.)(?=\s|$)"),
-        "Reminder: stage specific files by name rather than `git add -A` or "
-        "`git add .` — avoids accidentally staging secrets or large binaries.",
-    ),
-    (
-        re.compile(r"(?<!\S)pip\s+install\b"),
-        "Reminder: use `uv` for package management, not `pip`.",
-    ),
-    (
-        re.compile(r"git\s+push\s.*(-f\b|--force(?!-))"),
-        "Reminder: force-push is destructive — confirm this is intentional.",
-    ),
-    (
-        re.compile(r"git\s+commit\b"),
-        "Reminder: do not skip hooks (`--no-verify`) unless explicitly asked.",
-    ),
-]
+
+class _Predicate(Protocol):
+    def __call__(self, command: str) -> bool: ...
+
+
+@dataclass(frozen=True)
+class _InstantRule:
+    """An instant hint rule with pattern, hint text, and optional refinement."""
+
+    id: str
+    pattern: re.Pattern[str]
+    hint: str
+    refinement: _Predicate | None = None
 
 
 def _is_uv_pip(command: str) -> bool:
@@ -44,24 +40,57 @@ _STRIP_QUOTES = re.compile(r""""[^"]*"|'[^']*'""")
 
 _NO_VERIFY_FLAG = re.compile(r"\s(-n\b|--no-verify)\b")
 
+_GIT_COMMIT_SEGMENT = re.compile(r"git\s+commit\b.*")
+
 
 def _has_no_verify_flag(command: str) -> bool:
-    """Check for ``-n`` or ``--no-verify`` outside quoted strings."""
-    stripped = _STRIP_QUOTES.sub("", command)
-    return bool(_NO_VERIFY_FLAG.search(stripped))
+    """Check for ``-n`` or ``--no-verify`` in the ``git commit`` segment only.
+
+    Scopes the check to the portion of the command starting at ``git commit``,
+    so flags like ``head -n 5`` in chained commands don't false-positive.
+    Quoted strings are stripped before matching.
+    """
+    match = _GIT_COMMIT_SEGMENT.search(command)
+    if not match:
+        return False
+    segment = _STRIP_QUOTES.sub("", match.group())
+    return bool(_NO_VERIFY_FLAG.search(segment))
+
+
+_INSTANT_RULES: list[_InstantRule] = [
+    _InstantRule(
+        id="git-add-broad",
+        pattern=re.compile(r"git\s+add\s+(-A|\.)(?=\s|$)"),
+        hint="Reminder: stage specific files by name rather than `git add -A` or "
+        "`git add .` — avoids accidentally staging secrets or large binaries.",
+    ),
+    _InstantRule(
+        id="pip-install",
+        pattern=re.compile(r"(?<!\S)pip\s+install\b"),
+        hint="Reminder: use `uv` for package management, not `pip`.",
+        refinement=lambda command: not _is_uv_pip(command),
+    ),
+    _InstantRule(
+        id="force-push",
+        pattern=re.compile(r"git\s+push\s.*(-f\b|--force(?!-))"),
+        hint="Reminder: force-push is destructive — confirm this is intentional.",
+    ),
+    _InstantRule(
+        id="no-verify",
+        pattern=re.compile(r"git\s+commit\b"),
+        hint="Reminder: do not skip hooks (`--no-verify`) unless explicitly asked.",
+        refinement=_has_no_verify_flag,
+    ),
+]
 
 
 def check_instant_rules(command: str) -> str | None:
     """Return the first matching instant hint, or ``None``."""
-    for pattern, hint in _INSTANT_RULES:
-        if pattern.search(command):
-            # Exclude uv pip install from the pip rule.
-            if "pip" in hint and _is_uv_pip(command):
+    for rule in _INSTANT_RULES:
+        if rule.pattern.search(command):
+            if rule.refinement is not None and not rule.refinement(command):
                 continue
-            # Require actual --no-verify/-n flag outside quoted strings.
-            if "no-verify" in hint and not _has_no_verify_flag(command):
-                continue
-            return hint
+            return rule.hint
     return None
 
 

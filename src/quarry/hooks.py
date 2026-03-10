@@ -13,6 +13,7 @@ Hook events:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import sqlite3
 from dataclasses import dataclass
@@ -469,8 +470,41 @@ def _hint_state_path(session_id: str) -> Path:
     import tempfile  # noqa: PLC0415
 
     safe_id = _sanitize_session_id(session_id)
+    if not safe_id:
+        import hashlib  # noqa: PLC0415
+
+        safe_id = hashlib.sha256(session_id.encode()).hexdigest()[:16]
     tmpdir = Path(tempfile.gettempdir())
     return tmpdir / f"hint-state-{safe_id}.json"
+
+
+def _write_hint_state(state_path: Path, acc_json: str) -> None:
+    """Atomically write hint state with restricted permissions.
+
+    Uses a temp file + replace to avoid partial writes and symlink attacks.
+    """
+    import os  # noqa: PLC0415
+    import tempfile as _tf  # noqa: PLC0415
+
+    parent = str(state_path.parent)
+    with _tf.NamedTemporaryFile(
+        mode="w",
+        dir=parent,
+        prefix=".hint-",
+        suffix=".tmp",
+        delete=False,
+    ) as tmp:
+        tmp.write(acc_json)
+        tmp.flush()
+        os.fsync(tmp.fileno())
+    tmp_path = Path(tmp.name)
+    try:
+        tmp_path.chmod(0o600)
+        tmp_path.replace(state_path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp_path.unlink()
+        raise
 
 
 def handle_pre_tool_hint(
@@ -530,19 +564,9 @@ def handle_pre_tool_hint(
         # Add the current event to the accumulator.
         acc.add(ToolEvent(ts=time.time(), tool="Bash", command=command))
 
-        # Persist state with restricted permissions (fail-open).
+        # Persist state atomically (fail-open).
         try:
-            import os  # noqa: PLC0415
-
-            fd = os.open(
-                str(state_path),
-                os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
-                0o600,
-            )
-            try:
-                os.write(fd, acc.to_json().encode())
-            finally:
-                os.close(fd)
+            _write_hint_state(state_path, acc.to_json())
         except OSError:
             logger.debug(
                 "pre-tool-hint: could not write state to %s",

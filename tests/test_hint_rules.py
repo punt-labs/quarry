@@ -91,6 +91,14 @@ class TestNoVerifyRule:
         """'-n' in commit message should not trigger."""
         assert check_instant_rules('git commit -m "fix -n edge"') is None
 
+    def test_chained_head_n_no_false_positive(self) -> None:
+        """head -n in a chained command must not trigger no-verify hint."""
+        assert check_instant_rules('head -n 5 file && git commit -m "fix"') is None
+
+    def test_chained_tail_n_no_false_positive(self) -> None:
+        """tail -n in a chained command must not trigger no-verify hint."""
+        assert check_instant_rules('tail -n 10 log && git commit -m "fix"') is None
+
 
 class TestNonMatchingCommands:
     def test_ls(self) -> None:

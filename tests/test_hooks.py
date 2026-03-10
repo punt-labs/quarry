@@ -1113,3 +1113,22 @@ class TestHandlePreToolHint:
         state_path = _hint_state_path("test-perms")
         mode = state_path.stat().st_mode & 0o777
         assert mode == 0o600
+
+    def test_empty_sanitized_session_id(
+        self, tmp_path: Path, monkeypatch: object
+    ) -> None:
+        """Session IDs that sanitize to empty string get a hash fallback."""
+        import tempfile
+
+        monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))  # type: ignore[attr-defined]
+
+        payload: dict[str, object] = {
+            "tool_input": {"command": "ls"},
+            "session_id": "...",  # sanitizes to empty
+        }
+        handle_pre_tool_hint(payload)
+
+        # Should have created a state file (not hint-state-.json).
+        state_files = list(tmp_path.glob("hint-state-*.json"))
+        assert len(state_files) == 1
+        assert state_files[0].name != "hint-state-.json"
