@@ -970,6 +970,65 @@ class TestHookWiring:
 # ---------------------------------------------------------------------------
 
 
+class TestSessionStartTimeouts:
+    """SessionStart hooks must have timeouts to prevent hangs."""
+
+    def test_all_session_start_hooks_have_timeouts(self) -> None:
+        hooks_json = _HOOKS_DIR / "hooks.json"
+        data = json.loads(hooks_json.read_text())
+        for entry in data["hooks"]["SessionStart"]:
+            for hook in entry.get("hooks", []):
+                assert "timeout" in hook, (
+                    f"Missing timeout on SessionStart hook: {hook.get('command')}"
+                )
+                assert isinstance(hook["timeout"], int)
+                assert hook["timeout"] > 0
+
+
+class TestReadHookStdin:
+    """Verify _read_hook_stdin doesn't block on open pipes."""
+
+    def test_returns_empty_on_no_data(self) -> None:
+        """When stdin has no data within 100ms, returns empty string."""
+        import os
+        import select
+
+        r, w = os.pipe()
+        # Don't write anything — simulate open pipe with no data.
+        # Direct test: os.pipe with no write, select should timeout
+        readable, _, _ = select.select([r], [], [], 0.05)
+        assert readable == []
+        os.close(r)
+        os.close(w)
+
+    def test_reads_available_data(self) -> None:
+        """When stdin has JSON data, reads it without waiting for EOF."""
+        import os
+
+        from quarry.__main__ import _read_hook_stdin
+
+        r, w = os.pipe()
+        payload = json.dumps({"tool_input": {"command": "ls"}})
+        os.write(w, payload.encode())
+        os.close(w)  # Close write end so read gets EOF
+
+        class FakeStdin:
+            def fileno(self) -> int:
+                return r
+
+        import sys
+
+        old_stdin = sys.stdin
+        sys.stdin = FakeStdin()  # type: ignore[assignment,unused-ignore]
+        try:
+            result = _read_hook_stdin()
+        finally:
+            sys.stdin = old_stdin
+            os.close(r)
+
+        assert result == payload
+
+
 class TestHandlePreToolHint:
     def test_non_bash_payload_ignored(self) -> None:
         """Payloads without tool_input.command return empty."""

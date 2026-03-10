@@ -780,12 +780,50 @@ def version() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _read_hook_stdin() -> str:
+    """Read hook payload from stdin without blocking on EOF.
+
+    Claude Code pipes JSON to hook subprocesses but may not close the
+    pipe promptly.  ``sys.stdin.read()`` blocks until EOF — hanging the
+    hook (and the session) indefinitely.
+
+    Instead we use ``select`` + ``os.read`` to consume whatever bytes
+    are available within a tight timeout window, then return.
+
+    Falls back to ``sys.stdin.read()`` when stdin is not a real file
+    descriptor (e.g. under test harnesses like ``CliRunner``).
+    """
+    import os  # noqa: PLC0415
+    import select  # noqa: PLC0415
+    import sys  # noqa: PLC0415
+
+    try:
+        fd = sys.stdin.fileno()
+    except (AttributeError, OSError):
+        # Not a real fd (CliRunner, StringIO, etc.) — safe to read().
+        return sys.stdin.read()
+
+    # Wait up to 100ms for initial data.
+    if not select.select([fd], [], [], 0.1)[0]:
+        return ""
+    chunks: list[bytes] = []
+    while True:
+        chunk = os.read(fd, 65536)
+        if not chunk:  # EOF
+            break
+        chunks.append(chunk)
+        # 50ms inter-chunk timeout — stop when no more data arrives.
+        if not select.select([fd], [], [], 0.05)[0]:
+            break
+    return b"".join(chunks).decode()
+
+
 def _run_hook(handler: Callable[[dict[str, object]], dict[str, object]]) -> None:
     """Read stdin JSON, call *handler*, write stdout JSON.  Fail-open."""
     import sys  # noqa: PLC0415
 
     try:
-        raw = sys.stdin.read()
+        raw = _read_hook_stdin()
         payload: dict[str, object] = json.loads(raw) if raw.strip() else {}
         result = handler(payload)
         sys.stdout.write(json.dumps(result))
