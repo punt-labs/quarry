@@ -2,6 +2,10 @@
 
 I am a principal engineer. Every change I make leaves the codebase in a better state than I found it. I do not excuse new problems by pointing at existing ones. I do not defer quality to a future ticket. I do not create tech debt.
 
+## No "Pre-existing" Excuse
+
+There is no such thing as a "pre-existing" issue. If you see a problem — in code you wrote, code a reviewer flagged, or code you happen to be reading — you fix it. Do not classify issues as "pre-existing" to justify ignoring them. Do not suggest that something is "outside the scope of this change." If it is broken and you can see it, it is your problem now.
+
 ## Standards
 
 - **Tests accompany code.** Every module ships with tests. Untested code is unfinished code.
@@ -13,7 +17,7 @@ I am a principal engineer. Every change I make leaves the codebase in a better s
 - **`from __future__ import annotations`** in every Python file. Full type annotations on every function signature.
 - **Immutable data models.** `@dataclass(frozen=True)` or pydantic with immutability.
 - **Latest Python.** Target 3.13+. Use modern PEP conventions (`Annotated`, `type` statements, `X | Y` unions).
-- **Quality gates pass before every commit.** `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src/ tests/`, `uv run pytest`. Zero violations, zero errors, all tests green.
+- **Quality gates pass before every commit.** `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src/ tests/`, `uv run pyright`, `uv run pytest`. Zero violations, zero errors, all tests green.
 - **Running tests.** The full test suite (896 tests) needs `timeout=300000` on the Bash tool (5 minutes). During development, prefer targeted tests for files you changed: `uv run pytest tests/test_foo.py -v`. Never retry a command that produces no output — diagnose first.
 - **Double quotes.** Line length 88. Ruff with comprehensive rules.
 - **AWS credentials from environment variables only.** No profiles, no `.env` files committed, no hardcoded keys.
@@ -113,7 +117,7 @@ Before creating a PR, verify:
 - [ ] **README updated** if user-facing behavior changed (new flags, commands, defaults, config)
 - [ ] **CHANGELOG entry included in the PR diff** under `## [Unreleased]` (not retroactively on main)
 - [ ] **prfaq.tex updated** if the change shifts product direction or validates/invalidates a risk
-- [ ] **Quality gates pass** — `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src/ tests/`, `uv run pytest`
+- [ ] **Quality gates pass** — `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src/ tests/`, `uv run pyright`, `uv run pytest`
 - [ ] **Live demo** for features — create a test database (`--db demo`), ingest real content, and exercise the new behavior end-to-end. Fix any issues discovered before opening the PR.
 
 ### Documentation Discipline
@@ -144,9 +148,9 @@ Do **not** merge immediately after creating a PR. Expect **2-6 review cycles** b
    mcp__github__pull_request_read  →  get_review_comments
    ```
 
-3. **Take every comment seriously.** Do not dismiss feedback as "unrelated to the change" or "pre-existing." Each comment is either addressed with a fix or explicitly discussed with the reviewer. No silent dismissals.
+3. **Take every comment seriously.** There is no such thing as "pre-existing" or "unrelated to this change" — if you can see it, you own it. Each comment is either addressed with a fix or explicitly discussed with the reviewer. No silent dismissals.
 4. **Fix, re-push, repeat.** Each fix cycle: commit fixes, push, wait for CI (`gh pr checks <number> --watch`), read new feedback via MCP. Repeat until the **last review cycle is uneventful** — zero new comments, all checks green.
-5. **Merge only when** — The last review cycle produced zero new comments, GitHub Actions are green on the latest commit, and local quality gates (`uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src/ tests/`, `uv run pytest`) run clean.
+5. **Merge only when** — The last review cycle produced zero new comments, GitHub Actions are green on the latest commit, and local quality gates (`uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src/ tests/`, `uv run pyright`, `uv run pytest`) run clean.
 6. **Merge via MCP, not `gh`.** Use `mcp__github__merge_pull_request` (API-only, no local git side effects). `gh pr merge` tries to checkout main locally, which can fail in worktrees.
 
 **Quality gates apply at every step:** Each commit that addresses review feedback must pass both local checks and GitHub Actions. Do not merge if any CI check is failing.
@@ -196,28 +200,9 @@ The script: rebuilds the local `chat` database from all projects, creates a tarb
 
 Stored in macOS Keychain (`security find-generic-password -a quarry -s quarry-api-key -w`) and available via `.envrc`. Also set as a Fly secret and Vercel env var.
 
-# Agent Instructions
-
-This project follows [Punt Labs standards](https://github.com/punt-labs/punt-kit).
-
 ## Scratch Files
 
 Use `.tmp/` at the project root for scratch and temporary files — never `/tmp`. The `TMPDIR` environment variable is set via `.envrc` so that `tempfile` and subprocesses automatically use it. Contents are gitignored; only `.gitkeep` is tracked.
-
-## Quality Gates
-
-Run before every commit. Zero violations, zero errors, all tests green.
-
-```bash
-uv run ruff check . && uv run ruff format --check . && uv run mypy src/ tests/ && uv run pyright && uv run pytest
-```
-
-## Standards References
-- [Python](https://github.com/punt-labs/punt-kit/blob/main/standards/python.md)
-- [Plugins](https://github.com/punt-labs/punt-kit/blob/main/standards/plugins.md)
-- [GitHub](https://github.com/punt-labs/punt-kit/blob/main/standards/github.md)
-- [Workflow](https://github.com/punt-labs/punt-kit/blob/main/standards/workflow.md)
-- [CLI](https://github.com/punt-labs/punt-kit/blob/main/standards/cli.md)
 
 ## Available Tooling
 

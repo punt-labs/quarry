@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
-from quarry.__main__ import app
+from quarry.__main__ import _read_hook_stdin, app
 from quarry.hooks import (
     HookConfig,
     _extract_transcript_text,
@@ -975,14 +977,8 @@ class TestReadHookStdin:
 
     def test_empty_stdin_returns_empty(self) -> None:
         """EOF with no data returns empty string."""
-        import os
-        import sys
-        from unittest.mock import patch
-
-        from quarry.__main__ import _read_hook_stdin
-
         r_fd, w_fd = os.pipe()
-        os.close(w_fd)  # EOF immediately
+        os.close(w_fd)
         r = os.fdopen(r_fd, "r")
         with patch.object(sys, "stdin", r):
             result = _read_hook_stdin()
@@ -991,12 +987,6 @@ class TestReadHookStdin:
 
     def test_valid_json_parsed(self) -> None:
         """Valid JSON on stdin is read and returned."""
-        import os
-        import sys
-        from unittest.mock import patch
-
-        from quarry.__main__ import _read_hook_stdin
-
         r_fd, w_fd = os.pipe()
         payload = json.dumps({"cwd": "/tmp/test"})
         os.write(w_fd, payload.encode())
@@ -1013,37 +1003,28 @@ class TestReadHookStdin:
         Regression test for the session resume hang: Claude Code pipes
         data but may not close the pipe.
         """
-        import os
-        import sys
-        from unittest.mock import patch
-
-        from quarry.__main__ import _read_hook_stdin
-
         r_fd, w_fd = os.pipe()
         os.write(w_fd, b'{"cwd": "/tmp/test"}\n')
         # Do NOT close w_fd — simulates open pipe without EOF.
         r = os.fdopen(r_fd, "r")
-        with patch.object(sys, "stdin", r):
-            result = _read_hook_stdin()
-        r.close()
-        os.close(w_fd)
+        try:
+            with patch.object(sys, "stdin", r):
+                result = _read_hook_stdin()
+        finally:
+            r.close()
+            os.close(w_fd)
         assert result == '{"cwd": "/tmp/test"}\n'
 
     def test_no_data_no_eof_returns_empty(self) -> None:
         """Open pipe with no data returns empty without blocking."""
-        import os
-        import sys
-        from unittest.mock import patch
-
-        from quarry.__main__ import _read_hook_stdin
-
         r_fd, w_fd = os.pipe()
-        # Pipe open, no data, no EOF.
         r = os.fdopen(r_fd, "r")
-        with patch.object(sys, "stdin", r):
-            result = _read_hook_stdin()
-        r.close()
-        os.close(w_fd)
+        try:
+            with patch.object(sys, "stdin", r):
+                result = _read_hook_stdin()
+        finally:
+            r.close()
+            os.close(w_fd)
         assert result == ""
 
 
