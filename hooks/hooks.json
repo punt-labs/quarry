@@ -38,6 +38,17 @@
         ]
       }
     ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pre-tool-hint.sh"
+          }
+        ]
+      }
+    ],
     "PreCompact": [
       {
         "hooks": [

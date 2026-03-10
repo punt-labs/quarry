@@ -8,10 +8,12 @@ Hook events:
     session-start    — SessionStart: auto-register and sync the current repo.
     post-web-fetch   — PostToolUse on WebFetch: auto-ingest fetched URLs.
     pre-compact      — PreCompact: capture compaction summaries.
+    pre-tool-hint    — PreToolUse on Bash: emit convention hints.
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import sqlite3
 from dataclasses import dataclass
@@ -42,6 +44,7 @@ class HookConfig:
     session_sync: bool = True
     web_fetch: bool = True
     compaction: bool = True
+    convention_hints: bool = True
 
 
 def load_hook_config(cwd: str) -> HookConfig:
@@ -91,11 +94,15 @@ def load_hook_config(cwd: str) -> HookConfig:
     session_sync_val = auto.get("session_sync", True)
     web_fetch_val = auto.get("web_fetch", True)
     compaction_val = auto.get("compaction", True)
+    convention_hints_val = auto.get("convention_hints", True)
 
     return HookConfig(
         session_sync=session_sync_val if isinstance(session_sync_val, bool) else True,
         web_fetch=web_fetch_val if isinstance(web_fetch_val, bool) else True,
         compaction=compaction_val if isinstance(compaction_val, bool) else True,
+        convention_hints=(
+            convention_hints_val if isinstance(convention_hints_val, bool) else True
+        ),
     )
 
 
@@ -444,4 +451,134 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
         result["chunks"],
         len(text),
     )
+    return {}
+
+
+def _sanitize_session_id(raw: str) -> str:
+    """Sanitize *raw* to a safe filename component.
+
+    Strips path separators and non-alphanumeric characters to prevent
+    path traversal.  Returns only ``[a-zA-Z0-9_-]`` characters.
+    """
+    import re  # noqa: PLC0415
+
+    return re.sub(r"[^a-zA-Z0-9_-]", "", raw)[:64]
+
+
+def _hint_state_path(session_id: str) -> Path:
+    """Return the path to the hint state file for *session_id*."""
+    import tempfile  # noqa: PLC0415
+
+    safe_id = _sanitize_session_id(session_id)
+    if not safe_id:
+        import hashlib  # noqa: PLC0415
+
+        safe_id = hashlib.sha256(session_id.encode()).hexdigest()[:16]
+    tmpdir = Path(tempfile.gettempdir())
+    return tmpdir / f"hint-state-{safe_id}.json"
+
+
+def _write_hint_state(state_path: Path, acc_json: str) -> None:
+    """Atomically write hint state with restricted permissions.
+
+    Uses a temp file + replace to avoid partial writes and symlink attacks.
+    """
+    import os  # noqa: PLC0415
+    import tempfile as _tf  # noqa: PLC0415
+
+    parent = str(state_path.parent)
+    with _tf.NamedTemporaryFile(
+        mode="w",
+        dir=parent,
+        prefix=".hint-",
+        suffix=".tmp",
+        delete=False,
+    ) as tmp:
+        tmp.write(acc_json)
+        tmp.flush()
+        os.fsync(tmp.fileno())
+    tmp_path = Path(tmp.name)
+    try:
+        tmp_path.chmod(0o600)
+        tmp_path.replace(state_path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp_path.unlink()
+        raise
+
+
+def handle_pre_tool_hint(
+    payload: dict[str, object],
+) -> dict[str, object]:
+    """Handle PreToolUse on Bash: emit convention hints.
+
+    Accumulates recent tool calls in a session-scoped state file and
+    checks both instant and sequence rules.  Returns an allow decision
+    with ``additionalContext`` when a hint fires, otherwise ``{}``.
+    """
+    import time  # noqa: PLC0415
+
+    from quarry.hint_accumulator import HintAccumulator, ToolEvent  # noqa: PLC0415
+    from quarry.hint_rules import (  # noqa: PLC0415
+        check_instant_rules,
+        check_sequence_rules,
+    )
+
+    # Extract command from payload.
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return {}
+    command = tool_input.get("command")
+    if not isinstance(command, str) or not command.strip():
+        return {}
+
+    # Check config toggle.
+    cwd_obj = payload.get("cwd")
+    cwd = cwd_obj if isinstance(cwd_obj, str) else ""
+    if cwd:
+        config = load_hook_config(cwd)
+        if not config.convention_hints:
+            logger.debug("pre-tool-hint: disabled by config")
+            return {}
+
+    # Check instant rules first (no accumulator needed).
+    hint = check_instant_rules(command)
+
+    # Sequence rules require a valid session_id for state persistence.
+    session_id_raw = payload.get("session_id")
+    has_session = isinstance(session_id_raw, str) and bool(session_id_raw)
+
+    if has_session:
+        state_path = _hint_state_path(str(session_id_raw))
+        try:
+            state_data = state_path.read_text()
+        except OSError:
+            state_data = "[]"
+
+        acc = HintAccumulator.from_json(state_data)
+
+        # Check sequence rules if no instant hint fired.
+        if hint is None:
+            hint = check_sequence_rules(acc.recent(), command)
+
+        # Add the current event to the accumulator.
+        acc.add(ToolEvent(ts=time.time(), tool="Bash", command=command))
+
+        # Persist state atomically (fail-open).
+        try:
+            _write_hint_state(state_path, acc.to_json())
+        except OSError:
+            logger.debug(
+                "pre-tool-hint: could not write state to %s",
+                state_path,
+            )
+
+    if hint:
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "additionalContext": hint,
+            },
+        }
     return {}

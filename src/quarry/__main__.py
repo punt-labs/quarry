@@ -819,5 +819,13 @@ def hook_pre_compact() -> None:
     _run_hook(handle_pre_compact)
 
 
+@hooks_app.command(name="pre-tool-hint")
+def hook_pre_tool_hint() -> None:
+    """PreToolUse on Bash: emit convention hints."""
+    from quarry.hooks import handle_pre_tool_hint  # noqa: PLC0415
+
+    _run_hook(handle_pre_tool_hint)
+
+
 if __name__ == "__main__":
     app()
