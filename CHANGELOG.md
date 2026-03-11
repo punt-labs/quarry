@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [1.3.6] - 2026-03-10
+
 ## [1.3.5] - 2026-03-10
 
 ### Fixed
