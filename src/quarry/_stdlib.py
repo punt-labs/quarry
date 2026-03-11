@@ -102,6 +102,9 @@ def _parse_auto_capture(lines: list[str]) -> dict[str, str] | None:
             in_block = True
             continue
         if in_block:
+            # Skip blank / whitespace-only lines within the block.
+            if not stripped:
+                continue
             # Indented continuation lines belong to the block.
             if line.startswith((" ", "\t")) and ":" in stripped:
                 key, _, val = stripped.partition(":")
@@ -109,7 +112,7 @@ def _parse_auto_capture(lines: list[str]) -> dict[str, str] | None:
                 val = val.split("#")[0].strip()
                 result[key.strip()] = val
             else:
-                # Non-indented line ends the block.
+                # Non-indented, non-blank line ends the block.
                 break
     return result if in_block else None
 
