@@ -149,20 +149,19 @@ def _resolve_settings() -> Settings:
 def _sync_in_background() -> None:
     """Fire-and-forget sync via detached subprocess.
 
-    Spawns ``quarry sync`` so the SessionStart hook returns immediately.
-    The subprocess gets its own process group (``start_new_session``) so
-    it survives even if the hook process exits.
+    Uses ``sys.executable -m quarry`` to avoid PATH trust issues (the
+    hook runs automatically on SessionStart with no user confirmation).
+    Redirects all stdio to DEVNULL — especially stdin, to prevent the
+    child from holding Claude Code's stdin pipe open after the parent
+    exits.  The subprocess gets its own process group so it survives
+    the hook process.
     """
-    import shutil  # noqa: PLC0415
     import subprocess  # noqa: PLC0415
-
-    quarry_bin = shutil.which("quarry")
-    if quarry_bin is None:
-        logger.warning("session-start: quarry not found in PATH, skipping sync")
-        return
+    import sys  # noqa: PLC0415
 
     subprocess.Popen(  # noqa: S603
-        [quarry_bin, "sync"],
+        [sys.executable, "-m", "quarry", "sync"],
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
