@@ -206,6 +206,56 @@ class TestLoadHookConfig:
         config = load_hook_config(str(tmp_path))
         assert config.convention_hints is False
 
+    def test_yaml_alias_no_disables(self, tmp_path: Path) -> None:
+        """YAML boolean alias 'no' should disable the hook."""
+        config_dir = tmp_path / ".claude"
+        config_dir.mkdir()
+        (config_dir / "quarry.local.md").write_text(
+            "---\nauto_capture:\n  web_fetch: no\n---\n"
+        )
+        config = load_hook_config(str(tmp_path))
+        assert config.web_fetch is False
+
+    def test_yaml_alias_off_disables(self, tmp_path: Path) -> None:
+        """YAML boolean alias 'off' should disable the hook."""
+        config_dir = tmp_path / ".claude"
+        config_dir.mkdir()
+        (config_dir / "quarry.local.md").write_text(
+            "---\nauto_capture:\n  session_sync: off\n---\n"
+        )
+        config = load_hook_config(str(tmp_path))
+        assert config.session_sync is False
+
+    def test_yaml_alias_yes_enables(self, tmp_path: Path) -> None:
+        """YAML boolean alias 'yes' should enable the hook."""
+        config_dir = tmp_path / ".claude"
+        config_dir.mkdir()
+        (config_dir / "quarry.local.md").write_text(
+            "---\nauto_capture:\n  web_fetch: yes\n---\n"
+        )
+        config = load_hook_config(str(tmp_path))
+        assert config.web_fetch is True
+
+    def test_inline_comment_stripped(self, tmp_path: Path) -> None:
+        """Inline YAML comments should not break boolean parsing."""
+        config_dir = tmp_path / ".claude"
+        config_dir.mkdir()
+        (config_dir / "quarry.local.md").write_text(
+            "---\nauto_capture:\n  web_fetch: false # disabled for this project\n---\n"
+        )
+        config = load_hook_config(str(tmp_path))
+        assert config.web_fetch is False
+
+    def test_unrecognized_value_fails_closed(self, tmp_path: Path) -> None:
+        """Unrecognized boolean value for a present key should fail closed."""
+        config_dir = tmp_path / ".claude"
+        config_dir.mkdir()
+        (config_dir / "quarry.local.md").write_text(
+            "---\nauto_capture:\n  web_fetch: nope\n---\n"
+        )
+        config = load_hook_config(str(tmp_path))
+        assert config.web_fetch is False
+
 
 # ---------------------------------------------------------------------------
 # _sync_in_background tests

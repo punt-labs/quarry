@@ -232,9 +232,6 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     payload lacks content.  Skips URLs already ingested (dedup by
     document_name).
     """
-    from quarry.database import get_db  # noqa: PLC0415
-    from quarry.pipeline import ingest_content, ingest_url  # noqa: PLC0415
-
     cwd_obj = payload.get("cwd")
     cwd = cwd_obj if isinstance(cwd_obj, str) else ""
     if cwd:
@@ -247,6 +244,10 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     if not url:
         logger.debug("post-web-fetch: no valid URL in payload, skipping")
         return {}
+
+    # Heavy imports deferred past early-return guards.
+    from quarry.database import get_db  # noqa: PLC0415
+    from quarry.pipeline import ingest_content, ingest_url  # noqa: PLC0415
 
     settings = _resolve_settings()
     db = get_db(settings.lancedb_path)
@@ -367,9 +368,6 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
     Each compaction creates a new document keyed by session ID and
     timestamp.
     """
-    from quarry.database import get_db  # noqa: PLC0415
-    from quarry.pipeline import ingest_content  # noqa: PLC0415
-
     cwd_obj = payload.get("cwd")
     cwd = cwd_obj if isinstance(cwd_obj, str) else ""
     if cwd:
@@ -395,7 +393,11 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
         logger.debug("pre-compact: no conversation text found")
         return {}
 
+    # Heavy imports deferred past early-return guards.
     from datetime import UTC, datetime  # noqa: PLC0415
+
+    from quarry.database import get_db  # noqa: PLC0415
+    from quarry.pipeline import ingest_content  # noqa: PLC0415
 
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
     document_name = f"session-{session_id[:8]}-{timestamp}"

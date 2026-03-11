@@ -42,11 +42,12 @@ class HookConfig:
 
 
 def load_hook_config(cwd: str) -> HookConfig:
-    """Load hook config from YAML frontmatter in the project's config file.
+    """Load hook config from YAML-style frontmatter in the project's config file.
 
-    Falls back to a pure-stdlib key: value parser when PyYAML is not
-    available (which is the common case in the lightweight hook path).
-    Returns defaults (all enabled) if the file is missing or unparseable.
+    Uses a pure-stdlib parser for a minimal subset of frontmatter, reading only
+    the ``auto_capture`` block and its boolean fields.  This function does not
+    depend on PyYAML or support arbitrary YAML.  Returns defaults (all enabled)
+    if the file is missing, malformed, or the expected structure is absent.
     """
     path = Path(cwd) / _CONFIG_FILENAME
     if not path.is_file():
@@ -90,7 +91,8 @@ def _parse_auto_capture(lines: list[str]) -> dict[str, str] | None:
     """Extract key-value pairs under ``auto_capture:`` from frontmatter lines.
 
     Handles the simple nested YAML subset used by quarry config:
-    ``auto_capture:\\n  key: value``.  Returns None if the block is absent.
+    ``auto_capture:\\n  key: value``.  Strips inline comments (``# ...``).
+    Returns None if the block is absent.
     """
     result: dict[str, str] = {}
     in_block = False
@@ -103,23 +105,44 @@ def _parse_auto_capture(lines: list[str]) -> dict[str, str] | None:
             # Indented continuation lines belong to the block.
             if line.startswith((" ", "\t")) and ":" in stripped:
                 key, _, val = stripped.partition(":")
-                result[key.strip()] = val.strip()
+                # Strip inline YAML comments.
+                val = val.split("#")[0].strip()
+                result[key.strip()] = val
             else:
                 # Non-indented line ends the block.
                 break
     return result if in_block else None
 
 
+# YAML 1.1 boolean aliases (case-insensitive).
+_YAML_TRUE = frozenset({"true", "yes", "on"})
+_YAML_FALSE = frozenset({"false", "no", "off"})
+
+
 def _bool_field(data: dict[str, str], key: str, *, default: bool) -> bool:
-    """Parse a boolean value from a string dict, with a default."""
+    """Parse a boolean value from a string dict.
+
+    Supports YAML boolean aliases (true/false, yes/no, on/off).
+    Returns *default* when the key is absent.  Fails closed (returns
+    ``False``) when a key is present but its value is not a recognized
+    boolean — a user who explicitly sets a key intends to control the
+    behavior, so an unparseable value should not silently re-enable.
+    """
     val = data.get(key)
     if val is None:
         return default
-    if val.lower() == "true":
+    normalized = val.lower()
+    if normalized in _YAML_TRUE:
         return True
-    if val.lower() == "false":
+    if normalized in _YAML_FALSE:
         return False
-    return default
+    # Present but unrecognized — fail closed to respect user intent.
+    logger.warning(
+        "hook-config: unrecognized boolean %r for %s, defaulting to False",
+        val,
+        key,
+    )
+    return False
 
 
 # ── Hook stdin/stdout plumbing ───────────────────────────────────────
