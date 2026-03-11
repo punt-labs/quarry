@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [1.3.5] - 2026-03-10
+
 ### Fixed
 
 - **Session start hook blocks on sync** — `handle_session_start` called
