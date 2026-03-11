@@ -17,7 +17,6 @@ from quarry.hooks import (
     _extract_url,
     _extract_web_fetch_content,
     _find_registration,
-    _format_context,
     _hint_state_path,
     _unique_collection_name,
     handle_post_web_fetch,
@@ -26,7 +25,6 @@ from quarry.hooks import (
     handle_session_start,
     load_hook_config,
 )
-from quarry.sync import SyncResult
 from quarry.sync_registry import (
     DirectoryRegistration,
     list_registrations,
@@ -96,27 +94,6 @@ class TestUniqueCollectionName:
         assert name.startswith("myproject-")
         assert len(name) == len("myproject-") + 8  # 8-char hash
         conn.close()
-
-
-class TestFormatContext:
-    def test_includes_collection_and_directory(self) -> None:
-        result = SyncResult("col", ingested=1, deleted=0, skipped=5, failed=0)
-        ctx = _format_context("col", "/my/project", result)
-        assert 'Collection: "col"' in ctx
-        assert "/my/project" in ctx
-
-    def test_shows_sync_stats(self) -> None:
-        result = SyncResult("col", ingested=3, deleted=1, skipped=10, failed=2)
-        ctx = _format_context("col", "/p", result)
-        assert "3 ingested" in ctx
-        assert "1 deleted" in ctx
-        assert "10 unchanged" in ctx
-        assert "2 failed" in ctx
-
-    def test_empty_collection_message(self) -> None:
-        result = SyncResult("col", ingested=0, deleted=0, skipped=0, failed=0)
-        ctx = _format_context("col", "/p", result)
-        assert "empty" in ctx
 
 
 # ---------------------------------------------------------------------------
@@ -249,24 +226,21 @@ class TestHandleSessionStart:
         result = handle_session_start({"cwd": "/nonexistent/path/xyz123"})
         assert result == {}
 
-    def test_registers_and_syncs_new_directory(self, tmp_path: Path) -> None:
+    def test_registers_and_launches_background_sync(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
-        (project / "hello.txt").write_text("world")
 
         settings = MagicMock()
         settings.registry_path = tmp_path / "registry.db"
         settings.lancedb_path = tmp_path / "lancedb"
 
-        mock_result = SyncResult(
-            "myproject", ingested=1, deleted=0, skipped=0, failed=0
-        )
-
         with (
             patch("quarry.hooks._resolve_settings", return_value=settings),
-            patch("quarry.hooks.sync_collection", return_value=mock_result),
+            patch("quarry.hooks._sync_in_background") as mock_sync,
         ):
             result = handle_session_start({"cwd": str(project)})
+
+        mock_sync.assert_called_once()
 
         assert "hookSpecificOutput" in result
         output = result["hookSpecificOutput"]
@@ -274,7 +248,7 @@ class TestHandleSessionStart:
         assert output["hookEventName"] == "SessionStart"
         ctx = str(output["additionalContext"])
         assert "myproject" in ctx
-        assert "1 ingested" in ctx
+        assert "Background sync" in ctx
 
         # Verify it was registered in the registry.
         conn = open_registry(settings.registry_path)
@@ -296,22 +270,13 @@ class TestHandleSessionStart:
         register_directory(conn, project, "custom-name")
         conn.close()
 
-        mock_result = SyncResult(
-            "custom-name", ingested=0, deleted=0, skipped=3, failed=0
-        )
-
         with (
             patch("quarry.hooks._resolve_settings", return_value=settings),
-            patch(
-                "quarry.hooks.sync_collection", return_value=mock_result
-            ) as mock_sync,
+            patch("quarry.hooks._sync_in_background") as mock_sync,
         ):
             result = handle_session_start({"cwd": str(project)})
 
-        # Uses existing collection name, not directory name.
         mock_sync.assert_called_once()
-        call_args = mock_sync.call_args
-        assert call_args[0][1] == "custom-name"  # collection arg
 
         output = result["hookSpecificOutput"]
         assert isinstance(output, dict)
@@ -326,18 +291,16 @@ class TestHandleSessionStart:
         settings.registry_path = tmp_path / "registry.db"
         settings.lancedb_path = tmp_path / "lancedb"
 
-        mock_result = SyncResult("repo", ingested=0, deleted=0, skipped=10, failed=0)
-
         with (
             patch("quarry.hooks._resolve_settings", return_value=settings),
-            patch("quarry.hooks.sync_collection", return_value=mock_result),
+            patch("quarry.hooks._sync_in_background"),
         ):
             result = handle_session_start({"cwd": str(project)})
 
         output = result["hookSpecificOutput"]
         assert isinstance(output, dict)
         ctx = str(output["additionalContext"])
-        assert "search_documents" in ctx or "quarry MCP" in ctx
+        assert "quarry MCP" in ctx
 
     def test_disabled_by_config(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
@@ -367,13 +330,9 @@ class TestHandleSessionStart:
         project = tmp_path / "mine" / "myproject"
         project.mkdir(parents=True)
 
-        mock_result = SyncResult(
-            "myproject-mine", ingested=2, deleted=0, skipped=0, failed=0
-        )
-
         with (
             patch("quarry.hooks._resolve_settings", return_value=settings),
-            patch("quarry.hooks.sync_collection", return_value=mock_result),
+            patch("quarry.hooks._sync_in_background"),
         ):
             result = handle_session_start({"cwd": str(project)})
 

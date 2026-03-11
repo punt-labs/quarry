@@ -14,6 +14,17 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Session start hook blocks on sync** — `handle_session_start` called
+  `sync_collection` synchronously inside the SessionStart hook, blocking
+  session startup for 10+ seconds on projects with changed files. The sync
+  (file discovery, text extraction, ONNX embedding) is a pure side effect
+  that the hook's return value doesn't depend on. Moved sync to a detached
+  `quarry sync` subprocess via `_sync_in_background()`. Registration and
+  context injection remain synchronous; sync runs fire-and-forget. Present
+  since v0.10.0 (2026-02-24), 12 releases affected.
+
 ## [1.3.4] - 2026-03-10
 
 ## [1.3.3] - 2026-03-10
