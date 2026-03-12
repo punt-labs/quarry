@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 
+DEFAULT_PORT = 8420
+"""Well-known port for ``quarry serve``.  Used by mcp-proxy configs and
+service files (launchd, systemd) so the daemon URL is static."""
+
 _DEFAULT_LANCEDB = Path.home() / ".quarry" / "data" / "default" / "lancedb"
 
 

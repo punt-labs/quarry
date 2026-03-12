@@ -32,7 +32,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route, WebSocketRoute
 
 from quarry.backends import get_embedding_backend
-from quarry.config import Settings
+from quarry.config import DEFAULT_PORT, Settings
 from quarry.database import (
     count_chunks,
     get_db,
@@ -50,9 +50,6 @@ if TYPE_CHECKING:
     from quarry.types import EmbeddingBackend, LanceDB
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_PORT = 8420
-"""Well-known default port for ``quarry serve``."""
 
 _DEFAULT_CORS_ORIGINS = frozenset({"http://localhost"})
 
@@ -394,7 +391,7 @@ def serve(
 
     Args:
         settings: Resolved application settings.
-        port: Port to bind.  Defaults to :data:`DEFAULT_PORT` (8420).
+        port: Port to bind.  Defaults to :data:`DEFAULT_PORT`.
         host: Address to bind.  ``127.0.0.1`` for local-only (default),
             ``0.0.0.0`` for container/production deployment.
         api_key: Optional Bearer token.  When set, all endpoints except

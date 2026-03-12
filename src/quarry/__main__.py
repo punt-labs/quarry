@@ -17,6 +17,7 @@ from rich.progress import Progress
 from quarry.backends import get_embedding_backend
 from quarry.collections import derive_collection
 from quarry.config import (
+    DEFAULT_PORT,
     Settings,
     configure_logging,
     load_settings,
@@ -725,8 +726,12 @@ def doctor() -> None:
 def serve(
     port: Annotated[
         int,
-        typer.Option("--port", "-p", help="Port to bind (default: 8420)."),
-    ] = 8420,
+        typer.Option(
+            "--port",
+            "-p",
+            help=f"Port to bind (default: {DEFAULT_PORT}, 0 = OS-assigned).",
+        ),
+    ] = DEFAULT_PORT,
     host: Annotated[
         str,
         typer.Option(
