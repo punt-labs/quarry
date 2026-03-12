@@ -51,6 +51,20 @@ sh install.sh
 
 </details>
 
+## How It Works
+
+Quarry runs as a **daemon** — a single background process that loads the embedding model once and serves all sessions. Claude Code and Desktop don't talk to the daemon directly; they spawn a lightweight [**mcp-proxy**](https://github.com/punt-labs/mcp-proxy) binary (~5MB, <10ms startup) that bridges MCP stdio to the daemon over WebSocket:
+
+```text
+                    stdio                      WebSocket
+Claude Code ◄──────────────► mcp-proxy ◄──────────────────────► quarry serve
+             MCP JSON-RPC                                       (one process)
+```
+
+Without the proxy, every Claude Code tab spawns a separate Python process, each loading the embedding model into ~200MB of RAM. With it, you get instant startup and shared state across all sessions.
+
+`quarry install` downloads mcp-proxy automatically (SHA256-verified, correct platform) and configures MCP clients to use it.
+
 ## What You Can Do
 
 **Index anything you have.** PDFs, scanned documents, images, spreadsheets, presentations, source code, Markdown, LaTeX, DOCX, HTML, and webpages. Quarry parses each format natively — text extraction, OCR, tabular serialization, AST parsing — and indexes the content for semantic search.
@@ -91,6 +105,22 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 {
   "mcpServers": {
     "quarry": {
+      "command": "/path/to/mcp-proxy",
+      "args": ["ws://localhost:8420/mcp"]
+    }
+  }
+}
+```
+
+Use the absolute path to `mcp-proxy` (e.g. `~/.local/bin/mcp-proxy`). `quarry install` resolves this automatically. Requires `quarry serve` running (either started manually, or installed as a daemon via `quarry install`).
+
+<details>
+<summary>Without mcp-proxy (not recommended)</summary>
+
+```json
+{
+  "mcpServers": {
+    "quarry": {
       "command": "/path/to/uvx",
       "args": ["--from", "punt-quarry", "quarry", "mcp"]
     }
@@ -98,8 +128,9 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 }
 ```
 
-Use the absolute path to `uvx` (e.g. `/opt/homebrew/bin/uvx`). `quarry install` resolves this automatically.
+This spawns a full Python process per session (~200MB, ~2s startup each).
 
+</details>
 </details>
 
 ## Claude Code
@@ -107,8 +138,19 @@ Use the absolute path to `uvx` (e.g. `/opt/homebrew/bin/uvx`). `quarry install` 
 `quarry install` configures Claude Code automatically, or set up manually:
 
 ```bash
+claude mcp add quarry -- mcp-proxy ws://localhost:8420/mcp
+```
+
+<details>
+<summary>Without mcp-proxy (not recommended)</summary>
+
+```bash
 claude mcp add quarry -- uvx --from punt-quarry quarry mcp
 ```
+
+This spawns a full Python process per session.
+
+</details>
 
 ### Ambient Knowledge (Plugin)
 
@@ -220,14 +262,19 @@ quarry list databases                          # list all databases
 
 Each database is fully isolated — its own vector index and sync registry. The default database is called `default`.
 
-You can point MCP servers at different databases:
+You can point the daemon at a specific database:
+
+```bash
+quarry use work                     # set persistent default database
+quarry serve                        # daemon serves the 'work' database
+```
 
 ```json
 {
   "mcpServers": {
     "work": {
-      "command": "/path/to/uvx",
-      "args": ["--from", "punt-quarry", "quarry", "mcp", "--db", "work"]
+      "command": "/path/to/mcp-proxy",
+      "args": ["ws://localhost:8420/mcp"]
     }
   }
 }
@@ -319,6 +366,7 @@ Quarry is fully typed (`py.typed`) and can be used as a Python library. See [DES
 
 - [Design](DESIGN.md) — architecture and design decisions
 - [Changelog](CHANGELOG.md)
+- [mcp-proxy](https://github.com/punt-labs/mcp-proxy) — the stdio-to-WebSocket bridge that eliminates per-session startup cost
 - [AWS Setup Guide](docs/AWS-SETUP.md) — IAM, S3, SageMaker deployment
 - [Search Quality and Tuning](docs/SEARCH-TUNING.md)
 - [Backend Abstraction Design](docs/BACKEND-ABSTRACTION.md)
