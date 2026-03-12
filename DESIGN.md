@@ -152,7 +152,19 @@ Multi-stage Dockerfile: (1) install Python deps with `uv sync`, (2) download the
 
 ### Threaded Request Handling
 
+> **Superseded by [ASGI Server](#asgi-server-starlette--uvicorn).** Kept for historical context.
+
 `QuarryHTTPServer` extends `ThreadingHTTPServer` — each request gets its own daemon thread. This prevents a slow embedding (the dominant latency) from blocking other clients. Thread safety relies on immutable shared state: `_QuarryContext` fields are set once at startup, LanceDB handles concurrent reads internally, and ONNX Runtime sessions are thread-safe for inference. Alternative considered: uvicorn/starlette (async) — rejected as unnecessary complexity for 5 synchronous endpoints with no I/O multiplexing benefit.
+
+### ASGI Server (Starlette + uvicorn)
+
+Supersedes [Threaded Request Handling](#threaded-request-handling). The addition of MCP-over-WebSocket required native async support, which stdlib `http.server` cannot provide. `quarry serve` now runs a Starlette ASGI app on uvicorn. REST handlers remain sync functions — Starlette auto-detects this and runs them in its threadpool, preserving the original concurrency model where a slow embedding doesn't block other clients. The `/mcp` WebSocket endpoint is async, bridging WebSocket frames into MCP's `Server.run()` via anyio memory streams. Thread safety invariants are unchanged: `_QuarryContext` fields are set once at startup, LanceDB handles concurrent reads internally, and ONNX Runtime sessions are thread-safe for inference. Default port is 8420 (`DEFAULT_PORT` in `quarry.config`), overridable with `--port`.
+
+### MCP-over-WebSocket
+
+The `/mcp` WebSocket endpoint enables multiple Claude Code sessions to share a single quarry daemon via mcp-proxy, avoiding duplicate embedding model loads and database connections. Each WebSocket connection gets its own asyncio Task with a `ContextVar` for database selection (`_db_name`), so `use_database("work")` in one session doesn't affect others. `Server.run()` creates a local `ServerSession` per call — safe for concurrent use without shared mutable state. The `FastMCP._mcp_server` attribute is accessed via `getattr` with a runtime guard and actionable error message; `mcp` is pinned to `<2.0.0` to protect this private API usage.
+
+Security: Origin-based CSWSH protection (browsers always send `Origin`; non-browser clients like mcp-proxy don't), Bearer auth checked before WebSocket accept, and session keys are sanitized (control chars stripped, truncated to 64 chars) before logging (CWE-117).
 
 ### Configurable CORS Origins
 
@@ -160,7 +172,13 @@ Multi-stage Dockerfile: (1) install Python deps with `uv sync`, (2) download the
 
 ### Log Redaction (CWE-532)
 
+> **Superseded by [Log Safety](#log-safety-cwe-532-cwe-117).** The query string redaction approach was specific to stdlib `http.server` access logs.
+
 Access logs redact query strings from request lines. The `_redact_query_string` method parses HTTP request lines (`GET /path?q=secret HTTP/1.1`) to strip the query while preserving the method, path, and HTTP version. The `_handle_search` handler logs only result count, never the raw query. Error handlers use `urlparse().path` to strip queries.
+
+### Log Safety (CWE-532, CWE-117)
+
+Supersedes [Log Redaction](#log-redaction-cwe-532). Uvicorn's access log is disabled entirely (`access_log=False`), eliminating query string leakage at the source rather than redacting after the fact. The search handler continues to log only result count, never the raw query. WebSocket session keys are sanitized before logging: control characters stripped via `_CONTROL_CHAR_RE` and truncated to 64 characters to prevent log injection (CWE-117) and log flooding.
 
 ### Single Table Design
 
