@@ -15,11 +15,13 @@ from __future__ import annotations
 
 import hmac
 import logging
+import re
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from functools import cached_property
 from pathlib import Path
+from socket import socket
 from typing import TYPE_CHECKING
 
 import uvicorn
@@ -40,6 +42,8 @@ from quarry.database import (
 )
 
 if TYPE_CHECKING:
+    from contextlib import AbstractAsyncContextManager
+
     from starlette.requests import Request
     from starlette.websockets import WebSocket
 
@@ -50,6 +54,9 @@ logger = logging.getLogger(__name__)
 _DEFAULT_CORS_ORIGINS = frozenset({"http://localhost"})
 
 _AUTH_EXEMPT_PATHS = frozenset({"/health"})
+
+# Strip control characters from user-supplied log values (CWE-117).
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 
 class _QuarryContext:
@@ -113,7 +120,7 @@ def _check_auth(request: Request) -> JSONResponse | None:
     return None
 
 
-async def _health_route(request: Request) -> JSONResponse:
+def _health_route(request: Request) -> JSONResponse:
     ctx = _ctx(request)
     return JSONResponse(
         {
@@ -123,7 +130,7 @@ async def _health_route(request: Request) -> JSONResponse:
     )
 
 
-async def _search_route(request: Request) -> JSONResponse:
+def _search_route(request: Request) -> JSONResponse:
     auth_resp = _check_auth(request)
     if auth_resp is not None:
         return auth_resp
@@ -173,7 +180,7 @@ async def _search_route(request: Request) -> JSONResponse:
     )
 
 
-async def _documents_route(request: Request) -> JSONResponse:
+def _documents_route(request: Request) -> JSONResponse:
     auth_resp = _check_auth(request)
     if auth_resp is not None:
         return auth_resp
@@ -184,7 +191,7 @@ async def _documents_route(request: Request) -> JSONResponse:
     return JSONResponse({"total_documents": len(docs), "documents": docs})
 
 
-async def _collections_route(request: Request) -> JSONResponse:
+def _collections_route(request: Request) -> JSONResponse:
     auth_resp = _check_auth(request)
     if auth_resp is not None:
         return auth_resp
@@ -194,7 +201,7 @@ async def _collections_route(request: Request) -> JSONResponse:
     return JSONResponse({"total_collections": len(cols), "collections": cols})
 
 
-async def _status_route(request: Request) -> JSONResponse:
+def _status_route(request: Request) -> JSONResponse:
     auth_resp = _check_auth(request)
     if auth_resp is not None:
         return auth_resp
@@ -241,6 +248,14 @@ async def _mcp_websocket_route(websocket: WebSocket) -> None:
 
     ctx: _QuarryContext = websocket.app.state.ctx
 
+    # Reject cross-site WebSocket hijacking (CSWSH).  Browsers always send
+    # an Origin header on WebSocket upgrades; non-browser clients (mcp-proxy)
+    # do not.  If an Origin is present it must match the allowed CORS origins.
+    origin = websocket.headers.get("Origin")
+    if origin is not None and origin not in ctx.cors_origins:
+        await websocket.close(code=1008)
+        return
+
     # Auth before accept — reject unauthenticated connections immediately.
     if ctx.api_key:
         auth_header = websocket.headers.get("Authorization", "")
@@ -248,7 +263,9 @@ async def _mcp_websocket_route(websocket: WebSocket) -> None:
             await websocket.close(code=1008)
             return
 
-    session_key = websocket.query_params.get("session_key", "unknown")
+    # Sanitize user-controlled value before logging (CWE-117).
+    raw_key = websocket.query_params.get("session_key", "unknown")
+    session_key = _CONTROL_CHAR_RE.sub("", raw_key)
     logger.info("MCP WebSocket connected: session_key=%s", session_key)
 
     try:
@@ -267,7 +284,11 @@ async def _mcp_websocket_route(websocket: WebSocket) -> None:
 # ---------------------------------------------------------------------------
 
 
-def build_app(ctx: _QuarryContext) -> Starlette:
+def build_app(
+    ctx: _QuarryContext,
+    *,
+    lifespan: Callable[[Starlette], AbstractAsyncContextManager[None]] | None = None,
+) -> Starlette:
     """Build the Starlette ASGI application.
 
     Exposed as a factory so tests can construct the app without starting
@@ -293,7 +314,7 @@ def build_app(ctx: _QuarryContext) -> Starlette:
         ),
     ]
 
-    app = Starlette(routes=routes, middleware=middleware)
+    app = Starlette(routes=routes, middleware=middleware, lifespan=lifespan)
     app.state.ctx = ctx
     return app
 
@@ -369,8 +390,7 @@ def serve(
         # Shutdown
         _remove_port_file(port_path)
 
-    app = build_app(ctx)
-    app.router.lifespan_context = lifespan
+    app = build_app(ctx, lifespan=lifespan)
 
     config = uvicorn.Config(
         app,
@@ -378,6 +398,7 @@ def serve(
         port=port,
         log_config=None,
         log_level="warning",
+        access_log=False,
     )
     server = uvicorn.Server(config)
 
@@ -385,8 +406,10 @@ def serve(
     # Override startup to capture and write the port.
     original_startup = server.startup
 
-    async def _startup_with_port_file() -> None:
-        await original_startup()
+    async def _startup_with_port_file(
+        sockets: list[socket] | None = None,
+    ) -> None:
+        await original_startup(sockets=sockets)
         if server.servers and server.servers[0].sockets:
             actual_port = server.servers[0].sockets[0].getsockname()[1]
             _write_port_file(port_path, actual_port)
@@ -394,7 +417,7 @@ def serve(
         else:
             logger.error("Server started but no bound sockets; port file not written")
 
-    server.startup = _startup_with_port_file  # type: ignore[assignment]
+    server.startup = _startup_with_port_file  # type: ignore[method-assign]
 
     logger.info("Starting Quarry server on %s:%d", host, port)
     server.run()

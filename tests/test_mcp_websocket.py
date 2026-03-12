@@ -164,3 +164,78 @@ class TestMcpWebSocket:
             )
             resp = json.loads(ws.receive_text())
             assert "result" in resp
+
+    def test_websocket_rejects_foreign_origin(self, client: TestClient) -> None:
+        """Browser cross-origin WebSocket hijacking is blocked."""
+        with (
+            pytest.raises(WebSocketDisconnect),
+            client.websocket_connect(
+                "/mcp", headers={"Origin": "https://evil.com"}
+            ) as ws,
+        ):
+            ws.receive_text()
+
+    def test_websocket_allows_matching_origin(self, client: TestClient) -> None:
+        """Allowed CORS origin can open a WebSocket."""
+        with client.websocket_connect(
+            "/mcp", headers={"Origin": "http://localhost"}
+        ) as ws:
+            ws.send_text(
+                _jsonrpc_request(
+                    "initialize",
+                    params={
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "clientInfo": {"name": "test", "version": "0.1.0"},
+                    },
+                )
+            )
+            resp = json.loads(ws.receive_text())
+            assert "result" in resp
+
+    def test_websocket_allows_no_origin(self, client: TestClient) -> None:
+        """Non-browser clients (no Origin header) are allowed."""
+        with client.websocket_connect("/mcp") as ws:
+            ws.send_text(
+                _jsonrpc_request(
+                    "initialize",
+                    params={
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "clientInfo": {"name": "test", "version": "0.1.0"},
+                    },
+                )
+            )
+            resp = json.loads(ws.receive_text())
+            assert "result" in resp
+
+    def test_session_key_control_chars_sanitized(
+        self, client: TestClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Control characters in session_key are stripped from logs."""
+        import logging
+
+        with (
+            caplog.at_level(logging.INFO),
+            client.websocket_connect("/mcp?session_key=abc%0d%0aINJECTED") as ws,
+        ):
+            ws.send_text(
+                _jsonrpc_request(
+                    "initialize",
+                    params={
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "clientInfo": {"name": "test", "version": "0.1.0"},
+                    },
+                )
+            )
+            ws.receive_text()
+
+        key_logs = [
+            r.getMessage() for r in caplog.records if "session_key" in r.getMessage()
+        ]
+        assert key_logs
+        for msg in key_logs:
+            assert "\r" not in msg
+            assert "\n" not in msg
+            assert "INJECTED" in msg
