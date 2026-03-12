@@ -314,7 +314,33 @@ def build_app(
         ),
     ]
 
-    app = Starlette(routes=routes, middleware=middleware, lifespan=lifespan)
+    from starlette.exceptions import HTTPException  # noqa: PLC0415
+
+    async def _json_http_error(
+        request: Request,  # noqa: ARG001
+        exc: HTTPException,
+    ) -> JSONResponse:
+        return JSONResponse(
+            {"error": exc.detail or "Error"},
+            status_code=exc.status_code,
+        )
+
+    async def _json_server_error(
+        request: Request,
+        exc: Exception,  # noqa: ARG001
+    ) -> JSONResponse:
+        logger.exception("Unhandled error on %s", request.url.path)
+        return JSONResponse({"error": "Internal server error"}, status_code=500)
+
+    app = Starlette(
+        routes=routes,
+        middleware=middleware,
+        lifespan=lifespan,
+        exception_handlers={
+            HTTPException: _json_http_error,  # type: ignore[dict-item]
+            Exception: _json_server_error,
+        },
+    )
     app.state.ctx = ctx
     return app
 

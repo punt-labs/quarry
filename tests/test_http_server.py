@@ -221,7 +221,9 @@ class TestStatus:
 
 class TestNotFound:
     def test_unknown_path_returns_404(self, client: TestClient) -> None:
-        assert client.get("/unknown").status_code == 404
+        resp = client.get("/unknown")
+        assert resp.status_code == 404
+        assert resp.json()["error"] == "Not Found"
 
 
 class TestPortFile:
