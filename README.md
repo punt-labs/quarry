@@ -61,7 +61,7 @@ Claude Code ◄──────────────► mcp-proxy ◄──
              MCP JSON-RPC                                       (one process)
 ```
 
-Without the proxy, every Claude Code tab spawns a separate Python process, each loading the ~200MB embedding model. With it, you get instant startup and shared state across all sessions.
+Without the proxy, every Claude Code tab spawns a separate Python process, each loading the embedding model into ~200MB of RAM. With it, you get instant startup and shared state across all sessions.
 
 `quarry install` downloads mcp-proxy automatically (SHA256-verified, correct platform) and configures MCP clients to use it.
 
@@ -112,7 +112,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 }
 ```
 
-Use the absolute path to `mcp-proxy` (e.g. `~/.local/bin/mcp-proxy`). `quarry install` resolves this automatically. Requires `quarry serve` running as a daemon (installed via `quarry install`).
+Use the absolute path to `mcp-proxy` (e.g. `~/.local/bin/mcp-proxy`). `quarry install` resolves this automatically. Requires `quarry serve` running (either started manually, or installed as a daemon via `quarry install`).
 
 <details>
 <summary>Without mcp-proxy (not recommended)</summary>
@@ -262,17 +262,18 @@ quarry list databases                          # list all databases
 
 Each database is fully isolated — its own vector index and sync registry. The default database is called `default`.
 
-You can point MCP servers at different databases by passing `--db` to `quarry serve`:
+You can point the daemon at a specific database:
 
 ```bash
-quarry serve --db work              # daemon serves the 'work' database
+quarry use work                     # set persistent default database
+quarry serve                        # daemon serves the 'work' database
 ```
 
 ```json
 {
   "mcpServers": {
     "work": {
-      "command": "mcp-proxy",
+      "command": "/path/to/mcp-proxy",
       "args": ["ws://localhost:8420/mcp"]
     }
   }
