@@ -353,6 +353,26 @@ def _configure_claude_desktop() -> CheckResult:
     )
 
 
+def _check_mcp_proxy() -> CheckResult:
+    """Check whether mcp-proxy binary is installed and on PATH."""
+    from quarry.proxy import installed_path  # noqa: PLC0415
+
+    path = installed_path()
+    if path:
+        return CheckResult(
+            name="mcp-proxy",
+            passed=True,
+            message=f"found at {path}",
+            required=False,
+        )
+    return CheckResult(
+        name="mcp-proxy",
+        passed=False,
+        message="not found on PATH (run 'quarry install')",
+        required=False,
+    )
+
+
 def _check_claude_code_mcp() -> CheckResult:
     """Check whether quarry MCP is configured in Claude Code (read-only)."""
     claude_path = shutil.which("claude")
@@ -531,6 +551,7 @@ def check_environment(*, _skip_header: bool = False) -> int:
             _check_aws_credentials(),
             _check_embedding_model(),
             _check_imports(),
+            _check_mcp_proxy(),
             _check_claude_code_mcp(),
             _check_claude_desktop_mcp(),
             _check_sagemaker_endpoint(),

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import platform
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from quarry.proxy import _BINARY_NAME, _asset_name, install, installed_version
+from quarry.proxy import _BINARY_NAME, _asset_name, install, installed_path
 
 
 class TestAssetName:
@@ -56,15 +57,15 @@ class TestAssetName:
             _asset_name()
 
 
-class TestInstalledVersion:
+class TestInstalledPath:
     def test_found(self) -> None:
         path = "/usr/local/bin/mcp-proxy"
         with patch("quarry.proxy.shutil.which", return_value=path):
-            assert installed_version() == path
+            assert installed_path() == path
 
     def test_not_found(self) -> None:
         with patch("quarry.proxy.shutil.which", return_value=None):
-            assert installed_version() is None
+            assert installed_path() is None
 
 
 class TestInstall:
@@ -77,8 +78,6 @@ class TestInstall:
         return resp
 
     def test_downloads_and_installs(self, tmp_path: Path) -> None:
-        import hashlib
-
         binary_content = b"\x00" * 100
         real_checksum = hashlib.sha256(binary_content).hexdigest()
         checksum_text = f"{real_checksum}  mcp-proxy-darwin-arm64\n"
@@ -86,11 +85,12 @@ class TestInstall:
         binary_resp = self._make_mock_resp(binary_content)
         checksum_resp = self._make_mock_resp(checksum_text.encode())
 
-        # version= skips _latest_version, so 2 urlopen calls:
-        # 1) download binary, 2) download checksums
         with (
             patch("quarry.proxy._INSTALL_DIR", tmp_path),
-            patch("quarry.proxy._asset_name", return_value="mcp-proxy-darwin-arm64"),
+            patch(
+                "quarry.proxy._asset_name",
+                return_value="mcp-proxy-darwin-arm64",
+            ),
             patch(
                 "quarry.proxy.urllib.request.urlopen",
                 side_effect=[binary_resp, checksum_resp],
@@ -113,7 +113,10 @@ class TestInstall:
 
         with (
             patch("quarry.proxy._INSTALL_DIR", tmp_path),
-            patch("quarry.proxy._asset_name", return_value="mcp-proxy-darwin-arm64"),
+            patch(
+                "quarry.proxy._asset_name",
+                return_value="mcp-proxy-darwin-arm64",
+            ),
             patch(
                 "quarry.proxy.urllib.request.urlopen",
                 side_effect=[binary_resp, checksum_resp],
@@ -122,5 +125,6 @@ class TestInstall:
         ):
             install(version="v0.1.0")
 
-        # Binary should be deleted on checksum failure
+        # Neither final binary nor tempfile should remain
         assert not (tmp_path / _BINARY_NAME).exists()
+        assert not list(tmp_path.glob("*.tmp"))
