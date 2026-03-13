@@ -45,4 +45,4 @@ if git -C "$REPO_ROOT" diff --cached --quiet; then
   exit 0
 fi
 
-git -C "$REPO_ROOT" commit --no-verify -m "chore: restore dev plugin state"
+git -C "$REPO_ROOT" commit --no-verify -m "chore: restore dev plugin state [skip ci]"
