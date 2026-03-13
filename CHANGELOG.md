@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-03-13
+
 ### Added
 
 - **MCP-over-WebSocket endpoint** (`/mcp`) — Multiple Claude Code sessions can
