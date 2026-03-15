@@ -79,7 +79,7 @@ def _launchd_install() -> None:
     # respawning via KeepAlive.
     if _launchd_status():
         subprocess.run(
-            ["launchctl", "unload", str(_LAUNCHD_PLIST)],
+            ["launchctl", "unload", "-w", str(_LAUNCHD_PLIST)],
             check=False,
         )
         logger.info("Unloaded existing %s before upgrade", _LABEL)

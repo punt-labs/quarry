@@ -77,6 +77,9 @@ class TestInstallMacOS:
 
             # Fresh install: no unload, just load
             calls = [c.args[0] for c in mock_run.call_args_list]
+            assert not any("unload" in c for c in calls), (
+                "fresh install must not unload"
+            )
             assert any("load" in c for c in calls)
 
     @patch("quarry.service.subprocess.run")
