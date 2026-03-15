@@ -286,12 +286,18 @@ class TestLoadHookConfig:
 
 
 class TestSyncInBackground:
-    def test_returns_true_on_success(self) -> None:
+    def test_returns_true_on_success(self, tmp_path: Path) -> None:
         import subprocess as _subprocess
 
         from quarry.hooks import _sync_in_background
 
-        with patch.object(_subprocess, "Popen"):
+        mock_proc = MagicMock()
+        mock_proc.pid = 99999
+        with (
+            patch.object(_subprocess, "Popen", return_value=mock_proc),
+            patch("quarry.hooks._is_sync_running", return_value=False),
+            patch("quarry.hooks._write_sync_pidfile"),
+        ):
             assert _sync_in_background() is True
 
     def test_returns_false_on_oserror(self) -> None:
@@ -299,8 +305,44 @@ class TestSyncInBackground:
 
         from quarry.hooks import _sync_in_background
 
-        with patch.object(_subprocess, "Popen", side_effect=OSError("No such file")):
+        with (
+            patch.object(_subprocess, "Popen", side_effect=OSError("No such file")),
+            patch("quarry.hooks._is_sync_running", return_value=False),
+        ):
             assert _sync_in_background() is False
+
+    def test_skips_when_already_running(self) -> None:
+        from quarry.hooks import _sync_in_background
+
+        with patch("quarry.hooks._is_sync_running", return_value=True):
+            assert _sync_in_background() is False
+
+
+class TestIsSyncRunning:
+    def test_no_pidfile_returns_false(self, tmp_path: Path) -> None:
+        from quarry.hooks import _is_sync_running
+
+        with patch("tempfile.gettempdir", return_value=str(tmp_path)):
+            assert _is_sync_running() is False
+
+    def test_stale_pid_returns_false(self, tmp_path: Path) -> None:
+        from quarry.hooks import _is_sync_running
+
+        pidfile = tmp_path / "quarry-sync.pid"
+        pidfile.write_text("999999999")  # PID that doesn't exist
+        with patch("tempfile.gettempdir", return_value=str(tmp_path)):
+            assert _is_sync_running() is False
+            assert not pidfile.exists()  # Stale file cleaned up
+
+    def test_live_pid_returns_true(self, tmp_path: Path) -> None:
+        import os
+
+        from quarry.hooks import _is_sync_running
+
+        pidfile = tmp_path / "quarry-sync.pid"
+        pidfile.write_text(str(os.getpid()))  # Current process — definitely alive
+        with patch("tempfile.gettempdir", return_value=str(tmp_path)):
+            assert _is_sync_running() is True
 
 
 # ---------------------------------------------------------------------------

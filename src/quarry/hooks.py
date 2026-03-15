@@ -79,6 +79,37 @@ def _resolve_settings() -> Settings:
     return resolve_db_paths(load_settings(), None)
 
 
+def _is_sync_running() -> bool:
+    """Check if a quarry sync process is already running via PID file.
+
+    Returns True if a live sync process exists, False otherwise.
+    Stale PID files (process no longer running) are cleaned up.
+    """
+    import os  # noqa: PLC0415
+    import tempfile  # noqa: PLC0415
+
+    pidfile = Path(tempfile.gettempdir()) / "quarry-sync.pid"
+    if not pidfile.exists():
+        return False
+    try:
+        pid = int(pidfile.read_text().strip())
+        os.kill(pid, 0)  # signal 0: check if process exists
+        return True
+    except (ValueError, OSError):
+        # Stale PID file — process is gone.
+        with contextlib.suppress(OSError):
+            pidfile.unlink()
+        return False
+
+
+def _write_sync_pidfile(pid: int) -> None:
+    """Write the sync process PID to a lock file."""
+    import tempfile  # noqa: PLC0415
+
+    pidfile = Path(tempfile.gettempdir()) / "quarry-sync.pid"
+    pidfile.write_text(str(pid))
+
+
 def _sync_in_background() -> bool:
     """Fire-and-forget sync via detached subprocess.
 
@@ -89,23 +120,31 @@ def _sync_in_background() -> bool:
     exits.  The subprocess gets its own process group so it survives
     the hook process.
 
-    Returns True if the subprocess was launched, False on failure.
+    Guards against concurrent syncs via a PID file.  If a sync is
+    already running, skips silently.
+
+    Returns True if the subprocess was launched, False if skipped or failed.
     """
     import subprocess  # noqa: PLC0415
     import sys  # noqa: PLC0415
 
+    if _is_sync_running():
+        logger.debug("session-start: sync already running, skipping")
+        return False
+
     try:
-        subprocess.Popen(  # noqa: S603
+        proc = subprocess.Popen(  # noqa: S603
             [sys.executable, "-m", "quarry", "sync"],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
+        _write_sync_pidfile(proc.pid)
     except OSError as exc:
         logger.error("session-start: failed to launch background sync: %s", exc)
         return False
-    logger.info("session-start: background sync launched")
+    logger.info("session-start: background sync launched (pid=%d)", proc.pid)
     return True
 
 

@@ -20,7 +20,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "mcp__(plugin_quarry(-dev)?_)?quarry__.*",
+        "matcher": "mcp__(plugin_quarry(-dev)?_)?quarry(-proxy)?__.*",
         "hooks": [
           {
             "type": "command",
