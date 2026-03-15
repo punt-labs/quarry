@@ -16,9 +16,34 @@ across `transform`, `index`, and `connector`).
 
 ## [1.5.2] - 2026-03-15
 
+### Fixed
+
+- **launchd service upgrade fails silently** — `launchctl load` does nothing when
+  a service with the same label is already registered with a different binary path.
+  The old binary kept respawning via KeepAlive, ignoring the new plist. Fix: check
+  if the service is loaded and `unload -w` first, then write the new plist and
+  `load`. (#106)
+
 ## [1.5.1] - 2026-03-15
 
+### Fixed
+
+- **Concurrent background syncs** — SessionStart hook spawned a new `quarry sync`
+  on every session open/resume with no guard against concurrent instances. 7
+  simultaneous sessions produced 7 sync processes (580% CPU, 6.8 GB RAM). Fix:
+  atomic `O_CREAT|O_EXCL` lock file in `~/.quarry/sync.pid`, with proper EPERM
+  handling and separated error paths for Popen vs pidfile write failures. (#103)
+- **suppress-output hook missed quarry-proxy tools** — PostToolUse matcher for
+  suppressing verbose MCP output only matched `quarry` tools, not `quarry-proxy`
+  tools. (#103)
+
 ## [1.5.0] - 2026-03-13
+
+### Fixed
+
+- **Stale README install.sh SHA** — install command referenced SHA `b10f69c` but
+  the script had changed to `fcf0d67`, causing checksum verification failures for
+  new users.
 
 ## [1.4.0] - 2026-03-13
 
