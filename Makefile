@@ -1,4 +1,4 @@
-.PHONY: help test lint type check format
+.PHONY: help test lint type check format build clean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -19,3 +19,11 @@ check: lint type test ## Run all quality gates
 format: ## Auto-format code
 	uv run ruff format .
 	uv run ruff check --fix .
+
+build: ## Build wheel and sdist
+	rm -rf dist/
+	uv build
+	uvx twine check dist/*
+
+clean: ## Remove build artifacts
+	rm -rf dist/ .tmp/
