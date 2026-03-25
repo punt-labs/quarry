@@ -98,7 +98,7 @@ def check_instant_rules(command: str) -> str | None:
 # Sequence rules — require temporal context from the accumulator
 # ---------------------------------------------------------------------------
 
-_MAKE_CHECK_PATTERN = re.compile(r"\bmake\s+check\b")
+_MAKE_CHECK_PATTERN = re.compile(r"\bmake\s+check\b(?![-\w])")
 
 _FULL_GATE = "Reminder: run `make check` before committing."
 
@@ -109,9 +109,10 @@ _SOLO_GATE_TARGETS = re.compile(r"^make\s+(lint|type|test)$")
 
 def _is_solo_gate(command: str) -> bool:
     """True if *command* runs a single make sub-target (lint, type, test)."""
-    if "&&" in command or ";" in command:
+    cmd = command.strip()
+    if "&&" in cmd or ";" in cmd:
         return False
-    return bool(_SOLO_GATE_TARGETS.match(command))
+    return bool(_SOLO_GATE_TARGETS.match(cmd))
 
 
 def _command_has_full_gate(command: str) -> bool:

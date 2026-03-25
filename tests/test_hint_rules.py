@@ -132,6 +132,13 @@ class TestCommitWithoutGateRule:
         hint = check_sequence_rules(events, 'git commit -m "feat"')
         assert hint is None
 
+    def test_commit_after_make_check_all_still_triggers(self) -> None:
+        """make check-all is not the same as make check."""
+        events = [_event("make check-all")]
+        hint = check_sequence_rules(events, 'git commit -m "feat"')
+        assert hint is not None
+        assert "make check" in hint
+
     def test_non_commit_command_no_trigger(self) -> None:
         events: list[ToolEvent] = []
         assert check_sequence_rules(events, "git push origin main") is None
@@ -177,6 +184,13 @@ class TestSoloGateToolRule:
         events = [_event("make lint && make test")]
         hint = check_sequence_rules(events, "make type")
         assert hint is None
+
+    def test_trailing_whitespace_still_detected(self) -> None:
+        """Trailing whitespace should not prevent solo detection."""
+        events = [_event("make lint")]
+        hint = check_sequence_rules(events, "make type  ")
+        assert hint is not None
+        assert "make check" in hint
 
     def test_uv_run_tools_not_detected(self) -> None:
         """Raw uv run commands are no longer detected as gate tools."""
