@@ -122,29 +122,22 @@ def _event(command: str, ts: float = 100.0) -> ToolEvent:
 
 class TestCommitWithoutGateRule:
     def test_commit_without_gate_triggers(self) -> None:
-        events = [_event("uv run mypy src/"), _event("uv run ruff check .")]
+        events = [_event("make lint"), _event("make type")]
         hint = check_sequence_rules(events, 'git commit -m "fix"')
         assert hint is not None
-        assert "quality gate" in hint
-
-    def test_commit_after_full_gate_no_trigger(self) -> None:
-        full = (
-            "uv run ruff check . && uv run ruff format --check . "
-            "&& uv run mypy src/ tests/ && uv run pyright && uv run pytest"
-        )
-        events = [_event(full)]
-        hint = check_sequence_rules(events, 'git commit -m "feat"')
-        assert hint is None
+        assert "make check" in hint
 
     def test_commit_after_make_check_no_trigger(self) -> None:
-        # make check expands to a command containing all components
-        gate = (
-            "ruff check . && ruff format --check . && mypy src/ tests/ "
-            "&& pyright && pytest"
-        )
-        events = [_event(gate)]
+        events = [_event("make check")]
         hint = check_sequence_rules(events, 'git commit -m "feat"')
         assert hint is None
+
+    def test_commit_after_make_check_all_still_triggers(self) -> None:
+        """make check-all is not the same as make check."""
+        events = [_event("make check-all")]
+        hint = check_sequence_rules(events, 'git commit -m "feat"')
+        assert hint is not None
+        assert "make check" in hint
 
     def test_non_commit_command_no_trigger(self) -> None:
         events: list[ToolEvent] = []
@@ -152,31 +145,55 @@ class TestCommitWithoutGateRule:
 
 
 class TestSoloGateToolRule:
-    def test_second_solo_tool_triggers(self) -> None:
-        events = [_event("uv run mypy src/")]
-        hint = check_sequence_rules(events, "uv run ruff check .")
+    def test_second_solo_target_triggers(self) -> None:
+        events = [_event("make lint")]
+        hint = check_sequence_rules(events, "make type")
         assert hint is not None
-        assert "full quality gate" in hint
+        assert "make check" in hint
 
-    def test_first_solo_tool_no_trigger(self) -> None:
+    def test_first_solo_target_no_trigger(self) -> None:
         events: list[ToolEvent] = []
-        hint = check_sequence_rules(events, "uv run mypy src/")
+        hint = check_sequence_rules(events, "make lint")
         assert hint is None
 
     def test_non_gate_tool_no_trigger(self) -> None:
-        events = [_event("uv run mypy src/")]
+        events = [_event("make lint")]
         hint = check_sequence_rules(events, "ls -la")
         assert hint is None
 
-    def test_full_chain_not_flagged(self) -> None:
-        """A chained command is not a solo gate tool."""
-        events = [_event("uv run mypy src/")]
-        full = "uv run ruff check . && uv run pytest"
-        hint = check_sequence_rules(events, full)
+    def test_make_check_not_flagged_as_solo(self) -> None:
+        """make check is the full gate — not a solo target."""
+        events = [_event("make lint")]
+        hint = check_sequence_rules(events, "make check")
+        assert hint is None
+
+    def test_chained_make_not_flagged(self) -> None:
+        """Chained make commands are not solo targets."""
+        events = [_event("make lint")]
+        hint = check_sequence_rules(events, "make lint && make test")
+        assert hint is None
+
+    def test_multi_target_make_not_flagged(self) -> None:
+        """Multiple make targets in one command are not solo targets."""
+        events = [_event("make lint")]
+        hint = check_sequence_rules(events, "make lint type")
         assert hint is None
 
     def test_chained_past_event_not_counted(self) -> None:
-        """Past chained commands should not count as solo gate tools."""
-        events = [_event("uv run ruff check . && uv run pytest")]
-        hint = check_sequence_rules(events, "uv run mypy src/")
+        """Past chained commands should not count as solo targets."""
+        events = [_event("make lint && make test")]
+        hint = check_sequence_rules(events, "make type")
+        assert hint is None
+
+    def test_trailing_whitespace_still_detected(self) -> None:
+        """Trailing whitespace should not prevent solo detection."""
+        events = [_event("make lint")]
+        hint = check_sequence_rules(events, "make type  ")
+        assert hint is not None
+        assert "make check" in hint
+
+    def test_uv_run_tools_not_detected(self) -> None:
+        """Raw uv run commands are no longer detected as gate tools."""
+        events = [_event("uv run mypy src/")]
+        hint = check_sequence_rules(events, "uv run ruff check .")
         assert hint is None
