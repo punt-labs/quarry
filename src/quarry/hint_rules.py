@@ -98,32 +98,23 @@ def check_instant_rules(command: str) -> str | None:
 # Sequence rules — require temporal context from the accumulator
 # ---------------------------------------------------------------------------
 
-_GATE_COMPONENTS = frozenset({"ruff check", "ruff format", "mypy", "pyright", "pytest"})
+_MAKE_CHECK_PATTERN = re.compile(r"\bmake\s+check\b")
 
-_FULL_GATE = (
-    "Reminder: run the full quality gate before committing: "
-    "`uv run ruff check . && uv run ruff format --check . "
-    "&& uv run mypy src/ tests/ && uv run pyright && uv run pytest`"
-)
+_FULL_GATE = "Reminder: run `make check` before committing."
 
-_SOLO_GATE_HINT = (
-    "Tip: prefer the full quality gate chain (`uv run ruff check . && ...`) "
-    "over running individual tools separately."
-)
+_SOLO_GATE_HINT = "Tip: prefer `make check` over running sub-targets individually."
 
-_SOLO_GATE_PATTERN = re.compile(
-    r"^uv\s+run\s+(ruff\s+check|ruff\s+format|mypy|pyright|pytest)\b"
-)
+_SOLO_GATE_TARGETS = re.compile(r"^make\s+(lint|type|test)(?:\s|$)")
 
 
 def _is_solo_gate(command: str) -> bool:
-    """True if *command* is a solo gate tool (not chained with ``&&``)."""
-    return bool(_SOLO_GATE_PATTERN.search(command)) and "&&" not in command
+    """True if *command* runs a single make sub-target (lint, type, test)."""
+    return bool(_SOLO_GATE_TARGETS.match(command))
 
 
 def _command_has_full_gate(command: str) -> bool:
-    """Check if *command* contains all quality gate components."""
-    return all(component in command for component in _GATE_COMPONENTS)
+    """Check if *command* is ``make check``."""
+    return bool(_MAKE_CHECK_PATTERN.search(command))
 
 
 def check_sequence_rules(events: list[ToolEvent], command: str) -> str | None:

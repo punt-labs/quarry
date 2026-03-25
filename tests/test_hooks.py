@@ -1263,11 +1263,11 @@ class TestHandlePreToolHint:
         monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))  # type: ignore[attr-defined]
         session_id = "test-sequence"
 
-        # Pre-populate state with a solo mypy run (not full gate).
+        # Pre-populate state with a solo make sub-target (not full gate).
         from quarry.hint_accumulator import HintAccumulator, ToolEvent
 
         acc = HintAccumulator()
-        acc.add(ToolEvent(ts=100.0, tool="Bash", command="uv run mypy src/"))
+        acc.add(ToolEvent(ts=100.0, tool="Bash", command="make lint"))
         state_path = _hint_state_path(session_id)
         state_path.write_text(acc.to_json())
 
@@ -1277,7 +1277,7 @@ class TestHandlePreToolHint:
         }
         result = handle_pre_tool_hint(payload)
         assert "hookSpecificOutput" in result
-        assert "quality gate" in str(
+        assert "make check" in str(
             result["hookSpecificOutput"]["additionalContext"]  # type: ignore[index]
         )
 

@@ -14,6 +14,10 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- Replace Python-hardcoded quality gate hints (`ruff`, `mypy`, `pyright`, `pytest`) with language-agnostic `make check` — no longer fires irrelevant Python tool reminders in non-Python projects
+
 ## [1.5.2] - 2026-03-15
 
 ### Fixed
