@@ -386,10 +386,9 @@ run \texttt{quarry install}, and start searching.
 \begin{faqpair}{Do I have to manually index everything?}\label{faq:passive-capture}
   No. The CLI and MCP server require explicit commands, but the Claude Code
   plugin captures knowledge passively through hooks~\cite{claude-code-hooks}.
-  Four hooks ship today: auto-ingesting URLs Claude fetches during a session,
-  preserving conversation transcripts before context compaction, registering
-  your project directory at session start, and emitting soft convention hints
-  when Bash commands drift from project best practices. All hooks are fail-open
+  Three hooks ship today: auto-ingesting URLs Claude fetches during a session,
+  preserving conversation transcripts before context compaction, and registering
+  your project directory at session start. All hooks are fail-open
   (a failure never blocks your session) and per-project configurable via
   \texttt{.claude/quarry.local.md}. You work normally; the knowledge base grows
   in the background.
@@ -522,10 +521,9 @@ run \texttt{quarry install}, and start searching.
   HTML parsing, URL and sitemap crawling, text file parsing, source code
   parsing (30+ languages via Tree-sitter), semantic search with metadata
   filtering (page type, source format), directory sync, named databases,
-  MCP server, CLI, HTTP API server, Claude Code plugin with four hooks
+  MCP server, CLI, HTTP API server, Claude Code plugin with three hooks
   (session start auto-registration, post web fetch auto-ingestion,
-  pre-compact transcript preservation, convention hints via PreToolUse
-  accumulator).
+  pre-compact transcript preservation).
 
   \textbf{In progress:} macOS menu bar companion app
   (\href{https://github.com/punt-labs/quarry-menubar}{quarry-menubar}).
@@ -715,7 +713,7 @@ Shipped features that form the core product.
   \featureitem{Local OCR}{Extract text from scanned documents and images on-device with no cloud account required.}\label{feat:local-ocr}
   \featureitem{Named databases}{Organize separate knowledge bases by project or domain to keep search results relevant.}\label{feat:named-databases}
   \featureitem{One-command install}{A single \texttt{quarry install} auto-configures MCP for Claude Code and Claude Desktop with zero manual setup.}\label{feat:one-command-install}
-  \featureitem{Claude Code plugin}{Plugin with four hooks: auto-register project directory on session start, auto-ingest URLs Claude fetches (post web fetch), preserve conversation transcripts before context compaction (pre-compact), and emit soft convention hints when Bash commands drift from project conventions (pre-tool-hint). All hooks fail-open, non-blocking, per-project configurable.}\label{feat:claude-plugin}
+  \featureitem{Claude Code plugin}{Plugin with three hooks: auto-register project directory on session start, auto-ingest URLs Claude fetches (post web fetch), and preserve conversation transcripts before context compaction (pre-compact). All hooks fail-open, non-blocking, per-project configurable.}\label{feat:claude-plugin}
 \end{enumerate}
 
 \subsection*{Must Do Next}

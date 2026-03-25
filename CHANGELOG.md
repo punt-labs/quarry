@@ -14,9 +14,9 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
-### Fixed
+### Removed
 
-- Replace Python-hardcoded quality gate hints (`ruff`, `mypy`, `pyright`, `pytest`) with language-agnostic `make check` — no longer fires irrelevant Python tool reminders in non-Python projects
+- **Convention hint hooks** — removed the entire PreToolUse/Bash hook system (instant rules, sequence rules, Bash-command accumulator). Dev workflow conventions belong in CLAUDE.md, not in a knowledge management product. See `docs/build-plan-ppv/design.md` for the replacement design (knowledge event accumulator for research capture)
 
 ## [1.5.2] - 2026-03-15
 

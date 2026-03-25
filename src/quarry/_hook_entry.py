@@ -53,15 +53,8 @@ def _pre_compact() -> None:
     run_hook(handle_pre_compact)
 
 
-def _pre_tool_hint() -> None:
-    from quarry.hooks import handle_pre_tool_hint  # noqa: PLC0415
-
-    run_hook(handle_pre_tool_hint)
-
-
 _HANDLERS: dict[str, Callable[[], None]] = {
     "session-start": _session_start,
     "post-web-fetch": _post_web_fetch,
     "pre-compact": _pre_compact,
-    "pre-tool-hint": _pre_tool_hint,
 }

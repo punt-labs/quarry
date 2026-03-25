@@ -158,14 +158,13 @@ As an MCP server, Quarry is a tool you call — `/find`, `/ingest`, explicit com
 
 **Learning.** Knowledge flows through every session and normally evaporates — web research, document reads, debugging discoveries, architectural decisions. The plugin captures this passively. Hooks detect knowledge-generating events and ingest them automatically. You work normally; the knowledge base grows.
 
-Four hooks are shipped today:
+Three hooks are shipped today:
 
 - **Session start** — auto-registers the project directory so new files are indexed on sync.
 - **Post web fetch** — every URL Claude fetches is auto-ingested into the knowledge base.
 - **Pre-compact** — conversation transcript is captured before context compaction, preserving discoveries that would otherwise be lost.
-- **Convention hints** — soft reminders when Bash commands drift from project conventions (e.g., `git add -A` instead of specific files, `pip` instead of `uv`, committing without running the quality gate). Hints are advisory — they never block commands.
 
-Per-project hook configuration via `.claude/quarry.local.md` YAML frontmatter lets you selectively disable individual hooks (`convention_hints: false`). All hooks are fail-open (quarry crashing never breaks Claude Code) and non-blocking.
+Per-project hook configuration via `.claude/quarry.local.md` YAML frontmatter lets you selectively disable individual hooks. All hooks are fail-open (quarry crashing never breaks Claude Code) and non-blocking.
 
 **Recall.** Having the knowledge isn't enough if Claude doesn't know to look there. The plugin will inject a knowledge briefing at session start and nudge Claude before web searches that overlap with locally indexed content. The second time you research something, it's instant.
 
@@ -182,7 +181,6 @@ Per-project hook configuration via `.claude/quarry.local.md` YAML frontmatter le
 | **Web pages saved** | URLs Claude fetches are auto-ingested | Shipped |
 | **Conversations preserved** | Before context compaction, the transcript is captured | Shipped |
 | **Project directory registered** | Session start auto-registers the project | Shipped |
-| **Convention hints** | Soft reminders when commands drift from project conventions | Shipped |
 | **Knowledge briefing** | Session start — Claude knows what's in your knowledge base | Planned |
 | **Local-first nudge** | Before web search — suggests checking quarry for familiar topics | Planned |
 | **Documents indexed** | Non-code files Claude reads (PDFs, images) are queued | Planned |

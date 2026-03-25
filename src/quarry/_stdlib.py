@@ -38,7 +38,6 @@ class HookConfig:
     session_sync: bool = True
     web_fetch: bool = True
     compaction: bool = True
-    convention_hints: bool = True
 
 
 def load_hook_config(cwd: str) -> HookConfig:
@@ -83,7 +82,6 @@ def load_hook_config(cwd: str) -> HookConfig:
         session_sync=_bool_field(auto, "session_sync", default=True),
         web_fetch=_bool_field(auto, "web_fetch", default=True),
         compaction=_bool_field(auto, "compaction", default=True),
-        convention_hints=_bool_field(auto, "convention_hints", default=True),
     )
 
 

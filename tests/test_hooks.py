@@ -17,11 +17,9 @@ from quarry.hooks import (
     _extract_url,
     _extract_web_fetch_content,
     _find_registration,
-    _hint_state_path,
     _unique_collection_name,
     handle_post_web_fetch,
     handle_pre_compact,
-    handle_pre_tool_hint,
     handle_session_start,
 )
 from quarry.sync_registry import (
@@ -192,19 +190,6 @@ class TestLoadHookConfig:
         )
         config = load_hook_config(str(tmp_path))
         assert config.web_fetch is False
-
-    def test_convention_hints_default_enabled(self, tmp_path: Path) -> None:
-        config = load_hook_config(str(tmp_path))
-        assert config.convention_hints is True
-
-    def test_disables_convention_hints(self, tmp_path: Path) -> None:
-        config_dir = tmp_path / ".claude"
-        config_dir.mkdir()
-        (config_dir / "quarry.local.md").write_text(
-            "---\nauto_capture:\n  convention_hints: false\n---\n"
-        )
-        config = load_hook_config(str(tmp_path))
-        assert config.convention_hints is False
 
     def test_yaml_alias_no_disables(self, tmp_path: Path) -> None:
         """YAML boolean alias 'no' should disable the hook."""
@@ -1020,19 +1005,12 @@ class TestHookCLI:
         assert result.exit_code == 0
         assert json.loads(result.output) == {}
 
-    def test_pre_tool_hint_accepts_json_stdin(self) -> None:
-        payload = json.dumps({"tool_input": {"command": "ls"}})
-        result = runner.invoke(app, ["hooks", "pre-tool-hint"], input=payload)
-        assert result.exit_code == 0
-        assert json.loads(result.output) == {}
-
     def test_hooks_help(self) -> None:
         result = runner.invoke(app, ["hooks", "--help"])
         assert result.exit_code == 0
         assert "session-start" in result.output
         assert "post-web-fetch" in result.output
         assert "pre-compact" in result.output
-        assert "pre-tool-hint" in result.output
 
     def test_invalid_json_is_fail_open(self) -> None:
         result = runner.invoke(app, ["hooks", "session-start"], input="not json{{{")
@@ -1119,32 +1097,6 @@ class TestHookWiring:
         ]
         assert any("pre-compact.sh" in c for c in commands)
 
-    def test_pre_tool_hint_script_exists(self) -> None:
-        script = _HOOKS_DIR / "pre-tool-hint.sh"
-        assert script.is_file()
-        assert script.stat().st_mode & 0o111
-
-    def test_pre_tool_hint_hook_registered(self) -> None:
-        """PreToolUse has a Bash matcher entry for convention hints."""
-        hooks_json = _HOOKS_DIR / "hooks.json"
-        data = json.loads(hooks_json.read_text())
-        assert "PreToolUse" in data["hooks"]
-        entries = data["hooks"]["PreToolUse"]
-        bash_entries = [e for e in entries if e.get("matcher") == "Bash"]
-        assert bash_entries, "Expected at least one Bash matcher for PreToolUse"
-        commands = [
-            h["command"]
-            for entry in bash_entries
-            for h in entry.get("hooks", [])
-            if "command" in h
-        ]
-        assert any("pre-tool-hint.sh" in c for c in commands)
-
-
-# ---------------------------------------------------------------------------
-# PreToolUse hint handler tests
-# ---------------------------------------------------------------------------
-
 
 class TestReadHookStdin:
     """Verify read_hook_stdin doesn't block on open pipes (DES-027)."""
@@ -1200,167 +1152,3 @@ class TestReadHookStdin:
             r.close()
             os.close(w_fd)
         assert result == ""
-
-
-class TestHandlePreToolHint:
-    def test_non_bash_payload_ignored(self) -> None:
-        """Payloads without tool_input.command return empty."""
-        assert handle_pre_tool_hint({}) == {}
-        assert handle_pre_tool_hint({"tool_input": "not a dict"}) == {}
-
-    def test_empty_command_ignored(self) -> None:
-        payload: dict[str, object] = {"tool_input": {"command": ""}}
-        assert handle_pre_tool_hint(payload) == {}
-
-    def test_disabled_by_config(self, tmp_path: Path) -> None:
-        project = tmp_path / "myproject"
-        project.mkdir()
-        config_dir = project / ".claude"
-        config_dir.mkdir()
-        (config_dir / "quarry.local.md").write_text(
-            "---\nauto_capture:\n  convention_hints: false\n---\n"
-        )
-        payload: dict[str, object] = {
-            "cwd": str(project),
-            "tool_input": {"command": "git add -A"},
-            "session_id": "test-disabled",
-        }
-        result = handle_pre_tool_hint(payload)
-        assert result == {}
-
-    def test_instant_hint_fires(self, tmp_path: Path, monkeypatch: object) -> None:
-        import tempfile
-
-        monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))  # type: ignore[attr-defined]
-        payload: dict[str, object] = {
-            "tool_input": {"command": "git add -A"},
-            "session_id": "test-instant",
-        }
-        result = handle_pre_tool_hint(payload)
-        assert "hookSpecificOutput" in result
-        output = result["hookSpecificOutput"]
-        assert isinstance(output, dict)
-        assert output["permissionDecision"] == "allow"
-        assert "stage specific files" in str(output["additionalContext"])
-
-    def test_no_hint_for_safe_command(
-        self, tmp_path: Path, monkeypatch: object
-    ) -> None:
-        import tempfile
-
-        monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))  # type: ignore[attr-defined]
-        payload: dict[str, object] = {
-            "tool_input": {"command": "ls -la"},
-            "session_id": "test-safe",
-        }
-        result = handle_pre_tool_hint(payload)
-        assert result == {}
-
-    def test_sequence_hint_fires(self, tmp_path: Path, monkeypatch: object) -> None:
-        """Commit without gate triggers sequence rule."""
-        import tempfile
-
-        monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))  # type: ignore[attr-defined]
-        session_id = "test-sequence"
-
-        # Pre-populate state with a solo make sub-target (not full gate).
-        from quarry.hint_accumulator import HintAccumulator, ToolEvent
-
-        acc = HintAccumulator()
-        acc.add(ToolEvent(ts=100.0, tool="Bash", command="make lint"))
-        state_path = _hint_state_path(session_id)
-        state_path.write_text(acc.to_json())
-
-        payload: dict[str, object] = {
-            "tool_input": {"command": 'git commit -m "fix"'},
-            "session_id": session_id,
-        }
-        result = handle_pre_tool_hint(payload)
-        assert "hookSpecificOutput" in result
-        assert "make check" in str(
-            result["hookSpecificOutput"]["additionalContext"]  # type: ignore[index]
-        )
-
-    def test_state_persists_across_calls(
-        self, tmp_path: Path, monkeypatch: object
-    ) -> None:
-        import tempfile
-
-        monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))  # type: ignore[attr-defined]
-        session_id = "test-persist"
-
-        payload: dict[str, object] = {
-            "tool_input": {"command": "ls"},
-            "session_id": session_id,
-        }
-        handle_pre_tool_hint(payload)
-
-        state_path = _hint_state_path(session_id)
-        assert state_path.exists()
-
-        data = json.loads(state_path.read_text())
-        assert len(data) == 1
-        assert data[0]["command"] == "ls"
-
-    def test_corrupt_state_file_handled(
-        self, tmp_path: Path, monkeypatch: object
-    ) -> None:
-        import tempfile
-
-        monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))  # type: ignore[attr-defined]
-        session_id = "test-corrupt"
-        state_path = _hint_state_path(session_id)
-        state_path.write_text("not valid json{{{")
-
-        payload: dict[str, object] = {
-            "tool_input": {"command": "ls"},
-            "session_id": session_id,
-        }
-        result = handle_pre_tool_hint(payload)
-        assert result == {}
-
-        # State file should be overwritten with valid data.
-        data = json.loads(state_path.read_text())
-        assert len(data) == 1
-
-    def test_no_session_id_skips_sequence_rules(self) -> None:
-        """Without session_id, instant rules work but sequence rules skip."""
-        payload: dict[str, object] = {
-            "tool_input": {"command": "git add -A"},
-        }
-        result = handle_pre_tool_hint(payload)
-        assert "hookSpecificOutput" in result  # instant rule fires
-
-    def test_state_file_permissions(self, tmp_path: Path, monkeypatch: object) -> None:
-        import tempfile
-
-        monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))  # type: ignore[attr-defined]
-
-        payload: dict[str, object] = {
-            "tool_input": {"command": "ls"},
-            "session_id": "test-perms",
-        }
-        handle_pre_tool_hint(payload)
-
-        state_path = _hint_state_path("test-perms")
-        mode = state_path.stat().st_mode & 0o777
-        assert mode == 0o600
-
-    def test_empty_sanitized_session_id(
-        self, tmp_path: Path, monkeypatch: object
-    ) -> None:
-        """Session IDs that sanitize to empty string get a hash fallback."""
-        import tempfile
-
-        monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))  # type: ignore[attr-defined]
-
-        payload: dict[str, object] = {
-            "tool_input": {"command": "ls"},
-            "session_id": "...",  # sanitizes to empty
-        }
-        handle_pre_tool_hint(payload)
-
-        # Should have created a state file (not hint-state-.json).
-        state_files = list(tmp_path.glob("hint-state-*.json"))
-        assert len(state_files) == 1
-        assert state_files[0].name != "hint-state-.json"
