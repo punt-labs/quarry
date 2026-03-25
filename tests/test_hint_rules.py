@@ -166,6 +166,12 @@ class TestSoloGateToolRule:
         hint = check_sequence_rules(events, "make lint && make test")
         assert hint is None
 
+    def test_multi_target_make_not_flagged(self) -> None:
+        """Multiple make targets in one command are not solo targets."""
+        events = [_event("make lint")]
+        hint = check_sequence_rules(events, "make lint type")
+        assert hint is None
+
     def test_chained_past_event_not_counted(self) -> None:
         """Past chained commands should not count as solo targets."""
         events = [_event("make lint && make test")]

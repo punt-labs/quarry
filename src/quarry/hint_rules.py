@@ -104,7 +104,7 @@ _FULL_GATE = "Reminder: run `make check` before committing."
 
 _SOLO_GATE_HINT = "Tip: prefer `make check` over running sub-targets individually."
 
-_SOLO_GATE_TARGETS = re.compile(r"^make\s+(lint|type|test)(?:\s|$)")
+_SOLO_GATE_TARGETS = re.compile(r"^make\s+(lint|type|test)$")
 
 
 def _is_solo_gate(command: str) -> bool:
