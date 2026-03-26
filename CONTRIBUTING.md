@@ -67,7 +67,6 @@ Input -> Pages -> Chunks -> Vectors -> LanceDB
 
 ### Design Documents
 
-- [Backend Abstraction](docs/BACKEND-ABSTRACTION.md) -- pluggable OCR and embedding backends
 - [Non-Functional Design](docs/NON-FUNCTIONAL-DESIGN.md) -- logging and exception handling patterns
 
 ### Key Abstractions

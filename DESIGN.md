@@ -36,7 +36,7 @@ No intermediary service layer. Each surface imports core functions and calls the
 | Module | Responsibility |
 |--------|---------------|
 | `models.py` | Immutable dataclasses: `PageType` enum, `PageContent`, `Chunk`, `PageAnalysis`. All `@dataclass(frozen=True)`. |
-| `types.py` | Protocol definitions for external dependencies: `LanceDB`, `LanceTable`, `LanceQuery`, `OcrBackend`, `EmbeddingBackend`, `TextractClient`, `S3Client`, `SageMakerRuntimeClient`. Structural typing instead of `Any`. |
+| `types.py` | Protocol definitions for external dependencies: `LanceDB`, `LanceTable`, `LanceQuery`, `ListTablesResult`, `OcrBackend`, `EmbeddingBackend`. Structural typing instead of `Any`. |
 | `config.py` | `Settings` (pydantic `BaseSettings`), `resolve_db_paths()` for named databases, ONNX model constants. All configuration flows through `Settings`. |
 | `database.py` | LanceDB operations: `insert_chunks`, `search`, `list_documents`, `delete_document`, `count_chunks`, etc. Single table `chunks`. |
 
@@ -64,17 +64,13 @@ Each processor converts a source format into `list[PageContent]`:
 | `latex_utils.py` | LaTeX (command stripping for clean text extraction) |
 | `text_extractor.py` | Unified dispatcher that routes to the appropriate processor |
 
-### Backend Abstraction
+### Backends
 
 | Module | Responsibility |
 |--------|---------------|
 | `backends.py` | Thread-safe factory with double-checked locking. `get_ocr_backend()` and `get_embedding_backend()` return cached singleton instances. |
-| `ocr_local.py` | Local OCR via EasyOCR (offline, no setup). |
-| `ocr_client.py` | AWS Textract OCR (cloud, better for degraded scans). |
+| `ocr_local.py` | Local OCR via RapidOCR (offline, no setup). |
 | `embeddings.py` | Local ONNX embedding (snowflake-arctic-embed-m-v1.5, 768-dim, 512 tokens). |
-| `embeddings_sagemaker.py` | SageMaker embedding endpoint (cloud-accelerated batch ingestion). |
-
-Backend selection is config-driven (`OCR_BACKEND`, `EMBEDDING_BACKEND` in `Settings`). The factory reads config once and caches. Protocol types (`OcrBackend`, `EmbeddingBackend`) ensure backends are interchangeable without runtime introspection.
 
 ### Sync and Registry
 
@@ -117,7 +113,7 @@ Exceptions in background threads are logged via `logger.exception()`, not raised
 
 ### Protocol-Based Typing
 
-Third-party libraries without type stubs (LanceDB, boto3 clients) are typed via Protocol classes in `types.py`. This gives us:
+Third-party libraries without type stubs (LanceDB) are typed via Protocol classes in `types.py`. This gives us:
 
 - Exact type checking without `Any`
 - Mockable interfaces for testing

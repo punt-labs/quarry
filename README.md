@@ -336,7 +336,6 @@ Quarry is fully typed (`py.typed`) and can be used as a Python library. See [DES
 - [Changelog](CHANGELOG.md)
 - [mcp-proxy](https://github.com/punt-labs/mcp-proxy) — the stdio-to-WebSocket bridge that eliminates per-session startup cost
 - [Search Quality and Tuning](docs/SEARCH-TUNING.md)
-- [Backend Abstraction Design](docs/BACKEND-ABSTRACTION.md)
 - [Non-Functional Design](docs/NON-FUNCTIONAL-DESIGN.md)
 - [PR/FAQ](prfaq.pdf) — product vision and positioning
 
