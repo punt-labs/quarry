@@ -67,7 +67,7 @@ Input -> Pages -> Chunks -> Vectors -> LanceDB
 
 ### Design Documents
 
-- [Non-Functional Design](docs/NON-FUNCTIONAL-DESIGN.md) -- logging and exception handling patterns
+- [Architecture](docs/architecture.tex) -- system architecture, logging and exception handling standards
 
 ### Key Abstractions
 

@@ -46,6 +46,7 @@ htmlcov/
 *.aux
 *.log
 *.out
+*.toc
 *.synctex.gz
 
 # Claude Flow (deprecated)
@@ -80,3 +81,4 @@ prfaq*.run.xml
 
 # Local uv overrides (depot find-links, etc.)
 uv.toml
+/Lux.ini

@@ -14,10 +14,20 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Added
+
+- **`docs/architecture.tex`** — comprehensive LaTeX architecture document covering system design, daemon model, module responsibilities, wire protocol, configuration, search tuning, logging standards, security, deployment, and test architecture. Consolidates content from four separate markdown files into one authoritative document
+
+### Changed
+
+- **`DESIGN.md`** — slimmed to ADRs only; architecture and module tables moved to `docs/architecture.tex`
+- **`docs/claude-code-quarry.tex`** — refreshed implementation validation section to reflect current hook wiring status (all three knowledge capture hooks are now wired)
+
 ### Removed
 
 - **Convention hint hooks** — removed the entire PreToolUse/Bash hook system (instant rules, sequence rules, Bash-command accumulator). Dev workflow conventions belong in CLAUDE.md, not in a knowledge management product. See `docs/build-plan-ppv/design.md` for the replacement design (knowledge event accumulator for research capture)
 - **AWS backends** — removed Textract OCR and SageMaker embedding backends, all AWS infrastructure (CloudFormation templates, deployment scripts, IAM policies), and boto3/botocore dependencies. Local backends (RapidOCR, ONNX) always outperformed AWS in testing
+- **`docs/ADVANCED-CONFIG.md`**, **`docs/SEARCH-TUNING.md`**, **`docs/NON-FUNCTIONAL-DESIGN.md`** — absorbed into `docs/architecture.tex`
 
 ## [1.5.2] - 2026-03-15
 

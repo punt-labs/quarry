@@ -1,0 +1,917 @@
+%
+% architecture.tex
+%
+% Quarry Technical Architecture Specification
+% Written for principal engineers evaluating the system.
+%
+% Compile: pdflatex architecture.tex
+%
+
+\documentclass[a4paper,10pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{booktabs}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{longtable}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{blue!80!black},
+  commentstyle=\color{green!50!black},
+  stringstyle=\color{red!60!black},
+  breaklines=true,
+  frame=single,
+  framerule=0.3pt,
+  rulecolor=\color{gray!50},
+  backgroundcolor=\color{gray!5},
+  columns=fullflexible,
+}
+
+\newcommand{\modpath}[1]{\texttt{src/quarry/#1}}
+\newcommand{\tool}[1]{\texttt{#1}}
+\newcommand{\field}[1]{\texttt{#1}}
+
+\begin{document}
+
+\title{Quarry: Technical Architecture Specification}
+\author{Local Semantic Search for AI Agents}
+\date{March 2026}
+\hypersetup{
+  pdftitle={Quarry: Technical Architecture Specification},
+  pdfauthor={Punt Labs},
+  pdfsubject={Architecture},
+  pdfcreator={pdflatex}
+}
+\maketitle
+
+\tableofcontents
+\newpage
+
+% ===================================================================
+\section{Overview}
+% ===================================================================
+
+Quarry is a local semantic search engine.  It ingests documents in
+20+ formats, embeds them with a local ONNX model, stores vectors in
+LanceDB, and serves semantic search to AI agents (Claude Code, Claude
+Desktop) and a macOS menu bar app.
+
+The system follows the Punt Labs projection strategy: a single core
+library projects outward through four thin adapter layers.  Each
+surface imports core functions and calls them with resolved arguments.
+No intermediary service layer.
+
+\subsection{Design Principles}
+
+\begin{enumerate}[label=\textbf{P\arabic*}.]
+  \item \textbf{Library-first.}  The core library does all work.
+    CLI, MCP, HTTP, and plugin surfaces are thin wrappers that
+    resolve settings and delegate.
+  \item \textbf{Local by default.}  Everything runs on the user's
+    machine.  No API keys, no cloud accounts.  The embedding model
+    downloads once ($\sim$120\,MB, int8 quantized).
+  \item \textbf{One daemon, many clients.}  A single
+    \texttt{quarry serve} process loads the embedding model once
+    and serves all sessions over WebSocket.  Clients connect via
+    \texttt{mcp-proxy}.
+  \item \textbf{Fire-and-forget I/O.}  Side-effect MCP tools return
+    immediately and process in a bounded thread pool.  Search is
+    synchronous.
+  \item \textbf{Named databases.}  Each database is fully isolated:
+    its own LanceDB directory, sync registry, and vector index.
+    Work/personal separation without configuration files.
+\end{enumerate}
+
+% ===================================================================
+\section{System Architecture}
+% ===================================================================
+
+\subsection{Deployment Topology}
+
+\begin{lstlisting}
+                    stdio                      WebSocket
+Claude Code <------------------> mcp-proxy <-------------------> quarry serve
+             MCP JSON-RPC        (~5 MB Go)                      (one daemon)
+
+Claude Desktop <--- stdio ---> quarry mcp
+                               (standalone process, no daemon)
+\end{lstlisting}
+
+Without the proxy, every Claude Code tab spawns a separate Python
+process, each loading the embedding model into $\sim$200\,MB of RAM.
+With it, startup is instant and state is shared across all sessions.
+
+The CLI (\texttt{quarry find}, \texttt{quarry ingest}, etc.) uses
+the library directly --- no daemon involved.  Each invocation loads
+the embedding model, does the work, and exits.
+
+\subsection{Surface Summary}
+
+\begin{center}
+\begin{tabular}{llp{7cm}}
+\toprule
+\textbf{Surface} & \textbf{Transport} & \textbf{Purpose} \\
+\midrule
+CLI         & Direct library calls & Interactive use from terminal \\
+MCP server  & stdio or WebSocket   & Claude Code/Desktop tools \\
+HTTP server & REST JSON + WS \texttt{/mcp} & Menu bar app + mcp-proxy \\
+Plugin      & Hook shell commands  & Auto-register, auto-ingest, compaction safety \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% ===================================================================
+\section{Module Responsibilities}
+% ===================================================================
+
+\subsection{Data Layer}
+
+\begin{center}
+\begin{tabular}{llp{7cm}}
+\toprule
+\textbf{Module} & \textbf{File} & \textbf{Responsibility} \\
+\midrule
+Models    & \modpath{models.py}   & Immutable dataclasses: \texttt{PageType}
+            enum, \texttt{PageContent}, \texttt{Chunk},
+            \texttt{PageAnalysis}.  All \texttt{@dataclass(frozen=True)}. \\
+Types     & \modpath{types.py}    & Protocol definitions for external
+            dependencies: \texttt{LanceDB}, \texttt{LanceTable},
+            \texttt{LanceQuery}, \texttt{ListTablesResult},
+            \texttt{OcrBackend}, \texttt{EmbeddingBackend}.
+            Structural typing instead of \texttt{Any}. \\
+Config    & \modpath{config.py}   & \texttt{Settings} (pydantic
+            \texttt{BaseSettings}), \texttt{resolve\_db\_paths()} for
+            named databases, ONNX model constants. \\
+Database  & \modpath{database.py} & LanceDB operations:
+            \texttt{insert\_chunks}, \texttt{search},
+            \texttt{list\_documents}, \texttt{delete\_document},
+            \texttt{count\_chunks}, etc.  Single table
+            \texttt{chunks}. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Ingestion Pipeline}
+
+\begin{center}
+\begin{tabular}{llp{7cm}}
+\toprule
+\textbf{Module} & \textbf{File} & \textbf{Responsibility} \\
+\midrule
+Pipeline    & \modpath{pipeline.py}    & Orchestrator: dispatches by
+              format, chunks, embeds, stores.  Entry points:
+              \texttt{ingest\_document}, \texttt{ingest\_content},
+              \texttt{ingest\_auto} (URL with sitemap discovery). \\
+Chunker     & \modpath{chunker.py}     & Text splitting with overlap.
+              Respects page boundaries and heading structure. \\
+Collections & \modpath{collections.py} & \texttt{derive\_collection()}
+              --- determines collection name from path or URL. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Format Processors}
+
+Each processor converts a source format into
+\texttt{list[PageContent]}:
+
+\begin{center}
+\begin{tabular}{llp{6cm}}
+\toprule
+\textbf{Module} & \textbf{File} & \textbf{Formats} \\
+\midrule
+PDF           & \modpath{pdf\_analyzer.py}           & PDF (text via
+                PyMuPDF, OCR fallback for image pages) \\
+Image         & \modpath{image\_analyzer.py}          & PNG, JPG, TIFF,
+                BMP, WebP (OCR) \\
+Text          & \modpath{text\_processor.py}          & TXT, MD, LaTeX, DOCX \\
+Code          & \modpath{code\_processor.py}          & 30+ languages
+                (AST-aware splitting) \\
+HTML          & \modpath{html\_processor.py}          & HTML
+                (boilerplate stripping, Markdown conversion) \\
+Spreadsheet   & \modpath{spreadsheet\_processor.py}   & XLSX, CSV
+                (tabular serialization) \\
+Presentation  & \modpath{presentation\_processor.py}  & PPTX
+                (slide-per-chunk with notes) \\
+Dispatcher    & \modpath{text\_extractor.py}          & Extracts text
+                from text-based PDF pages (PyMuPDF) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Backends}
+
+\begin{center}
+\begin{tabular}{llp{7cm}}
+\toprule
+\textbf{Module} & \textbf{File} & \textbf{Responsibility} \\
+\midrule
+Factory     & \modpath{backends.py}    & Thread-safe factory with
+              double-checked locking.
+              \texttt{get\_ocr\_backend()} and
+              \texttt{get\_embedding\_backend()} return cached
+              singletons. \\
+OCR         & \modpath{ocr\_local.py}  & Local OCR via RapidOCR
+              (offline, no setup). \\
+Embeddings  & \modpath{embeddings.py}  & Local ONNX embedding
+              (snowflake-arctic-embed-m-v1.5, 768-dim, 512
+              tokens). \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Sync and Registry}
+
+\begin{center}
+\begin{tabular}{llp{7cm}}
+\toprule
+\textbf{Module} & \textbf{File} & \textbf{Responsibility} \\
+\midrule
+Sync     & \modpath{sync.py}          & Directory sync: discover
+           files, compute delta (new/changed/deleted),
+           ingest/delete accordingly.
+           \texttt{ThreadPoolExecutor} for concurrent ingestion. \\
+Registry & \modpath{sync\_registry.py} & SQLite registry of watched
+           directories.  Maps directories to collections with
+           timestamps. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Surfaces}
+
+\begin{center}
+\begin{tabular}{llp{7cm}}
+\toprule
+\textbf{Module} & \textbf{File} & \textbf{Responsibility} \\
+\midrule
+CLI         & \modpath{\_\_main\_\_.py} & Typer CLI with rich
+              formatting.  Synchronous.  All commands: resolve
+              settings $\to$ call core $\to$ format output. \\
+MCP Server  & \modpath{mcp\_server.py}  & FastMCP server.  Read-only
+              tools are synchronous.  Side-effect tools use
+              fire-and-forget. \\
+HTTP Server & \modpath{http\_server.py} & Starlette ASGI app on
+              uvicorn.  REST endpoints + WebSocket \texttt{/mcp}. \\
+Hooks       & \modpath{hooks.py}        & Claude Code plugin hooks:
+              session-start (auto-register), post-web-fetch
+              (auto-ingest), pre-compact (capture transcript).
+              All fail-open. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Support}
+
+\begin{center}
+\begin{tabular}{llp{7cm}}
+\toprule
+\textbf{Module} & \textbf{File} & \textbf{Responsibility} \\
+\midrule
+Formatting & \modpath{formatting.py} & Pre-formatted plain text
+             output using unicode box-drawing.  Used by both CLI
+             and MCP for consistent output. \\
+Results    & \modpath{results.py}    & \texttt{SyncResult} dataclass
+             for sync operation reporting. \\
+Sitemap    & \modpath{sitemap.py}    & Sitemap discovery and URL
+             extraction for web ingestion. \\
+Doctor     & \modpath{doctor.py}     & Health checks: model
+             availability, database access, backend
+             connectivity. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% ===================================================================
+\section{Daemon Model}
+% ===================================================================
+
+\subsection{Why a Daemon}
+
+The embedding model (snowflake-arctic-embed-m-v1.5, int8 quantized
+ONNX) occupies $\sim$200\,MB of RAM and takes $\sim$250\,ms to load.
+MCP's stdio transport model spawns a new process per session.  Without
+a daemon, five Claude Code tabs means five copies of the model in
+memory and five cold starts.
+
+\texttt{quarry serve} loads the model once and keeps it resident.
+The \texttt{mcp-proxy} binary ($\sim$5\,MB Go binary, $<$10\,ms
+startup) bridges each session's MCP stdio to the daemon over
+WebSocket.
+
+\subsection{mcp-proxy Architecture}
+
+\texttt{quarry install} downloads \texttt{mcp-proxy} (SHA256-verified,
+platform-specific binary) and configures MCP clients to use it.
+The proxy:
+
+\begin{enumerate}
+  \item Reads MCP JSON-RPC from stdin.
+  \item Forwards to \texttt{ws://localhost:8420/mcp} over WebSocket.
+  \item Relays responses back to stdout.
+\end{enumerate}
+
+Each WebSocket connection gets its own asyncio Task with a
+\texttt{ContextVar} for database selection (\texttt{\_db\_name}),
+so \texttt{use("work")} in one session does not affect others.
+
+\subsection{CLI Independence}
+
+The CLI does not use the daemon.  \texttt{quarry find "margins"}
+loads the embedding model in-process, queries LanceDB, prints
+results, and exits.  LanceDB handles concurrent reads safely, so
+CLI and daemon can access the same database simultaneously.
+
+% ===================================================================
+\section{MCP Tool Surface}
+% ===================================================================
+
+\begin{center}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{longtable}{lp{3.5cm}p{3.2cm}l}
+\toprule
+\textbf{Tool} & \textbf{Key Parameters} & \textbf{Purpose} &
+  \textbf{Exec} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Tool} & \textbf{Key Parameters} & \textbf{Purpose} &
+  \textbf{Exec} \\
+\midrule
+\endhead
+\tool{find}        & \field{query}, \field{limit},
+  \field{collection}       & Semantic search            & Sync \\
+\tool{ingest}      & \field{source}, \field{overwrite},
+  \field{collection}       & Ingest file or URL         & Bg \\
+\tool{remember}    & \field{content},
+  \field{document\_name}   & Ingest inline text         & Bg \\
+\tool{list}        & \field{kind}
+                           & List indexed data          & Sync \\
+\tool{show}        & \field{document\_name},
+  \field{page\_number}     & Document metadata or page  & Sync \\
+\tool{delete}      & \field{name}, \field{kind}
+                           & Delete document or
+                             collection                 & Bg \\
+\tool{register\_directory}   & \field{directory},
+  \field{collection}       & Register for sync          & Bg \\
+\tool{deregister\_directory} & \field{collection},
+  \field{keep\_data}       & Remove registration        & Bg \\
+\tool{sync\_all}   & ---  & Sync all registered dirs   & Bg \\
+\tool{status}      & ---  & Database stats             & Sync \\
+\tool{use}         & \field{name}
+                           & Switch active database     & Sync \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+Bg = background (\texttt{ThreadPoolExecutor}).
+
+Background tools use a bounded \texttt{ThreadPoolExecutor(max\_workers=4)}.
+They return an optimistic response immediately.  Settings and database
+connections are snapshotted at the tool boundary and passed into
+background functions --- this avoids a race condition where the mutable
+\texttt{\_db\_name} ContextVar could change between the tool call and
+the background thread's execution.  Exceptions in background threads
+are logged via \texttt{logger.exception()}, not raised.
+
+% ===================================================================
+\section{HTTP Server}
+% ===================================================================
+
+\subsection{ASGI Application}
+
+Starlette app built by \texttt{build\_app()} factory, served by
+uvicorn.  REST handlers are sync functions --- Starlette auto-detects
+this and runs them in its threadpool.  The \texttt{/mcp} WebSocket
+endpoint is async.
+
+Default port: 8420 (\texttt{DEFAULT\_PORT} in \modpath{config.py}),
+overridable with \texttt{-{}-port}.
+
+\subsection{Endpoints}
+
+\begin{center}
+\begin{tabular}{llp{6cm}l}
+\toprule
+\textbf{Path} & \textbf{Method} & \textbf{Purpose} &
+  \textbf{Auth} \\
+\midrule
+\texttt{/health}      & GET & \texttt{\{"status":"ok",
+  "uptime\_seconds":N\}} & No \\
+\texttt{/search}      & GET & Semantic search
+  (\field{q}, \field{limit}, \field{collection}) & Yes \\
+\texttt{/documents}   & GET & List indexed documents & Yes \\
+\texttt{/collections} & GET & List collections & Yes \\
+\texttt{/status}      & GET & Database statistics & Yes \\
+\texttt{/mcp}         & WS  & MCP JSON-RPC over WebSocket & Yes \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Port File}
+
+After binding, the server writes the actual port to
+\texttt{\~{}/.quarry/data/<db>/serve.port}.  This supports
+\texttt{-{}-port 0} (ephemeral assignment).  Removed on shutdown via
+lifespan context.
+
+% ===================================================================
+\section{Configuration}
+% ===================================================================
+
+\subsection{Settings}
+
+All settings are environment variables read via pydantic-settings.
+
+\begin{center}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{longtable}{llp{6.5cm}}
+\toprule
+\textbf{Variable} & \textbf{Default} & \textbf{Description} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Variable} & \textbf{Default} & \textbf{Description} \\
+\midrule
+\endhead
+\multicolumn{3}{l}{\textbf{Paths}} \\
+\midrule
+\texttt{QUARRY\_ROOT}    & \texttt{\~{}/.quarry/data} &
+  Base directory for all databases \\
+\texttt{LANCEDB\_PATH}   & \texttt{<root>/default/lancedb} &
+  Vector database location \\
+\texttt{REGISTRY\_PATH}  & \texttt{<root>/default/registry.db} &
+  Directory sync SQLite database \\
+\texttt{LOG\_PATH}        & \texttt{\~{}/.quarry/data/quarry.log} &
+  Log file (rotating, 5\,MB, 3 backups; independent of
+  \texttt{QUARRY\_ROOT}) \\
+\midrule
+\multicolumn{3}{l}{\textbf{Chunking}} \\
+\midrule
+\texttt{CHUNK\_MAX\_CHARS}     & \texttt{1800} &
+  Target max characters per chunk ($\sim$450 tokens) \\
+\texttt{CHUNK\_OVERLAP\_CHARS} & \texttt{200} &
+  Overlap between consecutive chunks \\
+\midrule
+\multicolumn{3}{l}{\textbf{Embedding}} \\
+\midrule
+\texttt{EMBEDDING\_MODEL}     & \texttt{Snowflake/\allowbreak snowflake-arctic-embed-m-v1.5} &
+  Model identifier (display only --- the ONNX model is fixed) \\
+\texttt{EMBEDDING\_DIMENSION} & \texttt{768} &
+  Vector dimension (display only --- fixed at 768) \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+\subsection{Named Databases}
+
+\texttt{resolve\_db\_paths(settings, name)} maps a database name to a
+path under \texttt{QUARRY\_ROOT}.  Each database is fully isolated ---
+its own LanceDB directory, sync registry, and vector index.  Names containing path separators (\texttt{/} or
+\texttt{\textbackslash}) or the literal traversal segments \texttt{.}
+or \texttt{..} are rejected; names like \texttt{foo.bar} are allowed.
+If \texttt{LANCEDB\_PATH} was explicitly overridden, the override is
+preserved.
+
+The persistent default database is stored in
+\texttt{\~{}/.quarry/config.toml} as \texttt{[default] database = "name"}.
+
+\subsection{Chunking Tuning}
+
+\textbf{Increase \texttt{CHUNK\_MAX\_CHARS}} (3000--4000) for documents
+with long self-contained sections: legal contracts, academic papers,
+large source code functions.
+
+\textbf{Decrease \texttt{CHUNK\_MAX\_CHARS}} (800--1200) for dense
+documents where each paragraph covers a distinct topic.
+
+\textbf{Increase \texttt{CHUNK\_OVERLAP\_CHARS}} (400) when relevant
+information spans paragraph boundaries.
+
+The embedding model has a 512-token context window.  Chunks exceeding
+this are truncated during embedding, reducing quality for the tail.
+
+% ===================================================================
+\section{Search and Retrieval}
+% ===================================================================
+
+\subsection{Embedding Model}
+
+snowflake-arctic-embed-m-v1.5 via ONNX Runtime:
+
+\begin{itemize}
+  \item 768-dimensional vectors, 512-token context window
+  \item Asymmetric retrieval: queries are prefixed with a search
+    instruction, documents are not
+  \item int8 quantized ONNX ($\sim$120\,MB on disk)
+  \item Runs on CPU only ($\sim$50\,ms per chunk on Apple Silicon)
+  \item Auto-downloads on first use via \texttt{huggingface\_hub}
+\end{itemize}
+
+The model is fixed --- there is no configuration to swap it.  Changing
+the model invalidates all existing embeddings, requiring full
+re-ingestion.
+
+\subsection{OCR}
+
+RapidOCR handles all image-based text extraction.  For semantic
+search, OCR accuracy matters less than expected --- the embedding
+model is robust to minor OCR errors.  A misspelled word rarely
+changes semantic meaning enough to affect search ranking.
+
+\subsection{Search Quality Tips}
+
+\begin{enumerate}
+  \item \textbf{Use natural language queries.}  The model is trained on
+    question-passage pairs.  ``What were Q3 revenue figures?'' works
+    better than ``Q3 revenue.''
+  \item \textbf{Use collection filtering.}
+    \texttt{quarry find "auth logic" -c backend}.
+  \item \textbf{Re-ingest after tuning.}  Chunk parameters only affect
+    new ingestions.  Run \texttt{quarry sync} after changes.
+  \item \textbf{Check chunk boundaries.}
+    \texttt{quarry find -n 1 "query"} and examine the result.
+  \item \textbf{Use \texttt{-{}-overwrite} when re-ingesting.}
+    Without it, duplicate chunks accumulate.
+\end{enumerate}
+
+% ===================================================================
+\section{Logging and Exceptions}
+% ===================================================================
+
+\subsection{Logging Standard}
+
+Every module that performs I/O declares
+\texttt{logger = logging.getLogger(\_\_name\_\_)}.  Pure data modules
+(\texttt{models.py}, \texttt{types.py}, \texttt{chunker.py}) do not.
+
+Logging is configured once at the application entry point (CLI or MCP
+server).  Library modules never call \texttt{logging.basicConfig}.
+
+\begin{center}
+\begin{tabular}{lp{8cm}}
+\toprule
+\textbf{Level} & \textbf{Use} \\
+\midrule
+\texttt{DEBUG}   & Internal state: variable values, branch decisions,
+                   intermediate results. \\
+\texttt{INFO}    & Operational milestones: starting a job, completing
+                   a step, resource counts. \\
+\texttt{WARNING} & Unexpected but recoverable: empty input, deprecated
+                   parameter usage. \\
+\texttt{ERROR}   & Failures that prevent completion but do not crash.
+                   Always with exception context. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\texttt{CRITICAL} is not used.  If the process must exit, it raises an
+exception.
+
+Log messages use \texttt{\%s}-style formatting (lazy evaluation), not
+f-strings.  Each message includes enough context to trace an operation
+without reading code.
+
+\subsection{Exception Handling}
+
+The codebase uses built-in exception types.  No custom exceptions
+unless a caller needs to distinguish failure modes programmatically.
+
+\begin{center}
+\begin{tabular}{lp{8cm}}
+\toprule
+\textbf{Exception} & \textbf{Raised when} \\
+\midrule
+\texttt{ValueError}       & Invalid input: unsupported format, bad
+                            parameter. \\
+\texttt{FileNotFoundError} & A file path argument does not exist. \\
+\texttt{RuntimeError}      & An operation reports failure (OCR engine
+                            error, ingestion failure). \\
+\texttt{TimeoutError}      & An external service exceeds its time
+                            budget. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Rules:}
+
+\begin{enumerate}
+  \item Never swallow exceptions.  Every \texttt{except} block must
+    re-raise, or log with \texttt{logger.exception()} and raise a
+    different exception, or (at system boundaries only) return a
+    documented sentinel.
+  \item Never use bare \texttt{except:}.
+  \item Never catch \texttt{Exception} broadly in library code.  Broad
+    catches are permitted only at the outermost boundary (MCP tool
+    handler, CLI command).
+  \item Exceptions carry context: include the values that caused the
+    failure.
+  \item Use \texttt{try/finally} for cleanup, not
+    \texttt{try/except}.
+  \item Do not use exceptions for flow control.
+\end{enumerate}
+
+% ===================================================================
+\section{Security}
+% ===================================================================
+
+\subsection{Bearer Token Authentication}
+
+\texttt{quarry serve -{}-api-key} (or \texttt{QUARRY\_API\_KEY} env var)
+gates all HTTP endpoints except \texttt{/health} behind
+\texttt{Authorization: Bearer <key>}.
+
+\begin{itemize}
+  \item \texttt{/health} is exempt --- load balancers need
+    unauthenticated health checks.
+  \item \texttt{OPTIONS} is exempt --- CORS preflight requests carry
+    no auth.
+  \item \texttt{hmac.compare\_digest} for token comparison ---
+    prevents timing attacks.
+  \item Case-insensitive scheme per RFC~7235.
+  \item Empty key = no auth --- prevents accidental trivial bypass.
+  \item No key = auth disabled --- local use requires no key.
+\end{itemize}
+
+The server refuses to bind to a non-loopback address without
+\texttt{-{}-api-key}.
+
+\subsection{WebSocket Security (CSWSH)}
+
+Origin-based cross-site WebSocket hijacking protection:
+
+\begin{itemize}
+  \item If an \texttt{Origin} header is present, it must match the
+    CORS allow-list.
+  \item Browsers always send \texttt{Origin}; non-browser clients
+    like \texttt{mcp-proxy} do not.
+  \item Bearer auth is checked before WebSocket accept (close code
+    1008 on failure).
+\end{itemize}
+
+\subsection{CORS}
+
+\texttt{CORSMiddleware} configured with GET and OPTIONS methods,
+Authorization and Content-Type headers.  Default allowed origin:
+\texttt{http://localhost}.  Configurable via \texttt{-{}-cors-origin}
+(repeatable).
+
+The server reflects the request's \texttt{Origin} header only when it
+matches the allow list, and adds \texttt{Vary: Origin} to signal
+cacheability varies by origin.  When no \texttt{Origin} is present,
+no CORS headers are emitted.
+
+\subsection{Log Safety (CWE-532, CWE-117)}
+
+Uvicorn's access log is disabled (\texttt{access\_log=False}),
+eliminating query string leakage at the source.  The search handler
+logs only result count, never the raw query.  WebSocket session keys
+are sanitized before logging: control characters stripped via
+\texttt{\_CONTROL\_CHAR\_RE} and truncated to 64 characters to prevent
+log injection (CWE-117) and log flooding.
+
+% ===================================================================
+\section{Deployment}
+% ===================================================================
+
+\subsection{Local (CLI)}
+
+\begin{lstlisting}
+uv tool install punt-quarry
+quarry install      # downloads model + mcp-proxy
+quarry doctor       # verifies environment
+\end{lstlisting}
+
+\subsection{Daemon (\texttt{quarry serve})}
+
+\begin{lstlisting}
+quarry serve --port 8420 --api-key $QUARRY_API_KEY
+\end{lstlisting}
+
+Managed by \texttt{launchd} (macOS) or \texttt{systemd} (Linux) via
+\texttt{quarry install}.
+
+\subsection{Container (Fly.io)}
+
+Multi-stage Dockerfile, three stages:
+
+\begin{enumerate}
+  \item \textbf{deps} (\texttt{python:3.13-slim}): installs
+    \texttt{uv}, runs \texttt{uv sync -{}-frozen -{}-no-dev}.  Two-pass
+    for Docker layer caching (deps first, then source).
+  \item \textbf{model} (extends \texttt{deps}): downloads the
+    embedding model at build time ($\sim$120\,MB, int8 quantized).
+    Cached as a separate Docker layer.
+  \item \textbf{runtime} (\texttt{python:3.13-slim}): copies
+    \texttt{/app} from deps, copies model cache from model stage.
+    \texttt{QUARRY\_ROOT=/data}, port 8080.
+\end{enumerate}
+
+LanceDB data lives on a Fly persistent volume at \texttt{/data}.
+\texttt{QUARRY\_API\_KEY} is set via \texttt{fly secrets}.
+Cold start is $\sim$5\,s with the baked-in model.
+
+% ===================================================================
+\section{Performance}
+% ===================================================================
+
+\subsection{Critical Path}
+
+\begin{center}
+\begin{tabular}{lrl}
+\toprule
+\textbf{Operation} & \textbf{Latency} & \textbf{Notes} \\
+\midrule
+Model load         & $\sim$250\,ms & One-time per process \\
+Embedding (1 chunk) & $\sim$50\,ms  & Apple Silicon, CPU \\
+LanceDB search     & $<$10\,ms     & Vector similarity + filter \\
+End-to-end search  & $<$100\,ms    & After model is loaded \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Fire-and-Forget MCP Pattern}
+
+Side-effect MCP tools return immediately and process in a bounded
+thread pool (4 workers).  This is necessary because:
+
+\begin{enumerate}
+  \item MCP tool calls block the LLM's response stream.  A 30-second
+    ingest blocks Claude from responding.
+  \item The bounded pool prevents resource exhaustion under concurrent
+    requests.
+  \item Settings and database connections are snapshotted at the tool
+    boundary, avoiding race conditions with the mutable
+    \texttt{\_db\_name} ContextVar.
+\end{enumerate}
+
+\subsection{Single Table Design}
+
+All chunks live in one LanceDB table (\texttt{chunks}).  Document and
+collection boundaries are columns, not separate tables.  This
+simplifies cross-document search and avoids table proliferation.
+Filtering by document/collection/page\_type/source\_format uses
+LanceDB's built-in filter predicates on the vector search.
+
+% ===================================================================
+\section{Plugin and Hook System}
+% ===================================================================
+
+The Claude Code plugin (\texttt{.claude-plugin/}) registers hooks
+that fire on session events and tool calls.  All hooks are fail-open:
+exceptions are logged and the process exits~0.
+
+\begin{center}
+\begin{tabular}{llp{5cm}l}
+\toprule
+\textbf{Hook Event} & \textbf{Matcher} & \textbf{Effect} &
+  \textbf{Blocks?} \\
+\midrule
+SessionStart  & * & Auto-register directory + background sync &
+  No \\
+PostToolUse   & quarry tools & Suppress tool output formatting &
+  No \\
+PostToolUse   & WebFetch & Auto-ingest fetched URL &
+  No \\
+PreCompact    & * & Capture transcript as session notes &
+  No \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Session Start}
+
+\texttt{handle\_session\_start()} auto-registers the working directory
+and launches a background sync via a detached subprocess.  Uses
+atomic PID-file locking (\texttt{O\_CREAT|O\_EXCL}) at
+\texttt{\~{}/.quarry/sync.pid} to prevent concurrent syncs.  Returns
+\texttt{additionalContext} immediately without waiting.
+
+\subsection{Web Fetch Capture}
+
+\texttt{handle\_post\_web\_fetch()} ingests URLs fetched during a
+session into the \texttt{web-captures} collection.  Deduplicates by
+document name.  Prefers already-fetched content from the tool response
+(avoids re-fetch, reduces SSRF surface).
+
+\subsection{Pre-Compact Capture}
+
+\texttt{handle\_pre\_compact()} reads the transcript (JSONL) and
+ingests it into the \texttt{session-notes} collection.  Extracts
+user/assistant message text, skipping tool-use blocks.  Capped at
+500{,}000 characters.
+
+% ===================================================================
+\section{CLI Commands}
+% ===================================================================
+
+\begin{center}
+\begin{longtable}{lp{8cm}}
+\toprule
+\textbf{Command} & \textbf{Purpose} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Command} & \textbf{Purpose} \\
+\midrule
+\endhead
+\texttt{ingest <source>}      & Ingest file or URL \\
+\texttt{remember}             & Ingest stdin content \\
+\texttt{find <query>}         & Semantic search \\
+\texttt{show <document>}      & Document metadata or page text \\
+\texttt{status}               & Database statistics \\
+\texttt{use <name>}           & Set persistent default database \\
+\texttt{delete <name>}        & Delete document or collection \\
+\texttt{register <directory>} & Register for incremental sync \\
+\texttt{deregister <collection>} & Remove directory registration \\
+\texttt{sync}                 & Sync all registered directories \\
+\texttt{list documents}       & List indexed documents \\
+\texttt{list collections}     & List collections with counts \\
+\texttt{list databases}       & List named databases \\
+\texttt{list registrations}   & List registered directories \\
+\texttt{serve}                & Start HTTP API server \\
+\texttt{mcp}                  & Start MCP server (stdio) \\
+\texttt{install}              & Set up data directory, download model \\
+\texttt{doctor}               & Check environment health \\
+\texttt{uninstall}            & Remove system daemon \\
+\texttt{version}              & Print version \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+Global flags: \texttt{-{}-json}, \texttt{-{}-verbose}/\texttt{-v},
+\texttt{-{}-quiet}/\texttt{-q}, \texttt{-{}-db <name>}.
+
+% ===================================================================
+\section{Test Architecture}
+% ===================================================================
+
+821 tests across 33 files.  Three tiers plus integration:
+
+\begin{center}
+\begin{tabular}{lp{5cm}p{5cm}}
+\toprule
+\textbf{Tier} & \textbf{Strategy} & \textbf{Files} \\
+\midrule
+Tier 1: Core logic & Real data, no mocks & \texttt{test\_database},
+  \texttt{test\_chunker}, \texttt{test\_embeddings},
+  \texttt{test\_code\_processor}, \texttt{test\_html\_processor},
+  \texttt{test\_text\_processor}, \texttt{test\_collections},
+  \texttt{test\_config}, \texttt{test\_formatting},
+  \texttt{test\_image\_analyzer}, \texttt{test\_latex\_utils},
+  \texttt{test\_models}, \texttt{test\_pdf\_analyzer},
+  \texttt{test\_presentation\_processor},
+  \texttt{test\_spreadsheet\_processor},
+  \texttt{test\_text\_extractor},
+  \texttt{test\_registry} (17 files) \\
+Tier 2: Orchestration & Mocked I/O & \texttt{test\_pipeline},
+  \texttt{test\_pipeline\_images},
+  \texttt{test\_ocr\_local}, \texttt{test\_url\_ingestion},
+  \texttt{test\_sitemap}, \texttt{test\_backends},
+  \texttt{test\_sync},
+  \texttt{test\_hooks}, \texttt{test\_doctor} (9 files) \\
+Tier 3: Surface wiring & Fully mocked, $<$2\,s &
+  \texttt{test\_cli}, \texttt{test\_mcp\_server},
+  \texttt{test\_mcp\_websocket}, \texttt{test\_http\_server},
+  \texttt{test\_proxy}, \texttt{test\_service} (6 files) \\
+Integration & Real ONNX + real LanceDB &
+  \texttt{test\_integration} (\texttt{@pytest.mark.slow}) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Quality gates: \texttt{ruff} (lint + format), \texttt{mypy} (strict),
+\texttt{pyright} (strict), \texttt{pytest} (all markers except
+slow/integration).  Zero violations required.
+
+% ===================================================================
+\section{Formal Model}
+% ===================================================================
+
+The plugin state machine --- how quarry hooks into the Claude Code
+session lifecycle --- is formally specified in
+\texttt{docs/claude-code-quarry.tex} using Z notation (ISO~13568).
+
+The specification covers:
+
+\begin{itemize}
+  \item Session start with/without auto-sync
+  \item Web fetch auto-capture into \texttt{web-captures} collection
+  \item Pre-compaction transcript capture into \texttt{session-notes}
+  \item Database switching via \texttt{use} tool
+  \item Knowledge hint injection at tool boundaries
+  \item Compaction observability: a capture flag records whether
+    capture preceded compaction; the hook system enforces
+    capture-before-compaction on a best-effort basis
+  \item Clean session boundaries: all quarry state cleared on
+    \texttt{EndSession}
+\end{itemize}
+
+The specification can be type-checked with \texttt{fuzz -t
+claude-code-quarry.tex}.
+
+\end{document}

@@ -42,9 +42,10 @@ documents, and conversation history.
 The key properties verified by this model:
 
 \begin{enumerate}
-  \item \textbf{Knowledge before work}: the codebase is indexed
-    before Claude begins processing. The \texttt{SessionStart} hook
-    auto-registers and syncs the working directory.
+  \item \textbf{Knowledge before work}: the codebase is
+    indexed before Claude begins processing.  The
+    SessionStart hook auto-registers and syncs the working
+    directory.
   \item \textbf{No knowledge loss on compaction}: before context
     compaction shrinks the conversation, the \texttt{PreCompact} hook
     captures session notes. No path reaches \texttt{CompactContext}
@@ -61,7 +62,8 @@ The key properties verified by this model:
 % ============================================================
 
 \begin{zed}
-  [TOOLNAME, TOOLINPUT, TOOLOUTPUT, PROMPT, RESPONSE, AGENTID, SESSIONID, CONTEXTCHUNK]
+  [TOOLNAME, TOOLINPUT, TOOLOUTPUT, PROMPT, \\
+  \quad RESPONSE, AGENTID, SESSIONID, CONTEXTCHUNK]
 \end{zed}
 
 \begin{zed}
@@ -903,108 +905,95 @@ for the next potential compaction cycle.
     is active. \texttt{SwitchDatabase} replaces, does not accumulate.
 
   \item \textbf{Compaction flag lifecycle}:
-    \texttt{CaptureBeforeCompact} sets \texttt{compactionSaved = ztrue}.
-    \texttt{CompactContext} resets it to \texttt{zfalse}. This tracks
-    whether the most recent compaction was preceded by a capture.
+    CaptureBeforeCompact sets compactionSaved to ztrue.
+    CompactContext resets it to zfalse.  This tracks whether
+    the most recent compaction was preceded by a capture.
 
   \item \textbf{Clean session boundaries}: all quarry state
     (indexed, activeDb, captures, compaction flag) is cleared on
     \texttt{EndSession}.
 \end{enumerate}
 
-\textbf{Note on the compaction safety property:} The Z spec does
-\emph{not} enforce that \texttt{CaptureBeforeCompact} must precede
-\texttt{CompactContext} --- it is possible to compact without
-capturing (the operations are independent). This reflects reality:
-Claude Code fires \texttt{PreCompact} before compaction, but the
-hook is non-blocking. The \texttt{compactionSaved} flag lets us
-\emph{observe} whether the capture occurred, not \emph{enforce} it.
+\textbf{Note on the compaction safety property:} The Z spec
+does \emph{not} enforce that capture must precede compaction
+--- it is possible to compact without capturing (the operations
+are independent).  This reflects reality: Claude Code fires
+the pre-compact hook before compaction, but the hook is
+non-blocking.  The compactionSaved flag lets us \emph{observe}
+whether the capture occurred, not \emph{enforce} it.
 Enforcement is the hook system's responsibility.
 
 % ============================================================
 \section{Hook Event Map}
 % ============================================================
 
-\begin{tabular}{lllll}
+{\small
+\begin{tabular}{llp{3.2cm}p{2.8cm}l}
 \hline
-\textbf{Hook} & \textbf{Matcher} & \textbf{Operation} & \textbf{Quarry Effect} & \textbf{Blocks?} \\
+\textbf{Hook} & \textbf{Matcher} & \textbf{Operation} &
+  \textbf{Effect} & \textbf{Blk} \\
 \hline
-SessionStart & * & StartSessionWithSync/NoSync & Auto-register + sync & No \\
-SessionStart & * & InjectKnowledgeHint & Project standards & No \\
-PostToolUse & WebFetch & CaptureWebFetch & Ingest URL & No \\
-PostToolUse & Edit|Write & InjectKnowledgeHint & File-type hints & No \\
-PostToolUse & Bash & InjectKnowledgeHint & Workflow hints & No \\
-PostToolUse & quarry\_\_use & SwitchDatabase & Change active DB & No \\
-PostToolUse & quarry\_\_find & SearchKnowledge & Inject results & No \\
-PostToolUse & quarry\_\_* & (suppress output) & Format display & No \\
-PreCompact & * & CaptureBeforeCompact & Save session notes & No \\
-SessionEnd & * & EndSession & Clear state & No \\
+SessionStart & * & StartSession\-WithSync/\-NoSync &
+  Auto-register + sync & No \\
+SessionStart & * & InjectKnowledge\-Hint &
+  Project standards & No \\
+PostToolUse & WebFetch & CaptureWebFetch &
+  Ingest URL & No \\
+PostToolUse & Edit|Write & InjectKnowledge\-Hint &
+  File-type hints & No \\
+PostToolUse & Bash & InjectKnowledge\-Hint &
+  Workflow hints & No \\
+PostToolUse & quarry\_\_use$^\dagger$ & SwitchDatabase &
+  Change active DB & No \\
+PostToolUse & quarry\_\_find$^\dagger$ & SearchKnowledge &
+  Inject results & No \\
+PostToolUse & quarry\_\_*$^\dagger$ & (suppress output) &
+  Format display & No \\
+PreCompact & * & CaptureBefore\-Compact &
+  Save session notes & No \\
+SessionEnd$^\ddagger$ & * & EndSession &
+  Clear state & No \\
 \hline
 \end{tabular}
+}
+
+\noindent
+$^\dagger$Conceptual matcher; actual regex is
+\texttt{mcp\_\_(plugin\_quarry...)?quarry(-proxy)?\_\_.*}
+(see \texttt{hooks.json}).\\
+$^\ddagger$Not yet wired --- no SessionEnd hook is registered.
 
 % ============================================================
 \section{Implementation Validation}
 % ============================================================
 
-This section cross-references the Z specification against the
-current quarry implementation (\texttt{hooks/hooks.json},
-\texttt{hooks/*.sh}, \texttt{src/quarry/hooks.py}).
+This section cross-references the Z specification against
+the current quarry implementation: the hook config, shell
+scripts in the hooks directory, and the Python handlers.
 
-\subsection{Critical Finding: Python Handlers Never Invoked}
+\subsection{Hook Wiring Status}
 
-The quarry hook system has a \textbf{wiring gap}. Three Python
-handlers were implemented in \texttt{src/quarry/hooks.py} but are
-never called by the shell scripts registered in \texttt{hooks.json}:
+All three knowledge capture handlers are implemented in
+\texttt{src/quarry/hooks.py} and wired via shell scripts in
+\texttt{hooks/hooks.json}.
 
-\begin{itemize}
-  \item \texttt{handle\_session\_start()} --- auto-registers directory
-    and runs sync. \textbf{Never invoked.} The shell script
-    \texttt{session-start.sh} only deploys commands and sets
-    permissions --- it does not call \texttt{quarry hooks session-start}.
-  \item \texttt{handle\_post\_web\_fetch()} --- ingests fetched URLs
-    into \texttt{web-captures} collection. \textbf{Not registered} in
-    \texttt{hooks.json} at all. No \texttt{PostToolUse} hook on
-    \texttt{WebFetch} exists.
-  \item \texttt{handle\_pre\_compact()} --- captures transcript as
-    session notes. \textbf{Not registered} in \texttt{hooks.json}.
-    No \texttt{PreCompact} hook exists.
-\end{itemize}
-
-\textbf{Root cause:} The implementation was split between shell
-scripts (setup/formatting) and Python handlers (knowledge capture).
-The Python handlers were written but never wired into the hook
-dispatch chain. The shell scripts do not call back to Python.
-
-\subsection{Built and Correct}
-
-\begin{tabular}{llll}
+{\small
+\begin{tabular}{lp{3cm}p{5cm}l}
 \hline
-\textbf{Component} & \textbf{Hook} & \textbf{File} & \textbf{Status} \\
+\textbf{Component} & \textbf{Hook Event} & \textbf{Files} &
+  \textbf{Status} \\
 \hline
-Command deployment & SessionStart & session-start.sh & Correct \\
-MCP tool permissions & SessionStart & session-start.sh & Correct \\
-Output formatting & PostToolUse (quarry) & suppress-output.sh & Correct \\
-Hook config parsing & (library) & hooks.py & Correct \\
+Auto-register + sync & SessionStart &
+  session-start.sh, session-sync.sh, hooks.py & Correct \\
+Output formatting & PostToolUse (quarry) &
+  suppress-output.sh & Correct \\
+Web fetch capture & PostToolUse (WebFetch) &
+  web-fetch.sh, hooks.py & Correct \\
+Compaction capture & PreCompact &
+  pre-compact.sh, hooks.py & Correct \\
 \hline
 \end{tabular}
-
-\subsection{Implemented but Not Wired}
-
-\begin{tabular}{llll}
-\hline
-\textbf{Z Operation} & \textbf{Handler} & \textbf{hooks.json} & \textbf{Fix} \\
-\hline
-StartSessionWithSync & handle\_session\_start() & Registered but & Wire shell to Python \\
- & & shell doesn't call it & \\
-CaptureWebFetch & handle\_post\_web\_fetch() & Not registered & Add PostToolUse WebFetch \\
-CaptureBeforeCompact & handle\_pre\_compact() & Not registered & Add PreCompact entry \\
-\hline
-\end{tabular}
-
-\textbf{Fix pattern:} Each shell script needs to call
-\texttt{quarry hooks <subcommand> < /dev/stdin} to delegate to the
-Python handler. Alternatively, register the Python CLI directly as
-the hook command.
+}
 
 \subsection{Not Yet Built}
 
@@ -1019,19 +1008,15 @@ EndSession cleanup & SessionEnd & Clear session state & Low \\
 \hline
 \end{tabular}
 
-\textbf{Knowledge hint injection} is the most significant new
-capability. It requires:
+\textbf{Knowledge hint injection} is the most significant unbuilt
+capability.  It requires a hint resolution engine that maps the
+current activity (tool name, file path, command) to relevant quarry
+collections, plus careful scoping: hints must be short (1--3
+sentences) to avoid flooding context.
 
-\begin{enumerate}
-  \item A hint resolution engine that maps the current activity
-    (tool name, file path, command) to relevant quarry collections.
-  \item A PostToolUse hook on \texttt{Edit|Write} that detects the
-    file being edited and searches quarry for relevant standards.
-  \item A SessionStart hook that injects project-level conventions.
-  \item Careful scoping: hints must be short (1--3 sentences) to
-    avoid flooding context. Quarry's semantic search ranks by
-    relevance --- the top result should be the hint.
-\end{enumerate}
+An earlier attempt at convention hints via a PreToolUse hook
+accumulator (see ADR in \texttt{DESIGN.md}) was implemented and
+later removed (PR \#113) in favor of a future semantic approach.
 
 \subsection{Coverage Summary}
 
@@ -1039,15 +1024,15 @@ capability. It requires:
 \hline
 \textbf{Z Operation} & \textbf{Implementation} & \textbf{Status} \\
 \hline
-StartSessionWithSync & hooks.py (handler exists) & \textbf{Not wired} \\
-StartSessionNoSync & hooks.py (config check) & \textbf{Not wired} \\
+StartSessionWithSync & hooks.py + session-sync.sh & Correct \\
+StartSessionNoSync & hooks.py (config check) & Correct \\
 SubmitPrompt / RejectPrompt & (base) & Correct \\
 Tool call operations & (base) & Correct \\
-CaptureWebFetch & hooks.py (handler exists) & \textbf{Not registered} \\
+CaptureWebFetch & hooks.py + web-fetch.sh & Correct \\
 SwitchDatabase & MCP tool & Correct \\
 SearchKnowledge & MCP tool & Correct \\
 InjectKnowledgeHint & --- & \textbf{Not built} \\
-CaptureBeforeCompact & hooks.py (handler exists) & \textbf{Not registered} \\
+CaptureBeforeCompact & hooks.py + pre-compact.sh & Correct \\
 CompactContext & (base) & Correct \\
 EndSession & --- & \textbf{Not built} \\
 \hline

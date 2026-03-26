@@ -289,7 +289,7 @@ Quarry works with zero configuration. These environment variables are available 
 | `CHUNK_MAX_CHARS` | `1800` | Max characters per chunk (~450 tokens) |
 | `CHUNK_OVERLAP_CHARS` | `200` | Overlap between consecutive chunks |
 
-For advanced settings (embedding model, paths), see [Advanced Configuration](docs/ADVANCED-CONFIG.md).
+For advanced settings (embedding model, paths), see [Architecture](docs/architecture.tex) §7 Configuration.
 
 ## MCP Tools Reference
 
@@ -335,8 +335,7 @@ Quarry is fully typed (`py.typed`) and can be used as a Python library. See [DES
 - [Design](DESIGN.md) — architecture and design decisions
 - [Changelog](CHANGELOG.md)
 - [mcp-proxy](https://github.com/punt-labs/mcp-proxy) — the stdio-to-WebSocket bridge that eliminates per-session startup cost
-- [Search Quality and Tuning](docs/SEARCH-TUNING.md)
-- [Non-Functional Design](docs/NON-FUNCTIONAL-DESIGN.md)
+- [Architecture](docs/architecture.tex) — system architecture, configuration, search tuning, logging standards
 - [PR/FAQ](prfaq.pdf) — product vision and positioning
 
 ## License
