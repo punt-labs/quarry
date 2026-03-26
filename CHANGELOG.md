@@ -14,9 +14,7 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
-### Changed
-
-- **Directory standard** — user data moved from `~/.quarry/` to `~/.punt-labs/quarry/` per org filesystem standard. Per-project config moved from `.claude/quarry.local.md` to `.punt-labs/quarry/config.md`. Logs moved to `~/.punt-labs/quarry/logs/`. No automatic migration — run `mv ~/.quarry/data ~/.punt-labs/quarry/data` to preserve existing databases.
+## [1.6.0] - 2026-03-26
 
 ### Added
 
@@ -34,6 +32,7 @@ across `transform`, `index`, and `connector`).
 - **`session-start.sh`** — refactored from 88-line shell script with business logic to 3-line thin gate per punt-kit hook standard; command deployment and permissions logic moved to Python in `_stdlib.py`
 - **`prfaq.tex`** — merged `prfaq-ambient.tex` into single document reflecting current project state; removed references to deleted features (AWS, convention hints, quarry-menubar)
 - **`TESTING.md`** — moved to `docs/TESTING.md`
+- **Directory standard** — user data moved from `~/.quarry/` to `~/.punt-labs/quarry/` per org filesystem standard. Per-project config moved from `.claude/quarry.local.md` to `.punt-labs/quarry/config.md`. Logs moved to `~/.punt-labs/quarry/logs/`. No automatic migration — run `mv ~/.quarry/data ~/.punt-labs/quarry/data` to preserve existing databases.
 
 ### Removed
 
