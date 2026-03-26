@@ -1,4 +1,4 @@
-.PHONY: help test lint type check format build clean depot
+.PHONY: help test lint type check format build clean depot docs docs-clean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -27,6 +27,27 @@ build: ## Build wheel and sdist
 
 clean: ## Remove build artifacts
 	rm -rf dist/ .tmp/
+
+TEX_DOCS := prfaq docs/architecture docs/claude-code-quarry
+
+docs: ## Build all LaTeX documents
+	@for doc in $(TEX_DOCS); do \
+		dir=$$(dirname $$doc); \
+		base=$$(basename $$doc); \
+		echo "Building $$doc.pdf..."; \
+		cd $$dir && pdflatex -interaction=nonstopmode $$base.tex > /dev/null 2>&1; \
+		if [ "$$base" = "prfaq" ]; then biber $$base > /dev/null 2>&1; fi; \
+		pdflatex -interaction=nonstopmode $$base.tex > /dev/null 2>&1; \
+		pdflatex -interaction=nonstopmode $$base.tex > /dev/null 2>&1; \
+		cd $(CURDIR); \
+	done
+	@$(MAKE) --no-print-directory docs-clean
+	@echo "Done."
+
+docs-clean: ## Remove LaTeX build artifacts
+	@for doc in $(TEX_DOCS); do \
+		rm -f $$doc.aux $$doc.log $$doc.out $$doc.toc $$doc.bbl $$doc.blg $$doc.bcf $$doc.run.xml; \
+	done
 
 DEPOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))../.depot
 
