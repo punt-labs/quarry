@@ -18,7 +18,15 @@ Quarry indexes documents in 20+ formats, embeds them with a local ONNX model (sn
 curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/25eaa96/install.sh | sh
 ```
 
-Restart Claude Code. The plugin auto-indexes your current project on session start. Try `/find "a function or concept in this codebase"` to search it, or `/ingest report.pdf` to add a document.
+Restart Claude Code, then:
+
+```text
+> /ingest report.pdf                    # index a document (runs in background)
+> /quarry status                        # after a moment, confirm it's there
+> /find "what does the report say about margins"   # search by meaning
+```
+
+Once installed, a plugin hook auto-indexes your current project directory on every session start — you don't need to `/ingest` your codebase manually.
 
 <details>
 <summary>Manual install (if you already have uv)</summary>
@@ -60,17 +68,6 @@ sh install.sh
 
 ## What It Looks Like
 
-### Search your knowledge base
-
-```text
-> /find "what embedding model does quarry use"
-
-▶ [docs/architecture.tex p.8 | text/.tex] (similarity: 0.4521)
-  snowflake-arctic-embed-m-v1.5 via ONNX Runtime: 768-dimensional vectors,
-  512-token context window. Asymmetric retrieval: queries are prefixed with
-  a search instruction, documents are not.
-```
-
 ### Ingest a document
 
 ```text
@@ -79,7 +76,7 @@ sh install.sh
 ▶ Ingesting report.pdf (background)
 ```
 
-### Check database status
+### Check what's indexed
 
 ```text
 > /quarry
@@ -91,15 +88,26 @@ sh install.sh
   Model: snowflake-arctic-embed-m-v1.5 (768-dim)
 ```
 
+### Search by meaning
+
+```text
+> /find "what were the Q3 revenue figures"
+
+▶ [report.pdf p.12 | text/.pdf] (similarity: 0.4521)
+  Third quarter revenue reached $142M, up 18% year-over-year,
+  driven primarily by expansion in the enterprise segment.
+  Gross margins improved to 71% from 68% in Q2.
+```
+
 ## Commands
 
 ### Slash Commands (Claude Code)
 
 | Command | What it does |
 |---------|-------------|
-| `/find <query>` | Semantic search. Questions get synthesized answers; keywords get raw results |
 | `/ingest <source>` | Ingest a URL, directory, or file |
 | `/remember <name>` | Ingest inline text under a document name |
+| `/find <query>` | Semantic search. Questions get synthesized answers; keywords get raw results |
 | `/explain <topic>` | Search and synthesize an explanation |
 | `/source <claim>` | Find which document a claim comes from |
 | `/quarry [sub]` | Manage: `status`, `sync`, `collections`, `databases`, `registrations` |
@@ -108,16 +116,16 @@ sh install.sh
 
 | Tool | Purpose | Execution |
 |------|---------|-----------|
+| `ingest` | Index a file or URL | Background |
+| `remember` | Index inline text | Background |
+| `register_directory` | Register directory for sync | Background |
+| `sync_all_registrations` | Re-index all registered directories | Background |
 | `find` | Semantic search with filters | Sync |
 | `show` | Document metadata or page text | Sync |
 | `list` | Documents, collections, databases, registrations | Sync |
 | `status` | Database statistics | Sync |
-| `ingest` | Index a file or URL | Background |
-| `remember` | Index inline text | Background |
 | `delete` | Remove document or collection | Background |
-| `register_directory` | Register directory for sync | Background |
 | `deregister_directory` | Remove registration | Background |
-| `sync_all_registrations` | Re-index all registered directories | Background |
 | `use` | Switch active database | Sync |
 
 ### CLI
@@ -148,6 +156,18 @@ Quarry works with zero configuration. These environment variables are available 
 | `CHUNK_OVERLAP_CHARS` | `200` | Overlap between consecutive chunks |
 
 For the full configuration reference, see [Architecture](docs/architecture.tex) section 7.
+
+## Passive Knowledge Capture
+
+Beyond explicit `/ingest` and `/find` commands, quarry runs as a Claude Code plugin with hooks that capture knowledge automatically during your sessions:
+
+| Hook | When it fires | What it does |
+|------|--------------|-------------|
+| **Session start** | On every session start | Auto-registers your project directory and syncs it in the background. Your codebase is searchable without manual ingestion. |
+| **Web fetch** | After any `WebFetch` tool call | URLs Claude fetches during research are auto-ingested into a `web-captures` collection. Reuses already-retrieved content when available, falls back to URL ingest otherwise. |
+| **Pre-compact** | Before context compaction | Captures the conversation transcript into a `session-notes` collection. Discoveries that would be lost when the context window shrinks are preserved as searchable chunks. |
+
+All hooks are fail-open — failures are ignored and never block Claude Code. Each hook is individually toggleable via `.claude/quarry.local.md` YAML frontmatter. See [AGENTS.md](AGENTS.md) for the full integration model.
 
 ## How It Works
 
