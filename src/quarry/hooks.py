@@ -254,8 +254,12 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
             "Quarry semantic search is active for this project.\n"
             f'Collection: "{collection}" ({directory})\n'
             f"{sync_line}\n"
-            "Use the quarry MCP tools (search_documents, get_page) to search "
-            "this codebase semantically."
+            "Use the quarry MCP tools (find, show, ingest, remember) "
+            "to search this codebase semantically.\n"
+            "Slash commands: /find, /ingest, /remember, /explain, "
+            "/source, /quarry.\n"
+            "For deep research across local docs and the web, use the "
+            "researcher agent."
         )
         return {
             "hookSpecificOutput": {

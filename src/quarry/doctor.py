@@ -424,6 +424,54 @@ def _print_check(check: CheckResult) -> None:
     print(f"  {symbol} {check.name}: {check.message}")  # noqa: T201
 
 
+_QUARRY_CLAUDE_MD_SECTION = """\
+
+<!-- quarry:capabilities -->
+# Quarry
+
+Local semantic search is available via quarry. Use it to search indexed
+documents by meaning, ingest new content, and recall knowledge across sessions.
+
+- **Slash commands**: `/find`, `/ingest`, `/remember`, `/explain`, `/source`,
+  `/quarry`
+- **Research agent**: `researcher` — combines quarry local search with web
+  research. Use for deep investigation across local docs and the web.
+- **Auto-behaviors**: working directory is auto-indexed at session start;
+  URLs fetched via WebFetch are auto-ingested; transcripts are captured before
+  context compaction.
+- **Search tip**: natural language queries work best ("What were Q3 margins?"
+  outperforms "Q3 margins").
+<!-- /quarry:capabilities -->
+"""
+
+_QUARRY_SECTION_MARKER = "<!-- quarry:capabilities -->"
+
+
+def _inject_claude_md() -> str:
+    """Append a quarry capabilities section to ~/.claude/CLAUDE.md.
+
+    Idempotent: skips if the section already exists.
+
+    Returns:
+        Status message for display.
+    """
+    claude_dir = Path.home() / ".claude"
+    claude_md = claude_dir / "CLAUDE.md"
+
+    claude_dir.mkdir(parents=True, exist_ok=True)
+
+    if claude_md.exists():
+        content = claude_md.read_text(encoding="utf-8")
+        if _QUARRY_SECTION_MARKER in content:
+            return f"{claude_md} already has quarry section"
+        with claude_md.open("a", encoding="utf-8") as f:
+            f.write(_QUARRY_CLAUDE_MD_SECTION)
+    else:
+        claude_md.write_text(_QUARRY_CLAUDE_MD_SECTION.lstrip(), encoding="utf-8")
+
+    return f"Appended quarry section to {claude_md}"
+
+
 def run_install() -> int:
     """Create data directory, download model, and configure MCP clients.
 
@@ -436,7 +484,7 @@ def run_install() -> int:
 
     # Step 1: data directory
     data_dir = Path.home() / ".quarry" / "data" / "default" / "lancedb"
-    print("[1/5] Creating data directory...")  # noqa: T201
+    print("[1/6] Creating data directory...")  # noqa: T201
     try:
         data_dir.mkdir(parents=True, exist_ok=True)
         print(f"  \u2713 {data_dir}")  # noqa: T201
@@ -445,7 +493,7 @@ def run_install() -> int:
         failed = True
 
     # Step 2: embedding model
-    print("[2/5] Downloading embedding model...")  # noqa: T201
+    print("[2/6] Downloading embedding model...")  # noqa: T201
     try:
         from quarry.embeddings import download_model_files  # noqa: PLC0415
 
@@ -457,7 +505,7 @@ def run_install() -> int:
 
     # Step 3: mcp-proxy binary (best-effort — proxy is optional, falls back to direct)
     # Installed before MCP client config so Desktop can resolve the absolute path.
-    print("[3/5] Installing mcp-proxy...")  # noqa: T201
+    print("[3/6] Installing mcp-proxy...")  # noqa: T201
     try:
         from quarry.proxy import install as proxy_install  # noqa: PLC0415
 
@@ -468,12 +516,12 @@ def run_install() -> int:
         print("    mcp-proxy is optional — quarry works without it.")  # noqa: T201
 
     # Step 4: MCP clients (uses mcp-proxy if step 3 succeeded, otherwise quarry mcp)
-    print("[4/5] Configuring MCP clients...")  # noqa: T201
+    print("[4/6] Configuring MCP clients...")  # noqa: T201
     for check in [_configure_claude_code(), _configure_claude_desktop()]:
         _print_check(check)
 
     # Step 5: daemon service (best-effort — not available in CI, containers, SSH)
-    print("[5/5] Registering quarry daemon...")  # noqa: T201
+    print("[5/6] Registering quarry daemon...")  # noqa: T201
     try:
         from quarry.service import install as svc_install  # noqa: PLC0415
 
@@ -482,6 +530,14 @@ def run_install() -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"  \u2022 Skipped: {exc}")  # noqa: T201
         print("    Daemon registration is optional — quarry works without it.")  # noqa: T201
+
+    # Step 6: CLAUDE.md context injection (best-effort)
+    print("[6/6] Injecting quarry context into CLAUDE.md...")  # noqa: T201
+    try:
+        msg = _inject_claude_md()
+        print(f"  \u2713 {msg}")  # noqa: T201
+    except Exception as exc:  # noqa: BLE001
+        print(f"  \u2022 Skipped: {exc}")  # noqa: T201
 
     # Verification
     print()  # noqa: T201

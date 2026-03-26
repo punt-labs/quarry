@@ -17,11 +17,15 @@ across `transform`, `index`, and `connector`).
 ### Added
 
 - **`docs/architecture.tex`** — comprehensive LaTeX architecture document covering system design, daemon model, module responsibilities, wire protocol, configuration, search tuning, logging standards, security, deployment, and test architecture. Consolidates content from four separate markdown files into one authoritative document
+- **`researcher` agent** — plugin subagent that combines quarry local search with web research. Searches quarry first, web for gaps, auto-ingests valuable findings so research compounds across sessions
+- **CLAUDE.md injection** — `quarry install` appends a quarry capabilities section to `~/.claude/CLAUDE.md` so agents discover quarry's tools and commands in every project
+- **AGENTS.md** — rewritten as an agent-first guide to quarry integration: MCP tools, slash commands, hooks, subagents, architecture, and integration patterns
 
 ### Changed
 
 - **`DESIGN.md`** — slimmed to ADRs only; architecture and module tables moved to `docs/architecture.tex`
 - **`docs/claude-code-quarry.tex`** — refreshed implementation validation section to reflect current hook wiring status (all three knowledge capture hooks are now wired)
+- **SessionStart context** — fixed stale MCP tool names (`search_documents`/`get_page` → `find`/`show`), added slash command list and researcher agent mention
 
 ### Removed
 
