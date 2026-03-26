@@ -68,7 +68,7 @@ Install from TestPyPI to verify:
 uv pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ punt-quarry
 ```
 
-The `--extra-index-url` fallback is needed because dependencies (boto3, lancedb, etc.) are on PyPI, not TestPyPI.
+The `--extra-index-url` fallback is needed because dependencies (lancedb, onnxruntime, etc.) are on PyPI, not TestPyPI.
 
 ---
 

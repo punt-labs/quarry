@@ -36,7 +36,7 @@ No intermediary service layer. Each surface imports core functions and calls the
 | Module | Responsibility |
 |--------|---------------|
 | `models.py` | Immutable dataclasses: `PageType` enum, `PageContent`, `Chunk`, `PageAnalysis`. All `@dataclass(frozen=True)`. |
-| `types.py` | Protocol definitions for external dependencies: `LanceDB`, `LanceTable`, `LanceQuery`, `OcrBackend`, `EmbeddingBackend`, `TextractClient`, `S3Client`, `SageMakerRuntimeClient`. Structural typing instead of `Any`. |
+| `types.py` | Protocol definitions for external dependencies: `LanceDB`, `LanceTable`, `LanceQuery`, `ListTablesResult`, `OcrBackend`, `EmbeddingBackend`. Structural typing instead of `Any`. |
 | `config.py` | `Settings` (pydantic `BaseSettings`), `resolve_db_paths()` for named databases, ONNX model constants. All configuration flows through `Settings`. |
 | `database.py` | LanceDB operations: `insert_chunks`, `search`, `list_documents`, `delete_document`, `count_chunks`, etc. Single table `chunks`. |
 
@@ -113,7 +113,7 @@ Exceptions in background threads are logged via `logger.exception()`, not raised
 
 ### Protocol-Based Typing
 
-Third-party libraries without type stubs (LanceDB, boto3 clients) are typed via Protocol classes in `types.py`. This gives us:
+Third-party libraries without type stubs (LanceDB) are typed via Protocol classes in `types.py`. This gives us:
 
 - Exact type checking without `Any`
 - Mockable interfaces for testing
