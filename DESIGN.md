@@ -49,7 +49,9 @@ snowflake-arctic-embed-m-v1.5: 768-dimensional, 512 token context. Auto-download
 
 ### Container Deployment (Fly.io)
 
-Multi-stage Dockerfile: (1) install Python deps with `uv sync`, (2) download the embedding model at build time via `hf_hub_download`, (3) slim runtime image with baked-in model. LanceDB data lives on a Fly persistent volume at `/data` (`QUARRY_ROOT=/data`). The `--host 0.0.0.0` flag binds to all interfaces for container networking. Auto-stop scales to zero when idle; cold start is ~5s with the baked-in model (no download on first request). TLS is terminated by Fly's proxy.
+> **Moved.** Dockerfile, fly.toml, .dockerignore, and sync-chat-db.sh relocated to `public-website/infra/quarry/`. The Dockerfile now installs `punt-quarry` from PyPI instead of copying source. See `public-website/CLAUDE.md` § "Chat Widget RAG Backend" for infrastructure details.
+
+Design rationale preserved here: multi-stage build downloads the embedding model at build time for fast cold starts (~5s). LanceDB data lives on a Fly persistent volume at `/data` (`QUARRY_ROOT=/data`). The `--host 0.0.0.0` flag binds to all interfaces for container networking. TLS is terminated by Fly's proxy.
 
 ### Threaded Request Handling
 

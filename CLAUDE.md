@@ -169,36 +169,6 @@ git status                  # Must show "up to date with origin"
 
 Work is NOT complete until `git push` succeeds.
 
-## Fly.io Deployment
-
-Quarry serves the punt-labs.com chat widget's RAG backend at `quarry.fly.dev`.
-
-### Infrastructure
-
-- **Region:** `iad` (Washington DC)
-- **Machine:** `shared-cpu-2x`, 512 MB RAM
-- **Volume:** `quarry_data` mounted at `/data` (persistent LanceDB storage)
-- **Auth:** `QUARRY_API_KEY` set via `fly secrets` (also in macOS Keychain as `quarry-api-key`)
-- **Auto-stop:** Disabled (`--autostop=off`). Machine runs continuously.
-
-### Database Sync (Local → Fly)
-
-The `chat` database is a curated subset of the `punt-labs` workspace: READMEs, DESIGN.md, CHANGELOGs, prfaq PDFs, and blog posts from all projects. It serves the chat widget at punt-labs.com.
-
-```bash
-# Full rebuild + deploy (one command)
-./scripts/sync-chat-db.sh
-
-# Override workspace location
-QUARRY_WORKSPACE=~/other/path ./scripts/sync-chat-db.sh
-```
-
-The script: rebuilds the local `chat` database from all projects, creates a tarball (with `COPYFILE_DISABLE=1` to suppress macOS resource forks), uploads via `fly sftp`, extracts on Fly, restarts the machine, and verifies search works.
-
-### API Key
-
-Stored in macOS Keychain (`security find-generic-password -a quarry -s quarry-api-key -w`) and available via `.envrc`. Also set as a Fly secret and Vercel env var.
-
 ## Scratch Files
 
 Use `.tmp/` at the project root for scratch and temporary files — never `/tmp`. The `TMPDIR` environment variable is set via `.envrc` so that `tempfile` and subprocesses automatically use it. Contents are gitignored; only `.gitkeep` is tracked.
