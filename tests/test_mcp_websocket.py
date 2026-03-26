@@ -24,8 +24,8 @@ def _mock_settings(tmp_path: Path) -> MagicMock:
     s.lancedb_path.mkdir(parents=True)
     s.embedding_model = "Snowflake/snowflake-arctic-embed-m-v1.5"
     s.embedding_dimension = 768
-    s.quarry_root = tmp_path / ".quarry"
-    s.registry_path = tmp_path / ".quarry" / "registry.db"
+    s.quarry_root = tmp_path / ".punt-labs" / "quarry"
+    s.registry_path = tmp_path / ".punt-labs" / "quarry" / "registry.db"
     return s
 
 

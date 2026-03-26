@@ -23,7 +23,9 @@ class TestSettings:
         assert settings.chunk_max_chars == 1800
         assert settings.chunk_overlap_chars == 200
         assert isinstance(settings.lancedb_path, Path)
-        expected = Path.home() / ".quarry" / "data" / "default" / "registry.db"
+        expected = (
+            Path.home() / ".punt-labs" / "quarry" / "data" / "default" / "registry.db"
+        )
         assert settings.registry_path == expected
 
     def test_override_via_constructor(self):
@@ -33,7 +35,7 @@ class TestSettings:
     def test_default_lancedb_path_under_home(self):
         settings = Settings()
         home = Path.home()
-        expected = home / ".quarry" / "data" / "default" / "lancedb"
+        expected = home / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
         assert settings.lancedb_path == expected
 
     def test_embedding_model_default(self):
@@ -42,7 +44,7 @@ class TestSettings:
 
     def test_quarry_root_default(self):
         settings = Settings()
-        assert settings.quarry_root == Path.home() / ".quarry" / "data"
+        assert settings.quarry_root == Path.home() / ".punt-labs" / "quarry" / "data"
 
 
 class TestResolveDbPaths:

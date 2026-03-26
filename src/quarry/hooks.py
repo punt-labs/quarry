@@ -80,7 +80,7 @@ def _resolve_settings() -> Settings:
 
 def _sync_lockfile() -> Path:
     """Return the path to the sync lock file in a user-owned directory."""
-    return Path.home() / ".quarry" / "sync.pid"
+    return Path.home() / ".punt-labs" / "quarry" / "sync.pid"
 
 
 def _is_sync_running() -> bool:
@@ -152,7 +152,7 @@ def _sync_in_background() -> bool:
     the hook process.
 
     Guards against concurrent syncs via an atomic lock file in
-    ``~/.quarry/sync.pid``.  Uses O_CREAT|O_EXCL to prevent TOCTOU
+    ``~/.punt-labs/quarry/sync.pid``.  Uses O_CREAT|O_EXCL to prevent TOCTOU
     races between concurrent SessionStart hooks.
 
     Returns True if the subprocess was launched, False if skipped or failed.

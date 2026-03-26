@@ -218,7 +218,7 @@ class TestStatus:
             "collection_count": 3,
             "chunk_count": 1234,
             "registered_directories": 2,
-            "database_path": "/home/user/.quarry/lancedb",
+            "database_path": "/home/user/.punt-labs/quarry/lancedb",
             "database_size_bytes": 12582912,
             "embedding_model": "arctic-embed",
         }
@@ -226,7 +226,7 @@ class TestStatus:
         assert "quarry status" in result
         assert "45" in result
         assert "1,234" in result
-        assert "/home/user/.quarry/lancedb" in result
+        assert "/home/user/.punt-labs/quarry/lancedb" in result
         assert "12.0 MB" in result
         assert "arctic-embed" in result
 

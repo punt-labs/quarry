@@ -6,7 +6,7 @@ async request handling and native WebSocket support.
 
 Lifecycle:
     1. ``quarry serve`` loads settings + embedding model (cold start)
-    2. Writes port to ``~/.quarry/data/<db>/serve.port``
+    2. Writes port to ``~/.punt-labs/quarry/data/<db>/serve.port``
     3. Serves JSON endpoints + ``/mcp`` WebSocket on ``localhost:<port>``
     4. Cleans up port file on shutdown
 """

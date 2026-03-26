@@ -414,7 +414,7 @@ overridable with \texttt{-{}-port}.
 \subsection{Port File}
 
 After binding, the server writes the actual port to
-\texttt{\~{}/.quarry/data/<db>/serve.port}.  This supports
+\texttt{\~{}/.punt-labs/quarry/data/<db>/serve.port}.  This supports
 \texttt{-{}-port 0} (ephemeral assignment).  Removed on shutdown via
 lifespan context.
 
@@ -440,13 +440,13 @@ All settings are environment variables read via pydantic-settings.
 \endhead
 \multicolumn{3}{l}{\textbf{Paths}} \\
 \midrule
-\texttt{QUARRY\_ROOT}    & \texttt{\~{}/.quarry/data} &
+\texttt{QUARRY\_ROOT}    & \texttt{\~{}/.punt-labs/quarry/data} &
   Base directory for all databases \\
 \texttt{LANCEDB\_PATH}   & \texttt{<root>/default/lancedb} &
   Vector database location \\
 \texttt{REGISTRY\_PATH}  & \texttt{<root>/default/registry.db} &
   Directory sync SQLite database \\
-\texttt{LOG\_PATH}        & \texttt{\~{}/.quarry/data/quarry.log} &
+\texttt{LOG\_PATH}        & \texttt{\~{}/.punt-labs/quarry/logs/quarry.log} &
   Log file (rotating, 5\,MB, 3 backups; independent of
   \texttt{QUARRY\_ROOT}) \\
 \midrule
@@ -478,7 +478,7 @@ If \texttt{LANCEDB\_PATH} was explicitly overridden, the override is
 preserved.
 
 The persistent default database is stored in
-\texttt{\~{}/.quarry/config.toml} as \texttt{[default] database = "name"}.
+\texttt{\~{}/.punt-labs/quarry/config.toml} as \texttt{[default] database = "name"}.
 
 \subsection{Chunking Tuning}
 
@@ -788,7 +788,7 @@ PreCompact    & * & Capture transcript as session notes &
 \texttt{handle\_session\_start()} auto-registers the working directory
 and launches a background sync via a detached subprocess.  Uses
 atomic PID-file locking (\texttt{O\_CREAT|O\_EXCL}) at
-\texttt{\~{}/.quarry/sync.pid} to prevent concurrent syncs.  Returns
+\texttt{\~{}/.punt-labs/quarry/sync.pid} to prevent concurrent syncs.  Returns
 \texttt{additionalContext} immediately without waiting.
 
 \subsection{Web Fetch Capture}

@@ -82,7 +82,7 @@ def main_callback(
         typer.Option(
             "--db",
             help="Named database (default: 'default'). "
-            "Resolves to ~/.quarry/data/<name>/lancedb.",
+            "Resolves to ~/.punt-labs/quarry/data/<name>/lancedb.",
         ),
     ] = "",
 ) -> None:
