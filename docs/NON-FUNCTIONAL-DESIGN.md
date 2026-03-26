@@ -116,7 +116,7 @@ current types are sufficient:
 |-----------|-------------|
 | `ValueError` | Invalid input: unsupported format, bad parameter value. |
 | `FileNotFoundError` | A file path argument does not exist. |
-| `RuntimeError` | An external service reports failure (e.g., Textract job failed). |
+| `RuntimeError` | An operation reports failure (e.g., OCR engine error, ingestion failure). |
 | `TimeoutError` | An external service exceeds its time budget. |
 
 If future code needs a domain-specific exception (e.g., to let callers distinguish

@@ -48,13 +48,10 @@ Tests verify that the pipeline wires processors, embeddings, and database calls 
 |------|---------------|
 | `test_pipeline.py` | `ingest_document` / `ingest_content` orchestration |
 | `test_pipeline_images.py` | Image ingestion: single/multi-page, progress callbacks |
-| `test_ocr_client.py` | Textract response parsing, S3 upload flow |
-| `test_ocr_client_sync.py` | Synchronous OCR path, line extraction |
 | `test_ocr_local.py` | Local OCR backend: PDF rendering, text extraction |
 | `test_url_ingestion.py` | URL fetching, HTML processing, redirect handling |
 | `test_sitemap.py` | Sitemap discovery, entry filtering, deduplication |
 | `test_backends.py` | Backend factory dispatch (OCR, embedding) |
-| `test_embeddings_sagemaker.py` | SageMaker embedding backend (mocked endpoint) |
 | `test_hooks.py` | Claude Code hook handlers: session-start, web-fetch, compact |
 | `test_doctor.py` | Environment checks, install flow, configuration |
 
