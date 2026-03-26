@@ -28,7 +28,19 @@ _LABEL = "com.punt-labs.quarry"
 
 
 def _quarry_exec_args() -> list[str]:
-    """Return the command to invoke ``quarry serve`` from the current Python."""
+    """Return the command to invoke ``quarry serve``.
+
+    Prefers the installed ``quarry`` binary (from ``uv tool install``) over
+    ``sys.executable -m quarry``.  When run from a dev venv, ``sys.executable``
+    points to the venv Python — the daemon should use the prod binary instead
+    so it survives venv rebuilds and directory moves.
+    """
+    # Resolve the uv tool binary through its symlink to get the stable path.
+    local_bin = Path.home() / ".local" / "bin" / "quarry"
+    if local_bin.exists():
+        resolved = local_bin.resolve()
+        return [str(resolved), "serve", "--port", str(DEFAULT_PORT)]
+    # Fallback: use the current Python (works for non-uv installs).
     return [sys.executable, "-m", "quarry", "serve", "--port", str(DEFAULT_PORT)]
 
 

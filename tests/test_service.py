@@ -36,10 +36,24 @@ class TestDetectPlatform:
 
 
 class TestQuarryExecArgs:
-    def test_uses_current_python(self) -> None:
+    def test_prefers_uv_tool_binary(self, tmp_path: Path) -> None:
+        fake_bin = tmp_path / "quarry"
+        fake_bin.write_text("#!/bin/sh\n")
+        fake_bin.chmod(0o755)
+        local_bin = tmp_path / ".local" / "bin" / "quarry"
+        local_bin.parent.mkdir(parents=True, exist_ok=True)
+        local_bin.symlink_to(fake_bin)
+        with patch("quarry.service.Path.home", return_value=tmp_path):
+            args = _quarry_exec_args()
+        assert args[-3:] == ["serve", "--port", str(DEFAULT_PORT)]
+        assert str(fake_bin) == args[0]
+
+    def test_falls_back_to_sys_executable(self, tmp_path: Path) -> None:
         import sys
 
-        args = _quarry_exec_args()
+        with patch("quarry.service.Path.home", return_value=tmp_path):
+            # No ~/.local/bin/quarry exists in tmp_path
+            args = _quarry_exec_args()
         assert args[0] == sys.executable
         assert args[1:] == ["-m", "quarry", "serve", "--port", str(DEFAULT_PORT)]
 
@@ -71,7 +85,7 @@ class TestInstallMacOS:
             assert _LABEL in content
             assert "KeepAlive" in content
             assert "RunAtLoad" in content
-            assert "<string>-m</string>" in content
+            assert "<string>serve</string>" in content
             assert "running" in msg
             assert str(DEFAULT_PORT) in msg
 
