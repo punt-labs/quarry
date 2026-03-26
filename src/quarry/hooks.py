@@ -271,7 +271,47 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
         conn.close()
 
 
-_WEB_CAPTURES_COLLECTION = "web-captures"
+_WEB_CAPTURES_FALLBACK = "web-captures"
+_SESSION_NOTES_FALLBACK = "session-notes"
+
+
+def _collection_for_cwd(cwd: str) -> str | None:
+    """Resolve the registered collection for a working directory.
+
+    Walks up from *cwd* to find a registered parent directory (or exact
+    match).  Returns the collection name, or ``None`` if no registration
+    covers *cwd*.
+    """
+    if not cwd:
+        return None
+
+    from quarry.sync_registry import list_registrations, open_registry  # noqa: PLC0415
+
+    settings = _resolve_settings()
+    conn = open_registry(settings.registry_path)
+    try:
+        registrations = list_registrations(conn)
+    finally:
+        conn.close()
+
+    if not registrations:
+        return None
+
+    # Build a set of registered directory paths for fast lookup.
+    reg_map: dict[str, str] = {r.directory: r.collection for r in registrations}
+
+    # Walk from cwd upward to find the first registered ancestor.
+    current = Path(cwd).resolve()
+    while True:
+        key = str(current)
+        if key in reg_map:
+            return reg_map[key]
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+
+    return None
 
 
 def _extract_url(payload: dict[str, object]) -> str | None:
@@ -310,11 +350,11 @@ def _extract_web_fetch_content(payload: dict[str, object]) -> str | None:
     return None
 
 
-def _is_already_ingested(url: str, db: LanceDB) -> bool:
-    """Check if *url* is already in the web-captures collection."""
+def _is_already_ingested(url: str, db: LanceDB, collection: str) -> bool:
+    """Check if *url* is already in the given collection."""
     from quarry.database import list_documents  # noqa: PLC0415
 
-    docs = list_documents(db, collection_filter=_WEB_CAPTURES_COLLECTION)
+    docs = list_documents(db, collection_filter=collection)
     return any(d["document_name"] == url for d in docs)
 
 
@@ -344,10 +384,12 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     from quarry.database import get_db  # noqa: PLC0415
     from quarry.pipeline import ingest_content, ingest_url  # noqa: PLC0415
 
+    collection = _collection_for_cwd(cwd) or _WEB_CAPTURES_FALLBACK
+
     settings = _resolve_settings()
     db = get_db(settings.lancedb_path)
 
-    if _is_already_ingested(url, db):
+    if _is_already_ingested(url, db, collection):
         logger.debug("post-web-fetch: already ingested %s, skipping", url)
         return {}
 
@@ -368,7 +410,7 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
                 url,
                 db,
                 settings,
-                collection=_WEB_CAPTURES_COLLECTION,
+                collection=collection,
                 format_hint="markdown",
             )
         else:
@@ -380,7 +422,7 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
             url,
             db,
             settings,
-            collection=_WEB_CAPTURES_COLLECTION,
+            collection=collection,
         )
     logger.info(
         "post-web-fetch: ingested %s (%d chunks)",
@@ -389,8 +431,6 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     )
     return {}
 
-
-_SESSION_NOTES_COLLECTION = "session-notes"
 
 _MAX_TRANSCRIPT_CHARS = 500_000
 
@@ -494,6 +534,8 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
     from quarry.database import get_db  # noqa: PLC0415
     from quarry.pipeline import ingest_content  # noqa: PLC0415
 
+    collection = _collection_for_cwd(cwd) or _SESSION_NOTES_FALLBACK
+
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
     document_name = f"session-{session_id[:8]}-{timestamp}"
 
@@ -505,7 +547,7 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
         document_name,
         db,
         settings,
-        collection=_SESSION_NOTES_COLLECTION,
+        collection=collection,
         format_hint="markdown",
     )
     logger.info(

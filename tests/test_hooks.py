@@ -13,6 +13,7 @@ from typer.testing import CliRunner
 from quarry.__main__ import app
 from quarry._stdlib import HookConfig, load_hook_config, read_hook_stdin
 from quarry.hooks import (
+    _collection_for_cwd,
     _extract_transcript_text,
     _extract_url,
     _extract_web_fetch_content,
@@ -91,6 +92,52 @@ class TestUniqueCollectionName:
         assert name.startswith("myproject-")
         assert len(name) == len("myproject-") + 8  # 8-char hash
         conn.close()
+
+
+class TestCollectionForCwd:
+    def test_returns_collection_for_exact_match(self, tmp_path: Path) -> None:
+        project = tmp_path / "myproject"
+        project.mkdir()
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+
+        conn = open_registry(settings.registry_path)
+        register_directory(conn, project, "myproject")
+        conn.close()
+
+        with patch("quarry.hooks._resolve_settings", return_value=settings):
+            result = _collection_for_cwd(str(project))
+        assert result == "myproject"
+
+    def test_returns_collection_for_subdirectory(self, tmp_path: Path) -> None:
+        project = tmp_path / "myproject"
+        project.mkdir()
+        subdir = project / "src" / "lib"
+        subdir.mkdir(parents=True)
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+
+        conn = open_registry(settings.registry_path)
+        register_directory(conn, project, "myproject")
+        conn.close()
+
+        with patch("quarry.hooks._resolve_settings", return_value=settings):
+            result = _collection_for_cwd(str(subdir))
+        assert result == "myproject"
+
+    def test_returns_none_for_unregistered_directory(self, tmp_path: Path) -> None:
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+
+        conn = open_registry(settings.registry_path)
+        conn.close()
+
+        with patch("quarry.hooks._resolve_settings", return_value=settings):
+            result = _collection_for_cwd(str(tmp_path / "unregistered"))
+        assert result is None
+
+    def test_returns_none_for_empty_cwd(self) -> None:
+        assert _collection_for_cwd("") is None
 
 
 # ---------------------------------------------------------------------------
@@ -658,6 +705,7 @@ class TestHandlePostWebFetch:
             ),
             patch("quarry.database.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
+            patch("quarry.hooks._collection_for_cwd", return_value=None),
             patch(
                 "quarry.html_processor.process_html_text",
                 return_value=mock_pages,
@@ -697,6 +745,7 @@ class TestHandlePostWebFetch:
             ),
             patch("quarry.database.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
+            patch("quarry.hooks._collection_for_cwd", return_value=None),
             patch(
                 "quarry.pipeline.ingest_url",
                 return_value=mock_ingest_result,
@@ -730,6 +779,7 @@ class TestHandlePostWebFetch:
             ),
             patch("quarry.database.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
+            patch("quarry.hooks._collection_for_cwd", return_value=None),
             patch("quarry.html_processor.process_html_text", return_value=[]),
             patch(
                 "quarry.pipeline.ingest_url",
@@ -751,12 +801,69 @@ class TestHandlePostWebFetch:
             ),
             patch("quarry.database.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=True),
+            patch("quarry.hooks._collection_for_cwd", return_value=None),
             patch("quarry.pipeline.ingest_url") as mock_ingest,
         ):
             result = handle_post_web_fetch(payload)
 
         assert result == {}
         mock_ingest.assert_not_called()
+
+    def test_uses_project_collection_when_registered(self) -> None:
+        """Web captures go to the project collection when cwd is registered."""
+        payload: dict[str, object] = {
+            "cwd": "/projects/myapp",
+            "tool_input": {"url": "https://example.com/docs"},
+            "tool_response": json.dumps({"result": "Some docs"}),
+        }
+        mock_ingest_result = {
+            "document_name": "https://example.com/docs",
+            "collection": "myapp",
+            "chunks": 3,
+        }
+
+        with (
+            patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
+            patch("quarry.database.get_db", return_value=MagicMock()),
+            patch("quarry.hooks._is_already_ingested", return_value=False),
+            patch("quarry.hooks._collection_for_cwd", return_value="myapp"),
+            patch("quarry.html_processor.process_html_text", return_value=[]),
+            patch(
+                "quarry.pipeline.ingest_url",
+                return_value=mock_ingest_result,
+            ) as mock_url,
+        ):
+            handle_post_web_fetch(payload)
+
+        assert mock_url.call_args[1]["collection"] == "myapp"
+
+    def test_falls_back_to_web_captures_when_unregistered(self) -> None:
+        """Web captures use fallback collection when cwd has no registration."""
+        payload: dict[str, object] = {
+            "cwd": "/unknown/dir",
+            "tool_input": {"url": "https://example.com/page"},
+            "tool_response": json.dumps({"result": "Content"}),
+        }
+        mock_ingest_result = {
+            "document_name": "https://example.com/page",
+            "collection": "web-captures",
+            "chunks": 2,
+        }
+
+        with (
+            patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
+            patch("quarry.database.get_db", return_value=MagicMock()),
+            patch("quarry.hooks._is_already_ingested", return_value=False),
+            patch("quarry.hooks._collection_for_cwd", return_value=None),
+            patch("quarry.html_processor.process_html_text", return_value=[]),
+            patch(
+                "quarry.pipeline.ingest_url",
+                return_value=mock_ingest_result,
+            ) as mock_url,
+        ):
+            handle_post_web_fetch(payload)
+
+        assert mock_url.call_args[1]["collection"] == "web-captures"
 
 
 class TestExtractTranscriptText:
@@ -944,6 +1051,7 @@ class TestHandlePreCompact:
                 return_value=MagicMock(),
             ),
             patch("quarry.database.get_db", return_value=MagicMock()),
+            patch("quarry.hooks._collection_for_cwd", return_value=None),
             patch(
                 "quarry.pipeline.ingest_content",
                 return_value=mock_result,
@@ -962,6 +1070,88 @@ class TestHandlePreCompact:
         assert "Build a feature" in call_args[0][0]  # content
         assert call_args[0][1].startswith("session-abc12345")  # doc name
         assert call_args[1]["collection"] == "session-notes"
+
+    def test_uses_project_collection_when_registered(self, tmp_path: Path) -> None:
+        """Session notes go to the project collection when cwd is registered."""
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(
+            json.dumps(
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "Working on myapp"}],
+                    },
+                }
+            )
+        )
+
+        mock_result = {
+            "document_name": "session-abc12345-20260224T120000",
+            "collection": "myapp",
+            "chunks": 1,
+        }
+
+        with (
+            patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
+            patch("quarry.database.get_db", return_value=MagicMock()),
+            patch("quarry.hooks._collection_for_cwd", return_value="myapp"),
+            patch(
+                "quarry.pipeline.ingest_content",
+                return_value=mock_result,
+            ) as mock_ingest,
+        ):
+            handle_pre_compact(
+                {
+                    "cwd": "/projects/myapp",
+                    "transcript_path": str(transcript),
+                    "session_id": "abc12345-full-id",
+                }
+            )
+
+        assert mock_ingest.call_args[1]["collection"] == "myapp"
+
+    def test_falls_back_to_session_notes_when_unregistered(
+        self, tmp_path: Path
+    ) -> None:
+        """Session notes use fallback collection when cwd has no registration."""
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(
+            json.dumps(
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "Some work"}],
+                    },
+                }
+            )
+        )
+
+        mock_result = {
+            "document_name": "session-abc12345-20260224T120000",
+            "collection": "session-notes",
+            "chunks": 1,
+        }
+
+        with (
+            patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
+            patch("quarry.database.get_db", return_value=MagicMock()),
+            patch("quarry.hooks._collection_for_cwd", return_value=None),
+            patch(
+                "quarry.pipeline.ingest_content",
+                return_value=mock_result,
+            ) as mock_ingest,
+        ):
+            handle_pre_compact(
+                {
+                    "cwd": "/unknown/dir",
+                    "transcript_path": str(transcript),
+                    "session_id": "abc12345-full-id",
+                }
+            )
+
+        assert mock_ingest.call_args[1]["collection"] == "session-notes"
 
     def test_empty_transcript_skips_ingestion(self, tmp_path: Path) -> None:
         transcript = tmp_path / "empty.jsonl"

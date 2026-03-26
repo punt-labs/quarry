@@ -14,6 +14,10 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Changed
+
+- **Project-scoped captures** — web fetch auto-ingestion and pre-compact transcript capture now scope to the project's registered collection instead of global `web-captures` / `session-notes` buckets. Falls back to global collections when cwd has no registration.
+
 ## [1.6.0] - 2026-03-26
 
 ### Added
