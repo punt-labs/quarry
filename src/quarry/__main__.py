@@ -702,7 +702,7 @@ def install() -> None:
 
 @app.command()
 def doctor() -> None:
-    """Check environment: Python, AWS, data directory, model, imports."""
+    """Check environment: Python, data directory, model, imports."""
     from quarry.doctor import check_environment  # noqa: PLC0415
 
     exit_code = check_environment()
