@@ -229,3 +229,19 @@ Refactored `session-start.sh` from 88 lines of shell business logic to a 4-line 
 ### Why This Design
 
 Follows punt-kit/standards/hooks.md: hooks are plumbing, not product. Business logic belongs in testable Python, not shell. The 4-line gate (not 3) is necessary because `session-setup` needs the plugin root to find the `commands/` directory, and `CLAUDE_PLUGIN_ROOT` is only a hooks.json template variable, not an env var.
+
+---
+
+## DES-015: Filesystem Standard Adoption
+
+**Date:** 2026-03-26
+**Status:** SETTLED
+**Topic:** User data directory layout
+
+### Design
+
+Adopted punt-kit/standards/filesystem.md. User data moves from `~/.quarry/` to `~/.punt-labs/quarry/`. Per-project config moves from `.claude/quarry.local.md` to `.punt-labs/quarry/config.md`. Logs move from `data/quarry.log` to `logs/quarry.log`.
+
+### Why This Design
+
+One namespace, one root. All Punt Labs tools under `~/.punt-labs/<tool>/`. Per-repo config owned by quarry, not by Claude Code's `.claude/` directory. No automatic migration per the standard — clean break with manual `mv` command documented.

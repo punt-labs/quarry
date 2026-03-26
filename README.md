@@ -151,7 +151,7 @@ Quarry works with zero configuration. These environment variables are available 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `QUARRY_API_KEY` | *(none)* | Bearer token for `quarry serve` |
-| `QUARRY_ROOT` | `~/.quarry/data` | Base directory for all databases |
+| `QUARRY_ROOT` | `~/.punt-labs/quarry/data` | Base directory for all databases |
 | `CHUNK_MAX_CHARS` | `1800` | Max characters per chunk (~450 tokens) |
 | `CHUNK_OVERLAP_CHARS` | `200` | Overlap between consecutive chunks |
 
@@ -167,7 +167,7 @@ Beyond explicit `/ingest` and `/find` commands, quarry runs as a Claude Code plu
 | **Web fetch** | After any `WebFetch` tool call | URLs Claude fetches during research are auto-ingested into a `web-captures` collection. Reuses already-retrieved content when available, falls back to URL ingest otherwise. |
 | **Pre-compact** | Before context compaction | Captures the conversation transcript into a `session-notes` collection. Discoveries that would be lost when the context window shrinks are preserved as searchable chunks. |
 
-All hooks are fail-open — failures are ignored and never block Claude Code. Each hook is individually toggleable via `.claude/quarry.local.md` YAML frontmatter. See [AGENTS.md](AGENTS.md) for the full integration model.
+All hooks are fail-open — failures are ignored and never block Claude Code. Each hook is individually toggleable via `.punt-labs/quarry/config.md` YAML frontmatter. See [AGENTS.md](AGENTS.md) for the full integration model.
 
 ## How It Works
 

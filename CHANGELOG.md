@@ -14,6 +14,10 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Changed
+
+- **Directory standard** — user data moved from `~/.quarry/` to `~/.punt-labs/quarry/` per org filesystem standard. Per-project config moved from `.claude/quarry.local.md` to `.punt-labs/quarry/config.md`. Logs moved to `~/.punt-labs/quarry/logs/`. No automatic migration — run `mv ~/.quarry/data ~/.punt-labs/quarry/data` to preserve existing databases.
+
 ### Added
 
 - **`docs/architecture.tex`** — comprehensive LaTeX architecture document covering system design, daemon model, module responsibilities, wire protocol, configuration, search tuning, logging standards, security, deployment, and test architecture. Consolidates content from four separate markdown files into one authoritative document

@@ -43,7 +43,7 @@ _LAUNCHD_PLIST = _LAUNCHD_DIR / f"{_LABEL}.plist"
 def _launchd_plist_content() -> str:
     args = _quarry_exec_args()
     program_args = "\n".join(f"        <string>{shlex.quote(a)}</string>" for a in args)
-    log_dir = Path.home() / ".quarry" / "data"
+    log_dir = Path.home() / ".punt-labs" / "quarry" / "logs"
     return textwrap.dedent(f"""\
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"

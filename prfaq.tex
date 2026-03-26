@@ -247,7 +247,7 @@ queues the URL for background ingestion. Before context compaction, a hook
 captures the conversation transcript. Your project directory is registered the
 moment a session starts. Every hook is fail-open and non-blocking: you work
 normally, and the knowledge base grows from the natural flow of every session.
-Per-project configuration via \texttt{.claude/quarry.local.md} lets you
+Per-project configuration via \texttt{.punt-labs/quarry/config.md} lets you
 selectively disable individual hooks.
 
 Because Quarry runs entirely on your machine, your documents never leave your
@@ -386,7 +386,7 @@ run \texttt{quarry install}, and start searching.
   immediately---they never block the conversation. A background process handles
   embedding and indexing. The hooks are fail-open: if Quarry is unavailable,
   Claude Code works exactly as before. Per-project configuration via
-  \texttt{.claude/quarry.local.md} lets you selectively disable individual
+  \texttt{.punt-labs/quarry/config.md} lets you selectively disable individual
   hooks.
 \end{faqpair}
 
@@ -427,7 +427,7 @@ run \texttt{quarry install}, and start searching.
   preserving conversation transcripts before context compaction, and registering
   your project directory at session start. All hooks are fail-open
   (a failure never blocks your session) and per-project configurable via
-  \texttt{.claude/quarry.local.md}. You work normally; the knowledge base grows
+  \texttt{.punt-labs/quarry/config.md}. You work normally; the knowledge base grows
   in the background.
 \end{faqpair}
 

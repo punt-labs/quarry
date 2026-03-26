@@ -107,9 +107,9 @@ class TestLoadHookConfig:
         assert config.compaction is True
 
     def test_disables_session_sync(self, tmp_path: Path) -> None:
-        config_dir = tmp_path / ".claude"
-        config_dir.mkdir()
-        (config_dir / "quarry.local.md").write_text(
+        config_dir = tmp_path / ".punt-labs" / "quarry"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.md").write_text(
             "---\nauto_capture:\n  session_sync: false\n---\n"
         )
         config = load_hook_config(str(tmp_path))
@@ -118,9 +118,9 @@ class TestLoadHookConfig:
         assert config.compaction is True
 
     def test_disables_web_fetch(self, tmp_path: Path) -> None:
-        config_dir = tmp_path / ".claude"
-        config_dir.mkdir()
-        (config_dir / "quarry.local.md").write_text(
+        config_dir = tmp_path / ".punt-labs" / "quarry"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.md").write_text(
             "---\nauto_capture:\n  web_fetch: false\n---\n"
         )
         config = load_hook_config(str(tmp_path))
@@ -128,18 +128,18 @@ class TestLoadHookConfig:
         assert config.web_fetch is False
 
     def test_disables_compaction(self, tmp_path: Path) -> None:
-        config_dir = tmp_path / ".claude"
-        config_dir.mkdir()
-        (config_dir / "quarry.local.md").write_text(
+        config_dir = tmp_path / ".punt-labs" / "quarry"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.md").write_text(
             "---\nauto_capture:\n  compaction: false\n---\n"
         )
         config = load_hook_config(str(tmp_path))
         assert config.compaction is False
 
     def test_disables_all(self, tmp_path: Path) -> None:
-        config_dir = tmp_path / ".claude"
-        config_dir.mkdir()
-        (config_dir / "quarry.local.md").write_text(
+        config_dir = tmp_path / ".punt-labs" / "quarry"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.md").write_text(
             "---\nauto_capture:\n"
             "  session_sync: false\n"
             "  web_fetch: false\n"
@@ -152,39 +152,37 @@ class TestLoadHookConfig:
         assert config.compaction is False
 
     def test_invalid_yaml_returns_defaults(self, tmp_path: Path) -> None:
-        config_dir = tmp_path / ".claude"
-        config_dir.mkdir()
-        (config_dir / "quarry.local.md").write_text("---\n: : :\n---\n")
+        config_dir = tmp_path / ".punt-labs" / "quarry"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.md").write_text("---\n: : :\n---\n")
         config = load_hook_config(str(tmp_path))
         assert config == HookConfig()
 
     def test_no_frontmatter_returns_defaults(self, tmp_path: Path) -> None:
-        config_dir = tmp_path / ".claude"
-        config_dir.mkdir()
-        (config_dir / "quarry.local.md").write_text("Just markdown, no frontmatter.")
+        config_dir = tmp_path / ".punt-labs" / "quarry"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.md").write_text("Just markdown, no frontmatter.")
         config = load_hook_config(str(tmp_path))
         assert config == HookConfig()
 
     def test_missing_auto_capture_returns_defaults(self, tmp_path: Path) -> None:
-        config_dir = tmp_path / ".claude"
-        config_dir.mkdir()
-        (config_dir / "quarry.local.md").write_text("---\nother_key: value\n---\n")
+        config_dir = tmp_path / ".punt-labs" / "quarry"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.md").write_text("---\nother_key: value\n---\n")
         config = load_hook_config(str(tmp_path))
         assert config == HookConfig()
 
     def test_non_dict_auto_capture_returns_defaults(self, tmp_path: Path) -> None:
-        config_dir = tmp_path / ".claude"
-        config_dir.mkdir()
-        (config_dir / "quarry.local.md").write_text(
-            "---\nauto_capture: just a string\n---\n"
-        )
+        config_dir = tmp_path / ".punt-labs" / "quarry"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.md").write_text("---\nauto_capture: just a string\n---\n")
         config = load_hook_config(str(tmp_path))
         assert config == HookConfig()
 
     def test_markdown_content_after_frontmatter(self, tmp_path: Path) -> None:
-        config_dir = tmp_path / ".claude"
-        config_dir.mkdir()
-        (config_dir / "quarry.local.md").write_text(
+        config_dir = tmp_path / ".punt-labs" / "quarry"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.md").write_text(
             "---\nauto_capture:\n  web_fetch: false\n---\n"
             "# Notes\nSome project notes here.\n"
         )
@@ -193,9 +191,9 @@ class TestLoadHookConfig:
 
     def test_yaml_alias_no_disables(self, tmp_path: Path) -> None:
         """YAML boolean alias 'no' should disable the hook."""
-        config_dir = tmp_path / ".claude"
-        config_dir.mkdir()
-        (config_dir / "quarry.local.md").write_text(
+        config_dir = tmp_path / ".punt-labs" / "quarry"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.md").write_text(
             "---\nauto_capture:\n  web_fetch: no\n---\n"
         )
         config = load_hook_config(str(tmp_path))
@@ -203,9 +201,9 @@ class TestLoadHookConfig:
 
     def test_yaml_alias_off_disables(self, tmp_path: Path) -> None:
         """YAML boolean alias 'off' should disable the hook."""
-        config_dir = tmp_path / ".claude"
-        config_dir.mkdir()
-        (config_dir / "quarry.local.md").write_text(
+        config_dir = tmp_path / ".punt-labs" / "quarry"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.md").write_text(
             "---\nauto_capture:\n  session_sync: off\n---\n"
         )
         config = load_hook_config(str(tmp_path))
@@ -213,9 +211,9 @@ class TestLoadHookConfig:
 
     def test_yaml_alias_yes_enables(self, tmp_path: Path) -> None:
         """YAML boolean alias 'yes' should enable the hook."""
-        config_dir = tmp_path / ".claude"
-        config_dir.mkdir()
-        (config_dir / "quarry.local.md").write_text(
+        config_dir = tmp_path / ".punt-labs" / "quarry"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.md").write_text(
             "---\nauto_capture:\n  web_fetch: yes\n---\n"
         )
         config = load_hook_config(str(tmp_path))
@@ -223,9 +221,9 @@ class TestLoadHookConfig:
 
     def test_inline_comment_stripped(self, tmp_path: Path) -> None:
         """Inline YAML comments should not break boolean parsing."""
-        config_dir = tmp_path / ".claude"
-        config_dir.mkdir()
-        (config_dir / "quarry.local.md").write_text(
+        config_dir = tmp_path / ".punt-labs" / "quarry"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.md").write_text(
             "---\nauto_capture:\n  web_fetch: false # disabled for this project\n---\n"
         )
         config = load_hook_config(str(tmp_path))
@@ -233,9 +231,9 @@ class TestLoadHookConfig:
 
     def test_unrecognized_value_fails_closed(self, tmp_path: Path) -> None:
         """Unrecognized boolean value for a present key should fail closed."""
-        config_dir = tmp_path / ".claude"
-        config_dir.mkdir()
-        (config_dir / "quarry.local.md").write_text(
+        config_dir = tmp_path / ".punt-labs" / "quarry"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.md").write_text(
             "---\nauto_capture:\n  web_fetch: nope\n---\n"
         )
         config = load_hook_config(str(tmp_path))
@@ -243,9 +241,9 @@ class TestLoadHookConfig:
 
     def test_blank_lines_in_auto_capture_block(self, tmp_path: Path) -> None:
         """Blank lines within auto_capture block should not terminate parsing."""
-        config_dir = tmp_path / ".claude"
-        config_dir.mkdir()
-        (config_dir / "quarry.local.md").write_text(
+        config_dir = tmp_path / ".punt-labs" / "quarry"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.md").write_text(
             "---\nauto_capture:\n  session_sync: false\n\n  web_fetch: false\n---\n"
         )
         config = load_hook_config(str(tmp_path))
@@ -254,9 +252,9 @@ class TestLoadHookConfig:
 
     def test_comment_lines_in_auto_capture_block(self, tmp_path: Path) -> None:
         """Indented comment lines should not terminate parsing."""
-        config_dir = tmp_path / ".claude"
-        config_dir.mkdir()
-        (config_dir / "quarry.local.md").write_text(
+        config_dir = tmp_path / ".punt-labs" / "quarry"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.md").write_text(
             "---\nauto_capture:\n  session_sync: false\n"
             "  # disable web fetch too\n  web_fetch: false\n---\n"
         )
@@ -505,9 +503,9 @@ class TestHandleSessionStart:
     def test_disabled_by_config(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
-        config_dir = project / ".claude"
-        config_dir.mkdir()
-        (config_dir / "quarry.local.md").write_text(
+        config_dir = project / ".punt-labs" / "quarry"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.md").write_text(
             "---\nauto_capture:\n  session_sync: false\n---\n"
         )
         result = handle_session_start({"cwd": str(project)})
@@ -615,9 +613,9 @@ class TestHandlePostWebFetch:
     def test_disabled_by_config(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
-        config_dir = project / ".claude"
-        config_dir.mkdir()
-        (config_dir / "quarry.local.md").write_text(
+        config_dir = project / ".punt-labs" / "quarry"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.md").write_text(
             "---\nauto_capture:\n  web_fetch: false\n---\n"
         )
         payload: dict[str, object] = {
@@ -881,9 +879,9 @@ class TestHandlePreCompact:
     def test_disabled_by_config(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
-        config_dir = project / ".claude"
-        config_dir.mkdir()
-        (config_dir / "quarry.local.md").write_text(
+        config_dir = project / ".punt-labs" / "quarry"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.md").write_text(
             "---\nauto_capture:\n  compaction: false\n---\n"
         )
         transcript = tmp_path / "session.jsonl"

@@ -62,7 +62,7 @@ def _check_python_version() -> CheckResult:
 
 
 def _check_data_directory() -> CheckResult:
-    data_dir = Path.home() / ".quarry" / "data" / "default" / "lancedb"
+    data_dir = Path.home() / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
     if data_dir.exists() and os.access(data_dir, os.W_OK):
         return CheckResult(
             name="Data directory",
@@ -171,7 +171,7 @@ def _check_imports() -> CheckResult:
 
 def _check_storage() -> CheckResult:
     """Report database storage size."""
-    data_dir = Path.home() / ".quarry" / "data"
+    data_dir = Path.home() / ".punt-labs" / "quarry" / "data"
     if not data_dir.exists():
         return CheckResult(
             name="Storage",
@@ -482,14 +482,17 @@ def run_install() -> int:
 
     failed = False
 
-    # Step 1: data directory
-    data_dir = Path.home() / ".quarry" / "data" / "default" / "lancedb"
-    print("[1/6] Creating data directory...")  # noqa: T201
+    # Step 1: data + logs directories
+    data_dir = Path.home() / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
+    logs_dir = Path.home() / ".punt-labs" / "quarry" / "logs"
+    print("[1/6] Creating directories...")  # noqa: T201
     try:
         data_dir.mkdir(parents=True, exist_ok=True)
+        logs_dir.mkdir(parents=True, exist_ok=True)
         print(f"  \u2713 {data_dir}")  # noqa: T201
+        print(f"  \u2713 {logs_dir}")  # noqa: T201
     except OSError as exc:
-        print(f"  \u2717 Failed to create {data_dir}: {exc}")  # noqa: T201
+        print(f"  \u2717 Failed to create directories: {exc}")  # noqa: T201
         failed = True
 
     # Step 2: embedding model

@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_CONFIG_FILENAME = ".claude/quarry.local.md"
+_CONFIG_FILENAME = ".punt-labs/quarry/config.md"
 
 
 # ── Hook config ──────────────────────────────────────────────────────
@@ -35,7 +35,7 @@ _CONFIG_FILENAME = ".claude/quarry.local.md"
 
 @dataclass(frozen=True)
 class HookConfig:
-    """Per-project hook configuration from ``.claude/quarry.local.md``."""
+    """Per-project hook configuration from ``.punt-labs/quarry/config.md``."""
 
     session_sync: bool = True
     web_fetch: bool = True

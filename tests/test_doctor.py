@@ -38,7 +38,7 @@ class TestCheckPythonVersion:
 
 class TestCheckDataDirectory:
     def test_existing_writable_directory(self, tmp_path: Path, monkeypatch: MP):
-        data_dir = tmp_path / ".quarry" / "data" / "default" / "lancedb"
+        data_dir = tmp_path / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
         data_dir.mkdir(parents=True)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         result = _check_data_directory()
@@ -138,7 +138,7 @@ class TestCheckLocalOcr:
 
 class TestCheckStorage:
     def test_reports_size(self, tmp_path: Path, monkeypatch: MP):
-        data_dir = tmp_path / ".quarry" / "data"
+        data_dir = tmp_path / ".punt-labs" / "quarry" / "data"
         data_dir.mkdir(parents=True)
         (data_dir / "test.db").write_bytes(b"x" * 1024)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -261,7 +261,7 @@ class TestQuietLogging:
 
 class TestCheckEnvironment:
     def test_returns_zero_when_all_pass(self, tmp_path: Path, monkeypatch: MP):
-        data_dir = tmp_path / ".quarry" / "data" / "default" / "lancedb"
+        data_dir = tmp_path / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
         data_dir.mkdir(parents=True)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAIOSFODNN7EXAMPLE")
@@ -414,7 +414,8 @@ class TestRunInstall:
             mock_dl.return_value = ("/fake/model.onnx", "/fake/tokenizer.json")
             result = run_install()
         assert result == 0
-        assert (tmp_path / ".quarry" / "data" / "default" / "lancedb").is_dir()
+        data_dir = tmp_path / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
+        assert data_dir.is_dir()
 
     def test_downloads_model(self, tmp_path: Path, monkeypatch: MP):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -427,7 +428,7 @@ class TestRunInstall:
     def test_idempotent(self, tmp_path: Path, monkeypatch: MP):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         _mock_install_deps(monkeypatch)
-        data_dir = tmp_path / ".quarry" / "data" / "default" / "lancedb"
+        data_dir = tmp_path / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
         data_dir.mkdir(parents=True)
         with patch("quarry.embeddings.download_model_files") as mock_dl:
             mock_dl.return_value = ("/fake/model.onnx", "/fake/tokenizer.json")

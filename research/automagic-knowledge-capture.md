@@ -198,7 +198,7 @@ Following Entire.io's pattern of deliberate restraint:
 Users should be able to opt in/out and tune the behavior. Following Entire.io's `settings.json` / `settings.local.json` pattern:
 
 ```yaml
-# .claude/quarry.local.md frontmatter
+# .punt-labs/quarry/config.md frontmatter
 ---
 auto_capture:
   web_fetch: true          # Layer 1: auto-ingest fetched URLs

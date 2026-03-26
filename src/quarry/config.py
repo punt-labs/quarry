@@ -21,10 +21,14 @@ ONNX_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
 
 class Settings(BaseSettings):
-    quarry_root: Path = Path.home() / ".quarry" / "data"
-    lancedb_path: Path = Path.home() / ".quarry" / "data" / "default" / "lancedb"
-    registry_path: Path = Path.home() / ".quarry" / "data" / "default" / "registry.db"
-    log_path: Path = Path.home() / ".quarry" / "data" / "quarry.log"
+    quarry_root: Path = Path.home() / ".punt-labs" / "quarry" / "data"
+    lancedb_path: Path = (
+        Path.home() / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
+    )
+    registry_path: Path = (
+        Path.home() / ".punt-labs" / "quarry" / "data" / "default" / "registry.db"
+    )
+    log_path: Path = Path.home() / ".punt-labs" / "quarry" / "logs" / "quarry.log"
     embedding_model: str = "Snowflake/snowflake-arctic-embed-m-v1.5"
     embedding_dimension: int = 768
 
@@ -38,7 +42,9 @@ DEFAULT_PORT = 8420
 """Well-known port for ``quarry serve``.  Used by mcp-proxy configs and
 service files (launchd, systemd) so the daemon URL is static."""
 
-_DEFAULT_LANCEDB = Path.home() / ".quarry" / "data" / "default" / "lancedb"
+_DEFAULT_LANCEDB = (
+    Path.home() / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
+)
 
 
 def resolve_db_paths(settings: Settings, db_name: str | None = None) -> Settings:
@@ -70,7 +76,7 @@ def resolve_db_paths(settings: Settings, db_name: str | None = None) -> Settings
     )
 
 
-_CONFIG_PATH = Path.home() / ".quarry" / "config.toml"
+_CONFIG_PATH = Path.home() / ".punt-labs" / "quarry" / "config.toml"
 
 
 def read_default_db() -> str | None:
