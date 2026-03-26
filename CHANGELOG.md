@@ -17,7 +17,7 @@ across `transform`, `index`, and `connector`).
 ### Removed
 
 - **Convention hint hooks** — removed the entire PreToolUse/Bash hook system (instant rules, sequence rules, Bash-command accumulator). Dev workflow conventions belong in CLAUDE.md, not in a knowledge management product. See `docs/build-plan-ppv/design.md` for the replacement design (knowledge event accumulator for research capture)
-- **AWS backends** — removed Textract OCR and SageMaker embedding backends, all AWS infrastructure (CloudFormation templates, deployment scripts, IAM policies), and boto3/botocore dependencies. Local backends (RapidOCR, ONNX) always outperformed AWS in testing. See `docs/removal-plan-aws/removal-plan.md`
+- **AWS backends** — removed Textract OCR and SageMaker embedding backends, all AWS infrastructure (CloudFormation templates, deployment scripts, IAM policies), and boto3/botocore dependencies. Local backends (RapidOCR, ONNX) always outperformed AWS in testing
 
 ## [1.5.2] - 2026-03-15
 

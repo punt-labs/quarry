@@ -45,10 +45,10 @@ and let the application configure the handler.
 
 **INFO-level events (the operational narrative):**
 
-- External service calls: S3 upload/download, Textract start/complete, model loading.
+- Resource loading: embedding model initialization, OCR engine startup.
 - Database mutations: inserts, deletes, with row counts.
 - Pipeline stage transitions: "Analyzing", "Chunking", "Embedding", "Storing".
-- Resource identifiers: document names, job IDs, S3 keys.
+- Resource identifiers: document names, collection names, file paths.
 
 **DEBUG-level events (development diagnostics):**
 
@@ -64,7 +64,7 @@ and let the application configure the handler.
 
 **ERROR-level events:**
 
-- External service failures (Textract, S3) — logged with `logger.exception()`.
+- External service failures — logged with `logger.exception()`.
 - File I/O failures — logged with `logger.exception()`.
 
 ### What not to log
@@ -87,7 +87,7 @@ logger.info(f"Inserted {count} chunks for {name}")         # incorrect
 Include enough context to trace an operation without reading code:
 
 ```python
-logger.info("Textract job started: %s (%d pages)", job_id, total_pages)
+logger.info("Ingesting %s (%d pages)", document_name, total_pages)
 ```
 
 Not:
@@ -154,9 +154,9 @@ subclass of `Exception` with a clear docstring.
 5. **Document raised exceptions** in docstrings using the `Raises:` section. Every
    public function that raises documents what and when.
 
-6. **Use `try/finally` for cleanup**, not `try/except`. The `ocr_client.py` S3
-   cleanup pattern is correct: the `finally` block ensures S3 objects are deleted
-   regardless of Textract outcome, and the exception propagates naturally.
+6. **Use `try/finally` for cleanup**, not `try/except`. The `finally` block
+   ensures resources are released regardless of outcome, and the exception
+   propagates naturally.
 
 7. **Boundary handlers (MCP tools, CLI commands)** may catch exceptions to produce
    user-friendly messages. They must still log the full traceback:

@@ -30,19 +30,9 @@ Quarry splits documents into overlapping chunks before embedding. Two environmen
 
 The embedding model (snowflake-arctic-embed-m-v1.5) has a 512-token context window. Chunks exceeding this are truncated during embedding, so very large `CHUNK_MAX_CHARS` values reduce embedding quality for the tail of each chunk.
 
-## OCR Backend Choice
+## OCR
 
-| Scenario | Recommended | Why |
-|----------|-------------|-----|
-| General document search | `local` (default) | Good enough for semantic search; no cloud dependency |
-| High-accuracy text extraction | `textract` | Better character accuracy, especially for degraded scans |
-| Scanned handwriting | `textract` | AWS Textract handles handwriting better than RapidOCR |
-| Offline or air-gapped | `local` | No network required |
-| Cost-sensitive bulk ingestion | `local` | Free; Textract charges per page |
-
-Set via `OCR_BACKEND=textract` (requires AWS credentials and S3 bucket).
-
-For semantic search, OCR accuracy matters less than you might expect. The embedding model is robust to minor OCR errors -- a misspelled word rarely changes the semantic meaning enough to affect search ranking. Use local OCR unless you need the extracted text for purposes beyond search (e.g. exact quoting).
+Quarry uses RapidOCR for all image-based text extraction. For semantic search, OCR accuracy matters less than you might expect — the embedding model is robust to minor OCR errors. A misspelled word rarely changes the semantic meaning enough to affect search ranking.
 
 ## Embedding Model
 

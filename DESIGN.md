@@ -64,17 +64,13 @@ Each processor converts a source format into `list[PageContent]`:
 | `latex_utils.py` | LaTeX (command stripping for clean text extraction) |
 | `text_extractor.py` | Unified dispatcher that routes to the appropriate processor |
 
-### Backend Abstraction
+### Backends
 
 | Module | Responsibility |
 |--------|---------------|
 | `backends.py` | Thread-safe factory with double-checked locking. `get_ocr_backend()` and `get_embedding_backend()` return cached singleton instances. |
-| `ocr_local.py` | Local OCR via EasyOCR (offline, no setup). |
-| `ocr_client.py` | AWS Textract OCR (cloud, better for degraded scans). |
+| `ocr_local.py` | Local OCR via RapidOCR (offline, no setup). |
 | `embeddings.py` | Local ONNX embedding (snowflake-arctic-embed-m-v1.5, 768-dim, 512 tokens). |
-| `embeddings_sagemaker.py` | SageMaker embedding endpoint (cloud-accelerated batch ingestion). |
-
-Backend selection is config-driven (`OCR_BACKEND`, `EMBEDDING_BACKEND` in `Settings`). The factory reads config once and caches. Protocol types (`OcrBackend`, `EmbeddingBackend`) ensure backends are interchangeable without runtime introspection.
 
 ### Sync and Registry
 
