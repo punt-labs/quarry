@@ -1508,6 +1508,209 @@ class TestHandlePreCompact:
         assert result == {}
         mock_ingest.assert_not_called()
 
+    def test_archives_raw_jsonl(self, tmp_path: Path) -> None:
+        """Raw JSONL is copied to the sessions directory."""
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(
+            '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Hello"}]}}\n'
+        )
+
+        sessions_dir = tmp_path / "home" / ".punt-labs" / "quarry" / "sessions"
+
+        mock_result = {
+            "document_name": "session-abc12345-20260224T120000",
+            "collection": "session-notes",
+            "chunks": 1,
+        }
+
+        with (
+            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
+            patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
+            patch("quarry.database.get_db", return_value=MagicMock()),
+            patch("quarry.hooks._collection_for_cwd", return_value=None),
+            patch("quarry.database.list_documents", return_value=[]),
+            patch("quarry.database.delete_document"),
+            patch(
+                "quarry.pipeline.ingest_content",
+                return_value=mock_result,
+            ),
+        ):
+            handle_pre_compact(
+                {
+                    "transcript_path": str(transcript),
+                    "session_id": "abc12345-full-id",
+                }
+            )
+
+        archived = list(sessions_dir.glob("session-abc12345-*.jsonl"))
+        assert len(archived) == 1
+        assert archived[0].read_text() == transcript.read_text()
+
+    def test_archive_retention_deletes_old_files(self, tmp_path: Path) -> None:
+        """Files older than 90 days are deleted during archival."""
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(
+            '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Hello"}]}}\n'
+        )
+
+        sessions_dir = tmp_path / "home" / ".punt-labs" / "quarry" / "sessions"
+        sessions_dir.mkdir(parents=True)
+
+        # Create an old archive (100 days ago).
+        old_file = sessions_dir / "session-oldoldol-20250101T000000.jsonl"
+        old_file.write_text("{}\n")
+        old_mtime = old_file.stat().st_mtime - (100 * 86400)
+        os.utime(old_file, (old_mtime, old_mtime))
+
+        mock_result = {
+            "document_name": "session-abc12345-20260224T120000",
+            "collection": "session-notes",
+            "chunks": 1,
+        }
+
+        with (
+            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
+            patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
+            patch("quarry.database.get_db", return_value=MagicMock()),
+            patch("quarry.hooks._collection_for_cwd", return_value=None),
+            patch("quarry.database.list_documents", return_value=[]),
+            patch("quarry.database.delete_document"),
+            patch(
+                "quarry.pipeline.ingest_content",
+                return_value=mock_result,
+            ),
+        ):
+            handle_pre_compact(
+                {
+                    "transcript_path": str(transcript),
+                    "session_id": "abc12345-full-id",
+                }
+            )
+
+        assert not old_file.exists()
+        new_archives = list(sessions_dir.glob("session-abc12345-*.jsonl"))
+        assert len(new_archives) == 1
+
+    def test_archive_failure_does_not_prevent_capture(self, tmp_path: Path) -> None:
+        """Ingest proceeds even when archival raises an exception."""
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(
+            '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Hello"}]}}\n'
+        )
+
+        mock_result = {
+            "document_name": "session-abc12345-20260224T120000",
+            "collection": "session-notes",
+            "chunks": 1,
+        }
+
+        with (
+            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
+            patch("quarry.hooks.shutil.copy", side_effect=OSError("disk full")),
+            patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
+            patch("quarry.database.get_db", return_value=MagicMock()),
+            patch("quarry.hooks._collection_for_cwd", return_value=None),
+            patch("quarry.database.list_documents", return_value=[]),
+            patch("quarry.database.delete_document"),
+            patch(
+                "quarry.pipeline.ingest_content",
+                return_value=mock_result,
+            ) as mock_ingest,
+        ):
+            handle_pre_compact(
+                {
+                    "transcript_path": str(transcript),
+                    "session_id": "abc12345-full-id",
+                }
+            )
+
+        mock_ingest.assert_called_once()
+
+    def test_archive_deduplicates_prior_sessions(self, tmp_path: Path) -> None:
+        """Prior archive files for the same session are replaced."""
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(
+            '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Hello"}]}}\n'
+        )
+
+        sessions_dir = tmp_path / "home" / ".punt-labs" / "quarry" / "sessions"
+        sessions_dir.mkdir(parents=True)
+
+        # Create a prior archive for the same session.
+        prior = sessions_dir / "session-abc12345-20260224T100000.jsonl"
+        prior.write_text("{}\n")
+
+        mock_result = {
+            "document_name": "session-abc12345-20260224T120000",
+            "collection": "session-notes",
+            "chunks": 1,
+        }
+
+        with (
+            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
+            patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
+            patch("quarry.database.get_db", return_value=MagicMock()),
+            patch("quarry.hooks._collection_for_cwd", return_value=None),
+            patch("quarry.database.list_documents", return_value=[]),
+            patch("quarry.database.delete_document"),
+            patch(
+                "quarry.pipeline.ingest_content",
+                return_value=mock_result,
+            ),
+        ):
+            handle_pre_compact(
+                {
+                    "transcript_path": str(transcript),
+                    "session_id": "abc12345-full-id",
+                }
+            )
+
+        assert not prior.exists()
+        all_archives = list(sessions_dir.glob("session-abc12345-*.jsonl"))
+        assert len(all_archives) == 1
+
+    def test_archive_survives_retention_with_old_source_mtime(
+        self, tmp_path: Path
+    ) -> None:
+        """Archive from old source transcript is not deleted by retention."""
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(
+            '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Hello"}]}}\n'
+        )
+
+        # Backdate source mtime to 95 days ago.
+        old_time = transcript.stat().st_mtime - (95 * 86400)
+        os.utime(transcript, (old_time, old_time))
+
+        mock_result = {
+            "document_name": "session-abc12345-20260224T120000",
+            "collection": "session-notes",
+            "chunks": 1,
+        }
+
+        with (
+            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
+            patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
+            patch("quarry.database.get_db", return_value=MagicMock()),
+            patch("quarry.hooks._collection_for_cwd", return_value=None),
+            patch("quarry.database.list_documents", return_value=[]),
+            patch("quarry.database.delete_document"),
+            patch(
+                "quarry.pipeline.ingest_content",
+                return_value=mock_result,
+            ),
+        ):
+            handle_pre_compact(
+                {
+                    "transcript_path": str(transcript),
+                    "session_id": "abc12345-full-id",
+                }
+            )
+
+        sessions_dir = tmp_path / "home" / ".punt-labs" / "quarry" / "sessions"
+        new_archives = list(sessions_dir.glob("session-abc12345-*.jsonl"))
+        assert len(new_archives) == 1, "archive should survive retention cleanup"
+
 
 # ---------------------------------------------------------------------------
 # CLI dispatcher tests
