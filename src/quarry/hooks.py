@@ -435,6 +435,50 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
 _MAX_TRANSCRIPT_CHARS = 500_000
 
 
+_MAX_TOOL_RESULT_CHARS = 500
+
+
+def _extract_tool_result_text(block: dict[str, object]) -> str:
+    """Extract text from a tool_result content block.
+
+    Returns the concatenated text if under _MAX_TOOL_RESULT_CHARS, else empty string.
+    """
+    tool_content = block.get("content")
+    tool_text = ""
+    if isinstance(tool_content, str):
+        tool_text = tool_content.strip()
+    elif isinstance(tool_content, list):
+        parts = [
+            str(b["text"]).strip()
+            for b in tool_content
+            if isinstance(b, dict)
+            and b.get("type") == "text"
+            and isinstance(b.get("text"), str)
+        ]
+        tool_text = " ".join(parts)
+    if tool_text and len(tool_text) <= _MAX_TOOL_RESULT_CHARS:
+        return tool_text
+    return ""
+
+
+def _extract_content_texts(content: list[object]) -> list[str]:
+    """Extract text fragments from a list of content blocks."""
+    texts: list[str] = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        block_type = block.get("type")
+        if block_type == "text" and isinstance(block.get("text"), str):
+            stripped = str(block["text"]).strip()
+            if stripped:
+                texts.append(stripped)
+        elif block_type == "tool_result":
+            tool_text = _extract_tool_result_text(block)
+            if tool_text:
+                texts.append(f"[tool_result] {tool_text}")
+    return texts
+
+
 def _extract_message_text(record: dict[str, object]) -> str | None:
     """Extract text from a single transcript record, or None if not a message."""
     record_type = record.get("type", "")
@@ -447,14 +491,7 @@ def _extract_message_text(record: dict[str, object]) -> str | None:
     content = message.get("content")
     if not isinstance(content, list):
         return None
-    texts = [
-        block["text"].strip()
-        for block in content
-        if isinstance(block, dict)
-        and block.get("type") == "text"
-        and isinstance(block.get("text"), str)
-        and str(block["text"]).strip()
-    ]
+    texts = _extract_content_texts(content)
     if not texts:
         return None
     return f"[{role}] {' '.join(texts)}"
@@ -479,7 +516,6 @@ def _extract_transcript_text(transcript_path: str) -> str:
         return ""
 
     parts: list[str] = []
-    total_chars = 0
     for line in raw.splitlines():
         try:
             obj = _json.loads(line)
@@ -487,11 +523,21 @@ def _extract_transcript_text(transcript_path: str) -> str:
             continue
         entry = _extract_message_text(obj)
         if entry:
-            entry_len = len(entry)
-            if total_chars + entry_len >= _MAX_TRANSCRIPT_CHARS:
-                break
             parts.append(entry)
-            total_chars += entry_len
+
+    # Front-truncation: drop oldest entries until total fits within budget.
+    total_chars = sum(len(p) for p in parts)
+    start = 0
+    while start < len(parts) and total_chars > _MAX_TRANSCRIPT_CHARS:
+        total_chars -= len(parts[start])
+        start += 1
+    if start > 0:
+        logger.debug(
+            "pre-compact: dropped %d oldest entries from transcript",
+            start,
+        )
+        parts = parts[start:]
+
     return "\n\n".join(parts)
 
 

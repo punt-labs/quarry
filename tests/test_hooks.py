@@ -14,6 +14,7 @@ from quarry.__main__ import app
 from quarry._stdlib import HookConfig, load_hook_config, read_hook_stdin
 from quarry.hooks import (
     _collection_for_cwd,
+    _extract_message_text,
     _extract_transcript_text,
     _extract_url,
     _extract_web_fetch_content,
@@ -866,6 +867,80 @@ class TestHandlePostWebFetch:
         assert mock_url.call_args[1]["collection"] == "web-captures"
 
 
+class TestExtractMessageText:
+    def test_extracts_short_tool_result_string(self) -> None:
+        record: dict[str, object] = {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_abc",
+                        "content": "5 passed, 0 failed",
+                    }
+                ],
+            },
+        }
+        result = _extract_message_text(record)
+        assert result is not None
+        assert "[tool_result] 5 passed, 0 failed" in result
+
+    def test_extracts_short_tool_result_list(self) -> None:
+        record: dict[str, object] = {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_abc",
+                        "content": [{"type": "text", "text": "No matches found"}],
+                    }
+                ],
+            },
+        }
+        result = _extract_message_text(record)
+        assert result is not None
+        assert "[tool_result] No matches found" in result
+
+    def test_skips_long_tool_result(self) -> None:
+        long_output = "x" * 501
+        record: dict[str, object] = {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_abc",
+                        "content": long_output,
+                    }
+                ],
+            },
+        }
+        result = _extract_message_text(record)
+        assert result is None
+
+    def test_skips_tool_use_blocks(self) -> None:
+        record: dict[str, object] = {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_abc",
+                        "name": "Bash",
+                        "input": {"command": "ls"},
+                    }
+                ],
+            },
+        }
+        result = _extract_message_text(record)
+        assert result is None
+
+
 class TestExtractTranscriptText:
     def _write_transcript(self, path: Path, records: list[dict[str, object]]) -> None:
         lines = [json.dumps(r) for r in records]
@@ -971,6 +1046,49 @@ class TestExtractTranscriptText:
         # Total includes "\n\n" separators between entries, so allow
         # a small margin above the content limit.
         assert len(text) < _MAX_TRANSCRIPT_CHARS * 1.02
+
+    def test_front_truncation_keeps_newest(self, tmp_path: Path) -> None:
+        from quarry.hooks import _MAX_TRANSCRIPT_CHARS
+
+        transcript = tmp_path / "session.jsonl"
+        # Each message is "[user] " (7 chars) + text.
+        # Make msg1 large enough that msg1+msg2+msg3 > _MAX_TRANSCRIPT_CHARS
+        # but msg2+msg3 fits.
+        half = _MAX_TRANSCRIPT_CHARS // 2
+        msg1_text = "A" * half
+        msg2_text = "B" * half
+        msg3_text = "C" * 50
+        self._write_transcript(
+            transcript,
+            [
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": [{"type": "text", "text": msg1_text}],
+                    },
+                },
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": [{"type": "text", "text": msg2_text}],
+                    },
+                },
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": [{"type": "text", "text": msg3_text}],
+                    },
+                },
+            ],
+        )
+        text = _extract_transcript_text(str(transcript))
+        # First message (AAA...) should be dropped, last two kept.
+        assert "A" * 50 not in text
+        assert msg2_text in text
+        assert msg3_text in text
 
     def test_returns_empty_for_unreadable_file(self, tmp_path: Path) -> None:
         transcript = tmp_path / "binary.jsonl"
