@@ -19,6 +19,10 @@ across `transform`, `index`, and `connector`).
 - **Pre-compact deduplication** — each compaction now deletes prior captures for the same session before ingesting the new transcript. Previously, repeated compactions accumulated redundant documents (session 64b2aacf had 14 copies). Dedup is fault-tolerant: failures log and proceed with ingestion.
 - **Enhanced transcript extraction** — short tool results (<= 500 chars) are now included in pre-compact captures, prefixed with `[tool_result]`. Long tool results and tool_use blocks remain excluded. Truncation now drops oldest content first (front-truncation), keeping the most recent conversation.
 
+### Added
+
+- **Raw JSONL archival** — pre-compact hook now copies the raw transcript to `~/.punt-labs/quarry/sessions/` before extraction. Archives are deduplicated per session and pruned after 90 days. Archival is fault-tolerant: failures log and proceed with ingestion.
+
 ### Changed
 
 - **Project-scoped captures** — web fetch auto-ingestion and pre-compact transcript capture now scope to the project's registered collection instead of global `web-captures` / `session-notes` buckets. Falls back to global collections when cwd has no registration.

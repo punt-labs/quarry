@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import shutil
 import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -541,6 +542,45 @@ def _extract_transcript_text(transcript_path: str) -> str:
     return "\n\n".join(parts)
 
 
+_ARCHIVE_RETENTION_DAYS = 90
+
+
+def _archive_transcript(
+    transcript_path: Path,
+    session_id: str,
+    sessions_dir: Path,
+) -> None:
+    """Copy raw JSONL transcript to the sessions archive directory.
+
+    Creates the directory if needed, deduplicates prior archives for the
+    same session, and lazily prunes files older than ``_ARCHIVE_RETENTION_DAYS``.
+    """
+    from datetime import UTC, datetime  # noqa: PLC0415
+
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+
+    prefix = f"session-{session_id[:8]}-"
+
+    # Copy first — prior archives survive if this fails.
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
+    dest = sessions_dir / f"{prefix}{timestamp}.jsonl"
+    shutil.copy(transcript_path, dest)
+
+    # Then dedup: remove prior archives, excluding the one we just wrote.
+    for existing in sessions_dir.glob(f"{prefix}*.jsonl"):
+        if existing != dest:
+            with contextlib.suppress(OSError):
+                existing.unlink()
+
+    # Lazy retention cleanup.
+    now = datetime.now(UTC).timestamp()
+    retention_seconds = _ARCHIVE_RETENTION_DAYS * 86400
+    for f in sessions_dir.glob("session-*.jsonl"):
+        with contextlib.suppress(OSError):
+            if now - f.stat().st_mtime > retention_seconds:
+                f.unlink()
+
+
 def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
     """Handle PreCompact hook.
 
@@ -568,6 +608,13 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
     if tp.suffix != ".jsonl":
         logger.warning("pre-compact: unexpected suffix %s", tp.suffix)
         return {}
+
+    # Archive raw JSONL before extraction.
+    sessions_dir = Path.home() / ".punt-labs" / "quarry" / "sessions"
+    try:
+        _archive_transcript(tp, session_id, sessions_dir)
+    except Exception:
+        logger.exception("pre-compact: archival failed, proceeding with ingest")
 
     text = _extract_transcript_text(transcript_path)
     if not text:
