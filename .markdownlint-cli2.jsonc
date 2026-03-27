@@ -1,5 +1,5 @@
 {
-  "ignores": [".beads/", ".claude/", ".venv/"],
+  "ignores": [".beads/", ".claude/", ".punt-labs/ethos/agents/", ".venv/"],
   "overrides": [
     {
       "files": ["tests/fixtures/*.md"],
