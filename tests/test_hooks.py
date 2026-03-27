@@ -1536,7 +1536,10 @@ class TestHandlePreCompact:
                 }
             )
 
-        assert result == {}
+        assert "systemMessage" in result
+        msg = str(result["systemMessage"])
+        assert "Warning" in msg
+        assert "sessions/" in msg
         # Temp file should be cleaned up.
         sessions_dir = tmp_path / "home" / ".punt-labs" / "quarry" / "sessions"
         txt_files = list(sessions_dir.glob("*.txt"))

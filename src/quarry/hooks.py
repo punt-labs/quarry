@@ -613,6 +613,7 @@ def _spawn_background_ingest(
     try:
         log_fh = log_file.open("a")
     except OSError:
+        logger.warning("pre-compact: could not open %s for stderr logging", log_file)
         log_fh = None
     try:
         subprocess.Popen(  # noqa: S603
@@ -704,7 +705,13 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
         session_id[:8],
         sessions_dir,
     ):
-        return {}
+        return {
+            "systemMessage": (
+                "Warning: session transcript capture failed. "
+                "The raw JSONL archive is still available in "
+                "~/.punt-labs/quarry/sessions/."
+            ),
+        }
 
     return {
         "systemMessage": (

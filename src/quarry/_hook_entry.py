@@ -90,6 +90,9 @@ def _ingest_background() -> None:
     text_file_path, document_name, collection, lancedb_path, session_prefix = args
     text_file = Path(text_file_path)
 
+    # Configure logging so output reaches stderr (parent routes to ingest.log).
+    logging.basicConfig(level=logging.INFO, stream=sys.stderr)
+
     try:
         text = text_file.read_text()
     except OSError:
@@ -97,50 +100,61 @@ def _ingest_background() -> None:
         text_file.unlink(missing_ok=True)
         return
 
-    from quarry.config import load_settings, resolve_db_paths  # noqa: PLC0415
-    from quarry.database import delete_document, get_db, list_documents  # noqa: PLC0415
-    from quarry.pipeline import ingest_content  # noqa: PLC0415
-
-    # Re-resolve settings for embedding model config.  The db path is
-    # taken from argv (parent already resolved it) to ensure consistency.
-    settings = resolve_db_paths(load_settings(), None)
-    db = get_db(Path(lancedb_path))
-
-    # Deduplicate: remove prior captures for this session.
     try:
-        prefix = f"session-{session_prefix}-"
-        existing = list_documents(db, collection_filter=collection)
-        prior = [doc for doc in existing if doc["document_name"].startswith(prefix)]
-        for doc in prior:
-            delete_document(db, doc["document_name"], collection=collection)
-        if prior:
-            logger.info(
-                "ingest-background: deleted %d prior capture(s) for session %s",
-                len(prior),
-                session_prefix,
+        from quarry.config import (  # noqa: PLC0415
+            load_settings,
+            resolve_db_paths,
+        )
+        from quarry.database import (  # noqa: PLC0415
+            delete_document,
+            get_db,
+            list_documents,
+        )
+        from quarry.pipeline import ingest_content  # noqa: PLC0415
+
+        # Re-resolve settings for embedding model config.  The db path is
+        # taken from argv (parent already resolved it) to ensure consistency.
+        settings = resolve_db_paths(load_settings(), None)
+        db = get_db(Path(lancedb_path))
+
+        # Deduplicate: remove prior captures for this session.
+        try:
+            prefix = f"session-{session_prefix}-"
+            existing = list_documents(db, collection_filter=collection)
+            prior = [doc for doc in existing if doc["document_name"].startswith(prefix)]
+            for doc in prior:
+                delete_document(db, doc["document_name"], collection=collection)
+            if prior:
+                logger.info(
+                    "ingest-background: deleted %d prior capture(s) for session %s",
+                    len(prior),
+                    session_prefix,
+                )
+        except Exception:
+            logger.exception("ingest-background: dedup failed, proceeding with ingest")
+
+        try:
+            result = ingest_content(
+                text,
+                document_name,
+                db,
+                settings,
+                collection=collection,
+                format_hint="markdown",
             )
-    except Exception:
-        logger.exception("ingest-background: dedup failed, proceeding with ingest")
-
-    try:
-        result = ingest_content(
-            text,
-            document_name,
-            db,
-            settings,
-            collection=collection,
-            format_hint="markdown",
-        )
-        logger.info(
-            "ingest-background: captured %s (%d chunks, %d chars)",
-            document_name,
-            result["chunks"],
-            len(text),
-        )
-    except Exception:
-        logger.exception("ingest-background: ingestion failed for %s", document_name)
+            logger.info(
+                "ingest-background: captured %s (%d chunks, %d chars)",
+                document_name,
+                result["chunks"],
+                len(text),
+            )
+        except Exception:
+            logger.exception(
+                "ingest-background: ingestion failed for %s",
+                document_name,
+            )
     finally:
-        # Clean up temp file.
+        # Clean up temp file regardless of import or ingestion failures.
         text_file.unlink(missing_ok=True)
 
 
