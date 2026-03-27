@@ -50,7 +50,7 @@ class BenchResult:
     warmup_time_s: float = 0.0
     total_time_s: float = 0.0
     texts_per_s: float = 0.0
-    peak_rss_mb: float = 0.0
+    max_rss_mb: float = 0.0
     active_providers: list[str] = field(default_factory=list)
     batch_times: list[float] = field(default_factory=list)
     error: str | None = None
@@ -83,7 +83,7 @@ CONFIGS = [
 
 
 def _get_rss_mb() -> float:
-    """Return current max RSS in MB.
+    """Return process-lifetime max RSS in MB.
 
     macOS ``ru_maxrss`` is in bytes; Linux is in kilobytes.
     """
@@ -96,7 +96,7 @@ def _get_rss_mb() -> float:
 
 
 def _make_chunks() -> list[str]:
-    """Build ~200 realistic text chunks from pipeline.py source."""
+    """Build ~500 realistic text chunks from pipeline.py source."""
     src = Path(__file__).resolve().parent.parent / "src" / "quarry" / "pipeline.py"
     text = src.read_text() if src.exists() else ""
 
@@ -243,10 +243,10 @@ def run_benchmark(
     result.texts_per_s = (
         n_texts / result.total_time_s if result.total_time_s > 0 else 0.0
     )
-    result.peak_rss_mb = _get_rss_mb()
+    result.max_rss_mb = _get_rss_mb()
 
     print(f"  Total: {result.total_time_s:.2f}s, {result.texts_per_s:.1f} texts/s")
-    print(f"  Peak RSS: {result.peak_rss_mb:.0f} MB")
+    print(f"  Max RSS: {result.max_rss_mb:.0f} MB")
 
     # Clean up session to free memory before next config
     del session
@@ -267,7 +267,7 @@ def print_summary(results: list[BenchResult]) -> None:
 
     header = (
         f"{'Configuration':<23} | {'Session (s)':>11} | {'Warmup (s)':>10} "
-        f"| {'Throughput (texts/s)':>20} | {'Peak RSS (MB)':>13} | Providers"
+        f"| {'Throughput (texts/s)':>20} | {'Max RSS (MB)':>13} | Providers"
     )
     sep = f"{'-' * 23}-+-{'-' * 11}-+-{'-' * 10}-+-{'-' * 20}-+-{'-' * 13}-+-{'-' * 30}"
     print(header)
@@ -279,12 +279,12 @@ def print_summary(results: list[BenchResult]) -> None:
         else:
             print(
                 f"{r.name:<23} | {r.session_time_s:>11.2f} | {r.warmup_time_s:>10.2f} "
-                f"| {r.texts_per_s:>20.1f} | {r.peak_rss_mb:>13.0f}"
+                f"| {r.texts_per_s:>20.1f} | {r.max_rss_mb:>13.0f}"
                 f" | {r.active_providers}"
             )
 
     # Batch timing details
-    print(f"\n{'Batch timing (seconds)':}")
+    print("\nBatch timing (seconds):")
     for r in results:
         if r.batch_times:
             avg = sum(r.batch_times) / len(r.batch_times)
@@ -317,7 +317,7 @@ def _print_gpu_info() -> None:
             print(f"  GPU: {result.stdout.strip()}")
         else:
             print("  GPU: nvidia-smi failed")
-    except FileNotFoundError:
+    except (FileNotFoundError, subprocess.TimeoutExpired):
         print("  GPU: nvidia-smi not found")
 
 

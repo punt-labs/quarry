@@ -58,9 +58,6 @@ dev = [
     "pytest-timeout>=2.3.0",
     "types-PyYAML>=6.0.0",
 ]
-cuda = [
-    "onnxruntime-gpu>=1.18.0",
-]
 
 [project.scripts]
 quarry = "quarry.__main__:app"
