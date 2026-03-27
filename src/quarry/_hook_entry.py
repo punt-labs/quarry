@@ -59,9 +59,115 @@ def _pre_compact() -> None:
     run_hook(handle_pre_compact)
 
 
+def _ingest_background() -> None:
+    """Run dedup + ingestion in a detached background process.
+
+    Called by ``handle_pre_compact`` via ``subprocess.Popen``.  Accepts
+    arguments via ``sys.argv`` (not stdin) because the parent process
+    has already exited by the time this runs.
+
+    Args (via sys.argv[2:]):
+        text_file: Path to the temp file containing extracted text.
+        document_name: The document name for the ingested content.
+        collection: The target collection name.
+        lancedb_path: Path to the LanceDB database.
+        session_prefix: First 8 chars of session ID (for dedup).
+    """
+    import logging  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    logger = logging.getLogger(__name__)
+
+    expected_arg_count = 5
+    args = sys.argv[2:]
+    if len(args) != expected_arg_count:
+        sys.exit(
+            "Usage: quarry-hook ingest-background"
+            " <text_file> <doc_name> <collection>"
+            " <lancedb_path> <session_prefix>"
+        )
+
+    text_file_path, document_name, collection, lancedb_path, session_prefix = args
+    text_file = Path(text_file_path)
+
+    # Detached subprocess: configure its own logging per the standard.
+    from quarry.logging_config import configure_logging as _configure  # noqa: PLC0415
+
+    _configure(stderr_level="WARNING")
+
+    try:
+        text = text_file.read_text()
+    except OSError:
+        logger.exception("ingest-background: could not read text file %s", text_file)
+        text_file.unlink(missing_ok=True)
+        return
+
+    try:
+        from quarry.config import (  # noqa: PLC0415
+            load_settings,
+            resolve_db_paths,
+        )
+        from quarry.database import (  # noqa: PLC0415
+            delete_document,
+            get_db,
+            list_documents,
+        )
+        from quarry.pipeline import ingest_content  # noqa: PLC0415
+
+        # Re-resolve settings for embedding model config.  The db path is
+        # taken from argv (parent already resolved it) to ensure consistency.
+        settings = resolve_db_paths(load_settings(), None)
+        db = get_db(Path(lancedb_path))
+
+        # Deduplicate: remove prior captures for this session.
+        try:
+            prefix = f"session-{session_prefix}-"
+            existing = list_documents(db, collection_filter=collection)
+            prior = [doc for doc in existing if doc["document_name"].startswith(prefix)]
+            for doc in prior:
+                delete_document(db, doc["document_name"], collection=collection)
+            if prior:
+                logger.info(
+                    "ingest-background: deleted %d prior capture(s) for session %s",
+                    len(prior),
+                    session_prefix,
+                )
+        except Exception:
+            logger.exception("ingest-background: dedup failed, proceeding with ingest")
+
+        try:
+            result = ingest_content(
+                text,
+                document_name,
+                db,
+                settings,
+                collection=collection,
+                format_hint="markdown",
+            )
+            logger.info(
+                "ingest-background: captured %s (%d chunks, %d chars)",
+                document_name,
+                result["chunks"],
+                len(text),
+            )
+        except Exception:
+            logger.exception(
+                "ingest-background: ingestion failed for %s",
+                document_name,
+            )
+    finally:
+        # Clean up temp file regardless of import or ingestion failures.
+        text_file.unlink(missing_ok=True)
+
+
 _HANDLERS: dict[str, Callable[[], None]] = {
     "session-setup": _session_setup,
     "session-start": _session_start,
     "post-web-fetch": _post_web_fetch,
     "pre-compact": _pre_compact,
+    "ingest-background": _ingest_background,
 }
+
+
+if __name__ == "__main__":
+    main()

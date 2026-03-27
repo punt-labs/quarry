@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -1115,6 +1116,30 @@ class TestExtractTranscriptText:
         assert _extract_transcript_text(str(transcript)) == ""
 
 
+def _make_transcript(tmp_path: Path, text: str = "Build a feature") -> Path:
+    """Create a minimal JSONL transcript file for testing."""
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(
+        json.dumps(
+            {
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": text}],
+                },
+            }
+        )
+    )
+    return transcript
+
+
+def _mock_settings() -> MagicMock:
+    """Return a mock Settings with a lancedb_path attribute."""
+    s = MagicMock()
+    s.lancedb_path = Path("/fake/lancedb")
+    return s
+
+
 class TestHandlePreCompact:
     def test_no_transcript_returns_empty(self) -> None:
         result = handle_pre_compact({})
@@ -1128,27 +1153,14 @@ class TestHandlePreCompact:
         (config_dir / "config.md").write_text(
             "---\nauto_capture:\n  compaction: false\n---\n"
         )
-        transcript = tmp_path / "session.jsonl"
-        transcript.write_text(
-            json.dumps(
-                {
-                    "type": "user",
-                    "message": {
-                        "role": "user",
-                        "content": [{"type": "text", "text": "Hello"}],
-                    },
-                }
-            )
-        )
+        transcript = _make_transcript(tmp_path, "Hello")
         payload: dict[str, object] = {
             "cwd": str(project),
             "transcript_path": str(transcript),
             "session_id": "abc123",
         }
-        with patch("quarry.pipeline.ingest_content") as mock_ingest:
-            result = handle_pre_compact(payload)
+        result = handle_pre_compact(payload)
         assert result == {}
-        mock_ingest.assert_not_called()
 
     def test_no_session_id_returns_empty(self, tmp_path: Path) -> None:
         result = handle_pre_compact({"transcript_path": str(tmp_path / "t.jsonl")})
@@ -1162,39 +1174,18 @@ class TestHandlePreCompact:
         result = handle_pre_compact(payload)
         assert result == {}
 
-    def test_ingests_transcript(self, tmp_path: Path) -> None:
-        transcript = tmp_path / "session.jsonl"
-        transcript.write_text(
-            json.dumps(
-                {
-                    "type": "user",
-                    "message": {
-                        "role": "user",
-                        "content": [{"type": "text", "text": "Build a feature"}],
-                    },
-                }
-            )
-        )
-
-        mock_result = {
-            "document_name": "session-abc12345-20260224T120000",
-            "collection": "session-notes",
-            "chunks": 1,
-        }
+    def test_returns_immediately_with_system_message(self, tmp_path: Path) -> None:
+        """handle_pre_compact returns systemMessage with collection and doc name."""
+        transcript = _make_transcript(tmp_path)
 
         with (
+            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
             patch(
                 "quarry.hooks._resolve_settings",
-                return_value=MagicMock(),
+                return_value=_mock_settings(),
             ),
-            patch("quarry.database.get_db", return_value=MagicMock()),
             patch("quarry.hooks._collection_for_cwd", return_value=None),
-            patch("quarry.database.list_documents", return_value=[]),
-            patch("quarry.database.delete_document"),
-            patch(
-                "quarry.pipeline.ingest_content",
-                return_value=mock_result,
-            ) as mock_ingest,
+            patch("quarry.hooks.subprocess.Popen") as mock_popen,
         ):
             result = handle_pre_compact(
                 {
@@ -1205,45 +1196,23 @@ class TestHandlePreCompact:
 
         assert "systemMessage" in result
         msg = str(result["systemMessage"])
-        assert "captured in quarry" in msg
-        assert "searchable via /find" in msg
-        mock_ingest.assert_called_once()
-        call_args = mock_ingest.call_args
-        assert "Build a feature" in call_args[0][0]  # content
-        assert call_args[0][1].startswith("session-abc12345")  # doc name
-        assert call_args[1]["collection"] == "session-notes"
+        assert "session-abc12345-" in msg
+        assert '"session-notes"' in msg
+        assert "/find" in msg
+        mock_popen.assert_called_once()
 
-    def test_uses_project_collection_when_registered(self, tmp_path: Path) -> None:
-        """Session notes go to the project collection when cwd is registered."""
-        transcript = tmp_path / "session.jsonl"
-        transcript.write_text(
-            json.dumps(
-                {
-                    "type": "user",
-                    "message": {
-                        "role": "user",
-                        "content": [{"type": "text", "text": "Working on myapp"}],
-                    },
-                }
-            )
-        )
-
-        mock_result = {
-            "document_name": "session-abc12345-20260224T120000",
-            "collection": "myapp",
-            "chunks": 1,
-        }
+    def test_popen_called_with_correct_args(self, tmp_path: Path) -> None:
+        """subprocess.Popen receives quarry-hook ingest-background with all args."""
+        transcript = _make_transcript(tmp_path)
 
         with (
-            patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
-            patch("quarry.database.get_db", return_value=MagicMock()),
-            patch("quarry.hooks._collection_for_cwd", return_value="myapp"),
-            patch("quarry.database.list_documents", return_value=[]),
-            patch("quarry.database.delete_document"),
+            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
             patch(
-                "quarry.pipeline.ingest_content",
-                return_value=mock_result,
-            ) as mock_ingest,
+                "quarry.hooks._resolve_settings",
+                return_value=_mock_settings(),
+            ),
+            patch("quarry.hooks._collection_for_cwd", return_value="myapp"),
+            patch("quarry.hooks.subprocess.Popen") as mock_popen,
         ):
             handle_pre_compact(
                 {
@@ -1253,41 +1222,83 @@ class TestHandlePreCompact:
                 }
             )
 
-        assert mock_ingest.call_args[1]["collection"] == "myapp"
+        args = mock_popen.call_args[0][0]
+        assert args[0] == sys.executable
+        assert args[1:3] == ["-m", "quarry._hook_entry"]
+        assert args[3] == "ingest-background"
+        # args[4] is the text file path
+        assert args[4].endswith(".txt")
+        assert "session-abc12345-" in args[5]  # document_name
+        assert args[6] == "myapp"  # collection
+        assert args[7] == str(Path("/fake/lancedb"))  # lancedb_path
+        assert args[8] == "abc12345"  # session_prefix
+
+        kwargs = mock_popen.call_args[1]
+        assert kwargs["start_new_session"] is True
+        assert kwargs["stdin"] == subprocess.DEVNULL
+
+    def test_writes_text_file_for_background(self, tmp_path: Path) -> None:
+        """Extracted text is written to a temp file in sessions dir."""
+        transcript = _make_transcript(tmp_path, "Important context here")
+
+        with (
+            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
+            patch(
+                "quarry.hooks._resolve_settings",
+                return_value=_mock_settings(),
+            ),
+            patch("quarry.hooks._collection_for_cwd", return_value=None),
+            patch("quarry.hooks.subprocess.Popen") as mock_popen,
+        ):
+            handle_pre_compact(
+                {
+                    "transcript_path": str(transcript),
+                    "session_id": "abc12345-full-id",
+                }
+            )
+
+        text_file = Path(mock_popen.call_args[0][0][4])
+        assert text_file.exists()
+        assert "Important context here" in text_file.read_text()
+
+    def test_uses_project_collection_when_registered(self, tmp_path: Path) -> None:
+        """Session notes go to the project collection when cwd is registered."""
+        transcript = _make_transcript(tmp_path, "Working on myapp")
+
+        with (
+            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
+            patch(
+                "quarry.hooks._resolve_settings",
+                return_value=_mock_settings(),
+            ),
+            patch("quarry.hooks._collection_for_cwd", return_value="myapp"),
+            patch("quarry.hooks.subprocess.Popen") as mock_popen,
+        ):
+            result = handle_pre_compact(
+                {
+                    "cwd": "/projects/myapp",
+                    "transcript_path": str(transcript),
+                    "session_id": "abc12345-full-id",
+                }
+            )
+
+        assert '"myapp"' in str(result["systemMessage"])
+        assert mock_popen.call_args[0][0][6] == "myapp"
 
     def test_falls_back_to_session_notes_when_unregistered(
         self, tmp_path: Path
     ) -> None:
         """Session notes use fallback collection when cwd has no registration."""
-        transcript = tmp_path / "session.jsonl"
-        transcript.write_text(
-            json.dumps(
-                {
-                    "type": "user",
-                    "message": {
-                        "role": "user",
-                        "content": [{"type": "text", "text": "Some work"}],
-                    },
-                }
-            )
-        )
-
-        mock_result = {
-            "document_name": "session-abc12345-20260224T120000",
-            "collection": "session-notes",
-            "chunks": 1,
-        }
+        transcript = _make_transcript(tmp_path, "Some work")
 
         with (
-            patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
-            patch("quarry.database.get_db", return_value=MagicMock()),
-            patch("quarry.hooks._collection_for_cwd", return_value=None),
-            patch("quarry.database.list_documents", return_value=[]),
-            patch("quarry.database.delete_document"),
+            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
             patch(
-                "quarry.pipeline.ingest_content",
-                return_value=mock_result,
-            ) as mock_ingest,
+                "quarry.hooks._resolve_settings",
+                return_value=_mock_settings(),
+            ),
+            patch("quarry.hooks._collection_for_cwd", return_value=None),
+            patch("quarry.hooks.subprocess.Popen") as mock_popen,
         ):
             handle_pre_compact(
                 {
@@ -1297,229 +1308,13 @@ class TestHandlePreCompact:
                 }
             )
 
-        assert mock_ingest.call_args[1]["collection"] == "session-notes"
-
-    def test_deduplicates_prior_captures(self, tmp_path: Path) -> None:
-        """Prior captures for the same session are deleted before new ingest."""
-        transcript = tmp_path / "session.jsonl"
-        transcript.write_text(
-            json.dumps(
-                {
-                    "type": "user",
-                    "message": {
-                        "role": "user",
-                        "content": [{"type": "text", "text": "More work"}],
-                    },
-                }
-            )
-        )
-
-        existing_docs = [
-            {
-                "document_name": "session-abc12345-20260224T100000",
-                "document_path": "",
-                "collection": "session-notes",
-                "total_pages": 1,
-                "chunk_count": 5,
-                "indexed_pages": 1,
-                "ingestion_timestamp": "2026-02-24T10:00:00",
-            },
-            {
-                "document_name": "session-abc12345-20260224T110000",
-                "document_path": "",
-                "collection": "session-notes",
-                "total_pages": 1,
-                "chunk_count": 10,
-                "indexed_pages": 1,
-                "ingestion_timestamp": "2026-02-24T11:00:00",
-            },
-        ]
-
-        mock_result: dict[str, object] = {
-            "document_name": "session-abc12345-20260224T120000",
-            "collection": "session-notes",
-            "chunks": 15,
-        }
-
-        call_order: list[str] = []
-
-        def track_delete(*_args: object, **_kwargs: object) -> int:
-            call_order.append("delete")
-            return 5
-
-        def track_ingest(*_args: object, **_kwargs: object) -> dict[str, object]:
-            call_order.append("ingest")
-            return mock_result
-
-        with (
-            patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
-            patch("quarry.database.get_db", return_value=MagicMock()),
-            patch("quarry.hooks._collection_for_cwd", return_value=None),
-            patch(
-                "quarry.database.list_documents",
-                return_value=existing_docs,
-            ) as mock_list,
-            patch(
-                "quarry.database.delete_document",
-                side_effect=track_delete,
-            ) as mock_delete,
-            patch(
-                "quarry.pipeline.ingest_content",
-                side_effect=track_ingest,
-            ),
-        ):
-            handle_pre_compact(
-                {
-                    "transcript_path": str(transcript),
-                    "session_id": "abc12345-full-id",
-                }
-            )
-
-        mock_list.assert_called_once()
-        assert mock_delete.call_count == 2
-        # Deletes happen before ingest.
-        assert call_order == ["delete", "delete", "ingest"]
-
-    def test_no_delete_when_no_prior_captures(self, tmp_path: Path) -> None:
-        """No delete calls when no prior captures exist."""
-        transcript = tmp_path / "session.jsonl"
-        transcript.write_text(
-            json.dumps(
-                {
-                    "type": "user",
-                    "message": {
-                        "role": "user",
-                        "content": [{"type": "text", "text": "First capture"}],
-                    },
-                }
-            )
-        )
-
-        mock_result = {
-            "document_name": "session-abc12345-20260224T120000",
-            "collection": "session-notes",
-            "chunks": 1,
-        }
-
-        with (
-            patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
-            patch("quarry.database.get_db", return_value=MagicMock()),
-            patch("quarry.hooks._collection_for_cwd", return_value=None),
-            patch("quarry.database.list_documents", return_value=[]),
-            patch("quarry.database.delete_document") as mock_delete,
-            patch(
-                "quarry.pipeline.ingest_content",
-                return_value=mock_result,
-            ) as mock_ingest,
-        ):
-            handle_pre_compact(
-                {
-                    "transcript_path": str(transcript),
-                    "session_id": "abc12345-full-id",
-                }
-            )
-
-        mock_delete.assert_not_called()
-        mock_ingest.assert_called_once()
-
-    def test_dedup_scoped_to_collection(self, tmp_path: Path) -> None:
-        """Dedup queries list_documents with the resolved collection filter."""
-        transcript = tmp_path / "session.jsonl"
-        transcript.write_text(
-            json.dumps(
-                {
-                    "type": "user",
-                    "message": {
-                        "role": "user",
-                        "content": [{"type": "text", "text": "Project work"}],
-                    },
-                }
-            )
-        )
-
-        mock_result = {
-            "document_name": "session-abc12345-20260224T120000",
-            "collection": "myapp",
-            "chunks": 1,
-        }
-
-        with (
-            patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
-            patch("quarry.database.get_db", return_value=MagicMock()),
-            patch("quarry.hooks._collection_for_cwd", return_value="myapp"),
-            patch(
-                "quarry.database.list_documents",
-                return_value=[],
-            ) as mock_list,
-            patch("quarry.database.delete_document"),
-            patch(
-                "quarry.pipeline.ingest_content",
-                return_value=mock_result,
-            ),
-        ):
-            handle_pre_compact(
-                {
-                    "cwd": "/projects/myapp",
-                    "transcript_path": str(transcript),
-                    "session_id": "abc12345-full-id",
-                }
-            )
-
-        mock_list.assert_called_once_with(
-            mock_list.call_args[0][0],  # the db object
-            collection_filter="myapp",
-        )
-
-    def test_dedup_failure_does_not_prevent_capture(self, tmp_path: Path) -> None:
-        """Ingest proceeds even when dedup raises an exception."""
-        transcript = tmp_path / "session.jsonl"
-        transcript.write_text(
-            json.dumps(
-                {
-                    "type": "user",
-                    "message": {
-                        "role": "user",
-                        "content": [{"type": "text", "text": "Important work"}],
-                    },
-                }
-            )
-        )
-
-        mock_result = {
-            "document_name": "session-abc12345-20260224T120000",
-            "collection": "session-notes",
-            "chunks": 1,
-        }
-
-        with (
-            patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
-            patch("quarry.database.get_db", return_value=MagicMock()),
-            patch("quarry.hooks._collection_for_cwd", return_value=None),
-            patch(
-                "quarry.database.list_documents",
-                side_effect=OSError("disk error"),
-            ),
-            patch("quarry.database.delete_document") as mock_delete,
-            patch(
-                "quarry.pipeline.ingest_content",
-                return_value=mock_result,
-            ) as mock_ingest,
-        ):
-            handle_pre_compact(
-                {
-                    "transcript_path": str(transcript),
-                    "session_id": "abc12345-full-id",
-                }
-            )
-
-        mock_delete.assert_not_called()
-        mock_ingest.assert_called_once()
+        assert mock_popen.call_args[0][0][6] == "session-notes"
 
     def test_empty_transcript_skips_ingestion(self, tmp_path: Path) -> None:
         transcript = tmp_path / "empty.jsonl"
         transcript.write_text("")
 
-        with patch("quarry.pipeline.ingest_content") as mock_ingest:
+        with patch("quarry.hooks.subprocess.Popen") as mock_popen:
             result = handle_pre_compact(
                 {
                     "transcript_path": str(transcript),
@@ -1528,7 +1323,7 @@ class TestHandlePreCompact:
             )
 
         assert result == {}
-        mock_ingest.assert_not_called()
+        mock_popen.assert_not_called()
 
     def test_archives_raw_jsonl(self, tmp_path: Path) -> None:
         """Raw JSONL is copied to the sessions directory."""
@@ -1539,23 +1334,14 @@ class TestHandlePreCompact:
 
         sessions_dir = tmp_path / "home" / ".punt-labs" / "quarry" / "sessions"
 
-        mock_result = {
-            "document_name": "session-abc12345-20260224T120000",
-            "collection": "session-notes",
-            "chunks": 1,
-        }
-
         with (
             patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
-            patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
-            patch("quarry.database.get_db", return_value=MagicMock()),
-            patch("quarry.hooks._collection_for_cwd", return_value=None),
-            patch("quarry.database.list_documents", return_value=[]),
-            patch("quarry.database.delete_document"),
             patch(
-                "quarry.pipeline.ingest_content",
-                return_value=mock_result,
+                "quarry.hooks._resolve_settings",
+                return_value=_mock_settings(),
             ),
+            patch("quarry.hooks._collection_for_cwd", return_value=None),
+            patch("quarry.hooks.subprocess.Popen"),
         ):
             handle_pre_compact(
                 {
@@ -1584,23 +1370,14 @@ class TestHandlePreCompact:
         old_mtime = old_file.stat().st_mtime - (100 * 86400)
         os.utime(old_file, (old_mtime, old_mtime))
 
-        mock_result = {
-            "document_name": "session-abc12345-20260224T120000",
-            "collection": "session-notes",
-            "chunks": 1,
-        }
-
         with (
             patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
-            patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
-            patch("quarry.database.get_db", return_value=MagicMock()),
-            patch("quarry.hooks._collection_for_cwd", return_value=None),
-            patch("quarry.database.list_documents", return_value=[]),
-            patch("quarry.database.delete_document"),
             patch(
-                "quarry.pipeline.ingest_content",
-                return_value=mock_result,
+                "quarry.hooks._resolve_settings",
+                return_value=_mock_settings(),
             ),
+            patch("quarry.hooks._collection_for_cwd", return_value=None),
+            patch("quarry.hooks.subprocess.Popen"),
         ):
             handle_pre_compact(
                 {
@@ -1614,30 +1391,21 @@ class TestHandlePreCompact:
         assert len(new_archives) == 1
 
     def test_archive_failure_does_not_prevent_capture(self, tmp_path: Path) -> None:
-        """Ingest proceeds even when archival raises an exception."""
+        """Background ingest is spawned even when archival raises an exception."""
         transcript = tmp_path / "session.jsonl"
         transcript.write_text(
             '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Hello"}]}}\n'
         )
 
-        mock_result = {
-            "document_name": "session-abc12345-20260224T120000",
-            "collection": "session-notes",
-            "chunks": 1,
-        }
-
         with (
             patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
             patch("quarry.hooks.shutil.copy", side_effect=OSError("disk full")),
-            patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
-            patch("quarry.database.get_db", return_value=MagicMock()),
-            patch("quarry.hooks._collection_for_cwd", return_value=None),
-            patch("quarry.database.list_documents", return_value=[]),
-            patch("quarry.database.delete_document"),
             patch(
-                "quarry.pipeline.ingest_content",
-                return_value=mock_result,
-            ) as mock_ingest,
+                "quarry.hooks._resolve_settings",
+                return_value=_mock_settings(),
+            ),
+            patch("quarry.hooks._collection_for_cwd", return_value=None),
+            patch("quarry.hooks.subprocess.Popen") as mock_popen,
         ):
             handle_pre_compact(
                 {
@@ -1646,7 +1414,7 @@ class TestHandlePreCompact:
                 }
             )
 
-        mock_ingest.assert_called_once()
+        mock_popen.assert_called_once()
 
     def test_archive_deduplicates_prior_sessions(self, tmp_path: Path) -> None:
         """Prior archive files for the same session are replaced."""
@@ -1662,23 +1430,14 @@ class TestHandlePreCompact:
         prior = sessions_dir / "session-abc12345-20260224T100000.jsonl"
         prior.write_text("{}\n")
 
-        mock_result = {
-            "document_name": "session-abc12345-20260224T120000",
-            "collection": "session-notes",
-            "chunks": 1,
-        }
-
         with (
             patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
-            patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
-            patch("quarry.database.get_db", return_value=MagicMock()),
-            patch("quarry.hooks._collection_for_cwd", return_value=None),
-            patch("quarry.database.list_documents", return_value=[]),
-            patch("quarry.database.delete_document"),
             patch(
-                "quarry.pipeline.ingest_content",
-                return_value=mock_result,
+                "quarry.hooks._resolve_settings",
+                return_value=_mock_settings(),
             ),
+            patch("quarry.hooks._collection_for_cwd", return_value=None),
+            patch("quarry.hooks.subprocess.Popen"),
         ):
             handle_pre_compact(
                 {
@@ -1704,23 +1463,14 @@ class TestHandlePreCompact:
         old_time = transcript.stat().st_mtime - (95 * 86400)
         os.utime(transcript, (old_time, old_time))
 
-        mock_result = {
-            "document_name": "session-abc12345-20260224T120000",
-            "collection": "session-notes",
-            "chunks": 1,
-        }
-
         with (
             patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
-            patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
-            patch("quarry.database.get_db", return_value=MagicMock()),
-            patch("quarry.hooks._collection_for_cwd", return_value=None),
-            patch("quarry.database.list_documents", return_value=[]),
-            patch("quarry.database.delete_document"),
             patch(
-                "quarry.pipeline.ingest_content",
-                return_value=mock_result,
+                "quarry.hooks._resolve_settings",
+                return_value=_mock_settings(),
             ),
+            patch("quarry.hooks._collection_for_cwd", return_value=None),
+            patch("quarry.hooks.subprocess.Popen"),
         ):
             handle_pre_compact(
                 {
@@ -1733,35 +1483,50 @@ class TestHandlePreCompact:
         new_archives = list(sessions_dir.glob("session-abc12345-*.jsonl"))
         assert len(new_archives) == 1, "archive should survive retention cleanup"
 
-    def test_returns_capture_confirmation(self, tmp_path: Path) -> None:
-        transcript = tmp_path / "session.jsonl"
-        transcript.write_text(
-            json.dumps(
-                {
-                    "type": "user",
-                    "message": {
-                        "role": "user",
-                        "content": [{"type": "text", "text": "Confirm capture"}],
-                    },
-                }
-            )
-        )
-
-        mock_result = {
-            "document_name": "session-abc12345-20260224T120000",
-            "collection": "session-notes",
-            "chunks": 3,
-        }
+    def test_system_message_contains_collection_and_doc_name(
+        self, tmp_path: Path
+    ) -> None:
+        """systemMessage includes collection, document name, and /find hint."""
+        transcript = _make_transcript(tmp_path, "Confirm capture")
 
         with (
-            patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
-            patch("quarry.database.get_db", return_value=MagicMock()),
-            patch("quarry.hooks._collection_for_cwd", return_value=None),
-            patch("quarry.database.list_documents", return_value=[]),
-            patch("quarry.database.delete_document"),
+            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
             patch(
-                "quarry.pipeline.ingest_content",
-                return_value=mock_result,
+                "quarry.hooks._resolve_settings",
+                return_value=_mock_settings(),
+            ),
+            patch("quarry.hooks._collection_for_cwd", return_value="quarry"),
+            patch("quarry.hooks.subprocess.Popen"),
+        ):
+            result = handle_pre_compact(
+                {
+                    "transcript_path": str(transcript),
+                    "session_id": "abc12345-full-id",
+                }
+            )
+
+        assert "systemMessage" in result
+        msg = str(result["systemMessage"])
+        assert "session-abc12345-" in msg
+        assert '"quarry"' in msg
+        assert "/find" in msg
+        # No chunk count in new format.
+        assert "chunks" not in msg
+
+    def test_popen_failure_cleans_up_and_returns_warning(self, tmp_path: Path) -> None:
+        """Popen OSError cleans up temp file and returns a warning systemMessage."""
+        transcript = _make_transcript(tmp_path, "Will not be ingested")
+
+        with (
+            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
+            patch(
+                "quarry.hooks._resolve_settings",
+                return_value=_mock_settings(),
+            ),
+            patch("quarry.hooks._collection_for_cwd", return_value=None),
+            patch(
+                "quarry.hooks.subprocess.Popen",
+                side_effect=FileNotFoundError("quarry-hook"),
             ),
         ):
             result = handle_pre_compact(
@@ -1772,10 +1537,156 @@ class TestHandlePreCompact:
             )
 
         assert "systemMessage" in result
-        ctx = str(result["systemMessage"])
-        assert "captured in quarry" in ctx
-        assert "searchable via /find" in ctx
-        assert "3 chunks" in ctx
+        msg = str(result["systemMessage"])
+        assert "Warning" in msg
+        assert "sessions/" in msg
+        # Temp file should be cleaned up.
+        sessions_dir = tmp_path / "home" / ".punt-labs" / "quarry" / "sessions"
+        txt_files = list(sessions_dir.glob("*.txt"))
+        assert txt_files == []
+
+    def test_system_message_uses_present_tense(self, tmp_path: Path) -> None:
+        """systemMessage says 'Capturing' not 'captured' (async honesty)."""
+        transcript = _make_transcript(tmp_path)
+
+        with (
+            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
+            patch(
+                "quarry.hooks._resolve_settings",
+                return_value=_mock_settings(),
+            ),
+            patch("quarry.hooks._collection_for_cwd", return_value=None),
+            patch("quarry.hooks.subprocess.Popen"),
+        ):
+            result = handle_pre_compact(
+                {
+                    "transcript_path": str(transcript),
+                    "session_id": "abc12345-full-id",
+                }
+            )
+
+        msg = str(result["systemMessage"])
+        assert msg.startswith("Capturing")
+        assert "background" in msg
+
+
+class TestIngestBackground:
+    """Tests for the ingest-background entry point."""
+
+    def test_performs_dedup_and_ingestion(self, tmp_path: Path) -> None:
+        """Background entry point does dedup + ingest and cleans up temp file."""
+        text_file = tmp_path / "session-abc12345-20260327T120000.txt"
+        text_file.write_text("Some transcript content")
+
+        mock_result: dict[str, object] = {
+            "document_name": "session-abc12345-20260327T120000",
+            "collection": "session-notes",
+            "chunks": 5,
+        }
+
+        existing_docs = [
+            {
+                "document_name": "session-abc12345-20260327T100000",
+                "document_path": "",
+                "collection": "session-notes",
+                "total_pages": 1,
+                "chunk_count": 3,
+                "indexed_pages": 1,
+                "ingestion_timestamp": "2026-03-27T10:00:00",
+            },
+        ]
+
+        from quarry._hook_entry import _ingest_background
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "quarry-hook",
+                    "ingest-background",
+                    str(text_file),
+                    "session-abc12345-20260327T120000",
+                    "session-notes",
+                    str(tmp_path / "lancedb"),
+                    "abc12345",
+                ],
+            ),
+            patch(
+                "quarry.config.resolve_db_paths",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "quarry.config.load_settings",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "quarry.database.get_db",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "quarry.database.list_documents",
+                return_value=existing_docs,
+            ),
+            patch(
+                "quarry.database.delete_document",
+            ) as mock_delete,
+            patch(
+                "quarry.pipeline.ingest_content",
+                return_value=mock_result,
+            ) as mock_ingest,
+        ):
+            _ingest_background()
+
+        mock_delete.assert_called_once()
+        mock_ingest.assert_called_once()
+        call_args = mock_ingest.call_args
+        assert "Some transcript content" in call_args[0][0]
+        assert call_args[0][1] == "session-abc12345-20260327T120000"
+        assert call_args[1]["collection"] == "session-notes"
+        # Temp file cleaned up.
+        assert not text_file.exists()
+
+    def test_cleans_up_temp_file_on_ingest_failure(self, tmp_path: Path) -> None:
+        """Temp file is removed even when ingestion fails."""
+        text_file = tmp_path / "session-abc12345-20260327T120000.txt"
+        text_file.write_text("Content")
+
+        from quarry._hook_entry import _ingest_background
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "quarry-hook",
+                    "ingest-background",
+                    str(text_file),
+                    "session-abc12345-20260327T120000",
+                    "session-notes",
+                    str(tmp_path / "lancedb"),
+                    "abc12345",
+                ],
+            ),
+            patch(
+                "quarry.config.resolve_db_paths",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "quarry.config.load_settings",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "quarry.database.get_db",
+                return_value=MagicMock(),
+            ),
+            patch("quarry.database.list_documents", return_value=[]),
+            patch(
+                "quarry.pipeline.ingest_content",
+                side_effect=RuntimeError("embedding failed"),
+            ),
+        ):
+            _ingest_background()
+
+        assert not text_file.exists()
 
 
 # ---------------------------------------------------------------------------

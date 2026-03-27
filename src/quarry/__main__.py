@@ -19,7 +19,6 @@ from quarry.collections import derive_collection
 from quarry.config import (
     DEFAULT_PORT,
     Settings,
-    configure_logging,
     load_settings,
     read_default_db,
     resolve_db_paths,
@@ -37,6 +36,7 @@ from quarry.database import (
     search,
 )
 from quarry.formatting import format_document_detail, format_status
+from quarry.logging_config import configure_logging
 from quarry.pipeline import ingest_auto, ingest_content, ingest_document
 from quarry.sync import sync_all
 from quarry.sync_registry import (
@@ -46,7 +46,7 @@ from quarry.sync_registry import (
     register_directory,
 )
 
-configure_logging(load_settings())
+configure_logging(stderr_level="WARNING")
 logger = logging.getLogger(__name__)
 
 app = typer.Typer(help="quarry: extract searchable knowledge from any document")

@@ -14,6 +14,31 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Changed
+
+- **index**: PreCompact hook spawns ingestion as a background process instead of
+  blocking compaction. Reduces hook latency from ~30s to <1s.
+- **tool**: PreCompact systemMessage now includes collection name and document
+  handle for actionable retrieval via `/find`, replacing the uninformative chunk
+  count.
+
+### Added
+
+- **infra**: Per-phase timing instrumentation across sync, embedding, and
+  pipeline. Logs wall-clock time for: plan computation, per-file ingestion,
+  per-batch embedding (including tokenization), LanceDB writes, deletes,
+  index creation, table optimization, and total sync duration.
+
+### Fixed
+
+- **infra**: PreCompact background process redirects stdin to DEVNULL (prevents
+  fd leak holding Claude Code's stdin pipe open). Background process calls
+  `configure_logging()` to write diagnostics to `~/.punt-labs/quarry/logs/quarry.log`.
+- **infra**: PreCompact Popen guarded with try/except OSError — cleans up temp
+  file and fails gracefully instead of crashing the hook.
+- **infra**: Adopted logging standard (`logging_config.py` with `dictConfig`,
+  5MB rotating file, `0o700` directory permissions).
+
 ## [1.7.1] - 2026-03-26
 
 ### Fixed

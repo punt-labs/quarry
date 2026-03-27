@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -183,6 +184,112 @@ class SyncResult:
     errors: list[str] = field(default_factory=list)
 
 
+_RECOVERABLE = (OSError, ValueError, RuntimeError, TimeoutError)
+
+
+def _ingest_files(
+    plan_to_ingest: list[Path],
+    resolved: Path,
+    collection: str,
+    db: LanceDB,
+    settings: Settings,
+    conn: sqlite3.Connection,
+    max_workers: int,
+    progress: Callable[[str], None],
+) -> tuple[int, int, list[str]]:
+    """Ingest files from a sync plan, returning (ingested, failed, errors)."""
+    ingested = 0
+    failed = 0
+    errors: list[str] = []
+
+    def _timed_ingest(fp: Path, document_name: str) -> float:
+        t = time.perf_counter()
+        ingest_document(
+            fp,
+            db,
+            settings,
+            overwrite=True,
+            collection=collection,
+            document_name=document_name,
+        )
+        return time.perf_counter() - t
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(
+                _timed_ingest,
+                fp,
+                str(fp.relative_to(resolved)),
+            ): fp
+            for fp in plan_to_ingest
+        }
+        for future in as_completed(futures):
+            fp = futures[future]
+            document_name = str(fp.relative_to(resolved))
+            try:
+                elapsed = future.result()
+                stat = fp.stat()
+                upsert_file(
+                    conn,
+                    FileRecord(
+                        path=str(fp),
+                        collection=collection,
+                        document_name=document_name,
+                        mtime=stat.st_mtime,
+                        size=stat.st_size,
+                        ingested_at=datetime.now(UTC).isoformat(),
+                    ),
+                    commit=False,
+                )
+                ingested += 1
+                progress(f"[{collection}] Ingested {document_name} in {elapsed:.2f}s")
+            except _RECOVERABLE as exc:
+                failed += 1
+                errors.append(f"{document_name}: {exc}")
+                logger.exception("Ingest failed for %s", document_name)
+                progress(f"[{collection}] Failed {document_name}: {exc}")
+    return ingested, failed, errors
+
+
+def _delete_documents(
+    plan_to_delete: list[str],
+    collection: str,
+    db: LanceDB,
+    conn: sqlite3.Connection,
+    progress: Callable[[str], None],
+) -> tuple[int, int, list[str]]:
+    """Delete documents from a sync plan, returning (deleted, failed, errors)."""
+    t_delete_start = time.perf_counter()
+    # Pre-build lookup for O(1) path resolution during deletes
+    files_by_document_name: dict[str, list[FileRecord]] = {}
+    for rec in list_files(conn, collection):
+        files_by_document_name.setdefault(rec.document_name, []).append(rec)
+
+    deleted = 0
+    failed = 0
+    errors: list[str] = []
+    for document_name in plan_to_delete:
+        try:
+            delete_document(db, document_name, collection=collection)
+            for rec in files_by_document_name.get(document_name, []):
+                delete_file(conn, rec.path, commit=False)
+            deleted += 1
+            progress(f"[{collection}] Deleted {document_name}")
+        except _RECOVERABLE as exc:
+            failed += 1
+            errors.append(f"{document_name}: {exc}")
+            logger.exception("Delete failed for %s", document_name)
+            progress(f"[{collection}] Failed to delete {document_name}: {exc}")
+    if plan_to_delete:
+        logger.info(
+            "sync: [%s] deleted %d documents in %.2fs",
+            collection,
+            deleted,
+            time.perf_counter() - t_delete_start,
+        )
+    return deleted, failed, errors
+
+
 def sync_collection(
     directory: Path,
     collection: str,
@@ -201,15 +308,22 @@ def sync_collection(
     Catches OSError, ValueError, RuntimeError, and TimeoutError for
     individual file ingest/delete failures so sync continues when one fails.
     """
-    _recoverable = (OSError, ValueError, RuntimeError, TimeoutError)
 
     def _progress(msg: str) -> None:
         logger.info(msg)
         if progress_callback is not None:
             progress_callback(msg)
 
+    t_sync_start = time.perf_counter()
+
     resolved = directory.resolve()
+    t0 = time.perf_counter()
     plan = compute_sync_plan(resolved, collection, conn, SUPPORTED_EXTENSIONS)
+    logger.info(
+        "sync: [%s] plan computed in %.2fs",
+        collection,
+        time.perf_counter() - t0,
+    )
     _progress(
         f"[{collection}] {len(plan.to_ingest)} to ingest, "
         f"{len(plan.to_delete)} to delete, {plan.unchanged} unchanged"
@@ -220,65 +334,40 @@ def sync_collection(
     errors: list[str] = []
 
     if plan.to_ingest:
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(
-                    ingest_document,
-                    fp,
-                    db,
-                    settings,
-                    overwrite=True,
-                    collection=collection,
-                    document_name=str(fp.relative_to(resolved)),
-                ): fp
-                for fp in plan.to_ingest
-            }
-            for future in as_completed(futures):
-                fp = futures[future]
-                document_name = str(fp.relative_to(resolved))
-                try:
-                    future.result()
-                    stat = fp.stat()
-                    upsert_file(
-                        conn,
-                        FileRecord(
-                            path=str(fp),
-                            collection=collection,
-                            document_name=document_name,
-                            mtime=stat.st_mtime,
-                            size=stat.st_size,
-                            ingested_at=datetime.now(UTC).isoformat(),
-                        ),
-                        commit=False,
-                    )
-                    ingested += 1
-                    _progress(f"[{collection}] Ingested {document_name}")
-                except _recoverable as exc:
-                    failed += 1
-                    errors.append(f"{document_name}: {exc}")
-                    logger.exception("Ingest failed for %s", document_name)
-                    _progress(f"[{collection}] Failed {document_name}: {exc}")
+        ingested, failed, errors = _ingest_files(
+            plan.to_ingest,
+            resolved,
+            collection,
+            db,
+            settings,
+            conn,
+            max_workers,
+            _progress,
+        )
 
-    # Pre-build lookup for O(1) path resolution during deletes
-    files_by_document_name: dict[str, list[FileRecord]] = {}
-    for rec in list_files(conn, collection):
-        files_by_document_name.setdefault(rec.document_name, []).append(rec)
-
-    deleted = 0
-    for document_name in plan.to_delete:
-        try:
-            delete_document(db, document_name, collection=collection)
-            for rec in files_by_document_name.get(document_name, []):
-                delete_file(conn, rec.path, commit=False)
-            deleted += 1
-            _progress(f"[{collection}] Deleted {document_name}")
-        except _recoverable as exc:
-            failed += 1
-            errors.append(f"{document_name}: {exc}")
-            logger.exception("Delete failed for %s", document_name)
-            _progress(f"[{collection}] Failed to delete {document_name}: {exc}")
+    del_count, del_failed, del_errors = _delete_documents(
+        plan.to_delete,
+        collection,
+        db,
+        conn,
+        _progress,
+    )
+    deleted = del_count
+    failed += del_failed
+    errors.extend(del_errors)
 
     conn.commit()
+
+    logger.info(
+        "sync: [%s] completed in %.2fs"
+        " (%d ingested, %d deleted, %d skipped, %d failed)",
+        collection,
+        time.perf_counter() - t_sync_start,
+        ingested,
+        deleted,
+        plan.unchanged,
+        failed,
+    )
 
     return SyncResult(
         collection=collection,
@@ -302,6 +391,7 @@ def sync_all(
     Opens the registry, iterates all registrations, syncs each,
     then optimizes the LanceDB table.
     """
+    t_all_start = time.perf_counter()
     conn = open_registry(settings.registry_path)
     try:
         registrations = list_registrations(conn)
@@ -316,8 +406,16 @@ def sync_all(
                 max_workers=max_workers,
                 progress_callback=progress_callback,
             )
+        t0 = time.perf_counter()
         create_collection_index(db)
+        logger.info("sync: create_collection_index in %.2fs", time.perf_counter() - t0)
+        t0 = time.perf_counter()
         optimize_table(db)
+        logger.info("sync: optimize_table in %.2fs", time.perf_counter() - t0)
+        logger.info(
+            "sync: all collections completed in %.2fs",
+            time.perf_counter() - t_all_start,
+        )
         return results
     finally:
         conn.close()

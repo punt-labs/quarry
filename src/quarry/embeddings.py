@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -139,15 +140,16 @@ class OnnxEmbeddingBackend:
                 n_batches,
             )
 
+        t_total_start = time.perf_counter()
         parts: list[NDArray[np.float32]] = []
         for i in range(n_batches):
             batch = texts[i * _EMBED_BATCH_SIZE : (i + 1) * _EMBED_BATCH_SIZE]
+            t_batch_start = time.perf_counter()
             encodings = self._tokenizer.encode_batch(batch)
             input_ids = np.array([e.ids for e in encodings], dtype=np.int64)
             attention_mask = np.array(
                 [e.attention_mask for e in encodings], dtype=np.int64
             )
-
             _token_embeddings, sentence_embedding = self._session.run(
                 None,
                 {
@@ -155,8 +157,23 @@ class OnnxEmbeddingBackend:
                     "attention_mask": attention_mask,
                 },
             )
+            t_batch_elapsed = time.perf_counter() - t_batch_start
             parts.append(np.asarray(sentence_embedding, dtype=np.float32))
-            logger.debug("Embedded batch %d/%d", i + 1, n_batches)
+            logger.debug(
+                "embedding: batch %d/%d (%d texts) in %.2fs",
+                i + 1,
+                n_batches,
+                len(batch),
+                t_batch_elapsed,
+            )
+
+        t_total_elapsed = time.perf_counter() - t_total_start
+        logger.info(
+            "embedding: %d texts in %.2fs (%.1f texts/s)",
+            n,
+            t_total_elapsed,
+            n / t_total_elapsed if t_total_elapsed > 0 else float("inf"),
+        )
 
         result: NDArray[np.float32] = np.concatenate(parts)
         return result

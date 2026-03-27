@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -1235,12 +1236,20 @@ def _chunk_embed_store(
 ) -> IngestResult:
     """Shared pipeline: chunk pages, embed, store in LanceDB."""
     progress("Chunking")
+    t0 = time.perf_counter()
     chunks = chunk_pages(
         pages,
         max_chars=settings.chunk_max_chars,
         overlap_chars=settings.chunk_overlap_chars,
         collection=collection,
         source_format=source_format,
+    )
+    t_chunk = time.perf_counter() - t0
+    logger.info(
+        "pipeline: chunked %d pages → %d chunks in %.2fs",
+        len(pages),
+        len(chunks),
+        t_chunk,
     )
     progress("Created %d chunks", len(chunks))
 
@@ -1249,10 +1258,21 @@ def _chunk_embed_store(
         embedder = get_embedding_backend(settings)
         progress("Generating embeddings (%s)", embedder.model_name)
         texts = [c.text for c in chunks]
+        t0 = time.perf_counter()
         vectors = embedder.embed_texts(texts)
+        t_embed = time.perf_counter() - t0
+        logger.info(
+            "pipeline: embedded %d chunks in %.2fs (%.1f chunks/s)",
+            len(chunks),
+            t_embed,
+            len(chunks) / t_embed if t_embed > 0 else float("inf"),
+        )
 
         progress("Storing in LanceDB")
+        t0 = time.perf_counter()
         inserted = insert_chunks(db, chunks, vectors)
+        t_store = time.perf_counter() - t0
+        logger.info("pipeline: stored %d chunks in %.2fs", inserted, t_store)
         progress("Done: %d chunks indexed from %s", inserted, document_name)
     else:
         progress("No text found — nothing to index")

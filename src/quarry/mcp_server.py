@@ -12,7 +12,7 @@ from mcp.server.fastmcp import FastMCP
 
 from quarry.backends import get_embedding_backend
 from quarry.collections import derive_collection
-from quarry.config import Settings, configure_logging, load_settings, resolve_db_paths
+from quarry.config import Settings, load_settings, resolve_db_paths
 from quarry.database import (
     count_chunks,
     delete_collection as db_delete_collection,
@@ -34,6 +34,7 @@ from quarry.formatting import (
     format_status,
     format_switch_summary,
 )
+from quarry.logging_config import configure_logging
 from quarry.pipeline import (
     ingest_auto as pipeline_ingest_auto,
     ingest_content as pipeline_ingest_content,
@@ -55,7 +56,7 @@ if TYPE_CHECKING:
     )
     from mcp.shared.message import SessionMessage
 
-configure_logging(load_settings())
+configure_logging(stderr_level="INFO")
 logger = logging.getLogger(__name__)
 
 mcp = FastMCP(

@@ -21,6 +21,8 @@ import contextlib
 import logging
 import shutil
 import sqlite3
+import subprocess
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -583,13 +585,64 @@ def _archive_transcript(
                 f.unlink()
 
 
+def _spawn_background_ingest(
+    text_file: Path,
+    text: str,
+    document_name: str,
+    collection: str,
+    lancedb_path: Path,
+    session_prefix: str,
+) -> bool:
+    """Write text to a temp file and spawn detached ingestion process.
+
+    Uses ``sys.executable`` to avoid PATH trust issues (same pattern as
+    ``_sync_in_background``).  Redirects stdin/stdout/stderr to DEVNULL;
+    the subprocess calls ``configure_logging()`` itself, so the rotating
+    file handler captures all diagnostics.
+
+    Returns True on success, False if the spawn failed (temp file cleaned up).
+    """
+    try:
+        text_file.write_text(text)
+    except OSError:
+        logger.exception("pre-compact: failed to write temp file %s", text_file)
+        text_file.unlink(missing_ok=True)
+        return False
+
+    try:
+        subprocess.Popen(  # noqa: S603
+            [
+                sys.executable,
+                "-m",
+                "quarry._hook_entry",
+                "ingest-background",
+                str(text_file),
+                document_name,
+                collection,
+                str(lancedb_path),
+                session_prefix,
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError:
+        logger.exception("pre-compact: failed to spawn background ingest")
+        text_file.unlink(missing_ok=True)
+        return False
+
+    logger.info("pre-compact: spawned background ingest for %s", document_name)
+    return True
+
+
 def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
     """Handle PreCompact hook.
 
-    Reads the conversation transcript before compaction and ingests it
-    as a searchable document in the ``session-notes`` collection.
-    Each compaction creates a new document keyed by session ID and
-    timestamp.
+    Reads the conversation transcript before compaction, writes the
+    extracted text to a temp file, and spawns a background process to
+    ingest it.  Returns the systemMessage immediately so compaction
+    is never blocked by embedding work.
     """
     cwd_obj = payload.get("cwd")
     cwd = cwd_obj if isinstance(cwd_obj, str) else ""
@@ -623,53 +676,37 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
         logger.debug("pre-compact: no conversation text found")
         return {}
 
-    # Heavy imports deferred past early-return guards.
     from datetime import UTC, datetime  # noqa: PLC0415
 
-    from quarry.database import delete_document, get_db, list_documents  # noqa: PLC0415
-    from quarry.pipeline import ingest_content  # noqa: PLC0415
-
     collection = _collection_for_cwd(cwd) or _SESSION_NOTES_FALLBACK
-
     settings = _resolve_settings()
-    db = get_db(settings.lancedb_path)
-
-    # Deduplicate: remove prior captures for this session in this collection.
-    try:
-        prefix = f"session-{session_id[:8]}-"
-        existing = list_documents(db, collection_filter=collection)
-        prior = [doc for doc in existing if doc["document_name"].startswith(prefix)]
-        for doc in prior:
-            delete_document(db, doc["document_name"], collection=collection)
-        if prior:
-            logger.info(
-                "pre-compact: deleted %d prior capture(s) for session %s",
-                len(prior),
-                session_id[:8],
-            )
-    except Exception:
-        logger.exception("pre-compact: dedup failed, proceeding with ingest")
 
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
     document_name = f"session-{session_id[:8]}-{timestamp}"
 
-    result = ingest_content(
+    # Write extracted text and spawn background ingestion.
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    text_file = sessions_dir / f"{document_name}.txt"
+    if not _spawn_background_ingest(
+        text_file,
         text,
         document_name,
-        db,
-        settings,
-        collection=collection,
-        format_hint="markdown",
-    )
-    logger.info(
-        "pre-compact: captured %s (%d chunks, %d chars)",
-        document_name,
-        result["chunks"],
-        len(text),
-    )
+        collection,
+        settings.lancedb_path,
+        session_id[:8],
+    ):
+        return {
+            "systemMessage": (
+                "Warning: session transcript capture failed. "
+                "The raw JSONL archive is still available in "
+                "~/.punt-labs/quarry/sessions/."
+            ),
+        }
+
     return {
         "systemMessage": (
-            f"Session transcript captured in quarry ({result['chunks']} chunks). "
-            "Prior conversations are searchable via /find."
+            f'Capturing conversation as "{document_name}" '
+            f'in collection "{collection}" (background). '
+            "Search with /find or show to retrieve context."
         ),
     }

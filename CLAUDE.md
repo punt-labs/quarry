@@ -102,6 +102,24 @@ Match the workflow to the bead's scope. The deciding factor is **design ambiguit
 
 **Ralph-loop** is a tool *within* tiers, not a tier itself. Use it in any tier when a sub-task has clear, testable success criteria and may need iteration.
 
+### Delegation Discipline
+
+The COO does not write code. All code changes — initial implementation, review-cycle fixes, lint fixes, test updates — are delegated to specialist agents:
+
+| Specialist | Agent | Domain |
+|-----------|-------|--------|
+| Raymond H | `rmh` | Python implementation |
+| Brian K | `bwk` | Go implementation |
+| Dan B | `djb` | Security review |
+| Doug M | `mdm` | CLI design |
+
+**Workflow**: spec → delegate → review → fix-spec → delegate → review → ship.
+
+- Write detailed specs: files to read, files to modify, acceptance criteria.
+- After code review agents report findings, consolidate into a fix spec and send back to the implementation agent. Do not apply fixes yourself.
+- There is no threshold below which a code change is "too small to delegate."
+- The only files the COO edits directly: `CHANGELOG.md`, `CLAUDE.md`, `DESIGN.md`, `README.md`, memory files, plan files.
+
 ### GitHub Operations
 
 Use the GitHub MCP server tools for all GitHub operations: creating PRs, merging PRs, reading PR status/diff/comments, creating/reading issues, searching, and managing releases. When GitHub MCP is unavailable, the `gh` CLI is acceptable.
