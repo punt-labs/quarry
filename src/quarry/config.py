@@ -1,4 +1,4 @@
-"""Application settings and logging configuration.
+"""Application settings.
 
 Settings are grouped by concern: LanceDB paths, embedding model,
 and chunking params.
@@ -6,9 +6,7 @@ and chunking params.
 
 from __future__ import annotations
 
-import logging
 import tomllib
-from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from pydantic_settings import BaseSettings
@@ -28,7 +26,6 @@ class Settings(BaseSettings):
     registry_path: Path = (
         Path.home() / ".punt-labs" / "quarry" / "data" / "default" / "registry.db"
     )
-    log_path: Path = Path.home() / ".punt-labs" / "quarry" / "logs" / "quarry.log"
     embedding_model: str = "Snowflake/snowflake-arctic-embed-m-v1.5"
     embedding_dimension: int = 768
 
@@ -104,31 +101,3 @@ def write_default_db(name: str) -> None:
 def load_settings() -> Settings:
     """Load application settings. Creates a fresh instance each call (no caching)."""
     return Settings()
-
-
-def configure_logging(settings: Settings) -> None:
-    """Set up root logger with stderr and file handlers at INFO level.
-
-    Idempotent: returns early if root logger already has handlers.
-    """
-    root = logging.getLogger()
-    if root.handlers:
-        return
-    settings.log_path.parent.mkdir(parents=True, exist_ok=True)
-    root.setLevel(logging.INFO)
-
-    fmt = logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s")
-
-    stderr_handler = logging.StreamHandler()
-    stderr_handler.setLevel(logging.INFO)
-    stderr_handler.setFormatter(fmt)
-    root.addHandler(stderr_handler)
-
-    file_handler = RotatingFileHandler(
-        settings.log_path,
-        maxBytes=5_000_000,  # 5 MB per file
-        backupCount=3,  # keep quarry.log.1, .2, .3
-    )
-    file_handler.setLevel(logging.INFO)
-    file_handler.setFormatter(fmt)
-    root.addHandler(file_handler)

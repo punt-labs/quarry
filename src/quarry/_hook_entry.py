@@ -90,8 +90,10 @@ def _ingest_background() -> None:
     text_file_path, document_name, collection, lancedb_path, session_prefix = args
     text_file = Path(text_file_path)
 
-    # Configure logging so output reaches stderr (parent routes to ingest.log).
-    logging.basicConfig(level=logging.INFO, stream=sys.stderr)
+    # Detached subprocess: configure its own logging per the standard.
+    from quarry.logging_config import configure_logging as _configure  # noqa: PLC0415
+
+    _configure(stderr_level="WARNING")
 
     try:
         text = text_file.read_text()

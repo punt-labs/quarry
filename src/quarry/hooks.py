@@ -592,14 +592,13 @@ def _spawn_background_ingest(
     collection: str,
     lancedb_path: Path,
     session_prefix: str,
-    sessions_dir: Path,
 ) -> bool:
     """Write text to a temp file and spawn detached ingestion process.
 
     Uses ``sys.executable`` to avoid PATH trust issues (same pattern as
-    ``_sync_in_background``).  Redirects stdin to DEVNULL to prevent
-    holding Claude Code's stdin pipe open.  stderr goes to a log file
-    for post-mortem diagnostics.
+    ``_sync_in_background``).  Redirects stdin/stdout/stderr to DEVNULL;
+    the subprocess calls ``configure_logging()`` itself, so the rotating
+    file handler captures all diagnostics.
 
     Returns True on success, False if the spawn failed (temp file cleaned up).
     """
@@ -607,14 +606,9 @@ def _spawn_background_ingest(
         text_file.write_text(text)
     except OSError:
         logger.exception("pre-compact: failed to write temp file %s", text_file)
+        text_file.unlink(missing_ok=True)
         return False
 
-    log_file = sessions_dir / "ingest.log"
-    try:
-        log_fh = log_file.open("a")
-    except OSError:
-        logger.warning("pre-compact: could not open %s for stderr logging", log_file)
-        log_fh = None
     try:
         subprocess.Popen(  # noqa: S603
             [
@@ -630,16 +624,13 @@ def _spawn_background_ingest(
             ],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
-            stderr=log_fh if log_fh else subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
     except OSError:
         logger.exception("pre-compact: failed to spawn background ingest")
         text_file.unlink(missing_ok=True)
         return False
-    finally:
-        if log_fh:
-            log_fh.close()
 
     logger.info("pre-compact: spawned background ingest for %s", document_name)
     return True
@@ -703,7 +694,6 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
         collection,
         settings.lancedb_path,
         session_id[:8],
-        sessions_dir,
     ):
         return {
             "systemMessage": (
