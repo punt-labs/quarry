@@ -17,6 +17,7 @@ across `transform`, `index`, and `connector`).
 ### Fixed
 
 - **Pre-compact deduplication** — each compaction now deletes prior captures for the same session before ingesting the new transcript. Previously, repeated compactions accumulated redundant documents (session 64b2aacf had 14 copies). Dedup is fault-tolerant: failures log and proceed with ingestion.
+- **Enhanced transcript extraction** — short tool results (<= 500 chars) are now included in pre-compact captures, prefixed with `[tool_result]`. Long tool results and tool_use blocks remain excluded. Truncation now drops oldest content first (front-truncation), keeping the most recent conversation.
 
 ### Changed
 
