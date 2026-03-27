@@ -561,14 +561,16 @@ def _archive_transcript(
 
     prefix = f"session-{session_id[:8]}-"
 
-    # Dedup: remove prior archives for this session.
-    for existing in sessions_dir.glob(f"{prefix}*.jsonl"):
-        with contextlib.suppress(OSError):
-            existing.unlink()
-
+    # Copy first — prior archives survive if this fails.
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
     dest = sessions_dir / f"{prefix}{timestamp}.jsonl"
     shutil.copy(transcript_path, dest)
+
+    # Then dedup: remove prior archives, excluding the one we just wrote.
+    for existing in sessions_dir.glob(f"{prefix}*.jsonl"):
+        if existing != dest:
+            with contextlib.suppress(OSError):
+                existing.unlink()
 
     # Lazy retention cleanup.
     now = datetime.now(UTC).timestamp()
