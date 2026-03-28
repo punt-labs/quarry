@@ -81,3 +81,4 @@ prfaq*.run.xml
 # Local uv overrides (depot find-links, etc.)
 uv.toml
 /Lux.ini
+.envrc.local
