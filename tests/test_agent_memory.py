@@ -535,7 +535,7 @@ class TestTemporalDecay:
                 source_format=".pdf",
                 ingestion_timestamp=old_ts,
                 agent_handle="rmh",
-                memory_type="episodic",
+                memory_type="fact",
             ),
             Chunk(
                 document_name="test.pdf",
@@ -550,7 +550,7 @@ class TestTemporalDecay:
                 source_format=".pdf",
                 ingestion_timestamp=now,
                 agent_handle="rmh",
-                memory_type="episodic",
+                memory_type="fact",
             ),
         ]
         vectors = _random_vectors(2)
@@ -568,8 +568,8 @@ class TestTemporalDecay:
         # Recent chunk (index 1) should outrank old chunk (index 0)
         assert int(str(results[0]["chunk_index"])) == 1
 
-    def test_decay_exempts_empty_agent_handle(self, tmp_path: Path) -> None:
-        """Rows with empty agent_handle get weight=1.0 regardless of decay_rate."""
+    def test_decay_exempts_empty_memory_type(self, tmp_path: Path) -> None:
+        """Rows with empty memory_type (documents, expertise) are exempt from decay."""
         db = get_db(tmp_path / "db")
         now = datetime.now(tz=UTC)
         old_ts = now - timedelta(days=30)

@@ -315,6 +315,9 @@ def _temporal_weight(
 
 
 _RowKey = tuple[str, int, int]
+_DECAYABLE_TYPES: frozenset[str] = frozenset(
+    {"fact", "observation", "opinion", "procedure"}
+)
 
 
 def _row_key(row: dict[str, object]) -> _RowKey:
@@ -341,8 +344,8 @@ def _fuse_rrf(
 
     for rank, row in enumerate(vec_results):
         key = _row_key(row)
-        agent_handle = str(row.get("agent_handle", ""))
-        if decay_rate > 0 and agent_handle:
+        memory_type = str(row.get("memory_type", ""))
+        if decay_rate > 0 and memory_type in _DECAYABLE_TYPES:
             ts = row.get("ingestion_timestamp", "")
             weight = _temporal_weight(ts, now_ts, decay_rate)
         else:
@@ -353,8 +356,8 @@ def _fuse_rrf(
 
     for rank, row in enumerate(fts_results):
         key = _row_key(row)
-        agent_handle = str(row.get("agent_handle", ""))
-        if decay_rate > 0 and agent_handle:
+        memory_type = str(row.get("memory_type", ""))
+        if decay_rate > 0 and memory_type in _DECAYABLE_TYPES:
             ts = row.get("ingestion_timestamp", "")
             weight = _temporal_weight(ts, now_ts, decay_rate)
         else:
