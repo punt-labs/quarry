@@ -76,24 +76,47 @@ def _migrate_schema(table: LanceTable) -> None:
 
     Idempotent — checks the table schema before adding each column.
     Called on every table open so pre-existing databases gain new columns
-    transparently.
+    transparently.  Logs a warning on failure so the caller can proceed
+    with the existing schema.
     """
     existing = {field.name for field in table.schema}
     missing = {
         col: expr for col, expr in _MIGRATION_COLUMNS.items() if col not in existing
     }
     if missing:
-        table.add_columns(missing)
+        try:
+            table.add_columns(missing)
+        except (OSError, RuntimeError, ValueError):
+            logger.warning(
+                "Schema migration failed for columns %s",
+                sorted(missing),
+                exc_info=True,
+            )
+            return
         logger.info("Migrated schema: added columns %s", sorted(missing))
 
 
 def _ensure_fts_index(table: LanceTable) -> None:
-    """Create a Tantivy full-text search index on the text column.
+    """Create a Tantivy full-text search index on the text column if missing.
 
-    Uses replace=True so it is safe to call repeatedly.
+    Uses replace=False and catches the "already exists" error so this is
+    safe to call repeatedly without rebuilding the entire index each time.
+    Logs a warning on unexpected failures so callers can fall back to
+    vector-only search.
     """
-    table.create_fts_index("text", replace=True)
-    logger.info("Ensured FTS index on text column")
+    try:
+        table.create_fts_index("text", replace=False)
+        logger.info("Created FTS index on text column")
+    except (OSError, RuntimeError, ValueError) as exc:
+        # LanceDB raises when the index already exists.  Any message
+        # containing "already" is the expected idempotent case.
+        if "already" in str(exc).lower():
+            logger.debug("FTS index already exists, skipping creation")
+        else:
+            logger.warning(
+                "FTS index creation failed; hybrid search will use vector-only",
+                exc_info=True,
+            )
 
 
 def ensure_schema(db: LanceDB) -> None:
@@ -134,13 +157,11 @@ def _get_or_create_table(
     if TABLE_NAME in db.list_tables().tables:
         table = db.open_table(TABLE_NAME)
         _migrate_schema(table)
-        _ensure_fts_index(table)
         return table
     with _table_lock:
         if TABLE_NAME in db.list_tables().tables:
             table = db.open_table(TABLE_NAME)
             _migrate_schema(table)
-            _ensure_fts_index(table)
             return table
         table = db.create_table(TABLE_NAME, data=records, schema=_schema())
         _ensure_fts_index(table)
@@ -272,16 +293,24 @@ def _temporal_weight(
 ) -> float:
     """Compute exponential temporal decay weight for a row.
 
-    Returns 1.0 when decay_rate is 0 (no decay).
+    Returns 1.0 when decay_rate is 0 (no decay) or when the timestamp
+    cannot be parsed.  Naive datetimes are treated as UTC.
     """
     if decay_rate <= 0:
         return 1.0
-    from datetime import datetime  # noqa: PLC0415
+    from datetime import UTC, datetime  # noqa: PLC0415
 
-    if isinstance(timestamp, datetime):
-        row_ts = timestamp.timestamp()
-    else:
-        row_ts = datetime.fromisoformat(str(timestamp)).timestamp()
+    try:
+        if isinstance(timestamp, datetime):
+            ts = timestamp
+        else:
+            ts = datetime.fromisoformat(str(timestamp))
+        # Treat naive datetimes as UTC.
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=UTC)
+        row_ts = ts.timestamp()
+    except (ValueError, TypeError, OverflowError):
+        return 1.0
     hours = max(0.0, (now_ts - row_ts) / 3600)
     return math.exp(-decay_rate * hours)
 
@@ -292,9 +321,9 @@ _RowKey = tuple[str, int, int]
 def _row_key(row: dict[str, object]) -> _RowKey:
     """Deduplication key for a chunk row."""
     return (
-        str(row["document_name"]),
-        int(str(row["chunk_index"])),
-        int(str(row["page_number"])),
+        str(row.get("document_name", "")),
+        int(str(row.get("chunk_index", 0))),
+        int(str(row.get("page_number", 0))),
     )
 
 
@@ -332,7 +361,11 @@ def _fuse_rrf(
     results: list[SearchResult] = []
     for key, score in ranked:
         row = all_rows[key]
-        row["_distance"] = 1.0 - score
+        # Preserve the original vector distance when available; FTS-only
+        # results (no vector channel hit) get _distance 0.0.
+        if "_distance" not in row:
+            row["_distance"] = 0.0
+        row["rrf_score"] = score
         results.append(cast("SearchResult", row))
 
     logger.debug(
@@ -411,7 +444,7 @@ def hybrid_search(
         fts_results = fts_query.to_list()
     except (OSError, ValueError, RuntimeError):
         # FTS index may not exist on legacy tables; fall back to vector-only
-        logger.debug("FTS search failed, using vector-only results")
+        logger.warning("FTS search failed, using vector-only results", exc_info=True)
 
     return _fuse_rrf(vec_results, fts_results, limit, decay_rate)
 

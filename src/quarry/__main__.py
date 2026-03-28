@@ -211,6 +211,9 @@ def ingest_cmd(
                 overwrite=overwrite,
                 collection=collection,
                 progress_callback=cb,
+                agent_handle=agent_handle,
+                memory_type=memory_type,
+                summary=summary,
             )
 
         _emit(result, json.dumps(result, indent=2))

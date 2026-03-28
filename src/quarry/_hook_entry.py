@@ -73,6 +73,8 @@ def _ingest_background() -> None:
         lancedb_path: Path to the LanceDB database.
         session_prefix: First 8 chars of session ID (for dedup).
         agent_handle: Agent handle from ethos sidecar (optional, may be empty).
+        memory_type: Memory classification (optional, may be empty).
+        summary: One-line summary of the content (optional, may be empty).
     """
     import logging  # noqa: PLC0415
     from pathlib import Path  # noqa: PLC0415
@@ -80,13 +82,14 @@ def _ingest_background() -> None:
     logger = logging.getLogger(__name__)
 
     min_arg_count = 5
-    max_arg_count = 6
+    max_arg_count = 8
     args = sys.argv[2:]
     if not (min_arg_count <= len(args) <= max_arg_count):
         sys.exit(
             "Usage: quarry-hook ingest-background"
             " <text_file> <doc_name> <collection>"
-            " <lancedb_path> <session_prefix> [agent_handle]"
+            " <lancedb_path> <session_prefix>"
+            " [agent_handle] [memory_type] [summary]"
         )
 
     text_file_path = args[0]
@@ -95,6 +98,8 @@ def _ingest_background() -> None:
     lancedb_path = args[3]
     session_prefix = args[4]
     agent_handle = args[5] if len(args) > 5 else ""
+    memory_type = args[6] if len(args) > 6 else ""
+    summary = args[7] if len(args) > 7 else ""
     text_file = Path(text_file_path)
 
     # Detached subprocess: configure its own logging per the standard.
@@ -151,6 +156,8 @@ def _ingest_background() -> None:
                 collection=collection,
                 format_hint="markdown",
                 agent_handle=agent_handle,
+                memory_type=memory_type,
+                summary=summary,
             )
             logger.info(
                 "ingest-background: captured %s (%d chunks, %d chars)",

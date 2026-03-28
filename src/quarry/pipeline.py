@@ -903,6 +903,9 @@ def ingest_url(
     document_name: str | None = None,
     timeout: int = 30,
     progress_callback: Callable[[str], None] | None = None,
+    agent_handle: str = "",
+    memory_type: str = "",
+    summary: str = "",
 ) -> IngestResult:
     """Fetch a URL, extract text from HTML, chunk, embed, store.
 
@@ -944,6 +947,9 @@ def ingest_url(
         collection=collection,
         source_format=".html",
         sections=len(pages),
+        agent_handle=agent_handle,
+        memory_type=memory_type,
+        summary=summary,
     )
 
 
@@ -957,6 +963,9 @@ def _ingest_url_with_delay(
     document_name: str | None,
     timeout: int,
     delay: float,
+    agent_handle: str = "",
+    memory_type: str = "",
+    summary: str = "",
 ) -> IngestResult:
     """Ingest a single URL with a pre-fetch delay to avoid rate limiting.
 
@@ -977,6 +986,9 @@ def _ingest_url_with_delay(
         collection=collection,
         document_name=document_name,
         timeout=timeout,
+        agent_handle=agent_handle,
+        memory_type=memory_type,
+        summary=summary,
     )
 
 
@@ -995,6 +1007,9 @@ def _bulk_ingest_entries(
     delay: float = 0.5,
     timeout: int = 30,
     progress: Callable[..., None],
+    agent_handle: str = "",
+    memory_type: str = "",
+    summary: str = "",
 ) -> SitemapResult:
     """Filter, dedup, and parallel-ingest a list of sitemap entries.
 
@@ -1061,6 +1076,9 @@ def _bulk_ingest_entries(
                     document_name=doc_name,
                     timeout=timeout,
                     delay=delay,
+                    agent_handle=agent_handle,
+                    memory_type=memory_type,
+                    summary=summary,
                 ): page_url
                 for page_url, doc_name in to_ingest
             }
@@ -1114,6 +1132,9 @@ def ingest_sitemap(
     delay: float = 0.5,
     timeout: int = 30,
     progress_callback: Callable[[str], None] | None = None,
+    agent_handle: str = "",
+    memory_type: str = "",
+    summary: str = "",
 ) -> SitemapResult:
     """Crawl a sitemap and ingest all discovered URLs.
 
@@ -1166,6 +1187,9 @@ def ingest_sitemap(
         delay=delay,
         timeout=timeout,
         progress=progress,
+        agent_handle=agent_handle,
+        memory_type=memory_type,
+        summary=summary,
     )
 
 
@@ -1180,6 +1204,9 @@ def ingest_auto(
     delay: float = 0.5,
     timeout: int = 30,
     progress_callback: Callable[[str], None] | None = None,
+    agent_handle: str = "",
+    memory_type: str = "",
+    summary: str = "",
 ) -> IngestResult | SitemapResult:
     """Smart URL ingestion: discover sitemap, crawl if found, else single page.
 
@@ -1236,6 +1263,9 @@ def ingest_auto(
             delay=delay,
             timeout=timeout,
             progress_callback=progress_callback,
+            agent_handle=agent_handle,
+            memory_type=memory_type,
+            summary=summary,
         )
 
     progress("Discovering sitemaps for %s://%s", parsed.scheme, parsed.netloc)
@@ -1255,6 +1285,9 @@ def ingest_auto(
             collection=collection,
             timeout=timeout,
             progress_callback=progress_callback,
+            agent_handle=agent_handle,
+            memory_type=memory_type,
+            summary=summary,
         )
 
     progress("Discovered %d pages via sitemap", len(entries))
@@ -1277,6 +1310,9 @@ def ingest_auto(
         delay=delay,
         timeout=timeout,
         progress=progress,
+        agent_handle=agent_handle,
+        memory_type=memory_type,
+        summary=summary,
     )
 
 

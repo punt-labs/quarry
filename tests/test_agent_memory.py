@@ -40,7 +40,7 @@ def _make_chunk(
 ) -> Chunk:
     return Chunk(
         document_name=document_name,
-        document_path="/tmp/test.pdf",
+        document_path=".tmp/test.pdf",
         collection=collection,
         page_number=1,
         total_pages=1,
@@ -90,7 +90,7 @@ def _create_legacy_table(db_path: Path) -> None:
         "text": "legacy data",
         "vector": vec,
         "document_name": "old.pdf",
-        "document_path": "/tmp/old.pdf",
+        "document_path": ".tmp/old.pdf",
         "collection": "default",
         "page_number": 1,
         "total_pages": 1,
@@ -303,7 +303,7 @@ class TestChunkerThreading:
         pages = [
             PageContent(
                 document_name="test.md",
-                document_path="/tmp/test.md",
+                document_path=".tmp/test.md",
                 page_number=1,
                 total_pages=1,
                 text="Some test content for chunking.",
@@ -329,7 +329,7 @@ class TestChunkerThreading:
         pages = [
             PageContent(
                 document_name="test.md",
-                document_path="/tmp/test.md",
+                document_path=".tmp/test.md",
                 page_number=1,
                 total_pages=1,
                 text="Some test content.",
@@ -524,7 +524,7 @@ class TestTemporalDecay:
         chunks = [
             Chunk(
                 document_name="test.pdf",
-                document_path="/tmp/test.pdf",
+                document_path=".tmp/test.pdf",
                 collection="default",
                 page_number=1,
                 total_pages=1,
@@ -537,7 +537,7 @@ class TestTemporalDecay:
             ),
             Chunk(
                 document_name="test.pdf",
-                document_path="/tmp/test.pdf",
+                document_path=".tmp/test.pdf",
                 collection="default",
                 page_number=1,
                 total_pages=1,
@@ -675,8 +675,10 @@ class TestPreCompactEthosTagging:
             )
 
         args = mock_popen.call_args[0][0]
-        # agent_handle is the last argument
-        assert args[-1] == "claude"
+        # Last three args: agent_handle, memory_type, summary.
+        assert args[-3] == "claude"
+        assert args[-2] == ""
+        assert args[-1] == ""
 
     def test_empty_handle_when_no_ethos(self, tmp_path: Path) -> None:
         """PreCompact passes empty agent_handle when no ethos config."""
@@ -707,4 +709,82 @@ class TestPreCompactEthosTagging:
             )
 
         args = mock_popen.call_args[0][0]
-        assert args[-1] == ""
+        # Last three args: agent_handle, memory_type, summary — all empty.
+        assert args[-3:] == ["", "", ""]
+
+
+# ── New regression tests ─────────────────────────────────────────────
+
+
+class TestIngestUrlThreadsAgentHandle:
+    def test_ingest_url_passes_agent_handle(self) -> None:
+        """ingest_url threads agent_handle/memory_type/summary to _chunk_embed_store."""
+        from unittest.mock import MagicMock
+
+        from quarry.pipeline import ingest_url
+
+        html = "<html><body>hi</body></html>"
+        result = {
+            "document_name": "x",
+            "collection": "c",
+            "chunks": 0,
+        }
+        with (
+            patch("quarry.pipeline._fetch_url", return_value=html),
+            patch("quarry.pipeline.process_html_text", return_value=[]),
+            patch("quarry.pipeline._chunk_embed_store") as mock_ces,
+            patch("quarry.pipeline.delete_document"),
+        ):
+            mock_ces.return_value = result
+            ingest_url(
+                "https://example.com",
+                MagicMock(),
+                MagicMock(),
+                agent_handle="rmh",
+                memory_type="fact",
+                summary="test summary",
+            )
+            _, kwargs = mock_ces.call_args
+            assert kwargs["agent_handle"] == "rmh"
+            assert kwargs["memory_type"] == "fact"
+            assert kwargs["summary"] == "test summary"
+
+
+class TestTemporalWeightEdgeCases:
+    def test_empty_timestamp_returns_one(self) -> None:
+        """_temporal_weight returns 1.0 for empty/unparseable timestamps."""
+        from datetime import UTC, datetime
+
+        now = datetime.now(tz=UTC).timestamp()
+        assert _temporal_weight("", now, 0.01) == 1.0
+        assert _temporal_weight(None, now, 0.01) == 1.0
+        assert _temporal_weight("not-a-date", now, 0.01) == 1.0
+
+    def test_naive_datetime_treated_as_utc(self) -> None:
+        """_temporal_weight treats naive datetimes as UTC (no crash)."""
+        from datetime import datetime, timedelta
+
+        now_utc = datetime(2026, 1, 1, 12, 0, 0)
+        naive_ts = now_utc - timedelta(hours=10)
+        # Should not crash and should produce a valid weight < 1.0.
+        from datetime import UTC
+
+        now_aware = now_utc.replace(tzinfo=UTC)
+        weight = _temporal_weight(naive_ts, now_aware.timestamp(), 0.01)
+        assert 0 < weight < 1.0
+
+
+class TestRowKeyMissingFields:
+    def test_missing_fields_no_crash(self) -> None:
+        """_row_key returns defaults when dict keys are missing."""
+        from quarry.database import _row_key
+
+        key = _row_key({})
+        assert key == ("", 0, 0)
+
+    def test_partial_fields(self) -> None:
+        """_row_key handles partial dict without crashing."""
+        from quarry.database import _row_key
+
+        key = _row_key({"document_name": "doc.pdf"})
+        assert key == ("doc.pdf", 0, 0)

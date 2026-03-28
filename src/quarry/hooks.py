@@ -423,6 +423,7 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
 
     if result is None:
         # Fallback: re-fetch if tool_response is missing/empty/boilerplate.
+        # No agent memory fields for auto-ingested web fetches.
         result = ingest_url(
             url,
             db,
@@ -453,9 +454,10 @@ def _read_ethos_agent_handle(cwd: str) -> str:
             try:
                 data = _yaml.safe_load(config_path.read_text())
             except (OSError, _yaml.YAMLError):
-                logger.debug(
+                logger.warning(
                     "pre-compact: could not parse ethos config %s",
                     config_path,
+                    exc_info=True,
                 )
                 return ""
             if isinstance(data, dict):
@@ -626,6 +628,8 @@ def _spawn_background_ingest(
     lancedb_path: Path,
     session_prefix: str,
     agent_handle: str = "",
+    memory_type: str = "",
+    summary: str = "",
 ) -> bool:
     """Write text to a temp file and spawn detached ingestion process.
 
@@ -656,6 +660,8 @@ def _spawn_background_ingest(
                 str(lancedb_path),
                 session_prefix,
                 agent_handle,
+                memory_type,
+                summary,
             ],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
