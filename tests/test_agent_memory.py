@@ -669,6 +669,12 @@ class TestReadEthosAgentHandle:
         """Returns empty string when no ethos config exists."""
         from quarry.hooks import _read_ethos_agent_handle
 
+        # tmp_path is inside the quarry repo (.tmp/pytest-...), so the
+        # upward walk finds the real ethos config. Create a dummy
+        # config.yaml without an 'agent' field to stop the walk here.
+        ethos_dir = tmp_path / ".punt-labs" / "ethos"
+        ethos_dir.mkdir(parents=True)
+        (ethos_dir / "config.yaml").write_text("{}")
         assert _read_ethos_agent_handle(str(tmp_path)) == ""
 
     def test_walks_up_to_find_config(self, tmp_path: Path) -> None:
