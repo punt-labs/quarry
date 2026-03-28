@@ -402,8 +402,8 @@ overridable with \texttt{-{}-port}.
 \midrule
 \texttt{/health}      & GET & \texttt{\{"status":"ok",
   "uptime\_seconds":N\}} & No \\
-\texttt{/search}      & GET & Hybrid search (vector + BM25 FTS when agent\_handle provided)
-  (\field{q}, \field{limit}, \field{collection}) & Yes \\
+\texttt{/search}      & GET & Vector-only search
+  (\field{q}, \field{limit}, \field{collection}, \field{page\_type}, \field{source\_format}) & Yes \\
 \texttt{/documents}   & GET & List indexed documents & Yes \\
 \texttt{/collections} & GET & List collections & Yes \\
 \texttt{/status}      & GET & Database statistics & Yes \\

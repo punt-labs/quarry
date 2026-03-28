@@ -3,8 +3,8 @@
 > **Status: Implemented.** The strategies described below are now live in quarry.
 > Tag memories with `quarry ingest file.md --agent-handle claude --memory-type fact`.
 > Filter with `quarry find "query" --agent-handle claude --memory-type procedure`.
-> Hybrid search (vector + BM25 via RRF) activates automatically when `agent_handle` is provided.
-> See `docs/architecture.tex` Section 6 for technical details.
+> Hybrid search (vector + BM25 via RRF) is used for all `find` calls.
+> See `docs/architecture.tex` Section 8 for technical details.
 
 ## The Problem
 

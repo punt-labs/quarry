@@ -22,7 +22,7 @@ These are the tools you call directly. Read-only tools are synchronous; write to
 
 | Tool | Purpose | Execution |
 |------|---------|-----------|
-| `find` | Semantic search with optional filters (collection, document_filter, page_type, source_format) (supports agent_handle, memory_type filters for agent-scoped search) | Sync |
+| `find` | Hybrid search (vector + BM25 via RRF) with optional filters (collection, document_filter, page_type, source_format, agent_handle, memory_type) | Sync |
 | `show` | Retrieve document metadata or a specific page's full text | Sync |
 | `list` | List documents, collections, databases, or registrations | Sync |
 | `status` | Database stats: doc/chunk counts, size, model info | Sync |

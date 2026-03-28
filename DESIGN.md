@@ -298,7 +298,7 @@ Benchmarked 6 configurations on two machines (M2 Air, AMD + RTX 5080):
 
 Dual-channel retrieval: vector similarity (existing ANN search) + BM25 full-text search (Tantivy via LanceDB native FTS). Results fused with Reciprocal Rank Fusion: `score[id] = Σ(1/(60 + rank))` across channels, weighted by temporal decay for agent-scoped memories.
 
-Hybrid search activates only when `agent_handle` is provided. Existing vector-only path unchanged (backwards compatible). FTS failures gracefully fall back to vector-only with a WARNING log.
+Hybrid search is used for all `find` calls regardless of whether `agent_handle` is provided. FTS failures gracefully fall back to vector-only with a WARNING log.
 
 ### Why This Design
 
