@@ -285,3 +285,58 @@ Benchmarked 6 configurations on two machines (M2 Air, AMD + RTX 5080):
 2. **int8 on CUDA** — Rejected for GPU deployment. The int8 quantized operators require 168 CPU↔GPU memory copies per inference, negating GPU acceleration. Only 18% faster than CPU despite having the GPU.
 3. **FP32 on CUDA** — Valid but suboptimal. FP16 is 1.9x faster with identical embedding quality for retrieval.
 4. **AWS SageMaker** — Previously rejected (DES-004 era). Network round-trip dominated; local CPU was faster.
+
+---
+
+## DES-017: Hybrid Search via BM25 + Vector + RRF
+
+**Date:** 2026-03-28
+**Status:** SETTLED
+**Topic:** How to retrieve agent memories and documents
+
+### Design
+
+Dual-channel retrieval: vector similarity (existing ANN search) + BM25 full-text search (Tantivy via LanceDB native FTS). Results fused with Reciprocal Rank Fusion: `score[id] = Σ(1/(60 + rank))` across channels, weighted by temporal decay for agent-scoped memories.
+
+Hybrid search is used for all `find` calls regardless of whether `agent_handle` is provided. FTS failures gracefully fall back to vector-only with a WARNING log.
+
+### Why This Design
+
+Vector search misses exact terms (proper nouns, code identifiers, jargon). BM25 catches keyword matches that embeddings miss. RRF fuses rankings without requiring score normalization across channels (~30 lines). Temporal decay (`exp(-decay_rate * hours)`) keeps recent agent observations relevant without losing stable reference material (unscoped documents exempt from decay).
+
+### Alternatives Considered
+
+1. **Vector-only with reranking** — Rejected. Reranking improves ordering but cannot surface documents the vector search missed entirely.
+2. **BM25-only** — Rejected. Loses semantic similarity for paraphrased queries.
+3. **Weighted linear combination** — Rejected. Requires normalizing scores across channels (cosine similarity vs BM25 are on different scales). RRF avoids this by using rank positions only.
+4. **Graph-based retrieval (Neo4j)** — Rejected. Overkill for local-only. Entity extraction + metadata filtering gives 80% of the benefit at 20% complexity.
+
+---
+
+## DES-018: Agent Memory Metadata Schema
+
+**Date:** 2026-03-28
+**Status:** SETTLED
+**Topic:** How to scope memories to agents and classify memory types
+
+### Design
+
+Three new columns on the LanceDB chunks table:
+
+| Column | Type | Default | Purpose |
+|--------|------|---------|---------|
+| `agent_handle` | utf8 | `""` | Which agent owns this memory (empty = unscoped) |
+| `memory_type` | utf8 | `""` | fact, observation, opinion, procedure (empty = document) |
+| `summary` | utf8 | `""` | One-line summary for lightweight search |
+
+Migration via `table.add_columns()` with empty-string defaults. Idempotent `_migrate_schema()` runs on every table open. Memory type taxonomy from the Hindsight architecture (91.4% on LongMemEval).
+
+### Why This Design
+
+Agent memories need scoping (rmh's memories shouldn't pollute bwk's searches) and classification (a "how do I deploy?" query should prefer procedures over facts). Empty defaults preserve backwards compatibility — existing unscoped documents gain the columns with no behavior change. Per-agent collections (`memory-claude`, `bwk-books`) provide isolation; the columns enable filtering within shared collections.
+
+### Alternatives Considered
+
+1. **Separate tables per agent** — Rejected. Complicates cross-agent search and increases table management overhead.
+2. **JSON metadata column** — Rejected. No SQL filtering, no type safety, harder to index.
+3. **Full entity extraction at ingestion** — Deferred to v2. Requires LLM pass per chunk (~1s each). The current schema supports it when added later.

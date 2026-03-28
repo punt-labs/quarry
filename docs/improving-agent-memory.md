@@ -1,5 +1,11 @@
 # Improving Agent Memory on LanceDB
 
+> **Status: Implemented.** The strategies described below are now live in quarry.
+> Tag memories with `quarry ingest file.md --agent-handle claude --memory-type fact`.
+> Filter with `quarry find "query" --agent-handle claude --memory-type procedure`.
+> Hybrid search (vector + BM25 via RRF) is used for all `find` calls.
+> See `docs/architecture.tex` Section 8 for technical details.
+
 ## The Problem
 
 You have an agent that needs to remember a large body of seeded knowledge and accumulate new memories as it works. Your current setup uses LanceDB with custom ingestion and recall. This document covers what the highest-performing memory systems do differently and how to apply those techniques locally, without remote API calls.

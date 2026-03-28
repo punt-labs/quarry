@@ -22,12 +22,12 @@ These are the tools you call directly. Read-only tools are synchronous; write to
 
 | Tool | Purpose | Execution |
 |------|---------|-----------|
-| `find` | Semantic search with optional filters (collection, document_filter, page_type, source_format) | Sync |
+| `find` | Hybrid search (vector + BM25 via RRF) with optional filters (collection, document_filter, page_type, source_format, agent_handle, memory_type) | Sync |
 | `show` | Retrieve document metadata or a specific page's full text | Sync |
 | `list` | List documents, collections, databases, or registrations | Sync |
 | `status` | Database stats: doc/chunk counts, size, model info | Sync |
-| `ingest` | Ingest a file or URL (auto-discovers sitemaps) | Background |
-| `remember` | Ingest inline text content with a document name | Background |
+| `ingest` | Ingest a file or URL (auto-discovers sitemaps) (supports agent_handle for expertise seeding) | Background |
+| `remember` | Ingest inline text content with a document name (supports agent_handle, memory_type, summary for memory tagging) | Background |
 | `delete` | Delete a document or collection | Background |
 | `register_directory` | Register a directory for incremental sync | Background |
 | `deregister_directory` | Remove a directory registration | Background |

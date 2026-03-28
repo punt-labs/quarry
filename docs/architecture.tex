@@ -9,6 +9,7 @@
 
 \documentclass[a4paper,10pt]{article}
 \usepackage[margin=1in]{geometry}
+\usepackage{amsmath}
 \usepackage{booktabs}
 \usepackage{listings}
 \usepackage{xcolor}
@@ -401,8 +402,8 @@ overridable with \texttt{-{}-port}.
 \midrule
 \texttt{/health}      & GET & \texttt{\{"status":"ok",
   "uptime\_seconds":N\}} & No \\
-\texttt{/search}      & GET & Semantic search
-  (\field{q}, \field{limit}, \field{collection}) & Yes \\
+\texttt{/search}      & GET & Vector-only search
+  (\field{q}, \field{limit}, \field{collection}, \field{page\_type}, \field{source\_format}) & Yes \\
 \texttt{/documents}   & GET & List indexed documents & Yes \\
 \texttt{/collections} & GET & List collections & Yes \\
 \texttt{/status}      & GET & Database statistics & Yes \\
@@ -538,6 +539,51 @@ changes semantic meaning enough to affect search ranking.
   \item \textbf{Use \texttt{-{}-overwrite} when re-ingesting.}
     Without it, duplicate chunks accumulate.
 \end{enumerate}
+
+\subsection{Hybrid Search}
+
+When an \texttt{agent\_handle} filter is provided, quarry uses dual-channel
+retrieval instead of vector-only search.
+
+\textbf{Channels:}
+\begin{enumerate}
+  \item \textbf{Vector similarity} --- existing ANN search via LanceDB
+  \item \textbf{BM25 full-text search} --- Tantivy index on the \texttt{text} column, created during schema migration
+\end{enumerate}
+
+Results are fused using Reciprocal Rank Fusion (RRF):
+\[
+  \text{score}(m) = \sum_{\text{channel}} \frac{1}{60 + \text{rank}_{\text{channel}}(m)}
+\]
+
+\textbf{Temporal decay} applies to agent-scoped memories (non-empty \texttt{agent\_handle}):
+\[
+  w = e^{-\lambda \cdot h}
+\]
+where $\lambda$ is the decay rate and $h$ is hours since ingestion. Unscoped documents ($\texttt{agent\_handle} = \text{``''}$) are exempt from decay.
+
+When no \texttt{agent\_handle} is provided, search uses the existing vector-only path (backwards compatible).
+
+\subsection{Agent Memory Schema}
+
+Three columns extend the chunks table for agent-scoped memory:
+
+\begin{center}
+\begin{tabular}{llll}
+\textbf{Column} & \textbf{Type} & \textbf{Default} & \textbf{Purpose} \\
+\hline
+\texttt{agent\_handle} & utf8 & \texttt{""} & Agent identity scope \\
+\texttt{memory\_type} & utf8 & \texttt{""} & fact, observation, opinion, procedure \\
+\texttt{summary} & utf8 & \texttt{""} & One-line summary \\
+\end{tabular}
+\end{center}
+
+Migration is idempotent --- \texttt{\_migrate\_schema()} adds missing columns
+with empty-string defaults on every table open. Existing databases gain
+the columns transparently.
+
+Identity tagging: the PreCompact hook reads the agent handle from
+\texttt{.punt-labs/ethos/config.yaml} and tags captured transcripts automatically.
 
 % ===================================================================
 \section{Logging and Exceptions}
@@ -819,7 +865,8 @@ user/assistant message text, skipping tool-use blocks.  Capped at
 \textbf{Command} & \textbf{Purpose} \\
 \midrule
 \endhead
-\texttt{ingest <source>}      & Ingest file or URL \\
+\texttt{ingest <source>}      & Ingest file or URL.  Flags: \texttt{-{}-agent-handle},
+  \texttt{-{}-memory-type}, \texttt{-{}-summary} \\
 \texttt{remember}             & Ingest stdin content \\
 \texttt{find <query>}         & Semantic search \\
 \texttt{show <document>}      & Document metadata or page text \\
