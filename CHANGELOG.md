@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [1.9.1] - 2026-03-29
+
 ### Fixed
 
 - **tool**: `quarry --version` now works (was "No such option"). Added eager
