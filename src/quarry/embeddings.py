@@ -117,7 +117,7 @@ class OnnxEmbeddingBackend:
             ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         )
 
-        force_cuda = os.environ.get("QUARRY_PROVIDER", "").lower() == "cuda"
+        force_cuda = os.environ.get("QUARRY_PROVIDER", "").strip().lower() == "cuda"
 
         try:
             self._session = ort.InferenceSession(
@@ -130,11 +130,23 @@ class OnnxEmbeddingBackend:
                 selection.provider,
                 selection.model_file,
             )
-        except Exception:
-            is_cuda_failure = (
-                selection.provider == "CUDAExecutionProvider" and not force_cuda
+        except Exception as cuda_exc:
+            exc_text = str(cuda_exc).lower()
+            cuda_markers = (
+                "cuda",
+                "cublas",
+                "cudnn",
+                "gpu",
+                "cudaexecutionprovider",
+                "failed to create cuda",
             )
-            if is_cuda_failure:
+            is_cuda_related = any(m in exc_text for m in cuda_markers)
+            is_fallback_eligible = (
+                selection.provider == "CUDAExecutionProvider"
+                and not force_cuda
+                and is_cuda_related
+            )
+            if is_fallback_eligible:
                 logger.warning(
                     "CUDA session failed, falling back to CPU + int8",
                     exc_info=True,
@@ -148,7 +160,10 @@ class OnnxEmbeddingBackend:
                         providers=["CPUExecutionProvider"],
                     )
                 except Exception as cpu_exc:
-                    msg = "CPU fallback also failed after CUDA session error"
+                    msg = (
+                        f"CPU fallback also failed after CUDA session error. "
+                        f"CUDA error: {cuda_exc}"
+                    )
                     raise RuntimeError(msg) from cpu_exc
                 logger.info(
                     "ONNX model loaded: provider=CPUExecutionProvider, model=%s",
