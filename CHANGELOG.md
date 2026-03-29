@@ -14,6 +14,15 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- **tool**: `quarry --version` now works (was "No such option"). Added eager
+  `--version` callback to the typer app.
+- **tool**: CLI help output uses plain text instead of rich markup panels,
+  per CLI standard.
+- **tool**: Help command ordering: product commands first, admin commands after.
+- **tool**: `hooks` subcommand hidden from `--help` (internal, not user-facing).
+
 ## [1.9.0] - 2026-03-29
 
 ### Added

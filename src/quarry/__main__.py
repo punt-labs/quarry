@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+import typer.core
 from rich.console import Console
 from rich.progress import Progress
 
@@ -49,9 +50,48 @@ from quarry.sync_registry import (
 configure_logging(stderr_level="WARNING")
 logger = logging.getLogger(__name__)
 
-app = typer.Typer(help="quarry: extract searchable knowledge from any document")
-hooks_app = typer.Typer(help="Claude Code hook handlers (called by hook scripts)")
-app.add_typer(hooks_app, name="hooks")
+_COMMAND_ORDER: list[str] = [
+    # Product commands
+    "find",
+    "ingest",
+    "show",
+    "remember",
+    "status",
+    "use",
+    "delete",
+    "register",
+    "deregister",
+    "sync",
+    "list",
+    # Admin commands
+    "install",
+    "doctor",
+    "serve",
+    "mcp",
+    "version",
+    "uninstall",
+]
+
+
+class _OrderedGroup(typer.core.TyperGroup):
+    """Typer group that enforces a fixed command order in --help."""
+
+    def list_commands(self, ctx: typer.Context) -> list[str]:  # type: ignore[override]
+        commands = super().list_commands(ctx)
+        order = {name: i for i, name in enumerate(_COMMAND_ORDER)}
+        return sorted(commands, key=lambda c: order.get(c, 999))
+
+
+app = typer.Typer(
+    help="quarry: extract searchable knowledge from any document",
+    rich_markup_mode=None,
+    cls=_OrderedGroup,
+)
+hooks_app = typer.Typer(
+    help="Claude Code hook handlers (called by hook scripts)",
+    rich_markup_mode=None,
+)
+app.add_typer(hooks_app, name="hooks", hidden=True)
 console = Console()
 err_console = Console(stderr=True)
 
@@ -62,9 +102,26 @@ _quiet: bool = False
 _global_db: str = ""
 
 
+def _version_callback(value: bool) -> None:
+    if value:
+        from importlib.metadata import version as get_version  # noqa: PLC0415
+
+        print(f"quarry {get_version('punt-quarry')}")
+        raise typer.Exit
+
+
 @app.callback(invoke_without_command=True)
 def main_callback(
     ctx: typer.Context,
+    version: Annotated[  # noqa: ARG001
+        bool,
+        typer.Option(
+            "--version",
+            callback=_version_callback,
+            is_eager=True,
+            help="Show version and exit.",
+        ),
+    ] = False,
     output_json: Annotated[
         bool,
         typer.Option("--json", help="Output as JSON."),
@@ -161,6 +218,89 @@ def _cli_errors(fn: Callable[..., None]) -> Callable[..., None]:
     return wrapper
 
 
+# ---------------------------------------------------------------------------
+# Product commands — ordered: find, ingest, show, remember, status, use,
+# delete, register, deregister, sync, list
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="find")
+@_cli_errors
+def find_cmd(
+    query: Annotated[str, typer.Argument(help="Search query")],
+    limit: Annotated[int, typer.Option("--limit", "-n", help="Max results")] = 10,
+    document: Annotated[
+        str, typer.Option("--document", "-d", help="Filter by document name")
+    ] = "",
+    collection: Annotated[
+        str, typer.Option("--collection", "-c", help="Filter by collection")
+    ] = "",
+    page_type: Annotated[
+        str,
+        typer.Option("--page-type", help="Filter by content type (text, code, etc.)"),
+    ] = "",
+    source_format: Annotated[
+        str,
+        typer.Option(
+            "--source-format", help="Filter by source format (.pdf, .py, etc.)"
+        ),
+    ] = "",
+    agent_handle: Annotated[
+        str,
+        typer.Option("--agent-handle", help="Filter by agent handle"),
+    ] = "",
+    memory_type: Annotated[
+        str,
+        typer.Option("--memory-type", help="Filter by memory type"),
+    ] = "",
+) -> None:
+    """Search indexed documents."""
+    settings = _resolved_settings()
+    db = get_db(settings.lancedb_path)
+
+    query_vector = get_embedding_backend(settings).embed_query(query)
+    results = hybrid_search(
+        db,
+        query,
+        query_vector,
+        limit=limit,
+        document_filter=document or None,
+        collection_filter=collection or None,
+        page_type_filter=page_type or None,
+        source_format_filter=source_format or None,
+        agent_handle_filter=agent_handle or None,
+        memory_type_filter=memory_type or None,
+    )
+
+    json_results = []
+    lines: list[str] = []
+    for r in results:
+        similarity = round(1 - float(str(r.get("_distance", 0))), 4)
+        meta = f"{r['page_type']}/{r['source_format']}"
+        lines.append(
+            f"\n[{r['document_name']} p.{r['page_number']} | {meta}]"
+            f" (similarity: {similarity})"
+        )
+        text = str(r["text"])
+        lines.append(text[:300])
+        json_results.append(
+            {
+                "document_name": r["document_name"],
+                "page_number": r["page_number"],
+                "page_type": r["page_type"],
+                "source_format": r["source_format"],
+                "similarity": similarity,
+                "text": text,
+                "collection": r.get("collection", ""),
+                "agent_handle": r.get("agent_handle", ""),
+                "memory_type": r.get("memory_type", ""),
+                "summary": r.get("summary", ""),
+            }
+        )
+
+    _emit(json_results, "\n".join(lines))
+
+
 @app.command(name="ingest")
 @_cli_errors
 def ingest_cmd(
@@ -247,6 +387,45 @@ def ingest_cmd(
         _emit(result, json.dumps(result, indent=2))
 
 
+@app.command(name="show")
+@_cli_errors
+def show_cmd(
+    document_name: Annotated[str, typer.Argument(help="Document name")],
+    page: Annotated[
+        int | None,
+        typer.Option("--page", "-p", help="Page number to display"),
+    ] = None,
+    collection: Annotated[
+        str,
+        typer.Option("--collection", "-c", help="Scope to collection"),
+    ] = "",
+) -> None:
+    """Show document metadata or a specific page's text."""
+    settings = _resolved_settings()
+    db = get_db(settings.lancedb_path)
+
+    if page is not None:
+        text = get_page_text(db, document_name, page, collection=collection or None)
+        if text is None:
+            err_console.print(
+                f"No data found for {document_name!r} page {page}",
+                style="red",
+            )
+            raise typer.Exit(code=1)
+        _emit(
+            {"document_name": document_name, "page": page, "text": text},
+            f"Document: {document_name}\nPage: {page}\n---\n{text}",
+        )
+        return
+
+    docs = list_documents(db, collection_filter=collection or None)
+    match = [d for d in docs if d["document_name"] == document_name]
+    if not match:
+        err_console.print(f"Document {document_name!r} not found", style="red")
+        raise typer.Exit(code=1)
+    _emit(match[0], format_document_detail(match[0]))
+
+
 @app.command()
 @_cli_errors
 def remember(
@@ -320,166 +499,6 @@ def remember(
     )
 
     _emit(result, json.dumps(result, indent=2))
-
-
-@app.command(name="find")
-@_cli_errors
-def find_cmd(
-    query: Annotated[str, typer.Argument(help="Search query")],
-    limit: Annotated[int, typer.Option("--limit", "-n", help="Max results")] = 10,
-    document: Annotated[
-        str, typer.Option("--document", "-d", help="Filter by document name")
-    ] = "",
-    collection: Annotated[
-        str, typer.Option("--collection", "-c", help="Filter by collection")
-    ] = "",
-    page_type: Annotated[
-        str,
-        typer.Option("--page-type", help="Filter by content type (text, code, etc.)"),
-    ] = "",
-    source_format: Annotated[
-        str,
-        typer.Option(
-            "--source-format", help="Filter by source format (.pdf, .py, etc.)"
-        ),
-    ] = "",
-    agent_handle: Annotated[
-        str,
-        typer.Option("--agent-handle", help="Filter by agent handle"),
-    ] = "",
-    memory_type: Annotated[
-        str,
-        typer.Option("--memory-type", help="Filter by memory type"),
-    ] = "",
-) -> None:
-    """Search indexed documents."""
-    settings = _resolved_settings()
-    db = get_db(settings.lancedb_path)
-
-    query_vector = get_embedding_backend(settings).embed_query(query)
-    results = hybrid_search(
-        db,
-        query,
-        query_vector,
-        limit=limit,
-        document_filter=document or None,
-        collection_filter=collection or None,
-        page_type_filter=page_type or None,
-        source_format_filter=source_format or None,
-        agent_handle_filter=agent_handle or None,
-        memory_type_filter=memory_type or None,
-    )
-
-    json_results = []
-    lines: list[str] = []
-    for r in results:
-        similarity = round(1 - float(str(r.get("_distance", 0))), 4)
-        meta = f"{r['page_type']}/{r['source_format']}"
-        lines.append(
-            f"\n[{r['document_name']} p.{r['page_number']} | {meta}]"
-            f" (similarity: {similarity})"
-        )
-        text = str(r["text"])
-        lines.append(text[:300])
-        json_results.append(
-            {
-                "document_name": r["document_name"],
-                "page_number": r["page_number"],
-                "page_type": r["page_type"],
-                "source_format": r["source_format"],
-                "similarity": similarity,
-                "text": text,
-                "collection": r.get("collection", ""),
-                "agent_handle": r.get("agent_handle", ""),
-                "memory_type": r.get("memory_type", ""),
-                "summary": r.get("summary", ""),
-            }
-        )
-
-    _emit(json_results, "\n".join(lines))
-
-
-list_app = typer.Typer(
-    help="List documents, collections, databases, or registrations.",
-    invoke_without_command=True,
-)
-app.add_typer(list_app, name="list")
-
-
-@list_app.callback(invoke_without_command=True)
-def list_callback(ctx: typer.Context) -> None:
-    """List documents, collections, databases, or registrations."""
-    if ctx.invoked_subcommand is None:
-        err_console.print(
-            "Error: specify a noun — documents, collections, "
-            "databases, or registrations.",
-            style="red",
-        )
-        raise typer.Exit(code=1)
-
-
-@list_app.command(name="documents")
-@_cli_errors
-def list_documents_cmd(
-    collection: Annotated[
-        str, typer.Option("--collection", "-c", help="Filter by collection")
-    ] = "",
-) -> None:
-    """List all indexed documents."""
-    settings = _resolved_settings()
-    db = get_db(settings.lancedb_path)
-    docs = list_documents(db, collection_filter=collection or None)
-
-    text = (
-        "\n".join(
-            f"[{doc['collection']}] {doc['document_name']}: "
-            f"{doc['indexed_pages']}/{doc['total_pages']} pages, "
-            f"{doc['chunk_count']} chunks"
-            for doc in docs
-        )
-        if docs
-        else "No documents indexed."
-    )
-    _emit(docs, text)
-
-
-@app.command(name="show")
-@_cli_errors
-def show_cmd(
-    document_name: Annotated[str, typer.Argument(help="Document name")],
-    page: Annotated[
-        int | None,
-        typer.Option("--page", "-p", help="Page number to display"),
-    ] = None,
-    collection: Annotated[
-        str,
-        typer.Option("--collection", "-c", help="Scope to collection"),
-    ] = "",
-) -> None:
-    """Show document metadata or a specific page's text."""
-    settings = _resolved_settings()
-    db = get_db(settings.lancedb_path)
-
-    if page is not None:
-        text = get_page_text(db, document_name, page, collection=collection or None)
-        if text is None:
-            err_console.print(
-                f"No data found for {document_name!r} page {page}",
-                style="red",
-            )
-            raise typer.Exit(code=1)
-        _emit(
-            {"document_name": document_name, "page": page, "text": text},
-            f"Document: {document_name}\nPage: {page}\n---\n{text}",
-        )
-        return
-
-    docs = list_documents(db, collection_filter=collection or None)
-    match = [d for d in docs if d["document_name"] == document_name]
-    if not match:
-        err_console.print(f"Document {document_name!r} not found", style="red")
-        raise typer.Exit(code=1)
-    _emit(match[0], format_document_detail(match[0]))
 
 
 @app.command(name="status")
@@ -575,27 +594,6 @@ def delete_cmd(
         )
 
 
-@list_app.command(name="collections")
-@_cli_errors
-def list_collections_cmd() -> None:
-    """List all collections with document and chunk counts."""
-    settings = _resolved_settings()
-    db = get_db(settings.lancedb_path)
-    cols = db_list_collections(db)
-
-    text = (
-        "\n".join(
-            f"{col['collection']}: "
-            f"{col['document_count']} documents, "
-            f"{col['chunk_count']} chunks"
-            for col in cols
-        )
-        if cols
-        else "No collections found."
-    )
-    _emit(cols, text)
-
-
 @app.command()
 @_cli_errors
 def register(
@@ -646,28 +644,6 @@ def deregister(
         {"collection": collection, "removed": removed},
         f"Deregistered collection {collection!r} ({removed} files)",
     )
-
-
-@list_app.command(name="registrations")
-@_cli_errors
-def list_registrations_cmd() -> None:
-    """List all registered directories."""
-    settings = _resolved_settings()
-    conn = open_registry(settings.registry_path)
-    try:
-        regs = list_registrations(conn)
-    finally:
-        conn.close()
-
-    json_data = [
-        {"collection": reg.collection, "directory": str(reg.directory)} for reg in regs
-    ]
-    text = (
-        "\n".join(f"{reg.collection}: {reg.directory}" for reg in regs)
-        if regs
-        else "No registered directories."
-    )
-    _emit(json_data, text)
 
 
 def _auto_workers(settings: Settings) -> int:  # noqa: ARG001
@@ -725,6 +701,94 @@ def sync_cmd(
     _emit(json_data, "\n".join(lines))
 
 
+list_app = typer.Typer(
+    help="List documents, collections, databases, or registrations.",
+    invoke_without_command=True,
+    rich_markup_mode=None,
+)
+app.add_typer(list_app, name="list")
+
+
+@list_app.callback(invoke_without_command=True)
+def list_callback(ctx: typer.Context) -> None:
+    """List documents, collections, databases, or registrations."""
+    if ctx.invoked_subcommand is None:
+        err_console.print(
+            "Error: specify a noun — documents, collections, "
+            "databases, or registrations.",
+            style="red",
+        )
+        raise typer.Exit(code=1)
+
+
+@list_app.command(name="documents")
+@_cli_errors
+def list_documents_cmd(
+    collection: Annotated[
+        str, typer.Option("--collection", "-c", help="Filter by collection")
+    ] = "",
+) -> None:
+    """List all indexed documents."""
+    settings = _resolved_settings()
+    db = get_db(settings.lancedb_path)
+    docs = list_documents(db, collection_filter=collection or None)
+
+    text = (
+        "\n".join(
+            f"[{doc['collection']}] {doc['document_name']}: "
+            f"{doc['indexed_pages']}/{doc['total_pages']} pages, "
+            f"{doc['chunk_count']} chunks"
+            for doc in docs
+        )
+        if docs
+        else "No documents indexed."
+    )
+    _emit(docs, text)
+
+
+@list_app.command(name="collections")
+@_cli_errors
+def list_collections_cmd() -> None:
+    """List all collections with document and chunk counts."""
+    settings = _resolved_settings()
+    db = get_db(settings.lancedb_path)
+    cols = db_list_collections(db)
+
+    text = (
+        "\n".join(
+            f"{col['collection']}: "
+            f"{col['document_count']} documents, "
+            f"{col['chunk_count']} chunks"
+            for col in cols
+        )
+        if cols
+        else "No collections found."
+    )
+    _emit(cols, text)
+
+
+@list_app.command(name="registrations")
+@_cli_errors
+def list_registrations_cmd() -> None:
+    """List all registered directories."""
+    settings = _resolved_settings()
+    conn = open_registry(settings.registry_path)
+    try:
+        regs = list_registrations(conn)
+    finally:
+        conn.close()
+
+    json_data = [
+        {"collection": reg.collection, "directory": str(reg.directory)} for reg in regs
+    ]
+    text = (
+        "\n".join(f"{reg.collection}: {reg.directory}" for reg in regs)
+        if regs
+        else "No registered directories."
+    )
+    _emit(json_data, text)
+
+
 @list_app.command(name="databases")
 @_cli_errors
 def list_databases_cmd() -> None:
@@ -742,6 +806,11 @@ def list_databases_cmd() -> None:
         else "No databases found."
     )
     _emit(databases, text)
+
+
+# ---------------------------------------------------------------------------
+# Admin commands — install, doctor, serve, mcp, version, uninstall
+# ---------------------------------------------------------------------------
 
 
 @app.command()
