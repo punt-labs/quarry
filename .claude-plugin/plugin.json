@@ -1,5 +1,5 @@
 {
-  "name": "quarry",
+  "name": "quarry-dev",
   "description": "Local semantic search for Claude Code: /find, /ingest, /remember, /explain, /source, /quarry",
   "version": "1.8.1",
   "author": {
