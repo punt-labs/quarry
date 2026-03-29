@@ -86,14 +86,15 @@ def _check_embedding_model() -> CheckResult:
     from huggingface_hub import try_to_load_from_cache  # noqa: PLC0415
 
     from quarry.config import (  # noqa: PLC0415
-        ONNX_MODEL_FILE,
         ONNX_MODEL_REPO,
         ONNX_MODEL_REVISION,
         ONNX_TOKENIZER_FILE,
     )
 
     model_cached = try_to_load_from_cache(
-        ONNX_MODEL_REPO, ONNX_MODEL_FILE, revision=ONNX_MODEL_REVISION
+        ONNX_MODEL_REPO,
+        "onnx/model_int8.onnx",
+        revision=ONNX_MODEL_REVISION,
     )
     tokenizer_cached = try_to_load_from_cache(
         ONNX_MODEL_REPO, ONNX_TOKENIZER_FILE, revision=ONNX_MODEL_REVISION
@@ -641,7 +642,7 @@ def _configure_ethos_ext(
     )
 
 
-def run_install() -> int:
+def run_install() -> int:  # noqa: C901
     """Create data directory, download model, and configure MCP clients.
 
     Returns 0 on success, 1 on failure.
@@ -671,6 +672,15 @@ def run_install() -> int:
 
         download_model_files()
         print("  \u2713 snowflake-arctic-embed-m-v1.5 (INT8 ONNX) cached")  # noqa: T201
+        # Also download FP16 model if CUDA is available
+        try:
+            import onnxruntime as ort  # noqa: PLC0415
+
+            if "CUDAExecutionProvider" in ort.get_available_providers():
+                download_model_files(model_file="onnx/model_fp16.onnx")
+                print("  \u2713 FP16 model cached (for CUDA)")  # noqa: T201
+        except Exception:  # noqa: BLE001, S110
+            pass  # FP16 download is optional -- first-use fallback works
     except Exception as exc:  # noqa: BLE001
         print(f"  \u2717 Model download failed: {exc}")  # noqa: T201
         failed = True

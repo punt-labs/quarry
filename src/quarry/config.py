@@ -13,7 +13,6 @@ from pydantic_settings import BaseSettings
 
 ONNX_MODEL_REPO = "Snowflake/snowflake-arctic-embed-m-v1.5"
 ONNX_MODEL_REVISION = "e58a8f756156a1293d763f17e3aae643474e9b8a"
-ONNX_MODEL_FILE = "onnx/model_int8.onnx"
 ONNX_TOKENIZER_FILE = "tokenizer.json"
 ONNX_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 

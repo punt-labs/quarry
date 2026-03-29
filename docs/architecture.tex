@@ -508,8 +508,12 @@ snowflake-arctic-embed-m-v1.5 via ONNX Runtime:
   \item 768-dimensional vectors, 512-token context window
   \item Asymmetric retrieval: queries are prefixed with a search
     instruction, documents are not
-  \item int8 quantized ONNX ($\sim$120\,MB on disk)
-  \item Runs on CPU only ($\sim$50\,ms per chunk on Apple Silicon)
+  \item int8 quantized ONNX for CPU ($\sim$120\,MB), FP16 for CUDA
+    ($\sim$220\,MB)
+  \item Provider auto-detection: CUDA+FP16 when available, CPU+int8
+    fallback.  \texttt{QUARRY\_PROVIDER} env var overrides
+    (\texttt{cpu}, \texttt{cuda}, or unset for auto).
+    See DES-016 and \texttt{provider.py}.
   \item Auto-downloads on first use via \texttt{huggingface\_hub}
 \end{itemize}
 

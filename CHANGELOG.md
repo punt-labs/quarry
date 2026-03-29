@@ -14,6 +14,19 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Added
+
+- **transform**: Auto-detect ONNX execution provider at startup. Selects
+  CUDA+FP16 when available, falls back to CPU+int8. `QUARRY_PROVIDER` env var
+  overrides: `cpu` (force CPU), `cuda` (force CUDA, fail loudly), unset
+  (auto-detect). Session options use `ORT_ENABLE_ALL` for graph optimizations.
+- **infra**: `quarry install` downloads FP16 model on CUDA-capable machines.
+
+### Changed
+
+- **infra**: Removed `ONNX_MODEL_FILE` constant from config.py. Model file
+  is now derived from provider selection via `provider.py`.
+
 ## [1.8.1] - 2026-03-29
 
 ### Added

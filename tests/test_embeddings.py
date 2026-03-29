@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -33,7 +34,9 @@ def _mock_tokenizer() -> MagicMock:
 
 
 def _patch_onnx_backend(session: MagicMock, tokenizer: MagicMock):
-    """Patch huggingface_hub, tokenizers, and onnxruntime for unit tests."""
+    """Patch provider selection, model loading, tokenizer, and ORT."""
+    from quarry.provider import ProviderSelection
+
     return (
         patch(
             "quarry.embeddings._load_model_files",
@@ -41,6 +44,13 @@ def _patch_onnx_backend(session: MagicMock, tokenizer: MagicMock):
         ),
         patch("tokenizers.Tokenizer.from_file", return_value=tokenizer),
         patch("onnxruntime.InferenceSession", return_value=session),
+        patch(
+            "quarry.embeddings.select_provider",
+            return_value=ProviderSelection(
+                provider="CPUExecutionProvider",
+                model_file="onnx/model_int8.onnx",
+            ),
+        ),
     )
 
 
@@ -53,8 +63,8 @@ class TestEmbedTexts:
         sentence_emb = rng.standard_normal((3, 768)).astype(np.float32)
         session.run.return_value = (token_emb, sentence_emb)
 
-        p1, p2, p3 = _patch_onnx_backend(session, tokenizer)
-        with p1, p2, p3:
+        p1, p2, p3, p4 = _patch_onnx_backend(session, tokenizer)
+        with p1, p2, p3, p4:
             backend = OnnxEmbeddingBackend()
             result = backend.embed_texts(["a", "b", "c"])
 
@@ -70,8 +80,8 @@ class TestEmbedTexts:
         sentence_emb = np.full((1, 768), 0.5, dtype=np.float32)
         session.run.return_value = (token_emb, sentence_emb)
 
-        p1, p2, p3 = _patch_onnx_backend(session, tokenizer)
-        with p1, p2, p3:
+        p1, p2, p3, p4 = _patch_onnx_backend(session, tokenizer)
+        with p1, p2, p3, p4:
             backend = OnnxEmbeddingBackend()
             result = backend.embed_texts(["test"])
 
@@ -81,8 +91,8 @@ class TestEmbedTexts:
         session = _mock_session()
         tokenizer = _mock_tokenizer()
 
-        p1, p2, p3 = _patch_onnx_backend(session, tokenizer)
-        with p1, p2, p3:
+        p1, p2, p3, p4 = _patch_onnx_backend(session, tokenizer)
+        with p1, p2, p3, p4:
             backend = OnnxEmbeddingBackend()
             result = backend.embed_texts([])
 
@@ -95,8 +105,8 @@ class TestEmbedQuery:
         session = _mock_session()
         tokenizer = _mock_tokenizer()
 
-        p1, p2, p3 = _patch_onnx_backend(session, tokenizer)
-        with p1, p2, p3:
+        p1, p2, p3, p4 = _patch_onnx_backend(session, tokenizer)
+        with p1, p2, p3, p4:
             backend = OnnxEmbeddingBackend()
             backend.embed_query("search term")
 
@@ -110,8 +120,8 @@ class TestEmbedQuery:
         session = _mock_session()
         tokenizer = _mock_tokenizer()
 
-        p1, p2, p3 = _patch_onnx_backend(session, tokenizer)
-        with p1, p2, p3:
+        p1, p2, p3, p4 = _patch_onnx_backend(session, tokenizer)
+        with p1, p2, p3, p4:
             backend = OnnxEmbeddingBackend()
             result = backend.embed_query("search term")
 
@@ -130,8 +140,8 @@ class TestBatching:
             np.zeros((len(feeds["input_ids"]), 768), dtype=np.float32),
         )
 
-        p1, p2, p3 = _patch_onnx_backend(session, tokenizer)
-        with p1, p2, p3:
+        p1, p2, p3, p4 = _patch_onnx_backend(session, tokenizer)
+        with p1, p2, p3, p4:
             backend = OnnxEmbeddingBackend()
             result = backend.embed_texts([f"text {i}" for i in range(n)])
 
@@ -148,8 +158,8 @@ class TestBatching:
             np.zeros((len(feeds["input_ids"]), 768), dtype=np.float32),
         )
 
-        p1, p2, p3 = _patch_onnx_backend(session, tokenizer)
-        with p1, p2, p3:
+        p1, p2, p3, p4 = _patch_onnx_backend(session, tokenizer)
+        with p1, p2, p3, p4:
             backend = OnnxEmbeddingBackend()
             result = backend.embed_texts([f"text {i}" for i in range(n)])
 
@@ -166,8 +176,8 @@ class TestBatching:
             np.zeros((len(feeds["input_ids"]), 768), dtype=np.float32),
         )
 
-        p1, p2, p3 = _patch_onnx_backend(session, tokenizer)
-        with p1, p2, p3:
+        p1, p2, p3, p4 = _patch_onnx_backend(session, tokenizer)
+        with p1, p2, p3, p4:
             backend = OnnxEmbeddingBackend()
             result = backend.embed_texts([f"text {i}" for i in range(n)])
 
@@ -185,10 +195,10 @@ class TestAutoDownloadFallback:
             ) as local_mock,
             patch("quarry.embeddings.download_model_files") as download_mock,
         ):
-            result = _load_model_files()
+            result = _load_model_files("onnx/model_int8.onnx")
 
         assert result == ("/cached/model.onnx", "/cached/tokenizer.json")
-        local_mock.assert_called_once()
+        local_mock.assert_called_once_with("onnx/model_int8.onnx")
         download_mock.assert_not_called()
 
     def test_downloads_when_not_cached(self):
@@ -200,13 +210,65 @@ class TestAutoDownloadFallback:
             ),
             patch(
                 "quarry.embeddings.download_model_files",
-                return_value=("/downloaded/model.onnx", "/downloaded/tokenizer.json"),
+                return_value=(
+                    "/downloaded/model.onnx",
+                    "/downloaded/tokenizer.json",
+                ),
             ) as download_mock,
         ):
-            result = _load_model_files()
+            result = _load_model_files("onnx/model_int8.onnx")
 
-        assert result == ("/downloaded/model.onnx", "/downloaded/tokenizer.json")
-        download_mock.assert_called_once()
+        assert result == (
+            "/downloaded/model.onnx",
+            "/downloaded/tokenizer.json",
+        )
+        download_mock.assert_called_once_with("onnx/model_int8.onnx")
+
+
+class TestCudaFallback:
+    def test_cuda_session_failure_falls_back_to_cpu(self, caplog):
+        """CUDA selected but session creation fails -> CPU fallback."""
+        from quarry.provider import ProviderSelection
+
+        session = MagicMock()
+        session.run.return_value = [[[0.1] * 768]]
+        tokenizer = MagicMock()
+        encoding = MagicMock()
+        encoding.ids = [1, 2, 3]
+        encoding.attention_mask = [1, 1, 1]
+        tokenizer.encode_batch.return_value = [encoding]
+
+        cuda_fail = RuntimeError("cuDNN not found")
+        call_count = 0
+
+        def session_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise cuda_fail  # CUDA attempt fails
+            return session  # CPU attempt succeeds
+
+        with (
+            patch(
+                "quarry.embeddings._load_model_files",
+                return_value=("/fake/model.onnx", "/fake/tokenizer.json"),
+            ),
+            patch("tokenizers.Tokenizer.from_file", return_value=tokenizer),
+            patch("onnxruntime.InferenceSession", side_effect=session_side_effect),
+            patch(
+                "quarry.embeddings.select_provider",
+                return_value=ProviderSelection(
+                    provider="CUDAExecutionProvider",
+                    model_file="onnx/model_fp16.onnx",
+                ),
+            ),
+            caplog.at_level(logging.WARNING),
+        ):
+            backend = OnnxEmbeddingBackend()
+
+        assert backend._session is session
+        assert "CUDA session failed" in caplog.text
+        assert "falling back to CPU" in caplog.text
 
 
 class TestModelName:
@@ -214,8 +276,8 @@ class TestModelName:
         session = _mock_session()
         tokenizer = _mock_tokenizer()
 
-        p1, p2, p3 = _patch_onnx_backend(session, tokenizer)
-        with p1, p2, p3:
+        p1, p2, p3, p4 = _patch_onnx_backend(session, tokenizer)
+        with p1, p2, p3, p4:
             backend = OnnxEmbeddingBackend()
 
         assert backend.model_name == "Snowflake/snowflake-arctic-embed-m-v1.5"
