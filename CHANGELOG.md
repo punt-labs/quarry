@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-03-29
+
 ### Added
 
 - **transform**: Auto-detect ONNX execution provider at startup. Selects
