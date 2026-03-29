@@ -561,9 +561,7 @@ def _ethos_ext_message(
         parts.append(f"updated {len(updated)} {_plural(updated)}: {', '.join(updated)}")
     if already_set:
         if not updated:
-            handles = ", ".join(already_set)
-            noun = _plural(already_set)
-            parts.append(f"all {noun} already have session_context ({handles})")
+            parts.append(f"session_context already set: {', '.join(already_set)}")
         else:
             parts.append(f"already set: {', '.join(already_set)}")
     if no_collection:
