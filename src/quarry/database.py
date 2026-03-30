@@ -155,17 +155,30 @@ def _get_or_create_table(
     Runs schema migration and FTS index creation on every open.
     """
     if TABLE_NAME in db.list_tables().tables:
-        table = db.open_table(TABLE_NAME)
-        _migrate_schema(table)
-        _ensure_fts_index(table)
-        return table
-    with _table_lock:
-        if TABLE_NAME in db.list_tables().tables:
+        try:
             table = db.open_table(TABLE_NAME)
             _migrate_schema(table)
             _ensure_fts_index(table)
             return table
-        table = db.create_table(TABLE_NAME, data=records, schema=_schema())
+        except ValueError:
+            pass  # Table disappeared between list and open — fall through to create
+    with _table_lock:
+        if TABLE_NAME in db.list_tables().tables:
+            try:
+                table = db.open_table(TABLE_NAME)
+                _migrate_schema(table)
+                _ensure_fts_index(table)
+                return table
+            except ValueError:
+                pass  # Race: fall through to create
+        try:
+            table = db.create_table(TABLE_NAME, data=records, schema=_schema())
+        except ValueError:
+            # Another thread created the table between our check and create
+            table = db.open_table(TABLE_NAME)
+            _migrate_schema(table)
+            _ensure_fts_index(table)
+            return table
         _ensure_fts_index(table)
         return None
 
