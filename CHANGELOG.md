@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-03-29
+
 ### Added
 
 - **tool**: `quarry doctor` reports active ONNX provider and model file as
