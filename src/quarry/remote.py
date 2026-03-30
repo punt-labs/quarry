@@ -18,6 +18,11 @@ class PermissionWarning(Warning):
     """Raised when config was written but file permissions could not be restricted."""
 
 
+def _toml_escape(value: str) -> str:
+    """Escape a string value for use inside a TOML basic string."""
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
 def read_proxy_config() -> dict[str, Any]:
     """Return parsed mcp-proxy config, or {} if file does not exist."""
     if not MCP_PROXY_CONFIG_PATH.exists():
@@ -35,10 +40,10 @@ def write_proxy_config(url: str, token: str) -> None:
     """Write quarry section to mcp-proxy config file atomically, chmod 0600."""
     content = (
         "[quarry]\n"
-        f'url = "{url}"\n'
+        f'url = "{_toml_escape(url)}"\n'
         "\n"
         "[quarry.headers]\n"
-        f'Authorization = "Bearer {token}"\n'
+        f'Authorization = "Bearer {_toml_escape(token)}"\n'
     )
     MCP_PROXY_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = MCP_PROXY_CONFIG_PATH.with_suffix(".tmp")
@@ -70,10 +75,10 @@ def delete_proxy_config() -> bool:
         return False
     raw = MCP_PROXY_CONFIG_PATH.read_text()
     # Strip the [quarry] block including all [quarry.*] subsections.
-    # Stop at the next top-level section (no dot in name) or EOF.
-    # Top-level sections match \[[^.\]]+\] (no dot between brackets).
+    # Stop at the next section that is not a quarry subsection (any [header]
+    # except [quarry] and [quarry.*]) or EOF.
     cleaned, n_subs = re.subn(
-        r"\[quarry\].*?(?=\n\[[^.\]]+\]|\Z)", "", raw, flags=re.DOTALL
+        r"\[quarry\].*?(?=\n\[(?!quarry)[^\]]*\]|\Z)", "", raw, flags=re.DOTALL
     )
     if n_subs == 0:
         return False

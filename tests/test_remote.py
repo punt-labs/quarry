@@ -54,6 +54,12 @@ class TestWriteProxyConfig:
         assert "sk-second" in content
         assert "sk-first" not in content
 
+    def test_escapes_special_chars_in_token(self, proxy_config_path: Path) -> None:
+        token = 'tok"en\\val'  # noqa: S105
+        write_proxy_config("ws://host:8420/mcp", token)
+        data = read_proxy_config()
+        assert data["quarry"]["headers"]["Authorization"] == f"Bearer {token}"
+
 
 class TestReadProxyConfig:
     def test_returns_empty_when_missing(self, proxy_config_path: Path) -> None:
@@ -122,6 +128,29 @@ class TestDeleteProxyConfig:
         result = delete_proxy_config()
         assert result is False
         assert proxy_config_path.read_text() == original
+
+    def test_does_not_eat_dotted_sibling_sections(
+        self, proxy_config_path: Path
+    ) -> None:
+        proxy_config_path.parent.mkdir(parents=True, exist_ok=True)
+        content = (
+            "[quarry]\n"
+            'url = "ws://host:8420/mcp"\n'
+            "\n"
+            "[quarry.headers]\n"
+            'Authorization = "Bearer sk-test"\n'
+            "\n"
+            "[proxy.settings]\n"
+            'foo = "bar"\n'
+        )
+        proxy_config_path.write_text(content)
+        result = delete_proxy_config()
+        assert result is True
+        assert proxy_config_path.exists()
+        remaining = proxy_config_path.read_text()
+        assert "[quarry]" not in remaining
+        assert "[proxy.settings]" in remaining
+        assert tomllib.loads(remaining)["proxy"]["settings"]["foo"] == "bar"
 
 
 class TestValidateConnection:
