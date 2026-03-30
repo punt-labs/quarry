@@ -85,11 +85,11 @@ fi
 
 # --- Step 3b: Detect NVIDIA GPU ---
 
-GPU_FLAG=""
+HAS_NVIDIA=0
 if command -v nvidia-smi >/dev/null 2>&1; then
   if nvidia-smi >/dev/null 2>&1; then
-    ok "NVIDIA GPU detected — will install CUDA support"
-    GPU_FLAG="--with onnxruntime-gpu>=1.18.0"
+    ok "NVIDIA GPU detected"
+    HAS_NVIDIA=1
   fi
 fi
 
@@ -98,13 +98,28 @@ fi
 info "Installing $PACKAGE..."
 
 # shellcheck disable=SC2086
-uv tool install --force $PYTHON_FLAG $GPU_FLAG "$PACKAGE==$VERSION" || fail "Failed to install $PACKAGE==$VERSION"
+uv tool install --force $PYTHON_FLAG "$PACKAGE==$VERSION" || fail "Failed to install $PACKAGE==$VERSION"
 ok "$PACKAGE==$VERSION installed"
 
 if ! command -v "$BINARY" >/dev/null 2>&1; then
   export PATH="$HOME/.local/bin:$PATH"
   if ! command -v "$BINARY" >/dev/null 2>&1; then
     fail "$PACKAGE installed but '$BINARY' not found on PATH"
+  fi
+fi
+
+# Swap onnxruntime for onnxruntime-gpu in the tool venv.
+# The two packages conflict (same Python module, different PyPI names).
+# uv pip --python targets the venv that owns that interpreter.
+if [ "$HAS_NVIDIA" = "1" ]; then
+  info "Installing CUDA support (onnxruntime-gpu)..."
+  TOOL_PYTHON="$(head -1 "$(command -v "$BINARY")" | sed 's/^#!//')"
+  if [ -f "$TOOL_PYTHON" ]; then
+    uv pip uninstall --python "$TOOL_PYTHON" onnxruntime < /dev/null 2>/dev/null || true
+    uv pip install --python "$TOOL_PYTHON" "onnxruntime-gpu>=1.18.0" < /dev/null || warn "Failed to install onnxruntime-gpu — CUDA will not be available"
+    ok "onnxruntime-gpu installed"
+  else
+    warn "Could not locate tool Python — CUDA support skipped"
   fi
 fi
 
