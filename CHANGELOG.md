@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [1.10.1] - 2026-03-29
+
 ### Fixed
 
 - **infra**: `install.sh` detects NVIDIA GPUs via `nvidia-smi` and swaps
