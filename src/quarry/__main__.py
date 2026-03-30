@@ -40,6 +40,16 @@ from quarry.formatting import format_document_detail, format_status
 from quarry.logging_config import configure_logging
 from quarry.pipeline import ingest_auto, ingest_content, ingest_document
 from quarry.provider import provider_display
+from quarry.remote import (
+    MCP_PROXY_CONFIG_PATH,
+    PermissionWarning,
+    delete_proxy_config,
+    mask_token,
+    read_proxy_config,
+    validate_connection,
+    validate_connection_from_ws_url,
+    write_proxy_config,
+)
 from quarry.sync import sync_all
 from quarry.sync_registry import (
     deregister_directory,
@@ -63,6 +73,9 @@ _COMMAND_ORDER: list[str] = [
     "register",
     "deregister",
     "sync",
+    "login",
+    "logout",
+    "remote",
     "list",
     # Admin commands
     "install",
@@ -701,6 +714,101 @@ def sync_cmd(
         lines.append(line)
 
     _emit(json_data, "\n".join(lines))
+
+
+@app.command(name="login")
+@_cli_errors
+def login_cmd(
+    host: Annotated[str, typer.Argument(help="Remote quarry host (hostname or IP)")],
+    port: Annotated[int, typer.Option("--port", "-p", help="Port")] = DEFAULT_PORT,
+    api_key: Annotated[
+        str,
+        typer.Option(
+            "--api-key",
+            help="Bearer token for remote server",
+            prompt=True,
+            hide_input=True,
+        ),
+    ] = "",
+) -> None:
+    """Connect to a remote quarry server."""
+    if not api_key:
+        err_console.print("Error: --api-key is required.", style="red")
+        raise typer.Exit(code=1)
+    ok, reason = validate_connection(host, port, api_key)
+    if not ok:
+        err_console.print(f"Error: {reason}", style="red")
+        raise typer.Exit(code=1)
+    try:
+        write_proxy_config(f"ws://{host}:{port}/mcp", api_key)
+    except PermissionWarning as exc:
+        err_console.print(f"Warning: {exc}", style="yellow")
+    except OSError as exc:
+        err_console.print(
+            f"Error: connection succeeded but could not write config to "
+            f"{MCP_PROXY_CONFIG_PATH}: {exc}",
+            style="red",
+        )
+        raise typer.Exit(code=1) from exc
+    _emit(
+        {"host": host, "port": port},
+        f"Logged in to {host}:{port}. Restart Claude Code to apply.",
+    )
+
+
+@app.command(name="logout")
+@_cli_errors
+def logout_cmd() -> None:
+    """Disconnect from remote quarry server and revert to local daemon."""
+    removed = delete_proxy_config()
+    if removed:
+        _emit(
+            {"logged_out": True},
+            "Logged out. Restart Claude Code to revert to local daemon.",
+        )
+    else:
+        _emit({"logged_out": False}, "No remote configured.")
+
+
+remote_app = typer.Typer(
+    help="Manage remote quarry server connection.",
+    invoke_without_command=True,
+    rich_markup_mode=None,
+)
+app.add_typer(remote_app, name="remote")
+
+
+@remote_app.callback(invoke_without_command=True)
+def remote_callback(ctx: typer.Context) -> None:
+    """Manage remote quarry server connection."""
+    if ctx.invoked_subcommand is None:
+        err_console.print("Error: specify a subcommand — list.", style="red")
+        raise typer.Exit(code=1)
+
+
+@remote_app.command(name="list")
+@_cli_errors
+def remote_list_cmd(
+    ping: Annotated[bool, typer.Option("--ping", help="Check server health")] = False,
+) -> None:
+    """Show configured remote server."""
+    config = read_proxy_config()
+    quarry_cfg = config.get("quarry", {})
+    if not quarry_cfg:
+        _emit({"remote": None}, "No remote configured.")
+        return
+    url = quarry_cfg.get("url", "")
+    auth_header = quarry_cfg.get("headers", {}).get("Authorization", "")
+    token = auth_header.removeprefix("Bearer ").strip()
+    masked = mask_token(token)
+    text = f"Remote: {url}  token: {masked}"
+    data: dict[str, object] = {"url": url, "token_prefix": masked}
+    if ping:
+        ok, reason = validate_connection_from_ws_url(url, token)
+        status = "healthy" if ok else f"unreachable ({reason})"
+        text += f"\nHealth: {status}"
+        data["health"] = status
+    _emit(data, text)
 
 
 list_app = typer.Typer(

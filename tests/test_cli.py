@@ -1890,3 +1890,159 @@ class TestCliStandards:
             assert "hooks" not in line, (
                 f"'hooks' should not appear in commands section: {line}"
             )
+
+
+class TestLoginCmd:
+    def test_success(self) -> None:
+        with (
+            patch("quarry.__main__.validate_connection", return_value=(True, "")),
+            patch("quarry.__main__.write_proxy_config") as mock_write,
+        ):
+            result = runner.invoke(
+                app, ["login", "okinos.example.com", "--api-key", "sk-test"]
+            )
+        _reset_globals()
+        assert result.exit_code == 0
+        assert "Restart Claude Code" in result.output
+        mock_write.assert_called_once_with(
+            "ws://okinos.example.com:8420/mcp", "sk-test"
+        )
+
+    def test_connection_failure(self) -> None:
+        with (
+            patch(
+                "quarry.__main__.validate_connection",
+                return_value=(False, "Authentication failed — check --api-key."),
+            ),
+            patch("quarry.__main__.write_proxy_config") as mock_write,
+        ):
+            result = runner.invoke(
+                app, ["login", "okinos.example.com", "--api-key", "bad-key"]
+            )
+        _reset_globals()
+        assert result.exit_code == 1
+        assert "Authentication failed" in result.output
+        mock_write.assert_not_called()
+
+    def test_custom_port(self) -> None:
+        with (
+            patch("quarry.__main__.validate_connection", return_value=(True, "")),
+            patch("quarry.__main__.write_proxy_config") as mock_write,
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "login",
+                    "okinos.example.com",
+                    "--port",
+                    "9000",
+                    "--api-key",
+                    "sk-test",
+                ],
+            )
+        _reset_globals()
+        assert result.exit_code == 0
+        mock_write.assert_called_once_with(
+            "ws://okinos.example.com:9000/mcp", "sk-test"
+        )
+
+    def test_empty_api_key_exits_with_error(self) -> None:
+        with patch("quarry.__main__.validate_connection") as mock_validate:
+            result = runner.invoke(app, ["login", "host.example.com", "--api-key", ""])
+        _reset_globals()
+        assert result.exit_code == 1
+        assert "required" in result.output
+        mock_validate.assert_not_called()
+
+
+class TestLogoutCmd:
+    def test_success(self) -> None:
+        with patch("quarry.__main__.delete_proxy_config", return_value=True):
+            result = runner.invoke(app, ["logout"])
+        _reset_globals()
+        assert result.exit_code == 0
+        assert "Logged out" in result.output
+
+    def test_no_config(self) -> None:
+        with patch("quarry.__main__.delete_proxy_config", return_value=False):
+            result = runner.invoke(app, ["logout"])
+        _reset_globals()
+        assert result.exit_code == 0
+        assert "No remote configured" in result.output
+
+
+class TestRemoteListCmd:
+    def test_no_remote(self) -> None:
+        with patch("quarry.__main__.read_proxy_config", return_value={}):
+            result = runner.invoke(app, ["remote", "list"])
+        _reset_globals()
+        assert result.exit_code == 0
+        assert "No remote" in result.output
+
+    def test_shows_url_and_masked_token(self) -> None:
+        cfg = {
+            "quarry": {
+                "url": "ws://host:8420/mcp",
+                "headers": {"Authorization": "Bearer sk-abcdef"},
+            }
+        }
+        with patch("quarry.__main__.read_proxy_config", return_value=cfg):
+            result = runner.invoke(app, ["remote", "list"])
+        _reset_globals()
+        assert result.exit_code == 0
+        assert "ws://host:8420/mcp" in result.output
+        assert "sk-a****" in result.output
+        assert "sk-abcdef" not in result.output
+
+    def test_ping_healthy(self) -> None:
+        cfg = {
+            "quarry": {
+                "url": "ws://host:8420/mcp",
+                "headers": {"Authorization": "Bearer sk-abcdef"},
+            }
+        }
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=cfg),
+            patch(
+                "quarry.__main__.validate_connection_from_ws_url",
+                return_value=(True, ""),
+            ),
+        ):
+            result = runner.invoke(app, ["remote", "list", "--ping"])
+        _reset_globals()
+        assert result.exit_code == 0
+        assert "healthy" in result.output
+
+    def test_ping_unreachable(self) -> None:
+        cfg = {
+            "quarry": {
+                "url": "ws://host:8420/mcp",
+                "headers": {"Authorization": "Bearer sk-abcdef"},
+            }
+        }
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=cfg),
+            patch(
+                "quarry.__main__.validate_connection_from_ws_url",
+                return_value=(False, "connection refused"),
+            ),
+        ):
+            result = runner.invoke(app, ["remote", "list", "--ping"])
+        _reset_globals()
+        assert result.exit_code == 0
+        assert "unreachable" in result.output
+
+    def test_bare_remote_errors(self) -> None:
+        result = runner.invoke(app, ["remote"])
+        _reset_globals()
+        assert result.exit_code == 1
+
+    def test_malformed_toml_shows_error(self) -> None:
+        with patch(
+            "quarry.__main__.read_proxy_config",
+            side_effect=ValueError("Malformed config at /path/quarry.toml: ..."),
+        ):
+            result = runner.invoke(app, ["remote", "list"])
+        _reset_globals()
+        assert result.exit_code == 1
+        assert "Malformed" in result.output
