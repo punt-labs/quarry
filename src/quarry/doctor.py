@@ -140,6 +140,27 @@ def _check_local_ocr() -> CheckResult:
         )
 
 
+def _check_provider() -> CheckResult:
+    """Report which ONNX execution provider is selected."""
+    from quarry.provider import select_provider  # noqa: PLC0415
+
+    try:
+        selection = select_provider()
+        return CheckResult(
+            name="ONNX provider",
+            passed=True,
+            message=f"{selection.provider} ({selection.model_file})",
+            required=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult(
+            name="ONNX provider",
+            passed=False,
+            message=str(exc),
+            required=False,
+        )
+
+
 def _check_imports() -> CheckResult:
     modules = [
         "lancedb",
@@ -751,6 +772,7 @@ def check_environment(*, _skip_header: bool = False) -> int:
             _check_data_directory(),
             _check_local_ocr(),
             _check_embedding_model(),
+            _check_provider(),
             _check_imports(),
             _check_mcp_proxy(),
             _check_claude_code_mcp(),

@@ -230,6 +230,34 @@ class TestStatus:
         assert "12.0 MB" in result
         assert "arctic-embed" in result
 
+    def test_includes_provider(self) -> None:
+        info = {
+            "document_count": 1,
+            "collection_count": 1,
+            "chunk_count": 10,
+            "registered_directories": 0,
+            "database_path": "/tmp/test",
+            "database_size_bytes": 0,
+            "embedding_model": "test-model",
+            "provider": "CPUExecutionProvider (int8)",
+        }
+        result = format_status(info)
+        assert "Provider:" in result
+        assert "CPUExecutionProvider (int8)" in result
+
+    def test_provider_defaults_to_unknown(self) -> None:
+        info = {
+            "document_count": 0,
+            "collection_count": 0,
+            "chunk_count": 0,
+            "registered_directories": 0,
+            "database_path": "/tmp/test",
+            "database_size_bytes": 0,
+            "embedding_model": "test-model",
+        }
+        result = format_status(info)
+        assert "Provider:       ?" in result
+
 
 class TestActionSummaries:
     def test_ingest_summary(self) -> None:

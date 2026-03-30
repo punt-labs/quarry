@@ -39,6 +39,7 @@ from quarry.database import (
 from quarry.formatting import format_document_detail, format_status
 from quarry.logging_config import configure_logging
 from quarry.pipeline import ingest_auto, ingest_content, ingest_document
+from quarry.provider import provider_display
 from quarry.sync import sync_all
 from quarry.sync_registry import (
     deregister_directory,
@@ -535,6 +536,7 @@ def status_cmd() -> None:
         "database_path": str(settings.lancedb_path),
         "database_size_bytes": db_size_bytes,
         "embedding_model": settings.embedding_model,
+        "provider": provider_display(),
     }
     _emit(data, format_status(data))
 

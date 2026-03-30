@@ -40,6 +40,7 @@ from quarry.pipeline import (
     ingest_content as pipeline_ingest_content,
     ingest_document,
 )
+from quarry.provider import provider_display
 from quarry.sync import sync_all as engine_sync_all
 from quarry.sync_registry import (
     deregister_directory as registry_deregister,
@@ -522,6 +523,7 @@ def status() -> str:
             "database_path": str(settings.lancedb_path),
             "database_size_bytes": db_size_bytes,
             "embedding_model": settings.embedding_model,
+            "provider": provider_display(),
         }
     )
 

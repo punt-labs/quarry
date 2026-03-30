@@ -40,6 +40,7 @@ from quarry.database import (
     list_documents,
     search,
 )
+from quarry.provider import provider_display
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
@@ -226,6 +227,7 @@ def _status_route(request: Request) -> JSONResponse:
             "database_path": str(settings.lancedb_path),
             "database_size_bytes": db_size_bytes,
             "embedding_model": settings.embedding_model,
+            "provider": provider_display(),
             "embedding_dimension": settings.embedding_dimension,
         }
     )

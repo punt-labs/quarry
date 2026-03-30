@@ -320,6 +320,7 @@ def format_status(info: Mapping[str, Any]) -> str:
         f"   Database:       {info.get('database_path', '?')}",
         f"   Size:           {_fmt_size(info.get('database_size_bytes', 0))}",
         f"   Model:          {info.get('embedding_model', '?')}",
+        f"   Provider:       {info.get('provider', '?')}",
     ]
     return "\n".join(lines)
 

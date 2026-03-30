@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
 from dataclasses import dataclass
@@ -77,3 +78,22 @@ def select_provider() -> ProviderSelection:
     logger.info("Using CPUExecutionProvider + int8")
     cpu = "CPUExecutionProvider"
     return ProviderSelection(cpu, PROVIDER_MODEL_MAP[cpu])
+
+
+@functools.lru_cache(maxsize=1)
+def provider_display() -> str:
+    """Return a human-readable provider string for status output.
+
+    Cached per process — provider detection runs once, not on every
+    status call.
+
+    Example: ``"CPUExecutionProvider (int8)"`` or ``"CUDAExecutionProvider (fp16)"``.
+    Returns ``"?"`` if provider detection fails.
+    """
+    try:
+        selection = select_provider()
+        variant = "fp16" if "fp16" in selection.model_file else "int8"
+        return f"{selection.provider} ({variant})"
+    except Exception:  # noqa: BLE001
+        logger.debug("Provider detection failed", exc_info=True)
+        return "?"

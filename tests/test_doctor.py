@@ -17,6 +17,7 @@ from quarry.doctor import (
     _check_embedding_model,
     _check_imports,
     _check_local_ocr,
+    _check_provider,
     _check_python_version,
     _check_storage,
     _configure_claude_code,
@@ -135,6 +136,45 @@ class TestCheckLocalOcr:
         # Pass/fail depends on whether rapidocr is installed in test env
         if result.passed:
             assert "RapidOCR" in result.message
+
+
+class TestCheckProvider:
+    def test_reports_provider_on_success(self) -> None:
+        from quarry.provider import ProviderSelection
+
+        selection = ProviderSelection(
+            provider="CPUExecutionProvider",
+            model_file="onnx/model_int8.onnx",
+        )
+        with patch("quarry.provider.select_provider", return_value=selection):
+            result = _check_provider()
+        assert result.passed is True
+        assert result.required is False
+        assert result.name == "ONNX provider"
+        assert "CPUExecutionProvider" in result.message
+        assert "onnx/model_int8.onnx" in result.message
+
+    def test_reports_cuda_provider(self) -> None:
+        from quarry.provider import ProviderSelection
+
+        selection = ProviderSelection(
+            provider="CUDAExecutionProvider",
+            model_file="onnx/model_fp16.onnx",
+        )
+        with patch("quarry.provider.select_provider", return_value=selection):
+            result = _check_provider()
+        assert result.passed is True
+        assert "CUDAExecutionProvider" in result.message
+
+    def test_reports_failure_on_exception(self) -> None:
+        with patch(
+            "quarry.provider.select_provider",
+            side_effect=RuntimeError("CUDA not available"),
+        ):
+            result = _check_provider()
+        assert result.passed is False
+        assert result.required is False
+        assert "CUDA not available" in result.message
 
 
 class TestCheckStorage:
@@ -282,6 +322,13 @@ class TestCheckEnvironment:
             doctor_mod,
             "_check_embedding_model",
             lambda: _ok(name="Embedding model", passed=True, message="mocked"),
+        )
+        monkeypatch.setattr(
+            doctor_mod,
+            "_check_provider",
+            lambda: _ok(
+                name="ONNX provider", passed=True, message="mocked", required=False
+            ),
         )
         monkeypatch.setattr(
             doctor_mod,

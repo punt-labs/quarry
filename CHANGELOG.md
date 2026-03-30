@@ -14,6 +14,13 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Added
+
+- **tool**: `quarry doctor` reports active ONNX provider and model file as
+  informational check.
+- **tool**: `quarry status` shows Provider line (e.g. "CPUExecutionProvider
+  (int8)" or "CUDAExecutionProvider (fp16)").
+
 ## [1.9.1] - 2026-03-29
 
 ### Fixed
