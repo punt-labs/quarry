@@ -116,8 +116,13 @@ if [ "$HAS_NVIDIA" = "1" ]; then
   TOOL_PYTHON="$(head -1 "$(command -v "$BINARY")" | sed 's/^#!//')"
   if [ -f "$TOOL_PYTHON" ]; then
     uv pip uninstall --python "$TOOL_PYTHON" onnxruntime < /dev/null 2>/dev/null || true
-    uv pip install --python "$TOOL_PYTHON" "onnxruntime-gpu>=1.18.0" < /dev/null || warn "Failed to install onnxruntime-gpu — CUDA will not be available"
-    ok "onnxruntime-gpu installed"
+    if uv pip install --python "$TOOL_PYTHON" "onnxruntime-gpu>=1.18.0" < /dev/null; then
+      ok "onnxruntime-gpu installed"
+    else
+      warn "Failed to install onnxruntime-gpu — restoring CPU onnxruntime"
+      uv pip install --python "$TOOL_PYTHON" "onnxruntime>=1.18.0" < /dev/null || fail "Could not restore onnxruntime — run: uv tool install --force $PACKAGE==$VERSION"
+      ok "onnxruntime (CPU) restored"
+    fi
   else
     warn "Could not locate tool Python — CUDA support skipped"
   fi
