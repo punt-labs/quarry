@@ -619,8 +619,10 @@ run \texttt{quarry install}, and start searching.
   Query latency is constant regardless of database size because LanceDB uses
   IVF-PQ indexing.
 
-  Quarry does not target multi-user or server deployments. The one exception is
-  the Fly.io deployment that serves the punt-labs.com chat widget's RAG backend.
+  Quarry supports multi-user access to a shared LAN daemon (e.g.\ a team
+  sharing a GPU machine), but does not target multi-tenant deployments with
+  per-user isolation. The Fly.io deployment that serves the punt-labs.com chat
+  widget's RAG backend is a single-tenant instance.
 \end{faqpair}
 
 \begin{faqpair}{What happens as the knowledge base grows?}
@@ -687,10 +689,11 @@ run \texttt{quarry install}, and start searching.
     \item \textbf{A cloud service.} Quarry will never require an account,
           subscription, or data upload. Local-first is a permanent design
           constraint, not a temporary limitation.
-    \item \textbf{A multi-user platform.} Quarry supports remote access to a
-          daemon on the local network (e.g.\ sharing a GPU machine), but this is
-          single-user remote access with Bearer token auth, not a multi-tenant
-          platform with user accounts, access control, or shared databases.
+    \item \textbf{A multi-tenant platform.} Quarry supports multi-user access
+          to a shared daemon on the local network (e.g.\ a team sharing a
+          GPU machine), authenticated via Bearer token. But there is no
+          per-user isolation, no access controls, no permissions, and no
+          separate views of the data. Everyone sees the same knowledge base.
     \item \textbf{Media search.} Quarry does not find images by visual content
           or match audio. It extracts \emph{text} from every format and indexes
           the knowledge inside.
@@ -702,8 +705,10 @@ run \texttt{quarry install}, and start searching.
     \item \textbf{Structured knowledge extraction.} Quarry indexes raw content
           and lets semantic search surface what is relevant. It does not extract
           summaries, decisions, or intent from captured content.
-    \item \textbf{Code provenance tracking.} Quarry does not add metadata to
-          git commits or link commits to sessions.
+    \item \textbf{Git write-side provenance.} Quarry does not add metadata to
+          git commits---no checkpoint trailers, shadow branches, or commit
+          annotations. It \emph{reads} from git (commits made during a session)
+          to enrich captured transcripts with artifact context.
   \end{itemize}
 \end{faqpair}
 
@@ -809,13 +814,13 @@ Defines scope. Features are categorized to prevent scope creep.
 \subsection*{Won't Do}
 
 \begin{enumerate}[nosep,leftmargin=2.5em]
-  \featureitem{Multi-user platform}{Remote daemon access for LAN GPU sharing is supported; multi-tenant accounts, access control, and shared databases are not.}\label{feat:no-multi-user}
+  \featureitem{Multi-tenant platform}{Multi-user LAN access is supported (shared daemon, Bearer token auth). Multi-tenancy is not: no per-user isolation, no access controls, no permissions.}\label{feat:no-multi-user}
   \featureitem{Media search by visual or audio content}{Quarry extracts text from every format. It does not match images by visual similarity or search audio.}\label{feat:no-media-search}
   \featureitem{Note-taking or filing system}{Indexes existing files. No editor, tagging, or organizational structure.}\label{feat:no-note-taking}
   \featureitem{General-purpose RAG framework}{Deliberately opinionated and zero-configuration. No pipeline assembly, no pluggable retrievers.}\label{feat:no-rag-framework}
   \featureitem{Hosted web UI}{Team browsing of shared knowledge is outside scope.}\label{feat:no-web-ui}
   \featureitem{Structured knowledge extraction}{Extraction is lossy and adds complexity. Semantic search over raw content is sufficient.}\label{feat:no-extraction}
-  \featureitem{Git commit metadata}{Checkpoint trailers or session IDs in git commits are outside scope.}\label{feat:no-git-meta}
+  \featureitem{Git write-side provenance}{No checkpoint trailers, shadow branches, or commit annotations. Quarry reads from git to enrich transcripts; it does not write to git.}\label{feat:no-git-meta}
 \end{enumerate}
 
 % ══════════════════════════════════════════════════════════════════════════════
