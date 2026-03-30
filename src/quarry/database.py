@@ -163,7 +163,7 @@ def _get_or_create_table(
         except ValueError as exc:
             if "not found" not in str(exc).lower():
                 raise
-            logger.debug("Table listed but open_table failed (stale list_tables), creating")
+            logger.debug("open_table failed after list_tables, creating")
     with _table_lock:
         if TABLE_NAME in db.list_tables().tables:
             try:
