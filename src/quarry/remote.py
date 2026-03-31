@@ -71,12 +71,18 @@ def write_proxy_config(
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
     fd = os.open(str(tmp), flags, 0o600)
     try:
-        with os.fdopen(fd, "w") as f:
-            f.write(content)
-    except:
+        f = os.fdopen(fd, "w")
+    except BaseException:
+        os.close(fd)
         tmp.unlink(missing_ok=True)
         raise
-    tmp.replace(MCP_PROXY_CONFIG_PATH)
+    try:
+        with f:
+            f.write(content)
+        tmp.replace(MCP_PROXY_CONFIG_PATH)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     try:
         MCP_PROXY_CONFIG_PATH.chmod(0o600)  # belt-and-suspenders for overwrite case
     except OSError as exc:
@@ -109,12 +115,18 @@ def delete_proxy_config() -> bool:
         flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
         fd = os.open(str(tmp), flags, 0o600)
         try:
-            with os.fdopen(fd, "w") as f:
-                f.write(stripped + "\n")
-        except:
+            f = os.fdopen(fd, "w")
+        except BaseException:
+            os.close(fd)
             tmp.unlink(missing_ok=True)
             raise
-        tmp.replace(MCP_PROXY_CONFIG_PATH)
+        try:
+            with f:
+                f.write(stripped + "\n")
+            tmp.replace(MCP_PROXY_CONFIG_PATH)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
     else:
         MCP_PROXY_CONFIG_PATH.unlink()
     return True
@@ -274,9 +286,15 @@ def store_ca_cert(cert_pem: bytes) -> None:
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
     fd = os.open(str(tmp), flags, 0o600)
     try:
-        with os.fdopen(fd, "wb") as f:
+        f = os.fdopen(fd, "wb")
+    except BaseException:
+        os.close(fd)
+        tmp.unlink(missing_ok=True)
+        raise
+    try:
+        with f:
             f.write(cert_pem)
         tmp.replace(CA_CERT_PATH)
-    except:
+    except BaseException:
         tmp.unlink(missing_ok=True)
         raise

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import http.client
+import os
 import ssl
 import stat
 import tomllib
@@ -463,6 +464,149 @@ class TestStoreCaCert:
     def test_default_ca_cert_path(self) -> None:
         expected = Path.home() / ".punt-labs" / "mcp-proxy" / "quarry-ca.crt"
         assert expected == CA_CERT_PATH
+
+
+class TestWriteProxyConfigFdLeak:
+    """Verify write_proxy_config() closes fd and removes .tmp on all failure paths."""
+
+    def test_fd_closed_and_tmp_removed_when_fdopen_raises(
+        self, proxy_config_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        proxy_config_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = proxy_config_path.with_suffix(".tmp")
+        captured_fds: list[int] = []
+        closed_fds: list[int] = []
+
+        real_open = os.open
+
+        def fake_open(path: str, flags: int, mode: int = 0o777) -> int:
+            fd = real_open(path, flags, mode)
+            captured_fds.append(fd)
+            return fd
+
+        real_close = os.close
+
+        def fake_close(fd: int) -> None:
+            closed_fds.append(fd)
+            real_close(fd)
+
+        with (
+            monkeypatch.context() as m,
+            patch("os.fdopen", side_effect=OSError("injected")),
+        ):
+            m.setattr("os.open", fake_open)
+            m.setattr("os.close", fake_close)
+            with pytest.raises(OSError, match="injected"):
+                write_proxy_config("ws://host:8420/mcp", "sk-test")
+
+        assert captured_fds, "os.open must have been called"
+        assert captured_fds[0] in closed_fds, "fd must be closed when os.fdopen raises"
+        assert not tmp.exists(), ".tmp must be removed when os.fdopen raises"
+
+    def test_tmp_removed_when_replace_raises(self, proxy_config_path: Path) -> None:
+        proxy_config_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = proxy_config_path.with_suffix(".tmp")
+        with (
+            patch.object(Path, "replace", side_effect=OSError("rename failed")),
+            pytest.raises(OSError, match="rename failed"),
+        ):
+            write_proxy_config("ws://host:8420/mcp", "sk-test")
+        assert not tmp.exists(), ".tmp must be removed when replace() raises"
+
+
+class TestDeleteProxyConfigFdLeak:
+    """Verify delete_proxy_config() closes fd and removes .tmp on all failure paths."""
+
+    def test_fd_closed_and_tmp_removed_when_fdopen_raises(
+        self, proxy_config_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Write a config with an extra section so delete_proxy_config writes a .tmp.
+        proxy_config_path.parent.mkdir(parents=True, exist_ok=True)
+        proxy_config_path.write_text(
+            '[quarry]\nurl = "ws://host:8420/mcp"\n\n[other]\nfoo = "bar"\n'
+        )
+        tmp = proxy_config_path.with_suffix(".tmp")
+        captured_fds: list[int] = []
+        closed_fds: list[int] = []
+
+        real_open = os.open
+
+        def fake_open(path: str, flags: int, mode: int = 0o777) -> int:
+            fd = real_open(path, flags, mode)
+            captured_fds.append(fd)
+            return fd
+
+        real_close = os.close
+
+        def fake_close(fd: int) -> None:
+            closed_fds.append(fd)
+            real_close(fd)
+
+        with (
+            monkeypatch.context() as m,
+            patch("os.fdopen", side_effect=OSError("injected")),
+        ):
+            m.setattr("os.open", fake_open)
+            m.setattr("os.close", fake_close)
+            with pytest.raises(OSError, match="injected"):
+                delete_proxy_config()
+
+        assert captured_fds, "os.open must have been called"
+        assert captured_fds[0] in closed_fds, "fd must be closed when os.fdopen raises"
+        assert not tmp.exists(), ".tmp must be removed when os.fdopen raises"
+
+    def test_tmp_removed_when_replace_raises(self, proxy_config_path: Path) -> None:
+        proxy_config_path.parent.mkdir(parents=True, exist_ok=True)
+        proxy_config_path.write_text(
+            '[quarry]\nurl = "ws://host:8420/mcp"\n\n[other]\nfoo = "bar"\n'
+        )
+        tmp = proxy_config_path.with_suffix(".tmp")
+        with (
+            patch.object(Path, "replace", side_effect=OSError("rename failed")),
+            pytest.raises(OSError, match="rename failed"),
+        ):
+            delete_proxy_config()
+        assert not tmp.exists(), ".tmp must be removed when replace() raises"
+
+
+class TestStoreCaCertFdLeak:
+    """Verify store_ca_cert() closes fd and removes .tmp on all failure paths."""
+
+    def test_fd_closed_and_tmp_removed_when_fdopen_raises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ca_path = tmp_path / "quarry-ca.crt"
+        monkeypatch.setattr("quarry.remote.CA_CERT_PATH", ca_path)
+        tmp = ca_path.with_suffix(".tmp")
+        captured_fds: list[int] = []
+        closed_fds: list[int] = []
+
+        real_open = os.open
+
+        def fake_open(path: str, flags: int, mode: int = 0o777) -> int:
+            fd = real_open(path, flags, mode)
+            captured_fds.append(fd)
+            return fd
+
+        real_close = os.close
+
+        def fake_close(fd: int) -> None:
+            closed_fds.append(fd)
+            real_close(fd)
+
+        pem = b"-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n"
+        with (
+            monkeypatch.context() as m,
+            patch("os.fdopen", side_effect=OSError("injected")),
+        ):
+            m.setattr("os.open", fake_open)
+            m.setattr("os.close", fake_close)
+            with pytest.raises(OSError, match="injected"):
+                store_ca_cert(pem)
+
+        assert captured_fds, "os.open must have been called"
+        assert captured_fds[0] in closed_fds, "fd must be closed when os.fdopen raises"
+        assert not tmp.exists(), ".tmp must be removed when os.fdopen raises"
 
 
 class TestValidateConnectionWithCaCert:
