@@ -315,6 +315,23 @@ class TestWriteTlsFiles:
         ):
             write_tls_files("myhost.local")
 
+    def test_invalid_hostname_raises_friendly_error(self) -> None:
+        """Hostname rejected by x509.DNSName raises ValueError with env-var hint."""
+        ca_cert_pem, ca_key_pem = generate_ca("localhost")
+        # Simulate a cryptography build that rejects the hostname as invalid.
+        original_dns_name = x509.DNSName
+
+        def _rejecting_dns_name(value: str) -> x509.DNSName:
+            if value == "bad_host":
+                raise ValueError("Invalid DNS label")
+            return original_dns_name(value)
+
+        with (
+            patch("quarry.tls.x509.DNSName", side_effect=_rejecting_dns_name),
+            pytest.raises(ValueError, match="QUARRY_TLS_HOSTNAME"),
+        ):
+            generate_server_cert(ca_cert_pem, ca_key_pem, "bad_host")
+
     def test_partial_ca_state_only_key_raises(self, tmp_path: Path) -> None:
         """ca.key present but ca.crt missing → ValueError, not silent regeneration."""
         tls_dir = tmp_path / "tls"

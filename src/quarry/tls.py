@@ -166,7 +166,16 @@ def generate_server_cert(
         try:
             san_names.append(x509.IPAddress(ipaddress.ip_address(hostname)))
         except ValueError:
-            san_names.append(x509.DNSName(hostname))
+            try:
+                san_names.append(x509.DNSName(hostname))
+            except ValueError as exc:
+                msg = (
+                    f"Hostname {hostname!r} is not a valid IP address or DNS label"
+                    " for TLS certificates. Set the QUARRY_TLS_HOSTNAME environment"
+                    " variable to a valid hostname or IP address and re-run"
+                    " 'quarry install'."
+                )
+                raise ValueError(msg) from exc
     # Always include 127.0.0.1 and ::1 as IP SANs for loopback numeric access.
     san_names.append(x509.IPAddress(ipaddress.ip_address("127.0.0.1")))
     san_names.append(x509.IPAddress(ipaddress.ip_address("::1")))

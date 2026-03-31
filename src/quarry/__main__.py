@@ -908,6 +908,7 @@ def login_cmd(
             Path(tmp_path).unlink()
 
     # Step 5: Store CA cert (only reached on successful validation).
+    ca_cert_was_fresh = not CA_CERT_PATH.exists()
     store_ca_cert(ca_cert_pem)
 
     # Step 6: Write mcp-proxy config.
@@ -916,6 +917,9 @@ def login_cmd(
     except PermissionWarning as exc:
         err_console.print(f"Warning: {exc}", style="yellow")
     except OSError as exc:
+        if ca_cert_was_fresh:
+            with contextlib.suppress(OSError):
+                CA_CERT_PATH.unlink()
         err_console.print(
             f"Error: connection succeeded but could not write config to "
             f"{MCP_PROXY_CONFIG_PATH}: {exc}",

@@ -113,6 +113,45 @@ class TestQuarryExecArgs:
             args = _quarry_exec_args()
         assert "--tls" not in args
 
+    def test_quarry_serve_host_env_adds_host_flag(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """QUARRY_SERVE_HOST set must produce --host <value> in args."""
+        bind_addr = "0.0.0.0"  # noqa: S104
+        monkeypatch.setenv("QUARRY_SERVE_HOST", bind_addr)
+        with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
+            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+        ):
+            args = _quarry_exec_args()
+        assert "--host" in args
+        host_idx = args.index("--host")
+        assert args[host_idx + 1] == bind_addr
+
+    def test_quarry_serve_host_unset_no_host_flag(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When QUARRY_SERVE_HOST is unset, --host must not appear in args."""
+        monkeypatch.delenv("QUARRY_SERVE_HOST", raising=False)
+        with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
+            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+        ):
+            args = _quarry_exec_args()
+        assert "--host" not in args
+
+    def test_quarry_serve_host_empty_no_host_flag(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Empty QUARRY_SERVE_HOST must not produce --host in args."""
+        monkeypatch.setenv("QUARRY_SERVE_HOST", "")
+        with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
+            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+        ):
+            args = _quarry_exec_args()
+        assert "--host" not in args
+
 
 class TestInstallMacOS:
     @patch("quarry.service.subprocess.run")

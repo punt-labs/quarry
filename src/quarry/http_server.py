@@ -36,9 +36,9 @@ from quarry.config import DEFAULT_PORT, Settings
 from quarry.database import (
     count_chunks,
     get_db,
+    hybrid_search,
     list_collections as db_list_collections,
     list_documents,
-    search,
 )
 from quarry.provider import provider_display
 
@@ -169,16 +169,23 @@ def _search_route(request: Request) -> JSONResponse:
     collection = request.query_params.get("collection") or None
     page_type = request.query_params.get("page_type") or None
     source_format = request.query_params.get("source_format") or None
+    document = request.query_params.get("document") or None
+    agent_handle = request.query_params.get("agent_handle") or None
+    memory_type = request.query_params.get("memory_type") or None
 
     ctx = _ctx(request)
     query_vector = ctx.embedder.embed_query(query)
-    results = search(
+    results = hybrid_search(
         ctx.db,
+        query,
         query_vector,
         limit=limit,
+        document_filter=document,
         collection_filter=collection,
         page_type_filter=page_type,
         source_format_filter=source_format,
+        agent_handle_filter=agent_handle,
+        memory_type_filter=memory_type,
     )
 
     formatted = [
@@ -190,6 +197,8 @@ def _search_route(request: Request) -> JSONResponse:
             "text": r["text"],
             "page_type": r["page_type"],
             "source_format": r["source_format"],
+            "agent_handle": r.get("agent_handle"),
+            "memory_type": r.get("memory_type"),
             "similarity": round(1 - float(str(r.get("_distance", 0))), 4),
         }
         for r in results

@@ -152,10 +152,10 @@ def validate_connection(
     )
     req = urllib.request.Request(url, headers=auth_headers)  # noqa: S310
     ssl_ctx: ssl.SSLContext | None = None
-    if scheme == "https" and ca_cert_path is not None:
-        ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ssl_ctx.load_verify_locations(ca_cert_path)
     try:
+        if scheme == "https" and ca_cert_path is not None:
+            ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ssl_ctx.load_verify_locations(ca_cert_path)
         with urllib.request.urlopen(req, timeout=10, context=ssl_ctx) as _:  # noqa: S310
             return True, ""
     except urllib.error.HTTPError as exc:

@@ -126,7 +126,7 @@ class TestConcurrency:
             return []
 
         with (
-            patch("quarry.http_server.search", side_effect=slow_search),
+            patch("quarry.http_server.hybrid_search", side_effect=slow_search),
             concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool,
         ):
             start = time.monotonic()
@@ -163,7 +163,7 @@ class TestSearch:
                 "_distance": 0.1,
             }
         ]
-        with patch("quarry.http_server.search", return_value=mock_results):
+        with patch("quarry.http_server.hybrid_search", return_value=mock_results):
             data = client.get("/search?q=hello").json()
 
         assert data["query"] == "hello"
@@ -172,39 +172,90 @@ class TestSearch:
         assert data["results"][0]["similarity"] == 0.9
 
     def test_search_with_limit(self, client: TestClient) -> None:
-        with patch("quarry.http_server.search", return_value=[]) as mock_search:
+        with patch("quarry.http_server.hybrid_search", return_value=[]) as mock_search:
             client.get("/search?q=hello&limit=5")
 
         _, kwargs = mock_search.call_args
         assert kwargs["limit"] == 5
 
     def test_search_limit_capped_at_50(self, client: TestClient) -> None:
-        with patch("quarry.http_server.search", return_value=[]) as mock_search:
+        with patch("quarry.http_server.hybrid_search", return_value=[]) as mock_search:
             client.get("/search?q=hello&limit=999")
 
         _, kwargs = mock_search.call_args
         assert kwargs["limit"] == 50
 
     def test_search_negative_limit_clamped_to_1(self, client: TestClient) -> None:
-        with patch("quarry.http_server.search", return_value=[]) as mock_search:
+        with patch("quarry.http_server.hybrid_search", return_value=[]) as mock_search:
             client.get("/search?q=hello&limit=-5")
 
         _, kwargs = mock_search.call_args
         assert kwargs["limit"] == 1
 
     def test_search_with_collection_filter(self, client: TestClient) -> None:
-        with patch("quarry.http_server.search", return_value=[]) as mock_search:
+        with patch("quarry.http_server.hybrid_search", return_value=[]) as mock_search:
             client.get("/search?q=hello&collection=research")
 
         _, kwargs = mock_search.call_args
         assert kwargs["collection_filter"] == "research"
 
     def test_search_empty_results(self, client: TestClient) -> None:
-        with patch("quarry.http_server.search", return_value=[]):
+        with patch("quarry.http_server.hybrid_search", return_value=[]):
             data = client.get("/search?q=nonexistent").json()
 
         assert data["total_results"] == 0
         assert data["results"] == []
+
+    def test_search_agent_handle_filter_passed_through(
+        self, client: TestClient
+    ) -> None:
+        """agent_handle query param must reach hybrid_search as agent_handle_filter."""
+        with patch("quarry.http_server.hybrid_search", return_value=[]) as mock_search:
+            client.get("/search?q=hello&agent_handle=someagent")
+
+        _, kwargs = mock_search.call_args
+        assert kwargs["agent_handle_filter"] == "someagent"
+
+    def test_search_memory_type_filter_passed_through(self, client: TestClient) -> None:
+        """memory_type query param must reach hybrid_search as memory_type_filter."""
+        with patch("quarry.http_server.hybrid_search", return_value=[]) as mock_search:
+            client.get("/search?q=hello&memory_type=episodic")
+
+        _, kwargs = mock_search.call_args
+        assert kwargs["memory_type_filter"] == "episodic"
+
+    def test_search_document_filter_passed_through(self, client: TestClient) -> None:
+        """document query param must reach hybrid_search as document_filter."""
+        with patch("quarry.http_server.hybrid_search", return_value=[]) as mock_search:
+            client.get("/search?q=hello&document=report.pdf")
+
+        _, kwargs = mock_search.call_args
+        assert kwargs["document_filter"] == "report.pdf"
+
+    def test_search_result_includes_agent_and_memory_fields(
+        self, client: TestClient
+    ) -> None:
+        """Results must include agent_handle and memory_type fields."""
+        mock_results = [
+            {
+                "document_name": "note.md",
+                "collection": "default",
+                "page_number": 1,
+                "chunk_index": 0,
+                "text": "remember this",
+                "page_type": "text",
+                "source_format": ".md",
+                "agent_handle": "rmh",
+                "memory_type": "episodic",
+                "_distance": 0.2,
+            }
+        ]
+        with patch("quarry.http_server.hybrid_search", return_value=mock_results):
+            data = client.get("/search?q=remember").json()
+
+        result = data["results"][0]
+        assert result["agent_handle"] == "rmh"
+        assert result["memory_type"] == "episodic"
 
 
 class TestDocuments:
@@ -406,7 +457,7 @@ class TestApiKeyAuth:
         assert resp.status_code == 401
 
     def test_search_allowed_with_correct_key(self, auth_client: TestClient) -> None:
-        with patch("quarry.http_server.search", return_value=[]):
+        with patch("quarry.http_server.hybrid_search", return_value=[]):
             data = auth_client.get(
                 "/search?q=test",
                 headers={"Authorization": f"Bearer {_TEST_API_KEY}"},
@@ -426,7 +477,7 @@ class TestApiKeyAuth:
 
     def test_no_auth_required_when_key_not_configured(self, client: TestClient) -> None:
         """The default client fixture has no api_key — all open."""
-        with patch("quarry.http_server.search", return_value=[]):
+        with patch("quarry.http_server.hybrid_search", return_value=[]):
             data = client.get("/search?q=test").json()
         assert data["query"] == "test"
 
@@ -438,7 +489,7 @@ class TestApiKeyAuth:
 
     def test_bearer_scheme_case_insensitive(self, auth_client: TestClient) -> None:
         """RFC 7235: auth scheme names are case-insensitive."""
-        with patch("quarry.http_server.search", return_value=[]):
+        with patch("quarry.http_server.hybrid_search", return_value=[]):
             data = auth_client.get(
                 "/search?q=test",
                 headers={"Authorization": f"bearer {_TEST_API_KEY}"},
@@ -462,6 +513,6 @@ class TestEmptyApiKey:
     def test_empty_key_does_not_require_auth(
         self, empty_key_client: TestClient
     ) -> None:
-        with patch("quarry.http_server.search", return_value=[]):
+        with patch("quarry.http_server.hybrid_search", return_value=[]):
             data = empty_key_client.get("/search?q=test").json()
         assert data["query"] == "test"

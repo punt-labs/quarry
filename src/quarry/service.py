@@ -37,6 +37,11 @@ def _quarry_exec_args() -> list[str]:
     points to the venv Python — the daemon should use the prod binary instead
     so it survives venv rebuilds and directory moves.
 
+    Reads ``QUARRY_SERVE_HOST`` from the environment at registration time.
+    When set and non-empty, ``--host <value>`` is baked into the service
+    command so the daemon binds to the correct address after reboot.  If unset,
+    the server defaults to loopback (``127.0.0.1``).
+
     Appends ``--tls`` when TLS certificates are present in TLS_DIR.
     """
     # Resolve the uv tool binary through its symlink to get the stable path.
@@ -47,6 +52,10 @@ def _quarry_exec_args() -> list[str]:
     else:
         # Fallback: use the current Python (works for non-uv installs).
         base = [sys.executable, "-m", "quarry", "serve", "--port", str(DEFAULT_PORT)]
+
+    serve_host = os.environ.get("QUARRY_SERVE_HOST", "").strip()
+    if serve_host:
+        base.extend(["--host", serve_host])
 
     cert_path = TLS_DIR / "server.crt"
     key_path = TLS_DIR / "server.key"

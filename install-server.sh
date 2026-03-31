@@ -131,7 +131,7 @@ fi
 
 info "Downloading embedding model and generating TLS certificates..."
 printf '\n'
-"$BINARY" install
+QUARRY_SERVE_HOST=0.0.0.0 "$BINARY" install
 printf '\n'
 
 # --- Step 5: Start the daemon ---

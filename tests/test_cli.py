@@ -2073,7 +2073,7 @@ class TestLoginCmd:
             patch("quarry.__main__.store_ca_cert"),
             patch("quarry.__main__.validate_connection", return_value=(True, "")),
             patch("quarry.__main__.write_proxy_config"),
-            patch("quarry.__main__.CA_CERT_PATH", "/fake/quarry-ca.crt"),
+            patch("quarry.__main__.CA_CERT_PATH", Path("/fake/quarry-ca.crt")),
         )
 
     def test_success_with_yes_flag(self) -> None:
@@ -2086,7 +2086,7 @@ class TestLoginCmd:
                 "quarry.__main__.validate_connection", return_value=(True, "")
             ) as mock_validate,
             patch("quarry.__main__.write_proxy_config") as mock_write,
-            patch("quarry.__main__.CA_CERT_PATH", "/fake/quarry-ca.crt"),
+            patch("quarry.__main__.CA_CERT_PATH", Path("/fake/quarry-ca.crt")),
         ):
             result = runner.invoke(
                 app,
@@ -2117,7 +2117,7 @@ class TestLoginCmd:
             patch("quarry.__main__.store_ca_cert"),
             patch("quarry.__main__.validate_connection", return_value=(True, "")),
             patch("quarry.__main__.write_proxy_config") as mock_write,
-            patch("quarry.__main__.CA_CERT_PATH", "/fake/quarry-ca.crt"),
+            patch("quarry.__main__.CA_CERT_PATH", Path("/fake/quarry-ca.crt")),
         ):
             result = runner.invoke(
                 app,
@@ -2136,7 +2136,7 @@ class TestLoginCmd:
             patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
             patch("quarry.__main__.store_ca_cert") as mock_store,
             patch("quarry.__main__.write_proxy_config") as mock_write,
-            patch("quarry.__main__.CA_CERT_PATH", "/fake/quarry-ca.crt"),
+            patch("quarry.__main__.CA_CERT_PATH", Path("/fake/quarry-ca.crt")),
         ):
             result = runner.invoke(
                 app,
@@ -2174,7 +2174,7 @@ class TestLoginCmd:
                 return_value=(False, "Authentication failed — check --api-key."),
             ),
             patch("quarry.__main__.write_proxy_config") as mock_write,
-            patch("quarry.__main__.CA_CERT_PATH", "/fake/quarry-ca.crt"),
+            patch("quarry.__main__.CA_CERT_PATH", Path("/fake/quarry-ca.crt")),
         ):
             result = runner.invoke(
                 app,
@@ -2195,7 +2195,7 @@ class TestLoginCmd:
             patch("quarry.__main__.store_ca_cert"),
             patch("quarry.__main__.validate_connection", return_value=(True, "")),
             patch("quarry.__main__.write_proxy_config") as mock_write,
-            patch("quarry.__main__.CA_CERT_PATH", "/fake/quarry-ca.crt"),
+            patch("quarry.__main__.CA_CERT_PATH", Path("/fake/quarry-ca.crt")),
         ):
             result = runner.invoke(
                 app,
@@ -2225,7 +2225,7 @@ class TestLoginCmd:
                 "quarry.__main__.validate_connection", return_value=(True, "")
             ) as mock_validate,
             patch("quarry.__main__.write_proxy_config") as mock_write,
-            patch("quarry.__main__.CA_CERT_PATH", "/fake/quarry-ca.crt"),
+            patch("quarry.__main__.CA_CERT_PATH", Path("/fake/quarry-ca.crt")),
         ):
             result = runner.invoke(app, ["login", "okinos.example.com", "--yes"])
         _reset_globals()
@@ -2251,7 +2251,7 @@ class TestLoginCmd:
             patch("quarry.__main__.store_ca_cert"),
             patch("quarry.__main__.validate_connection", return_value=(True, "")),
             patch("quarry.__main__.write_proxy_config") as mock_write,
-            patch("quarry.__main__.CA_CERT_PATH", "/fake/quarry-ca.crt"),
+            patch("quarry.__main__.CA_CERT_PATH", Path("/fake/quarry-ca.crt")),
         ):
             result = runner.invoke(
                 app,
@@ -2261,6 +2261,35 @@ class TestLoginCmd:
         assert result.exit_code == 0
         url_arg = mock_write.call_args[0][0]
         assert url_arg.startswith("wss://"), f"Expected wss:// but got: {url_arg}"
+
+    def test_proxy_config_oserror_cleans_up_fresh_ca_cert(self) -> None:
+        """OSError from write_proxy_config removes freshly-written CA cert."""
+        fake_ca_path = MagicMock()
+        fake_ca_path.exists.return_value = False  # cert was not present before login
+
+        with (
+            patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
+            patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
+            patch("quarry.__main__.store_ca_cert"),
+            patch("quarry.__main__.validate_connection", return_value=(True, "")),
+            patch(
+                "quarry.__main__.write_proxy_config",
+                side_effect=OSError("Permission denied"),
+            ),
+            patch("quarry.__main__.CA_CERT_PATH", fake_ca_path),
+            patch(
+                "quarry.__main__.MCP_PROXY_CONFIG_PATH",
+                Path("/fake/mcp-proxy.toml"),
+            ),
+        ):
+            result = runner.invoke(
+                app,
+                ["login", "okinos.example.com", "--api-key", "sk-test", "--yes"],
+            )
+        _reset_globals()
+        assert result.exit_code == 1
+        assert "Permission denied" in result.output
+        fake_ca_path.unlink.assert_called_once()
 
 
 class TestLogoutCmd:

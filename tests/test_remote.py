@@ -524,3 +524,19 @@ class TestValidateConnectionWithCaCert:
 
         assert len(ssl_contexts_used) == 1
         assert ssl_contexts_used[0] is None
+
+    def test_missing_ca_file_returns_false_not_raises(self) -> None:
+        """load_verify_locations() raising FileNotFoundError returns (False, ...)."""
+        with patch(
+            "ssl.SSLContext.load_verify_locations",
+            side_effect=FileNotFoundError("no such file"),
+        ):
+            ok, reason = validate_connection(
+                "localhost",
+                8420,
+                "sk-test",
+                scheme="https",
+                ca_cert_path="/nonexistent/ca.crt",
+            )
+        assert ok is False
+        assert reason  # non-empty error message
