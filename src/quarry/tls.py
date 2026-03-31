@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime
 import hashlib
 import logging
+import os
 from pathlib import Path
 
 from cryptography import x509
@@ -241,7 +242,9 @@ def cert_fingerprint(cert_pem: bytes) -> str:
 def write_tls_files(hostname: str) -> None:
     """Generate CA + server cert, write to TLS_DIR.
 
-    Idempotent: skips generation if all four files already exist.
+    Idempotent: skips generation if all four files already exist. If the CA
+    already exists but server certs are missing (partial state), reuses the
+    existing CA so clients that pinned it remain valid.
 
     File permissions:
         ca.crt  — 0644 (must be fetchable/served)
@@ -257,24 +260,30 @@ def write_tls_files(hostname: str) -> None:
     server_crt_path = TLS_DIR / "server.crt"
     server_key_path = TLS_DIR / "server.key"
 
-    all_exist = all(
-        p.exists() for p in (ca_crt_path, ca_key_path, server_crt_path, server_key_path)
-    )
-    if all_exist:
+    all_paths = (ca_crt_path, ca_key_path, server_crt_path, server_key_path)
+    if all(p.exists() for p in all_paths):
         logger.debug("TLS files already exist at %s — skipping generation", TLS_DIR)
         return
 
-    logger.info("Generating TLS certificates for hostname=%r", hostname)
     TLS_DIR.mkdir(parents=True, exist_ok=True)
 
-    ca_cert_pem, ca_key_pem = generate_ca(hostname)
+    # Reuse existing CA if present; only generate a new one if missing.
+    # Regenerating the CA would break all clients that pinned the old CA cert.
+    if ca_crt_path.exists() and ca_key_path.exists():
+        logger.info("Reusing existing CA at %s", TLS_DIR)
+        ca_cert_pem = ca_crt_path.read_bytes()
+        ca_key_pem = ca_key_path.read_bytes()
+    else:
+        logger.info("Generating new CA for hostname=%r", hostname)
+        ca_cert_pem, ca_key_pem = generate_ca(hostname)
+        _write_file(ca_crt_path, ca_cert_pem, mode=0o644)
+        _write_file(ca_key_path, ca_key_pem, mode=0o600)
+
+    # Always regenerate server cert (it may be missing or expired).
+    logger.info("Generating server cert for hostname=%r", hostname)
     server_cert_pem, server_key_pem = generate_server_cert(
         ca_cert_pem, ca_key_pem, hostname
     )
-
-    # Write files with tight permissions.
-    _write_file(ca_crt_path, ca_cert_pem, mode=0o644)
-    _write_file(ca_key_path, ca_key_pem, mode=0o600)
     _write_file(server_crt_path, server_cert_pem, mode=0o600)
     _write_file(server_key_path, server_key_pem, mode=0o600)
 
@@ -282,18 +291,20 @@ def write_tls_files(hostname: str) -> None:
 
 
 def _write_file(path: Path, data: bytes, mode: int) -> None:
-    """Write binary data to path atomically and set file permissions.
+    """Write binary data to path atomically with the given permissions.
 
-    Writes to a .tmp sibling, chmods it, then renames into place so that a
-    crash between write and chmod cannot leave a file with wrong permissions,
-    and idempotency checks on all-four-exist are never fooled by partial state.
-    The .tmp file is removed on any exception to avoid leaking a private key
-    at default umask permissions.
+    Uses os.open() with mode so the file is created with the correct
+    permissions from the start — no window where a private key is world-readable
+    before chmod. Writes to a .tmp sibling then renames into place so
+    idempotency checks on all-four-exist are never fooled by partial state.
+    The .tmp file is removed on any exception.
     """
     tmp = path.with_suffix(".tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    fd = os.open(str(tmp), flags, mode)
     try:
-        tmp.write_bytes(data)
-        tmp.chmod(mode)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
         tmp.rename(path)
     except:
         tmp.unlink(missing_ok=True)

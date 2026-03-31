@@ -294,9 +294,8 @@ def _remote_https_get(path: str, config: dict[str, object]) -> dict[str, object]
 
     conn: http.client.HTTPConnection | http.client.HTTPSConnection
     if scheme == "https":
-        ssl_ctx = ssl.create_default_context()
-        if ca_cert:
-            ssl_ctx.load_verify_locations(str(ca_cert))
+        ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ssl_ctx.load_verify_locations(str(ca_cert))
         conn = http.client.HTTPSConnection(host, port, context=ssl_ctx, timeout=15)
     else:
         conn = http.client.HTTPConnection(host, port, timeout=15)
@@ -363,6 +362,10 @@ def find_cmd(
             params["page_type"] = page_type
         if source_format:
             params["source_format"] = source_format
+        if agent_handle:
+            params["agent_handle"] = agent_handle
+        if memory_type:
+            params["memory_type"] = memory_type
         qs = urllib.parse.urlencode(params)
         remote_resp = _remote_https_get(f"/search?{qs}", proxy_config)
         raw_results = remote_resp.get("results", [])
@@ -881,7 +884,7 @@ def login_cmd(
 
     # Step 2: Display fingerprint.
     fp = cert_fingerprint(ca_cert_pem)
-    print(f"Server CA fingerprint: {fp}")
+    err_console.print(f"Server CA fingerprint: {fp}")
 
     # Step 3: Prompt for trust (skip if --yes).
     if not yes:
@@ -973,12 +976,18 @@ def remote_list_cmd(
         _emit({"remote": None}, "No remote configured.")
         return
     url = quarry_cfg.get("url", "")
-    auth_header = quarry_cfg.get("headers", {}).get("Authorization", "")
-    if not url or not auth_header.startswith("Bearer "):
-        _emit({"remote": None}, "No remote configured (config is incomplete).")
+    if not url:
+        _emit(
+            {
+                "configured": False,
+                "message": "No remote configured. Run 'quarry login <host>'.",
+            },
+            "No remote configured. Run 'quarry login <host>'.",
+        )
         return
-    token = auth_header.removeprefix("Bearer ").strip()
-    masked = mask_token(token)
+    auth_header = (quarry_cfg.get("headers") or {}).get("Authorization", "")
+    token: str | None = auth_header.removeprefix("Bearer ").strip() or None
+    masked = mask_token(token) if token is not None else "(none)"
     ca_cert = quarry_cfg.get("ca_cert")
     text = f"Remote: {url}  token: {masked}"
     data: dict[str, object] = {"url": url, "token_prefix": masked}

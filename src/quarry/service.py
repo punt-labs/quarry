@@ -48,8 +48,16 @@ def _quarry_exec_args() -> list[str]:
         # Fallback: use the current Python (works for non-uv installs).
         base = [sys.executable, "-m", "quarry", "serve", "--port", str(DEFAULT_PORT)]
 
-    if (TLS_DIR / "server.crt").exists():
+    cert_path = TLS_DIR / "server.crt"
+    key_path = TLS_DIR / "server.key"
+    if cert_path.exists() and key_path.exists():
         base.append("--tls")
+    elif cert_path.exists() or key_path.exists():
+        logger.warning(
+            "Partial TLS state in %s — only one of server.crt / server.key exists. "
+            "Run 'quarry install' to regenerate TLS files.",
+            TLS_DIR,
+        )
 
     return base
 

@@ -141,7 +141,7 @@ fi
 
 QUARRY_LOG="$HOME/.punt-labs/quarry/quarry.log"
 mkdir -p "$(dirname "$QUARRY_LOG")"
-"$BINARY" serve --host 0.0.0.0 --tls --api-key "$QUARRY_API_KEY" >> "$QUARRY_LOG" 2>&1 &
+"$BINARY" serve --host 0.0.0.0 --tls >> "$QUARRY_LOG" 2>&1 &
 DAEMON_PID=$!
 sleep 2
 if kill -0 "$DAEMON_PID" 2>/dev/null; then

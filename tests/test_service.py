@@ -69,7 +69,20 @@ class TestQuarryExecArgs:
         assert args[0] == sys.executable
         assert args[1:] == ["-m", "quarry", "serve", "--port", str(DEFAULT_PORT)]
 
-    def test_appends_tls_flag_when_cert_exists(self, tmp_path: Path) -> None:
+    def test_appends_tls_flag_when_cert_and_key_exist(self, tmp_path: Path) -> None:
+        tls_dir = tmp_path / "tls"
+        tls_dir.mkdir()
+        (tls_dir / "server.crt").write_text("CERT")
+        (tls_dir / "server.key").write_text("KEY")
+        with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
+            patch("quarry.service.TLS_DIR", tls_dir),
+        ):
+            args = _quarry_exec_args()
+        assert "--tls" in args
+
+    def test_no_tls_flag_on_partial_state(self, tmp_path: Path) -> None:
+        """Only server.crt present (no key) → no --tls flag, warning logged."""
         tls_dir = tmp_path / "tls"
         tls_dir.mkdir()
         (tls_dir / "server.crt").write_text("CERT")
@@ -78,7 +91,7 @@ class TestQuarryExecArgs:
             patch("quarry.service.TLS_DIR", tls_dir),
         ):
             args = _quarry_exec_args()
-        assert "--tls" in args
+        assert "--tls" not in args
 
 
 class TestInstallMacOS:
