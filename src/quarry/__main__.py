@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import http.client
 import importlib.metadata
 import json
 import logging
+import ssl
 import sys
+import urllib.parse
 from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import Annotated
@@ -237,6 +240,70 @@ def _cli_errors(fn: Callable[..., None]) -> Callable[..., None]:
 
 
 # ---------------------------------------------------------------------------
+# Remote helpers
+# ---------------------------------------------------------------------------
+
+
+def _remote_https_get(path: str, config: dict[str, object]) -> dict[str, object]:
+    """Make an authenticated GET request to the remote quarry server.
+
+    Derives the HTTPS base URL from the wss:// URL in ``config``, builds a
+    pinned SSL context using the CA cert when provided, and returns the parsed
+    JSON response body.
+
+    Args:
+        path: Request path including query string, e.g. ``/search?q=foo&limit=10``.
+        config: Dict from ``read_proxy_config()`` with keys ``url``, optional
+            ``ca_cert``, and ``headers``.
+
+    Returns:
+        Parsed JSON response as a dict.
+
+    Raises:
+        RuntimeError: If the server returns a non-200 status code.
+        OSError: If the connection cannot be established.
+    """
+    raw_url = str(config["url"])
+    http_base = (
+        "https://" + raw_url[6:]
+        if raw_url.startswith("wss://")
+        else "http://" + raw_url[5:]
+        if raw_url.startswith("ws://")
+        else raw_url
+    )
+    parsed = urllib.parse.urlparse(http_base)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 8420
+
+    ca_cert = config.get("ca_cert")
+    ssl_ctx = ssl.create_default_context()
+    if ca_cert:
+        ssl_ctx.load_verify_locations(str(ca_cert))
+
+    headers_raw = config.get("headers", {})
+    headers: dict[str, str] = (
+        {k: str(v) for k, v in headers_raw.items()}
+        if isinstance(headers_raw, dict)
+        else {}
+    )
+
+    conn = http.client.HTTPSConnection(host, port, context=ssl_ctx, timeout=15)
+    try:
+        conn.request("GET", path, headers=headers)
+        resp = conn.getresponse()
+        body = resp.read()
+        if resp.status != 200:
+            body_text = body.decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"Remote quarry server returned HTTP {resp.status}: {body_text}"
+            )
+        response_data: dict[str, object] = json.loads(body)
+        return response_data
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
 # Product commands — ordered: find, ingest, show, remember, status, use,
 # delete, register, deregister, sync, list
 # ---------------------------------------------------------------------------
@@ -273,6 +340,44 @@ def find_cmd(
     ] = "",
 ) -> None:
     """Search indexed documents."""
+    proxy_config = read_proxy_config()
+    if proxy_config:
+        params: dict[str, str | int] = {"q": query, "limit": limit}
+        if collection:
+            params["collection"] = collection
+        if document:
+            params["document"] = document
+        if page_type:
+            params["page_type"] = page_type
+        if source_format:
+            params["source_format"] = source_format
+        qs = urllib.parse.urlencode(params)
+        remote_resp = _remote_https_get(f"/search?{qs}", proxy_config)
+        raw_results = remote_resp.get("results", [])
+        remote_results: list[dict[str, object]] = (
+            list(raw_results) if isinstance(raw_results, list) else []
+        )
+        json_results: list[dict[str, object]] = []
+        lines: list[str] = []
+        for r in remote_results:
+            similarity = round(float(str(r.get("similarity", 0))), 4)
+            lines.append(
+                f"\n[{r.get('document_name', '')} | {r.get('collection', '')}]"
+                f" (similarity: {similarity})"
+            )
+            text = str(r.get("text", ""))
+            lines.append(text[:300])
+            json_results.append(
+                {
+                    "document_name": r.get("document_name", ""),
+                    "collection": r.get("collection", ""),
+                    "similarity": similarity,
+                    "text": text,
+                }
+            )
+        _emit(json_results, "\n".join(lines))
+        return
+
     settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
 
@@ -290,33 +395,33 @@ def find_cmd(
         memory_type_filter=memory_type or None,
     )
 
-    json_results = []
-    lines: list[str] = []
-    for r in results:
-        similarity = round(1 - float(str(r.get("_distance", 0))), 4)
-        meta = f"{r['page_type']}/{r['source_format']}"
-        lines.append(
-            f"\n[{r['document_name']} p.{r['page_number']} | {meta}]"
+    local_json_results: list[dict[str, object]] = []
+    local_lines: list[str] = []
+    for row in results:
+        similarity = round(1 - float(str(row.get("_distance", 0))), 4)
+        meta = f"{row['page_type']}/{row['source_format']}"
+        local_lines.append(
+            f"\n[{row['document_name']} p.{row['page_number']} | {meta}]"
             f" (similarity: {similarity})"
         )
-        text = str(r["text"])
-        lines.append(text[:300])
-        json_results.append(
+        text = str(row["text"])
+        local_lines.append(text[:300])
+        local_json_results.append(
             {
-                "document_name": r["document_name"],
-                "page_number": r["page_number"],
-                "page_type": r["page_type"],
-                "source_format": r["source_format"],
+                "document_name": row["document_name"],
+                "page_number": row["page_number"],
+                "page_type": row["page_type"],
+                "source_format": row["source_format"],
                 "similarity": similarity,
                 "text": text,
-                "collection": r.get("collection", ""),
-                "agent_handle": r.get("agent_handle", ""),
-                "memory_type": r.get("memory_type", ""),
-                "summary": r.get("summary", ""),
+                "collection": row.get("collection", ""),
+                "agent_handle": row.get("agent_handle", ""),
+                "memory_type": row.get("memory_type", ""),
+                "summary": row.get("summary", ""),
             }
         )
 
-    _emit(json_results, "\n".join(lines))
+    _emit(local_json_results, "\n".join(local_lines))
 
 
 @app.command(name="ingest")
@@ -523,6 +628,12 @@ def remember(
 @_cli_errors
 def status_cmd() -> None:
     """Show database status: documents, chunks, storage, model info."""
+    proxy_config = read_proxy_config()
+    if proxy_config:
+        remote_data = _remote_https_get("/status", proxy_config)
+        _emit(remote_data, format_status(remote_data))
+        return
+
     settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
 

@@ -254,6 +254,51 @@ class TestStatusCmd:
         assert "2" in result.output
         assert "30" in result.output
 
+    def test_remote_routing_when_config_present(self):
+        remote_status = {
+            "document_count": 42,
+            "collection_count": 3,
+            "chunk_count": 1200,
+            "database_path": "/remote/path/lancedb",
+            "database_size_bytes": 8192,
+            "embedding_model": "snowflake-arctic-embed-m-v1.5",
+            "provider": "cuda",
+        }
+        proxy_config = {
+            "url": "wss://quarry.example.com:8420/mcp",
+            "ca_cert": "/path/to/ca.crt",
+            "headers": {"Authorization": "Bearer tok"},
+        }
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch(
+                "quarry.__main__._remote_https_get", return_value=remote_status
+            ) as mock_get,
+        ):
+            result = runner.invoke(app, ["status"])
+
+        assert result.exit_code == 0
+        mock_get.assert_called_once_with("/status", proxy_config)
+        assert "42" in result.output
+        assert "1,200" in result.output
+
+    def test_local_path_when_no_config(self):
+        mock_settings = _mock_settings()
+        mock_settings.registry_path.exists.return_value = False
+        mock_settings.lancedb_path.exists.return_value = False
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value={}),
+            patch("quarry.__main__._resolved_settings", return_value=mock_settings),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.list_documents", return_value=[]),
+            patch("quarry.__main__.count_chunks", return_value=0),
+            patch("quarry.__main__.db_list_collections", return_value=[]),
+        ):
+            result = runner.invoke(app, ["status"])
+
+        assert result.exit_code == 0
+        assert "Documents" in result.output
+
 
 class TestUseCmd:
     def test_sets_default_db(self):
@@ -562,6 +607,74 @@ class TestFindCmd:
             result = runner.invoke(app, ["find", "query"])
 
         assert result.exit_code == 1
+
+    def test_remote_routing_when_config_present(self):
+        remote_response = {
+            "results": [
+                {
+                    "document_name": "remote-doc.pdf",
+                    "collection": "remote-col",
+                    "text": "remote search result text",
+                    "similarity": 0.91,
+                },
+            ]
+        }
+        proxy_config = {
+            "url": "wss://quarry.example.com:8420/mcp",
+            "ca_cert": "/path/to/ca.crt",
+            "headers": {"Authorization": "Bearer tok"},
+        }
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch(
+                "quarry.__main__._remote_https_get", return_value=remote_response
+            ) as mock_get,
+        ):
+            result = runner.invoke(app, ["find", "some query", "--limit", "5"])
+
+        assert result.exit_code == 0
+        mock_get.assert_called_once()
+        call_path: str = mock_get.call_args[0][0]
+        assert "/search?" in call_path
+        assert "q=some+query" in call_path or "q=some%20query" in call_path
+        assert "limit=5" in call_path
+        assert "remote-doc.pdf" in result.output
+        assert "remote search result text" in result.output
+
+    def test_remote_routing_includes_filters(self):
+        proxy_config = {
+            "url": "wss://quarry.example.com:8420/mcp",
+            "headers": {"Authorization": "Bearer tok"},
+        }
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch(
+                "quarry.__main__._remote_https_get", return_value={"results": []}
+            ) as mock_get,
+        ):
+            runner.invoke(
+                app,
+                ["find", "query", "--collection", "math", "--document", "notes.pdf"],
+            )
+
+        call_path = mock_get.call_args[0][0]
+        assert "collection=math" in call_path
+        assert "document=notes.pdf" in call_path
+
+    def test_local_path_when_no_config(self):
+        mock_vector = np.zeros(768, dtype=np.float32)
+        mock_backend = MagicMock()
+        mock_backend.embed_query.return_value = mock_vector
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value={}),
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.get_embedding_backend", return_value=mock_backend),
+            patch("quarry.__main__.hybrid_search", return_value=[]),
+        ):
+            result = runner.invoke(app, ["find", "query"])
+
+        assert result.exit_code == 0
 
 
 class TestDeleteCollectionCmd:

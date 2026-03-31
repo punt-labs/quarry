@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Generator
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -21,6 +23,18 @@ _QUARRY_ENV_VARS = (
     "QUARRY_ROOT",
     "REGISTRY_PATH",
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_remote_config() -> Generator[None]:
+    """Prevent tests from reading the real mcp-proxy config on disk.
+
+    Existing CLI tests assume local DB access. This fixture returns an empty
+    config so ``read_proxy_config()`` never triggers remote routing unless a
+    test explicitly patches it.
+    """
+    with patch("quarry.__main__.read_proxy_config", return_value={}):
+        yield
 
 
 @pytest.fixture(autouse=True)
