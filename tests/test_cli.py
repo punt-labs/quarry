@@ -2043,7 +2043,7 @@ class TestServeTlsFlag:
 
         _reset_globals()
         assert result.exit_code == 1
-        assert "quarry install" in result.output.replace("\n", " ")
+        assert "quarry install" in " ".join(result.output.split())
 
     def test_no_tls_flag_passes_none_ssl_args(self) -> None:
         with (
