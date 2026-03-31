@@ -125,6 +125,10 @@ ok "$BINARY $(command -v "$BINARY")"
 
 # --- Step 4: Download embedding model and generate TLS certificates ---
 
+if [ -z "${QUARRY_API_KEY:-}" ]; then
+  fail "QUARRY_API_KEY is not set. Export it before running this script: export QUARRY_API_KEY=<your-key>"
+fi
+
 info "Downloading embedding model and generating TLS certificates..."
 printf '\n'
 "$BINARY" install
@@ -134,10 +138,6 @@ printf '\n'
 
 info "Starting quarry daemon..."
 printf '\n'
-
-if [ -z "${QUARRY_API_KEY:-}" ]; then
-  fail "QUARRY_API_KEY is not set. Export it before running this script: export QUARRY_API_KEY=<your-key>"
-fi
 
 QUARRY_LOG="$HOME/.punt-labs/quarry/quarry.log"
 mkdir -p "$(dirname "$QUARRY_LOG")"
