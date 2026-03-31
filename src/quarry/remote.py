@@ -260,10 +260,11 @@ def fetch_ca_cert(host: str, port: int) -> bytes:
 
 
 def store_ca_cert(cert_pem: bytes) -> None:
-    """Write the CA certificate to CA_CERT_PATH atomically, chmod 0600.
+    """Write the CA certificate to CA_CERT_PATH with 0600 permissions, atomically.
 
-    Writes to a .tmp sibling, chmods it, then replaces the destination so a
-    crash between write and chmod cannot leave a cert with wrong permissions.
+    Uses os.open() with mode 0600 from creation so no chmod race window exists.
+    Writes to a .tmp sibling then renames into place so a crash cannot leave a
+    partially written file at the destination path.
 
     Args:
         cert_pem: CA certificate in PEM format.

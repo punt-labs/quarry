@@ -980,7 +980,10 @@ def remote_list_cmd(
             "No remote configured. Run 'quarry login <host>'.",
         )
         return
-    auth_header = (quarry_cfg.get("headers") or {}).get("Authorization", "")
+    headers_raw = quarry_cfg.get("headers")
+    auth_header = (
+        headers_raw.get("Authorization", "") if isinstance(headers_raw, dict) else ""
+    ) or ""
     token: str | None = auth_header.removeprefix("Bearer ").strip() or None
     masked = mask_token(token) if token is not None else "(none)"
     ca_cert = quarry_cfg.get("ca_cert")
