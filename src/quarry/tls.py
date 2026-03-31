@@ -14,7 +14,15 @@ from pathlib import Path
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import (
+    dsa,
+    ec,
+    ed448,
+    ed25519,
+    rsa,
+    x448,
+    x25519,
+)
 from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey
 from cryptography.x509.oid import NameOID
 
@@ -28,6 +36,41 @@ _EC_CURVE = ec.SECP256R1()
 
 def _now_utc() -> datetime.datetime:
     return datetime.datetime.now(datetime.UTC)
+
+
+def _signing_public_key(
+    pub: rsa.RSAPublicKey
+    | ec.EllipticCurvePublicKey
+    | dsa.DSAPublicKey
+    | ed25519.Ed25519PublicKey
+    | ed448.Ed448PublicKey
+    | x25519.X25519PublicKey
+    | x448.X448PublicKey,
+) -> (
+    rsa.RSAPublicKey
+    | ec.EllipticCurvePublicKey
+    | dsa.DSAPublicKey
+    | ed25519.Ed25519PublicKey
+    | ed448.Ed448PublicKey
+):
+    """Narrow a public key to the signing-key types accepted by AuthorityKeyIdentifier.
+
+    X25519 and X448 are key-agreement keys and cannot sign certificates.
+    Our CA always uses EC P-256, so this assertion is always satisfied.
+    """
+    if not isinstance(
+        pub,
+        (
+            rsa.RSAPublicKey,
+            ec.EllipticCurvePublicKey,
+            dsa.DSAPublicKey,
+            ed25519.Ed25519PublicKey,
+            ed448.Ed448PublicKey,
+        ),
+    ):
+        msg = f"CA public key must be a signing key, got {type(pub).__name__}"
+        raise TypeError(msg)
+    return pub
 
 
 def generate_ca(hostname: str) -> tuple[bytes, bytes]:
@@ -58,6 +101,10 @@ def generate_ca(hostname: str) -> tuple[bytes, bytes]:
         .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
         .add_extension(
             x509.SubjectKeyIdentifier.from_public_key(key.public_key()),
+            critical=False,
+        )
+        .add_extension(
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(key.public_key()),
             critical=False,
         )
         .sign(key, hashes.SHA256())
@@ -123,6 +170,12 @@ def generate_server_cert(
         .add_extension(x509.SubjectAlternativeName(san_names), critical=False)
         .add_extension(
             x509.SubjectKeyIdentifier.from_public_key(server_key.public_key()),
+            critical=False,
+        )
+        .add_extension(
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(
+                _signing_public_key(ca_cert.public_key())
+            ),
             critical=False,
         )
         .sign(ca_key, hashes.SHA256())
