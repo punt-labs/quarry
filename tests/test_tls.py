@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey
+from cryptography.x509.oid import ExtendedKeyUsageOID
 
 from quarry.tls import (
     TLS_DIR,
@@ -48,6 +49,24 @@ class TestGenerateCa:
         delta = cert.not_valid_after_utc - cert.not_valid_before_utc
         # Allow 1 day of slack for year boundary differences.
         assert delta.days >= 364 * 10
+
+    def test_authority_key_identifier_present(self) -> None:
+        cert_pem, _ = generate_ca("test.example.com")
+        cert = x509.load_pem_x509_certificate(cert_pem)
+        aki = cert.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier)
+        assert aki is not None
+
+    def test_key_usage_key_cert_sign_and_crl_sign(self) -> None:
+        cert_pem, _ = generate_ca("test.example.com")
+        cert = x509.load_pem_x509_certificate(cert_pem)
+        ku_ext = cert.extensions.get_extension_for_class(x509.KeyUsage)
+        assert ku_ext.critical is True
+        ku = ku_ext.value
+        assert ku.key_cert_sign is True
+        assert ku.crl_sign is True
+        assert ku.digital_signature is False
+        assert ku.key_encipherment is False
+        assert ku.key_agreement is False
 
 
 class TestGenerateServerCert:
@@ -114,6 +133,34 @@ class TestGenerateServerCert:
         _, key_pem = generate_server_cert(ca_cert, ca_key, "myserver.local")
         key = serialization.load_pem_private_key(key_pem, password=None)
         assert isinstance(key, EllipticCurvePrivateKey)
+
+    def test_authority_key_identifier_present(self) -> None:
+        ca_cert, ca_key = self._make_ca()
+        cert_pem, _ = generate_server_cert(ca_cert, ca_key, "myserver.local")
+        cert = x509.load_pem_x509_certificate(cert_pem)
+        aki = cert.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier)
+        assert aki is not None
+
+    def test_key_usage_digital_signature_and_key_encipherment(self) -> None:
+        ca_cert, ca_key = self._make_ca()
+        cert_pem, _ = generate_server_cert(ca_cert, ca_key, "myserver.local")
+        cert = x509.load_pem_x509_certificate(cert_pem)
+        ku_ext = cert.extensions.get_extension_for_class(x509.KeyUsage)
+        assert ku_ext.critical is True
+        ku = ku_ext.value
+        assert ku.digital_signature is True
+        assert ku.key_encipherment is True
+        assert ku.key_cert_sign is False
+        assert ku.crl_sign is False
+        assert ku.key_agreement is False
+
+    def test_extended_key_usage_server_auth(self) -> None:
+        ca_cert, ca_key = self._make_ca()
+        cert_pem, _ = generate_server_cert(ca_cert, ca_key, "myserver.local")
+        cert = x509.load_pem_x509_certificate(cert_pem)
+        eku_ext = cert.extensions.get_extension_for_class(x509.ExtendedKeyUsage)
+        assert eku_ext.critical is False
+        assert ExtendedKeyUsageOID.SERVER_AUTH in eku_ext.value
 
 
 class TestCertFingerprint:
