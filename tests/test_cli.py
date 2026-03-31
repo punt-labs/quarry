@@ -1907,26 +1907,7 @@ class TestLoginCmd:
         assert result.exit_code == 0
         assert "Restart Claude Code" in result.output
         mock_validate.assert_called_once_with(
-            "okinos.example.com", 8420, "sk-test", scheme="wss"
-        )
-        mock_write.assert_called_once_with(
-            "wss://okinos.example.com:8420/mcp", "sk-test"
-        )
-
-    def test_default_wss_for_non_localhost(self) -> None:
-        with (
-            patch(
-                "quarry.__main__.validate_connection", return_value=(True, "")
-            ) as mock_validate,
-            patch("quarry.__main__.write_proxy_config") as mock_write,
-        ):
-            result = runner.invoke(
-                app, ["login", "okinos.example.com", "--api-key", "sk-test"]
-            )
-        _reset_globals()
-        assert result.exit_code == 0
-        mock_validate.assert_called_once_with(
-            "okinos.example.com", 8420, "sk-test", scheme="wss"
+            "okinos.example.com", 8420, "sk-test", scheme="https"
         )
         mock_write.assert_called_once_with(
             "wss://okinos.example.com:8420/mcp", "sk-test"
@@ -1942,7 +1923,9 @@ class TestLoginCmd:
             result = runner.invoke(app, ["login", "localhost", "--api-key", "sk-test"])
         _reset_globals()
         assert result.exit_code == 0
-        mock_validate.assert_called_once_with("localhost", 8420, "sk-test", scheme="ws")
+        mock_validate.assert_called_once_with(
+            "localhost", 8420, "sk-test", scheme="http"
+        )
         mock_write.assert_called_once_with("ws://localhost:8420/mcp", "sk-test")
 
     def test_insecure_flag_allows_ws_for_non_localhost(self) -> None:
@@ -1961,7 +1944,7 @@ class TestLoginCmd:
         assert "Warning" in result.output
         assert "cleartext" in result.output
         mock_validate.assert_called_once_with(
-            "okinos.example.com", 8420, "sk-test", scheme="ws"
+            "okinos.example.com", 8420, "sk-test", scheme="http"
         )
         mock_write.assert_called_once_with(
             "ws://okinos.example.com:8420/mcp", "sk-test"

@@ -755,7 +755,8 @@ def login_cmd(
         )
     else:
         scheme = "wss"
-    ok, reason = validate_connection(host, port, api_key, scheme=scheme)
+    http_scheme = "https" if scheme == "wss" else "http"
+    ok, reason = validate_connection(host, port, api_key, scheme=http_scheme)
     if not ok:
         err_console.print(f"Error: {reason}", style="red")
         raise typer.Exit(code=1)
