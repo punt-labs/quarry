@@ -267,6 +267,35 @@ class TestValidateConnectionFromWsUrl:
             f"Expected https:// URL but got: {captured[0]}"
         )
 
+    def test_ca_cert_path_forwarded(self, tmp_path: Path) -> None:
+        """ca_cert_path must reach urlopen as a non-None SSL context."""
+        from quarry.tls import generate_ca
+
+        ca_pem, _ = generate_ca("host.example.com")
+        ca_file = tmp_path / "ca.crt"
+        ca_file.write_bytes(ca_pem)
+
+        captured_contexts: list[object] = []
+
+        def fake_urlopen(
+            req: object, *, timeout: int, context: object = None
+        ) -> object:
+            captured_contexts.append(context)
+            mock_resp = MagicMock()
+            mock_resp.__enter__ = lambda s: s
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            return mock_resp
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            validate_connection_from_ws_url(
+                "wss://host.example.com:8420/mcp", "tok", str(ca_file)
+            )
+
+        assert len(captured_contexts) == 1
+        assert captured_contexts[0] is not None, (
+            "ca_cert_path must produce a non-None SSL context"
+        )
+
 
 class TestMaskToken:
     def test_short_token(self) -> None:

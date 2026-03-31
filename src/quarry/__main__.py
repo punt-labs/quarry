@@ -284,9 +284,6 @@ def _remote_https_get(path: str, config: dict[str, object]) -> dict[str, object]
             "Remote server uses HTTPS but no CA cert is pinned. "
             "Run 'quarry login' to trust the server's certificate."
         )
-    ssl_ctx = ssl.create_default_context()
-    if ca_cert:
-        ssl_ctx.load_verify_locations(str(ca_cert))
 
     headers_raw = config.get("headers", {})
     headers: dict[str, str] = (
@@ -295,7 +292,14 @@ def _remote_https_get(path: str, config: dict[str, object]) -> dict[str, object]
         else {}
     )
 
-    conn = http.client.HTTPSConnection(host, port, context=ssl_ctx, timeout=15)
+    conn: http.client.HTTPConnection | http.client.HTTPSConnection
+    if scheme == "https":
+        ssl_ctx = ssl.create_default_context()
+        if ca_cert:
+            ssl_ctx.load_verify_locations(str(ca_cert))
+        conn = http.client.HTTPSConnection(host, port, context=ssl_ctx, timeout=15)
+    else:
+        conn = http.client.HTTPConnection(host, port, timeout=15)
     try:
         conn.request("GET", path, headers=headers)
         resp = conn.getresponse()

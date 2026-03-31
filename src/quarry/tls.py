@@ -287,8 +287,14 @@ def _write_file(path: Path, data: bytes, mode: int) -> None:
     Writes to a .tmp sibling, chmods it, then renames into place so that a
     crash between write and chmod cannot leave a file with wrong permissions,
     and idempotency checks on all-four-exist are never fooled by partial state.
+    The .tmp file is removed on any exception to avoid leaking a private key
+    at default umask permissions.
     """
     tmp = path.with_suffix(".tmp")
-    tmp.write_bytes(data)
-    tmp.chmod(mode)
-    tmp.rename(path)
+    try:
+        tmp.write_bytes(data)
+        tmp.chmod(mode)
+        tmp.rename(path)
+    except:
+        tmp.unlink(missing_ok=True)
+        raise
