@@ -7,6 +7,7 @@ import stat
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey
 from cryptography.x509.oid import ExtendedKeyUsageOID
@@ -261,3 +262,34 @@ class TestWriteTlsFiles:
     def test_default_tls_dir_path(self) -> None:
         expected = Path.home() / ".punt-labs" / "quarry" / "tls"
         assert expected == TLS_DIR
+
+    def test_reuses_existing_ca_when_server_certs_missing(self, tmp_path: Path) -> None:
+        """Partial state: CA exists but server certs missing → reuses CA, no error."""
+        tls_dir = tmp_path / "tls"
+        with patch("quarry.tls.TLS_DIR", tls_dir):
+            write_tls_files("myhost.local")
+        # Remove server certs to simulate partial state.
+        (tls_dir / "server.crt").unlink()
+        (tls_dir / "server.key").unlink()
+        ca_crt_before = (tls_dir / "ca.crt").read_bytes()
+        with patch("quarry.tls.TLS_DIR", tls_dir):
+            write_tls_files("myhost.local")
+        # CA must not change — clients may have pinned it.
+        assert (tls_dir / "ca.crt").read_bytes() == ca_crt_before
+        assert (tls_dir / "server.crt").exists()
+        assert (tls_dir / "server.key").exists()
+
+    def test_ca_mismatch_raises_value_error(self, tmp_path: Path) -> None:
+        """Mismatched ca.crt and ca.key files raise ValueError."""
+        tls_dir = tmp_path / "tls"
+        tls_dir.mkdir(parents=True)
+        # Generate two independent CA keypairs; use cert from one, key from another.
+        ca_cert_pem_a, _ = generate_ca("host-a.local")
+        _, ca_key_pem_b = generate_ca("host-b.local")
+        (tls_dir / "ca.crt").write_bytes(ca_cert_pem_a)
+        (tls_dir / "ca.key").write_bytes(ca_key_pem_b)
+        with (
+            patch("quarry.tls.TLS_DIR", tls_dir),
+            pytest.raises(ValueError, match="do not match"),
+        ):
+            write_tls_files("myhost.local")

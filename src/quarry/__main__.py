@@ -265,6 +265,7 @@ def _remote_https_get(path: str, config: dict[str, object]) -> dict[str, object]
     Raises:
         RuntimeError: If the server returns a non-200 status code.
         OSError: If the connection cannot be established.
+        SystemExit: If the remote URL uses HTTPS but no CA cert is pinned.
     """
     raw_url = str(config["url"])
     http_base = ws_to_http(raw_url)

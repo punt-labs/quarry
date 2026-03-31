@@ -420,7 +420,8 @@ def serve(
         host: Address to bind.  ``127.0.0.1`` for local-only (default),
             ``0.0.0.0`` for container/production deployment.
         api_key: Optional Bearer token.  When set, all endpoints except
-            /health require ``Authorization: Bearer <key>``.
+            ``/health`` and ``/ca.crt`` require
+            ``Authorization: Bearer <key>``.
         cors_origins: Allowed CORS origins.  Defaults to ``http://localhost``.
         ssl_certfile: Path to TLS server certificate PEM.  When provided
             (with ssl_keyfile), the server uses HTTPS/WSS.

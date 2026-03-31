@@ -98,7 +98,7 @@ def generate_ca(hostname: str) -> tuple[bytes, bytes]:
         .issuer_name(issuer)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(now)
+        .not_valid_before(now - datetime.timedelta(minutes=5))
         .not_valid_after(now + datetime.timedelta(days=_CERT_VALID_YEARS * 365))
         .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
         .add_extension(
@@ -183,7 +183,7 @@ def generate_server_cert(
         .issuer_name(ca_cert.subject)
         .public_key(server_key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(now)
+        .not_valid_before(now - datetime.timedelta(minutes=5))
         .not_valid_after(now + datetime.timedelta(days=_CERT_VALID_YEARS * 365))
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
         .add_extension(
@@ -277,13 +277,31 @@ def write_tls_files(hostname: str) -> None:
         logger.info("Reusing existing CA at %s", TLS_DIR)
         ca_cert_pem = ca_crt_path.read_bytes()
         ca_key_pem = ca_key_path.read_bytes()
+        # Verify the CA keypair is consistent — mismatched files would produce
+        # certificates that clients cannot verify.
+        _ca_check = x509.load_pem_x509_certificate(ca_cert_pem)
+        _ca_key_check = serialization.load_pem_private_key(ca_key_pem, password=None)
+        _cert_pub = _ca_check.public_key().public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        _key_pub = _ca_key_check.public_key().public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        if _cert_pub != _key_pub:
+            msg = (
+                f"CA cert and key at {TLS_DIR} do not match. "
+                "Delete ca.crt and ca.key and re-run 'quarry install'."
+            )
+            raise ValueError(msg)
     else:
         logger.info("Generating new CA for hostname=%r", hostname)
         ca_cert_pem, ca_key_pem = generate_ca(hostname)
         _write_file(ca_crt_path, ca_cert_pem, mode=0o644)
         _write_file(ca_key_path, ca_key_pem, mode=0o600)
 
-    # Always regenerate server cert (it may be missing or expired).
+    # Always regenerate server cert if we got here (some files were missing).
     logger.info("Generating server cert for hostname=%r", hostname)
     server_cert_pem, server_key_pem = generate_server_cert(
         ca_cert_pem, ca_key_pem, hostname
