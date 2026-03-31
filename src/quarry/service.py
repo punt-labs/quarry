@@ -37,10 +37,12 @@ def _quarry_exec_args() -> list[str]:
     points to the venv Python — the daemon should use the prod binary instead
     so it survives venv rebuilds and directory moves.
 
-    Reads ``QUARRY_SERVE_HOST`` from the environment at registration time.
-    When set and non-empty, ``--host <value>`` is baked into the service
-    command so the daemon binds to the correct address after reboot.  If unset,
-    the server defaults to loopback (``127.0.0.1``).
+    Reads ``QUARRY_SERVE_HOST`` and ``QUARRY_API_KEY`` from the environment at
+    registration time.  When set and non-empty, ``--host <value>`` and
+    ``--api-key <value>`` are baked into the service command so the daemon
+    binds to the correct address and accepts authenticated requests after
+    reboot.  If ``QUARRY_SERVE_HOST`` is unset the server defaults to loopback
+    (``127.0.0.1``).
 
     Appends ``--tls`` when TLS certificates are present in TLS_DIR.
     """
@@ -56,6 +58,10 @@ def _quarry_exec_args() -> list[str]:
     serve_host = os.environ.get("QUARRY_SERVE_HOST", "").strip()
     if serve_host:
         base.extend(["--host", serve_host])
+
+    api_key = os.environ.get("QUARRY_API_KEY", "").strip()
+    if api_key:
+        base.extend(["--api-key", api_key])
 
     cert_path = TLS_DIR / "server.crt"
     key_path = TLS_DIR / "server.key"

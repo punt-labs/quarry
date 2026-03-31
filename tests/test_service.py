@@ -12,7 +12,9 @@ from quarry.config import DEFAULT_PORT
 from quarry.service import (
     _LABEL,
     _get_tls_hostname,
+    _launchd_plist_content,
     _quarry_exec_args,
+    _systemd_unit_content,
     detect_platform,
     install,
     uninstall,
@@ -151,6 +153,60 @@ class TestQuarryExecArgs:
         ):
             args = _quarry_exec_args()
         assert "--host" not in args
+
+    def test_quarry_exec_args_includes_api_key(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """QUARRY_API_KEY set must produce --api-key <value> as adjacent elements."""
+        monkeypatch.setenv("QUARRY_API_KEY", "testkey")
+        with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
+            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+        ):
+            args = _quarry_exec_args()
+        assert "--api-key" in args
+        key_idx = args.index("--api-key")
+        assert args[key_idx + 1] == "testkey"
+
+    def test_quarry_exec_args_no_api_key(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When QUARRY_API_KEY is absent, --api-key must not appear in args."""
+        monkeypatch.delenv("QUARRY_API_KEY", raising=False)
+        with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
+            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+        ):
+            args = _quarry_exec_args()
+        assert "--api-key" not in args
+
+
+class TestServiceFileApiKey:
+    def test_launchd_plist_includes_api_key(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """_launchd_plist_content() must embed --api-key and the key value."""
+        monkeypatch.setenv("QUARRY_API_KEY", "k1")
+        with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
+            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+        ):
+            content = _launchd_plist_content()
+        assert "--api-key" in content
+        assert "k1" in content
+
+    def test_systemd_unit_includes_api_key(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """_systemd_unit_content() must embed --api-key and the key value."""
+        monkeypatch.setenv("QUARRY_API_KEY", "k1")
+        with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
+            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+        ):
+            content = _systemd_unit_content()
+        assert "--api-key" in content
+        assert "k1" in content
 
 
 class TestInstallMacOS:
