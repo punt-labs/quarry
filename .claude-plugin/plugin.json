@@ -12,7 +12,7 @@
       "command": "sh",
       "args": [
         "-c",
-        "if command -v mcp-proxy >/dev/null 2>&1; then if [ -f \"${HOME}/.punt-labs/mcp-proxy/quarry.toml\" ]; then exec mcp-proxy --config quarry; else exec mcp-proxy ws://localhost:8420/mcp; fi; else exec quarry mcp; fi"
+        "if [ -f \"${HOME}/.punt-labs/mcp-proxy/quarry.toml\" ]; then exec mcp-proxy --config quarry; else exec quarry mcp; fi"
       ]
     }
   }
