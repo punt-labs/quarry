@@ -141,6 +141,12 @@ fi
 
 QUARRY_LOG="$HOME/.punt-labs/quarry/quarry.log"
 mkdir -p "$(dirname "$QUARRY_LOG")"
+
+# quarry install may have started a loopback daemon — stop it so we can
+# bind to 0.0.0.0 for remote access.
+pkill -f "${BINARY} serve" 2>/dev/null || true
+sleep 1
+
 "$BINARY" serve --host 0.0.0.0 --tls >> "$QUARRY_LOG" 2>&1 &
 DAEMON_PID=$!
 sleep 2
