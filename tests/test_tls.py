@@ -360,7 +360,40 @@ class TestWriteFile:
     def test_no_tmp_file_left_on_success(self, tmp_path: Path) -> None:
         target = tmp_path / "out.bin"
         _write_file(target, b"data", 0o600)
+        # Fix 5: tmp name is "out.bin.tmp", not "out.tmp"
+        assert not (tmp_path / "out.bin.tmp").exists()
         assert not (tmp_path / "out.tmp").exists()
+
+    def test_tmp_name_uses_full_filename_not_suffix_replacement(
+        self, tmp_path: Path
+    ) -> None:
+        """_write_file must use path.name + '.tmp', not path.with_suffix('.tmp').
+
+        server.crt and server.key would both produce 'server.tmp' under the
+        old with_suffix approach, causing a collision.  The correct names are
+        'server.crt.tmp' and 'server.key.tmp'.
+        """
+        import os
+
+        # Track which tmp paths were actually created.
+        created_tmp: list[str] = []
+        real_open = os.open
+
+        def capturing_open(path: str, flags: int, mode: int = 0o777) -> int:
+            created_tmp.append(path)
+            return real_open(path, flags, mode)
+
+        target = tmp_path / "server.crt"
+        with patch("quarry.tls.os.open", side_effect=capturing_open):
+            _write_file(target, b"data", 0o600)
+
+        assert created_tmp, "os.open was not called"
+        tmp_name = Path(created_tmp[0]).name
+        assert tmp_name == "server.crt.tmp", (
+            f"Expected 'server.crt.tmp' but got {tmp_name!r}. "
+            "path.with_suffix('.tmp') would produce 'server.tmp', colliding "
+            "with server.key's tmp file."
+        )
 
     def test_fd_closed_when_fdopen_raises(self, tmp_path: Path) -> None:
         """If os.fdopen raises, the raw fd must be closed — not leaked."""
@@ -406,6 +439,8 @@ class TestWriteFile:
         ):
             _write_file(target, b"data", 0o600)
 
+        # Fix 5: tmp name is "out.bin.tmp", not "out.tmp"
+        assert not (tmp_path / "out.bin.tmp").exists()
         assert not (tmp_path / "out.tmp").exists()
 
     def test_tmp_file_removed_when_write_raises(self, tmp_path: Path) -> None:

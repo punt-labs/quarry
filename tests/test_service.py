@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import platform
+import stat
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -15,6 +16,7 @@ from quarry.service import (
     _launchd_plist_content,
     _quarry_exec_args,
     _systemd_unit_content,
+    _write_env_file,
     detect_platform,
     install,
     uninstall,
@@ -154,21 +156,20 @@ class TestQuarryExecArgs:
             args = _quarry_exec_args()
         assert "--host" not in args
 
-    def test_quarry_exec_args_includes_api_key(
+    def test_quarry_exec_args_never_contains_api_key(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """QUARRY_API_KEY set must produce --api-key <value> as adjacent elements."""
+        """QUARRY_API_KEY must never appear in exec args — it stays in the env file."""
         monkeypatch.setenv("QUARRY_API_KEY", "testkey")
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
             patch("quarry.service.TLS_DIR", tmp_path / "tls"),
         ):
             args = _quarry_exec_args()
-        assert "--api-key" in args
-        key_idx = args.index("--api-key")
-        assert args[key_idx + 1] == "testkey"
+        assert "--api-key" not in args
+        assert "testkey" not in args
 
-    def test_quarry_exec_args_no_api_key(
+    def test_quarry_exec_args_no_api_key_when_unset(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """When QUARRY_API_KEY is absent, --api-key must not appear in args."""
@@ -181,32 +182,111 @@ class TestQuarryExecArgs:
         assert "--api-key" not in args
 
 
+class TestWriteEnvFile:
+    def test_writes_api_key(self, tmp_path: Path) -> None:
+        """_write_env_file writes QUARRY_API_KEY=<value> to the env file."""
+        env_file = tmp_path / "quarry.env"
+        with patch("quarry.service._ENV_FILE", env_file):
+            _write_env_file("s3cr3t")
+        content = env_file.read_text()
+        assert "QUARRY_API_KEY=s3cr3t" in content
+
+    def test_mode_0600(self, tmp_path: Path) -> None:
+        """The env file must be created with mode 0600."""
+        env_file = tmp_path / "quarry.env"
+        with patch("quarry.service._ENV_FILE", env_file):
+            _write_env_file("k1")
+        mode = stat.S_IMODE(env_file.stat().st_mode)
+        assert mode == 0o600
+
+    def test_creates_parent_dir(self, tmp_path: Path) -> None:
+        """_write_env_file creates the parent directory if absent."""
+        env_file = tmp_path / "nested" / "quarry.env"
+        with patch("quarry.service._ENV_FILE", env_file):
+            _write_env_file("k1")
+        assert env_file.exists()
+
+    def test_overwrites_existing(self, tmp_path: Path) -> None:
+        """_write_env_file replaces a pre-existing env file atomically."""
+        env_file = tmp_path / "quarry.env"
+        with patch("quarry.service._ENV_FILE", env_file):
+            _write_env_file("first")
+            _write_env_file("second")
+        content = env_file.read_text()
+        assert "QUARRY_API_KEY=second" in content
+        assert "QUARRY_API_KEY=first" not in content
+
+    def test_fd_closed_and_tmp_removed_when_fdopen_raises(self, tmp_path: Path) -> None:
+        """If os.fdopen raises, the raw fd must be closed and tmp file removed."""
+        import os as _os
+
+        env_file = tmp_path / "quarry.env"
+        closed_fds: list[int] = []
+        real_close = _os.close
+
+        def fake_close(fd: int) -> None:
+            closed_fds.append(fd)
+            real_close(fd)
+
+        with (
+            patch("quarry.service._ENV_FILE", env_file),
+            patch("quarry.service.os.fdopen", side_effect=OSError("injected")),
+            patch("quarry.service.os.close", side_effect=fake_close),
+            pytest.raises(OSError, match="injected"),
+        ):
+            _write_env_file("k1")
+
+        # No .tmp files should remain
+        assert not any(tmp_path.glob("*.tmp"))
+        # The raw fd must have been closed
+        assert closed_fds, "os.close was never called after os.fdopen failure"
+
+
 class TestServiceFileApiKey:
-    def test_launchd_plist_includes_api_key(
+    def test_launchd_plist_contains_environment_variables_block(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """_launchd_plist_content() must embed --api-key and the key value."""
+        """_launchd_plist_content() embeds EnvironmentVariables and QUARRY_API_KEY."""
         monkeypatch.setenv("QUARRY_API_KEY", "k1")
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
             patch("quarry.service.TLS_DIR", tmp_path / "tls"),
         ):
             content = _launchd_plist_content()
-        assert "--api-key" in content
+        assert "EnvironmentVariables" in content
+        assert "QUARRY_API_KEY" in content
         assert "k1" in content
+        # Must NOT appear in ProgramArguments args
+        assert "--api-key" not in content
 
-    def test_systemd_unit_includes_api_key(
+    def test_launchd_plist_no_env_vars_when_no_key(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """_systemd_unit_content() must embed --api-key and the key value."""
-        monkeypatch.setenv("QUARRY_API_KEY", "k1")
+        """When QUARRY_API_KEY is unset, no EnvironmentVariables block appears."""
+        monkeypatch.delenv("QUARRY_API_KEY", raising=False)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
             patch("quarry.service.TLS_DIR", tmp_path / "tls"),
         ):
+            content = _launchd_plist_content()
+        assert "QUARRY_API_KEY" not in content
+        assert "--api-key" not in content
+
+    def test_systemd_unit_contains_environment_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """_systemd_unit_content() must include EnvironmentFile= pointing to env."""
+        monkeypatch.setenv("QUARRY_API_KEY", "k1")
+        with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
+            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+            patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
+        ):
             content = _systemd_unit_content()
-        assert "--api-key" in content
-        assert "k1" in content
+        assert "EnvironmentFile=" in content
+        assert "quarry.env" in content
+        # Must NOT pass the key as a CLI arg
+        assert "--api-key" not in content
 
 
 class TestInstallMacOS:

@@ -906,36 +906,55 @@ def login_cmd(
 
     # Step 4: Validate connection using a tempfile — store CA cert only on success
     # so a failed validation does not leave an orphaned cert on disk.
-    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".crt")
+    # Two-block pattern: close the fd explicitly if os.fdopen raises (Fix 1).
+    tmp_fd, tmp_path_str = tempfile.mkstemp(suffix=".crt")
+    tmp_path = Path(tmp_path_str)
     try:
-        with os.fdopen(tmp_fd, "wb") as tmp_file:
-            tmp_file.write(ca_cert_pem)
+        try:
+            tmp_file = os.fdopen(tmp_fd, "wb")
+        except BaseException:
+            os.close(tmp_fd)
+            tmp_path.unlink(missing_ok=True)
+            raise
+        try:
+            with tmp_file:
+                tmp_file.write(ca_cert_pem)
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            raise
         ok, reason = validate_connection(
-            host, port, api_key, scheme="https", ca_cert_path=tmp_path
+            host, port, api_key, scheme="https", ca_cert_path=tmp_path_str
         )
         if not ok:
             err_console.print(f"Error: {reason}", style="red")
             raise typer.Exit(code=1)
     finally:
-        with contextlib.suppress(OSError):
-            Path(tmp_path).unlink()
+        tmp_path.unlink(missing_ok=True)
 
-    # Step 5: Store CA cert (only reached on successful validation).
-    ca_cert_was_fresh = not CA_CERT_PATH.exists()
-    store_ca_cert(ca_cert_pem)
-
-    # Step 6: Write mcp-proxy config.
+    # Step 5: Write mcp-proxy config first, then store the CA cert.
+    # This order ensures that if the CA cert write fails, we can roll back
+    # the config — the reverse order has no recovery path (Fix 2).
+    ws_url = f"wss://{host}:{port}/mcp"
     try:
-        write_proxy_config(f"wss://{host}:{port}/mcp", api_key, str(CA_CERT_PATH))
+        write_proxy_config(ws_url, api_key, str(CA_CERT_PATH))
     except PermissionWarning as exc:
         err_console.print(f"Warning: {exc}", style="yellow")
     except OSError as exc:
-        if ca_cert_was_fresh:
-            with contextlib.suppress(OSError):
-                CA_CERT_PATH.unlink()
         err_console.print(
             f"Error: connection succeeded but could not write config to "
             f"{MCP_PROXY_CONFIG_PATH}: {exc}",
+            style="red",
+        )
+        raise typer.Exit(code=1) from exc
+
+    # Step 6: Store CA cert — roll back the config on failure.
+    try:
+        store_ca_cert(ca_cert_pem)
+    except Exception as exc:
+        with contextlib.suppress(OSError):
+            delete_proxy_config()
+        err_console.print(
+            f"Error: could not store CA certificate: {exc}",
             style="red",
         )
         raise typer.Exit(code=1) from exc
@@ -1004,13 +1023,16 @@ def remote_list_cmd(
     ) or ""
     token: str | None = auth_header.removeprefix("Bearer ").strip() or None
     masked = mask_token(token) if token is not None else "(none)"
-    ca_cert = quarry_cfg.get("ca_cert")
+    ca_cert = quarry_cfg.get("ca_cert") or None
     text = f"Remote: {url}  token: {masked}"
     data: dict[str, object] = {"url": url, "token_prefix": masked}
     if ping:
-        ok, reason = validate_connection_from_ws_url(
-            url, token, ca_cert_path=str(ca_cert) if ca_cert is not None else None
-        )
+        if url.startswith("wss://") and not ca_cert:
+            ok, reason = False, "wss:// configured but no CA certificate pinned"
+        else:
+            ok, reason = validate_connection_from_ws_url(
+                url, token, ca_cert_path=str(ca_cert) if ca_cert is not None else None
+            )
         status = "healthy" if ok else f"unreachable ({reason})"
         text += f"\nHealth: {status}"
         data["health"] = status

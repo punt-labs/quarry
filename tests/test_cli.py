@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -2349,21 +2350,22 @@ class TestLoginCmd:
         url_arg = mock_write.call_args[0][0]
         assert url_arg.startswith("wss://"), f"Expected wss:// but got: {url_arg}"
 
-    def test_proxy_config_oserror_cleans_up_fresh_ca_cert(self) -> None:
-        """OSError from write_proxy_config removes freshly-written CA cert."""
-        fake_ca_path = MagicMock()
-        fake_ca_path.exists.return_value = False  # cert was not present before login
+    def test_proxy_config_oserror_exits_without_writing_ca_cert(self) -> None:
+        """OSError from write_proxy_config exits before CA cert is stored.
 
+        With the new ordering (config first, CA cert second), a failure to
+        write the config means the CA cert write is never attempted.
+        """
         with (
             patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
             patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
-            patch("quarry.__main__.store_ca_cert"),
+            patch("quarry.__main__.store_ca_cert") as mock_store,
             patch("quarry.__main__.validate_connection", return_value=(True, "")),
             patch(
                 "quarry.__main__.write_proxy_config",
                 side_effect=OSError("Permission denied"),
             ),
-            patch("quarry.__main__.CA_CERT_PATH", fake_ca_path),
+            patch("quarry.__main__.CA_CERT_PATH", Path("/fake/quarry-ca.crt")),
             patch(
                 "quarry.__main__.MCP_PROXY_CONFIG_PATH",
                 Path("/fake/mcp-proxy.toml"),
@@ -2376,7 +2378,106 @@ class TestLoginCmd:
         _reset_globals()
         assert result.exit_code == 1
         assert "Permission denied" in result.output
-        fake_ca_path.unlink.assert_called_once()
+        # Config failed first — CA cert write never reached.
+        mock_store.assert_not_called()
+
+    def test_ca_cert_write_failure_rolls_back_config(self) -> None:
+        """If store_ca_cert raises after write_proxy_config succeeds, config is removed.
+
+        Fix 2: write_proxy_config runs first; on CA cert failure, delete_proxy_config
+        is called to roll back so the user does not end up with a config pointing at
+        a CA cert that was never written.
+        """
+        with (
+            patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
+            patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
+            patch("quarry.__main__.store_ca_cert", side_effect=OSError("disk full")),
+            patch("quarry.__main__.validate_connection", return_value=(True, "")),
+            patch("quarry.__main__.write_proxy_config"),
+            patch("quarry.__main__.delete_proxy_config") as mock_delete,
+            patch("quarry.__main__.CA_CERT_PATH", Path("/fake/quarry-ca.crt")),
+        ):
+            result = runner.invoke(
+                app,
+                ["login", "okinos.example.com", "--api-key", "sk-test", "--yes"],
+            )
+        _reset_globals()
+        assert result.exit_code == 1
+        mock_delete.assert_called_once()
+
+    def test_write_proxy_config_called_before_store_ca_cert(self) -> None:
+        """Fix 2: write_proxy_config must be called before store_ca_cert.
+
+        Verifies call ordering by recording which mock was called first.
+        """
+        call_order: list[str] = []
+
+        def record_write(*_args: object, **_kwargs: object) -> None:
+            call_order.append("write_proxy_config")
+
+        def record_store(*_args: object, **_kwargs: object) -> None:
+            call_order.append("store_ca_cert")
+
+        with (
+            patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
+            patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
+            patch("quarry.__main__.store_ca_cert", side_effect=record_store),
+            patch("quarry.__main__.validate_connection", return_value=(True, "")),
+            patch("quarry.__main__.write_proxy_config", side_effect=record_write),
+            patch("quarry.__main__.CA_CERT_PATH", Path("/fake/quarry-ca.crt")),
+        ):
+            result = runner.invoke(
+                app,
+                ["login", "okinos.example.com", "--api-key", "sk-test", "--yes"],
+            )
+        _reset_globals()
+        assert result.exit_code == 0, result.output
+        assert call_order == ["write_proxy_config", "store_ca_cert"], (
+            f"Expected write_proxy_config before store_ca_cert, got: {call_order}"
+        )
+
+    def test_fdopen_failure_closes_fd_and_removes_tmp(self) -> None:
+        """Fix 1: if os.fdopen raises during tempfile write, the raw fd is closed
+        and the temp file is removed — no fd leak, no orphaned file.
+        """
+        import os as _os
+
+        closed_fds: list[int] = []
+        real_close = _os.close
+
+        def fake_close(fd: int) -> None:
+            closed_fds.append(fd)
+            real_close(fd)
+
+        created_tmp: list[str] = []
+        _real_mkstemp = tempfile.mkstemp
+
+        def fake_mkstemp(
+            suffix: str | None = None, prefix: str | None = None
+        ) -> tuple[int, str]:
+            result_fd, path = _real_mkstemp(suffix=suffix, prefix=prefix)
+            created_tmp.append(path)
+            return result_fd, path
+
+        with (
+            patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
+            patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
+            patch("quarry.__main__.tempfile.mkstemp", side_effect=fake_mkstemp),
+            patch("quarry.__main__.os.fdopen", side_effect=OSError("resource limit")),
+            patch("quarry.__main__.os.close", side_effect=fake_close),
+            patch("quarry.__main__.CA_CERT_PATH", Path("/fake/quarry-ca.crt")),
+        ):
+            result = runner.invoke(
+                app,
+                ["login", "okinos.example.com", "--api-key", "sk-test", "--yes"],
+            )
+        _reset_globals()
+        # The command must exit non-zero — fdopen failed.
+        assert result.exit_code != 0
+        assert closed_fds, "raw fd was not closed after os.fdopen failure"
+        # Temp file must be cleaned up.
+        for p in created_tmp:
+            assert not Path(p).exists(), f"temp file {p!r} was not removed"
 
     def test_tempfile_written_completely_via_fdopen(self) -> None:
         """login_cmd uses os.fdopen (not os.write) so all CA PEM bytes reach the file.
@@ -2528,3 +2629,56 @@ class TestRemoteListCmd:
         _reset_globals()
         assert result.exit_code == 0
         assert "No remote configured" in result.output
+
+    def test_ping_wss_without_ca_cert_reports_unhealthy_without_network_call(
+        self,
+    ) -> None:
+        """Fix 3: wss:// + no ca_cert → unhealthy immediately, no network call.
+
+        validate_connection_from_ws_url must NOT be called — the early check
+        short-circuits to avoid a SystemExit from _remote_https_get.
+        """
+        cfg = {
+            "quarry": {
+                "url": "wss://host:8420/mcp",
+                "headers": {"Authorization": "Bearer sk-abcdef"},
+                # Deliberately no 'ca_cert' key
+            }
+        }
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=cfg),
+            patch("quarry.__main__.validate_connection_from_ws_url") as mock_validate,
+        ):
+            result = runner.invoke(app, ["remote", "list", "--ping"])
+        _reset_globals()
+        assert result.exit_code == 0
+        # No network call was attempted.
+        mock_validate.assert_not_called()
+        # The output must indicate the server is unhealthy with a CA-related reason.
+        assert "unreachable" in result.output
+        assert "CA" in result.output
+
+    def test_ping_wss_with_ca_cert_calls_validate(self) -> None:
+        """Fix 3: wss:// with ca_cert configured calls validate_connection_from_ws_url.
+
+        The early-exit guard must not block calls when a CA cert is present.
+        """
+        cfg = {
+            "quarry": {
+                "url": "wss://host:8420/mcp",
+                "ca_cert": "/path/to/ca.crt",
+                "headers": {"Authorization": "Bearer sk-abcdef"},
+            }
+        }
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=cfg),
+            patch(
+                "quarry.__main__.validate_connection_from_ws_url",
+                return_value=(True, ""),
+            ) as mock_validate,
+        ):
+            result = runner.invoke(app, ["remote", "list", "--ping"])
+        _reset_globals()
+        assert result.exit_code == 0
+        mock_validate.assert_called_once()
+        assert "healthy" in result.output

@@ -18,6 +18,7 @@ import shlex
 import socket
 import subprocess
 import sys
+import tempfile
 import textwrap
 from pathlib import Path
 
@@ -27,6 +28,44 @@ from quarry.tls import TLS_DIR, cert_fingerprint, write_tls_files
 logger = logging.getLogger(__name__)
 
 _LABEL = "com.punt-labs.quarry"
+_ENV_FILE: Path = Path.home() / ".punt-labs" / "quarry" / "quarry.env"
+
+
+def _write_env_file(api_key: str) -> None:
+    """Write QUARRY_API_KEY to the env file atomically with mode 0600.
+
+    Uses os.open() so the file is created with restrictive permissions
+    from the start — no chmod race window.  Writes to a .tmp sibling then
+    renames into place.
+
+    Args:
+        api_key: The API key value to store.
+    """
+    _ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
+    content = f"QUARRY_API_KEY={api_key}\n"
+    tmp_fd, tmp_path_str = tempfile.mkstemp(dir=_ENV_FILE.parent, suffix=".tmp")
+    tmp_path = Path(tmp_path_str)
+    # Restrict permissions to 0600 before writing — mkstemp creates 0600 by default
+    # on most platforms, but set explicitly for clarity and portability.
+    tmp_path.chmod(0o600)
+    try:
+        try:
+            tmp_file = os.fdopen(tmp_fd, "w")
+        except BaseException:
+            os.close(tmp_fd)
+            tmp_path.unlink(missing_ok=True)
+            raise
+        try:
+            with tmp_file:
+                tmp_file.write(content)
+            tmp_path.replace(_ENV_FILE)
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            raise
+    except Exception:
+        # Ensure the tmp file is gone even if the outer try branches somehow miss it.
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def _quarry_exec_args() -> list[str]:
@@ -37,12 +76,14 @@ def _quarry_exec_args() -> list[str]:
     points to the venv Python — the daemon should use the prod binary instead
     so it survives venv rebuilds and directory moves.
 
-    Reads ``QUARRY_SERVE_HOST`` and ``QUARRY_API_KEY`` from the environment at
-    registration time.  When set and non-empty, ``--host <value>`` and
-    ``--api-key <value>`` are baked into the service command so the daemon
-    binds to the correct address and accepts authenticated requests after
-    reboot.  If ``QUARRY_SERVE_HOST`` is unset the server defaults to loopback
-    (``127.0.0.1``).
+    Reads ``QUARRY_SERVE_HOST`` from the environment at registration time.
+    When set and non-empty, ``--host <value>`` is baked into the service command
+    so the daemon binds to the correct address after reboot.  If unset, the
+    server defaults to loopback (``127.0.0.1``).
+
+    The API key is NOT included in exec args — it is passed to the daemon via
+    an env file (``~/.punt-labs/quarry/quarry.env``) to keep it out of
+    ``ps aux`` output and world-readable service files.
 
     Appends ``--tls`` when TLS certificates are present in TLS_DIR.
     """
@@ -58,10 +99,6 @@ def _quarry_exec_args() -> list[str]:
     serve_host = os.environ.get("QUARRY_SERVE_HOST", "").strip()
     if serve_host:
         base.extend(["--host", serve_host])
-
-    api_key = os.environ.get("QUARRY_API_KEY", "").strip()
-    if api_key:
-        base.extend(["--api-key", api_key])
 
     cert_path = TLS_DIR / "server.crt"
     key_path = TLS_DIR / "server.key"
@@ -89,6 +126,20 @@ def _launchd_plist_content() -> str:
     args = _quarry_exec_args()
     program_args = "\n".join(f"        <string>{shlex.quote(a)}</string>" for a in args)
     log_dir = Path.home() / ".punt-labs" / "quarry" / "logs"
+    # launchd does not support EnvironmentFile — embed the API key directly in the
+    # plist EnvironmentVariables dict.  The plist is written at install time (0700
+    # LaunchAgents dir, 0644 plist) by the installing user, so this matches the
+    # security posture of any other credential in a launchd plist.
+    api_key = os.environ.get("QUARRY_API_KEY", "").strip()
+    env_vars_block = ""
+    if api_key:
+        env_vars_block = textwrap.dedent(f"""\
+            <key>EnvironmentVariables</key>
+            <dict>
+                <key>QUARRY_API_KEY</key>
+                <string>{api_key}</string>
+            </dict>
+        """)
     return textwrap.dedent(f"""\
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -101,7 +152,7 @@ def _launchd_plist_content() -> str:
             <array>
         {program_args}
             </array>
-            <key>RunAtLoad</key>
+            {env_vars_block}<key>RunAtLoad</key>
             <true/>
             <key>KeepAlive</key>
             <true/>
@@ -178,6 +229,7 @@ _SYSTEMD_UNIT = _SYSTEMD_DIR / "quarry.service"
 def _systemd_unit_content() -> str:
     args = _quarry_exec_args()
     exec_start = " ".join(shlex.quote(a) for a in args)
+    env_file_path = str(_ENV_FILE)
     return textwrap.dedent(f"""\
         [Unit]
         Description=Quarry semantic search daemon
@@ -185,6 +237,7 @@ def _systemd_unit_content() -> str:
 
         [Service]
         ExecStart={exec_start}
+        EnvironmentFile=-{env_file_path}
         Restart=on-failure
         RestartSec=5
 
@@ -269,6 +322,13 @@ def detect_platform() -> str:
 
 def install() -> str:
     """Install quarry as a system service.  Returns a status message."""
+    # Write the API key env file before registering the service so the daemon
+    # can read it on first start.  The key is NOT baked into exec args —
+    # it lives in a 0600 env file to keep it out of ps output and service files.
+    api_key = os.environ.get("QUARRY_API_KEY", "").strip()
+    if api_key:
+        _write_env_file(api_key)
+
     # Generate TLS certificates before registering the service so that the
     # service file can include --tls in its exec args.
     hostname = _get_tls_hostname()

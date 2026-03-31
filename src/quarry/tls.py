@@ -345,7 +345,7 @@ def _write_file(path: Path, data: bytes, mode: int) -> None:
     idempotency checks on all-four-exist are never fooled by partial state.
     The .tmp file is removed on any exception.
     """
-    tmp = path.with_suffix(".tmp")
+    tmp = path.with_name(path.name + ".tmp")
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
     fd = os.open(str(tmp), flags, mode)
     try:
