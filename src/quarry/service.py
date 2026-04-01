@@ -379,6 +379,8 @@ def ensure_gpu_runtime() -> str:
     )
     if gpu_install.returncode == 0:
         logger.info("onnxruntime-gpu installed successfully")
+        # Clear stale module cache so subsequent imports see the new package.
+        sys.modules.pop("onnxruntime", None)
         return "onnxruntime-gpu installed"
 
     # GPU install failed — restore CPU onnxruntime.
@@ -386,10 +388,18 @@ def ensure_gpu_runtime() -> str:
         "onnxruntime-gpu install failed (rc=%d), restoring CPU runtime",
         gpu_install.returncode,
     )
-    subprocess.run(
+    cpu_restore = subprocess.run(
         [uv_path, "pip", "install", "--python", python, "onnxruntime>=1.18.0"],
         capture_output=True,
     )
+    # Clear stale module cache so subsequent imports see the restored package.
+    sys.modules.pop("onnxruntime", None)
+    if cpu_restore.returncode != 0:
+        logger.error(
+            "CPU onnxruntime restore also failed (rc=%d)",
+            cpu_restore.returncode,
+        )
+        return "onnxruntime-gpu install failed, CPU restore also failed"
     return "onnxruntime-gpu install failed, CPU restored"
 
 
@@ -442,12 +452,6 @@ def install() -> str:
 
     plat = detect_platform()
 
-    # Ensure onnxruntime-gpu is installed when an NVIDIA GPU is present.
-    # Must run before model download (in doctor.py) so that CUDA provider
-    # detection can trigger FP16 model caching.
-    gpu_status = ensure_gpu_runtime()
-    logger.info("GPU runtime: %s", gpu_status)
-
     # Linux: API key written to ~/.punt-labs/quarry/quarry.env (0600) before
     # service registration so systemd can read it via EnvironmentFile= on first
     # start.  The key is NOT baked into ExecStart args to stay out of ps output.
@@ -478,7 +482,6 @@ def install() -> str:
         f"quarry daemon {status} on port {DEFAULT_PORT}.",
         f"  Service: {_LAUNCHD_PLIST if plat == 'macos' else _SYSTEMD_UNIT}",
         f"  Command: {exec_display}",
-        f"  GPU runtime: {gpu_status}",
     ]
     if fingerprint:
         lines.append(f"  CA fingerprint: {fingerprint}")
