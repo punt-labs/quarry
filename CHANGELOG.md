@@ -43,6 +43,9 @@ across `transform`, `index`, and `connector`).
   for `onnxruntime-gpu` automatically. Previously this logic lived only in the
   install shell scripts, so upgrading via `uv tool install --force` would lose
   CUDA support. Now works regardless of installation method.
+- **infra**: `quarry install` now restarts the quarry systemd service after cert
+  regeneration. Previously `systemctl enable --now` did not restart an
+  already-running service, causing it to serve stale TLS certs.
 
 ## [1.10.1] - 2026-03-29
 

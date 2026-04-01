@@ -334,6 +334,19 @@ class TestWriteTlsFiles:
         ):
             generate_server_cert(ca_cert_pem, ca_key_pem, "bad_host")
 
+    def test_write_tls_files_returns_true_on_generation(self, tmp_path: Path) -> None:
+        """First call generates files and returns True."""
+        tls_dir = tmp_path / "tls"
+        with patch("quarry.tls.TLS_DIR", tls_dir):
+            assert write_tls_files("localhost") is True
+
+    def test_write_tls_files_returns_false_when_all_exist(self, tmp_path: Path) -> None:
+        """Second call finds all files present and returns False."""
+        tls_dir = tmp_path / "tls"
+        with patch("quarry.tls.TLS_DIR", tls_dir):
+            write_tls_files("localhost")
+            assert write_tls_files("localhost") is False
+
     def test_partial_ca_state_only_key_raises(self, tmp_path: Path) -> None:
         """ca.key present but ca.crt missing → ValueError, not silent regeneration."""
         tls_dir = tmp_path / "tls"

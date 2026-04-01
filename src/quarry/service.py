@@ -285,7 +285,13 @@ def _systemd_install() -> None:
         ["systemctl", "--user", "enable", "--now", "quarry"],
         check=True,
     )
-    logger.info("Enabled and started quarry.service")
+    # Force restart to pick up new unit file and TLS certs.
+    # enable --now starts a stopped service but does not restart a running one.
+    subprocess.run(
+        ["systemctl", "--user", "restart", "quarry"],
+        check=True,
+    )
+    logger.info("Enabled and restarted quarry.service")
 
 
 def _systemd_uninstall() -> None:

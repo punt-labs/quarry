@@ -253,7 +253,7 @@ def cert_fingerprint(cert_pem: bytes) -> str:
     return f"SHA256:{digest}"
 
 
-def write_tls_files(hostname: str) -> None:
+def write_tls_files(hostname: str) -> bool:
     """Generate CA + server cert, write to TLS_DIR.
 
     Idempotent: skips generation if all four files already exist. If the CA
@@ -268,6 +268,9 @@ def write_tls_files(hostname: str) -> None:
 
     Args:
         hostname: The server hostname (used in cert CN and SAN).
+
+    Returns:
+        True if new cert files were written, False if all files already existed.
     """
     ca_crt_path = TLS_DIR / "ca.crt"
     ca_key_path = TLS_DIR / "ca.key"
@@ -277,7 +280,7 @@ def write_tls_files(hostname: str) -> None:
     all_paths = (ca_crt_path, ca_key_path, server_crt_path, server_key_path)
     if all(p.exists() for p in all_paths):
         logger.debug("TLS files already exist at %s — skipping generation", TLS_DIR)
-        return
+        return False
 
     TLS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -334,6 +337,7 @@ def write_tls_files(hostname: str) -> None:
     _write_file(server_key_path, server_key_pem, mode=0o600)
 
     logger.info("TLS files written to %s", TLS_DIR)
+    return True
 
 
 def _write_file(path: Path, data: bytes, mode: int) -> None:

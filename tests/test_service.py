@@ -19,6 +19,7 @@ from quarry.service import (
     _launchd_plist_content,
     _quarry_exec_args,
     _systemd_escape,
+    _systemd_install,
     _systemd_unit_content,
     _write_env_file,
     detect_platform,
@@ -675,11 +676,12 @@ class TestInstallLinux:
             assert "ExecStart=" in content
             assert "running" in msg
 
-            # Verify daemon-reload and enable calls
-            assert mock_run.call_count >= 3  # daemon-reload, enable, is-active
+            # Verify daemon-reload, enable, restart, and is-active calls
+            assert mock_run.call_count >= 4  # daemon-reload, enable, restart, is-active
             calls = [c.args[0] for c in mock_run.call_args_list]
             assert any("daemon-reload" in c for c in calls)
             assert any("enable" in c for c in calls)
+            assert any("restart" in c for c in calls)
 
     @patch("quarry.service._has_linger", return_value=False)
     @patch("quarry.service.subprocess.run")
@@ -721,6 +723,36 @@ class TestInstallLinux:
             calls = [c.args[0] for c in mock_run.call_args_list]
             assert any("disable" in c for c in calls)
             assert any("daemon-reload" in c for c in calls)
+
+
+class TestSystemdInstallCallsRestart:
+    """_systemd_install() must call systemctl restart after enable --now."""
+
+    @patch("quarry.service.subprocess.run")
+    def test_restart_called_after_enable(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        unit_path = tmp_path / "quarry.service"
+        with (
+            patch("quarry.service._SYSTEMD_DIR", tmp_path),
+            patch("quarry.service._SYSTEMD_UNIT", unit_path),
+            patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
+            patch(
+                "quarry.service._quarry_exec_args",
+                return_value=["quarry", "serve", "--port", "8420"],
+            ),
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            _systemd_install()
+
+        calls = [c.args[0] for c in mock_run.call_args_list]
+        enable_call = ["systemctl", "--user", "enable", "--now", "quarry"]
+        restart_call = ["systemctl", "--user", "restart", "quarry"]
+        assert enable_call in calls
+        assert restart_call in calls
+        enable_idx = calls.index(enable_call)
+        restart_idx = calls.index(restart_call)
+        assert restart_idx > enable_idx, "restart must come after enable --now"
 
 
 class TestLaunchdPlistAtomicWrite:
