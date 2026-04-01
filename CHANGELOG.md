@@ -40,8 +40,8 @@ across `transform`, `index`, and `connector`).
 ### Fixed
 
 - **infra**: `quarry install` now detects NVIDIA GPUs and swaps `onnxruntime`
-  for `onnxruntime-gpu` automatically. Previously this logic lived only in
-  `install-server.sh`, so upgrading via `uv tool install --force` would lose
+  for `onnxruntime-gpu` automatically. Previously this logic lived only in the
+  install shell scripts, so upgrading via `uv tool install --force` would lose
   CUDA support. Now works regardless of installation method.
 
 ## [1.10.1] - 2026-03-29

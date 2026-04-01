@@ -330,6 +330,7 @@ def ensure_gpu_runtime() -> str:
       - ``"CUDA already available"``
       - ``"onnxruntime-gpu installed"``
       - ``"onnxruntime-gpu install failed, CPU restored"``
+      - ``"onnxruntime-gpu install failed, CPU restore also failed"``
       - ``"uv not found, skipped GPU check"``
     """
     uv_path = shutil.which("uv")
