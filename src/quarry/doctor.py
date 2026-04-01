@@ -676,7 +676,7 @@ def run_install() -> int:  # noqa: C901
     # Step 1: data + logs directories
     data_dir = Path.home() / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
     logs_dir = Path.home() / ".punt-labs" / "quarry" / "logs"
-    print("[1/7] Creating directories...")  # noqa: T201
+    print("[1/8] Creating directories...")  # noqa: T201
     try:
         data_dir.mkdir(parents=True, exist_ok=True)
         logs_dir.mkdir(parents=True, exist_ok=True)
@@ -686,8 +686,19 @@ def run_install() -> int:  # noqa: C901
         print(f"  \u2717 Failed to create directories: {exc}")  # noqa: T201
         failed = True
 
-    # Step 2: embedding model
-    print("[2/7] Downloading embedding model...")  # noqa: T201
+    # Step 2: GPU runtime (must run before model download so CUDA provider
+    # detection can trigger FP16 model caching)
+    print("[2/8] Checking GPU runtime...")  # noqa: T201
+    try:
+        from quarry.service import ensure_gpu_runtime  # noqa: PLC0415
+
+        gpu_status = ensure_gpu_runtime()
+        print(f"  \u2713 {gpu_status}")  # noqa: T201
+    except Exception as exc:  # noqa: BLE001
+        print(f"  \u2022 Skipped: {exc}")  # noqa: T201
+
+    # Step 3: embedding model
+    print("[3/8] Downloading embedding model...")  # noqa: T201
     try:
         from quarry.embeddings import download_model_files  # noqa: PLC0415
 
@@ -706,9 +717,9 @@ def run_install() -> int:  # noqa: C901
         print(f"  \u2717 Model download failed: {exc}")  # noqa: T201
         failed = True
 
-    # Step 3: mcp-proxy binary (best-effort — proxy is optional, falls back to direct)
+    # Step 4: mcp-proxy binary (best-effort — proxy is optional, falls back to direct)
     # Installed before MCP client config so Desktop can resolve the absolute path.
-    print("[3/7] Installing mcp-proxy...")  # noqa: T201
+    print("[4/8] Installing mcp-proxy...")  # noqa: T201
     try:
         from quarry.proxy import install as proxy_install  # noqa: PLC0415
 
@@ -718,13 +729,13 @@ def run_install() -> int:  # noqa: C901
         print(f"  \u2022 Skipped: {exc}")  # noqa: T201
         print("    mcp-proxy is optional — quarry works without it.")  # noqa: T201
 
-    # Step 4: MCP clients (uses mcp-proxy if step 3 succeeded, otherwise quarry mcp)
-    print("[4/7] Configuring MCP clients...")  # noqa: T201
+    # Step 5: MCP clients (uses mcp-proxy if step 4 succeeded, otherwise quarry mcp)
+    print("[5/8] Configuring MCP clients...")  # noqa: T201
     for check in [_configure_claude_code(), _configure_claude_desktop()]:
         _print_check(check)
 
-    # Step 5: daemon service (best-effort — not available in CI, containers, SSH)
-    print("[5/7] Registering quarry daemon...")  # noqa: T201
+    # Step 6: daemon service (best-effort — not available in CI, containers, SSH)
+    print("[6/8] Registering quarry daemon...")  # noqa: T201
     try:
         from quarry.service import install as svc_install  # noqa: PLC0415
 
@@ -734,16 +745,16 @@ def run_install() -> int:  # noqa: C901
         print(f"  \u2022 Skipped: {exc}")  # noqa: T201
         print("    Daemon registration is optional — quarry works without it.")  # noqa: T201
 
-    # Step 6: CLAUDE.md context injection (best-effort)
-    print("[6/7] Injecting quarry context into CLAUDE.md...")  # noqa: T201
+    # Step 7: CLAUDE.md context injection (best-effort)
+    print("[7/8] Injecting quarry context into CLAUDE.md...")  # noqa: T201
     try:
         msg = _inject_claude_md()
         print(f"  \u2713 {msg}")  # noqa: T201
     except Exception as exc:  # noqa: BLE001
         print(f"  \u2022 Skipped: {exc}")  # noqa: T201
 
-    # Step 7: ethos ext session_context (best-effort)
-    print("[7/7] Configuring ethos identity extension...")  # noqa: T201
+    # Step 8: ethos ext session_context (best-effort)
+    print("[8/8] Configuring ethos identity extension...")  # noqa: T201
     try:
         check = _configure_ethos_ext()
         _print_check(check)

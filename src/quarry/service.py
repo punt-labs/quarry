@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import os
 import platform
+import shutil
 import socket
 import subprocess
 import sys
@@ -313,6 +314,86 @@ def _systemd_status() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# GPU runtime
+# ---------------------------------------------------------------------------
+
+
+def ensure_gpu_runtime() -> str:
+    """Swap onnxruntime for onnxruntime-gpu when an NVIDIA GPU is present.
+
+    Safe to call on any platform -- returns early when nvidia-smi is absent
+    (macOS, CPU-only Linux).  Uses ``uv pip`` to swap the package inside
+    the current interpreter's environment.
+
+    Returns a status string for display:
+      - ``"no NVIDIA GPU"``
+      - ``"CUDA already available"``
+      - ``"onnxruntime-gpu installed"``
+      - ``"onnxruntime-gpu install failed, CPU restored"``
+      - ``"uv not found, skipped GPU check"``
+    """
+    uv_path = shutil.which("uv")
+    if uv_path is None:
+        logger.info("uv not on PATH — skipping GPU runtime check")
+        return "uv not found, skipped GPU check"
+
+    nvidia_smi = shutil.which("nvidia-smi")
+    if nvidia_smi is None:
+        logger.info("nvidia-smi not found — no NVIDIA GPU")
+        return "no NVIDIA GPU"
+
+    result = subprocess.run(
+        [nvidia_smi],
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        logger.info(
+            "nvidia-smi failed (rc=%d) — no usable NVIDIA GPU",
+            result.returncode,
+        )
+        return "no NVIDIA GPU"
+
+    # GPU is present — check if CUDA provider is already available.
+    try:
+        import onnxruntime as ort  # noqa: PLC0415
+
+        if "CUDAExecutionProvider" in ort.get_available_providers():
+            logger.info("CUDAExecutionProvider already available")
+            return "CUDA already available"
+    except ImportError:
+        pass  # onnxruntime not importable — proceed with install
+
+    python = sys.executable
+    logger.info("Swapping onnxruntime for onnxruntime-gpu (python=%s)", python)
+
+    # Uninstall CPU onnxruntime (suppress errors — may not be installed).
+    subprocess.run(
+        [uv_path, "pip", "uninstall", "--python", python, "onnxruntime"],
+        capture_output=True,
+    )
+
+    # Install onnxruntime-gpu.
+    gpu_install = subprocess.run(
+        [uv_path, "pip", "install", "--python", python, "onnxruntime-gpu>=1.18.0"],
+        capture_output=True,
+    )
+    if gpu_install.returncode == 0:
+        logger.info("onnxruntime-gpu installed successfully")
+        return "onnxruntime-gpu installed"
+
+    # GPU install failed — restore CPU onnxruntime.
+    logger.warning(
+        "onnxruntime-gpu install failed (rc=%d), restoring CPU runtime",
+        gpu_install.returncode,
+    )
+    subprocess.run(
+        [uv_path, "pip", "install", "--python", python, "onnxruntime>=1.18.0"],
+        capture_output=True,
+    )
+    return "onnxruntime-gpu install failed, CPU restored"
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -361,6 +442,12 @@ def install() -> str:
 
     plat = detect_platform()
 
+    # Ensure onnxruntime-gpu is installed when an NVIDIA GPU is present.
+    # Must run before model download (in doctor.py) so that CUDA provider
+    # detection can trigger FP16 model caching.
+    gpu_status = ensure_gpu_runtime()
+    logger.info("GPU runtime: %s", gpu_status)
+
     # Linux: API key written to ~/.punt-labs/quarry/quarry.env (0600) before
     # service registration so systemd can read it via EnvironmentFile= on first
     # start.  The key is NOT baked into ExecStart args to stay out of ps output.
@@ -391,6 +478,7 @@ def install() -> str:
         f"quarry daemon {status} on port {DEFAULT_PORT}.",
         f"  Service: {_LAUNCHD_PLIST if plat == 'macos' else _SYSTEMD_UNIT}",
         f"  Command: {exec_display}",
+        f"  GPU runtime: {gpu_status}",
     ]
     if fingerprint:
         lines.append(f"  CA fingerprint: {fingerprint}")

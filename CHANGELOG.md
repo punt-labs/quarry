@@ -37,6 +37,13 @@ across `transform`, `index`, and `connector`).
 - **infra**: `install-both.sh` — single-machine installer with loopback TLS.
 - **plugin**: mcp-proxy invocation updated to `mcp-proxy --config quarry`.
 
+### Fixed
+
+- **infra**: `quarry install` now detects NVIDIA GPUs and swaps `onnxruntime`
+  for `onnxruntime-gpu` automatically. Previously this logic lived only in
+  `install-server.sh`, so upgrading via `uv tool install --force` would lose
+  CUDA support. Now works regardless of installation method.
+
 ## [1.10.1] - 2026-03-29
 
 ### Fixed

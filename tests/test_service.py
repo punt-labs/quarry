@@ -21,6 +21,7 @@ from quarry.service import (
     _systemd_unit_content,
     _write_env_file,
     detect_platform,
+    ensure_gpu_runtime,
     install,
     uninstall,
 )
@@ -29,6 +30,7 @@ from quarry.service import (
 # ~/.punt-labs/quarry/tls/ during tests.
 _PATCH_TLS = patch("quarry.service.write_tls_files")
 _PATCH_CERT_FP = patch("quarry.service.cert_fingerprint", return_value="")
+_PATCH_GPU = patch("quarry.service.ensure_gpu_runtime", return_value="no NVIDIA GPU")
 
 
 class TestGetTlsHostname:
@@ -445,6 +447,7 @@ class TestInstallHostKeyGuard:
         with pytest.raises(SystemExit, match="QUARRY_API_KEY is empty"):
             install()
 
+    @patch("quarry.service.ensure_gpu_runtime", return_value="no NVIDIA GPU")
     @patch("quarry.service.subprocess.run")
     @patch.object(platform, "system", return_value="Darwin")
     @patch("quarry.service.write_tls_files")
@@ -455,6 +458,7 @@ class TestInstallHostKeyGuard:
         _tls: MagicMock,
         _sys: MagicMock,
         mock_run: MagicMock,
+        _gpu: MagicMock,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -474,6 +478,7 @@ class TestInstallHostKeyGuard:
             msg = install()
         assert "running" in msg
 
+    @patch("quarry.service.ensure_gpu_runtime", return_value="no NVIDIA GPU")
     @patch("quarry.service.subprocess.run")
     @patch.object(platform, "system", return_value="Darwin")
     @patch("quarry.service.write_tls_files")
@@ -484,6 +489,7 @@ class TestInstallHostKeyGuard:
         _tls: MagicMock,
         _sys: MagicMock,
         mock_run: MagicMock,
+        _gpu: MagicMock,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -518,6 +524,7 @@ class TestInstallMacOS:
             patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
             _PATCH_TLS,
             _PATCH_CERT_FP,
+            _PATCH_GPU,
         ):
             # First call: launchctl list → not found (fresh install)
             # Second call: launchctl load → success
@@ -559,6 +566,7 @@ class TestInstallMacOS:
             patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
             _PATCH_TLS,
             _PATCH_CERT_FP,
+            _PATCH_GPU,
         ):
             # First call: launchctl list → found (existing service)
             # Second call: launchctl unload → success
@@ -634,6 +642,7 @@ class TestInstallMacOS:
             patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
             _PATCH_TLS,
             _PATCH_CERT_FP,
+            _PATCH_GPU,
         ):
             mock_run.side_effect = [
                 MagicMock(returncode=113),  # launchctl list: not found (fresh install)
@@ -661,6 +670,7 @@ class TestInstallLinux:
             patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
             _PATCH_TLS,
             _PATCH_CERT_FP,
+            _PATCH_GPU,
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="active\n")
 
@@ -692,6 +702,7 @@ class TestInstallLinux:
             patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
             _PATCH_TLS,
             _PATCH_CERT_FP,
+            _PATCH_GPU,
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="active\n")
 
@@ -883,6 +894,7 @@ class TestInstallMacOSSkipsEnvFile:
     Writing it to an env file is unnecessary and duplicates the secret on disk.
     """
 
+    @patch("quarry.service.ensure_gpu_runtime", return_value="no NVIDIA GPU")
     @patch("quarry.service.subprocess.run")
     @patch.object(platform, "system", return_value="Darwin")
     @patch("quarry.service.write_tls_files")
@@ -893,6 +905,7 @@ class TestInstallMacOSSkipsEnvFile:
         _tls: MagicMock,
         _sys: MagicMock,
         mock_run: MagicMock,
+        _gpu: MagicMock,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -916,6 +929,7 @@ class TestInstallMacOSSkipsEnvFile:
             "the API key goes into the plist EnvironmentVariables block"
         )
 
+    @patch("quarry.service.ensure_gpu_runtime", return_value="no NVIDIA GPU")
     @patch("quarry.service.subprocess.run")
     @patch.object(platform, "system", return_value="Linux")
     @patch("quarry.service._has_linger", return_value=True)
@@ -928,6 +942,7 @@ class TestInstallMacOSSkipsEnvFile:
         _linger: MagicMock,
         _sys: MagicMock,
         mock_run: MagicMock,
+        _gpu: MagicMock,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -948,3 +963,144 @@ class TestInstallMacOSSkipsEnvFile:
         )
         content = env_file.read_text()
         assert "QUARRY_API_KEY" in content
+
+
+class TestEnsureGpuRuntime:
+    """Tests for ensure_gpu_runtime() — NVIDIA GPU detection and onnxruntime swap."""
+
+    def test_no_uv_on_path(self) -> None:
+        """When uv is not on PATH, return early without any subprocess calls."""
+        with patch("quarry.service.shutil.which", return_value=None):
+            result = ensure_gpu_runtime()
+        assert result == "uv not found, skipped GPU check"
+
+    def test_no_nvidia_smi(self) -> None:
+        """When nvidia-smi is absent, return 'no NVIDIA GPU'."""
+
+        def which_side_effect(name: str) -> str | None:
+            if name == "uv":
+                return "/usr/bin/uv"
+            if name == "nvidia-smi":
+                return None
+            return None
+
+        with patch("quarry.service.shutil.which", side_effect=which_side_effect):
+            result = ensure_gpu_runtime()
+        assert result == "no NVIDIA GPU"
+
+    def test_nvidia_smi_fails(self) -> None:
+        """When nvidia-smi exists but fails, return 'no NVIDIA GPU'."""
+
+        def which_side_effect(name: str) -> str | None:
+            if name == "uv":
+                return "/usr/bin/uv"
+            if name == "nvidia-smi":
+                return "/usr/bin/nvidia-smi"
+            return None
+
+        with (
+            patch("quarry.service.shutil.which", side_effect=which_side_effect),
+            patch(
+                "quarry.service.subprocess.run",
+                return_value=MagicMock(returncode=1),
+            ),
+        ):
+            result = ensure_gpu_runtime()
+        assert result == "no NVIDIA GPU"
+
+    def test_cuda_already_available(self) -> None:
+        """When CUDAExecutionProvider is already available, return early."""
+
+        def which_side_effect(name: str) -> str | None:
+            if name == "uv":
+                return "/usr/bin/uv"
+            if name == "nvidia-smi":
+                return "/usr/bin/nvidia-smi"
+            return None
+
+        mock_ort = MagicMock()
+        mock_ort.get_available_providers.return_value = [
+            "CUDAExecutionProvider",
+            "CPUExecutionProvider",
+        ]
+        with (
+            patch("quarry.service.shutil.which", side_effect=which_side_effect),
+            patch(
+                "quarry.service.subprocess.run",
+                return_value=MagicMock(returncode=0),
+            ) as mock_run,
+            patch.dict("sys.modules", {"onnxruntime": mock_ort}),
+        ):
+            result = ensure_gpu_runtime()
+
+        assert result == "CUDA already available"
+        # Only nvidia-smi should have been called — no pip commands.
+        mock_run.assert_called_once()
+
+    def test_swap_success(self) -> None:
+        """When nvidia-smi works and CUDA not available, swap succeeds."""
+
+        def which_side_effect(name: str) -> str | None:
+            if name == "uv":
+                return "/usr/bin/uv"
+            if name == "nvidia-smi":
+                return "/usr/bin/nvidia-smi"
+            return None
+
+        mock_ort = MagicMock()
+        mock_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
+
+        call_count = 0
+
+        def run_side_effect(*args: object, **kwargs: object) -> MagicMock:
+            nonlocal call_count
+            call_count += 1
+            return MagicMock(returncode=0)
+
+        with (
+            patch("quarry.service.shutil.which", side_effect=which_side_effect),
+            patch(
+                "quarry.service.subprocess.run",
+                side_effect=run_side_effect,
+            ),
+            patch.dict("sys.modules", {"onnxruntime": mock_ort}),
+        ):
+            result = ensure_gpu_runtime()
+
+        assert result == "onnxruntime-gpu installed"
+        # nvidia-smi + uninstall + install = 3 subprocess calls
+        assert call_count == 3
+
+    def test_swap_failure_restores_cpu(self) -> None:
+        """When onnxruntime-gpu install fails, CPU onnxruntime is restored."""
+
+        def which_side_effect(name: str) -> str | None:
+            if name == "uv":
+                return "/usr/bin/uv"
+            if name == "nvidia-smi":
+                return "/usr/bin/nvidia-smi"
+            return None
+
+        mock_ort = MagicMock()
+        mock_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
+
+        calls: list[list[str]] = []
+
+        def run_side_effect(cmd: list[str], **kwargs: object) -> MagicMock:
+            calls.append(cmd)
+            # nvidia-smi OK, uninstall OK, gpu fails, cpu restore OK
+            if "onnxruntime-gpu>=1.18.0" in cmd:
+                return MagicMock(returncode=1)
+            return MagicMock(returncode=0)
+
+        with (
+            patch("quarry.service.shutil.which", side_effect=which_side_effect),
+            patch("quarry.service.subprocess.run", side_effect=run_side_effect),
+            patch.dict("sys.modules", {"onnxruntime": mock_ort}),
+        ):
+            result = ensure_gpu_runtime()
+
+        assert result == "onnxruntime-gpu install failed, CPU restored"
+        # Verify CPU restore was called
+        restore_calls = [c for c in calls if "onnxruntime>=1.18.0" in c]
+        assert len(restore_calls) == 1
