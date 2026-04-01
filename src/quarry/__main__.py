@@ -397,6 +397,7 @@ def find_cmd(
                     "source_format": r.get("source_format", ""),
                     "agent_handle": r.get("agent_handle", ""),
                     "memory_type": r.get("memory_type", ""),
+                    "summary": r.get("summary", ""),
                     "similarity": similarity,
                     "text": text,
                 }
@@ -435,15 +436,16 @@ def find_cmd(
         local_json_results.append(
             {
                 "document_name": row["document_name"],
+                "collection": row.get("collection", ""),
                 "page_number": row["page_number"],
+                "chunk_index": row.get("chunk_index", 0),
                 "page_type": row["page_type"],
                 "source_format": row["source_format"],
-                "similarity": similarity,
-                "text": text,
-                "collection": row.get("collection", ""),
                 "agent_handle": row.get("agent_handle", ""),
                 "memory_type": row.get("memory_type", ""),
                 "summary": row.get("summary", ""),
+                "similarity": similarity,
+                "text": text,
             }
         )
 

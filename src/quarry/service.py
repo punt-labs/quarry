@@ -53,7 +53,8 @@ def _write_env_file(api_key: str) -> None:
         raise
     try:
         with f:
-            f.write(f"QUARRY_API_KEY={api_key}\n")
+            escaped = api_key.replace('"', '\\"')
+            f.write(f'QUARRY_API_KEY="{escaped}"\n')
         tmp_path.replace(_ENV_FILE)
     except BaseException:
         tmp_path.unlink(missing_ok=True)

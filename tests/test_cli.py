@@ -736,6 +736,7 @@ class TestFindCmd:
                     "source_format": ".pdf",
                     "agent_handle": "rmh",
                     "memory_type": "fact",
+                    "summary": "remote doc summary",
                     "text": "full text here",
                     "similarity": 0.85,
                 },
@@ -764,6 +765,7 @@ class TestFindCmd:
         assert item["source_format"] == ".pdf"
         assert item["agent_handle"] == "rmh"
         assert item["memory_type"] == "fact"
+        assert item["summary"] == "remote doc summary"
         assert item["similarity"] == 0.85
         assert item["text"] == "full text here"
 
@@ -1685,11 +1687,13 @@ class TestJsonOutput:
             {
                 "document_name": "report.pdf",
                 "page_number": 3,
+                "chunk_index": 5,
                 "text": "revenue grew",
                 "page_type": "text",
                 "source_format": ".pdf",
                 "_distance": 0.15,
                 "collection": "default",
+                "summary": "quarterly revenue summary",
             },
         ]
         with (
@@ -1709,8 +1713,10 @@ class TestJsonOutput:
         assert len(data) == 1
         assert data[0]["document_name"] == "report.pdf"
         assert data[0]["page_number"] == 3
+        assert data[0]["chunk_index"] == 5
         assert "similarity" in data[0]
         assert data[0]["text"] == "revenue grew"
+        assert data[0]["summary"] == "quarterly revenue summary"
 
     def test_find_json_empty(self):
         _reset_globals()

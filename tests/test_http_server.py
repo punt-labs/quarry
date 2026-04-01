@@ -171,6 +171,50 @@ class TestSearch:
         assert data["total_results"] == 1
         assert data["results"][0]["document_name"] == "test.pdf"
         assert data["results"][0]["similarity"] == 0.9
+        assert "summary" in data["results"][0]
+
+    def test_search_result_includes_summary_field(self, client: TestClient) -> None:
+        """HTTP /search results must include the summary field."""
+        mock_results = [
+            {
+                "document_name": "doc.md",
+                "collection": "default",
+                "page_number": 1,
+                "chunk_index": 2,
+                "text": "some content",
+                "page_type": "text",
+                "source_format": ".md",
+                "_distance": 0.2,
+                "summary": "a brief summary",
+            }
+        ]
+        with patch("quarry.http_server.hybrid_search", return_value=mock_results):
+            data = client.get("/search?q=content").json()
+
+        result = data["results"][0]
+        assert result["summary"] == "a brief summary"
+
+    def test_search_result_summary_defaults_to_empty_string(
+        self, client: TestClient
+    ) -> None:
+        """summary must default to empty string when absent from DB row."""
+        mock_results = [
+            {
+                "document_name": "doc.md",
+                "collection": "default",
+                "page_number": 1,
+                "chunk_index": 0,
+                "text": "content",
+                "page_type": "text",
+                "source_format": ".md",
+                "_distance": 0.1,
+                # no summary key
+            }
+        ]
+        with patch("quarry.http_server.hybrid_search", return_value=mock_results):
+            data = client.get("/search?q=content").json()
+
+        assert data["results"][0]["summary"] == ""
 
     def test_search_with_limit(self, client: TestClient) -> None:
         with patch("quarry.http_server.hybrid_search", return_value=[]) as mock_search:

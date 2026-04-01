@@ -194,7 +194,7 @@ cleanup_https_rewrite
 info "Waiting for quarry daemon to be ready..."
 _i=0
 while [ $_i -lt 15 ]; do
-  if curl -fs "http://localhost:8420/health" >/dev/null 2>&1; then
+  if curl -fsk "https://localhost:8420/health" >/dev/null 2>&1; then
     ok "Daemon is ready"
     break
   fi

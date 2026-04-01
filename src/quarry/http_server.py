@@ -200,6 +200,7 @@ def _search_route(request: Request) -> JSONResponse:
             "source_format": r["source_format"],
             "agent_handle": r.get("agent_handle"),
             "memory_type": r.get("memory_type"),
+            "summary": r.get("summary", ""),
             "similarity": round(1 - float(str(r.get("_distance", 0))), 4),
         }
         for r in results

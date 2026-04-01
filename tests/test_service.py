@@ -183,13 +183,39 @@ class TestQuarryExecArgs:
 
 
 class TestWriteEnvFile:
-    def test_writes_api_key(self, tmp_path: Path) -> None:
-        """_write_env_file writes QUARRY_API_KEY=<value> to the env file."""
+    def test_writes_api_key_double_quoted(self, tmp_path: Path) -> None:
+        """_write_env_file writes QUARRY_API_KEY="<value>" double-quoted.
+
+        Systemd EnvironmentFile treats # as an inline comment in unquoted values;
+        double-quoting prevents silent truncation.
+        """
         env_file = tmp_path / "quarry.env"
         with patch("quarry.service._ENV_FILE", env_file):
             _write_env_file("s3cr3t")
         content = env_file.read_text()
-        assert "QUARRY_API_KEY=s3cr3t" in content
+        assert 'QUARRY_API_KEY="s3cr3t"' in content
+
+    def test_key_containing_hash_not_truncated(self, tmp_path: Path) -> None:
+        """A key containing # must be written in full, not truncated at the #.
+
+        Unquoted, systemd treats # as a comment start — the stored key would be
+        silently shortened and authentication would break.
+        """
+        env_file = tmp_path / "quarry.env"
+        api_key = "abc#def"
+        with patch("quarry.service._ENV_FILE", env_file):
+            _write_env_file(api_key)
+        content = env_file.read_text()
+        assert 'QUARRY_API_KEY="abc#def"' in content
+
+    def test_key_containing_double_quote_escaped(self, tmp_path: Path) -> None:
+        """A key containing " must have the character escaped, not left raw."""
+        env_file = tmp_path / "quarry.env"
+        api_key = 'tok"en'
+        with patch("quarry.service._ENV_FILE", env_file):
+            _write_env_file(api_key)
+        content = env_file.read_text()
+        assert r'QUARRY_API_KEY="tok\"en"' in content
 
     def test_mode_0600(self, tmp_path: Path) -> None:
         """The env file must be created with mode 0600."""
@@ -213,8 +239,8 @@ class TestWriteEnvFile:
             _write_env_file("first")
             _write_env_file("second")
         content = env_file.read_text()
-        assert "QUARRY_API_KEY=second" in content
-        assert "QUARRY_API_KEY=first" not in content
+        assert '"second"' in content
+        assert '"first"' not in content
 
     def test_fd_closed_and_tmp_removed_when_fdopen_raises(self, tmp_path: Path) -> None:
         """If os.fdopen raises, the raw fd must be closed and tmp file removed."""
