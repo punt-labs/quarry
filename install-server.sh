@@ -134,27 +134,31 @@ printf '\n'
 QUARRY_SERVE_HOST=0.0.0.0 "$BINARY" install
 printf '\n'
 
-# --- Step 5: Start the daemon ---
+# --- Step 5: Health-check the service-managed daemon ---
 
-info "Starting quarry daemon..."
+# quarry install (above) registered quarry as a launchd/systemd service with
+# KeepAlive/Restart=on-failure and --host 0.0.0.0 --tls baked in.  The service
+# manager has already started the daemon.  Do NOT pkill it and re-spawn
+# manually — that causes a port conflict because the service manager immediately
+# restarts the killed daemon (KeepAlive) while the manual process is binding.
+
+info "Waiting for daemon to be ready..."
 printf '\n'
 
-QUARRY_LOG="$HOME/.punt-labs/quarry/quarry.log"
-mkdir -p "$(dirname "$QUARRY_LOG")"
-
-# quarry install may have started a loopback daemon — stop it so we can
-# bind to 0.0.0.0 for remote access.
-pkill -f "${BINARY} serve" 2>/dev/null || true
-sleep 1
-
-"$BINARY" serve --host 0.0.0.0 --tls >> "$QUARRY_LOG" 2>&1 &
-DAEMON_PID=$!
-sleep 2
-if kill -0 "$DAEMON_PID" 2>/dev/null; then
-  ok "Quarry daemon started (PID $DAEMON_PID) — logs: $QUARRY_LOG"
-else
-  fail "Quarry daemon failed to start — check logs at $QUARRY_LOG"
-fi
+HEALTH_URL="https://localhost:8420/health"
+MAX_TRIES=10
+i=0
+while [ "$i" -lt "$MAX_TRIES" ]; do
+  i=$((i + 1))
+  if "$BINARY" doctor >/dev/null 2>&1; then
+    ok "Quarry daemon is healthy (attempt $i/$MAX_TRIES)"
+    break
+  fi
+  if [ "$i" -eq "$MAX_TRIES" ]; then
+    fail "Daemon did not become healthy after $MAX_TRIES attempts — check service logs"
+  fi
+  sleep 2
+done
 printf '\n'
 
 # --- Step 6: Verify ---

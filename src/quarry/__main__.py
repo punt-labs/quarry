@@ -870,6 +870,7 @@ def login_cmd(
             "--api-key",
             help="Bearer token for remote server (omit for unauthenticated servers)",
             hide_input=True,
+            envvar="QUARRY_API_KEY",
         ),
     ] = None,
     yes: Annotated[

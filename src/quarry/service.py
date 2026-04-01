@@ -53,7 +53,7 @@ def _write_env_file(api_key: str) -> None:
         raise
     try:
         with f:
-            escaped = api_key.replace('"', '\\"')
+            escaped = api_key.replace("\\", "\\\\").replace('"', '\\"')
             f.write(f'QUARRY_API_KEY="{escaped}"\n')
         tmp_path.replace(_ENV_FILE)
     except BaseException:
@@ -185,8 +185,23 @@ def _launchd_install() -> None:
                 result.returncode,
             )
 
-    _LAUNCHD_PLIST.write_text(_launchd_plist_content())
-    _LAUNCHD_PLIST.chmod(0o600)
+    content = _launchd_plist_content()
+    tmp_path = _LAUNCHD_PLIST.with_name(_LAUNCHD_PLIST.name + ".tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    fd = os.open(str(tmp_path), flags, 0o600)
+    try:
+        f = os.fdopen(fd, "w")
+    except BaseException:
+        os.close(fd)
+        tmp_path.unlink(missing_ok=True)
+        raise
+    try:
+        with f:
+            f.write(content)
+        tmp_path.replace(_LAUNCHD_PLIST)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
     logger.info("Wrote %s", _LAUNCHD_PLIST)
 
     subprocess.run(

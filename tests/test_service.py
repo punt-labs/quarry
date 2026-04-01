@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import platform
 import stat
 from pathlib import Path
@@ -13,6 +14,7 @@ from quarry.config import DEFAULT_PORT
 from quarry.service import (
     _LABEL,
     _get_tls_hostname,
+    _launchd_install,
     _launchd_plist_content,
     _quarry_exec_args,
     _systemd_unit_content,
@@ -620,3 +622,83 @@ class TestInstallLinux:
             calls = [c.args[0] for c in mock_run.call_args_list]
             assert any("disable" in c for c in calls)
             assert any("daemon-reload" in c for c in calls)
+
+
+class TestLaunchdPlistAtomicWrite:
+    """Verify _launchd_install() writes the plist atomically with mode 0600."""
+
+    @patch("quarry.service.subprocess.run")
+    def test_plist_created_with_mode_0600(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        """The plist file must be created with mode 0600 (no world-readable window)."""
+        plist_path = tmp_path / "com.punt-labs.quarry.plist"
+        mock_run.side_effect = [
+            MagicMock(returncode=113),  # launchctl list: not found
+            MagicMock(returncode=0),  # launchctl load: success
+        ]
+        with (
+            patch("quarry.service._LAUNCHD_DIR", tmp_path),
+            patch("quarry.service._LAUNCHD_PLIST", plist_path),
+            patch("quarry.service._quarry_exec_args", return_value=["quarry", "serve"]),
+        ):
+            _launchd_install()
+
+        assert plist_path.exists()
+        mode = stat.S_IMODE(plist_path.stat().st_mode)
+        assert mode == 0o600, f"expected 0o600, got {oct(mode)}"
+
+    @patch("quarry.service.subprocess.run")
+    def test_fd_closed_and_tmp_removed_when_fdopen_raises(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        """If os.fdopen raises during plist write, the raw fd is closed and tmp removed.
+
+        Fix 3 invariant: no temp file leaks and no fd leaks on fdopen failure.
+        """
+        plist_path = tmp_path / "com.punt-labs.quarry.plist"
+        closed_fds: list[int] = []
+        real_close = os.close
+
+        def fake_close(fd: int) -> None:
+            closed_fds.append(fd)
+            real_close(fd)
+
+        mock_run.return_value = MagicMock(returncode=113)  # launchctl list: not found
+
+        with (
+            patch("quarry.service._LAUNCHD_DIR", tmp_path),
+            patch("quarry.service._LAUNCHD_PLIST", plist_path),
+            patch("quarry.service._quarry_exec_args", return_value=["quarry", "serve"]),
+            patch("quarry.service.os.fdopen", side_effect=OSError("injected")),
+            patch("quarry.service.os.close", side_effect=fake_close),
+            pytest.raises(OSError, match="injected"),
+        ):
+            _launchd_install()
+
+        # No .tmp files should remain
+        assert not any(tmp_path.glob("*.tmp"))
+        # The raw fd must have been closed
+        assert closed_fds, "os.close was never called after os.fdopen failure"
+
+
+class TestWriteEnvFileBackslash:
+    """Verify _write_env_file correctly escapes backslashes in API keys."""
+
+    def test_backslash_escaped(self, tmp_path: Path) -> None:
+        """A backslash in the API key must be doubled in the env file."""
+        env_file = tmp_path / "quarry.env"
+        with patch("quarry.service._ENV_FILE", env_file):
+            _write_env_file("tok\\en")
+        content = env_file.read_text()
+        assert 'QUARRY_API_KEY="tok\\\\en"' in content
+
+    def test_backslash_and_quote_escaped(self, tmp_path: Path) -> None:
+        """Keys with both backslashes and double-quotes must have both escaped."""
+        env_file = tmp_path / "quarry.env"
+        api_key = 'value\\with\\backslashes"and"quotes'
+        with patch("quarry.service._ENV_FILE", env_file):
+            _write_env_file(api_key)
+        content = env_file.read_text()
+        expected = r'QUARRY_API_KEY="value\\with\\backslashes\"and\"quotes"'
+        assert expected in content

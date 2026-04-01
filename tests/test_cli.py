@@ -3,10 +3,14 @@ from __future__ import annotations
 import json
 import tempfile
 from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 from typer.testing import CliRunner
+
+if TYPE_CHECKING:
+    import pytest
 
 import quarry.__main__ as cli_mod
 from quarry.__main__ import app
@@ -2579,6 +2583,40 @@ class TestLoginCmd:
         # a .crt path, which confirms fdopen completed without truncation (if it had
         # truncated, validate_connection would have raised or returned False).
         assert written_paths[0].endswith(".crt")
+
+    def test_api_key_from_envvar(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """QUARRY_API_KEY env var is used as --api-key when the flag is omitted.
+
+        Install scripts call `QUARRY_API_KEY=<token> quarry login <host> --yes`.
+        Without envvar= on the option, the token is silently ignored.
+        """
+        monkeypatch.setenv("QUARRY_API_KEY", "env-sk-test")
+        with (
+            patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
+            patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
+            patch("quarry.__main__.store_ca_cert"),
+            patch(
+                "quarry.__main__.validate_connection", return_value=(True, "")
+            ) as mock_validate,
+            patch("quarry.__main__.write_proxy_config") as mock_write,
+            patch("quarry.__main__.CA_CERT_PATH", Path("/fake/quarry-ca.crt")),
+        ):
+            result = runner.invoke(
+                app,
+                ["login", "okinos.example.com", "--yes"],
+                # do NOT pass --api-key; key must come from the env var
+            )
+        _reset_globals()
+        assert result.exit_code == 0, result.output
+        # validate_connection must receive the key from the env var, not None.
+        call_args = mock_validate.call_args
+        assert call_args.args[2] == "env-sk-test", (
+            f"Expected api_key='env-sk-test' from QUARRY_API_KEY, "
+            f"got: {call_args.args[2]!r}"
+        )
+        # write_proxy_config must also receive the env var token.
+        mock_write.assert_called_once()
+        assert mock_write.call_args[0][1] == "env-sk-test"
 
 
 class TestLogoutCmd:
