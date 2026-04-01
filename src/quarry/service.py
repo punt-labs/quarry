@@ -14,7 +14,6 @@ from __future__ import annotations
 import logging
 import os
 import platform
-import shlex
 import socket
 import subprocess
 import sys
@@ -240,9 +239,21 @@ _SYSTEMD_DIR = Path.home() / ".config" / "systemd" / "user"
 _SYSTEMD_UNIT = _SYSTEMD_DIR / "quarry.service"
 
 
+def _systemd_escape(arg: str) -> str:
+    """Escape a single argument for use in systemd unit ExecStart.
+
+    systemd uses its own parser, not POSIX shell.  Double-quote the value
+    and backslash-escape embedded double-quotes and backslashes.
+    Single-quote POSIX shell escaping (e.g. ``'foo'"'"'bar'``) is invalid
+    in systemd ExecStart and must not be used.
+    """
+    escaped = arg.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
 def _systemd_unit_content() -> str:
     args = _quarry_exec_args()
-    exec_start = " ".join(shlex.quote(a) for a in args)
+    exec_start = " ".join(_systemd_escape(a) for a in args)
     env_file_path = str(_ENV_FILE)
     return textwrap.dedent(f"""\
         [Unit]
@@ -348,10 +359,16 @@ def install() -> str:
         )
         raise SystemExit(msg)
 
+    plat = detect_platform()
+
     # Write the API key env file before registering the service so the daemon
     # can read it on first start.  The key is NOT baked into exec args —
     # it lives in a 0600 env file to keep it out of ps output and service files.
-    if api_key:
+    # macOS: the key goes into the plist EnvironmentVariables block — no env
+    # file needed there.  Linux: systemd reads it via EnvironmentFile=.
+    if api_key and plat == "linux":
+        # macOS: key goes into plist EnvironmentVariables block — no env file needed.
+        # Linux: systemd reads it via EnvironmentFile=.
         _write_env_file(api_key)
 
     # Generate TLS certificates before registering the service so that the
@@ -361,7 +378,6 @@ def install() -> str:
     ca_crt = TLS_DIR / "ca.crt"
     fingerprint = cert_fingerprint(ca_crt.read_bytes()) if ca_crt.exists() else ""
 
-    plat = detect_platform()
     args = _quarry_exec_args()
 
     if plat == "macos":

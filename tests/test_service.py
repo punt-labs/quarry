@@ -17,6 +17,7 @@ from quarry.service import (
     _launchd_install,
     _launchd_plist_content,
     _quarry_exec_args,
+    _systemd_escape,
     _systemd_unit_content,
     _write_env_file,
     detect_platform,
@@ -493,6 +494,7 @@ class TestInstallHostKeyGuard:
         with (
             patch("quarry.service._LAUNCHD_DIR", tmp_path),
             patch("quarry.service._LAUNCHD_PLIST", plist_path),
+            patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
         ):
             mock_run.side_effect = [
                 MagicMock(returncode=113),  # launchctl list: not found
@@ -513,6 +515,7 @@ class TestInstallMacOS:
         with (
             patch("quarry.service._LAUNCHD_DIR", tmp_path),
             patch("quarry.service._LAUNCHD_PLIST", plist_path),
+            patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
             _PATCH_TLS,
             _PATCH_CERT_FP,
         ):
@@ -553,6 +556,7 @@ class TestInstallMacOS:
         with (
             patch("quarry.service._LAUNCHD_DIR", tmp_path),
             patch("quarry.service._LAUNCHD_PLIST", plist_path),
+            patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
             _PATCH_TLS,
             _PATCH_CERT_FP,
         ):
@@ -627,6 +631,7 @@ class TestInstallMacOS:
         with (
             patch("quarry.service._LAUNCHD_DIR", tmp_path),
             patch("quarry.service._LAUNCHD_PLIST", plist_path),
+            patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
             _PATCH_TLS,
             _PATCH_CERT_FP,
         ):
@@ -653,6 +658,7 @@ class TestInstallLinux:
         with (
             patch("quarry.service._SYSTEMD_DIR", tmp_path),
             patch("quarry.service._SYSTEMD_UNIT", unit_path),
+            patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
             _PATCH_TLS,
             _PATCH_CERT_FP,
         ):
@@ -683,6 +689,7 @@ class TestInstallLinux:
         with (
             patch("quarry.service._SYSTEMD_DIR", tmp_path),
             patch("quarry.service._SYSTEMD_UNIT", unit_path),
+            patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
             _PATCH_TLS,
             _PATCH_CERT_FP,
         ):
@@ -792,3 +799,151 @@ class TestWriteEnvFileBackslash:
         content = env_file.read_text()
         expected = r'QUARRY_API_KEY="value\\with\\backslashes\"and\"quotes"'
         assert expected in content
+
+
+class TestSystemdEscape:
+    """Unit tests for _systemd_escape() — systemd ExecStart argument escaper.
+
+    systemd uses its own parser, not POSIX shell.  shlex.quote() produces
+    single-quote style escaping (e.g. 'foo'"'"'bar') that systemd cannot
+    decode.  _systemd_escape() must always use double-quote style.
+    """
+
+    def test_plain_arg_double_quoted(self) -> None:
+        """A plain argument must be wrapped in double quotes."""
+        assert _systemd_escape("quarry") == '"quarry"'
+
+    def test_path_with_spaces_double_quoted(self) -> None:
+        """A path with spaces must be double-quoted, not single-quoted."""
+        result = _systemd_escape("/home/user/my bin/quarry")
+        assert result == '"/home/user/my bin/quarry"'
+        assert "'" not in result
+
+    def test_single_quote_in_path_no_posix_escape(self) -> None:
+        """A path with a single quote must NOT produce POSIX shell escaping.
+
+        shlex.quote would produce the POSIX escape sequence (e.g. 'x'"'"'y')
+        which systemd cannot parse.  _systemd_escape() must use double-quote style,
+        leaving single quotes bare inside the outer double quotes.
+        """
+        path = "/home/o'brien/.local/bin/quarry"
+        result = _systemd_escape(path)
+        # The POSIX single-quote escape sequence must not appear.
+        assert "'" + '"' not in result, f"POSIX escape pattern found in: {result!r}"
+        # Single quotes inside double-quoted strings are fine in systemd — they
+        # must appear verbatim, not escaped.
+        assert "o'brien" in result
+        # Must use double-quote wrapping.
+        assert result.startswith('"')
+        assert result.endswith('"')
+
+    def test_embedded_double_quote_backslash_escaped(self) -> None:
+        """An embedded double-quote must be backslash-escaped."""
+        result = _systemd_escape('say "hello"')
+        assert result == '"say \\"hello\\""'
+
+    def test_backslash_doubled(self) -> None:
+        """A backslash in the argument must be doubled."""
+        result = _systemd_escape("C:\\path\\to\\quarry")
+        assert result == '"C:\\\\path\\\\to\\\\quarry"'
+
+    def test_systemd_unit_exec_start_no_posix_escape(self, tmp_path: Path) -> None:
+        """_systemd_unit_content() ExecStart must not contain the POSIX escape pattern.
+
+        When the quarry binary path contains a single quote, shlex.quote()
+        would produce 'foo'"'"'bar' which systemd rejects.
+        """
+        single_quote_path = "/home/o'brien/.local/bin/quarry"
+        with (
+            patch(
+                "quarry.service._quarry_exec_args",
+                return_value=[single_quote_path, "serve", "--port", "8420"],
+            ),
+            patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
+        ):
+            content = _systemd_unit_content()
+
+        exec_start_line = next(
+            line for line in content.splitlines() if line.startswith("ExecStart=")
+        )
+        # The POSIX single-quote escape sequence ('"'"') must not appear.
+        # shlex.quote produces this pattern; systemd cannot parse it.
+        assert "'" + '"' not in exec_start_line, (
+            f"ExecStart must not use POSIX shell escaping; got: {exec_start_line!r}"
+        )
+        # The path must appear with the single-quote verbatim inside double quotes.
+        assert '"' + "/home/o'brien/.local/bin/quarry" + '"' in exec_start_line
+
+
+class TestInstallMacOSSkipsEnvFile:
+    """install() on macOS must NOT write quarry.env even when QUARRY_API_KEY is set.
+
+    macOS launchd reads the key from the plist EnvironmentVariables block.
+    Writing it to an env file is unnecessary and duplicates the secret on disk.
+    """
+
+    @patch("quarry.service.subprocess.run")
+    @patch.object(platform, "system", return_value="Darwin")
+    @patch("quarry.service.write_tls_files")
+    @patch("quarry.service.cert_fingerprint", return_value="")
+    def test_no_env_file_written_on_macos(
+        self,
+        _fp: MagicMock,
+        _tls: MagicMock,
+        _sys: MagicMock,
+        mock_run: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("QUARRY_API_KEY", "sekrit")
+        plist_path = tmp_path / "com.punt-labs.quarry.plist"
+        env_file = tmp_path / "quarry.env"
+        with (
+            patch("quarry.service._LAUNCHD_DIR", tmp_path),
+            patch("quarry.service._LAUNCHD_PLIST", plist_path),
+            patch("quarry.service._ENV_FILE", env_file),
+        ):
+            mock_run.side_effect = [
+                MagicMock(returncode=113),  # launchctl list: not found
+                MagicMock(returncode=0),  # launchctl load: success
+                MagicMock(returncode=0),  # launchctl list: running
+            ]
+            install()
+
+        assert not env_file.exists(), (
+            "install() must not write quarry.env on macOS — "
+            "the API key goes into the plist EnvironmentVariables block"
+        )
+
+    @patch("quarry.service.subprocess.run")
+    @patch.object(platform, "system", return_value="Linux")
+    @patch("quarry.service._has_linger", return_value=True)
+    @patch("quarry.service.write_tls_files")
+    @patch("quarry.service.cert_fingerprint", return_value="")
+    def test_env_file_written_on_linux(
+        self,
+        _fp: MagicMock,
+        _tls: MagicMock,
+        _linger: MagicMock,
+        _sys: MagicMock,
+        mock_run: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Verify the complementary path: Linux does write the env file."""
+        monkeypatch.setenv("QUARRY_API_KEY", "sekrit")
+        unit_path = tmp_path / "quarry.service"
+        env_file = tmp_path / "quarry.env"
+        with (
+            patch("quarry.service._SYSTEMD_DIR", tmp_path),
+            patch("quarry.service._SYSTEMD_UNIT", unit_path),
+            patch("quarry.service._ENV_FILE", env_file),
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="active\n")
+            install()
+
+        assert env_file.exists(), (
+            "install() must write quarry.env on Linux so systemd EnvironmentFile= works"
+        )
+        content = env_file.read_text()
+        assert "QUARRY_API_KEY" in content
