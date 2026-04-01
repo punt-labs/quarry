@@ -39,7 +39,6 @@ htmlcov/
 
 # Environment
 .env
-.envrc
 
 # LaTeX build artifacts
 *.aux
