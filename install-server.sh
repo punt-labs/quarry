@@ -19,7 +19,7 @@ ok()   { printf '  %b✓%b %s\n' "$GREEN" "$NC" "$1"; }
 warn() { printf '  %b!%b %s\n' "$YELLOW" "$NC" "$1"; }
 fail() { printf '  %b✗%b %s\n' "$YELLOW" "$NC" "$1"; exit 1; }
 
-VERSION="1.10.1"
+VERSION="1.11.0"
 PACKAGE="punt-quarry"
 BINARY="quarry"
 
