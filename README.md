@@ -51,6 +51,27 @@ sh install.sh
 
 </details>
 
+### Remote Server
+
+Run quarry on a GPU server and connect from any Mac or Linux client over TLS.
+
+**Server** (no Claude Code required):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/688d75c/install-server.sh | sh
+```
+
+Generates TLS certificates, registers a systemd service, and prints a CA fingerprint. NVIDIA GPUs are auto-detected for CUDA inference.
+
+**Client** (connects to a remote server):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/688d75c/install-client.sh | sh
+quarry login <server-hostname> --api-key <token>
+```
+
+TOFU certificate pinning — the client fetches the server's CA cert, displays the fingerprint for confirmation, then pins it for all future connections over `wss://`.
+
 ### Claude Desktop
 
 [**Download punt-quarry.mcpb**](https://github.com/punt-labs/quarry/releases/latest/download/punt-quarry.mcpb) and double-click to install. Alternatively, `quarry install` configures Claude Desktop automatically.
@@ -142,6 +163,12 @@ quarry use work                                # switch database
 quarry status                                  # database dashboard
 quarry doctor                                  # health check
 quarry serve                                   # start daemon on :8420
+quarry install                                 # set up daemon, TLS certs, mcp-proxy
+
+# Remote connections
+quarry login okinos.local --api-key <token>    # TOFU login to remote server
+quarry logout                                  # disconnect, revert to local daemon
+quarry remote list --ping                      # show remote config and health
 
 # Agent memory tagging
 quarry ingest notes.md --agent-handle claude --memory-type fact
@@ -181,12 +208,12 @@ All hooks are fail-open — failures are ignored and never block Claude Code. Ea
 Quarry runs as a daemon. Claude Code sessions connect through mcp-proxy:
 
 ```text
-                    stdio                      WebSocket
+                    stdio                       wss:// (TLS)
 Claude Code <-----------------> mcp-proxy <---------------------> quarry serve
-             MCP JSON-RPC       (~5 MB Go)                        (one daemon)
+             MCP JSON-RPC       (~5 MB Go)      pinned CA cert    (one daemon)
 ```
 
-Without the proxy, every session spawns a separate Python process, each loading the embedding model into ~200 MB of RAM. With it, startup is instant and state is shared across all sessions.
+Without the proxy, every session spawns a separate Python process, each loading the embedding model into ~200 MB of RAM. With it, startup is instant and state is shared across all sessions. All connections use TLS with a self-signed CA — even on localhost.
 
 `quarry install` downloads mcp-proxy (SHA256-verified, correct platform) and configures MCP clients.
 
