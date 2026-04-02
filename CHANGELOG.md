@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-04-01
+
 ### Added
 
 - **tool**: `quarry login <host> [--port N] [--api-key KEY] [--yes]` — TOFU login
