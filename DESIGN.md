@@ -383,7 +383,7 @@ Without this install step, agents with existing `quarry.yaml` ext files (contain
 
 ### Design
 
-All connections between quarry clients and servers use TLS — including localhost. There is no `--insecure` flag, no plaintext WebSocket path, no opt-out. The security model is TOFU (Trust On First Use) with self-signed CA certificate pinning.
+The installed quarry service always runs with TLS enabled — including on localhost. `quarry serve` without `--tls` is supported for local development but must not be used for production. The security model is TOFU (Trust On First Use) with self-signed CA certificate pinning.
 
 **Certificate generation:** `quarry install` generates a self-signed EC P-256 CA and server certificate with full x509 extension set. Certs are written atomically to `~/.punt-labs/quarry/tls/` with 0600/0644 permissions. The CA cert CN is `"Quarry CA"` (not hostname-scoped). The server cert SAN includes the configured hostname, localhost, and loopback addresses.
 
@@ -417,7 +417,7 @@ When a remote quarry server is configured (via `quarry login`), **every data com
 
 **Everything else routes remotely:** `find`, `status`, `list` (all subcommands), `show`, `ingest`, `remember`, `delete`, `register`, `deregister`, `sync`, `use`, `doctor`
 
-The HTTP server exposes REST endpoints for every remotely-routable operation. The CLI detects remote configuration via `_safe_proxy_config()` and routes through `_remote_https_get()` or `_remote_https_post()` with the pinned CA cert and Bearer token.
+The CLI detects remote configuration via `_safe_proxy_config()` and routes through HTTP helpers with the pinned CA cert and Bearer token. Currently only `_remote_https_get()` exists; a matching `_remote_https_post()` / `_remote_https_delete()` helper is needed for write operations (tracked as `quarry-stcd`).
 
 **Current state (v1.11.0):** Only `find` and `status` route remotely. All other commands silently hit the local database. This is tracked as epic `quarry-g0ed` with 11 tasks to complete parity.
 

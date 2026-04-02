@@ -112,12 +112,14 @@ CLI -----> HTTPS GET/POST ---------> quarry serve
 Without the proxy, every Claude Code tab spawns a separate Python
 process, each loading the embedding model into $\sim$200\,MB of RAM.
 With it, startup is instant and state is shared across all sessions.
-All connections use TLS with TOFU certificate pinning (DES-020) ---
-even on localhost.
+Installed services use TLS with TOFU certificate pinning (DES-020)
+--- even on localhost.
 
-When a remote server is configured, the CLI routes data commands
-over HTTPS to the server (DES-021).  Only authentication and
-administration commands remain local.
+When a remote server is configured (DES-021), the CLI should route
+all data commands over HTTPS to the server, with only authentication
+and administration commands remaining local.  As of v1.11.0, only
+\texttt{find} and \texttt{status} are remote-routed; remaining
+commands are tracked in epic quarry-g0ed.
 
 \subsection{Surface Summary}
 
@@ -766,9 +768,10 @@ no CORS headers are emitted.
 
 \subsection{TLS and TOFU Certificate Pinning}
 
-All connections use TLS --- including localhost.  There is no insecure
-mode.  Certificate management uses TOFU (Trust On First Use) with
-self-signed CA pinning (DES-020).
+The installed service always runs with TLS enabled.  \texttt{quarry
+serve} without \texttt{-{}-tls} is supported for local development but
+must not be used for production.  Certificate management uses TOFU
+(Trust On First Use) with self-signed CA pinning (DES-020).
 
 \textbf{Certificate generation:} \texttt{quarry install} generates
 an EC~P-256 CA and server certificate.  Files are written atomically
@@ -840,8 +843,11 @@ and writes the mcp-proxy config.
 \subsection{Daemon (\texttt{quarry serve})}
 
 \begin{lstlisting}
-quarry serve --port 8420 --host 0.0.0.0 --tls
+QUARRY_API_KEY=<token> quarry serve --port 8420 --host 0.0.0.0 --tls
 \end{lstlisting}
+
+Non-loopback hosts require an API key (the server refuses to start
+without one).
 
 Managed by \texttt{launchd} (macOS) or \texttt{systemd} (Linux) via
 \texttt{quarry install}.  API key delivered via systemd
@@ -1004,12 +1010,15 @@ user/assistant message text, skipping tool-use blocks.  Capped at
 Global flags: \texttt{-{}-json}, \texttt{-{}-verbose}/\texttt{-v},
 \texttt{-{}-quiet}/\texttt{-q}, \texttt{-{}-db <name>}.
 
-\textbf{Remote routing:} When a remote server is configured (via
-\texttt{quarry login}), all data commands route to the remote server
-over HTTPS with the pinned CA cert.  Only authentication commands
-(\texttt{login}, \texttt{logout}, \texttt{remote}) and administration
-commands (\texttt{install}, \texttt{uninstall}, \texttt{serve},
-\texttt{mcp}, \texttt{version}) are local-only.  See DES-021.
+\textbf{Remote routing (DES-021):} When a remote server is configured
+(via \texttt{quarry login}), all data commands should route to the
+remote server over HTTPS with the pinned CA cert.  Only authentication
+commands (\texttt{login}, \texttt{logout}, \texttt{remote}) and
+administration commands (\texttt{install}, \texttt{uninstall},
+\texttt{serve}, \texttt{mcp}, \texttt{version}) are local-only.
+As of v1.11.0, only \texttt{find} and \texttt{status} are
+remote-routed; remaining commands (including \texttt{doctor}) are
+tracked in epic quarry-g0ed.
 
 % ===================================================================
 \section{Test Architecture}
