@@ -121,6 +121,7 @@ ignore = [
 "benchmarks/*" = ["T20", "S311", "BLE001", "PLC0415", "SIM905"]
 "src/quarry/__main__.py" = ["T20", "FBT"]
 "src/quarry/mcp_server.py" = ["T20", "FBT"]
+"src/quarry/hooks.py" = ["S603"]  # Popen calls use sys.executable — trusted
 
 [tool.ruff.format]
 quote-style = "double"

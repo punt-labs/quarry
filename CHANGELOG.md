@@ -14,9 +14,22 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Added
+
+- **infra**: Generalized `_remote_https_request(method, path, config, body)` helper
+  supporting GET, POST, and DELETE. Thin `_remote_https_get` wrapper preserved for
+  backward compatibility. Handles JSON body encoding, 204 No Content, and non-2xx
+  error reporting.
+- **tool**: `quarry list documents` and `quarry list collections` route to the
+  remote HTTPS API when a remote server is configured.
+- **infra**: CORS middleware now allows POST and DELETE methods (previously GET only).
+- **infra**: Shared `_format_documents_text` and `_format_collections_text` formatters
+  ensure remote and local output paths produce identical output.
+
 ### Fixed
 
 - **connector**: Fall back to single-page ingestion when sitemap discovery finds pages but path filtering yields zero matches — previously silently ingested nothing for sites with partially parseable sitemaps (e.g. namespace-prefixed XML)
+- Removed stale `noqa: S603` suppression in `hooks.py`.
 
 ## [1.11.0] - 2026-04-01
 

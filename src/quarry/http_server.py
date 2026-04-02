@@ -353,7 +353,7 @@ def build_app(
         Middleware(
             CORSMiddleware,
             allow_origins=origins,
-            allow_methods=["GET", "OPTIONS"],
+            allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
             allow_headers=["Authorization", "Content-Type"],
         ),
     ]
