@@ -51,10 +51,10 @@ class TestListDocumentsCmd:
             result = runner.invoke(app, ["list", "documents"])
 
         assert result.exit_code == 0
-        assert "[default]" in result.output
+        assert "default" in result.output
         assert "report.pdf" in result.output
-        assert "10/10 pages" in result.output
-        assert "25 chunks" in result.output
+        assert "10" in result.output
+        assert "25" in result.output
 
     def test_filters_by_collection(self):
         with (
@@ -76,11 +76,124 @@ class TestListDocumentsCmd:
             result = runner.invoke(app, ["list", "documents"])
 
         assert result.exit_code == 0
-        assert "No documents indexed" in result.output
+        assert "No documents" in result.output
+
+    def test_remote_routing_when_config_present(self):
+        remote_docs = {
+            "total_documents": 1,
+            "documents": [
+                {
+                    "document_name": "remote-report.pdf",
+                    "collection": "remote-col",
+                    "indexed_pages": 5,
+                    "total_pages": 5,
+                    "chunk_count": 12,
+                },
+            ],
+        }
+        inner_config = {
+            "url": "wss://quarry.example.com:8420/mcp",
+            "ca_cert": "/path/to/ca.crt",
+            "headers": {"Authorization": "Bearer tok"},
+        }
+        proxy_config = {"quarry": inner_config}
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch(
+                "quarry.__main__._remote_https_get", return_value=remote_docs
+            ) as mock_get,
+        ):
+            result = runner.invoke(app, ["list", "documents"])
+
+        assert result.exit_code == 0
+        mock_get.assert_called_once_with("/documents", inner_config)
+        assert "remote-report.pdf" in result.output
+        assert "remote-col" in result.output
+
+    def test_remote_routing_with_collection_filter(self):
+        inner_config = {
+            "url": "wss://quarry.example.com:8420/mcp",
+            "headers": {"Authorization": "Bearer tok"},
+        }
+        proxy_config = {"quarry": inner_config}
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch(
+                "quarry.__main__._remote_https_get",
+                return_value={"documents": []},
+            ) as mock_get,
+        ):
+            runner.invoke(app, ["list", "documents", "--collection", "math"])
+
+        call_path: str = mock_get.call_args[0][0]
+        assert "collection=math" in call_path
+
+    def test_local_path_when_no_config(self):
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value={}),
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.list_documents", return_value=[]),
+        ):
+            result = runner.invoke(app, ["list", "documents"])
+
+        assert result.exit_code == 0
+        assert "No documents" in result.output
 
     def test_bare_list_errors(self):
         result = runner.invoke(app, ["list"])
         assert result.exit_code == 1
+
+    def test_remote_json_includes_all_fields(self):
+        """Remote path emits the same JSON field names as the local path."""
+        doc_fields = {
+            "document_name": "remote-report.pdf",
+            "document_path": "/docs/remote-report.pdf",
+            "collection": "remote-col",
+            "total_pages": 5,
+            "chunk_count": 12,
+            "indexed_pages": 5,
+            "ingestion_timestamp": "2026-01-01T00:00:00",
+        }
+
+        # Remote path
+        remote_resp = {"documents": [doc_fields]}
+        inner_config = {
+            "url": "wss://quarry.example.com:8420/mcp",
+            "headers": {"Authorization": "Bearer tok"},
+        }
+        proxy_config = {"quarry": inner_config}
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch("quarry.__main__._remote_https_get", return_value=remote_resp),
+        ):
+            remote_result = runner.invoke(app, ["--json", "list", "documents"])
+        _reset_globals()
+
+        assert remote_result.exit_code == 0
+        remote_data = json.loads(remote_result.output)
+        assert len(remote_data) == 1
+        remote_keys = set(remote_data[0].keys())
+
+        # Local path
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value={}),
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.list_documents", return_value=[doc_fields]),
+        ):
+            local_result = runner.invoke(app, ["--json", "list", "documents"])
+        _reset_globals()
+
+        assert local_result.exit_code == 0
+        local_data = json.loads(local_result.output)
+        assert len(local_data) == 1
+        local_keys = set(local_data[0].keys())
+
+        assert remote_keys == local_keys, (
+            f"Field mismatch: remote-only={remote_keys - local_keys}, "
+            f"local-only={local_keys - remote_keys}"
+        )
 
 
 class TestShowCmd:
@@ -876,8 +989,8 @@ class TestListCollectionsCmd:
 
         assert result.exit_code == 0
         assert "math" in result.output
-        assert "5 documents" in result.output
-        assert "100 chunks" in result.output
+        assert "5" in result.output
+        assert "100" in result.output
         assert "science" in result.output
 
     def test_empty(self):
@@ -889,7 +1002,94 @@ class TestListCollectionsCmd:
             result = runner.invoke(app, ["list", "collections"])
 
         assert result.exit_code == 0
-        assert "No collections found" in result.output
+        assert "No collections" in result.output
+
+    def test_remote_routing_when_config_present(self):
+        remote_cols = {
+            "total_collections": 2,
+            "collections": [
+                {"collection": "math", "document_count": 5, "chunk_count": 100},
+                {"collection": "science", "document_count": 3, "chunk_count": 60},
+            ],
+        }
+        inner_config = {
+            "url": "wss://quarry.example.com:8420/mcp",
+            "ca_cert": "/path/to/ca.crt",
+            "headers": {"Authorization": "Bearer tok"},
+        }
+        proxy_config = {"quarry": inner_config}
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch(
+                "quarry.__main__._remote_https_get", return_value=remote_cols
+            ) as mock_get,
+        ):
+            result = runner.invoke(app, ["list", "collections"])
+
+        assert result.exit_code == 0
+        mock_get.assert_called_once_with("/collections", inner_config)
+        assert "math" in result.output
+        assert "5" in result.output
+        assert "science" in result.output
+
+    def test_local_path_when_no_config(self):
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value={}),
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.db_list_collections", return_value=[]),
+        ):
+            result = runner.invoke(app, ["list", "collections"])
+
+        assert result.exit_code == 0
+        assert "No collections" in result.output
+
+    def test_remote_json_includes_all_fields(self):
+        """Remote path emits the same JSON field names as the local path."""
+        col_fields = {
+            "collection": "math",
+            "document_count": 5,
+            "chunk_count": 100,
+        }
+
+        # Remote path
+        remote_resp = {"collections": [col_fields]}
+        inner_config = {
+            "url": "wss://quarry.example.com:8420/mcp",
+            "headers": {"Authorization": "Bearer tok"},
+        }
+        proxy_config = {"quarry": inner_config}
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch("quarry.__main__._remote_https_get", return_value=remote_resp),
+        ):
+            remote_result = runner.invoke(app, ["--json", "list", "collections"])
+        _reset_globals()
+
+        assert remote_result.exit_code == 0
+        remote_data = json.loads(remote_result.output)
+        assert len(remote_data) == 1
+        remote_keys = set(remote_data[0].keys())
+
+        # Local path
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value={}),
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.db_list_collections", return_value=[col_fields]),
+        ):
+            local_result = runner.invoke(app, ["--json", "list", "collections"])
+        _reset_globals()
+
+        assert local_result.exit_code == 0
+        local_data = json.loads(local_result.output)
+        assert len(local_data) == 1
+        local_keys = set(local_data[0].keys())
+
+        assert remote_keys == local_keys, (
+            f"Field mismatch: remote-only={remote_keys - local_keys}, "
+            f"local-only={local_keys - remote_keys}"
+        )
 
 
 class TestRegisterCmd:
@@ -2833,3 +3033,92 @@ class TestRemoteHttpsGet:
         }
         with pytest.raises(SystemExit, match="CA certificate"):
             _remote_https_get("/health", config)
+
+
+class TestRemoteHttpsRequest:
+    """Unit tests for _remote_https_request() — generalised HTTP helper."""
+
+    def test_delegates_get_to_request(self) -> None:
+        """_remote_https_get delegates to _remote_https_request with method=GET."""
+        from quarry.__main__ import _remote_https_get
+
+        with patch("quarry.__main__._remote_https_request") as mock_req:
+            mock_req.return_value = {"ok": True}
+            config: dict[str, object] = {"url": "ws://localhost:8420/mcp"}
+            result = _remote_https_get("/status", config)
+
+        mock_req.assert_called_once_with("GET", "/status", config)
+        assert result == {"ok": True}
+
+    def test_post_sends_json_body(self) -> None:
+        """POST with a body dict sends JSON-encoded content."""
+        from quarry.__main__ import _remote_https_request
+
+        config: dict[str, object] = {
+            "url": "ws://localhost:8420/mcp",
+            "headers": {},
+        }
+        mock_conn = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = b'{"ok": true}'
+        mock_conn.getresponse.return_value = mock_resp
+
+        with patch("http.client.HTTPConnection", return_value=mock_conn):
+            result = _remote_https_request(
+                "POST", "/remember", config, body={"text": "hello"}
+            )
+
+        assert result == {"ok": True}
+        call_kwargs = mock_conn.request.call_args
+        assert call_kwargs[0][0] == "POST"
+        assert call_kwargs[0][1] == "/remember"
+        sent_body = call_kwargs[1].get("body") or call_kwargs[0][2]
+        assert json.loads(sent_body) == {"text": "hello"}
+        sent_headers = call_kwargs[1].get("headers") or call_kwargs[0][3]
+        assert sent_headers["Content-Type"] == "application/json"
+
+    def test_delete_no_body(self) -> None:
+        """DELETE without a body sends no Content-Type header."""
+        from quarry.__main__ import _remote_https_request
+
+        config: dict[str, object] = {
+            "url": "ws://localhost:8420/mcp",
+            "headers": {},
+        }
+        mock_conn = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = b'{"deleted": 5}'
+        mock_conn.getresponse.return_value = mock_resp
+
+        with patch("http.client.HTTPConnection", return_value=mock_conn):
+            result = _remote_https_request("DELETE", "/documents?name=foo", config)
+
+        assert result == {"deleted": 5}
+        call_args = mock_conn.request.call_args
+        assert call_args[0][0] == "DELETE"
+        sent_headers = call_args[1].get("headers", {})
+        assert "Content-Type" not in sent_headers
+
+    def test_non_2xx_raises_runtime_error(self) -> None:
+        """Status codes >= 300 raise RuntimeError."""
+        import pytest
+
+        from quarry.__main__ import _remote_https_request
+
+        config: dict[str, object] = {
+            "url": "ws://localhost:8420/mcp",
+            "headers": {},
+        }
+        mock_conn = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.status = 404
+        mock_resp.read.return_value = b'{"error": "Not found"}'
+        mock_conn.getresponse.return_value = mock_resp
+
+        with (
+            patch("http.client.HTTPConnection", return_value=mock_conn),
+            pytest.raises(RuntimeError, match="HTTP 404"),
+        ):
+            _remote_https_request("DELETE", "/documents?name=foo", config)

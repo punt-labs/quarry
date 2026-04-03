@@ -41,7 +41,12 @@ from quarry.database import (
     list_collections as db_list_collections,
     list_documents,
 )
-from quarry.formatting import format_document_detail, format_status
+from quarry.formatting import (
+    format_collections,
+    format_document_detail,
+    format_documents,
+    format_status,
+)
 from quarry.logging_config import configure_logging
 from quarry.pipeline import ingest_auto, ingest_content, ingest_document
 from quarry.provider import provider_display
@@ -247,23 +252,30 @@ def _cli_errors(fn: Callable[..., None]) -> Callable[..., None]:
 # ---------------------------------------------------------------------------
 
 
-def _remote_https_get(path: str, config: dict[str, object]) -> dict[str, object]:
-    """Make an authenticated GET request to the remote quarry server.
+def _remote_https_request(
+    method: str,
+    path: str,
+    config: dict[str, object],
+    body: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Make an authenticated HTTP request to the remote quarry server.
 
     Derives the HTTPS base URL from the wss:// URL in ``config``, builds a
     pinned SSL context using the CA cert when provided, and returns the parsed
     JSON response body.
 
     Args:
+        method: HTTP method (GET, POST, DELETE).
         path: Request path including query string, e.g. ``/search?q=foo&limit=10``.
         config: Dict from ``read_proxy_config()`` with keys ``url``, optional
             ``ca_cert``, and ``headers``.
+        body: Optional JSON-serialisable dict sent as the request body.
 
     Returns:
         Parsed JSON response as a dict.
 
     Raises:
-        RuntimeError: If the server returns a non-200 status code.
+        RuntimeError: If the server returns a non-2xx status code.
         OSError: If the connection cannot be established.
         SystemExit: If the remote URL uses HTTPS but no CA cert is pinned.
     """
@@ -288,6 +300,11 @@ def _remote_https_get(path: str, config: dict[str, object]) -> dict[str, object]
         else {}
     )
 
+    encoded_body: bytes | None = None
+    if body is not None:
+        encoded_body = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+
     conn: http.client.HTTPConnection | http.client.HTTPSConnection
     if scheme == "https":
         ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -302,18 +319,25 @@ def _remote_https_get(path: str, config: dict[str, object]) -> dict[str, object]
     else:
         conn = http.client.HTTPConnection(host, port, timeout=15)
     try:
-        conn.request("GET", path, headers=headers)
+        conn.request(method, path, body=encoded_body, headers=headers)
         resp = conn.getresponse()
-        body = resp.read()
-        if resp.status != 200:
-            body_text = body.decode("utf-8", errors="replace")
+        resp_body = resp.read()
+        if resp.status >= 300:
+            body_text = resp_body.decode("utf-8", errors="replace")
             raise RuntimeError(
                 f"Remote quarry server returned HTTP {resp.status}: {body_text}"
             )
-        response_data: dict[str, object] = json.loads(body)
+        if not resp_body:
+            return {}
+        response_data: dict[str, object] = json.loads(resp_body)
         return response_data
     finally:
         conn.close()
+
+
+def _remote_https_get(path: str, config: dict[str, object]) -> dict[str, object]:
+    """Make an authenticated GET request to the remote quarry server."""
+    return _remote_https_request("GET", path, config)
 
 
 # ---------------------------------------------------------------------------
@@ -1076,42 +1100,50 @@ def list_documents_cmd(
     ] = "",
 ) -> None:
     """List all indexed documents."""
+    proxy_config = _safe_proxy_config().get("quarry", {})
+    if isinstance(proxy_config, dict) and "url" in proxy_config:
+        params: dict[str, str] = {}
+        if collection:
+            params["collection"] = collection
+        qs = f"?{urllib.parse.urlencode(params)}" if params else ""
+        remote_resp = _remote_https_get(f"/documents{qs}", proxy_config)
+        raw_docs = remote_resp.get("documents", [])
+        if not isinstance(raw_docs, list):
+            err_console.print(
+                "Warning: unexpected response from remote server", style="yellow"
+            )
+            raw_docs = []
+        docs: list[dict[str, object]] = list(raw_docs)
+        _emit(docs, format_documents(docs))
+        return
+
     settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
-    docs = list_documents(db, collection_filter=collection or None)
-
-    text = (
-        "\n".join(
-            f"[{doc['collection']}] {doc['document_name']}: "
-            f"{doc['indexed_pages']}/{doc['total_pages']} pages, "
-            f"{doc['chunk_count']} chunks"
-            for doc in docs
-        )
-        if docs
-        else "No documents indexed."
-    )
-    _emit(docs, text)
+    local_docs = list_documents(db, collection_filter=collection or None)
+    _emit(local_docs, format_documents(local_docs))
 
 
 @list_app.command(name="collections")
 @_cli_errors
 def list_collections_cmd() -> None:
     """List all collections with document and chunk counts."""
+    proxy_config = _safe_proxy_config().get("quarry", {})
+    if isinstance(proxy_config, dict) and "url" in proxy_config:
+        remote_resp = _remote_https_get("/collections", proxy_config)
+        raw_cols = remote_resp.get("collections", [])
+        if not isinstance(raw_cols, list):
+            err_console.print(
+                "Warning: unexpected response from remote server", style="yellow"
+            )
+            raw_cols = []
+        cols: list[dict[str, object]] = list(raw_cols)
+        _emit(cols, format_collections(cols))
+        return
+
     settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
-    cols = db_list_collections(db)
-
-    text = (
-        "\n".join(
-            f"{col['collection']}: "
-            f"{col['document_count']} documents, "
-            f"{col['chunk_count']} chunks"
-            for col in cols
-        )
-        if cols
-        else "No collections found."
-    )
-    _emit(cols, text)
+    local_cols = db_list_collections(db)
+    _emit(local_cols, format_collections(local_cols))
 
 
 @list_app.command(name="registrations")

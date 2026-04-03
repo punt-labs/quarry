@@ -456,6 +456,30 @@ class TestOptionsPreflightCors:
         tokens = [h.strip().lower() for h in allow_headers.split(",")]
         assert "authorization" in tokens
 
+    def test_cors_allows_post_method(self, client: TestClient) -> None:
+        resp = client.options(
+            "/health",
+            headers={
+                "Origin": "http://localhost",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        allow_methods = resp.headers.get("Access-Control-Allow-Methods", "")
+        tokens = [m.strip().upper() for m in allow_methods.split(",")]
+        assert "POST" in tokens
+
+    def test_cors_allows_delete_method(self, client: TestClient) -> None:
+        resp = client.options(
+            "/health",
+            headers={
+                "Origin": "http://localhost",
+                "Access-Control-Request-Method": "DELETE",
+            },
+        )
+        allow_methods = resp.headers.get("Access-Control-Allow-Methods", "")
+        tokens = [m.strip().upper() for m in allow_methods.split(",")]
+        assert "DELETE" in tokens
+
 
 class TestCorsOrigins:
     """Test configurable CORS origin reflection."""
