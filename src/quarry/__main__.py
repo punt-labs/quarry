@@ -1092,7 +1092,6 @@ def list_callback(ctx: typer.Context) -> None:
         raise typer.Exit(code=1)
 
 
-
 @list_app.command(name="documents")
 @_cli_errors
 def list_documents_cmd(
