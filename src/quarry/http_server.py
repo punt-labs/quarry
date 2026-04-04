@@ -35,7 +35,10 @@ from quarry.backends import get_embedding_backend
 from quarry.config import DEFAULT_PORT, Settings
 from quarry.database import (
     count_chunks,
+    delete_collection as db_delete_collection,
+    delete_document as db_delete_document,
     get_db,
+    get_page_text,
     hybrid_search,
     list_collections as db_list_collections,
     list_documents,
@@ -217,6 +220,9 @@ def _documents_route(request: Request) -> JSONResponse:
     if auth_resp is not None:
         return auth_resp
 
+    if request.method == "DELETE":
+        return _handle_delete_document(request)
+
     collection = request.query_params.get("collection") or None
     ctx = _ctx(request)
     docs = list_documents(ctx.db, collection_filter=collection)
@@ -228,9 +234,82 @@ def _collections_route(request: Request) -> JSONResponse:
     if auth_resp is not None:
         return auth_resp
 
+    if request.method == "DELETE":
+        return _handle_delete_collection(request)
+
     ctx = _ctx(request)
     cols = db_list_collections(ctx.db)
     return JSONResponse({"total_collections": len(cols), "collections": cols})
+
+
+def _show_route(request: Request) -> JSONResponse:
+    auth_resp = _check_auth(request)
+    if auth_resp is not None:
+        return auth_resp
+
+    document = request.query_params.get("document", "")
+    if not document:
+        return JSONResponse(
+            {"error": "Missing required parameter: document"}, status_code=400
+        )
+
+    collection = request.query_params.get("collection") or None
+    page_str = request.query_params.get("page")
+    page = 0
+    if page_str:
+        try:
+            page = int(page_str)
+        except ValueError:
+            return JSONResponse(
+                {"error": f"Invalid page number: {page_str!r}"},
+                status_code=400,
+            )
+
+    ctx = _ctx(request)
+
+    if page > 0:
+        text = get_page_text(ctx.db, document, page, collection=collection)
+        if text is None:
+            return JSONResponse({"error": "Not found"}, status_code=404)
+        return JSONResponse(
+            {"document_name": document, "page_number": page, "text": text}
+        )
+
+    # No page or page == 0: return document metadata.
+    docs = list_documents(ctx.db, collection_filter=collection)
+    match = [d for d in docs if d["document_name"] == document]
+    if not match:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    return JSONResponse(match[0])
+
+
+def _handle_delete_document(request: Request) -> JSONResponse:
+    name = request.query_params.get("name", "")
+    if not name:
+        return JSONResponse(
+            {"error": "Missing required parameter: name"}, status_code=400
+        )
+
+    collection = request.query_params.get("collection") or None
+    ctx = _ctx(request)
+    count = db_delete_document(ctx.db, name, collection=collection)
+    if count == 0:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    return JSONResponse({"deleted": count, "name": name, "type": "document"})
+
+
+def _handle_delete_collection(request: Request) -> JSONResponse:
+    name = request.query_params.get("name", "")
+    if not name:
+        return JSONResponse(
+            {"error": "Missing required parameter: name"}, status_code=400
+        )
+
+    ctx = _ctx(request)
+    count = db_delete_collection(ctx.db, name)
+    if count == 0:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    return JSONResponse({"deleted": count, "name": name, "type": "collection"})
 
 
 def _status_route(request: Request) -> JSONResponse:
@@ -343,8 +422,9 @@ def build_app(
         Route("/health", _health_route, methods=["GET"]),
         Route("/ca.crt", _ca_cert_route, methods=["GET"]),
         Route("/search", _search_route, methods=["GET"]),
-        Route("/documents", _documents_route, methods=["GET"]),
-        Route("/collections", _collections_route, methods=["GET"]),
+        Route("/show", _show_route, methods=["GET"]),
+        Route("/documents", _documents_route, methods=["GET", "DELETE"]),
+        Route("/collections", _collections_route, methods=["GET", "DELETE"]),
         Route("/status", _status_route, methods=["GET"]),
         WebSocketRoute("/mcp", _mcp_websocket_route),
     ]

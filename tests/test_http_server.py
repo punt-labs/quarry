@@ -628,3 +628,129 @@ class TestEmptyApiKey:
         with patch("quarry.http_server.hybrid_search", return_value=[]):
             data = empty_key_client.get("/search?q=test").json()
         assert data["query"] == "test"
+
+
+class TestShow:
+    """Tests for GET /show endpoint."""
+
+    def test_show_page_text(self, client: TestClient) -> None:
+        with patch("quarry.http_server.get_page_text", return_value="Hello world"):
+            data = client.get("/show?document=foo&page=1").json()
+
+        assert data["document_name"] == "foo"
+        assert data["page_number"] == 1
+        assert data["text"] == "Hello world"
+
+    def test_show_metadata(self, client: TestClient) -> None:
+        mock_doc = {
+            "document_name": "foo",
+            "collection": "default",
+            "total_pages": 10,
+            "chunk_count": 42,
+            "indexed_pages": 10,
+            "ingestion_timestamp": "2026-01-01T00:00:00",
+        }
+        with patch("quarry.http_server.list_documents", return_value=[mock_doc]):
+            data = client.get("/show?document=foo").json()
+
+        assert data["document_name"] == "foo"
+        assert data["total_pages"] == 10
+
+    def test_show_missing_document_param(self, client: TestClient) -> None:
+        resp = client.get("/show")
+        assert resp.status_code == 400
+        assert "document" in resp.json()["error"].lower()
+
+    def test_show_empty_document_param(self, client: TestClient) -> None:
+        resp = client.get("/show?document=")
+        assert resp.status_code == 400
+
+    def test_show_page_not_found(self, client: TestClient) -> None:
+        with patch("quarry.http_server.get_page_text", return_value=None):
+            resp = client.get("/show?document=foo&page=1")
+
+        assert resp.status_code == 404
+        assert resp.json()["error"] == "Not found"
+
+    def test_show_document_not_found(self, client: TestClient) -> None:
+        with patch("quarry.http_server.list_documents", return_value=[]):
+            resp = client.get("/show?document=missing")
+
+        assert resp.status_code == 404
+        assert resp.json()["error"] == "Not found"
+
+    def test_show_with_collection(self, client: TestClient) -> None:
+        with patch(
+            "quarry.http_server.get_page_text", return_value="page text"
+        ) as mock_get_page:
+            client.get("/show?document=foo&page=1&collection=math")
+
+        _, kwargs = mock_get_page.call_args
+        assert kwargs["collection"] == "math"
+
+    def test_show_metadata_with_collection(self, client: TestClient) -> None:
+        with patch("quarry.http_server.list_documents", return_value=[]) as mock_list:
+            client.get("/show?document=foo&collection=math")
+
+        _, kwargs = mock_list.call_args
+        assert kwargs["collection_filter"] == "math"
+
+    def test_show_invalid_page_returns_400(self, client: TestClient) -> None:
+        resp = client.get("/show?document=foo&page=abc")
+        assert resp.status_code == 400
+        assert "Invalid page number" in resp.json()["error"]
+
+
+class TestDeleteDocuments:
+    """Tests for DELETE /documents endpoint."""
+
+    def test_delete_document(self, client: TestClient) -> None:
+        with patch("quarry.http_server.db_delete_document", return_value=15):
+            data = client.delete("/documents?name=foo").json()
+
+        assert data["deleted"] == 15
+        assert data["name"] == "foo"
+        assert data["type"] == "document"
+
+    def test_delete_document_not_found(self, client: TestClient) -> None:
+        with patch("quarry.http_server.db_delete_document", return_value=0):
+            resp = client.delete("/documents?name=foo")
+
+        assert resp.status_code == 404
+        assert resp.json()["error"] == "Not found"
+
+    def test_delete_document_missing_name(self, client: TestClient) -> None:
+        resp = client.delete("/documents")
+        assert resp.status_code == 400
+        assert "name" in resp.json()["error"].lower()
+
+    def test_delete_document_with_collection(self, client: TestClient) -> None:
+        with patch("quarry.http_server.db_delete_document", return_value=5) as mock_del:
+            client.delete("/documents?name=foo&collection=math")
+
+        _, kwargs = mock_del.call_args
+        assert kwargs["collection"] == "math"
+
+
+class TestDeleteCollections:
+    """Tests for DELETE /collections endpoint."""
+
+    def test_delete_collection(self, client: TestClient) -> None:
+        with patch("quarry.http_server.db_delete_collection", return_value=50):
+            data = client.delete("/collections?name=math").json()
+
+        assert data["deleted"] == 50
+        assert data["name"] == "math"
+        assert data["type"] == "collection"
+
+    def test_delete_collection_not_found(self, client: TestClient) -> None:
+        with patch("quarry.http_server.db_delete_collection", return_value=0):
+            resp = client.delete("/collections?name=missing")
+
+        assert resp.status_code == 404
+        assert resp.json()["error"] == "Not found"
+
+    def test_delete_collection_missing_name(self, client: TestClient) -> None:
+        resp = client.delete("/collections")
+        assert resp.status_code == 400
+        assert "name" in resp.json()["error"].lower()

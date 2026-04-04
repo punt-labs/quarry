@@ -295,6 +295,198 @@ class TestShowCmd:
         assert result.exit_code == 0
         assert mock_get_page.call_args[1]["collection"] == "math"
 
+    def test_remote_routing_page_text(self):
+        remote_resp = {
+            "document_name": "report.pdf",
+            "page_number": 3,
+            "text": "Remote page content",
+        }
+        inner_config = {
+            "url": "wss://quarry.example.com:8420/mcp",
+            "ca_cert": "/path/to/ca.crt",
+            "headers": {"Authorization": "Bearer tok"},
+        }
+        proxy_config = {"quarry": inner_config}
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch(
+                "quarry.__main__._remote_https_get", return_value=remote_resp
+            ) as mock_get,
+        ):
+            result = runner.invoke(app, ["show", "report.pdf", "--page", "3"])
+
+        assert result.exit_code == 0
+        mock_get.assert_called_once()
+        call_path: str = mock_get.call_args[0][0]
+        assert "/show?" in call_path
+        assert "document=report.pdf" in call_path
+        assert "page=3" in call_path
+        assert "Remote page content" in result.output
+
+    def test_remote_routing_metadata(self):
+        remote_resp = {
+            "document_name": "report.pdf",
+            "collection": "math",
+            "total_pages": 10,
+            "chunk_count": 42,
+            "indexed_pages": 10,
+            "ingestion_timestamp": "2026-01-01T00:00:00",
+        }
+        inner_config = {
+            "url": "wss://quarry.example.com:8420/mcp",
+            "ca_cert": "/path/to/ca.crt",
+            "headers": {"Authorization": "Bearer tok"},
+        }
+        proxy_config = {"quarry": inner_config}
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch(
+                "quarry.__main__._remote_https_get", return_value=remote_resp
+            ) as mock_get,
+        ):
+            result = runner.invoke(app, ["show", "report.pdf"])
+
+        assert result.exit_code == 0
+        mock_get.assert_called_once()
+        call_path = mock_get.call_args[0][0]
+        assert "/show?" in call_path
+        assert "document=report.pdf" in call_path
+        assert "page" not in call_path
+        assert "report.pdf" in result.output
+        assert "math" in result.output
+
+    def test_remote_routing_with_collection(self):
+        inner_config = {
+            "url": "wss://quarry.example.com:8420/mcp",
+            "headers": {"Authorization": "Bearer tok"},
+        }
+        proxy_config = {"quarry": inner_config}
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch(
+                "quarry.__main__._remote_https_get",
+                return_value={
+                    "document_name": "doc.pdf",
+                    "page_number": 1,
+                    "text": "t",
+                },
+            ) as mock_get,
+        ):
+            runner.invoke(
+                app,
+                ["show", "doc.pdf", "--page", "1", "--collection", "math"],
+            )
+
+        call_path = mock_get.call_args[0][0]
+        assert "collection=math" in call_path
+
+    def test_local_path_when_no_config(self):
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value={}),
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.list_documents", return_value=[]),
+        ):
+            result = runner.invoke(app, ["show", "missing.pdf"])
+
+        assert result.exit_code == 1
+        assert "not found" in result.output
+
+    def test_remote_json_page_includes_all_fields(self):
+        """Remote page path emits the same JSON field names as the local path."""
+        # Remote path
+        remote_resp = {
+            "document_name": "report.pdf",
+            "page_number": 3,
+            "text": "page content",
+        }
+        inner_config = {
+            "url": "wss://quarry.example.com:8420/mcp",
+            "headers": {"Authorization": "Bearer tok"},
+        }
+        proxy_config = {"quarry": inner_config}
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch("quarry.__main__._remote_https_get", return_value=remote_resp),
+        ):
+            remote_result = runner.invoke(
+                app, ["--json", "show", "report.pdf", "--page", "3"]
+            )
+        _reset_globals()
+
+        assert remote_result.exit_code == 0
+        remote_data = json.loads(remote_result.output)
+        remote_keys = set(remote_data.keys())
+
+        # Local path
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value={}),
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.get_page_text", return_value="page content"),
+        ):
+            local_result = runner.invoke(
+                app, ["--json", "show", "report.pdf", "--page", "3"]
+            )
+        _reset_globals()
+
+        assert local_result.exit_code == 0
+        local_data = json.loads(local_result.output)
+        local_keys = set(local_data.keys())
+
+        assert remote_keys == local_keys, (
+            f"Field mismatch: remote-only={remote_keys - local_keys}, "
+            f"local-only={local_keys - remote_keys}"
+        )
+
+    def test_remote_json_metadata_includes_all_fields(self):
+        """Remote metadata path emits the same JSON field names as the local path."""
+        doc_fields = {
+            "document_name": "report.pdf",
+            "document_path": "/docs/report.pdf",
+            "collection": "math",
+            "total_pages": 10,
+            "chunk_count": 42,
+            "indexed_pages": 10,
+            "ingestion_timestamp": "2026-01-01T00:00:00",
+        }
+
+        # Remote path
+        inner_config = {
+            "url": "wss://quarry.example.com:8420/mcp",
+            "headers": {"Authorization": "Bearer tok"},
+        }
+        proxy_config = {"quarry": inner_config}
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch("quarry.__main__._remote_https_get", return_value=doc_fields),
+        ):
+            remote_result = runner.invoke(app, ["--json", "show", "report.pdf"])
+        _reset_globals()
+
+        assert remote_result.exit_code == 0
+        remote_data = json.loads(remote_result.output)
+        remote_keys = set(remote_data.keys())
+
+        # Local path
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value={}),
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.list_documents", return_value=[doc_fields]),
+        ):
+            local_result = runner.invoke(app, ["--json", "show", "report.pdf"])
+        _reset_globals()
+
+        assert local_result.exit_code == 0
+        local_data = json.loads(local_result.output)
+        local_keys = set(local_data.keys())
+
+        assert remote_keys == local_keys, (
+            f"Field mismatch: remote-only={remote_keys - local_keys}, "
+            f"local-only={local_keys - remote_keys}"
+        )
+
 
 class TestStatusCmd:
     def test_shows_status(self):
@@ -506,7 +698,7 @@ class TestDeleteCmd:
         ):
             result = runner.invoke(app, ["delete", "missing.pdf"])
 
-        assert result.exit_code == 0
+        assert result.exit_code == 1
         assert "No data found" in result.output
 
     def test_delete_with_collection_scope(self):
@@ -542,6 +734,136 @@ class TestDeleteCmd:
             result = runner.invoke(app, ["delete", "doc.pdf"])
 
         assert result.exit_code == 1
+
+    def test_remote_routing_delete_document(self):
+        remote_resp = {"deleted": 15, "name": "report.pdf", "type": "document"}
+        inner_config = {
+            "url": "wss://quarry.example.com:8420/mcp",
+            "ca_cert": "/path/to/ca.crt",
+            "headers": {"Authorization": "Bearer tok"},
+        }
+        proxy_config = {"quarry": inner_config}
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch(
+                "quarry.__main__._remote_https_request", return_value=remote_resp
+            ) as mock_req,
+        ):
+            result = runner.invoke(app, ["delete", "report.pdf"])
+
+        assert result.exit_code == 0
+        mock_req.assert_called_once()
+        call_method: str = mock_req.call_args[0][0]
+        call_path: str = mock_req.call_args[0][1]
+        assert call_method == "DELETE"
+        assert "/documents?" in call_path
+        assert "name=report.pdf" in call_path
+        assert "Deleted 15 chunks" in result.output
+
+    def test_remote_routing_delete_document_with_collection(self):
+        remote_resp = {"deleted": 5, "name": "doc.pdf", "type": "document"}
+        inner_config = {
+            "url": "wss://quarry.example.com:8420/mcp",
+            "headers": {"Authorization": "Bearer tok"},
+        }
+        proxy_config = {"quarry": inner_config}
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch(
+                "quarry.__main__._remote_https_request", return_value=remote_resp
+            ) as mock_req,
+        ):
+            runner.invoke(app, ["delete", "doc.pdf", "--collection", "math"])
+
+        call_path = mock_req.call_args[0][1]
+        assert "collection=math" in call_path
+
+    def test_remote_routing_delete_collection(self):
+        remote_resp = {"deleted": 50, "name": "math", "type": "collection"}
+        inner_config = {
+            "url": "wss://quarry.example.com:8420/mcp",
+            "ca_cert": "/path/to/ca.crt",
+            "headers": {"Authorization": "Bearer tok"},
+        }
+        proxy_config = {"quarry": inner_config}
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch(
+                "quarry.__main__._remote_https_request", return_value=remote_resp
+            ) as mock_req,
+        ):
+            result = runner.invoke(app, ["delete", "math", "--type", "collection"])
+
+        assert result.exit_code == 0
+        call_method = mock_req.call_args[0][0]
+        call_path = mock_req.call_args[0][1]
+        assert call_method == "DELETE"
+        assert "/collections?" in call_path
+        assert "name=math" in call_path
+        assert "Deleted 50 chunks" in result.output
+
+    def test_remote_routing_unknown_type(self):
+        inner_config = {
+            "url": "wss://quarry.example.com:8420/mcp",
+            "headers": {"Authorization": "Bearer tok"},
+        }
+        proxy_config = {"quarry": inner_config}
+        with patch("quarry.__main__.read_proxy_config", return_value=proxy_config):
+            result = runner.invoke(app, ["delete", "x", "--type", "bogus"])
+
+        assert result.exit_code == 1
+        assert "unknown type" in result.output.lower()
+
+    def test_local_path_when_no_config(self):
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value={}),
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.db_delete_document", return_value=0),
+        ):
+            result = runner.invoke(app, ["delete", "missing.pdf"])
+
+        assert result.exit_code == 1
+        assert "No data found" in result.output
+
+    def test_remote_json_delete_document_includes_all_fields(self):
+        """Remote delete path emits the same JSON field names as the local path."""
+        # Remote path
+        remote_resp = {"deleted": 15, "name": "report.pdf", "type": "document"}
+        inner_config = {
+            "url": "wss://quarry.example.com:8420/mcp",
+            "headers": {"Authorization": "Bearer tok"},
+        }
+        proxy_config = {"quarry": inner_config}
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch("quarry.__main__._remote_https_request", return_value=remote_resp),
+        ):
+            remote_result = runner.invoke(app, ["--json", "delete", "report.pdf"])
+        _reset_globals()
+
+        assert remote_result.exit_code == 0
+        remote_data = json.loads(remote_result.output)
+        remote_keys = set(remote_data.keys())
+
+        # Local path
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value={}),
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.db_delete_document", return_value=15),
+        ):
+            local_result = runner.invoke(app, ["--json", "delete", "report.pdf"])
+        _reset_globals()
+
+        assert local_result.exit_code == 0
+        local_data = json.loads(local_result.output)
+        local_keys = set(local_data.keys())
+
+        assert remote_keys == local_keys, (
+            f"Field mismatch: remote-only={remote_keys - local_keys}, "
+            f"local-only={local_keys - remote_keys}"
+        )
 
 
 class TestFindCmd:
@@ -957,7 +1279,7 @@ class TestDeleteCollectionCmd:
         ):
             result = runner.invoke(app, ["delete", "unknown", "--type", "collection"])
 
-        assert result.exit_code == 0
+        assert result.exit_code == 1
         assert "No data found" in result.output
 
     def test_delete_collection_backend_error(self):
@@ -1447,7 +1769,7 @@ class TestDbOption:
                 return_value=_mock_settings(),
             ) as mock_resolve,
             patch("quarry.__main__.get_db"),
-            patch("quarry.__main__.db_delete_document", return_value=0),
+            patch("quarry.__main__.db_delete_document", return_value=1),
         ):
             result = runner.invoke(app, ["--db", "work", "delete", "x.pdf"])
         assert result.exit_code == 0
@@ -2036,7 +2358,7 @@ class TestJsonOutput:
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert data["document_name"] == "report.pdf"
-        assert data["page"] == 2
+        assert data["page_number"] == 2
         assert data["text"] == "Hello world"
 
     def test_show_metadata_json(self):

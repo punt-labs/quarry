@@ -16,6 +16,10 @@ across `transform`, `index`, and `connector`).
 
 ### Added
 
+- **tool**: `GET /show` endpoint — retrieve document metadata or page text remotely.
+- **tool**: `DELETE /documents` and `DELETE /collections` endpoints — delete indexed
+  data remotely. Returns 404 if the resource does not exist.
+- **tool**: `quarry show` and `quarry delete` route to remote when configured.
 - **infra**: Generalized `_remote_https_request(method, path, config, body)` helper
   supporting GET, POST, and DELETE. Thin `_remote_https_get` wrapper preserved for
   backward compatibility. Handles JSON body encoding, 204 No Content, and non-2xx
