@@ -1103,22 +1103,20 @@ def deregister(
     )
 
 
-def _auto_workers(settings: Settings) -> int:
-    """Return worker count for sync ThreadPoolExecutor.
+def _auto_workers(settings: Settings) -> int:  # noqa: ARG001
+    """Select worker count based on the active ONNX execution provider.
 
-    Returns 4 when CUDAExecutionProvider is active — parsing N files in
-    parallel while the GPU handles embedding is the right model.  Falls
-    back to 1 for CPU-only deployments so sync does not starve the daemon
-    or the editor for cores.
+    Returns 4 when CUDAExecutionProvider is active (GPU-accelerated embedding
+    is fast; parsing is the bottleneck and is parallelizable). Returns 1 for
+    CPU-only deployments. Respects the QUARRY_PROVIDER environment variable.
+    Falls back to 1 on any error (broken runtime, missing dependency, etc.).
     """
-    _ = settings  # reserved for provider config in future
     try:
-        import onnxruntime  # noqa: PLC0415
+        from quarry.provider import select_provider  # noqa: PLC0415
 
-        providers = onnxruntime.get_available_providers()
-    except ImportError:
+        return 4 if select_provider().provider == "CUDAExecutionProvider" else 1
+    except Exception:  # noqa: BLE001
         return 1
-    return 4 if "CUDAExecutionProvider" in providers else 1
 
 
 def _format_sync_results(json_data: dict[str, dict[str, object]]) -> str:
