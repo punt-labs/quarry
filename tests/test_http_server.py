@@ -764,3 +764,467 @@ class TestDeleteCollections:
         resp = client.delete("/collections")
         assert resp.status_code == 400
         assert "name" in resp.json()["error"].lower()
+
+
+class TestRemember:
+    """Tests for POST /remember endpoint."""
+
+    def test_success(self, client: TestClient) -> None:
+        mock_result = {
+            "document_name": "notes.md",
+            "collection": "default",
+            "chunks": 3,
+        }
+        with patch(
+            "quarry.pipeline.ingest_content", return_value=mock_result
+        ) as mock_ingest:
+            resp = client.post(
+                "/remember",
+                json={"name": "notes.md", "content": "hello world"},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json() == mock_result
+        mock_ingest.assert_called_once()
+
+    def test_missing_content_returns_400(self, client: TestClient) -> None:
+        resp = client.post("/remember", json={"name": "notes.md"})
+        assert resp.status_code == 400
+        assert "content" in resp.json()["error"].lower()
+
+    def test_missing_name_returns_400(self, client: TestClient) -> None:
+        resp = client.post("/remember", json={"content": "hello"})
+        assert resp.status_code == 400
+        assert "name" in resp.json()["error"].lower()
+
+    def test_empty_content_returns_400(self, client: TestClient) -> None:
+        resp = client.post("/remember", json={"name": "a.md", "content": ""})
+        assert resp.status_code == 400
+        assert "content" in resp.json()["error"].lower()
+
+    def test_whitespace_content_returns_400(self, client: TestClient) -> None:
+        """Whitespace-only content must be rejected (matches local CLI)."""
+        resp = client.post("/remember", json={"name": "a.md", "content": "   \n\n\t"})
+        assert resp.status_code == 400
+        assert "content" in resp.json()["error"].lower()
+
+    def test_whitespace_name_returns_400(self, client: TestClient) -> None:
+        resp = client.post("/remember", json={"name": "   ", "content": "hello"})
+        assert resp.status_code == 400
+        assert "name" in resp.json()["error"].lower()
+
+    def test_invalid_json_returns_400(self, client: TestClient) -> None:
+        resp = client.post(
+            "/remember",
+            content=b"not json",
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 400
+
+    def test_pipeline_value_error_returns_400(self, client: TestClient) -> None:
+        """ingest_content raising ValueError maps to HTTP 400, not 500."""
+        with patch(
+            "quarry.pipeline.ingest_content",
+            side_effect=ValueError("bad content encoding"),
+        ):
+            resp = client.post(
+                "/remember",
+                json={"name": "n.md", "content": "body"},
+            )
+        assert resp.status_code == 400
+        assert "bad content encoding" in resp.json()["error"]
+
+    def test_pipeline_os_error_returns_502(self, client: TestClient) -> None:
+        """ingest_content raising OSError maps to HTTP 502, not 500."""
+        with patch(
+            "quarry.pipeline.ingest_content",
+            side_effect=OSError("disk full"),
+        ):
+            resp = client.post(
+                "/remember",
+                json={"name": "n.md", "content": "body"},
+            )
+        assert resp.status_code == 502
+        assert "disk full" in resp.json()["error"]
+
+    def test_rejects_oversized_body(self, client: TestClient) -> None:
+        """Remember body > 50 MB must be rejected with HTTP 413."""
+        from quarry.http_server import MAX_REMEMBER_BODY_BYTES
+
+        too_big = MAX_REMEMBER_BODY_BYTES + 1
+        resp = client.post(
+            "/remember",
+            content=b"x",  # actual body tiny; Content-Length header lies
+            headers={
+                "Content-Type": "application/json",
+                "Content-Length": str(too_big),
+            },
+        )
+        assert resp.status_code == 413
+        assert "too large" in resp.json()["error"].lower()
+
+    def test_passes_all_params(self, client: TestClient) -> None:
+        with patch(
+            "quarry.pipeline.ingest_content",
+            return_value={"document_name": "n", "collection": "c", "chunks": 1},
+        ) as mock_ingest:
+            client.post(
+                "/remember",
+                json={
+                    "name": "n.md",
+                    "content": "body",
+                    "collection": "notes",
+                    "format_hint": "markdown",
+                    "overwrite": False,
+                    "agent_handle": "rmh",
+                    "memory_type": "fact",
+                    "summary": "one line",
+                },
+            )
+
+        args, kwargs = mock_ingest.call_args
+        # Positional: content, name, db, settings
+        assert args[0] == "body"
+        assert args[1] == "n.md"
+        assert kwargs["collection"] == "notes"
+        assert kwargs["format_hint"] == "markdown"
+        assert kwargs["overwrite"] is False
+        assert kwargs["agent_handle"] == "rmh"
+        assert kwargs["memory_type"] == "fact"
+        assert kwargs["summary"] == "one line"
+
+    def test_overwrite_defaults_true(self, client: TestClient) -> None:
+        with patch(
+            "quarry.pipeline.ingest_content",
+            return_value={"document_name": "n", "collection": "c", "chunks": 1},
+        ) as mock_ingest:
+            client.post(
+                "/remember",
+                json={"name": "n.md", "content": "body"},
+            )
+
+        assert mock_ingest.call_args.kwargs["overwrite"] is True
+
+    def test_rejects_non_bool_overwrite(self, client: TestClient) -> None:
+        """Strings like 'false' or '0' must not be silently coerced to True."""
+        resp = client.post(
+            "/remember",
+            json={"name": "n.md", "content": "body", "overwrite": "false"},
+        )
+        assert resp.status_code == 400
+        assert "overwrite" in resp.json()["error"].lower()
+        assert "boolean" in resp.json()["error"].lower()
+
+    def test_rejects_integer_overwrite(self, client: TestClient) -> None:
+        resp = client.post(
+            "/remember",
+            json={"name": "n.md", "content": "body", "overwrite": 0},
+        )
+        assert resp.status_code == 400
+        assert "overwrite" in resp.json()["error"].lower()
+
+
+def _fake_public_addrinfo(
+    _host: str,
+    *_args: object,
+    **_kwargs: object,
+) -> list[tuple[object, object, object, str, tuple[str, int]]]:
+    """Stand in for socket.getaddrinfo() — resolves every host to 93.184.216.34."""
+    return [(None, None, None, "", ("93.184.216.34", 0))]
+
+
+class TestIngest:
+    """Tests for POST /ingest endpoint."""
+
+    def test_success_with_url(self, client: TestClient) -> None:
+        mock_result = {
+            "document_name": "https://example.com",
+            "collection": "example.com",
+            "chunks": 5,
+        }
+        with (
+            patch(
+                "quarry.http_server.socket_module.getaddrinfo",
+                side_effect=_fake_public_addrinfo,
+            ),
+            patch(
+                "quarry.pipeline.ingest_auto", return_value=mock_result
+            ) as mock_ingest,
+        ):
+            resp = client.post("/ingest", json={"source": "https://example.com/docs"})
+
+        assert resp.status_code == 200
+        assert resp.json() == mock_result
+        mock_ingest.assert_called_once()
+
+    def test_missing_source_returns_400(self, client: TestClient) -> None:
+        resp = client.post("/ingest", json={})
+        assert resp.status_code == 400
+        assert "source" in resp.json()["error"].lower()
+
+    def test_non_url_source_returns_400(self, client: TestClient) -> None:
+        resp = client.post("/ingest", json={"source": "/path/to/file.pdf"})
+        assert resp.status_code == 400
+        assert "url" in resp.json()["error"].lower()
+
+    def test_empty_source_returns_400(self, client: TestClient) -> None:
+        resp = client.post("/ingest", json={"source": ""})
+        assert resp.status_code == 400
+
+    def test_invalid_json_returns_400(self, client: TestClient) -> None:
+        resp = client.post(
+            "/ingest",
+            content=b"not json",
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 400
+
+    def test_passes_all_params(self, client: TestClient) -> None:
+        with (
+            patch(
+                "quarry.http_server.socket_module.getaddrinfo",
+                side_effect=_fake_public_addrinfo,
+            ),
+            patch(
+                "quarry.pipeline.ingest_auto",
+                return_value={"document_name": "d", "collection": "c", "chunks": 1},
+            ) as mock_ingest,
+        ):
+            client.post(
+                "/ingest",
+                json={
+                    "source": "https://example.com/docs",
+                    "overwrite": True,
+                    "collection": "mycol",
+                    "agent_handle": "rmh",
+                    "memory_type": "fact",
+                    "summary": "one line",
+                },
+            )
+
+        args, kwargs = mock_ingest.call_args
+        assert args[0] == "https://example.com/docs"
+        assert kwargs["overwrite"] is True
+        assert kwargs["collection"] == "mycol"
+        assert kwargs["agent_handle"] == "rmh"
+        assert kwargs["memory_type"] == "fact"
+        assert kwargs["summary"] == "one line"
+
+    def test_rejects_private_ip(self, client: TestClient) -> None:
+        """URLs whose host resolves to RFC 1918 space must be blocked."""
+
+        def fake_getaddrinfo(
+            _host: str,
+            *_a: object,
+            **_kw: object,
+        ) -> list[tuple[object, object, object, str, tuple[str, int]]]:
+            return [(None, None, None, "", ("192.168.1.1", 0))]
+
+        with patch(
+            "quarry.http_server.socket_module.getaddrinfo",
+            side_effect=fake_getaddrinfo,
+        ):
+            resp = client.post("/ingest", json={"source": "http://192.168.1.1/"})
+        assert resp.status_code == 400
+        assert "rejected" in resp.json()["error"].lower()
+
+    def test_rejects_loopback(self, client: TestClient) -> None:
+        def fake_getaddrinfo(
+            _host: str,
+            *_a: object,
+            **_kw: object,
+        ) -> list[tuple[object, object, object, str, tuple[str, int]]]:
+            return [(None, None, None, "", ("127.0.0.1", 0))]
+
+        with patch(
+            "quarry.http_server.socket_module.getaddrinfo",
+            side_effect=fake_getaddrinfo,
+        ):
+            resp = client.post("/ingest", json={"source": "http://127.0.0.1/"})
+        assert resp.status_code == 400
+        assert "rejected" in resp.json()["error"].lower()
+
+    def test_rejects_metadata_ip(self, client: TestClient) -> None:
+        """Cloud metadata endpoint must be blocked without even resolving."""
+        with patch(
+            "quarry.http_server.socket_module.getaddrinfo",
+        ) as mock_resolve:
+            resp = client.post(
+                "/ingest",
+                json={"source": "http://169.254.169.254/latest/meta-data/"},
+            )
+        assert resp.status_code == 400
+        assert "metadata" in resp.json()["error"].lower()
+        mock_resolve.assert_not_called()
+
+    def test_rejects_dotlocal(self, client: TestClient) -> None:
+        """mDNS .local hostnames must be blocked pre-resolution."""
+        with patch(
+            "quarry.http_server.socket_module.getaddrinfo",
+        ) as mock_resolve:
+            resp = client.post("/ingest", json={"source": "http://myserver.local/"})
+        assert resp.status_code == 400
+        assert ".local" in resp.json()["error"]
+        mock_resolve.assert_not_called()
+
+    def test_rejects_link_local(self, client: TestClient) -> None:
+        def fake_getaddrinfo(
+            _host: str,
+            *_a: object,
+            **_kw: object,
+        ) -> list[tuple[object, object, object, str, tuple[str, int]]]:
+            return [(None, None, None, "", ("169.254.10.5", 0))]
+
+        with patch(
+            "quarry.http_server.socket_module.getaddrinfo",
+            side_effect=fake_getaddrinfo,
+        ):
+            resp = client.post(
+                "/ingest", json={"source": "http://autoconfigured.example/"}
+            )
+        assert resp.status_code == 400
+        assert "rejected" in resp.json()["error"].lower()
+
+    def test_pipeline_value_error_returns_400(self, client: TestClient) -> None:
+        """ingest_auto raising ValueError maps to HTTP 400."""
+        with (
+            patch(
+                "quarry.http_server.socket_module.getaddrinfo",
+                side_effect=_fake_public_addrinfo,
+            ),
+            patch(
+                "quarry.pipeline.ingest_auto",
+                side_effect=ValueError("unsupported URL"),
+            ),
+        ):
+            resp = client.post("/ingest", json={"source": "https://example.com/"})
+        assert resp.status_code == 400
+        assert "unsupported URL" in resp.json()["error"]
+
+    def test_pipeline_os_error_returns_502(self, client: TestClient) -> None:
+        """ingest_auto raising OSError maps to HTTP 502 (bad gateway)."""
+        with (
+            patch(
+                "quarry.http_server.socket_module.getaddrinfo",
+                side_effect=_fake_public_addrinfo,
+            ),
+            patch(
+                "quarry.pipeline.ingest_auto",
+                side_effect=OSError("upstream refused connection"),
+            ),
+        ):
+            resp = client.post("/ingest", json={"source": "https://example.com/"})
+        assert resp.status_code == 502
+        assert "upstream refused connection" in resp.json()["error"]
+
+    def test_rejects_oversized_body(self, client: TestClient) -> None:
+        """Ingest body > 1 MB must be rejected with HTTP 413."""
+        from quarry.http_server import MAX_INGEST_BODY_BYTES
+
+        too_big = MAX_INGEST_BODY_BYTES + 1
+        resp = client.post(
+            "/ingest",
+            content=b"x",
+            headers={
+                "Content-Type": "application/json",
+                "Content-Length": str(too_big),
+            },
+        )
+        assert resp.status_code == 413
+        assert "too large" in resp.json()["error"].lower()
+
+    def test_rejects_non_bool_overwrite(self, client: TestClient) -> None:
+        """Strings like 'false' must not be silently coerced to True."""
+        resp = client.post(
+            "/ingest",
+            json={"source": "https://example.com/", "overwrite": "false"},
+        )
+        assert resp.status_code == 400
+        assert "overwrite" in resp.json()["error"].lower()
+        assert "boolean" in resp.json()["error"].lower()
+
+    def test_accepts_uppercase_scheme(self, client: TestClient) -> None:
+        """HTTPS:// (uppercase) must be accepted — scheme is case-insensitive."""
+        mock_result = {
+            "document_name": "https://example.com",
+            "collection": "example.com",
+            "chunks": 1,
+        }
+        with (
+            patch(
+                "quarry.http_server.socket_module.getaddrinfo",
+                side_effect=_fake_public_addrinfo,
+            ),
+            patch(
+                "quarry.pipeline.ingest_auto", return_value=mock_result
+            ) as mock_ingest,
+        ):
+            resp = client.post("/ingest", json={"source": "HTTPS://example.com/docs"})
+
+        assert resp.status_code == 200
+        mock_ingest.assert_called_once()
+
+    def test_rejects_cgnat(self, client: TestClient) -> None:
+        """RFC 6598 CGNAT addresses (100.64.0.0/10) must be blocked."""
+
+        def fake_getaddrinfo(
+            _host: str,
+            *_a: object,
+            **_kw: object,
+        ) -> list[tuple[object, object, object, str, tuple[str, int]]]:
+            return [(None, None, None, "", ("100.64.1.1", 0))]
+
+        with patch(
+            "quarry.http_server.socket_module.getaddrinfo",
+            side_effect=fake_getaddrinfo,
+        ):
+            resp = client.post("/ingest", json={"source": "http://cgnat.example/"})
+        assert resp.status_code == 400
+        assert "cgnat" in resp.json()["error"].lower()
+
+
+class TestCheckBodySize:
+    """Unit tests for the _check_body_size helper."""
+
+    def test_accepts_body_within_limit(self) -> None:
+        from quarry.http_server import _check_body_size
+
+        request = MagicMock()
+        request.headers = {"content-length": "100"}
+        assert _check_body_size(request, 200) is None
+
+    def test_rejects_oversized(self) -> None:
+        from quarry.http_server import _check_body_size
+
+        request = MagicMock()
+        request.headers = {"content-length": "300"}
+        resp = _check_body_size(request, 200)
+        assert resp is not None
+        assert resp.status_code == 413
+
+    def test_rejects_missing_content_length(self) -> None:
+        from quarry.http_server import _check_body_size
+
+        request = MagicMock()
+        request.headers = {}
+        resp = _check_body_size(request, 200)
+        assert resp is not None
+        assert resp.status_code == 411
+
+    def test_rejects_non_numeric_content_length(self) -> None:
+        from quarry.http_server import _check_body_size
+
+        request = MagicMock()
+        request.headers = {"content-length": "not-a-number"}
+        resp = _check_body_size(request, 200)
+        assert resp is not None
+        assert resp.status_code == 400
+
+    def test_rejects_negative_content_length(self) -> None:
+        from quarry.http_server import _check_body_size
+
+        request = MagicMock()
+        request.headers = {"content-length": "-10"}
+        resp = _check_body_size(request, 200)
+        assert resp is not None
+        assert resp.status_code == 400

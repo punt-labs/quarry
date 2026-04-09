@@ -16,6 +16,12 @@ across `transform`, `index`, and `connector`).
 
 ### Added
 
+- **tool**: `POST /remember` endpoint — accept inline text content for remote
+  ingestion via JSON body.
+- **tool**: `POST /ingest` endpoint — accept URL for remote ingestion via JSON
+  body. File upload is deferred.
+- **tool**: `quarry remember` and `quarry ingest <url>` route to remote when
+  configured.
 - **tool**: `GET /show` endpoint — retrieve document metadata or page text remotely.
 - **tool**: `DELETE /documents` and `DELETE /collections` endpoints — delete indexed
   data remotely. Returns 404 if the resource does not exist.

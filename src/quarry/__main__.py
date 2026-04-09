@@ -338,7 +338,14 @@ def _remote_https_request(
             )
         if not resp_body:
             return {}
-        response_data: dict[str, object] = json.loads(resp_body)
+        parsed = json.loads(resp_body)
+        if not isinstance(parsed, dict):
+            raise RemoteError(
+                resp.status,
+                f"Malformed response from remote server: "
+                f"expected JSON object, got {type(parsed).__name__}",
+            )
+        response_data: dict[str, object] = parsed
         return response_data
     finally:
         conn.close()
@@ -362,6 +369,28 @@ def _safe_proxy_config() -> dict[str, Any]:
     except ValueError as exc:
         err_console.print(f"Warning: {exc}", style="yellow")
         return {}
+
+
+def _exit_on_ingest_failure(result: dict[str, object] | object) -> None:
+    """Exit 1 if *result* reports errors and zero ingested chunks.
+
+    Both the local pipeline and the remote HTTP response use the same
+    ``{errors, chunks}`` shape.  A successful operation may report errors
+    alongside a positive chunk count (partial success); only the "all or
+    nothing" failure case is promoted to a non-zero exit code here.
+    """
+    if not isinstance(result, dict):
+        return
+    errors_raw = result.get("errors")
+    if not isinstance(errors_raw, list) or not errors_raw:
+        return
+    chunks_raw = result.get("chunks", 0)
+    try:
+        chunks = int(chunks_raw) if isinstance(chunks_raw, int | float | str) else 0
+    except (TypeError, ValueError):
+        chunks = 0
+    if chunks == 0:
+        raise typer.Exit(code=1)
 
 
 @app.command(name="find")
@@ -528,9 +557,42 @@ def ingest_cmd(
     Supports PDF, images, PPTX, XLSX, CSV, HTML, TXT, MD, TEX, DOCX, and
     source code files.
     """
+    is_url = source.startswith(("http://", "https://"))
+
+    proxy_config = _safe_proxy_config().get("quarry", {})
+    if isinstance(proxy_config, dict) and "url" in proxy_config:
+        if not is_url:
+            err_console.print(
+                "Error: file upload to remote server is not supported in "
+                "this release. Use a URL or run quarry locally.",
+                style="red",
+            )
+            raise typer.Exit(code=1)
+        body: dict[str, object] = {
+            "source": source,
+            "overwrite": overwrite,
+            "collection": collection,
+            "agent_handle": agent_handle,
+            "memory_type": memory_type,
+            "summary": summary,
+        }
+        try:
+            remote_resp = _remote_https_request(
+                "POST", "/ingest", proxy_config, body=body
+            )
+        except RemoteError as exc:
+            err_console.print(f"Error: {exc}", style="red")
+            raise typer.Exit(code=1) from exc
+        _emit(remote_resp, json.dumps(remote_resp, indent=2))
+        remote_errors_raw = remote_resp.get("errors", [])
+        if isinstance(remote_errors_raw, list):
+            for err_msg in remote_errors_raw:
+                err_console.print(f"  {err_msg}", style="red")
+        _exit_on_ingest_failure(remote_resp)
+        return
+
     settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
-    is_url = source.startswith(("http://", "https://"))
 
     if is_url:
         with _progress(f"Fetching {source}") as cb:
@@ -550,6 +612,7 @@ def ingest_cmd(
         errors: list[str] = result.get("errors", [])  # type: ignore[assignment]
         for err in errors:
             err_console.print(f"  {err}", style="red")
+        _exit_on_ingest_failure(result)
     else:
         file_path = Path(source).resolve()
         if file_path.is_dir():
@@ -575,6 +638,7 @@ def ingest_cmd(
             )
 
         _emit(result, json.dumps(result, indent=2))
+        _exit_on_ingest_failure(result)
 
 
 @app.command(name="show")
@@ -704,6 +768,33 @@ def remember(
         err_console.print("Error: no content on stdin.", style="red")
         raise typer.Exit(code=1)
 
+    proxy_config = _safe_proxy_config().get("quarry", {})
+    if isinstance(proxy_config, dict) and "url" in proxy_config:
+        body: dict[str, object] = {
+            "name": name,
+            "content": content,
+            "collection": collection,
+            "format_hint": format_hint,
+            "overwrite": overwrite,
+            "agent_handle": agent_handle,
+            "memory_type": memory_type,
+            "summary": summary,
+        }
+        try:
+            remote_resp = _remote_https_request(
+                "POST", "/remember", proxy_config, body=body
+            )
+        except RemoteError as exc:
+            err_console.print(f"Error: {exc}", style="red")
+            raise typer.Exit(code=1) from exc
+        _emit(remote_resp, json.dumps(remote_resp, indent=2))
+        remote_errors_raw = remote_resp.get("errors", [])
+        if isinstance(remote_errors_raw, list):
+            for err_msg in remote_errors_raw:
+                err_console.print(f"  {err_msg}", style="red")
+        _exit_on_ingest_failure(remote_resp)
+        return
+
     settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
 
@@ -721,6 +812,11 @@ def remember(
     )
 
     _emit(result, json.dumps(result, indent=2))
+    local_errors_raw = result.get("errors")
+    if isinstance(local_errors_raw, list):
+        for err_msg in local_errors_raw:
+            err_console.print(f"  {err_msg}", style="red")
+    _exit_on_ingest_failure(result)
 
 
 @app.command(name="status")

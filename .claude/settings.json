@@ -41,7 +41,10 @@
       "Bash(uv:*)",
       "Bash(uvx:*)",
       "Bash(python3:*)",
-      "Bash(quarry:*)"
+      "Bash(quarry:*)",
+      "Write",
+      "Read",
+      "Edit"
     ],
     "deny": [
       "Bash(curl:*)",
