@@ -3957,8 +3957,15 @@ class TestLoginCmd:
             "wss://okinos.example.com:9000/mcp", "sk-test", "/fake/quarry-ca.crt"
         )
 
-    def test_no_api_key_proceeds_without_auth(self) -> None:
+    def test_no_api_key_proceeds_without_auth(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Omitting --api-key succeeds for unauthenticated servers (token=None)."""
+        # Isolate from the ambient environment: the --api-key option reads
+        # QUARRY_API_KEY via typer's envvar= binding, so a developer or CI
+        # machine with that var exported would leak a real token into the
+        # mock and flip api_key from None to the exported value.
+        monkeypatch.delenv("QUARRY_API_KEY", raising=False)
         with (
             patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
             patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
