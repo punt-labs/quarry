@@ -905,6 +905,24 @@ class TestRemember:
 
         assert mock_ingest.call_args.kwargs["overwrite"] is True
 
+    def test_rejects_non_bool_overwrite(self, client: TestClient) -> None:
+        """Strings like 'false' or '0' must not be silently coerced to True."""
+        resp = client.post(
+            "/remember",
+            json={"name": "n.md", "content": "body", "overwrite": "false"},
+        )
+        assert resp.status_code == 400
+        assert "overwrite" in resp.json()["error"].lower()
+        assert "boolean" in resp.json()["error"].lower()
+
+    def test_rejects_integer_overwrite(self, client: TestClient) -> None:
+        resp = client.post(
+            "/remember",
+            json={"name": "n.md", "content": "body", "overwrite": 0},
+        )
+        assert resp.status_code == 400
+        assert "overwrite" in resp.json()["error"].lower()
+
 
 def _fake_public_addrinfo(
     _host: str,
@@ -1114,6 +1132,55 @@ class TestIngest:
         )
         assert resp.status_code == 413
         assert "too large" in resp.json()["error"].lower()
+
+    def test_rejects_non_bool_overwrite(self, client: TestClient) -> None:
+        """Strings like 'false' must not be silently coerced to True."""
+        resp = client.post(
+            "/ingest",
+            json={"source": "https://example.com/", "overwrite": "false"},
+        )
+        assert resp.status_code == 400
+        assert "overwrite" in resp.json()["error"].lower()
+        assert "boolean" in resp.json()["error"].lower()
+
+    def test_accepts_uppercase_scheme(self, client: TestClient) -> None:
+        """HTTPS:// (uppercase) must be accepted — scheme is case-insensitive."""
+        mock_result = {
+            "document_name": "https://example.com",
+            "collection": "example.com",
+            "chunks": 1,
+        }
+        with (
+            patch(
+                "quarry.http_server.socket_module.getaddrinfo",
+                side_effect=_fake_public_addrinfo,
+            ),
+            patch(
+                "quarry.pipeline.ingest_auto", return_value=mock_result
+            ) as mock_ingest,
+        ):
+            resp = client.post("/ingest", json={"source": "HTTPS://example.com/docs"})
+
+        assert resp.status_code == 200
+        mock_ingest.assert_called_once()
+
+    def test_rejects_cgnat(self, client: TestClient) -> None:
+        """RFC 6598 CGNAT addresses (100.64.0.0/10) must be blocked."""
+
+        def fake_getaddrinfo(
+            _host: str,
+            *_a: object,
+            **_kw: object,
+        ) -> list[tuple[object, object, object, str, tuple[str, int]]]:
+            return [(None, None, None, "", ("100.64.1.1", 0))]
+
+        with patch(
+            "quarry.http_server.socket_module.getaddrinfo",
+            side_effect=fake_getaddrinfo,
+        ):
+            resp = client.post("/ingest", json={"source": "http://cgnat.example/"})
+        assert resp.status_code == 400
+        assert "cgnat" in resp.json()["error"].lower()
 
 
 class TestCheckBodySize:

@@ -29,6 +29,7 @@ from urllib.parse import urlsplit
 
 import uvicorn
 from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse, PlainTextResponse, Response
@@ -81,16 +82,32 @@ _METADATA_HOSTNAMES = frozenset(
     }
 )
 
+# RFC 6598 Shared Address Space (Carrier-Grade NAT).  Python's
+# ``ipaddress.ip_address().is_private`` predates RFC 6598 and does not cover
+# this range, so we check it explicitly.
+_CGNAT_NETWORK = ipaddress.ip_network("100.64.0.0/10")
+
 
 def _validate_ingest_url(url: str) -> str | None:
     """Return None if *url* is safe to fetch, else a human-readable reason.
 
-    Rejects URLs that resolve to private, loopback, link-local, reserved, or
-    multicast addresses, ``.local`` hostnames, and well-known cloud metadata
-    endpoints.  This is the SSRF guard for the authenticated ingest path.
+    Rejects URLs that resolve to private, loopback, link-local, reserved,
+    multicast, or CGNAT (RFC 6598) addresses, ``.local`` hostnames, and
+    well-known cloud metadata endpoints.  Scheme and hostname comparisons
+    are case-insensitive — ``urlsplit`` normalizes both per RFC 3986.
+
+    Note: This check has a known DNS rebinding race.  The DNS resolution
+    here and the one performed by the downstream fetcher are independent.
+    An attacker controlling DNS can return a safe public IP here and a
+    private or metadata IP during the actual fetch.  Mitigating this
+    requires pinning the resolved IP for the fetch, which is tracked as a
+    follow-up.  For now, POST /ingest is authenticated-only, so a
+    rebinding attack requires a compromised API key.
     """
     parsed = urlsplit(url)
-    if parsed.scheme not in {"http", "https"}:
+    # urlsplit lowercases the scheme, but be defensive.
+    scheme = parsed.scheme.lower()
+    if scheme not in {"http", "https"}:
         return f"unsupported scheme {parsed.scheme!r}"
     host = parsed.hostname
     if not host:
@@ -122,8 +139,30 @@ def _validate_ingest_url(url: str) -> str | None:
             or addr.is_unspecified
         ):
             return f"host {host!r} resolves to blocked address {addr}"
+        if addr.version == 4 and addr in _CGNAT_NETWORK:
+            return f"host {host!r} resolves to CGNAT address {addr}"
 
     return None
+
+
+def _coerce_bool_field(
+    body: dict[str, object], field: str, *, default: bool
+) -> bool | JSONResponse:
+    """Return the bool value of ``body[field]`` or a 400 response.
+
+    Rejects any non-bool non-null value.  Python's ``bool()`` coerces the
+    strings ``"false"`` and ``"0"`` to ``True`` — use this helper instead to
+    preserve caller intent.
+    """
+    value = body.get(field)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return JSONResponse(
+        {"error": f"Field {field!r} must be a boolean"},
+        status_code=400,
+    )
 
 
 def _check_body_size(request: Request, limit: int) -> JSONResponse | None:
@@ -404,9 +443,9 @@ async def _remember_route(request: Request) -> JSONResponse:
 
     collection = body.get("collection") or "default"
     format_hint = body.get("format_hint") or "auto"
-    overwrite = body.get("overwrite")
-    if overwrite is None:
-        overwrite = True
+    overwrite = _coerce_bool_field(body, "overwrite", default=True)
+    if isinstance(overwrite, JSONResponse):
+        return overwrite
     agent_handle = body.get("agent_handle") or ""
     memory_type = body.get("memory_type") or ""
     summary = body.get("summary") or ""
@@ -414,13 +453,16 @@ async def _remember_route(request: Request) -> JSONResponse:
     from quarry.pipeline import ingest_content  # noqa: PLC0415
 
     ctx = _ctx(request)
+    # ingest_content is synchronous and performs embedding + DB writes.
+    # Run it in the threadpool so the event loop stays responsive.
     try:
-        result = ingest_content(
+        result = await run_in_threadpool(
+            ingest_content,
             content,
             name,
             ctx.db,
             ctx.settings,
-            overwrite=bool(overwrite),
+            overwrite=overwrite,
             collection=str(collection),
             format_hint=str(format_hint),
             agent_handle=str(agent_handle),
@@ -456,20 +498,19 @@ async def _ingest_route(request: Request) -> JSONResponse:
         return JSONResponse(
             {"error": "Missing required field: source"}, status_code=400
         )
-    if not source.startswith(("http://", "https://")):
-        return JSONResponse(
-            {"error": "source must be an http:// or https:// URL"},
-            status_code=400,
-        )
 
-    reason = _validate_ingest_url(source)
+    # _validate_ingest_url owns all scheme validation.  It calls
+    # getaddrinfo(), which can block on DNS — run it in the threadpool.
+    reason = await run_in_threadpool(_validate_ingest_url, source)
     if reason is not None:
         return JSONResponse(
             {"error": f"URL rejected: {reason}"},
             status_code=400,
         )
 
-    overwrite = bool(body.get("overwrite", False))
+    overwrite = _coerce_bool_field(body, "overwrite", default=False)
+    if isinstance(overwrite, JSONResponse):
+        return overwrite
     collection = body.get("collection") or ""
     agent_handle = body.get("agent_handle") or ""
     memory_type = body.get("memory_type") or ""
@@ -478,8 +519,11 @@ async def _ingest_route(request: Request) -> JSONResponse:
     from quarry.pipeline import ingest_auto  # noqa: PLC0415
 
     ctx = _ctx(request)
+    # ingest_auto fetches the URL, embeds pages, and writes to LanceDB —
+    # all synchronous blocking work.  Offload to the threadpool.
     try:
-        result = ingest_auto(
+        result = await run_in_threadpool(
+            ingest_auto,
             source,
             ctx.db,
             ctx.settings,
