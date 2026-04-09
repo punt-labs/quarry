@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-04-09
+
 ### Added
 
 - **tool**: `POST /sync` endpoint — trigger background sync of registered
