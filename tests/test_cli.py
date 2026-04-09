@@ -1463,26 +1463,44 @@ class TestRegisterCmd:
         assert result.exit_code == 1
 
 
+def _mock_registration(collection: str = "math") -> MagicMock:
+    """Return a DirectoryRegistration-like mock for get_registration patches."""
+    reg = MagicMock()
+    reg.collection = collection
+    reg.directory = f"/home/u/{collection}"
+    reg.registered_at = "2026-01-01T00:00:00"
+    return reg
+
+
 class TestDeregisterCmd:
     def test_deregisters_collection(self, tmp_path: Path):
         settings = _mock_settings()
         settings.registry_path = tmp_path / "registry.db"
         with (
             patch("quarry.__main__._resolved_settings", return_value=settings),
+            patch(
+                "quarry.__main__.get_registration",
+                return_value=_mock_registration("math"),
+            ),
             patch("quarry.__main__.deregister_directory", return_value=["a.pdf"]),
             patch("quarry.__main__.get_db"),
-            patch("quarry.__main__.db_delete_document"),
+            patch("quarry.__main__.db_delete_document", return_value=3),
         ):
             result = runner.invoke(app, ["deregister", "math"])
         assert result.exit_code == 0
         assert "Deregistered" in result.output
         assert "math" in result.output
+        assert "3 chunks deleted" in result.output
 
     def test_keep_data_flag(self, tmp_path: Path):
         settings = _mock_settings()
         settings.registry_path = tmp_path / "registry.db"
         with (
             patch("quarry.__main__._resolved_settings", return_value=settings),
+            patch(
+                "quarry.__main__.get_registration",
+                return_value=_mock_registration("math"),
+            ),
             patch("quarry.__main__.deregister_directory", return_value=["a.pdf"]),
             patch("quarry.__main__.get_db") as mock_get_db,
             patch("quarry.__main__.db_delete_document") as mock_del,
@@ -1492,22 +1510,28 @@ class TestDeregisterCmd:
         mock_get_db.assert_not_called()
         mock_del.assert_not_called()
 
-    def test_deregister_empty_collection(self, tmp_path: Path):
+    def test_deregister_unregistered_collection_exits_1(self, tmp_path: Path):
+        """Missing collection must fail with exit 1, matching remote 404 path."""
         settings = _mock_settings()
         settings.registry_path = tmp_path / "registry.db"
         with (
             patch("quarry.__main__._resolved_settings", return_value=settings),
+            patch("quarry.__main__.get_registration", return_value=None),
             patch("quarry.__main__.deregister_directory", return_value=[]),
         ):
             result = runner.invoke(app, ["deregister", "empty"])
-        assert result.exit_code == 0
-        assert "0 files" in result.output
+        assert result.exit_code == 1
+        assert "No registration" in result.output
 
     def test_deregister_delete_error(self, tmp_path: Path):
         settings = _mock_settings()
         settings.registry_path = tmp_path / "registry.db"
         with (
             patch("quarry.__main__._resolved_settings", return_value=settings),
+            patch(
+                "quarry.__main__.get_registration",
+                return_value=_mock_registration("math"),
+            ),
             patch("quarry.__main__.deregister_directory", return_value=["a.pdf"]),
             patch("quarry.__main__.get_db"),
             patch(
@@ -2423,6 +2447,706 @@ class TestIngestCmdRemote:
         assert remote_keys == local_keys
 
 
+_REMOTE_INNER_CONFIG = {
+    "url": "wss://quarry.example.com:8420/mcp",
+    "ca_cert": "/path/to/ca.crt",
+    "headers": {"Authorization": "Bearer tok"},
+}
+_REMOTE_PROXY_CONFIG = {"quarry": _REMOTE_INNER_CONFIG}
+
+
+class TestSyncCmdRemote:
+    """Remote-routing tests for ``quarry sync``."""
+
+    def test_remote_routing_posts_to_sync(self):
+        remote_resp = {
+            "math": {
+                "ingested": 3,
+                "deleted": 1,
+                "skipped": 5,
+                "failed": 0,
+                "errors": [],
+            }
+        }
+        with (
+            patch(
+                "quarry.__main__.read_proxy_config",
+                return_value=_REMOTE_PROXY_CONFIG,
+            ),
+            patch(
+                "quarry.__main__._remote_https_request", return_value=remote_resp
+            ) as mock_req,
+        ):
+            result = runner.invoke(app, ["sync"])
+
+        assert result.exit_code == 0
+        mock_req.assert_called_once()
+        assert mock_req.call_args[0][0] == "POST"
+        assert mock_req.call_args[0][1] == "/sync"
+        # Fix 5: remote sync must use the long timeout (not 15s default).
+        assert mock_req.call_args.kwargs["timeout"] >= 60.0
+        assert "3 ingested" in result.output
+        assert "1 deleted" in result.output
+
+    def test_remote_routing_warns_on_workers_flag(self):
+        """Fix 6: --workers is meaningless over HTTP; the CLI must warn."""
+        remote_resp: dict[str, dict[str, object]] = {}
+        with (
+            patch(
+                "quarry.__main__.read_proxy_config",
+                return_value=_REMOTE_PROXY_CONFIG,
+            ),
+            patch("quarry.__main__._remote_https_request", return_value=remote_resp),
+        ):
+            result = runner.invoke(app, ["sync", "--workers", "4"])
+
+        assert result.exit_code == 0
+        assert "--workers is ignored" in result.output
+
+    def test_remote_routing_does_not_call_local(self):
+        with (
+            patch(
+                "quarry.__main__.read_proxy_config",
+                return_value=_REMOTE_PROXY_CONFIG,
+            ),
+            patch("quarry.__main__._remote_https_request", return_value={}),
+            patch("quarry.__main__.sync_all") as mock_sync_all,
+        ):
+            result = runner.invoke(app, ["sync"])
+
+        assert result.exit_code == 0
+        mock_sync_all.assert_not_called()
+
+    def test_remote_routing_http_error_exits_1(self):
+        from quarry.__main__ import RemoteError
+
+        with (
+            patch(
+                "quarry.__main__.read_proxy_config",
+                return_value=_REMOTE_PROXY_CONFIG,
+            ),
+            patch(
+                "quarry.__main__._remote_https_request",
+                side_effect=RemoteError(502, "pipeline failed"),
+            ),
+        ):
+            result = runner.invoke(app, ["sync"])
+
+        assert result.exit_code == 1
+        assert "pipeline failed" in result.output
+
+    def test_remote_prints_errors(self):
+        remote_resp = {
+            "col": {
+                "ingested": 1,
+                "deleted": 0,
+                "skipped": 0,
+                "failed": 2,
+                "errors": ["a.pdf: corrupt", "b.pdf: timeout"],
+            }
+        }
+        with (
+            patch(
+                "quarry.__main__.read_proxy_config",
+                return_value=_REMOTE_PROXY_CONFIG,
+            ),
+            patch("quarry.__main__._remote_https_request", return_value=remote_resp),
+        ):
+            result = runner.invoke(app, ["sync"])
+
+        assert result.exit_code == 0
+        assert "corrupt" in result.output
+        assert "timeout" in result.output
+
+    def test_local_fallback_when_no_proxy(self):
+        from quarry.sync import SyncResult
+
+        mock_results = {
+            "col": SyncResult(
+                collection="col", ingested=1, deleted=0, skipped=0, failed=0
+            )
+        }
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value={}),
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.sync_all", return_value=mock_results) as mock_sync,
+        ):
+            result = runner.invoke(app, ["sync"])
+
+        assert result.exit_code == 0
+        mock_sync.assert_called_once()
+
+    def test_json_equivalence_remote_local(self):
+        """Remote and local paths emit the same top-level JSON keys."""
+        from quarry.sync import SyncResult
+
+        remote_resp = {
+            "col": {
+                "ingested": 2,
+                "deleted": 1,
+                "skipped": 3,
+                "failed": 0,
+                "errors": [],
+            }
+        }
+        with (
+            patch(
+                "quarry.__main__.read_proxy_config",
+                return_value=_REMOTE_PROXY_CONFIG,
+            ),
+            patch("quarry.__main__._remote_https_request", return_value=remote_resp),
+        ):
+            remote_res = runner.invoke(app, ["--json", "sync"])
+        _reset_globals()
+        assert remote_res.exit_code == 0
+        remote_data = json.loads(remote_res.output)
+        assert set(remote_data.keys()) == {"col"}
+        remote_entry_keys = set(remote_data["col"].keys())
+
+        mock_results = {
+            "col": SyncResult(
+                collection="col",
+                ingested=2,
+                deleted=1,
+                skipped=3,
+                failed=0,
+                errors=[],
+            )
+        }
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value={}),
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.sync_all", return_value=mock_results),
+        ):
+            local_res = runner.invoke(app, ["--json", "sync"])
+        _reset_globals()
+        assert local_res.exit_code == 0
+        local_data = json.loads(local_res.output)
+        local_entry_keys = set(local_data["col"].keys())
+
+        assert remote_entry_keys == local_entry_keys
+
+
+class TestListDatabasesCmdRemote:
+    """Remote-routing tests for ``quarry list databases``."""
+
+    def test_remote_routing_returns_server_db(self):
+        remote_resp = {
+            "total_databases": 1,
+            "databases": [
+                {
+                    "name": "server-db",
+                    "document_count": 42,
+                    "size_bytes": 12345,
+                    "size_description": "12.1 KB",
+                }
+            ],
+        }
+        with (
+            patch(
+                "quarry.__main__.read_proxy_config",
+                return_value=_REMOTE_PROXY_CONFIG,
+            ),
+            patch(
+                "quarry.__main__._remote_https_get", return_value=remote_resp
+            ) as mock_get,
+        ):
+            result = runner.invoke(app, ["list", "databases"])
+
+        assert result.exit_code == 0
+        mock_get.assert_called_once_with("/databases", _REMOTE_INNER_CONFIG)
+        assert "server-db" in result.output
+        assert "42 documents" in result.output
+
+    def test_local_fallback_when_no_proxy(self, tmp_path: Path):
+        settings = _mock_settings()
+        settings.quarry_root = tmp_path
+        (tmp_path / "default" / "lancedb").mkdir(parents=True)
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value={}),
+            patch("quarry.__main__._resolved_settings", return_value=settings),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.list_documents", return_value=[]),
+        ):
+            result = runner.invoke(app, ["list", "databases"])
+
+        assert result.exit_code == 0
+        assert "default" in result.output
+
+    def test_json_equivalence_remote_local(self, tmp_path: Path):
+        """Remote and local paths emit identical JSON keys for databases."""
+        remote_resp = {
+            "databases": [
+                {
+                    "name": "work",
+                    "document_count": 0,
+                    "size_bytes": 0,
+                    "size_description": "0 bytes",
+                }
+            ]
+        }
+        with (
+            patch(
+                "quarry.__main__.read_proxy_config",
+                return_value=_REMOTE_PROXY_CONFIG,
+            ),
+            patch("quarry.__main__._remote_https_get", return_value=remote_resp),
+        ):
+            remote_res = runner.invoke(app, ["--json", "list", "databases"])
+        _reset_globals()
+        assert remote_res.exit_code == 0
+        remote_data = json.loads(remote_res.output)
+        assert len(remote_data) == 1
+        remote_keys = set(remote_data[0].keys())
+
+        settings = _mock_settings()
+        settings.quarry_root = tmp_path
+        (tmp_path / "work" / "lancedb").mkdir(parents=True)
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value={}),
+            patch("quarry.__main__._resolved_settings", return_value=settings),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.list_documents", return_value=[]),
+        ):
+            local_res = runner.invoke(app, ["--json", "list", "databases"])
+        _reset_globals()
+        assert local_res.exit_code == 0
+        local_data = json.loads(local_res.output)
+        assert len(local_data) == 1
+        local_keys = set(local_data[0].keys())
+        assert remote_keys == local_keys
+
+
+class TestUseCmdRemote:
+    """``quarry use`` is client-side state; verify it does not touch the server."""
+
+    def test_writes_client_config_when_remote(self, tmp_path: Path):
+        with (
+            patch(
+                "quarry.__main__.read_proxy_config",
+                return_value=_REMOTE_PROXY_CONFIG,
+            ),
+            patch("quarry.__main__.resolve_db_paths", return_value=_mock_settings()),
+            patch("quarry.__main__.load_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.write_default_db") as mock_write,
+            patch("quarry.__main__._remote_https_request") as mock_req,
+        ):
+            result = runner.invoke(app, ["use", "work"])
+
+        assert result.exit_code == 0
+        mock_write.assert_called_once_with("work")
+        mock_req.assert_not_called()
+        assert "client-side" in result.output.lower()
+
+
+class TestRegisterCmdRemote:
+    """Remote-routing tests for ``quarry register``."""
+
+    def test_remote_routing_posts_to_registrations(self, tmp_path: Path):
+        d = tmp_path / "docs"
+        d.mkdir()
+        remote_resp = {
+            "directory": str(d),
+            "collection": "docs",
+            "registered_at": "2026-01-01T00:00:00",
+        }
+        with (
+            patch(
+                "quarry.__main__.read_proxy_config",
+                return_value=_REMOTE_PROXY_CONFIG,
+            ),
+            patch(
+                "quarry.__main__._remote_https_request", return_value=remote_resp
+            ) as mock_req,
+        ):
+            result = runner.invoke(app, ["register", str(d), "--collection", "docs"])
+
+        assert result.exit_code == 0
+        mock_req.assert_called_once()
+        assert mock_req.call_args[0][0] == "POST"
+        assert mock_req.call_args[0][1] == "/registrations"
+        body = mock_req.call_args[1]["body"]
+        assert body["directory"] == str(d.resolve())
+        assert body["collection"] == "docs"
+        assert "Registered" in result.output
+
+    def test_remote_routing_default_collection_from_dir_name(self, tmp_path: Path):
+        d = tmp_path / "ml-101"
+        d.mkdir()
+        remote_resp = {
+            "directory": str(d),
+            "collection": "ml-101",
+            "registered_at": "2026-01-01T00:00:00",
+        }
+        with (
+            patch(
+                "quarry.__main__.read_proxy_config",
+                return_value=_REMOTE_PROXY_CONFIG,
+            ),
+            patch(
+                "quarry.__main__._remote_https_request", return_value=remote_resp
+            ) as mock_req,
+        ):
+            runner.invoke(app, ["register", str(d)])
+
+        body = mock_req.call_args[1]["body"]
+        assert body["collection"] == "ml-101"
+
+    def test_remote_routing_http_error_exits_1(self, tmp_path: Path):
+        from quarry.__main__ import RemoteError
+
+        d = tmp_path / "bad"
+        d.mkdir()
+        with (
+            patch(
+                "quarry.__main__.read_proxy_config",
+                return_value=_REMOTE_PROXY_CONFIG,
+            ),
+            patch(
+                "quarry.__main__._remote_https_request",
+                side_effect=RemoteError(400, "directory outside $HOME"),
+            ),
+        ):
+            result = runner.invoke(app, ["register", str(d)])
+
+        assert result.exit_code == 1
+        assert "outside" in result.output.lower()
+
+    def test_local_fallback_when_no_proxy(self, tmp_path: Path):
+        d = tmp_path / "course"
+        d.mkdir()
+        settings = _mock_settings()
+        settings.registry_path = tmp_path / "registry.db"
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value={}),
+            patch("quarry.__main__._resolved_settings", return_value=settings),
+        ):
+            result = runner.invoke(app, ["register", str(d), "--collection", "course"])
+
+        assert result.exit_code == 0
+        assert "course" in result.output
+
+    def test_json_equivalence_remote_local(self, tmp_path: Path):
+        d = tmp_path / "course"
+        d.mkdir()
+
+        remote_resp = {
+            "directory": str(d.resolve()),
+            "collection": "course",
+            "registered_at": "2026-01-01T00:00:00",
+        }
+        with (
+            patch(
+                "quarry.__main__.read_proxy_config",
+                return_value=_REMOTE_PROXY_CONFIG,
+            ),
+            patch("quarry.__main__._remote_https_request", return_value=remote_resp),
+        ):
+            remote_res = runner.invoke(
+                app, ["--json", "register", str(d), "--collection", "course"]
+            )
+        _reset_globals()
+        assert remote_res.exit_code == 0
+        remote_keys = set(json.loads(remote_res.output).keys())
+
+        settings = _mock_settings()
+        settings.registry_path = tmp_path / "registry.db"
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value={}),
+            patch("quarry.__main__._resolved_settings", return_value=settings),
+        ):
+            local_res = runner.invoke(
+                app, ["--json", "register", str(d), "--collection", "local-course"]
+            )
+        _reset_globals()
+        assert local_res.exit_code == 0
+        local_keys = set(json.loads(local_res.output).keys())
+
+        assert remote_keys == local_keys
+
+
+class TestDeregisterCmdRemote:
+    """Remote-routing tests for ``quarry deregister``."""
+
+    def test_remote_routing_sends_delete(self):
+        remote_resp = {
+            "collection": "docs",
+            "removed": 7,
+            "deleted_chunks": 42,
+            "type": "registration",
+        }
+        with (
+            patch(
+                "quarry.__main__.read_proxy_config",
+                return_value=_REMOTE_PROXY_CONFIG,
+            ),
+            patch(
+                "quarry.__main__._remote_https_request", return_value=remote_resp
+            ) as mock_req,
+        ):
+            result = runner.invoke(app, ["deregister", "docs"])
+
+        assert result.exit_code == 0
+        assert mock_req.call_args[0][0] == "DELETE"
+        sent_path = mock_req.call_args[0][1]
+        assert "/registrations?" in sent_path
+        assert "collection=docs" in sent_path
+        # Fix 1: remote path must propagate keep_data so the server purges
+        # LanceDB chunks in step with the registry rows.
+        assert "keep_data=false" in sent_path
+        assert "Deregistered" in result.output
+        assert "7 files" in result.output
+        assert "42 chunks deleted" in result.output
+
+    def test_remote_deregister_cleans_data(self):
+        """Default deregister must tell the server to delete chunks too."""
+        remote_resp = {
+            "collection": "math",
+            "removed": 2,
+            "deleted_chunks": 9,
+            "type": "registration",
+        }
+        with (
+            patch(
+                "quarry.__main__.read_proxy_config",
+                return_value=_REMOTE_PROXY_CONFIG,
+            ),
+            patch(
+                "quarry.__main__._remote_https_request", return_value=remote_resp
+            ) as mock_req,
+        ):
+            result = runner.invoke(app, ["deregister", "math"])
+
+        assert result.exit_code == 0
+        sent_path = mock_req.call_args[0][1]
+        assert "keep_data=false" in sent_path
+
+    def test_remote_deregister_keep_data_flag(self):
+        """--keep-data must pass keep_data=true in the URL."""
+        remote_resp = {
+            "collection": "math",
+            "removed": 2,
+            "deleted_chunks": 0,
+            "type": "registration",
+        }
+        with (
+            patch(
+                "quarry.__main__.read_proxy_config",
+                return_value=_REMOTE_PROXY_CONFIG,
+            ),
+            patch(
+                "quarry.__main__._remote_https_request", return_value=remote_resp
+            ) as mock_req,
+        ):
+            result = runner.invoke(app, ["deregister", "math", "--keep-data"])
+
+        assert result.exit_code == 0
+        sent_path = mock_req.call_args[0][1]
+        assert "keep_data=true" in sent_path
+
+    def test_remote_routing_not_found_exits_1(self):
+        from quarry.__main__ import RemoteError
+
+        with (
+            patch(
+                "quarry.__main__.read_proxy_config",
+                return_value=_REMOTE_PROXY_CONFIG,
+            ),
+            patch(
+                "quarry.__main__._remote_https_request",
+                side_effect=RemoteError(404, "Not found"),
+            ),
+        ):
+            result = runner.invoke(app, ["deregister", "missing"])
+
+        assert result.exit_code == 1
+        assert "No registration" in result.output
+
+    def test_remote_routing_does_not_call_local(self):
+        remote_resp = {"collection": "c", "removed": 0, "type": "registration"}
+        with (
+            patch(
+                "quarry.__main__.read_proxy_config",
+                return_value=_REMOTE_PROXY_CONFIG,
+            ),
+            patch("quarry.__main__._remote_https_request", return_value=remote_resp),
+            patch("quarry.__main__.deregister_directory") as mock_local,
+        ):
+            result = runner.invoke(app, ["deregister", "c"])
+
+        assert result.exit_code == 0
+        mock_local.assert_not_called()
+
+    def test_local_fallback_when_no_proxy(self, tmp_path: Path):
+        settings = _mock_settings()
+        settings.registry_path = tmp_path / "registry.db"
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value={}),
+            patch("quarry.__main__._resolved_settings", return_value=settings),
+            patch(
+                "quarry.__main__.get_registration",
+                return_value=_mock_registration("math"),
+            ),
+            patch("quarry.__main__.deregister_directory", return_value=[]),
+        ):
+            result = runner.invoke(app, ["deregister", "math"])
+
+        assert result.exit_code == 0
+
+    def test_json_equivalence_remote_local(self, tmp_path: Path):
+        remote_resp = {
+            "collection": "math",
+            "removed": 3,
+            "deleted_chunks": 12,
+            "type": "registration",
+        }
+        with (
+            patch(
+                "quarry.__main__.read_proxy_config",
+                return_value=_REMOTE_PROXY_CONFIG,
+            ),
+            patch("quarry.__main__._remote_https_request", return_value=remote_resp),
+        ):
+            remote_res = runner.invoke(app, ["--json", "deregister", "math"])
+        _reset_globals()
+        assert remote_res.exit_code == 0
+        remote_keys = set(json.loads(remote_res.output).keys())
+
+        settings = _mock_settings()
+        settings.registry_path = tmp_path / "registry.db"
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value={}),
+            patch("quarry.__main__._resolved_settings", return_value=settings),
+            patch(
+                "quarry.__main__.get_registration",
+                return_value=_mock_registration("math"),
+            ),
+            patch("quarry.__main__.deregister_directory", return_value=["a", "b", "c"]),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.db_delete_document", return_value=4),
+        ):
+            local_res = runner.invoke(app, ["--json", "deregister", "math"])
+        _reset_globals()
+        assert local_res.exit_code == 0
+        local_keys = set(json.loads(local_res.output).keys())
+
+        assert remote_keys == local_keys
+
+
+class TestListRegistrationsCmdRemote:
+    """Remote-routing tests for ``quarry list registrations``."""
+
+    def test_remote_routing_lists(self):
+        remote_resp = {
+            "total_registrations": 2,
+            "registrations": [
+                {
+                    "directory": "/home/u/docs",
+                    "collection": "docs",
+                    "registered_at": "2026-01-01T00:00:00",
+                },
+                {
+                    "directory": "/home/u/code",
+                    "collection": "code",
+                    "registered_at": "2026-01-02T00:00:00",
+                },
+            ],
+        }
+        with (
+            patch(
+                "quarry.__main__.read_proxy_config",
+                return_value=_REMOTE_PROXY_CONFIG,
+            ),
+            patch(
+                "quarry.__main__._remote_https_get", return_value=remote_resp
+            ) as mock_get,
+        ):
+            result = runner.invoke(app, ["list", "registrations"])
+
+        assert result.exit_code == 0
+        mock_get.assert_called_once_with("/registrations", _REMOTE_INNER_CONFIG)
+        assert "docs" in result.output
+        assert "code" in result.output
+
+    def test_remote_empty(self):
+        remote_resp = {"total_registrations": 0, "registrations": []}
+        with (
+            patch(
+                "quarry.__main__.read_proxy_config",
+                return_value=_REMOTE_PROXY_CONFIG,
+            ),
+            patch("quarry.__main__._remote_https_get", return_value=remote_resp),
+        ):
+            result = runner.invoke(app, ["list", "registrations"])
+
+        assert result.exit_code == 0
+        assert "No registered directories" in result.output
+
+    def test_local_fallback_when_no_proxy(self, tmp_path: Path):
+        settings = _mock_settings()
+        settings.registry_path = tmp_path / "registry.db"
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value={}),
+            patch("quarry.__main__._resolved_settings", return_value=settings),
+        ):
+            result = runner.invoke(app, ["list", "registrations"])
+
+        assert result.exit_code == 0
+        assert "No registered directories" in result.output
+
+    def test_json_equivalence_remote_local(self, tmp_path: Path):
+        from quarry.sync_registry import DirectoryRegistration
+
+        remote_resp = {
+            "registrations": [
+                {
+                    "directory": "/home/u/math",
+                    "collection": "math",
+                    "registered_at": "2026-01-01T00:00:00",
+                }
+            ]
+        }
+        with (
+            patch(
+                "quarry.__main__.read_proxy_config",
+                return_value=_REMOTE_PROXY_CONFIG,
+            ),
+            patch("quarry.__main__._remote_https_get", return_value=remote_resp),
+        ):
+            remote_res = runner.invoke(app, ["--json", "list", "registrations"])
+        _reset_globals()
+        assert remote_res.exit_code == 0
+        remote_data = json.loads(remote_res.output)
+        assert len(remote_data) == 1
+        remote_keys = set(remote_data[0].keys())
+
+        local_regs = [
+            DirectoryRegistration(
+                directory="/home/u/math",
+                collection="math",
+                registered_at="2026-01-01T00:00:00",
+            )
+        ]
+        settings = _mock_settings()
+        settings.registry_path = tmp_path / "registry.db"
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value={}),
+            patch("quarry.__main__._resolved_settings", return_value=settings),
+            patch("quarry.__main__.open_registry"),
+            patch("quarry.__main__.list_registrations", return_value=local_regs),
+        ):
+            local_res = runner.invoke(app, ["--json", "list", "registrations"])
+        _reset_globals()
+        assert local_res.exit_code == 0
+        local_data = json.loads(local_res.output)
+        assert len(local_data) == 1
+        local_keys = set(local_data[0].keys())
+
+        assert remote_keys == local_keys
+
+
 class TestDatabasesCmdSizeFormatting:
     def test_megabyte_formatting(self, tmp_path: Path):
         settings = _mock_settings()
@@ -2830,9 +3554,13 @@ class TestJsonOutput:
         settings.registry_path = tmp_path / "registry.db"
         with (
             patch("quarry.__main__._resolved_settings", return_value=settings),
+            patch(
+                "quarry.__main__.get_registration",
+                return_value=_mock_registration("math"),
+            ),
             patch("quarry.__main__.deregister_directory", return_value=["a.pdf"]),
             patch("quarry.__main__.get_db"),
-            patch("quarry.__main__.db_delete_document"),
+            patch("quarry.__main__.db_delete_document", return_value=4),
         ):
             result = runner.invoke(app, ["--json", "deregister", "math"])
 
@@ -2840,6 +3568,7 @@ class TestJsonOutput:
         data = json.loads(result.output)
         assert data["collection"] == "math"
         assert data["removed"] == 1
+        assert data["deleted_chunks"] == 4
 
     def test_list_registrations_json(self, tmp_path: Path):
         _reset_globals()
@@ -3834,6 +4563,48 @@ class TestRemoteHttpsRequest:
             pytest.raises(RemoteError, match="expected JSON object"),
         ):
             _remote_https_request("GET", "/status", config)
+
+    def test_non_json_response_raises_remote_error(self) -> None:
+        """HTML from a reverse proxy must not leak a JSONDecodeError."""
+        import pytest
+
+        from quarry.__main__ import RemoteError, _remote_https_request
+
+        config: dict[str, object] = {
+            "url": "ws://localhost:8420/mcp",
+            "headers": {},
+        }
+        mock_conn = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = b"<html><body>502 Bad Gateway</body></html>"
+        mock_conn.getresponse.return_value = mock_resp
+
+        with (
+            patch("http.client.HTTPConnection", return_value=mock_conn),
+            pytest.raises(RemoteError, match="non-JSON response"),
+        ):
+            _remote_https_request("GET", "/status", config)
+
+    def test_timeout_parameter_reaches_connection(self) -> None:
+        """Fix 5: the timeout kwarg must be passed to HTTPConnection."""
+        from quarry.__main__ import _remote_https_request
+
+        config: dict[str, object] = {
+            "url": "ws://localhost:8420/mcp",
+            "headers": {},
+        }
+        mock_conn = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = b"{}"
+        mock_conn.getresponse.return_value = mock_resp
+
+        with patch("http.client.HTTPConnection", return_value=mock_conn) as mock_cls:
+            _remote_https_request("POST", "/sync", config, body={}, timeout=600.0)
+
+        _, kwargs = mock_cls.call_args
+        assert kwargs["timeout"] == 600.0
 
 
 class TestIngestExitCodes:

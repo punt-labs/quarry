@@ -84,12 +84,22 @@ def discover_files(
     Skips dotfiles, macOS resource forks (``._*``), and files inside
     hidden directories (``.Trash``, ``.git``, etc.).
 
+    Symlinks whose target resolves outside *directory* are dropped and
+    logged as a warning.  A registered ``~/docs`` containing
+    ``shadow -> /etc/shadow`` would otherwise let the sync walker
+    ingest arbitrary files on the server.
+
     Returns absolute paths, sorted for deterministic order.  Uses
     ``absolute()`` rather than ``resolve()`` so that symlinks within
     the tree keep their in-tree path (``relative_to`` stays valid).
     """
     root_spec = _load_ignore_spec(directory)
     result: list[Path] = []
+    try:
+        root_resolved = directory.resolve(strict=True)
+    except (OSError, RuntimeError):
+        logger.warning("Cannot resolve registered root: %s", directory)
+        return result
 
     for dirpath_str, dirnames, filenames in os.walk(directory):
         dirpath = Path(dirpath_str)
@@ -116,9 +126,38 @@ def discover_files(
                 continue
             if local_spec is not None and local_spec.match_file(filename):
                 continue
+            if filepath.is_symlink() and not _symlink_inside_root(
+                filepath, root_resolved
+            ):
+                continue
             result.append(filepath.absolute())
 
     return result
+
+
+def _symlink_inside_root(link: Path, root_resolved: Path) -> bool:
+    """Return True iff *link*'s target resolves inside *root_resolved*.
+
+    Skips unresolvable symlinks and targets outside the registered root so
+    a remote client cannot ingest ``/etc/shadow`` via a symlink trap.  All
+    rejections are logged at WARNING so operators can spot exfiltration
+    attempts in the server log.
+    """
+    try:
+        target = link.resolve(strict=True)
+    except (OSError, RuntimeError):
+        logger.warning("Skipping unresolvable symlink: %s", link)
+        return False
+    try:
+        target.relative_to(root_resolved)
+    except ValueError:
+        logger.warning(
+            "Skipping symlink %s that escapes registered root: %s",
+            link,
+            target,
+        )
+        return False
+    return True
 
 
 @dataclass(frozen=True)

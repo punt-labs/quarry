@@ -177,6 +177,49 @@ class TestDiscoverFiles:
         assert len(result) == 1
         assert result[0].name == "main.py"
 
+    def test_symlink_escape_is_dropped(self, tmp_path: Path):
+        """A symlink whose target resolves outside the root must be skipped.
+
+        Without this check a remote client could register ``~/docs``
+        containing ``shadow -> /etc/shadow`` and have the target's
+        contents ingested into the searchable index.
+        """
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        secret = outside / "secret.txt"
+        secret.write_text("top secret")
+
+        root = tmp_path / "root"
+        root.mkdir()
+        (root / "legit.txt").write_text("hello")
+        (root / "escape.txt").symlink_to(secret)
+
+        result = discover_files(root, frozenset({".txt"}))
+        names = {p.name for p in result}
+        assert names == {"legit.txt"}
+
+    def test_symlink_inside_root_is_kept(self, tmp_path: Path):
+        """Symlinks that resolve inside the registered root are still ingested."""
+        root = tmp_path / "root"
+        root.mkdir()
+        (root / "real.txt").write_text("content")
+        (root / "link.txt").symlink_to(root / "real.txt")
+
+        result = discover_files(root, frozenset({".txt"}))
+        names = {p.name for p in result}
+        assert names == {"real.txt", "link.txt"}
+
+    def test_broken_symlink_is_dropped(self, tmp_path: Path):
+        """A symlink whose target does not exist is skipped without crashing."""
+        root = tmp_path / "root"
+        root.mkdir()
+        (root / "real.txt").write_text("content")
+        (root / "broken.txt").symlink_to(tmp_path / "does-not-exist")
+
+        result = discover_files(root, frozenset({".txt"}))
+        names = {p.name for p in result}
+        assert names == {"real.txt"}
+
     def test_nested_gitignore_respected(self, tmp_path: Path):
         """A .gitignore inside a subdirectory applies to that subtree."""
         project = tmp_path / "myproject"

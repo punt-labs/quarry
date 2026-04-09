@@ -16,6 +16,8 @@ from __future__ import annotations
 import hmac
 import ipaddress
 import logging
+import os
+import pwd
 import re
 import socket as socket_module
 import time
@@ -41,6 +43,7 @@ from quarry.database import (
     count_chunks,
     delete_collection as db_delete_collection,
     delete_document as db_delete_document,
+    format_size,
     get_db,
     get_page_text,
     hybrid_search,
@@ -48,7 +51,14 @@ from quarry.database import (
     list_documents,
 )
 from quarry.provider import provider_display
-from quarry.sync_registry import list_registrations, open_registry
+from quarry.sync_registry import (
+    DirectoryRegistration,
+    deregister_directory,
+    get_registration,
+    list_registrations,
+    open_registry,
+    register_directory,
+)
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
@@ -70,6 +80,9 @@ _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
 # Maximum request body sizes.  /remember accepts content, /ingest only a URL.
 MAX_REMEMBER_BODY_BYTES = 50 * 1024 * 1024
 MAX_INGEST_BODY_BYTES = 1 * 1024 * 1024
+# /sync and /registrations bodies carry only small option dicts.
+MAX_SYNC_BODY_BYTES = 16 * 1024
+MAX_REGISTRATIONS_BODY_BYTES = 16 * 1024
 
 # Hostnames that expose cloud instance metadata services.  Reject regardless
 # of DNS resolution to harden against DNS-rebinding and TOCTOU attacks.
@@ -162,6 +175,29 @@ def _coerce_bool_field(
     return JSONResponse(
         {"error": f"Field {field!r} must be a boolean"},
         status_code=400,
+    )
+
+
+def _pipeline_error_response(exc: Exception, label: str) -> JSONResponse:
+    """Map an ingest/sync pipeline exception to a JSON error response.
+
+    The split is intentional:
+
+    * ``ValueError`` means the caller sent something the pipeline could not
+      parse — return 400 so the client can fix its input.
+    * ``OSError`` means a downstream transport failure (disk, network);
+      502 signals the issue is upstream of the client.
+    * Anything else is logged with the full traceback and wrapped in a 500
+      JSON envelope so the CLI never sees an HTML error page.
+    """
+    if isinstance(exc, ValueError):
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    if isinstance(exc, OSError):
+        return JSONResponse({"error": str(exc)}, status_code=502)
+    logger.exception("%s pipeline failure", label)
+    return JSONResponse(
+        {"error": f"{label} failed: {exc}"},
+        status_code=500,
     )
 
 
@@ -469,10 +505,8 @@ async def _remember_route(request: Request) -> JSONResponse:
             memory_type=str(memory_type),
             summary=str(summary),
         )
-    except ValueError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
-    except OSError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=502)
+    except Exception as exc:  # noqa: BLE001 — routed through _pipeline_error_response
+        return _pipeline_error_response(exc, "remember")
     return JSONResponse(dict(result))
 
 
@@ -533,11 +567,323 @@ async def _ingest_route(request: Request) -> JSONResponse:
             memory_type=str(memory_type),
             summary=str(summary),
         )
-    except ValueError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
-    except OSError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=502)
+    except Exception as exc:  # noqa: BLE001 — routed through _pipeline_error_response
+        return _pipeline_error_response(exc, "ingest")
     return JSONResponse(dict(result))
+
+
+async def _sync_route(request: Request) -> JSONResponse:
+    """Run ``sync_all`` against the registered directories.  Body is ignored.
+
+    The local ``sync_all`` function has no per-collection filter: it walks
+    every registration in the registry and returns a ``{collection: result}``
+    mapping.  The endpoint mirrors that shape.
+    """
+    auth_resp = _check_auth(request)
+    if auth_resp is not None:
+        return auth_resp
+
+    size_err = _check_body_size(request, MAX_SYNC_BODY_BYTES)
+    if size_err is not None:
+        return size_err
+
+    # Reject malformed JSON so clients do not think the server silently
+    # ignored their arguments.  An empty body is fine.
+    if int(request.headers.get("content-length", "0") or "0") > 0:
+        try:
+            body = await request.json()
+        except ValueError:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse(
+                {"error": "Body must be a JSON object"}, status_code=400
+            )
+
+    from quarry.sync import sync_all  # noqa: PLC0415
+
+    ctx = _ctx(request)
+    try:
+        results = await run_in_threadpool(sync_all, ctx.db, ctx.settings)
+    except Exception as exc:  # noqa: BLE001 — routed through _pipeline_error_response
+        return _pipeline_error_response(exc, "sync")
+
+    return JSONResponse(
+        {
+            collection: {
+                "ingested": res.ingested,
+                "deleted": res.deleted,
+                "skipped": res.skipped,
+                "failed": res.failed,
+                "errors": list(res.errors),
+            }
+            for collection, res in results.items()
+        }
+    )
+
+
+def _databases_route(request: Request) -> JSONResponse:
+    """Return a single-entry list describing the server's configured database.
+
+    The server process is fixed to one database — selection is a client-side
+    concern.  The response shape matches ``discover_databases`` so the CLI can
+    format remote and local output identically.
+    """
+    auth_resp = _check_auth(request)
+    if auth_resp is not None:
+        return auth_resp
+
+    ctx = _ctx(request)
+    settings = ctx.settings
+    lance_dir = settings.lancedb_path
+
+    # A fresh database has no ``chunks`` table yet; ``list_documents`` can
+    # raise on that path.  Treat any failure as "zero documents" so the
+    # remote /databases endpoint keeps the contract of ``discover_databases``.
+    if lance_dir.exists():
+        try:
+            docs = list_documents(ctx.db)
+        except Exception:  # noqa: BLE001 — table may not exist yet
+            logger.debug("list_documents failed on fresh database", exc_info=True)
+            docs = []
+    else:
+        docs = []
+    size_bytes = (
+        sum(f.stat().st_size for f in lance_dir.rglob("*") if f.is_file())
+        if lance_dir.exists()
+        else 0
+    )
+    name = lance_dir.parent.name or "default"
+    summary = {
+        "name": name,
+        "document_count": len(docs),
+        "size_bytes": size_bytes,
+        "size_description": format_size(size_bytes),
+    }
+    return JSONResponse({"total_databases": 1, "databases": [summary]})
+
+
+def _use_route(request: Request) -> JSONResponse:
+    """Reject database selection: the server is fixed to its own database."""
+    auth_resp = _check_auth(request)
+    if auth_resp is not None:
+        return auth_resp
+
+    return JSONResponse(
+        {
+            "error": (
+                "database selection is client-side only; "
+                "the remote server is fixed to its own database"
+            )
+        },
+        status_code=400,
+    )
+
+
+async def _registrations_route(request: Request) -> JSONResponse:
+    """Dispatch GET/POST/DELETE on /registrations to the right handler."""
+    auth_resp = _check_auth(request)
+    if auth_resp is not None:
+        return auth_resp
+
+    if request.method == "GET":
+        return await _handle_list_registrations(request)
+    if request.method == "DELETE":
+        return await _handle_delete_registration(request)
+    return await _handle_add_registration(request)
+
+
+def _list_registrations_sync(registry_path: Path) -> list[DirectoryRegistration]:
+    """Open registry, list, close — all in one thread."""
+    conn = open_registry(registry_path)
+    try:
+        return list_registrations(conn)
+    finally:
+        conn.close()
+
+
+async def _handle_list_registrations(request: Request) -> JSONResponse:
+    ctx = _ctx(request)
+    settings = ctx.settings
+    if not settings.registry_path.exists():
+        return JSONResponse({"total_registrations": 0, "registrations": []})
+
+    regs = await run_in_threadpool(_list_registrations_sync, settings.registry_path)
+    payload = [
+        {
+            "collection": reg.collection,
+            "directory": reg.directory,
+            "registered_at": reg.registered_at,
+        }
+        for reg in regs
+    ]
+    return JSONResponse({"total_registrations": len(payload), "registrations": payload})
+
+
+def _server_home() -> tuple[Path | None, str | None]:
+    """Return the server process's home directory from the passwd database.
+
+    Uses ``pwd.getpwuid(os.getuid())`` rather than ``$HOME`` so that a remote
+    client cannot widen the allowlist by influencing the server's environment.
+    Returns ``(None, reason)`` if the passwd entry cannot be resolved.
+    """
+    try:
+        entry = pwd.getpwuid(os.getuid())
+    except KeyError as exc:
+        return None, f"cannot determine server home directory: {exc}"
+    try:
+        return Path(entry.pw_dir).resolve(), None
+    except (OSError, RuntimeError) as exc:
+        return None, f"cannot resolve server home directory: {exc}"
+
+
+def _resolve_registration_path(directory: str) -> tuple[Path | None, str | None]:
+    """Return the resolved absolute path, or an error reason.
+
+    Rejects anything that resolves outside the server process's home
+    directory (as reported by the passwd database, not ``$HOME``).  A
+    remote client must not be able to register ``/etc`` or ``/root/.ssh``
+    and then siphon their contents out via subsequent sync.
+    """
+    if ".." in Path(directory).parts:
+        return None, "directory must not contain '..'"
+    try:
+        resolved = Path(directory).expanduser().resolve()
+    except (OSError, RuntimeError) as exc:
+        return None, f"cannot resolve directory: {exc}"
+
+    home, reason = _server_home()
+    if home is None:
+        return None, reason
+    try:
+        resolved.relative_to(home)
+    except ValueError:
+        return None, f"directory {str(resolved)!r} is outside {str(home)!r}"
+    return resolved, None
+
+
+def _register_sync(
+    registry_path: Path, resolved: Path, collection: str
+) -> DirectoryRegistration:
+    """Open registry, register, close — all in the caller's thread.
+
+    SQLite connections are bound to the thread that created them, so the
+    open/use/close lifecycle must stay inside the worker thread handling
+    the request.
+    """
+    conn = open_registry(registry_path)
+    try:
+        return register_directory(conn, resolved, collection)
+    finally:
+        conn.close()
+
+
+async def _handle_add_registration(request: Request) -> JSONResponse:
+    size_err = _check_body_size(request, MAX_REGISTRATIONS_BODY_BYTES)
+    if size_err is not None:
+        return size_err
+
+    try:
+        body = await request.json()
+    except ValueError:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "Body must be a JSON object"}, status_code=400)
+
+    directory = body.get("directory")
+    if not isinstance(directory, str) or not directory.strip():
+        return JSONResponse(
+            {"error": "Missing required field: directory"}, status_code=400
+        )
+    collection = body.get("collection")
+    if not isinstance(collection, str) or not collection.strip():
+        return JSONResponse(
+            {"error": "Missing required field: collection"}, status_code=400
+        )
+
+    resolved, reason = _resolve_registration_path(directory)
+    if resolved is None:
+        return JSONResponse({"error": reason}, status_code=400)
+    if not resolved.is_dir():
+        return JSONResponse(
+            {"error": f"directory not found: {resolved}"}, status_code=400
+        )
+
+    ctx = _ctx(request)
+    try:
+        reg = await run_in_threadpool(
+            _register_sync, ctx.settings.registry_path, resolved, collection
+        )
+    except FileNotFoundError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+
+    return JSONResponse(
+        {
+            "directory": reg.directory,
+            "collection": reg.collection,
+            "registered_at": reg.registered_at,
+        }
+    )
+
+
+def _deregister_sync(registry_path: Path, collection: str) -> tuple[bool, list[str]]:
+    """Open registry, deregister, close — all in one thread."""
+    conn = open_registry(registry_path)
+    try:
+        existing = get_registration(conn, collection)
+        if existing is None:
+            return False, []
+        removed_docs = deregister_directory(conn, collection)
+        return True, removed_docs
+    finally:
+        conn.close()
+
+
+async def _handle_delete_registration(request: Request) -> JSONResponse:
+    collection = request.query_params.get("collection", "")
+    if not collection:
+        return JSONResponse(
+            {"error": "Missing required parameter: collection"}, status_code=400
+        )
+
+    keep_data_raw = request.query_params.get("keep_data", "false").lower()
+    if keep_data_raw not in {"true", "false"}:
+        return JSONResponse(
+            {"error": "keep_data must be 'true' or 'false'"},
+            status_code=400,
+        )
+    keep_data = keep_data_raw == "true"
+
+    ctx = _ctx(request)
+    if not ctx.settings.registry_path.exists():
+        return JSONResponse({"error": "Not found"}, status_code=404)
+
+    found, removed_docs = await run_in_threadpool(
+        _deregister_sync, ctx.settings.registry_path, collection
+    )
+    if not found:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+
+    deleted_chunks = 0
+    if not keep_data and removed_docs:
+
+        def _purge() -> int:
+            total = 0
+            for doc_name in removed_docs:
+                total += db_delete_document(ctx.db, doc_name, collection=collection)
+            return total
+
+        deleted_chunks = await run_in_threadpool(_purge)
+
+    return JSONResponse(
+        {
+            "collection": collection,
+            "removed": len(removed_docs),
+            "deleted_chunks": deleted_chunks,
+            "type": "registration",
+        }
+    )
 
 
 def _handle_delete_document(request: Request) -> JSONResponse:
@@ -684,6 +1030,14 @@ def build_app(
         Route("/collections", _collections_route, methods=["GET", "DELETE"]),
         Route("/remember", _remember_route, methods=["POST"]),
         Route("/ingest", _ingest_route, methods=["POST"]),
+        Route("/sync", _sync_route, methods=["POST"]),
+        Route("/databases", _databases_route, methods=["GET"]),
+        Route("/use", _use_route, methods=["POST"]),
+        Route(
+            "/registrations",
+            _registrations_route,
+            methods=["GET", "POST", "DELETE"],
+        ),
         Route("/status", _status_route, methods=["GET"]),
         WebSocketRoute("/mcp", _mcp_websocket_route),
     ]

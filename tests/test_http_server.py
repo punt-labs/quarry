@@ -1183,6 +1183,481 @@ class TestIngest:
         assert "cgnat" in resp.json()["error"].lower()
 
 
+class TestSync:
+    """Tests for POST /sync endpoint."""
+
+    def _sync_result(
+        self,
+        collection: str = "math",
+        *,
+        ingested: int = 3,
+        deleted: int = 1,
+        skipped: int = 5,
+        failed: int = 0,
+        errors: list[str] | None = None,
+    ) -> object:
+        from quarry.sync import SyncResult
+
+        return SyncResult(
+            collection=collection,
+            ingested=ingested,
+            deleted=deleted,
+            skipped=skipped,
+            failed=failed,
+            errors=errors or [],
+        )
+
+    def test_success(self, client: TestClient) -> None:
+        mock_results = {"math": self._sync_result()}
+        with patch("quarry.sync.sync_all", return_value=mock_results):
+            resp = client.post("/sync", json={})
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data == {
+            "math": {
+                "ingested": 3,
+                "deleted": 1,
+                "skipped": 5,
+                "failed": 0,
+                "errors": [],
+            }
+        }
+
+    def test_empty_body_accepted(self, client: TestClient) -> None:
+        with patch("quarry.sync.sync_all", return_value={}):
+            resp = client.post(
+                "/sync",
+                content=b"",
+                headers={"Content-Length": "0"},
+            )
+        assert resp.status_code == 200
+        assert resp.json() == {}
+
+    def test_invalid_json_returns_400(self, client: TestClient) -> None:
+        resp = client.post(
+            "/sync",
+            content=b"not json",
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 400
+
+    def test_non_object_body_returns_400(self, client: TestClient) -> None:
+        resp = client.post("/sync", json=[1, 2, 3])
+        assert resp.status_code == 400
+
+    def test_auth_required(self, auth_client: TestClient) -> None:
+        resp = auth_client.post("/sync", json={})
+        assert resp.status_code == 401
+
+    def test_auth_allows_with_key(self, auth_client: TestClient) -> None:
+        with patch("quarry.sync.sync_all", return_value={}):
+            resp = auth_client.post(
+                "/sync",
+                json={},
+                headers={"Authorization": f"Bearer {_TEST_API_KEY}"},
+            )
+        assert resp.status_code == 200
+
+    def test_pipeline_value_error_returns_400(self, client: TestClient) -> None:
+        with patch("quarry.sync.sync_all", side_effect=ValueError("bad reg")):
+            resp = client.post("/sync", json={})
+        assert resp.status_code == 400
+        assert "bad reg" in resp.json()["error"]
+
+    def test_pipeline_os_error_returns_502(self, client: TestClient) -> None:
+        with patch("quarry.sync.sync_all", side_effect=OSError("disk full")):
+            resp = client.post("/sync", json={})
+        assert resp.status_code == 502
+        assert "disk full" in resp.json()["error"]
+
+    def test_rejects_oversized_body(self, client: TestClient) -> None:
+        from quarry.http_server import MAX_SYNC_BODY_BYTES
+
+        too_big = MAX_SYNC_BODY_BYTES + 1
+        resp = client.post(
+            "/sync",
+            content=b"x",
+            headers={
+                "Content-Type": "application/json",
+                "Content-Length": str(too_big),
+            },
+        )
+        assert resp.status_code == 413
+        assert "too large" in resp.json()["error"].lower()
+
+    def test_errors_list_passed_through(self, client: TestClient) -> None:
+        mock_results = {
+            "col": self._sync_result(
+                "col",
+                ingested=1,
+                failed=2,
+                errors=["a.pdf: corrupt", "b.pdf: timeout"],
+            )
+        }
+        with patch("quarry.sync.sync_all", return_value=mock_results):
+            resp = client.post("/sync", json={})
+        assert resp.status_code == 200
+        assert resp.json()["col"]["errors"] == ["a.pdf: corrupt", "b.pdf: timeout"]
+
+
+class TestDatabases:
+    """Tests for GET /databases endpoint."""
+
+    def test_returns_single_entry_list(self, client: TestClient) -> None:
+        with patch("quarry.http_server.list_documents", return_value=[{"x": 1}]):
+            resp = client.get("/databases")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total_databases"] == 1
+        assert len(data["databases"]) == 1
+        entry = data["databases"][0]
+        assert set(entry.keys()) == {
+            "name",
+            "document_count",
+            "size_bytes",
+            "size_description",
+        }
+        assert entry["document_count"] == 1
+
+    def test_name_from_parent_dir(self, tmp_path: Path) -> None:
+        """Database name should come from the lancedb parent directory name."""
+        settings = _mock_settings(tmp_path)
+        # Override so lancedb_path lives under 'work/lancedb'.
+        work_dir = tmp_path / "work" / "lancedb"
+        work_dir.mkdir(parents=True)
+        settings.lancedb_path = work_dir
+        ctx = _QuarryContext(settings)
+        ctx.__dict__["db"] = _SHARED_DB
+        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        app = build_app(ctx)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        with patch("quarry.http_server.list_documents", return_value=[]):
+            data = client.get("/databases").json()
+
+        assert data["databases"][0]["name"] == "work"
+
+    def test_auth_required(self, auth_client: TestClient) -> None:
+        resp = auth_client.get("/databases")
+        assert resp.status_code == 401
+
+
+class TestUse:
+    """Tests for POST /use endpoint."""
+
+    def test_returns_400_not_supported(self, client: TestClient) -> None:
+        resp = client.post("/use", json={"name": "work"})
+        assert resp.status_code == 400
+        error = resp.json()["error"].lower()
+        assert "client-side" in error
+
+    def test_auth_required(self, auth_client: TestClient) -> None:
+        resp = auth_client.post("/use", json={"name": "work"})
+        assert resp.status_code == 401
+
+
+class TestRegistrations:
+    """Tests for GET/POST/DELETE /registrations endpoint."""
+
+    @pytest.fixture()
+    def home_client(self, tmp_path: Path) -> TestClient:
+        """A client whose settings live under a fake $HOME."""
+        home = tmp_path / "home"
+        home.mkdir()
+        settings = _mock_settings(tmp_path)
+        settings.registry_path = home / "registry.db"
+        ctx = _QuarryContext(settings)
+        ctx.__dict__["db"] = _SHARED_DB
+        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        app = build_app(ctx)
+        return TestClient(app, raise_server_exceptions=False)
+
+    def test_get_empty_when_no_registry(self, client: TestClient) -> None:
+        resp = client.get("/registrations")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total_registrations"] == 0
+        assert data["registrations"] == []
+
+    def test_get_lists_registrations(self, client: TestClient) -> None:
+        from quarry.sync_registry import DirectoryRegistration
+
+        regs = [
+            DirectoryRegistration(
+                directory="/home/u/math",
+                collection="math",
+                registered_at="2026-01-01T00:00:00",
+            )
+        ]
+        with (
+            patch(
+                "quarry.http_server.open_registry",
+                return_value=MagicMock(close=MagicMock()),
+            ),
+            patch("quarry.http_server.list_registrations", return_value=regs),
+            patch(
+                "pathlib.Path.exists",
+                return_value=True,
+            ),
+        ):
+            data = client.get("/registrations").json()
+
+        assert data["total_registrations"] == 1
+        entry = data["registrations"][0]
+        assert entry["collection"] == "math"
+        assert entry["directory"] == "/home/u/math"
+        assert entry["registered_at"] == "2026-01-01T00:00:00"
+
+    def test_post_registers_directory(
+        self,
+        home_client: TestClient,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        home = tmp_path / "home"
+        monkeypatch.setenv("HOME", str(home))
+        target = home / "docs"
+        target.mkdir()
+
+        resp = home_client.post(
+            "/registrations",
+            json={"directory": str(target), "collection": "docs"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["collection"] == "docs"
+        assert data["directory"] == str(target.resolve())
+        assert "registered_at" in data
+
+    def test_post_rejects_missing_directory(self, client: TestClient) -> None:
+        resp = client.post("/registrations", json={"collection": "c"})
+        assert resp.status_code == 400
+        assert "directory" in resp.json()["error"].lower()
+
+    def test_post_rejects_missing_collection(self, client: TestClient) -> None:
+        resp = client.post("/registrations", json={"directory": "/home/x"})
+        assert resp.status_code == 400
+        assert "collection" in resp.json()["error"].lower()
+
+    def test_post_rejects_path_with_parent_segment(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        resp = client.post(
+            "/registrations",
+            json={"directory": "/home/../etc", "collection": "c"},
+        )
+        assert resp.status_code == 400
+        assert ".." in resp.json()["error"]
+
+    def test_post_rejects_outside_home(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        resp = client.post(
+            "/registrations",
+            json={"directory": "/etc", "collection": "c"},
+        )
+        assert resp.status_code == 400
+        assert "outside" in resp.json()["error"].lower()
+
+    def test_post_rejects_nonexistent_path(
+        self,
+        home_client: TestClient,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        home = tmp_path / "home"
+        monkeypatch.setenv("HOME", str(home))
+        missing = home / "does-not-exist"
+        resp = home_client.post(
+            "/registrations",
+            json={"directory": str(missing), "collection": "c"},
+        )
+        assert resp.status_code == 400
+        assert "not found" in resp.json()["error"].lower()
+
+    def test_post_conflict_returns_409(
+        self,
+        home_client: TestClient,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        home = tmp_path / "home"
+        monkeypatch.setenv("HOME", str(home))
+        target = home / "docs"
+        target.mkdir()
+
+        # Register once, then try again.
+        resp1 = home_client.post(
+            "/registrations",
+            json={"directory": str(target), "collection": "docs"},
+        )
+        assert resp1.status_code == 200
+        resp2 = home_client.post(
+            "/registrations",
+            json={"directory": str(target), "collection": "docs"},
+        )
+        assert resp2.status_code == 409
+
+    def test_delete_success(
+        self,
+        home_client: TestClient,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        home = tmp_path / "home"
+        monkeypatch.setenv("HOME", str(home))
+        target = home / "docs"
+        target.mkdir()
+        home_client.post(
+            "/registrations",
+            json={"directory": str(target), "collection": "docs"},
+        )
+
+        with patch("quarry.http_server.db_delete_document", return_value=0):
+            resp = home_client.delete("/registrations?collection=docs")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["collection"] == "docs"
+        assert data["type"] == "registration"
+
+    def test_delete_also_removes_documents(
+        self,
+        home_client: TestClient,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """DELETE without keep_data must call db_delete_document per file.
+
+        Regression for the class-3 divergence bug where the remote path
+        left LanceDB chunks indexed after a deregister.
+        """
+        home = tmp_path / "home"
+        monkeypatch.setenv("HOME", str(home))
+        target = home / "docs"
+        target.mkdir()
+
+        home_client.post(
+            "/registrations",
+            json={"directory": str(target), "collection": "docs"},
+        )
+
+        fake_docs = ["a.pdf", "sub/b.txt", "c.md"]
+        with (
+            patch(
+                "quarry.http_server.deregister_directory",
+                return_value=fake_docs,
+            ),
+            patch(
+                "quarry.http_server.db_delete_document",
+                return_value=5,
+            ) as mock_del,
+        ):
+            resp = home_client.delete("/registrations?collection=docs")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["removed"] == 3
+        assert data["deleted_chunks"] == 15  # 3 docs * 5 chunks
+        assert mock_del.call_count == 3
+        called_names = [call.args[1] for call in mock_del.call_args_list]
+        assert called_names == fake_docs
+        for call in mock_del.call_args_list:
+            assert call.kwargs["collection"] == "docs"
+
+    def test_delete_keep_data(
+        self,
+        home_client: TestClient,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """DELETE with keep_data=true must not call db_delete_document."""
+        home = tmp_path / "home"
+        monkeypatch.setenv("HOME", str(home))
+        target = home / "docs"
+        target.mkdir()
+
+        home_client.post(
+            "/registrations",
+            json={"directory": str(target), "collection": "docs"},
+        )
+
+        with (
+            patch(
+                "quarry.http_server.deregister_directory",
+                return_value=["a.pdf"],
+            ),
+            patch("quarry.http_server.db_delete_document") as mock_del,
+        ):
+            resp = home_client.delete("/registrations?collection=docs&keep_data=true")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["removed"] == 1
+        assert data["deleted_chunks"] == 0
+        mock_del.assert_not_called()
+
+    def test_delete_rejects_invalid_keep_data(
+        self,
+        home_client: TestClient,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        home = tmp_path / "home"
+        monkeypatch.setenv("HOME", str(home))
+        resp = home_client.delete("/registrations?collection=docs&keep_data=yes")
+        assert resp.status_code == 400
+        assert "keep_data" in resp.json()["error"]
+
+    def test_delete_missing_collection_param(self, client: TestClient) -> None:
+        resp = client.delete("/registrations")
+        assert resp.status_code == 400
+
+    def test_delete_not_found(self, home_client: TestClient) -> None:
+        resp = home_client.delete("/registrations?collection=missing")
+        assert resp.status_code == 404
+
+    def test_delete_no_registry_returns_404(self, client: TestClient) -> None:
+        resp = client.delete("/registrations?collection=anything")
+        assert resp.status_code == 404
+
+    def test_auth_required_get(self, auth_client: TestClient) -> None:
+        assert auth_client.get("/registrations").status_code == 401
+
+    def test_auth_required_post(self, auth_client: TestClient) -> None:
+        assert (
+            auth_client.post(
+                "/registrations",
+                json={"directory": "/home/x", "collection": "c"},
+            ).status_code
+            == 401
+        )
+
+    def test_auth_required_delete(self, auth_client: TestClient) -> None:
+        assert auth_client.delete("/registrations?collection=c").status_code == 401
+
+    def test_post_rejects_oversized_body(self, client: TestClient) -> None:
+        from quarry.http_server import MAX_REGISTRATIONS_BODY_BYTES
+
+        too_big = MAX_REGISTRATIONS_BODY_BYTES + 1
+        resp = client.post(
+            "/registrations",
+            content=b"x",
+            headers={
+                "Content-Type": "application/json",
+                "Content-Length": str(too_big),
+            },
+        )
+        assert resp.status_code == 413
+
+
 class TestCheckBodySize:
     """Unit tests for the _check_body_size helper."""
 
@@ -1228,3 +1703,149 @@ class TestCheckBodySize:
         resp = _check_body_size(request, 200)
         assert resp is not None
         assert resp.status_code == 400
+
+
+class TestServerHomeResolution:
+    """Server home is resolved via the passwd database, not ``$HOME``."""
+
+    def test_home_unset_refuses_registration(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Registering must fail cleanly when pwd cannot resolve the uid."""
+        home = tmp_path / "home"
+        home.mkdir()
+        settings = _mock_settings(tmp_path)
+        settings.registry_path = home / "registry.db"
+        ctx = _QuarryContext(settings)
+        ctx.__dict__["db"] = _SHARED_DB
+        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        test_client = TestClient(build_app(ctx), raise_server_exceptions=False)
+
+        # Even if an attacker could unset HOME, the server consults pwd.
+        monkeypatch.delenv("HOME", raising=False)
+
+        def _boom(_uid: int) -> object:
+            raise KeyError("uid not in passwd")
+
+        with patch("quarry.http_server.pwd.getpwuid", side_effect=_boom):
+            resp = test_client.post(
+                "/registrations",
+                json={"directory": "/etc", "collection": "evil"},
+            )
+
+        assert resp.status_code == 400
+        assert "home" in resp.json()["error"].lower()
+
+    def test_home_used_is_from_pwd_not_env(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Setting HOME to a wider root must not widen the allowlist."""
+        real_home = tmp_path / "realhome"
+        real_home.mkdir()
+        fake_home = tmp_path / "fakehome"
+        fake_home.mkdir()
+
+        settings = _mock_settings(tmp_path)
+        settings.registry_path = real_home / "registry.db"
+        ctx = _QuarryContext(settings)
+        ctx.__dict__["db"] = _SHARED_DB
+        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        test_client = TestClient(build_app(ctx), raise_server_exceptions=False)
+
+        monkeypatch.setenv("HOME", str(fake_home))
+        real_entry = MagicMock()
+        real_entry.pw_dir = str(real_home)
+
+        # Registering somewhere under real_home must succeed even though
+        # the env says HOME=fakehome.
+        target = real_home / "docs"
+        target.mkdir()
+        with patch("quarry.http_server.pwd.getpwuid", return_value=real_entry):
+            resp = test_client.post(
+                "/registrations",
+                json={"directory": str(target), "collection": "docs"},
+            )
+        assert resp.status_code == 200
+
+        # And registering outside pw_dir fails, even if HOME covers it.
+        outside = fake_home / "docs"
+        outside.mkdir()
+        with patch("quarry.http_server.pwd.getpwuid", return_value=real_entry):
+            resp = test_client.post(
+                "/registrations",
+                json={"directory": str(outside), "collection": "evil"},
+            )
+        assert resp.status_code == 400
+        assert "outside" in resp.json()["error"].lower()
+
+
+class TestDatabasesMissingTable:
+    """Fresh databases (no chunks table) must still respond to /databases."""
+
+    def test_list_documents_failure_is_zero(self, client: TestClient) -> None:
+        """A raise from list_documents must degrade to document_count=0."""
+        with patch(
+            "quarry.http_server.list_documents",
+            side_effect=ValueError("Table 'chunks' was not found"),
+        ):
+            resp = client.get("/databases")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total_databases"] == 1
+        assert data["databases"][0]["document_count"] == 0
+
+
+class TestSyncGenericFailure:
+    """Fix 8: ``_sync_route`` wraps generic exceptions in a JSON envelope."""
+
+    def test_runtime_error_returns_500_json(self, client: TestClient) -> None:
+        with patch(
+            "quarry.sync.sync_all",
+            side_effect=RuntimeError("embedder crashed"),
+        ):
+            resp = client.post("/sync", json={})
+
+        assert resp.status_code == 500
+        assert resp.headers["content-type"].startswith("application/json")
+        body = resp.json()
+        assert "embedder crashed" in body["error"]
+        assert "sync failed" in body["error"]
+
+    def test_remember_runtime_error_returns_500_json(self, client: TestClient) -> None:
+        with patch(
+            "quarry.pipeline.ingest_content",
+            side_effect=RuntimeError("embedder crashed"),
+        ):
+            resp = client.post(
+                "/remember",
+                json={"name": "n.md", "content": "body"},
+            )
+        assert resp.status_code == 500
+        body = resp.json()
+        assert "embedder crashed" in body["error"]
+        assert "remember failed" in body["error"]
+
+    def test_ingest_runtime_error_returns_500_json(self, client: TestClient) -> None:
+        with (
+            patch(
+                "quarry.http_server.socket_module.getaddrinfo",
+                side_effect=_fake_public_addrinfo,
+            ),
+            patch(
+                "quarry.pipeline.ingest_auto",
+                side_effect=RuntimeError("embedder crashed"),
+            ),
+        ):
+            resp = client.post(
+                "/ingest",
+                json={"source": "https://example.com/"},
+            )
+        assert resp.status_code == 500
+        body = resp.json()
+        assert "embedder crashed" in body["error"]
+        assert "ingest failed" in body["error"]

@@ -16,6 +16,18 @@ across `transform`, `index`, and `connector`).
 
 ### Added
 
+- **tool**: `POST /sync` endpoint — trigger background sync of registered
+  directories remotely.
+- **tool**: `GET /databases` endpoint — list server-visible databases.
+- **tool**: `POST /use` endpoint — returns 400; database selection is
+  client-side only.
+- **tool**: `GET /registrations`, `POST /registrations`, `DELETE /registrations`
+  endpoints — manage registered directories remotely.
+- **tool**: `quarry sync`, `quarry register`, `quarry deregister`, and
+  `quarry list registrations` route to remote when configured.
+- **security**: `POST /registrations` rejects directories outside the server
+  process's `$HOME` to prevent exfiltration of sensitive paths via subsequent
+  sync.
 - **tool**: `POST /remember` endpoint — accept inline text content for remote
   ingestion via JSON body.
 - **tool**: `POST /ingest` endpoint — accept URL for remote ingestion via JSON

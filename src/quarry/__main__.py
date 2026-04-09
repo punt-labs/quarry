@@ -67,6 +67,7 @@ from quarry.remote import (
 from quarry.sync import sync_all
 from quarry.sync_registry import (
     deregister_directory,
+    get_registration,
     list_registrations,
     open_registry,
     register_directory,
@@ -260,11 +261,17 @@ class RemoteError(RuntimeError):
         self.status = status
 
 
+_DEFAULT_REMOTE_TIMEOUT = 15.0
+_SYNC_REMOTE_TIMEOUT = 600.0
+
+
 def _remote_https_request(
     method: str,
     path: str,
     config: dict[str, object],
     body: dict[str, object] | None = None,
+    *,
+    timeout: float = _DEFAULT_REMOTE_TIMEOUT,
 ) -> dict[str, object]:
     """Make an authenticated HTTP request to the remote quarry server.
 
@@ -278,12 +285,15 @@ def _remote_https_request(
         config: Dict from ``read_proxy_config()`` with keys ``url``, optional
             ``ca_cert``, and ``headers``.
         body: Optional JSON-serialisable dict sent as the request body.
+        timeout: Socket timeout in seconds.  Defaults to 15; long-running
+            operations like ``/sync`` should pass a larger value.
 
     Returns:
         Parsed JSON response as a dict.
 
     Raises:
-        RuntimeError: If the server returns a non-2xx status code.
+        RemoteError: If the server returns a non-2xx status code or a
+            non-JSON / non-dict response body.
         OSError: If the connection cannot be established.
         SystemExit: If the remote URL uses HTTPS but no CA cert is pinned.
     """
@@ -323,9 +333,9 @@ def _remote_https_request(
                 f"Cannot load CA certificate {ca_cert!r}. "
                 f"Run 'quarry login' to configure. ({exc})"
             ) from exc
-        conn = http.client.HTTPSConnection(host, port, context=ssl_ctx, timeout=15)
+        conn = http.client.HTTPSConnection(host, port, context=ssl_ctx, timeout=timeout)
     else:
-        conn = http.client.HTTPConnection(host, port, timeout=15)
+        conn = http.client.HTTPConnection(host, port, timeout=timeout)
     try:
         conn.request(method, path, body=encoded_body, headers=headers)
         resp = conn.getresponse()
@@ -338,14 +348,21 @@ def _remote_https_request(
             )
         if not resp_body:
             return {}
-        parsed = json.loads(resp_body)
-        if not isinstance(parsed, dict):
+        try:
+            parsed_body = json.loads(resp_body)
+        except json.JSONDecodeError as exc:
+            preview = resp_body[:200].decode("utf-8", errors="replace")
+            raise RemoteError(
+                resp.status,
+                f"Remote quarry server returned non-JSON response: {preview!r}",
+            ) from exc
+        if not isinstance(parsed_body, dict):
             raise RemoteError(
                 resp.status,
                 f"Malformed response from remote server: "
-                f"expected JSON object, got {type(parsed).__name__}",
+                f"expected JSON object, got {type(parsed_body).__name__}",
             )
-        response_data: dict[str, object] = parsed
+        response_data: dict[str, object] = parsed_body
         return response_data
     finally:
         conn.close()
@@ -873,11 +890,26 @@ def use_cmd(
 
     Use 'default' to reset to the default database. The --db flag
     overrides this per-call.
+
+    Note: database selection is always a client-side preference.  When a
+    remote server is configured, this still writes the local config — the
+    remote server is fixed to the database it was started with.
     """
     # Validate the name before persisting.
     resolve_db_paths(load_settings(), name if name != "default" else None)
     write_default_db(name)
-    _emit({"database": name}, f"Default database set to {name!r}")
+
+    proxy_config = _safe_proxy_config().get("quarry", {})
+    remote_note = (
+        "Note: this is a client-side preference; "
+        "the remote server is fixed to its own database."
+        if isinstance(proxy_config, dict) and "url" in proxy_config
+        else ""
+    )
+    text = f"Default database set to {name!r}"
+    if remote_note:
+        text += f"\n{remote_note}"
+    _emit({"database": name}, text)
 
 
 @app.command(name="delete")
@@ -960,6 +992,28 @@ def register(
     ] = "",
 ) -> None:
     """Register a directory for incremental sync."""
+    proxy_config = _safe_proxy_config().get("quarry", {})
+    if isinstance(proxy_config, dict) and "url" in proxy_config:
+        # Server-side path allowlist requires an absolute path — the resolved
+        # path is what the server will enforce against its $HOME.
+        resolved_str = str(directory.expanduser().resolve())
+        col = collection or directory.name or Path(resolved_str).name
+        body: dict[str, object] = {"directory": resolved_str, "collection": col}
+        try:
+            remote_resp = _remote_https_request(
+                "POST", "/registrations", proxy_config, body=body
+            )
+        except RemoteError as exc:
+            err_console.print(f"Error: {exc}", style="red")
+            raise typer.Exit(code=1) from exc
+        reg_dir = remote_resp.get("directory", resolved_str)
+        reg_col = remote_resp.get("collection", col)
+        _emit(
+            {"directory": str(reg_dir), "collection": str(reg_col)},
+            f"Registered {reg_dir} as collection {reg_col!r}",
+        )
+        return
+
     settings = _resolved_settings()
     resolved = directory.resolve()
     col = collection or resolved.name
@@ -984,27 +1038,93 @@ def deregister(
     ] = False,
 ) -> None:
     """Remove a directory registration. Optionally keep indexed data."""
+    proxy_config = _safe_proxy_config().get("quarry", {})
+    if isinstance(proxy_config, dict) and "url" in proxy_config:
+        params = {
+            "collection": collection,
+            "keep_data": "true" if keep_data else "false",
+        }
+        path = f"/registrations?{urllib.parse.urlencode(params)}"
+        try:
+            remote_resp = _remote_https_request("DELETE", path, proxy_config)
+        except RemoteError as exc:
+            if exc.status == 404:
+                err_console.print(
+                    f"No registration found for {collection!r}", style="red"
+                )
+                raise typer.Exit(code=1) from exc
+            err_console.print(f"Error: {exc}", style="red")
+            raise typer.Exit(code=1) from exc
+        removed_raw = remote_resp.get("removed", 0)
+        removed = int(removed_raw) if isinstance(removed_raw, int | float) else 0
+        deleted_chunks_raw = remote_resp.get("deleted_chunks", 0)
+        deleted_chunks = (
+            int(deleted_chunks_raw)
+            if isinstance(deleted_chunks_raw, int | float)
+            else 0
+        )
+        _emit(
+            {
+                "collection": collection,
+                "removed": removed,
+                "deleted_chunks": deleted_chunks,
+            },
+            f"Deregistered collection {collection!r} "
+            f"({removed} files, {deleted_chunks} chunks deleted)",
+        )
+        return
+
     settings = _resolved_settings()
     conn = open_registry(settings.registry_path)
     try:
+        existing = get_registration(conn, collection)
         doc_names = deregister_directory(conn, collection)
     finally:
         conn.close()
 
+    if existing is None:
+        err_console.print(f"No registration found for {collection!r}", style="red")
+        raise typer.Exit(code=1)
+
+    deleted_chunks = 0
     if not keep_data and doc_names:
         db = get_db(settings.lancedb_path)
         for name in doc_names:
-            db_delete_document(db, name, collection=collection)
+            deleted_chunks += db_delete_document(db, name, collection=collection)
     removed = len(doc_names)
     _emit(
-        {"collection": collection, "removed": removed},
-        f"Deregistered collection {collection!r} ({removed} files)",
+        {
+            "collection": collection,
+            "removed": removed,
+            "deleted_chunks": deleted_chunks,
+        },
+        f"Deregistered collection {collection!r} "
+        f"({removed} files, {deleted_chunks} chunks deleted)",
     )
 
 
 def _auto_workers(settings: Settings) -> int:  # noqa: ARG001
     """Select worker count. Local backends are CPU-bound — 1 worker."""
     return 1
+
+
+def _format_sync_results(json_data: dict[str, dict[str, object]]) -> str:
+    """Format a ``{collection: result}`` mapping as a multi-line summary."""
+    lines: list[str] = []
+    for col, res in json_data.items():
+        ingested = res.get("ingested", 0)
+        deleted = res.get("deleted", 0)
+        skipped = res.get("skipped", 0)
+        failed = res.get("failed", 0)
+        line = (
+            f"{col}: {ingested} ingested, {deleted} deleted, "
+            f"{skipped} unchanged, {failed} failed"
+        )
+        errors = res.get("errors")
+        if isinstance(errors, list) and errors:
+            line += "\n" + "\n".join(f"  error: {e}" for e in errors)
+        lines.append(line)
+    return "\n".join(lines)
 
 
 @app.command(name="sync")
@@ -1020,6 +1140,31 @@ def sync_cmd(
     ] = None,
 ) -> None:
     """Sync all registered directories: ingest new/changed, remove deleted."""
+    proxy_config = _safe_proxy_config().get("quarry", {})
+    if isinstance(proxy_config, dict) and "url" in proxy_config:
+        if workers is not None:
+            err_console.print(
+                "Warning: --workers is ignored when a remote quarry server is "
+                "configured",
+                style="yellow",
+            )
+        try:
+            remote_resp = _remote_https_request(
+                "POST",
+                "/sync",
+                proxy_config,
+                body={},
+                timeout=_SYNC_REMOTE_TIMEOUT,
+            )
+        except RemoteError as exc:
+            err_console.print(f"Error: {exc}", style="red")
+            raise typer.Exit(code=1) from exc
+        remote_data: dict[str, dict[str, object]] = {
+            col: dict(val) for col, val in remote_resp.items() if isinstance(val, dict)
+        }
+        _emit(remote_data, _format_sync_results(remote_data))
+        return
+
     settings = _resolved_settings()
     effective_workers = workers if workers is not None else _auto_workers(settings)
     logger.info("Using %d sync workers", effective_workers)
@@ -1033,28 +1178,17 @@ def sync_cmd(
             progress_callback=cb,
         )
 
-    json_data = {
+    json_data: dict[str, dict[str, object]] = {
         col: {
             "ingested": res.ingested,
             "deleted": res.deleted,
             "skipped": res.skipped,
             "failed": res.failed,
-            "errors": res.errors,
+            "errors": list(res.errors),
         }
         for col, res in results.items()
     }
-
-    lines: list[str] = []
-    for col, res in results.items():
-        line = (
-            f"{col}: {res.ingested} ingested, {res.deleted} deleted, "
-            f"{res.skipped} unchanged, {res.failed} failed"
-        )
-        if res.errors:
-            line += "\n" + "\n".join(f"  error: {e}" for e in res.errors)
-        lines.append(line)
-
-    _emit(json_data, "\n".join(lines))
+    _emit(json_data, _format_sync_results(json_data))
 
 
 @app.command(name="login")
@@ -1314,10 +1448,39 @@ def list_collections_cmd() -> None:
     _emit(local_cols, format_collections(local_cols))
 
 
+def _format_registrations(regs: list[dict[str, object]]) -> str:
+    if not regs:
+        return "No registered directories."
+    return "\n".join(
+        f"{reg.get('collection', '')}: {reg.get('directory', '')}" for reg in regs
+    )
+
+
 @list_app.command(name="registrations")
 @_cli_errors
 def list_registrations_cmd() -> None:
     """List all registered directories."""
+    proxy_config = _safe_proxy_config().get("quarry", {})
+    if isinstance(proxy_config, dict) and "url" in proxy_config:
+        remote_resp = _remote_https_get("/registrations", proxy_config)
+        raw = remote_resp.get("registrations", [])
+        if not isinstance(raw, list):
+            err_console.print(
+                "Warning: unexpected response from remote server", style="yellow"
+            )
+            raw = []
+        remote_regs: list[dict[str, object]] = [
+            {
+                "collection": entry.get("collection", ""),
+                "directory": entry.get("directory", ""),
+                "registered_at": entry.get("registered_at", ""),
+            }
+            for entry in raw
+            if isinstance(entry, dict)
+        ]
+        _emit(remote_regs, _format_registrations(remote_regs))
+        return
+
     settings = _resolved_settings()
     conn = open_registry(settings.registry_path)
     try:
@@ -1325,34 +1488,55 @@ def list_registrations_cmd() -> None:
     finally:
         conn.close()
 
-    json_data = [
-        {"collection": reg.collection, "directory": str(reg.directory)} for reg in regs
+    json_data: list[dict[str, object]] = [
+        {
+            "collection": reg.collection,
+            "directory": str(reg.directory),
+            "registered_at": reg.registered_at,
+        }
+        for reg in regs
     ]
-    text = (
-        "\n".join(f"{reg.collection}: {reg.directory}" for reg in regs)
-        if regs
-        else "No registered directories."
+    _emit(json_data, _format_registrations(json_data))
+
+
+def _format_databases(databases: list[dict[str, object]]) -> str:
+    if not databases:
+        return "No databases found."
+    return "\n".join(
+        f"{db_info.get('name', '')}: {db_info.get('document_count', 0)} documents, "
+        f"{db_info.get('size_description', '')}"
+        for db_info in databases
     )
-    _emit(json_data, text)
 
 
 @list_app.command(name="databases")
 @_cli_errors
 def list_databases_cmd() -> None:
-    """List named databases with document counts and storage size."""
+    """List named databases with document counts and storage size.
+
+    When a remote server is configured, shows the single database the
+    remote server is fixed to.  The local path scans
+    ``~/.punt-labs/quarry/data/`` for every named database.
+    """
+    proxy_config = _safe_proxy_config().get("quarry", {})
+    if isinstance(proxy_config, dict) and "url" in proxy_config:
+        remote_resp = _remote_https_get("/databases", proxy_config)
+        raw = remote_resp.get("databases", [])
+        if not isinstance(raw, list):
+            err_console.print(
+                "Warning: unexpected response from remote server", style="yellow"
+            )
+            raw = []
+        remote_dbs: list[dict[str, object]] = [
+            dict(entry) for entry in raw if isinstance(entry, dict)
+        ]
+        _emit(remote_dbs, _format_databases(remote_dbs))
+        return
+
     settings = _resolved_settings()
     databases = discover_databases(settings.quarry_root)
-
-    text = (
-        "\n".join(
-            f"{db_info['name']}: {db_info['document_count']} documents, "
-            f"{db_info['size_description']}"
-            for db_info in databases
-        )
-        if databases
-        else "No databases found."
-    )
-    _emit(databases, text)
+    local_dbs: list[dict[str, object]] = [dict(db_info) for db_info in databases]
+    _emit(local_dbs, _format_databases(local_dbs))
 
 
 # ---------------------------------------------------------------------------
