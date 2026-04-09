@@ -14,8 +14,10 @@ Lifecycle:
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import logging
 import re
+import socket as socket_module
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -23,6 +25,7 @@ from functools import cached_property
 from pathlib import Path
 from socket import socket
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 import uvicorn
 from starlette.applications import Starlette
@@ -62,6 +65,91 @@ _AUTH_EXEMPT_PATHS = frozenset({"/health", "/ca.crt"})
 
 # Strip control characters from user-supplied log values (CWE-117).
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+# Maximum request body sizes.  /remember accepts content, /ingest only a URL.
+MAX_REMEMBER_BODY_BYTES = 50 * 1024 * 1024
+MAX_INGEST_BODY_BYTES = 1 * 1024 * 1024
+
+# Hostnames that expose cloud instance metadata services.  Reject regardless
+# of DNS resolution to harden against DNS-rebinding and TOCTOU attacks.
+_METADATA_HOSTNAMES = frozenset(
+    {
+        "169.254.169.254",
+        "metadata.google.internal",
+        "metadata",
+        "instance-data.ec2.internal",
+    }
+)
+
+
+def _validate_ingest_url(url: str) -> str | None:
+    """Return None if *url* is safe to fetch, else a human-readable reason.
+
+    Rejects URLs that resolve to private, loopback, link-local, reserved, or
+    multicast addresses, ``.local`` hostnames, and well-known cloud metadata
+    endpoints.  This is the SSRF guard for the authenticated ingest path.
+    """
+    parsed = urlsplit(url)
+    if parsed.scheme not in {"http", "https"}:
+        return f"unsupported scheme {parsed.scheme!r}"
+    host = parsed.hostname
+    if not host:
+        return "missing hostname"
+
+    host_lower = host.lower()
+    if host_lower in _METADATA_HOSTNAMES:
+        return f"metadata hostname {host!r} is blocked"
+    if host_lower.endswith(".local"):
+        return f"'.local' hostname {host!r} is blocked"
+
+    try:
+        infos = socket_module.getaddrinfo(host, None)
+    except OSError as exc:
+        return f"cannot resolve hostname {host!r}: {exc}"
+
+    for info in infos:
+        sockaddr = info[4]
+        try:
+            addr = ipaddress.ip_address(sockaddr[0])
+        except ValueError:
+            return f"cannot parse resolved address for {host!r}"
+        if (
+            addr.is_private
+            or addr.is_loopback
+            or addr.is_link_local
+            or addr.is_reserved
+            or addr.is_multicast
+            or addr.is_unspecified
+        ):
+            return f"host {host!r} resolves to blocked address {addr}"
+
+    return None
+
+
+def _check_body_size(request: Request, limit: int) -> JSONResponse | None:
+    """Reject requests whose advertised body size exceeds *limit*.
+
+    Also rejects chunked-encoding requests with no ``Content-Length`` header
+    so the server cannot be forced to stream arbitrary bytes before noticing.
+    """
+    header = request.headers.get("content-length")
+    if header is None:
+        return JSONResponse(
+            {"error": "Content-Length header required"},
+            status_code=411,
+        )
+    try:
+        length = int(header)
+    except ValueError:
+        return JSONResponse({"error": "Invalid Content-Length header"}, status_code=400)
+    if length < 0:
+        return JSONResponse({"error": "Invalid Content-Length header"}, status_code=400)
+    if length > limit:
+        return JSONResponse(
+            {"error": f"Request body too large (max {limit} bytes)"},
+            status_code=413,
+        )
+    return None
 
 
 class _QuarryContext:
@@ -288,6 +376,126 @@ def _show_route(request: Request) -> JSONResponse:
     return JSONResponse(match[0])
 
 
+async def _remember_route(request: Request) -> JSONResponse:
+    """Ingest inline text content. Body: {name, content, ...optional}."""
+    auth_resp = _check_auth(request)
+    if auth_resp is not None:
+        return auth_resp
+
+    size_err = _check_body_size(request, MAX_REMEMBER_BODY_BYTES)
+    if size_err is not None:
+        return size_err
+
+    try:
+        body = await request.json()
+    except ValueError:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "Body must be a JSON object"}, status_code=400)
+
+    name = body.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return JSONResponse({"error": "Missing required field: name"}, status_code=400)
+    content = body.get("content")
+    if not isinstance(content, str) or not content.strip():
+        return JSONResponse(
+            {"error": "Missing required field: content"}, status_code=400
+        )
+
+    collection = body.get("collection") or "default"
+    format_hint = body.get("format_hint") or "auto"
+    overwrite = body.get("overwrite")
+    if overwrite is None:
+        overwrite = True
+    agent_handle = body.get("agent_handle") or ""
+    memory_type = body.get("memory_type") or ""
+    summary = body.get("summary") or ""
+
+    from quarry.pipeline import ingest_content  # noqa: PLC0415
+
+    ctx = _ctx(request)
+    try:
+        result = ingest_content(
+            content,
+            name,
+            ctx.db,
+            ctx.settings,
+            overwrite=bool(overwrite),
+            collection=str(collection),
+            format_hint=str(format_hint),
+            agent_handle=str(agent_handle),
+            memory_type=str(memory_type),
+            summary=str(summary),
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    except OSError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=502)
+    return JSONResponse(dict(result))
+
+
+async def _ingest_route(request: Request) -> JSONResponse:
+    """Ingest a URL. Body: {source, ...optional}. File upload not supported."""
+    auth_resp = _check_auth(request)
+    if auth_resp is not None:
+        return auth_resp
+
+    size_err = _check_body_size(request, MAX_INGEST_BODY_BYTES)
+    if size_err is not None:
+        return size_err
+
+    try:
+        body = await request.json()
+    except ValueError:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "Body must be a JSON object"}, status_code=400)
+
+    source = body.get("source")
+    if not isinstance(source, str) or not source:
+        return JSONResponse(
+            {"error": "Missing required field: source"}, status_code=400
+        )
+    if not source.startswith(("http://", "https://")):
+        return JSONResponse(
+            {"error": "source must be an http:// or https:// URL"},
+            status_code=400,
+        )
+
+    reason = _validate_ingest_url(source)
+    if reason is not None:
+        return JSONResponse(
+            {"error": f"URL rejected: {reason}"},
+            status_code=400,
+        )
+
+    overwrite = bool(body.get("overwrite", False))
+    collection = body.get("collection") or ""
+    agent_handle = body.get("agent_handle") or ""
+    memory_type = body.get("memory_type") or ""
+    summary = body.get("summary") or ""
+
+    from quarry.pipeline import ingest_auto  # noqa: PLC0415
+
+    ctx = _ctx(request)
+    try:
+        result = ingest_auto(
+            source,
+            ctx.db,
+            ctx.settings,
+            overwrite=overwrite,
+            collection=str(collection),
+            agent_handle=str(agent_handle),
+            memory_type=str(memory_type),
+            summary=str(summary),
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    except OSError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=502)
+    return JSONResponse(dict(result))
+
+
 def _handle_delete_document(request: Request) -> JSONResponse:
     name = request.query_params.get("name", "")
     if not name:
@@ -430,6 +638,8 @@ def build_app(
         Route("/show", _show_route, methods=["GET"]),
         Route("/documents", _documents_route, methods=["GET", "DELETE"]),
         Route("/collections", _collections_route, methods=["GET", "DELETE"]),
+        Route("/remember", _remember_route, methods=["POST"]),
+        Route("/ingest", _ingest_route, methods=["POST"]),
         Route("/status", _status_route, methods=["GET"]),
         WebSocketRoute("/mcp", _mcp_websocket_route),
     ]

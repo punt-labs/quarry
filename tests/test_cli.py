@@ -2073,6 +2073,355 @@ class TestRememberCmd:
         assert result.exit_code == 0
         assert mock_ingest.call_args[1]["collection"] == "notes"
 
+    def test_remote_routing_posts_json_body(self):
+        remote_resp = {
+            "document_name": "notes.md",
+            "collection": "default",
+            "chunks": 2,
+        }
+        proxy_config = {
+            "quarry": {
+                "url": "wss://quarry.example.com:8420/mcp",
+                "ca_cert": "/path/to/ca.crt",
+                "headers": {"Authorization": "Bearer tok"},
+            }
+        }
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch(
+                "quarry.__main__._remote_https_request", return_value=remote_resp
+            ) as mock_req,
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "remember",
+                    "--name",
+                    "notes.md",
+                    "--collection",
+                    "notes",
+                    "--format",
+                    "markdown",
+                    "--agent-handle",
+                    "rmh",
+                    "--memory-type",
+                    "fact",
+                    "--summary",
+                    "one line",
+                ],
+                input="body text",
+            )
+
+        assert result.exit_code == 0
+        mock_req.assert_called_once()
+        method = mock_req.call_args[0][0]
+        path = mock_req.call_args[0][1]
+        body = mock_req.call_args[1]["body"]
+        assert method == "POST"
+        assert path == "/remember"
+        assert body["name"] == "notes.md"
+        assert body["content"] == "body text"
+        assert body["collection"] == "notes"
+        assert body["format_hint"] == "markdown"
+        assert body["overwrite"] is True
+        assert body["agent_handle"] == "rmh"
+        assert body["memory_type"] == "fact"
+        assert body["summary"] == "one line"
+
+    def test_remote_routing_does_not_call_local(self):
+        remote_resp = {
+            "document_name": "a.md",
+            "collection": "default",
+            "chunks": 1,
+        }
+        proxy_config = {
+            "quarry": {
+                "url": "wss://quarry.example.com:8420/mcp",
+                "headers": {"Authorization": "Bearer tok"},
+            }
+        }
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch("quarry.__main__._remote_https_request", return_value=remote_resp),
+            patch("quarry.__main__.ingest_content") as mock_local,
+        ):
+            result = runner.invoke(app, ["remember", "--name", "a.md"], input="hi")
+
+        assert result.exit_code == 0
+        mock_local.assert_not_called()
+
+    def test_remote_routing_http_error_exits_1(self):
+        from quarry.__main__ import RemoteError
+
+        proxy_config = {
+            "quarry": {
+                "url": "wss://quarry.example.com:8420/mcp",
+                "headers": {"Authorization": "Bearer tok"},
+            }
+        }
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch(
+                "quarry.__main__._remote_https_request",
+                side_effect=RemoteError(500, "boom"),
+            ),
+        ):
+            result = runner.invoke(app, ["remember", "--name", "a.md"], input="hi")
+
+        assert result.exit_code == 1
+        assert "boom" in result.output
+
+    def test_local_fallback_when_no_proxy(self):
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value={}),
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch(
+                "quarry.__main__.ingest_content",
+                return_value={"chunks": 1},
+            ) as mock_local,
+        ):
+            result = runner.invoke(app, ["remember", "--name", "a.md"], input="hi")
+
+        assert result.exit_code == 0
+        mock_local.assert_called_once()
+
+    def test_json_equivalence_remote_local(self):
+        """Remote and local paths emit the same top-level JSON keys."""
+        mock_result = {
+            "document_name": "notes.md",
+            "collection": "default",
+            "chunks": 2,
+        }
+
+        # Remote path
+        proxy_config = {
+            "quarry": {
+                "url": "wss://quarry.example.com:8420/mcp",
+                "headers": {"Authorization": "Bearer tok"},
+            }
+        }
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch("quarry.__main__._remote_https_request", return_value=mock_result),
+        ):
+            remote_res = runner.invoke(
+                app,
+                ["--json", "remember", "--name", "notes.md"],
+                input="body",
+            )
+        _reset_globals()
+        assert remote_res.exit_code == 0
+        remote_keys = set(json.loads(remote_res.output).keys())
+
+        # Local path
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value={}),
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.ingest_content", return_value=mock_result),
+        ):
+            local_res = runner.invoke(
+                app,
+                ["--json", "remember", "--name", "notes.md"],
+                input="body",
+            )
+        _reset_globals()
+        assert local_res.exit_code == 0
+        local_keys = set(json.loads(local_res.output).keys())
+
+        assert remote_keys == local_keys
+
+
+class TestIngestCmdRemote:
+    """Remote-routing tests for ``quarry ingest``."""
+
+    def test_remote_routing_url_posts_json_body(self):
+        remote_resp = {
+            "document_name": "https://example.com",
+            "collection": "example.com",
+            "chunks": 5,
+        }
+        proxy_config = {
+            "quarry": {
+                "url": "wss://quarry.example.com:8420/mcp",
+                "ca_cert": "/path/to/ca.crt",
+                "headers": {"Authorization": "Bearer tok"},
+            }
+        }
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch(
+                "quarry.__main__._remote_https_request", return_value=remote_resp
+            ) as mock_req,
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "ingest",
+                    "https://example.com/docs",
+                    "--overwrite",
+                    "--collection",
+                    "mycol",
+                    "--agent-handle",
+                    "rmh",
+                    "--memory-type",
+                    "fact",
+                    "--summary",
+                    "one line",
+                ],
+            )
+
+        assert result.exit_code == 0
+        mock_req.assert_called_once()
+        method = mock_req.call_args[0][0]
+        path = mock_req.call_args[0][1]
+        body = mock_req.call_args[1]["body"]
+        assert method == "POST"
+        assert path == "/ingest"
+        assert body["source"] == "https://example.com/docs"
+        assert body["overwrite"] is True
+        assert body["collection"] == "mycol"
+        assert body["agent_handle"] == "rmh"
+        assert body["memory_type"] == "fact"
+        assert body["summary"] == "one line"
+
+    def test_remote_routing_url_does_not_call_local(self):
+        remote_resp = {"document_name": "x", "collection": "c", "chunks": 1}
+        proxy_config = {
+            "quarry": {
+                "url": "wss://quarry.example.com:8420/mcp",
+                "headers": {"Authorization": "Bearer tok"},
+            }
+        }
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch("quarry.__main__._remote_https_request", return_value=remote_resp),
+            patch("quarry.__main__.ingest_auto") as mock_local,
+        ):
+            result = runner.invoke(app, ["ingest", "https://example.com/"])
+
+        assert result.exit_code == 0
+        mock_local.assert_not_called()
+
+    def test_remote_routing_local_file_exits_1(self, tmp_path: Path):
+        f = tmp_path / "doc.txt"
+        f.write_text("hello")
+        proxy_config = {
+            "quarry": {
+                "url": "wss://quarry.example.com:8420/mcp",
+                "headers": {"Authorization": "Bearer tok"},
+            }
+        }
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch("quarry.__main__._remote_https_request") as mock_req,
+        ):
+            result = runner.invoke(app, ["ingest", str(f)])
+
+        assert result.exit_code == 1
+        assert "file upload" in result.output.lower()
+        mock_req.assert_not_called()
+
+    def test_remote_routing_http_error_exits_1(self):
+        from quarry.__main__ import RemoteError
+
+        proxy_config = {
+            "quarry": {
+                "url": "wss://quarry.example.com:8420/mcp",
+                "headers": {"Authorization": "Bearer tok"},
+            }
+        }
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch(
+                "quarry.__main__._remote_https_request",
+                side_effect=RemoteError(500, "boom"),
+            ),
+        ):
+            result = runner.invoke(app, ["ingest", "https://example.com/"])
+
+        assert result.exit_code == 1
+        assert "boom" in result.output
+
+    def test_remote_prints_errors_list(self):
+        remote_resp = {
+            "document_name": "x",
+            "collection": "c",
+            "chunks": 3,
+            "errors": ["page /broken: 404", "page /gone: 410"],
+        }
+        proxy_config = {
+            "quarry": {
+                "url": "wss://quarry.example.com:8420/mcp",
+                "headers": {"Authorization": "Bearer tok"},
+            }
+        }
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch("quarry.__main__._remote_https_request", return_value=remote_resp),
+        ):
+            result = runner.invoke(app, ["ingest", "https://example.com/"])
+
+        assert result.exit_code == 0
+        assert "404" in result.output
+        assert "410" in result.output
+
+    def test_local_fallback_when_no_proxy_url(self):
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value={}),
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch(
+                "quarry.__main__.ingest_auto",
+                return_value={"document_name": "x", "chunks": 1},
+            ) as mock_local,
+        ):
+            result = runner.invoke(app, ["ingest", "https://example.com/"])
+
+        assert result.exit_code == 0
+        mock_local.assert_called_once()
+
+    def test_json_equivalence_remote_local(self):
+        """Remote and local paths emit the same top-level JSON keys for URLs."""
+        mock_result = {
+            "document_name": "https://example.com",
+            "collection": "example.com",
+            "chunks": 5,
+        }
+
+        # Remote path
+        proxy_config = {
+            "quarry": {
+                "url": "wss://quarry.example.com:8420/mcp",
+                "headers": {"Authorization": "Bearer tok"},
+            }
+        }
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch("quarry.__main__._remote_https_request", return_value=mock_result),
+        ):
+            remote_res = runner.invoke(
+                app, ["--json", "ingest", "https://example.com/"]
+            )
+        _reset_globals()
+        assert remote_res.exit_code == 0
+        remote_keys = set(json.loads(remote_res.output).keys())
+
+        # Local path
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value={}),
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.ingest_auto", return_value=mock_result),
+        ):
+            local_res = runner.invoke(app, ["--json", "ingest", "https://example.com/"])
+        _reset_globals()
+        assert local_res.exit_code == 0
+        local_keys = set(json.loads(local_res.output).keys())
+
+        assert remote_keys == local_keys
+
 
 class TestDatabasesCmdSizeFormatting:
     def test_megabyte_formatting(self, tmp_path: Path):
@@ -3441,3 +3790,178 @@ class TestRemoteHttpsRequest:
             _remote_https_request("DELETE", "/documents?name=foo", config)
 
         assert exc_info.value.status == 404
+
+    def test_non_dict_response_raises_remote_error(self) -> None:
+        """A JSON array (not object) must raise RemoteError, not crash."""
+        import pytest
+
+        from quarry.__main__ import RemoteError, _remote_https_request
+
+        config: dict[str, object] = {
+            "url": "ws://localhost:8420/mcp",
+            "headers": {},
+        }
+        mock_conn = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = b'["not", "a", "dict"]'
+        mock_conn.getresponse.return_value = mock_resp
+
+        with (
+            patch("http.client.HTTPConnection", return_value=mock_conn),
+            pytest.raises(RemoteError, match="expected JSON object"),
+        ):
+            _remote_https_request("GET", "/status", config)
+
+    def test_non_dict_scalar_response_raises_remote_error(self) -> None:
+        """A JSON scalar must raise RemoteError rather than crash downstream."""
+        import pytest
+
+        from quarry.__main__ import RemoteError, _remote_https_request
+
+        config: dict[str, object] = {
+            "url": "ws://localhost:8420/mcp",
+            "headers": {},
+        }
+        mock_conn = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = b"42"
+        mock_conn.getresponse.return_value = mock_resp
+
+        with (
+            patch("http.client.HTTPConnection", return_value=mock_conn),
+            pytest.raises(RemoteError, match="expected JSON object"),
+        ):
+            _remote_https_request("GET", "/status", config)
+
+
+class TestIngestExitCodes:
+    """Fix 7: exit 1 when errors reported and zero chunks ingested."""
+
+    def test_local_ingest_url_exits_1_on_errors_with_zero_chunks(self) -> None:
+        mock_result = {
+            "document_name": "example.com",
+            "chunks": 0,
+            "errors": ["fetch failed: 500"],
+        }
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.ingest_auto", return_value=mock_result),
+        ):
+            result = runner.invoke(app, ["ingest", "https://example.com"])
+        assert result.exit_code == 1
+        assert "500" in result.output
+
+    def test_local_ingest_url_zero_chunks_no_errors_exits_0(self) -> None:
+        """Zero chunks without errors should not exit non-zero."""
+        mock_result = {"document_name": "example.com", "chunks": 0}
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.ingest_auto", return_value=mock_result),
+        ):
+            result = runner.invoke(app, ["ingest", "https://example.com"])
+        assert result.exit_code == 0
+
+    def test_local_ingest_url_errors_with_some_chunks_exits_0(self) -> None:
+        """Partial success (errors + chunks > 0) must still exit 0."""
+        mock_result = {
+            "document_name": "example.com",
+            "chunks": 3,
+            "errors": ["page /gone: 404"],
+        }
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.ingest_auto", return_value=mock_result),
+        ):
+            result = runner.invoke(app, ["ingest", "https://example.com"])
+        assert result.exit_code == 0
+        assert "404" in result.output
+
+    def test_remote_ingest_exits_1_on_errors_with_zero_chunks(self) -> None:
+        remote_resp = {
+            "document_name": "x",
+            "collection": "c",
+            "chunks": 0,
+            "errors": ["fetch failed"],
+        }
+        proxy_config = {
+            "quarry": {
+                "url": "wss://quarry.example.com:8420/mcp",
+                "headers": {"Authorization": "Bearer tok"},
+            }
+        }
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch("quarry.__main__._remote_https_request", return_value=remote_resp),
+        ):
+            result = runner.invoke(app, ["ingest", "https://example.com/"])
+        assert result.exit_code == 1
+        assert "fetch failed" in result.output
+
+    def test_local_remember_exits_1_on_errors_with_zero_chunks(self) -> None:
+        mock_result = {
+            "document_name": "notes.md",
+            "chunks": 0,
+            "errors": ["embedding failed"],
+        }
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.ingest_content", return_value=mock_result),
+        ):
+            result = runner.invoke(
+                app, ["remember", "--name", "notes.md"], input="body"
+            )
+        assert result.exit_code == 1
+        assert "embedding failed" in result.output
+
+    def test_remote_remember_exits_1_on_errors_with_zero_chunks(self) -> None:
+        remote_resp = {
+            "document_name": "notes.md",
+            "collection": "default",
+            "chunks": 0,
+            "errors": ["server problem"],
+        }
+        proxy_config = {
+            "quarry": {
+                "url": "wss://quarry.example.com:8420/mcp",
+                "headers": {"Authorization": "Bearer tok"},
+            }
+        }
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch("quarry.__main__._remote_https_request", return_value=remote_resp),
+        ):
+            result = runner.invoke(
+                app, ["remember", "--name", "notes.md"], input="body"
+            )
+        assert result.exit_code == 1
+        assert "server problem" in result.output
+
+    def test_remote_remember_mirrors_errors_to_stderr(self) -> None:
+        """The remote remember path must print the errors list (Fix 6)."""
+        remote_resp = {
+            "document_name": "notes.md",
+            "collection": "default",
+            "chunks": 2,
+            "errors": ["warning: stripped html"],
+        }
+        proxy_config = {
+            "quarry": {
+                "url": "wss://quarry.example.com:8420/mcp",
+                "headers": {"Authorization": "Bearer tok"},
+            }
+        }
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch("quarry.__main__._remote_https_request", return_value=remote_resp),
+        ):
+            result = runner.invoke(
+                app, ["remember", "--name", "notes.md"], input="body"
+            )
+        assert result.exit_code == 0
+        assert "stripped html" in result.output
