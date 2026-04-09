@@ -14,6 +14,22 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- **tool**: All six remote-calling CLI commands (`find`, `status`, `list documents`,
+  `list collections`, `list registrations`, `list databases`) now print a one-line
+  error and exit 1 when the daemon is unreachable, instead of dumping a raw
+  `ConnectionRefusedError` traceback. `_remote_https_request` wraps `OSError` as
+  `RemoteError` at the transport layer so all callers see a consistent exception
+  type.
+- **transform**: `_auto_workers` selects 4 workers when the active ONNX execution
+  provider is `CUDAExecutionProvider`, up from a hardcoded 1. Parsing is the
+  bottleneck on GPU hosts and is parallelizable; CPU-only hosts remain at 1 worker.
+  Respects `QUARRY_PROVIDER` env var.
+- **infra**: Fixed 17 pre-existing test failures caused by `onnxruntime` namespace
+  corruption in dev venvs. `_patch_onnx_backend` is now a context manager and all
+  patches use `create=True` for attributes missing from the broken namespace.
+
 ## [1.12.0] - 2026-04-09
 
 ### Added
