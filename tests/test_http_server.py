@@ -1362,8 +1362,18 @@ class TestRegistrations:
     """Tests for GET/POST/DELETE /registrations endpoint."""
 
     @pytest.fixture()
-    def home_client(self, tmp_path: Path) -> TestClient:
-        """A client whose settings live under a fake $HOME."""
+    def home_client(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> TestClient:
+        """A client whose settings live under ``tmp_path``.
+
+        Also patches ``_server_home`` to return ``tmp_path`` so that
+        registrations under ``tmp_path`` pass the path allowlist.  The
+        real, pwd-backed resolver returns the runner's ``$HOME`` in CI,
+        which is outside ``tmp_path`` — on dev laptops pytest puts
+        ``tmp_path`` inside ``$HOME`` by coincidence, hiding the failure
+        until CI runs.
+        """
         home = tmp_path / "home"
         home.mkdir()
         settings = _mock_settings(tmp_path)
@@ -1372,6 +1382,11 @@ class TestRegistrations:
         ctx.__dict__["db"] = _SHARED_DB
         ctx.__dict__["embedder"] = _SHARED_EMBEDDER
         app = build_app(ctx)
+        resolved = tmp_path.resolve()
+        monkeypatch.setattr(
+            "quarry.http_server._server_home",
+            lambda: (resolved, None),
+        )
         return TestClient(app, raise_server_exceptions=False)
 
     def test_get_empty_when_no_registry(self, client: TestClient) -> None:
