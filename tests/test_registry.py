@@ -58,8 +58,8 @@ class TestOpenRegistry:
         conn = open_registry(tmp_path / "r.db")
         with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
             conn.execute(
-                "INSERT INTO files VALUES (?, ?, ?, ?, ?, ?)",
-                ("/x/y.pdf", "nonexistent", "y.pdf", 1.0, 100, "2025-01-01"),
+                "INSERT INTO files VALUES (?, ?, ?, ?, ?, ?, ?)",
+                ("/x/y.pdf", "nonexistent", "y.pdf", 1.0, 100, "2025-01-01", None),
             )
         conn.close()
 
@@ -116,8 +116,16 @@ class TestDeregisterDirectory:
         register_directory(conn, d, "course")
         # Insert a fake file record
         conn.execute(
-            "INSERT INTO files VALUES (?, ?, ?, ?, ?, ?)",
-            ("/fake/path.pdf", "course", "path.pdf", 100.0, 500, "2025-01-01"),
+            "INSERT INTO files VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                "/fake/path.pdf",
+                "course",
+                "path.pdf",
+                100.0,
+                500,
+                "2025-01-01",
+                None,
+            ),
         )
         conn.commit()
         names = deregister_directory(conn, "course")
@@ -242,4 +250,106 @@ class TestFileRecordOperations:
         upsert_file(conn, rec)
         delete_file(conn, rec.path)
         assert get_file(conn, rec.path) is None
+        conn.close()
+
+
+class TestContentHashColumn:
+    """Coverage for the ``content_hash`` column added in quarry-272m."""
+
+    def test_files_table_schema_has_content_hash_column(self, tmp_path: Path):
+        conn = open_registry(tmp_path / "r.db")
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(files)")}
+        assert "content_hash" in columns
+        conn.close()
+
+    def test_migration_adds_content_hash_column_to_pre_existing_db(
+        self, tmp_path: Path
+    ):
+        """Open a v1 registry (no content_hash column) and verify migration.
+
+        Builds the original 6-column schema by hand, inserts a real row,
+        then calls ``open_registry`` which must add the column without
+        dropping the existing row.
+        """
+        db_path = tmp_path / "legacy.db"
+        raw = sqlite3.connect(str(db_path))
+        raw.executescript(
+            """
+            CREATE TABLE directories (
+                directory     TEXT PRIMARY KEY,
+                collection    TEXT NOT NULL UNIQUE,
+                registered_at TEXT NOT NULL
+            );
+            CREATE TABLE files (
+                path          TEXT PRIMARY KEY,
+                collection    TEXT NOT NULL,
+                document_name TEXT NOT NULL,
+                mtime         REAL NOT NULL,
+                size          INTEGER NOT NULL,
+                ingested_at   TEXT NOT NULL,
+                FOREIGN KEY (collection) REFERENCES directories(collection)
+            );
+            INSERT INTO directories VALUES ('/legacy', 'legacy', '2025-01-01');
+            INSERT INTO files VALUES (
+                '/legacy/a.pdf', 'legacy', 'a.pdf', 1.0, 100, '2025-01-01'
+            );
+            """
+        )
+        raw.commit()
+        raw.close()
+
+        conn = open_registry(db_path)
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(files)")}
+        assert "content_hash" in columns
+
+        rec = get_file(conn, "/legacy/a.pdf")
+        assert rec is not None
+        assert rec.path == "/legacy/a.pdf"
+        assert rec.content_hash is None
+        conn.close()
+
+    def _register(self, conn: sqlite3.Connection, tmp_path: Path) -> None:
+        d = tmp_path / "dir"
+        d.mkdir(exist_ok=True)
+        register_directory(conn, d, "c")
+
+    def test_upsert_file_round_trips_content_hash(self, tmp_path: Path):
+        conn = open_registry(tmp_path / "r.db")
+        self._register(conn, tmp_path)
+        rec = FileRecord(
+            path="/p/a.pdf",
+            collection="c",
+            document_name="a.pdf",
+            mtime=1.0,
+            size=10,
+            ingested_at="2025-01-01",
+            content_hash="deadbeef",
+        )
+        upsert_file(conn, rec)
+
+        got = get_file(conn, "/p/a.pdf")
+        assert got is not None
+        assert got.content_hash == "deadbeef"
+
+        listed = list_files(conn, "c")
+        assert len(listed) == 1
+        assert listed[0].content_hash == "deadbeef"
+        conn.close()
+
+    def test_upsert_file_allows_none_content_hash(self, tmp_path: Path):
+        conn = open_registry(tmp_path / "r.db")
+        self._register(conn, tmp_path)
+        rec = FileRecord(
+            path="/p/a.pdf",
+            collection="c",
+            document_name="a.pdf",
+            mtime=1.0,
+            size=10,
+            ingested_at="2025-01-01",
+        )
+        upsert_file(conn, rec)
+
+        got = get_file(conn, "/p/a.pdf")
+        assert got is not None
+        assert got.content_hash is None
         conn.close()

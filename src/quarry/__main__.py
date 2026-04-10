@@ -1162,12 +1162,13 @@ def _format_sync_results(json_data: dict[str, dict[str, object]]) -> str:
     lines: list[str] = []
     for col, res in json_data.items():
         ingested = res.get("ingested", 0)
+        refreshed = res.get("refreshed", 0)
         deleted = res.get("deleted", 0)
         skipped = res.get("skipped", 0)
         failed = res.get("failed", 0)
         line = (
-            f"{col}: {ingested} ingested, {deleted} deleted, "
-            f"{skipped} unchanged, {failed} failed"
+            f"{col}: {ingested} ingested, {refreshed} refreshed, "
+            f"{deleted} deleted, {skipped} unchanged, {failed} failed"
         )
         errors = res.get("errors")
         if isinstance(errors, list) and errors:
@@ -1230,6 +1231,7 @@ def sync_cmd(
     json_data: dict[str, dict[str, object]] = {
         col: {
             "ingested": res.ingested,
+            "refreshed": res.refreshed,
             "deleted": res.deleted,
             "skipped": res.skipped,
             "failed": res.failed,

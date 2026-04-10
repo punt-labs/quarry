@@ -1641,6 +1641,7 @@ class TestSyncCmd:
             "math": SyncResult(
                 collection="math",
                 ingested=3,
+                refreshed=2,
                 deleted=1,
                 skipped=5,
                 failed=0,
@@ -1656,6 +1657,7 @@ class TestSyncCmd:
 
         assert result.exit_code == 0
         assert "3 ingested" in result.output
+        assert "2 refreshed" in result.output
         assert "1 deleted" in result.output
         assert "5 unchanged" in result.output
 
@@ -1664,7 +1666,12 @@ class TestSyncCmd:
 
         mock_results = {
             "col": SyncResult(
-                collection="col", ingested=0, deleted=0, skipped=0, failed=0
+                collection="col",
+                ingested=0,
+                refreshed=0,
+                deleted=0,
+                skipped=0,
+                failed=0,
             )
         }
         with (
@@ -1682,7 +1689,12 @@ class TestSyncCmd:
 
         mock_results = {
             "col": SyncResult(
-                collection="col", ingested=0, deleted=0, skipped=0, failed=0
+                collection="col",
+                ingested=0,
+                refreshed=0,
+                deleted=0,
+                skipped=0,
+                failed=0,
             )
         }
         settings = _mock_settings()
@@ -1717,6 +1729,7 @@ class TestSyncCmd:
             "col": SyncResult(
                 collection="col",
                 ingested=1,
+                refreshed=0,
                 deleted=0,
                 skipped=0,
                 failed=2,
@@ -2531,6 +2544,7 @@ class TestSyncCmdRemote:
         remote_resp = {
             "math": {
                 "ingested": 3,
+                "refreshed": 2,
                 "deleted": 1,
                 "skipped": 5,
                 "failed": 0,
@@ -2555,6 +2569,7 @@ class TestSyncCmdRemote:
         # Fix 5: remote sync must use the long timeout (not 15s default).
         assert mock_req.call_args.kwargs["timeout"] >= 60.0
         assert "3 ingested" in result.output
+        assert "2 refreshed" in result.output
         assert "1 deleted" in result.output
 
     def test_remote_routing_warns_on_workers_flag(self):
@@ -2608,6 +2623,7 @@ class TestSyncCmdRemote:
         remote_resp = {
             "col": {
                 "ingested": 1,
+                "refreshed": 0,
                 "deleted": 0,
                 "skipped": 0,
                 "failed": 2,
@@ -2632,7 +2648,12 @@ class TestSyncCmdRemote:
 
         mock_results = {
             "col": SyncResult(
-                collection="col", ingested=1, deleted=0, skipped=0, failed=0
+                collection="col",
+                ingested=1,
+                refreshed=0,
+                deleted=0,
+                skipped=0,
+                failed=0,
             )
         }
         with (
@@ -2653,6 +2674,7 @@ class TestSyncCmdRemote:
         remote_resp = {
             "col": {
                 "ingested": 2,
+                "refreshed": 0,
                 "deleted": 1,
                 "skipped": 3,
                 "failed": 0,
@@ -2677,6 +2699,7 @@ class TestSyncCmdRemote:
             "col": SyncResult(
                 collection="col",
                 ingested=2,
+                refreshed=0,
                 deleted=1,
                 skipped=3,
                 failed=0,
@@ -3694,6 +3717,7 @@ class TestJsonOutput:
             "math": SyncResult(
                 collection="math",
                 ingested=3,
+                refreshed=0,
                 deleted=1,
                 skipped=5,
                 failed=0,
@@ -3710,6 +3734,7 @@ class TestJsonOutput:
         data = json.loads(result.output)
         assert "math" in data
         assert data["math"]["ingested"] == 3
+        assert data["math"]["refreshed"] == 0
         assert data["math"]["deleted"] == 1
 
     def test_ingest_file_json(self, tmp_path: Path):

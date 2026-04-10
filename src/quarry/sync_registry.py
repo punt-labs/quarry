@@ -23,19 +23,22 @@ class FileRecord:
     mtime: float
     size: int
     ingested_at: str
+    content_hash: str | None = None
 
 
 def open_registry(path: Path) -> sqlite3.Connection:
     """Open (or create) the registry database at *path*.
 
     Creates parent directories, enables WAL mode, and initializes
-    the schema if the tables do not yet exist.
+    the schema if the tables do not yet exist.  Runs idempotent
+    migrations for columns added after the original schema shipped.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path))
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     _init_schema(conn)
+    _migrate_schema(conn)
     return conn
 
 
@@ -141,8 +144,8 @@ def get_registration(
 def get_file(conn: sqlite3.Connection, path: str) -> FileRecord | None:
     """Look up a file record by absolute path."""
     row = conn.execute(
-        "SELECT path, collection, document_name, mtime, size, ingested_at "
-        "FROM files WHERE path = ?",
+        "SELECT path, collection, document_name, mtime, size, ingested_at, "
+        "content_hash FROM files WHERE path = ?",
         (path,),
     ).fetchone()
     if row is None:
@@ -154,6 +157,7 @@ def get_file(conn: sqlite3.Connection, path: str) -> FileRecord | None:
         mtime=row[3],
         size=row[4],
         ingested_at=row[5],
+        content_hash=row[6],
     )
 
 
@@ -163,8 +167,8 @@ def upsert_file(
     """Insert or replace a file record."""
     conn.execute(
         "INSERT OR REPLACE INTO files "
-        "(path, collection, document_name, mtime, size, ingested_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
+        "(path, collection, document_name, mtime, size, ingested_at, content_hash) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
         (
             record.path,
             record.collection,
@@ -172,6 +176,7 @@ def upsert_file(
             record.mtime,
             record.size,
             record.ingested_at,
+            record.content_hash,
         ),
     )
     if commit:
@@ -184,8 +189,8 @@ def list_files(
 ) -> list[FileRecord]:
     """Return all file records for a collection."""
     rows = conn.execute(
-        "SELECT path, collection, document_name, mtime, size, ingested_at "
-        "FROM files WHERE collection = ? ORDER BY path",
+        "SELECT path, collection, document_name, mtime, size, ingested_at, "
+        "content_hash FROM files WHERE collection = ? ORDER BY path",
         (collection,),
     ).fetchall()
     return [
@@ -196,6 +201,7 @@ def list_files(
             mtime=r[3],
             size=r[4],
             ingested_at=r[5],
+            content_hash=r[6],
         )
         for r in rows
     ]
@@ -223,9 +229,23 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             mtime         REAL NOT NULL,
             size          INTEGER NOT NULL,
             ingested_at   TEXT NOT NULL,
+            content_hash  TEXT,
             FOREIGN KEY (collection) REFERENCES directories(collection)
         );
         CREATE INDEX IF NOT EXISTS idx_files_collection_path
             ON files(collection, path);
         """
     )
+
+
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    """Apply idempotent migrations for columns added after v1.
+
+    Uses ``PRAGMA table_info`` to check for presence rather than
+    catching ``OperationalError`` — the pragma is explicit and the
+    intent reads straight from the code.
+    """
+    file_columns = {row[1] for row in conn.execute("PRAGMA table_info(files)")}
+    if "content_hash" not in file_columns:
+        conn.execute("ALTER TABLE files ADD COLUMN content_hash TEXT")
+        conn.commit()
