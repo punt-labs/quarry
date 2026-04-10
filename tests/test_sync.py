@@ -5,8 +5,11 @@ import sqlite3
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from quarry.sync import (
     _DEFAULT_IGNORE_PATTERNS,
+    _content_hash,
     _load_ignore_spec,
     compute_sync_plan,
     discover_files,
@@ -406,6 +409,119 @@ class TestComputeSyncPlan:
         assert plan.unchanged == 1
         conn.close()
 
+    def _seed_with_hash(
+        self,
+        conn: sqlite3.Connection,
+        f: Path,
+        *,
+        content_hash: str | None,
+    ) -> None:
+        """Insert a FileRecord for *f* matching disk state, with *content_hash*."""
+        stat = f.stat()
+        upsert_file(
+            conn,
+            FileRecord(
+                path=str(f.resolve()),
+                collection="col",
+                document_name=f.name,
+                mtime=stat.st_mtime,
+                size=stat.st_size,
+                ingested_at="2025-01-01",
+                content_hash=content_hash,
+            ),
+        )
+
+    def test_compute_sync_plan_refreshes_on_touch_without_content_change(
+        self, tmp_path: Path
+    ):
+        conn, d = self._setup(tmp_path)
+        f = d / "same.txt"
+        f.write_bytes(b"stable content")
+        self._seed_with_hash(conn, f, content_hash=_content_hash(f))
+
+        # Bump mtime via os.utime; content byte-identical.
+        stat = f.stat()
+        os.utime(f, (stat.st_atime, stat.st_mtime + 100))
+
+        plan = compute_sync_plan(d, "col", conn, self.EXTS)
+        assert plan.to_ingest == []
+        assert len(plan.to_refresh) == 1
+        assert plan.to_refresh[0][0].name == "same.txt"
+        assert plan.to_refresh[0][1] == _content_hash(f)
+        assert plan.unchanged == 0
+        conn.close()
+
+    def test_compute_sync_plan_reingests_on_content_change_same_size(
+        self, tmp_path: Path
+    ):
+        conn, d = self._setup(tmp_path)
+        f = d / "edit.txt"
+        f.write_bytes(b"aaaaa")
+        self._seed_with_hash(conn, f, content_hash=_content_hash(f))
+
+        # Replace content with the same length so only the hash differs.
+        f.write_bytes(b"bbbbb")
+        stat = f.stat()
+        os.utime(f, (stat.st_atime, stat.st_mtime + 10))
+
+        plan = compute_sync_plan(d, "col", conn, self.EXTS)
+        assert len(plan.to_ingest) == 1
+        assert plan.to_ingest[0].name == "edit.txt"
+        assert plan.to_refresh == []
+        conn.close()
+
+    def test_compute_sync_plan_reingests_on_size_change(self, tmp_path: Path):
+        conn, d = self._setup(tmp_path)
+        f = d / "grow.txt"
+        f.write_bytes(b"short")
+        self._seed_with_hash(conn, f, content_hash=_content_hash(f))
+
+        with f.open("ab") as fh:
+            fh.write(b"-longer-now")
+
+        plan = compute_sync_plan(d, "col", conn, self.EXTS)
+        assert len(plan.to_ingest) == 1
+        assert plan.to_ingest[0].name == "grow.txt"
+        assert plan.to_refresh == []
+        conn.close()
+
+    def test_compute_sync_plan_reingests_when_hash_missing(self, tmp_path: Path):
+        conn, d = self._setup(tmp_path)
+        f = d / "legacy.txt"
+        f.write_bytes(b"pre-migration row")
+        self._seed_with_hash(conn, f, content_hash=None)
+
+        stat = f.stat()
+        os.utime(f, (stat.st_atime, stat.st_mtime + 10))
+
+        plan = compute_sync_plan(d, "col", conn, self.EXTS)
+        assert len(plan.to_ingest) == 1
+        assert plan.to_ingest[0].name == "legacy.txt"
+        assert plan.to_refresh == []
+        conn.close()
+
+    def test_compute_sync_plan_reingests_on_hash_read_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        conn, d = self._setup(tmp_path)
+        f = d / "sadfile.txt"
+        f.write_bytes(b"payload")
+        self._seed_with_hash(conn, f, content_hash="cafebabe")
+
+        stat = f.stat()
+        os.utime(f, (stat.st_atime, stat.st_mtime + 10))
+
+        def _boom(_path: Path) -> str:
+            raise OSError("permission denied")
+
+        monkeypatch.setattr("quarry.sync._content_hash", _boom)
+
+        plan = compute_sync_plan(d, "col", conn, self.EXTS)
+        assert len(plan.to_ingest) == 1
+        assert plan.to_ingest[0].name == "sadfile.txt"
+        assert plan.to_refresh == []
+        conn.close()
+
 
 def _mock_settings(tmp_path: Path) -> MagicMock:
     s = MagicMock()
@@ -543,6 +659,194 @@ class TestSyncCollection:
         files = list_files(conn, "col")
         assert len(files) == 1
         assert files[0].document_name == "pkg/mod.py"
+        conn.close()
+
+
+class TestSyncCollectionDurabilityAndRefresh:
+    """Tests for quarry-272m: content-hash refresh path and durable ingest."""
+
+    def _setup(self, tmp_path: Path) -> tuple[sqlite3.Connection, Path, Path]:
+        registry_path = tmp_path / "r.db"
+        conn = open_registry(registry_path)
+        d = tmp_path / "docs"
+        d.mkdir()
+        register_directory(conn, d, "col")
+        return conn, d, registry_path
+
+    def test_sync_collection_ingest_is_durable_on_crash(self, tmp_path: Path):
+        """A crash mid-sync must leave already-ingested rows on disk.
+
+        Monkeypatches ``ingest_document`` to raise ``KeyboardInterrupt`` on
+        the third call so it escapes the ``_RECOVERABLE`` tuple in
+        ``_ingest_files``.  After the raise, opens a *fresh* connection to
+        the same registry path and asserts the first two rows are visible
+        — proving per-row commits made it to disk rather than sitting in
+        an uncommitted transaction.
+        """
+        conn, d, registry_path = self._setup(tmp_path)
+        for name in ("a.txt", "b.txt", "c.txt", "d.txt"):
+            (d / name).write_text(f"content of {name}")
+
+        db = MagicMock()
+        settings = _mock_settings(tmp_path)
+
+        calls: list[str] = []
+
+        def _ingest(
+            fp: Path,
+            *_args: object,
+            **kwargs: object,
+        ) -> dict[str, object]:
+            name = kwargs["document_name"]
+            assert isinstance(name, str)
+            calls.append(name)
+            if len(calls) == 3:
+                msg = "user interrupt"
+                raise KeyboardInterrupt(msg)
+            return {"chunks": 1}
+
+        with (
+            patch("quarry.sync.ingest_document", side_effect=_ingest),
+            pytest.raises(KeyboardInterrupt),
+        ):
+            sync_collection(d, "col", db, settings, conn, max_workers=1)
+
+        conn.close()
+
+        # Fresh connection — must not rely on the sync's own conn's
+        # uncommitted state.
+        verify = sqlite3.connect(str(registry_path))
+        verify.row_factory = sqlite3.Row
+        rows = verify.execute(
+            "SELECT path, content_hash FROM files WHERE collection = ? ORDER BY path",
+            ("col",),
+        ).fetchall()
+        verify.close()
+
+        # The first two calls succeeded and should be committed.  The
+        # third raised before upsert, so at most two rows are present.
+        assert len(rows) == 2, (
+            f"expected 2 durable rows, got {len(rows)}; calls={calls}"
+        )
+        for row in rows:
+            assert row["content_hash"] is not None
+
+    def test_sync_collection_refresh_path_updates_registry_mtime_without_reingest(
+        self, tmp_path: Path
+    ):
+        """Bumping mtime on a hashed file must refresh, not re-ingest."""
+        conn, d, _ = self._setup(tmp_path)
+        for name in ("a.txt", "b.txt", "c.txt"):
+            (d / name).write_text(f"payload for {name}")
+
+        db = MagicMock()
+        settings = _mock_settings(tmp_path)
+
+        with patch(
+            "quarry.sync.ingest_document",
+            return_value={"chunks": 1},
+        ) as mock_ingest:
+            first = sync_collection(d, "col", db, settings, conn, max_workers=1)
+        assert first.ingested == 3
+        assert first.refreshed == 0
+        assert mock_ingest.call_count == 3
+
+        # Capture post-ingest mtimes from the registry.
+        pre_refresh = {r.path: r.mtime for r in list_files(conn, "col")}
+
+        # Bump every file's mtime without touching content.
+        for name in ("a.txt", "b.txt", "c.txt"):
+            f = d / name
+            stat = f.stat()
+            os.utime(f, (stat.st_atime, stat.st_mtime + 100))
+
+        with patch(
+            "quarry.sync.ingest_document",
+            return_value={"chunks": 1},
+        ) as mock_ingest:
+            second = sync_collection(d, "col", db, settings, conn, max_workers=1)
+        assert second.ingested == 0
+        assert second.refreshed == 3
+        assert second.skipped == 0
+        assert mock_ingest.call_count == 0
+
+        post_refresh = {r.path: r.mtime for r in list_files(conn, "col")}
+        assert set(pre_refresh) == set(post_refresh)
+        for path, old_mtime in pre_refresh.items():
+            assert post_refresh[path] > old_mtime, (
+                f"{path} mtime did not advance: {old_mtime} -> {post_refresh[path]}"
+            )
+        conn.close()
+
+    def test_refresh_files_partial_failure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Class 2 failure-injection: _refresh_files catches OSError per file.
+
+        If ``upsert_file`` raises ``OSError`` on one file, the other
+        files must still be refreshed.  The failed file's mtime must
+        remain unchanged in the registry.
+        """
+        conn, d, registry_path = self._setup(tmp_path)
+        for name in ("a.txt", "b.txt"):
+            (d / name).write_text(f"content of {name}")
+
+        db = MagicMock()
+        settings = _mock_settings(tmp_path)
+
+        # Initial ingest so content_hash is populated.
+        with patch(
+            "quarry.sync.ingest_document",
+            return_value={"chunks": 1},
+        ):
+            first = sync_collection(d, "col", db, settings, conn, max_workers=1)
+        assert first.ingested == 2
+
+        pre_mtimes = {r.path: r.mtime for r in list_files(conn, "col")}
+
+        # Bump mtimes without changing content — triggers refresh path.
+        for name in ("a.txt", "b.txt"):
+            f = d / name
+            stat = f.stat()
+            os.utime(f, (stat.st_atime, stat.st_mtime + 200))
+
+        # Make upsert_file raise OSError on the second call only.
+        call_count = 0
+        _real_upsert = upsert_file
+
+        def _failing_upsert(
+            conn_arg: sqlite3.Connection,
+            record: FileRecord,
+            *,
+            commit: bool = True,
+        ) -> None:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                raise OSError("disk full")
+            _real_upsert(conn_arg, record, commit=commit)
+
+        monkeypatch.setattr("quarry.sync.upsert_file", _failing_upsert)
+
+        with patch(
+            "quarry.sync.ingest_document",
+            return_value={"chunks": 1},
+        ):
+            second = sync_collection(d, "col", db, settings, conn, max_workers=1)
+        assert second.refreshed == 1
+        assert second.failed == 1
+        assert len(second.errors) == 1
+        assert "disk full" in second.errors[0]
+
+        # Verify via a fresh connection: only the first file's mtime advanced.
+        verify = open_registry(registry_path)
+        post_mtimes = {r.path: r.mtime for r in list_files(verify, "col")}
+        verify.close()
+
+        updated = [p for p, m in post_mtimes.items() if m != pre_mtimes[p]]
+        assert len(updated) == 1, (
+            f"expected exactly 1 file refreshed, got {len(updated)}"
+        )
         conn.close()
 
 

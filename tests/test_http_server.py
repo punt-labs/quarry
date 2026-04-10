@@ -1191,6 +1191,7 @@ class TestSync:
         collection: str = "math",
         *,
         ingested: int = 3,
+        refreshed: int = 2,
         deleted: int = 1,
         skipped: int = 5,
         failed: int = 0,
@@ -1201,6 +1202,7 @@ class TestSync:
         return SyncResult(
             collection=collection,
             ingested=ingested,
+            refreshed=refreshed,
             deleted=deleted,
             skipped=skipped,
             failed=failed,
@@ -1217,6 +1219,7 @@ class TestSync:
         assert data == {
             "math": {
                 "ingested": 3,
+                "refreshed": 2,
                 "deleted": 1,
                 "skipped": 5,
                 "failed": 0,

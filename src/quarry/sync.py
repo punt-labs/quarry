@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import sqlite3
@@ -48,6 +49,22 @@ _DEFAULT_IGNORE_PATTERNS: Final[list[str]] = [
     "build/",
     ".DS_Store",
 ]
+
+_HASH_CHUNK_SIZE: Final[int] = 1 << 20  # 1 MiB
+
+
+def _content_hash(path: Path) -> str:
+    """Return a fast content hash of *path* for change detection.
+
+    Uses ``blake2b`` with a 16-byte digest (128 bits) — several GB/s on
+    modern CPUs, collision-resistant enough for incremental sync, and
+    in stdlib (no new deps).
+    """
+    h = hashlib.blake2b(digest_size=16)
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(_HASH_CHUNK_SIZE), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def _load_ignore_spec(directory: Path) -> pathspec.PathSpec:
@@ -163,6 +180,7 @@ def _symlink_inside_root(link: Path, root_resolved: Path) -> bool:
 @dataclass(frozen=True)
 class SyncPlan:
     to_ingest: list[Path]
+    to_refresh: list[tuple[Path, str]]
     to_delete: list[str]
     unchanged: int
 
@@ -175,11 +193,21 @@ def compute_sync_plan(
 ) -> SyncPlan:
     """Compare files on disk against the registry to produce a sync plan.
 
-    Compares both mtime and size: mtime can change without content change
-    (e.g. touch), and size can change without mtime (rare but possible).
-    Either difference triggers re-ingest. Returns which files need
-    ingesting (new or changed), which document_names should be deleted
-    (removed from disk), and how many were unchanged.
+    Categorizes each discovered file into one of four buckets:
+
+    - ``to_ingest``: new files, size mismatches, or files whose content
+      hash has changed.  These need full re-embedding.
+    - ``to_refresh``: files whose ``(mtime, size)`` shifted but whose
+      content hash still matches the stored value.  Only the registry
+      row needs updating — LanceDB is left alone.  Each entry carries
+      the freshly-computed hash so the refresh helper can reuse it.
+    - ``to_delete``: ``document_name``s present in the registry but no
+      longer on disk.
+    - ``unchanged``: files with identical ``(mtime, size)``.
+
+    Fail-safe rules: size mismatch, missing stored hash, or hash read
+    errors all fall through to ``to_ingest``.  We never put a file in
+    ``to_refresh`` unless we are certain its content matches.
     """
     disk_files = discover_files(directory, extensions)
     disk_paths = {str(p) for p in disk_files}
@@ -188,19 +216,29 @@ def compute_sync_plan(
     known_files = {r.path: r for r in list_files(conn, collection)}
 
     to_ingest: list[Path] = []
+    to_refresh: list[tuple[Path, str]] = []
     unchanged = 0
 
     for file_path in disk_files:
         stat = file_path.stat()
         record = known_files.get(str(file_path))
-        if (
-            record is None
-            or record.mtime != stat.st_mtime
-            or record.size != stat.st_size
-        ):
+        if record is None:
             to_ingest.append(file_path)
-        else:
+            continue
+        if record.mtime == stat.st_mtime and record.size == stat.st_size:
             unchanged += 1
+            continue
+        # mtime or size changed — consult content hash if we have one.
+        if record.content_hash is not None and record.size == stat.st_size:
+            try:
+                disk_hash = _content_hash(file_path)
+            except OSError:
+                to_ingest.append(file_path)
+                continue
+            if disk_hash == record.content_hash:
+                to_refresh.append((file_path, disk_hash))
+                continue
+        to_ingest.append(file_path)
 
     to_delete = [
         r.document_name for r in known_files.values() if r.path not in disk_paths
@@ -208,6 +246,7 @@ def compute_sync_plan(
 
     return SyncPlan(
         to_ingest=to_ingest,
+        to_refresh=to_refresh,
         to_delete=to_delete,
         unchanged=unchanged,
     )
@@ -217,6 +256,7 @@ def compute_sync_plan(
 class SyncResult:
     collection: str
     ingested: int
+    refreshed: int
     deleted: int
     skipped: int
     failed: int
@@ -236,12 +276,21 @@ def _ingest_files(
     max_workers: int,
     progress: Callable[[str], None],
 ) -> tuple[int, int, list[str]]:
-    """Ingest files from a sync plan, returning (ingested, failed, errors)."""
+    """Ingest files from a sync plan, returning (ingested, failed, errors).
+
+    Commits each row to the registry immediately after a successful
+    ingest so an interrupted sync does not lose progress.  Without
+    per-row commits, a crash mid-sync leaves every row in SQLite's
+    WAL; restart rolls them back, and the next sync re-embeds every
+    document on top of the LanceDB chunks that did make it to disk.
+    """
     ingested = 0
     failed = 0
     errors: list[str] = []
 
-    def _timed_ingest(fp: Path, document_name: str) -> float:
+    def _timed_ingest(
+        fp: Path, document_name: str
+    ) -> tuple[float, os.stat_result, str | None]:
         t = time.perf_counter()
         ingest_document(
             fp,
@@ -251,7 +300,18 @@ def _ingest_files(
             collection=collection,
             document_name=document_name,
         )
-        return time.perf_counter() - t
+        elapsed = time.perf_counter() - t
+        # Capture stat and hash immediately after ingest, inside the
+        # worker thread, so the values match the content that was
+        # actually embedded.  Moving these to the as_completed callback
+        # would introduce a TOCTOU race if the file is modified between
+        # ingest and the callback.
+        stat = fp.stat()  # if this fails it is a real failure — let it propagate
+        try:
+            content_hash: str | None = _content_hash(fp)
+        except OSError:
+            content_hash = None  # record without hash; next sync will backfill
+        return elapsed, stat, content_hash
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
@@ -266,8 +326,7 @@ def _ingest_files(
             fp = futures[future]
             document_name = str(fp.relative_to(resolved))
             try:
-                elapsed = future.result()
-                stat = fp.stat()
+                elapsed, stat, content_hash = future.result()
                 upsert_file(
                     conn,
                     FileRecord(
@@ -277,8 +336,9 @@ def _ingest_files(
                         mtime=stat.st_mtime,
                         size=stat.st_size,
                         ingested_at=datetime.now(UTC).isoformat(),
+                        content_hash=content_hash,
                     ),
-                    commit=False,
+                    commit=True,
                 )
                 ingested += 1
                 progress(f"[{collection}] Ingested {document_name} in {elapsed:.2f}s")
@@ -288,6 +348,59 @@ def _ingest_files(
                 logger.exception("Ingest failed for %s", document_name)
                 progress(f"[{collection}] Failed {document_name}: {exc}")
     return ingested, failed, errors
+
+
+def _refresh_files(
+    plan_to_refresh: list[tuple[Path, str]],
+    resolved: Path,
+    collection: str,
+    conn: sqlite3.Connection,
+    progress: Callable[[str], None],
+) -> tuple[int, int, list[str]]:
+    """Update registry rows for files whose content hash still matches.
+
+    No LanceDB work, no re-embedding — just a fresh ``(mtime, size,
+    content_hash, ingested_at)`` for each row.
+
+    Re-hashes the file at refresh time to guard against TOCTOU: if the
+    file changed between ``compute_sync_plan`` and now, the refresh is
+    skipped so the old registry row stays and the next sync detects the
+    mtime mismatch again.
+
+    Returns ``(refreshed, failed, errors)`` matching the pattern used
+    by ``_ingest_files`` and ``_delete_documents``.
+    """
+    refreshed = 0
+    failed = 0
+    errors: list[str] = []
+    for fp, plan_hash in plan_to_refresh:
+        try:
+            stat = fp.stat()
+            current_hash = _content_hash(fp)
+            if current_hash != plan_hash:
+                logger.info("File changed since plan, skipping refresh: %s", fp)
+                continue
+            document_name = str(fp.relative_to(resolved))
+            upsert_file(
+                conn,
+                FileRecord(
+                    path=str(fp),
+                    collection=collection,
+                    document_name=document_name,
+                    mtime=stat.st_mtime,
+                    size=stat.st_size,
+                    ingested_at=datetime.now(UTC).isoformat(),
+                    content_hash=current_hash,
+                ),
+                commit=True,
+            )
+            refreshed += 1
+            progress(f"[{collection}] Refreshed {document_name}")
+        except OSError as exc:
+            failed += 1
+            errors.append(f"{fp}: {exc}")
+            logger.warning("Refresh failed for %s: %s", fp, exc)
+    return refreshed, failed, errors
 
 
 def _delete_documents(
@@ -311,7 +424,7 @@ def _delete_documents(
         try:
             delete_document(db, document_name, collection=collection)
             for rec in files_by_document_name.get(document_name, []):
-                delete_file(conn, rec.path, commit=False)
+                delete_file(conn, rec.path, commit=True)
             deleted += 1
             progress(f"[{collection}] Deleted {document_name}")
         except _RECOVERABLE as exc:
@@ -365,10 +478,12 @@ def sync_collection(
     )
     _progress(
         f"[{collection}] {len(plan.to_ingest)} to ingest, "
+        f"{len(plan.to_refresh)} to refresh, "
         f"{len(plan.to_delete)} to delete, {plan.unchanged} unchanged"
     )
 
     ingested = 0
+    refreshed = 0
     failed = 0
     errors: list[str] = []
 
@@ -384,6 +499,17 @@ def sync_collection(
             _progress,
         )
 
+    if plan.to_refresh:
+        refreshed, ref_failed, ref_errors = _refresh_files(
+            plan.to_refresh,
+            resolved,
+            collection,
+            conn,
+            _progress,
+        )
+        failed += ref_failed
+        errors.extend(ref_errors)
+
     del_count, del_failed, del_errors = _delete_documents(
         plan.to_delete,
         collection,
@@ -395,14 +521,18 @@ def sync_collection(
     failed += del_failed
     errors.extend(del_errors)
 
+    # Belt-and-suspenders: all three helpers commit per-row now.
+    # Flush any residual writes so the registry is durable before
+    # we return.
     conn.commit()
 
     logger.info(
         "sync: [%s] completed in %.2fs"
-        " (%d ingested, %d deleted, %d skipped, %d failed)",
+        " (%d ingested, %d refreshed, %d deleted, %d skipped, %d failed)",
         collection,
         time.perf_counter() - t_sync_start,
         ingested,
+        refreshed,
         deleted,
         plan.unchanged,
         failed,
@@ -411,6 +541,7 @@ def sync_collection(
     return SyncResult(
         collection=collection,
         ingested=ingested,
+        refreshed=refreshed,
         deleted=deleted,
         skipped=plan.unchanged,
         failed=failed,

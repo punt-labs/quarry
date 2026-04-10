@@ -611,6 +611,7 @@ async def _sync_route(request: Request) -> JSONResponse:
         {
             collection: {
                 "ingested": res.ingested,
+                "refreshed": res.refreshed,
                 "deleted": res.deleted,
                 "skipped": res.skipped,
                 "failed": res.failed,
