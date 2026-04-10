@@ -288,7 +288,9 @@ def _ingest_files(
     failed = 0
     errors: list[str] = []
 
-    def _timed_ingest(fp: Path, document_name: str) -> float:
+    def _timed_ingest(
+        fp: Path, document_name: str
+    ) -> tuple[float, os.stat_result, str]:
         t = time.perf_counter()
         ingest_document(
             fp,
@@ -298,7 +300,15 @@ def _ingest_files(
             collection=collection,
             document_name=document_name,
         )
-        return time.perf_counter() - t
+        elapsed = time.perf_counter() - t
+        # Capture stat and hash immediately after ingest, inside the
+        # worker thread, so the values match the content that was
+        # actually embedded.  Moving these to the as_completed callback
+        # would introduce a TOCTOU race if the file is modified between
+        # ingest and the callback.
+        stat = fp.stat()
+        content_hash = _content_hash(fp)
+        return elapsed, stat, content_hash
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
@@ -313,9 +323,7 @@ def _ingest_files(
             fp = futures[future]
             document_name = str(fp.relative_to(resolved))
             try:
-                elapsed = future.result()
-                stat = fp.stat()
-                content_hash = _content_hash(fp)
+                elapsed, stat, content_hash = future.result()
                 upsert_file(
                     conn,
                     FileRecord(
@@ -398,7 +406,7 @@ def _delete_documents(
         try:
             delete_document(db, document_name, collection=collection)
             for rec in files_by_document_name.get(document_name, []):
-                delete_file(conn, rec.path, commit=False)
+                delete_file(conn, rec.path, commit=True)
             deleted += 1
             progress(f"[{collection}] Deleted {document_name}")
         except _RECOVERABLE as exc:
@@ -493,9 +501,9 @@ def sync_collection(
     failed += del_failed
     errors.extend(del_errors)
 
-    # Belt-and-suspenders: _ingest_files and _refresh_files commit
-    # per-row, but _delete_documents still batches.  Flush any residual
-    # writes so the registry is durable before we return.
+    # Belt-and-suspenders: all three helpers commit per-row now.
+    # Flush any residual writes so the registry is durable before
+    # we return.
     conn.commit()
 
     logger.info(

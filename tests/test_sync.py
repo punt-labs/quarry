@@ -778,6 +778,74 @@ class TestSyncCollectionDurabilityAndRefresh:
             )
         conn.close()
 
+    def test_refresh_files_partial_failure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Class 2 failure-injection: _refresh_files catches OSError per file.
+
+        If ``upsert_file`` raises ``OSError`` on one file, the other
+        files must still be refreshed.  The failed file's mtime must
+        remain unchanged in the registry.
+        """
+        conn, d, registry_path = self._setup(tmp_path)
+        for name in ("a.txt", "b.txt"):
+            (d / name).write_text(f"content of {name}")
+
+        db = MagicMock()
+        settings = _mock_settings(tmp_path)
+
+        # Initial ingest so content_hash is populated.
+        with patch(
+            "quarry.sync.ingest_document",
+            return_value={"chunks": 1},
+        ):
+            first = sync_collection(d, "col", db, settings, conn, max_workers=1)
+        assert first.ingested == 2
+
+        pre_mtimes = {r.path: r.mtime for r in list_files(conn, "col")}
+
+        # Bump mtimes without changing content — triggers refresh path.
+        for name in ("a.txt", "b.txt"):
+            f = d / name
+            stat = f.stat()
+            os.utime(f, (stat.st_atime, stat.st_mtime + 200))
+
+        # Make upsert_file raise OSError on the second call only.
+        call_count = 0
+        _real_upsert = upsert_file
+
+        def _failing_upsert(
+            conn_arg: sqlite3.Connection,
+            record: FileRecord,
+            *,
+            commit: bool = True,
+        ) -> None:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                raise OSError("disk full")
+            _real_upsert(conn_arg, record, commit=commit)
+
+        monkeypatch.setattr("quarry.sync.upsert_file", _failing_upsert)
+
+        with patch(
+            "quarry.sync.ingest_document",
+            return_value={"chunks": 1},
+        ):
+            second = sync_collection(d, "col", db, settings, conn, max_workers=1)
+        assert second.refreshed == 1
+
+        # Verify via a fresh connection: only the first file's mtime advanced.
+        verify = open_registry(registry_path)
+        post_mtimes = {r.path: r.mtime for r in list_files(verify, "col")}
+        verify.close()
+
+        updated = [p for p, m in post_mtimes.items() if m != pre_mtimes[p]]
+        assert len(updated) == 1, (
+            f"expected exactly 1 file refreshed, got {len(updated)}"
+        )
+        conn.close()
+
 
 class TestSyncAll:
     def test_syncs_all_registered(self, tmp_path: Path):
