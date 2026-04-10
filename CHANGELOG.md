@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [1.12.1] - 2026-04-09
+
 ### Fixed
 
 - **tool**: All six remote-calling CLI commands (`find`, `status`, `list documents`,
