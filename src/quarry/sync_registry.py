@@ -34,6 +34,11 @@ def open_registry(path: Path) -> sqlite3.Connection:
     migrations for columns added after the original schema shipped.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
+    # check_same_thread=False: the connection is only ever written from the
+    # calling thread (never from ThreadPoolExecutor workers), but it is passed
+    # across function boundaries that include threaded code paths.  This flag
+    # prevents spurious ProgrammingError if Python's thread-affinity check
+    # triggers on the same-thread access pattern.
     conn = sqlite3.connect(str(path), check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")

@@ -58,7 +58,8 @@ class TestOpenRegistry:
         conn = open_registry(tmp_path / "r.db")
         with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
             conn.execute(
-                "INSERT INTO files VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO files (path, collection, document_name, mtime, size, "
+                "ingested_at, content_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 ("/x/y.pdf", "nonexistent", "y.pdf", 1.0, 100, "2025-01-01", None),
             )
         conn.close()
@@ -116,7 +117,8 @@ class TestDeregisterDirectory:
         register_directory(conn, d, "course")
         # Insert a fake file record
         conn.execute(
-            "INSERT INTO files VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO files (path, collection, document_name, mtime, size, "
+            "ingested_at, content_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 "/fake/path.pdf",
                 "course",

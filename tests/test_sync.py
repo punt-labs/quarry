@@ -834,6 +834,9 @@ class TestSyncCollectionDurabilityAndRefresh:
         ):
             second = sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert second.refreshed == 1
+        assert second.failed == 1
+        assert len(second.errors) == 1
+        assert "disk full" in second.errors[0]
 
         # Verify via a fresh connection: only the first file's mtime advanced.
         verify = open_registry(registry_path)

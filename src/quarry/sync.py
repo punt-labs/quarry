@@ -290,7 +290,7 @@ def _ingest_files(
 
     def _timed_ingest(
         fp: Path, document_name: str
-    ) -> tuple[float, os.stat_result, str]:
+    ) -> tuple[float, os.stat_result, str | None]:
         t = time.perf_counter()
         ingest_document(
             fp,
@@ -306,8 +306,11 @@ def _ingest_files(
         # actually embedded.  Moving these to the as_completed callback
         # would introduce a TOCTOU race if the file is modified between
         # ingest and the callback.
-        stat = fp.stat()
-        content_hash = _content_hash(fp)
+        stat = fp.stat()  # if this fails it is a real failure — let it propagate
+        try:
+            content_hash: str | None = _content_hash(fp)
+        except OSError:
+            content_hash = None  # record without hash; next sync will backfill
         return elapsed, stat, content_hash
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -353,17 +356,30 @@ def _refresh_files(
     collection: str,
     conn: sqlite3.Connection,
     progress: Callable[[str], None],
-) -> int:
+) -> tuple[int, int, list[str]]:
     """Update registry rows for files whose content hash still matches.
 
     No LanceDB work, no re-embedding — just a fresh ``(mtime, size,
-    content_hash, ingested_at)`` for each row.  The hash carried on the
-    plan is reused verbatim so we do not touch the file twice.
+    content_hash, ingested_at)`` for each row.
+
+    Re-hashes the file at refresh time to guard against TOCTOU: if the
+    file changed between ``compute_sync_plan`` and now, the refresh is
+    skipped so the old registry row stays and the next sync detects the
+    mtime mismatch again.
+
+    Returns ``(refreshed, failed, errors)`` matching the pattern used
+    by ``_ingest_files`` and ``_delete_documents``.
     """
     refreshed = 0
-    for fp, content_hash in plan_to_refresh:
+    failed = 0
+    errors: list[str] = []
+    for fp, plan_hash in plan_to_refresh:
         try:
             stat = fp.stat()
+            current_hash = _content_hash(fp)
+            if current_hash != plan_hash:
+                logger.info("File changed since plan, skipping refresh: %s", fp)
+                continue
             document_name = str(fp.relative_to(resolved))
             upsert_file(
                 conn,
@@ -374,15 +390,17 @@ def _refresh_files(
                     mtime=stat.st_mtime,
                     size=stat.st_size,
                     ingested_at=datetime.now(UTC).isoformat(),
-                    content_hash=content_hash,
+                    content_hash=current_hash,
                 ),
                 commit=True,
             )
             refreshed += 1
             progress(f"[{collection}] Refreshed {document_name}")
         except OSError as exc:
+            failed += 1
+            errors.append(f"{fp}: {exc}")
             logger.warning("Refresh failed for %s: %s", fp, exc)
-    return refreshed
+    return refreshed, failed, errors
 
 
 def _delete_documents(
@@ -482,13 +500,15 @@ def sync_collection(
         )
 
     if plan.to_refresh:
-        refreshed = _refresh_files(
+        refreshed, ref_failed, ref_errors = _refresh_files(
             plan.to_refresh,
             resolved,
             collection,
             conn,
             _progress,
         )
+        failed += ref_failed
+        errors.extend(ref_errors)
 
     del_count, del_failed, del_errors = _delete_documents(
         plan.to_delete,
