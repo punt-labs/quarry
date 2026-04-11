@@ -1,17 +1,17 @@
-"""Shell-integration tests for install.sh, install-server.sh, install-client.sh,
-install-both.sh.
+"""Shell-integration tests for install.sh (consolidated installer).
 
-These tests invoke the install scripts with a ``PATH`` pointing at mock
-versions of ``nvidia-smi``, ``uv``, ``curl``, ``ssh``, ``claude``, and
-``quarry``.  Each mock records its invocation to a log file; the tests then
-read the log and assert the expected call ordering.
+These tests invoke install.sh with different mode flags (no flag, --server,
+--client) using a ``PATH`` pointing at mock versions of ``nvidia-smi``,
+``uv``, ``curl``, ``ssh``, ``claude``, and ``quarry``.  Each mock records
+its invocation to a log file; the tests then read the log and assert the
+expected call ordering.
 
 Why a shell test and not a unit test: the bug that motivated this file
-(quarry-e4c2) was a drift in the step ordering inside the script itself —
-the shell-level GPU swap was deleted from install-server.sh / install-client.sh
-when they were split out of install.sh, and no Python code ever saw the
-difference.  The only way to catch this class of regression is to exercise
-the script end-to-end with mocks.
+(quarry-e4c2) was a drift in the step ordering inside the script itself --
+separate install scripts diverged from install.sh and no Python code ever
+saw the difference.  Consolidating into a single script with mode flags
+eliminates the drift class, but we still need to verify each mode's
+conditional logic.
 
 Ordering invariants asserted per CLAUDE.md Class 5:
 
@@ -20,8 +20,12 @@ Ordering invariants asserted per CLAUDE.md Class 5:
       ``onnxruntime`` and installs ``onnxruntime-gpu`` *before* ``quarry install``
   (c) When ``nvidia-smi`` is absent, the GPU swap is not invoked at all
   (d) ``quarry install`` runs after the GPU swap (where applicable)
-  (e) ``install-client.sh`` never calls ``quarry install`` — client machines
+  (e) ``--client`` mode never calls ``quarry install`` -- client machines
       don't download the embedding model or start a local daemon
+  (f) ``--server`` mode does not call ``claude`` or plugin commands
+  (g) ``--server`` without ``QUARRY_API_KEY`` fails early
+  (h) Unknown flags cause the script to exit non-zero
+  (i) ``sh -s -- --server`` works (POSIX piped-stdin argument passing)
 """
 
 from __future__ import annotations
@@ -36,9 +40,6 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = REPO_ROOT / "install.sh"
-INSTALL_SERVER_SH = REPO_ROOT / "install-server.sh"
-INSTALL_CLIENT_SH = REPO_ROOT / "install-client.sh"
-INSTALL_BOTH_SH = REPO_ROOT / "install-both.sh"
 
 
 def _write_mock(path: Path, body: str) -> None:
@@ -50,7 +51,7 @@ def _write_mock(path: Path, body: str) -> None:
 @pytest.fixture
 def mock_bin(tmp_path: Path) -> Path:
     """Mock ``bin`` directory with stubs for every external command the
-    install scripts invoke.
+    install script invokes.
 
     Each mock appends one line per invocation to ``$LOG_FILE``: the mock
     name followed by its argv, space-separated, so tests can assert on call
@@ -66,7 +67,7 @@ def mock_bin(tmp_path: Path) -> Path:
         'printf "\\n" >> "$LOG_FILE"\n'
     )
 
-    # git — prerequisite check only.
+    # git -- prerequisite check only.
     _write_mock(bin_dir / "git", log_header + "exit 0\n")
     _write_mock(
         bin_dir / "python3",
@@ -80,7 +81,7 @@ def mock_bin(tmp_path: Path) -> Path:
         + "exit 0\n",
     )
 
-    # claude — marketplace/plugin commands.
+    # claude -- marketplace/plugin commands.
     _write_mock(
         bin_dir / "claude",
         log_header
@@ -95,13 +96,13 @@ def mock_bin(tmp_path: Path) -> Path:
         + "exit 0\n",
     )
 
-    # uv — subcommands used by the scripts.
+    # uv -- subcommands used by the script.
     _write_mock(
         bin_dir / "uv",
         log_header + "exit 0\n",
     )
 
-    # quarry — the install scripts do two things with ``quarry``:
+    # quarry -- the install script does two things with ``quarry``:
     #   1. ``command -v quarry`` + ``head -1 ... | sed 's/^#!//'`` to extract
     #      the tool venv's Python interpreter path from the shebang.
     #   2. ``"$BINARY" install`` / ``"$BINARY" login`` / ``"$BINARY" doctor``
@@ -126,12 +127,12 @@ def mock_bin(tmp_path: Path) -> Path:
         quarry_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
     )
 
-    # curl — used for health checks in install-server.sh / install-both.sh.
-    # Succeed so the health-check loop terminates fast.
+    # curl -- used for health checks.  Succeed so the health-check loop
+    # terminates fast.
     _write_mock(bin_dir / "curl", log_header + "exit 0\n")
 
-    # ssh — install.sh / install-client.sh / install-both.sh test SSH to
-    # github.com.  Return a success banner so the HTTPS rewrite is skipped.
+    # ssh -- the script tests SSH to github.com for HTTPS fallback.
+    # Return a success banner so the HTTPS rewrite is skipped.
     _write_mock(
         bin_dir / "ssh",
         log_header
@@ -139,11 +140,11 @@ def mock_bin(tmp_path: Path) -> Path:
         + "exit 0\n",
     )
 
-    # systemctl / launchctl — used by the belt-and-suspenders restart block.
+    # systemctl / launchctl -- used by the belt-and-suspenders restart block.
     _write_mock(bin_dir / "systemctl", log_header + "exit 0\n")
     _write_mock(bin_dir / "launchctl", log_header + "exit 0\n")
 
-    # head / sed / id — real utilities from the host; we add them to the
+    # head / sed / id -- real utilities from the host; we add them to the
     # mock PATH so scripts don't pick up something unexpected.  Symlink to
     # the real binaries.
     for util in ("head", "sed", "id", "printf", "sleep", "grep", "basename"):
@@ -175,15 +176,49 @@ def env(mock_bin: Path, tmp_path: Path) -> dict[str, str]:
     }
 
 
-def _run_script(script: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def _run_script(
+    script: Path,
+    env: dict[str, str],
+    *,
+    args: list[str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     """Run ``script`` under /bin/sh with ``env`` and return the result.
 
     Scripts use ``set -eu`` so any mock stub that exits non-zero will abort
     the run.  Use ``check=False`` because some tests want to inspect the
     exit code.
     """
-    return subprocess.run(  # noqa: S603 — /bin/sh with a fixed script path
-        ["/bin/sh", str(script)],
+    cmd = ["/bin/sh", str(script)]
+    if args:
+        cmd.extend(args)
+    return subprocess.run(  # noqa: S603 -- /bin/sh with a fixed script path
+        cmd,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=str(script.parent),
+    )
+
+
+def _run_script_piped(
+    script: Path,
+    env: dict[str, str],
+    *,
+    args: list[str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run ``script`` via ``sh -s -- <args>`` with stdin piped from the script.
+
+    This simulates ``curl ... | sh -s -- --server`` which is the POSIX way
+    to pass arguments when piping to sh.
+    """
+    cmd = ["/bin/sh", "-s"]
+    if args:
+        cmd.append("--")
+        cmd.extend(args)
+    return subprocess.run(  # noqa: S603 -- /bin/sh with controlled stdin
+        cmd,
+        input=script.read_text(),
         env=env,
         capture_output=True,
         text=True,
@@ -216,19 +251,16 @@ def _any_line_contains(log: list[str], needle: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# install-server.sh
+# Default mode (full install)
 # ---------------------------------------------------------------------------
 
 
-def test_install_server_gpu_swap_runs_before_quarry_install_when_nvidia_present(
+def test_default_mode_gpu_swap_runs_before_quarry_install(
     env: dict[str, str], mock_bin: Path
 ) -> None:
-    """quarry-e4c2: the shell-level GPU swap MUST run before ``quarry install``
-    when an NVIDIA GPU is present.  Regression guard — this is the exact
-    ordering bug that was deleted from install-server.sh when it was split
-    out of install.sh.
+    """Default mode: GPU swap MUST run before ``quarry install``
+    when an NVIDIA GPU is present.
     """
-    # Present a working nvidia-smi so HAS_NVIDIA=1.
     _write_mock(
         mock_bin / "nvidia-smi",
         'printf "%s" "$(basename "$0")" >> "$LOG_FILE"\n'
@@ -237,9 +269,43 @@ def test_install_server_gpu_swap_runs_before_quarry_install_when_nvidia_present(
         "exit 0\n",
     )
 
-    result = _run_script(INSTALL_SERVER_SH, env)
+    result = _run_script(INSTALL_SH, env)
     assert result.returncode == 0, (
-        f"install-server.sh failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        f"install.sh failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+    log = _read_log(env)
+
+    tool_install_idx = _index_of(log, "uv tool install --force")
+    gpu_install_idx = _index_of(log, "onnxruntime-gpu")
+    quarry_install_idx = _index_of(log, "quarry install")
+
+    assert tool_install_idx < gpu_install_idx < quarry_install_idx
+
+
+# ---------------------------------------------------------------------------
+# --server mode
+# ---------------------------------------------------------------------------
+
+
+def test_server_mode_gpu_swap_runs_before_quarry_install(
+    env: dict[str, str], mock_bin: Path
+) -> None:
+    """--server mode: the shell-level GPU swap MUST run before
+    ``quarry install`` when an NVIDIA GPU is present.
+    """
+    _write_mock(
+        mock_bin / "nvidia-smi",
+        'printf "%s" "$(basename "$0")" >> "$LOG_FILE"\n'
+        'for a in "$@"; do printf " %s" "$a" >> "$LOG_FILE"; done\n'
+        'printf "\\n" >> "$LOG_FILE"\n'
+        "exit 0\n",
+    )
+
+    result = _run_script(INSTALL_SH, env, args=["--server"])
+    assert result.returncode == 0, (
+        f"install.sh --server failed:\nstdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
     )
 
     log = _read_log(env)
@@ -269,19 +335,16 @@ def test_install_server_gpu_swap_runs_before_quarry_install_when_nvidia_present(
     )
 
 
-def test_install_server_skips_gpu_swap_without_nvidia(
+def test_server_mode_skips_gpu_swap_without_nvidia(
     env: dict[str, str], mock_bin: Path
 ) -> None:
-    """No nvidia-smi on PATH → no GPU swap.  Prevents the script from
-    uninstalling onnxruntime on CPU-only hosts, which would leave quarry
-    unable to embed.
-    """
-    # Deliberately do NOT create a nvidia-smi mock — HAS_NVIDIA stays 0.
+    """--server mode: No nvidia-smi on PATH -> no GPU swap."""
     assert not (mock_bin / "nvidia-smi").exists()
 
-    result = _run_script(INSTALL_SERVER_SH, env)
+    result = _run_script(INSTALL_SH, env, args=["--server"])
     assert result.returncode == 0, (
-        f"install-server.sh failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        f"install.sh --server failed:\nstdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
     )
 
     log = _read_log(env)
@@ -298,15 +361,47 @@ def test_install_server_skips_gpu_swap_without_nvidia(
     _index_of(log, "quarry install")
 
 
-# ---------------------------------------------------------------------------
-# install-client.sh
-# ---------------------------------------------------------------------------
-
-
-def test_install_client_gpu_swap_runs_when_nvidia_present_and_no_quarry_install(
+def test_server_mode_does_not_invoke_claude(
     env: dict[str, str], mock_bin: Path
 ) -> None:
-    """install-client.sh must port the GPU swap (so ``quarry doctor`` on a
+    """(f) --server mode must NOT call claude CLI (no plugin, no marketplace)."""
+    assert not (mock_bin / "nvidia-smi").exists()
+
+    result = _run_script(INSTALL_SH, env, args=["--server"])
+    assert result.returncode == 0, (
+        f"install.sh --server failed:\nstdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+
+    log = _read_log(env)
+    assert not _any_line_contains(log, "claude"), (
+        "--server mode must not invoke claude CLI"
+    )
+
+
+def test_server_mode_fails_without_quarry_api_key(
+    env: dict[str, str],
+) -> None:
+    """(g) --server without QUARRY_API_KEY must fail early."""
+    env_no_key = {**env}
+    del env_no_key["QUARRY_API_KEY"]
+
+    result = _run_script(INSTALL_SH, env_no_key, args=["--server"])
+    assert result.returncode != 0, "--server without QUARRY_API_KEY must exit non-zero"
+    assert "QUARRY_API_KEY" in result.stdout, (
+        "Error message must mention QUARRY_API_KEY"
+    )
+
+
+# ---------------------------------------------------------------------------
+# --client mode
+# ---------------------------------------------------------------------------
+
+
+def test_client_mode_gpu_swap_runs_and_no_quarry_install(
+    env: dict[str, str], mock_bin: Path
+) -> None:
+    """--client mode must run the GPU swap (so ``quarry doctor`` on a
     client reports CUDA providers) but MUST NOT call ``quarry install``
     (clients don't download the 120MB model or start a local daemon).
     """
@@ -318,9 +413,10 @@ def test_install_client_gpu_swap_runs_when_nvidia_present_and_no_quarry_install(
         "exit 0\n",
     )
 
-    result = _run_script(INSTALL_CLIENT_SH, env)
+    result = _run_script(INSTALL_SH, env, args=["--client"])
     assert result.returncode == 0, (
-        f"install-client.sh failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        f"install.sh --client failed:\nstdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
     )
 
     log = _read_log(env)
@@ -332,22 +428,77 @@ def test_install_client_gpu_swap_runs_when_nvidia_present_and_no_quarry_install(
 
     # (e) quarry install is NOT invoked on a client install.
     assert not _any_line_contains(log, "quarry install"), (
-        "install-client.sh must not run 'quarry install' — clients don't "
+        "--client mode must not run 'quarry install' -- clients don't "
         "download the embedding model or start a local daemon"
     )
 
 
+def test_client_mode_does_not_start_daemon(env: dict[str, str], mock_bin: Path) -> None:
+    """--client mode must not call systemctl, launchctl, or health check."""
+    assert not (mock_bin / "nvidia-smi").exists()
+
+    result = _run_script(INSTALL_SH, env, args=["--client"])
+    assert result.returncode == 0, (
+        f"install.sh --client failed:\nstdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+
+    log = _read_log(env)
+    assert not _any_line_contains(log, "systemctl"), (
+        "--client mode must not call systemctl"
+    )
+    assert not _any_line_contains(log, "launchctl"), (
+        "--client mode must not call launchctl"
+    )
+
+
 # ---------------------------------------------------------------------------
-# install-both.sh
+# Argument parsing
 # ---------------------------------------------------------------------------
 
 
-def test_install_both_gpu_swap_runs_before_quarry_install(
-    env: dict[str, str], mock_bin: Path
-) -> None:
-    """install-both.sh must perform the same GPU swap + quarry install
-    ordering as install-server.sh.
+def test_unknown_flag_fails(env: dict[str, str]) -> None:
+    """(h) Unknown flags must cause the script to exit non-zero."""
+    result = _run_script(INSTALL_SH, env, args=["--bogus"])
+    assert result.returncode != 0, "Unknown flag must exit non-zero"
+    assert "Unknown option" in result.stderr, (
+        "Error message must indicate unknown option"
+    )
+
+
+def test_help_flag_exits_zero(env: dict[str, str]) -> None:
+    """--help must exit 0 and print usage."""
+    result = _run_script(INSTALL_SH, env, args=["--help"])
+    assert result.returncode == 0
+    assert "--server" in result.stdout
+    assert "--client" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# sh -s -- --flag (piped stdin argument passing)
+# ---------------------------------------------------------------------------
+
+
+def test_piped_server_mode_parses_flag(env: dict[str, str], mock_bin: Path) -> None:
+    """(i) ``sh -s -- --server`` must correctly parse the --server flag
+    when the script is piped via stdin (simulating curl | sh -s -- --server).
     """
+    result = _run_script_piped(INSTALL_SH, env, args=["--server"])
+    assert result.returncode == 0, (
+        f"sh -s -- --server failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+    log = _read_log(env)
+
+    # Verify server-mode behavior: quarry install runs, claude does not.
+    _index_of(log, "quarry install")
+    assert not _any_line_contains(log, "claude"), (
+        "piped --server mode must not invoke claude CLI"
+    )
+
+
+def test_piped_client_mode_parses_flag(env: dict[str, str], mock_bin: Path) -> None:
+    """``sh -s -- --client`` must correctly parse the --client flag."""
     _write_mock(
         mock_bin / "nvidia-smi",
         'printf "%s" "$(basename "$0")" >> "$LOG_FILE"\n'
@@ -356,70 +507,24 @@ def test_install_both_gpu_swap_runs_before_quarry_install(
         "exit 0\n",
     )
 
-    result = _run_script(INSTALL_BOTH_SH, env)
+    result = _run_script_piped(INSTALL_SH, env, args=["--client"])
     assert result.returncode == 0, (
-        f"install-both.sh failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        f"sh -s -- --client failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
 
     log = _read_log(env)
-
-    tool_install_idx = _index_of(log, "uv tool install --force")
-    gpu_install_idx = _index_of(log, "onnxruntime-gpu")
-    quarry_install_idx = _index_of(log, "quarry install")
-
-    assert tool_install_idx < gpu_install_idx < quarry_install_idx, (
-        f"Expected uv tool install ({tool_install_idx}) < GPU swap ({gpu_install_idx}) "
-        f"< quarry install ({quarry_install_idx})"
+    assert not _any_line_contains(log, "quarry install"), (
+        "piped --client mode must not run quarry install"
     )
 
 
 # ---------------------------------------------------------------------------
-# install.sh (reference implementation — guards the source of truth)
+# Shellcheck
 # ---------------------------------------------------------------------------
 
 
-def test_install_sh_gpu_swap_still_runs_before_quarry_install(
-    env: dict[str, str], mock_bin: Path
-) -> None:
-    """install.sh is the reference implementation the split installers port
-    from.  If someone accidentally reintroduces the regression here too,
-    fail loudly.
-    """
-    _write_mock(
-        mock_bin / "nvidia-smi",
-        'printf "%s" "$(basename "$0")" >> "$LOG_FILE"\n'
-        'for a in "$@"; do printf " %s" "$a" >> "$LOG_FILE"; done\n'
-        'printf "\\n" >> "$LOG_FILE"\n'
-        "exit 0\n",
-    )
-
-    result = _run_script(INSTALL_SH, env)
-    assert result.returncode == 0, (
-        f"install.sh failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    )
-
-    log = _read_log(env)
-
-    tool_install_idx = _index_of(log, "uv tool install --force")
-    gpu_install_idx = _index_of(log, "onnxruntime-gpu")
-    quarry_install_idx = _index_of(log, "quarry install")
-
-    assert tool_install_idx < gpu_install_idx < quarry_install_idx
-
-
-# ---------------------------------------------------------------------------
-# Shellcheck — cheap static gate that catches the classes of shell bugs
-# ``make check`` would otherwise miss.
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "script",
-    [INSTALL_SH, INSTALL_SERVER_SH, INSTALL_CLIENT_SH, INSTALL_BOTH_SH],
-    ids=lambda p: p.name,
-)
-def test_install_script_passes_shellcheck(script: Path) -> None:
-    """Per CLAUDE.md Class 5: every install script must pass ``shellcheck -x``."""
+def test_install_script_passes_shellcheck() -> None:
+    """Per CLAUDE.md Class 5: install.sh must pass ``shellcheck -x``."""
     shellcheck_bin = shutil.which("shellcheck")
     if shellcheck_bin is None:
         pytest.fail(
@@ -428,12 +533,12 @@ def test_install_script_passes_shellcheck(script: Path) -> None:
             "CI (apt-get install shellcheck) so this gate "
             "cannot be skipped."
         )
-    result = subprocess.run(  # noqa: S603 — shellcheck resolved via shutil.which
-        [shellcheck_bin, "-x", str(script)],
+    result = subprocess.run(  # noqa: S603 -- shellcheck resolved via shutil.which
+        [shellcheck_bin, "-x", str(INSTALL_SH)],
         capture_output=True,
         text=True,
         check=False,
     )
     assert result.returncode == 0, (
-        f"shellcheck failed on {script.name}:\n{result.stdout}\n{result.stderr}"
+        f"shellcheck failed on install.sh:\n{result.stdout}\n{result.stderr}"
     )

@@ -821,7 +821,7 @@ registers a daemon with TLS on localhost.
 \subsection{Server (Remote GPU)}
 
 \begin{lstlisting}
-curl -fsSL https://raw.githubusercontent.com/.../install-server.sh | sh
+curl -fsSL https://raw.githubusercontent.com/.../install.sh | sh -s -- --server
 \end{lstlisting}
 
 No Claude Code required.  Installs quarry, embedding model, generates
@@ -832,7 +832,7 @@ Detects NVIDIA GPUs and swaps \texttt{onnxruntime} for
 \subsection{Client (Remote Access)}
 
 \begin{lstlisting}
-curl -fsSL https://raw.githubusercontent.com/.../install-client.sh | sh
+curl -fsSL https://raw.githubusercontent.com/.../install.sh | sh -s -- --client
 quarry login <server> --api-key <token>
 \end{lstlisting}
 

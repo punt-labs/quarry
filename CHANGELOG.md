@@ -14,6 +14,16 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Changed
+
+- **infra**: Consolidated four install scripts (`install.sh`, `install-server.sh`,
+  `install-client.sh`, `install-both.sh`) into a single `install.sh` with mode
+  flags: `--server` (daemon + TLS, no plugin), `--client` (CLI + plugin, no
+  daemon), default (full install).  Eliminates the four-way VERSION drift bug
+  class that caused three separate hotfixes.  Install via
+  `curl ... | sh -s -- --server` (POSIX `sh -s --` for piped argument passing).
+  Deleted `install-server.sh`, `install-client.sh`, `install-both.sh`.
+
 ## [1.12.2] - 2026-04-11
 
 ### Fixed
