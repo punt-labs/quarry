@@ -818,27 +818,30 @@ curl -fsSL https://raw.githubusercontent.com/.../install.sh | sh
 Installs quarry, embedding model, mcp-proxy, Claude Code plugin, and
 registers a daemon with TLS on localhost.
 
-\subsection{Server (Remote GPU)}
+\subsection{Network Mode (Remote GPU)}
 
 \begin{lstlisting}
-curl -fsSL https://raw.githubusercontent.com/.../install.sh | sh -s -- --server
+export QUARRY_API_KEY=$(openssl rand -hex 32)
+curl -fsSL https://raw.githubusercontent.com/.../install.sh | sh -s -- --network
 \end{lstlisting}
 
-No Claude Code required.  Installs quarry, embedding model, generates
-TLS certificates, registers systemd service on \texttt{0.0.0.0:8420}.
+Same as default, but binds daemon to \texttt{0.0.0.0:8420} instead of
+localhost.  Requires \texttt{QUARRY\_API\_KEY}.  Installs quarry,
+embedding model, generates TLS certificates, registers systemd service.
 Detects NVIDIA GPUs and swaps \texttt{onnxruntime} for
 \texttt{onnxruntime-gpu}.  Prints CA fingerprint for client TOFU.
+Claude Code plugin installed if \texttt{claude} CLI is on PATH.
 
 \subsection{Client (Remote Access)}
 
 \begin{lstlisting}
-curl -fsSL https://raw.githubusercontent.com/.../install.sh | sh -s -- --client
+curl -fsSL https://raw.githubusercontent.com/.../install.sh | sh
 quarry login <server> --api-key <token>
 \end{lstlisting}
 
-No model download, no daemon.  Installs CLI, mcp-proxy, and Claude
-Code plugin.  \texttt{quarry login} performs TOFU certificate pinning
-and writes the mcp-proxy config.
+No special flag needed.  Default install runs a local daemon on
+localhost.  \texttt{quarry login} redirects queries to the remote
+server via TOFU certificate pinning and writes the mcp-proxy config.
 
 \subsection{Daemon (\texttt{quarry serve})}
 

@@ -55,22 +55,23 @@ sh install.sh
 
 Run quarry on a GPU server and connect from any Mac or Linux client over TLS.
 
-**Server** (no Claude Code required):
+**Server** (GPU host, serves remote clients):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/6f5efa51e699e6758b23b2a881d553e105befeda/install.sh | sh -s -- --server
+export QUARRY_API_KEY=$(openssl rand -hex 32)
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/<SHA>/install.sh | sh -s -- --network
 ```
 
-Generates TLS certificates, registers a systemd service, and prints a CA fingerprint. NVIDIA GPUs are auto-detected for CUDA inference.
+Generates TLS certificates, binds daemon to 0.0.0.0, registers a systemd service, and prints a CA fingerprint. NVIDIA GPUs are auto-detected for CUDA inference.
 
-**Client** (connects to a remote server):
+**Client** (connects to remote server):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/6f5efa51e699e6758b23b2a881d553e105befeda/install.sh | sh -s -- --client
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/<SHA>/install.sh | sh
 quarry login <server-hostname> --api-key <token>
 ```
 
-TOFU certificate pinning — the client fetches the server's CA cert, displays the fingerprint for confirmation, then pins it for all future connections over `wss://`.
+No special flag needed --- the default install runs a local daemon on localhost. `quarry login` redirects queries to the remote server over `wss://` with TOFU certificate pinning.
 
 ### Claude Desktop
 

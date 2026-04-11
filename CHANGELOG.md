@@ -16,13 +16,14 @@ across `transform`, `index`, and `connector`).
 
 ### Changed
 
-- **infra**: Consolidated four install scripts (`install.sh`, `install-server.sh`,
-  `install-client.sh`, `install-both.sh`) into a single `install.sh` with mode
-  flags: `--server` (daemon + TLS, no plugin), `--client` (CLI + plugin, no
-  daemon), default (full install).  Eliminates the four-way VERSION drift bug
-  class that caused three separate hotfixes.  Install via
-  `curl ... | sh -s -- --server` (POSIX `sh -s --` for piped argument passing).
-  Deleted `install-server.sh`, `install-client.sh`, `install-both.sh`.
+- **infra**: Simplified `install.sh` from three modes (`--server`/`--client`/default)
+  to two: default and `--network`.  Default installs everything (CLI, model, daemon
+  on localhost, GPU swap, plugin if claude CLI found, local quarry login).
+  `--network` is the same but binds daemon to 0.0.0.0 and requires
+  `QUARRY_API_KEY`.  Claude Code plugin install is now optional -- skipped with a
+  note when `claude` CLI is not on PATH, instead of failing.  Clients no longer
+  need a `--client` flag; just install normally and `quarry login <server>`.
+  Removed `--server` and `--client` flags.
 
 ## [1.12.2] - 2026-04-11
 
