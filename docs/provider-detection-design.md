@@ -14,7 +14,7 @@ precision selection, and graceful fallback to `quarry`'s embedding layer.
 The probe runs once per process, at `OnnxEmbeddingBackend.__init__` time
 (which is itself cached in `backends.py`). It does not run at import time.
 
-```
+```python
 def _select_provider() -> tuple[str, str]:
     """Return (provider_name, model_file) for the best available config.
 
@@ -86,7 +86,7 @@ cast in `embed_texts` already handles this.
 
 Ordered, each step either succeeds (return) or falls through:
 
-```
+```text
 1. QUARRY_PROVIDER=cpu       -> CPU + int8          (explicit override)
 2. CUDA available + valid    -> CUDA + FP16         (best throughput)
 3. CUDA available + invalid  -> log WARNING, fall through
@@ -207,6 +207,7 @@ output matches the spec.
 
 `tests/test_embeddings.py` already mocks `InferenceSession` and
 `_load_model_files`. After the change, the mock target shifts:
+
 - Mock `select_provider()` instead of `InferenceSession` directly
 - Or mock at the same level (`onnxruntime.InferenceSession`) since
   `select_provider` calls it internally
@@ -219,14 +220,16 @@ continue to work.
 ### Integration test (manual, not CI)
 
 On a GPU machine, run:
+
 ```bash
 QUARRY_PROVIDER=cpu uv run python -c "from quarry.embeddings import OnnxEmbeddingBackend; b = OnnxEmbeddingBackend(); print(b.embed_texts(['test']).shape)"
 ```
+
 Then without the override. Verify logs show the expected provider.
 
 ## 7. Migration
 
-### Transparent. No user action required.
+### Transparent — no user action required
 
 - **Existing CPU installs**: behavior is identical. `select_provider()`
   detects CPU only, selects int8. Same model, same session, same vectors.

@@ -140,7 +140,7 @@ results = search(db, "query text", settings, limit=5)
 
 For non-Python integrations, use the REST API:
 
-```
+```text
 GET /search?q=margins&limit=10
 GET /documents
 GET /collections

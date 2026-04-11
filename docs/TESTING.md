@@ -4,7 +4,7 @@ Quarry has **794 tests** across 35 test files. Tests are organized into three ti
 
 ## Architecture and test boundaries
 
-```
+```text
 ┌─────────────────────────────────────────────────────┐
 │  Surfaces: CLI, MCP server, HTTP API                │  ← wiring tests (mocked backends)
 ├─────────────────────────────────────────────────────┤
@@ -66,12 +66,14 @@ Tests verify that CLI flags, MCP tool parameters, and HTTP endpoints correctly r
 | `test_http_server.py` | HTTP API: search, documents, status, CORS, port file |
 
 **What surface tests verify:**
+
 - Flags/parameters reach the correct backend function with correct values
 - Error conditions (backend exceptions, invalid input) produce exit code 1
 - `--json` output is valid JSON with expected structure
 - `_cli_errors` decorator catches exceptions but propagates `SystemExit`/`KeyboardInterrupt`
 
 **What surface tests do NOT verify:**
+
 - Whether search returns relevant results (that's tier 1 + integration)
 - Whether ingestion produces correct chunks (that's tier 2)
 - Whether the embedding model works (that's tier 1)

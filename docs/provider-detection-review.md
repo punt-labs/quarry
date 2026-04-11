@@ -19,6 +19,7 @@ parameter, but does not address what happens when CUDA is selected and
 the FP16 model is not cached.
 
 Current flow:
+
 1. `select_provider()` picks CUDA + FP16
 2. It creates `InferenceSession("onnx/model_fp16.onnx")` -- but this
    needs an absolute filesystem path, not a relative HF repo path
@@ -31,6 +32,7 @@ filename to a local path *before* creating the session. This means
 absolute path, then pass that to `InferenceSession`.
 
 **Fix**: Make the probe sequence explicit:
+
 1. Determine candidate provider + model_file (the HF repo path)
 2. Resolve model_file to a local path via `_load_model_files(model_file)`
 3. Create `InferenceSession(local_path, providers=[candidate])`
@@ -48,7 +50,7 @@ The design says `OnnxEmbeddingBackend.__init__` calls
 `provider.py` must handle model file resolution (downloading from HF),
 which is currently `embeddings.py`'s job. The dependency graph becomes:
 
-```
+```text
 provider.py -> embeddings._load_model_files() -> huggingface_hub
 embeddings.py -> provider.select_provider() -> ort
 ```
@@ -88,6 +90,7 @@ useful for debugging GPU setups -- you want to see the error, not silently
 fall back to CPU.
 
 **Fix**: Support three values:
+
 - `cpu` -- force CPU, skip CUDA probe
 - `cuda` -- force CUDA, raise on failure (no fallback)
 - unset -- auto-detect with fallback (current behavior)
@@ -148,7 +151,7 @@ Step 1 says log: `"Provider override: QUARRY_PROVIDER=cpu, using
 CPUExecutionProvider + int8"`. The message leaks the model filename into
 the log. Better:
 
-```
+```text
 "Provider override: cpu (QUARRY_PROVIDER env var)"
 ```
 

@@ -67,7 +67,7 @@ No silent local fallback. Only `login`/`logout`/`remote` stay local.
 
 ## Dependency Graph
 
-```
+```text
 PR 1 (infra + read wiring)
   └─► PR 2 (show + delete)
   └─► PR 3 (remember + ingest)
