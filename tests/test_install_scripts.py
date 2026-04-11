@@ -1,17 +1,17 @@
-"""Shell-integration tests for install.sh (consolidated installer).
+"""Shell-integration tests for install.sh (two-mode installer).
 
-These tests invoke install.sh with different mode flags (no flag, --server,
---client) using a ``PATH`` pointing at mock versions of ``nvidia-smi``,
-``uv``, ``curl``, ``ssh``, ``claude``, and ``quarry``.  Each mock records
-its invocation to a log file; the tests then read the log and assert the
+These tests invoke install.sh with different flags (no flag, --network)
+using a ``PATH`` pointing at mock versions of ``nvidia-smi``, ``uv``,
+``curl``, ``ssh``, ``claude``, and ``quarry``.  Each mock records its
+invocation to a log file; the tests then read the log and assert the
 expected call ordering.
 
-Why a shell test and not a unit test: the bug that motivated this file
-(quarry-e4c2) was a drift in the step ordering inside the script itself --
-separate install scripts diverged from install.sh and no Python code ever
-saw the difference.  Consolidating into a single script with mode flags
-eliminates the drift class, but we still need to verify each mode's
-conditional logic.
+The installer has two modes:
+
+  - **Default** (no flags): full install -- daemon on localhost, TLS,
+    plugin (if claude CLI found), local quarry login.
+  - **--network**: same as default, but binds daemon to 0.0.0.0 instead
+    of localhost.  Requires QUARRY_API_KEY.
 
 Ordering invariants asserted per CLAUDE.md Class 5:
 
@@ -20,12 +20,11 @@ Ordering invariants asserted per CLAUDE.md Class 5:
       ``onnxruntime`` and installs ``onnxruntime-gpu`` *before* ``quarry install``
   (c) When ``nvidia-smi`` is absent, the GPU swap is not invoked at all
   (d) ``quarry install`` runs after the GPU swap (where applicable)
-  (e) ``--client`` mode never calls ``quarry install`` -- client machines
-      don't download the embedding model or start a local daemon
-  (f) ``--server`` mode does not call ``claude`` or plugin commands
-  (g) ``--server`` without ``QUARRY_API_KEY`` fails early
-  (h) Unknown flags cause the script to exit non-zero
-  (i) ``sh -s -- --server`` works (POSIX piped-stdin argument passing)
+  (e) ``--network`` without ``QUARRY_API_KEY`` fails early
+  (f) Unknown flags cause the script to exit non-zero
+  (g) ``sh -s -- --network`` works (POSIX piped-stdin argument passing)
+  (h) Plugin install is skipped (no failure) when claude CLI is absent
+  (i) Plugin install runs when claude CLI is present
 """
 
 from __future__ import annotations
@@ -152,6 +151,12 @@ def mock_bin(tmp_path: Path) -> Path:
         if real is not None:
             (bin_dir / util).symlink_to(real)
 
+    # openssl -- used in the success message but not critical.
+    _write_mock(
+        bin_dir / "openssl",
+        log_header + 'printf "abcdef1234567890\\n"\nexit 0\n',
+    )
+
     return bin_dir
 
 
@@ -209,7 +214,7 @@ def _run_script_piped(
 ) -> subprocess.CompletedProcess[str]:
     """Run ``script`` via ``sh -s -- <args>`` with stdin piped from the script.
 
-    This simulates ``curl ... | sh -s -- --server`` which is the POSIX way
+    This simulates ``curl ... | sh -s -- --network`` which is the POSIX way
     to pass arguments when piping to sh.
     """
     cmd = ["/bin/sh", "-s"]
@@ -251,16 +256,14 @@ def _any_line_contains(log: list[str], needle: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Default mode (full install)
+# Default mode (full install, with claude CLI present)
 # ---------------------------------------------------------------------------
 
 
 def test_default_mode_gpu_swap_runs_before_quarry_install(
     env: dict[str, str], mock_bin: Path
 ) -> None:
-    """Default mode: GPU swap MUST run before ``quarry install``
-    when an NVIDIA GPU is present.
-    """
+    """Default mode with GPU: GPU swap MUST run before ``quarry install``."""
     _write_mock(
         mock_bin / "nvidia-smi",
         'printf "%s" "$(basename "$0")" >> "$LOG_FILE"\n'
@@ -283,15 +286,82 @@ def test_default_mode_gpu_swap_runs_before_quarry_install(
     assert tool_install_idx < gpu_install_idx < quarry_install_idx
 
 
+def test_default_mode_runs_quarry_install(env: dict[str, str]) -> None:
+    """Default mode always runs ``quarry install`` (localhost)."""
+    result = _run_script(INSTALL_SH, env)
+    assert result.returncode == 0, (
+        f"install.sh failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+    log = _read_log(env)
+    _index_of(log, "quarry install")
+
+
+def test_default_mode_runs_plugin_install_with_claude(env: dict[str, str]) -> None:
+    """Default mode with claude CLI installs the plugin."""
+    result = _run_script(INSTALL_SH, env)
+    assert result.returncode == 0, (
+        f"install.sh failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+    log = _read_log(env)
+    assert _any_line_contains(log, "claude plugin install"), (
+        "Default mode with claude CLI must install the plugin"
+    )
+
+
+def test_default_mode_runs_quarry_login(env: dict[str, str]) -> None:
+    """Default mode runs ``quarry login localhost``."""
+    result = _run_script(INSTALL_SH, env)
+    assert result.returncode == 0, (
+        f"install.sh failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+    log = _read_log(env)
+    assert _any_line_contains(log, "quarry login"), (
+        "Default mode must run quarry login localhost"
+    )
+
+
 # ---------------------------------------------------------------------------
-# --server mode
+# Default mode without claude CLI
 # ---------------------------------------------------------------------------
 
 
-def test_server_mode_gpu_swap_runs_before_quarry_install(
+def test_default_mode_no_claude_skips_plugin(
     env: dict[str, str], mock_bin: Path
 ) -> None:
-    """--server mode: the shell-level GPU swap MUST run before
+    """(h) When claude CLI is absent, plugin install is skipped without failure."""
+    # Remove the claude mock so command -v claude fails.
+    (mock_bin / "claude").unlink()
+
+    result = _run_script(INSTALL_SH, env)
+    assert result.returncode == 0, (
+        f"install.sh failed without claude:\nstdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+
+    log = _read_log(env)
+    assert not _any_line_contains(log, "claude"), (
+        "Plugin install must be skipped when claude CLI is absent"
+    )
+
+    # quarry install still runs (daemon on localhost).
+    _index_of(log, "quarry install")
+
+    # Success message should mention Claude Code not found.
+    assert "Claude Code" in result.stdout or "not found" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# --network mode
+# ---------------------------------------------------------------------------
+
+
+def test_network_mode_gpu_swap_runs_before_quarry_install(
+    env: dict[str, str], mock_bin: Path
+) -> None:
+    """--network mode: the shell-level GPU swap MUST run before
     ``quarry install`` when an NVIDIA GPU is present.
     """
     _write_mock(
@@ -302,9 +372,9 @@ def test_server_mode_gpu_swap_runs_before_quarry_install(
         "exit 0\n",
     )
 
-    result = _run_script(INSTALL_SH, env, args=["--server"])
+    result = _run_script(INSTALL_SH, env, args=["--network"])
     assert result.returncode == 0, (
-        f"install.sh --server failed:\nstdout:\n{result.stdout}\n"
+        f"install.sh --network failed:\nstdout:\n{result.stdout}\n"
         f"stderr:\n{result.stderr}"
     )
 
@@ -335,15 +405,15 @@ def test_server_mode_gpu_swap_runs_before_quarry_install(
     )
 
 
-def test_server_mode_skips_gpu_swap_without_nvidia(
+def test_network_mode_skips_gpu_swap_without_nvidia(
     env: dict[str, str], mock_bin: Path
 ) -> None:
-    """--server mode: No nvidia-smi on PATH -> no GPU swap."""
+    """--network mode: No nvidia-smi on PATH -> no GPU swap."""
     assert not (mock_bin / "nvidia-smi").exists()
 
-    result = _run_script(INSTALL_SH, env, args=["--server"])
+    result = _run_script(INSTALL_SH, env, args=["--network"])
     assert result.returncode == 0, (
-        f"install.sh --server failed:\nstdout:\n{result.stdout}\n"
+        f"install.sh --network failed:\nstdout:\n{result.stdout}\n"
         f"stderr:\n{result.stderr}"
     )
 
@@ -361,99 +431,53 @@ def test_server_mode_skips_gpu_swap_without_nvidia(
     _index_of(log, "quarry install")
 
 
-def test_server_mode_does_not_invoke_claude(
-    env: dict[str, str], mock_bin: Path
-) -> None:
-    """(f) --server mode must NOT call claude CLI (no plugin, no marketplace)."""
-    assert not (mock_bin / "nvidia-smi").exists()
-
-    result = _run_script(INSTALL_SH, env, args=["--server"])
-    assert result.returncode == 0, (
-        f"install.sh --server failed:\nstdout:\n{result.stdout}\n"
-        f"stderr:\n{result.stderr}"
-    )
-
-    log = _read_log(env)
-    assert not _any_line_contains(log, "claude"), (
-        "--server mode must not invoke claude CLI"
-    )
-
-
-def test_server_mode_fails_without_quarry_api_key(
+def test_network_mode_fails_without_quarry_api_key(
     env: dict[str, str],
 ) -> None:
-    """(g) --server without QUARRY_API_KEY must fail early."""
+    """(e) --network without QUARRY_API_KEY must fail early."""
     env_no_key = {**env}
     del env_no_key["QUARRY_API_KEY"]
 
-    result = _run_script(INSTALL_SH, env_no_key, args=["--server"])
-    assert result.returncode != 0, "--server without QUARRY_API_KEY must exit non-zero"
+    result = _run_script(INSTALL_SH, env_no_key, args=["--network"])
+    assert result.returncode != 0, "--network without QUARRY_API_KEY must exit non-zero"
     assert "QUARRY_API_KEY" in result.stdout, (
         "Error message must mention QUARRY_API_KEY"
     )
 
 
-# ---------------------------------------------------------------------------
-# --client mode
-# ---------------------------------------------------------------------------
-
-
-def test_client_mode_gpu_swap_runs_and_no_quarry_install(
-    env: dict[str, str], mock_bin: Path
-) -> None:
-    """--client mode must run the GPU swap (so ``quarry doctor`` on a
-    client reports CUDA providers) but MUST NOT call ``quarry install``
-    (clients don't download the 120MB model or start a local daemon).
-    """
-    _write_mock(
-        mock_bin / "nvidia-smi",
-        'printf "%s" "$(basename "$0")" >> "$LOG_FILE"\n'
-        'for a in "$@"; do printf " %s" "$a" >> "$LOG_FILE"; done\n'
-        'printf "\\n" >> "$LOG_FILE"\n'
-        "exit 0\n",
-    )
-
-    result = _run_script(INSTALL_SH, env, args=["--client"])
+def test_network_mode_runs_quarry_install(env: dict[str, str]) -> None:
+    """--network mode runs ``quarry install`` with QUARRY_SERVE_HOST=0.0.0.0."""
+    result = _run_script(INSTALL_SH, env, args=["--network"])
     assert result.returncode == 0, (
-        f"install.sh --client failed:\nstdout:\n{result.stdout}\n"
+        f"install.sh --network failed:\nstdout:\n{result.stdout}\n"
         f"stderr:\n{result.stderr}"
     )
 
     log = _read_log(env)
-
-    # GPU swap ran.
-    tool_install_idx = _index_of(log, "uv tool install --force")
-    gpu_install_idx = _index_of(log, "onnxruntime-gpu")
-    assert tool_install_idx < gpu_install_idx
-
-    # (e) quarry install is NOT invoked on a client install.
-    assert not _any_line_contains(log, "quarry install"), (
-        "--client mode must not run 'quarry install' -- clients don't "
-        "download the embedding model or start a local daemon"
-    )
+    _index_of(log, "quarry install")
 
 
-def test_client_mode_does_not_start_daemon(env: dict[str, str], mock_bin: Path) -> None:
-    """--client mode must not call systemctl, launchctl, or health check."""
-    assert not (mock_bin / "nvidia-smi").exists()
-
-    result = _run_script(INSTALL_SH, env, args=["--client"])
+def test_network_mode_installs_plugin_with_claude(env: dict[str, str]) -> None:
+    """--network mode with claude CLI still installs the plugin."""
+    result = _run_script(INSTALL_SH, env, args=["--network"])
     assert result.returncode == 0, (
-        f"install.sh --client failed:\nstdout:\n{result.stdout}\n"
+        f"install.sh --network failed:\nstdout:\n{result.stdout}\n"
         f"stderr:\n{result.stderr}"
     )
 
     log = _read_log(env)
-    assert not _any_line_contains(log, "systemctl"), (
-        "--client mode must not call systemctl"
+    assert _any_line_contains(log, "claude plugin install"), (
+        "--network mode with claude CLI must install the plugin"
     )
-    assert not _any_line_contains(log, "launchctl"), (
-        "--client mode must not call launchctl"
-    )
-    # Health check uses curl against localhost:8420 -- client must skip it.
-    assert not _any_line_contains(log, "localhost:8420/health"), (
-        "--client mode must not health-check the daemon"
-    )
+
+
+def test_network_mode_success_message(env: dict[str, str]) -> None:
+    """--network mode success message includes remote connection instructions."""
+    result = _run_script(INSTALL_SH, env, args=["--network"])
+    assert result.returncode == 0
+
+    assert "server is ready" in result.stdout
+    assert "quarry login" in result.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -462,7 +486,7 @@ def test_client_mode_does_not_start_daemon(env: dict[str, str], mock_bin: Path) 
 
 
 def test_unknown_flag_fails(env: dict[str, str]) -> None:
-    """(h) Unknown flags must cause the script to exit non-zero."""
+    """(f) Unknown flags must cause the script to exit non-zero."""
     result = _run_script(INSTALL_SH, env, args=["--bogus"])
     assert result.returncode != 0, "Unknown flag must exit non-zero"
     assert "Unknown option" in result.stderr, (
@@ -470,65 +494,66 @@ def test_unknown_flag_fails(env: dict[str, str]) -> None:
     )
 
 
-def test_mutually_exclusive_flags_fail(env: dict[str, str]) -> None:
-    """--server and --client are mutually exclusive; both must fail."""
-    result = _run_script(INSTALL_SH, env, args=["--server", "--client"])
-    assert result.returncode != 0, "--server --client must exit non-zero"
-    assert "mutually exclusive" in result.stderr, (
-        "Error must mention mutual exclusivity"
-    )
-
-
 def test_help_flag_exits_zero(env: dict[str, str]) -> None:
     """--help must exit 0 and print usage."""
     result = _run_script(INSTALL_SH, env, args=["--help"])
     assert result.returncode == 0
-    assert "--server" in result.stdout
-    assert "--client" in result.stdout
+    assert "--network" in result.stdout
+
+
+def test_help_does_not_mention_old_flags(env: dict[str, str]) -> None:
+    """--help must not mention removed --server or --client flags."""
+    result = _run_script(INSTALL_SH, env, args=["--help"])
+    assert result.returncode == 0
+    assert "--server" not in result.stdout
+    assert "--client" not in result.stdout
+
+
+def test_old_flags_fail(env: dict[str, str]) -> None:
+    """Removed --server and --client flags must fail as unknown options."""
+    for flag in ("--server", "--client"):
+        result = _run_script(INSTALL_SH, env, args=[flag])
+        assert result.returncode != 0, f"{flag} must exit non-zero"
+        assert "Unknown option" in result.stderr, (
+            f"{flag} must be reported as unknown option"
+        )
 
 
 # ---------------------------------------------------------------------------
-# sh -s -- --flag (piped stdin argument passing)
+# sh -s -- --network (piped stdin argument passing)
 # ---------------------------------------------------------------------------
 
 
-def test_piped_server_mode_parses_flag(env: dict[str, str], mock_bin: Path) -> None:
-    """(i) ``sh -s -- --server`` must correctly parse the --server flag
-    when the script is piped via stdin (simulating curl | sh -s -- --server).
+def test_piped_network_mode_parses_flag(env: dict[str, str], mock_bin: Path) -> None:
+    """(g) ``sh -s -- --network`` must correctly parse the --network flag
+    when the script is piped via stdin (simulating curl | sh -s -- --network).
     """
-    result = _run_script_piped(INSTALL_SH, env, args=["--server"])
+    result = _run_script_piped(INSTALL_SH, env, args=["--network"])
     assert result.returncode == 0, (
-        f"sh -s -- --server failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        f"sh -s -- --network failed:\nstdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
     )
 
     log = _read_log(env)
 
-    # Verify server-mode behavior: quarry install runs, claude does not.
+    # Verify network-mode behavior: quarry install runs.
     _index_of(log, "quarry install")
-    assert not _any_line_contains(log, "claude"), (
-        "piped --server mode must not invoke claude CLI"
-    )
+
+    # Success message is network-mode specific.
+    assert "server is ready" in result.stdout
 
 
-def test_piped_client_mode_parses_flag(env: dict[str, str], mock_bin: Path) -> None:
-    """``sh -s -- --client`` must correctly parse the --client flag."""
-    _write_mock(
-        mock_bin / "nvidia-smi",
-        'printf "%s" "$(basename "$0")" >> "$LOG_FILE"\n'
-        'for a in "$@"; do printf " %s" "$a" >> "$LOG_FILE"; done\n'
-        'printf "\\n" >> "$LOG_FILE"\n'
-        "exit 0\n",
-    )
-
-    result = _run_script_piped(INSTALL_SH, env, args=["--client"])
+def test_piped_default_mode(env: dict[str, str], mock_bin: Path) -> None:
+    """Piped default mode (no flags) runs quarry install and plugin."""
+    result = _run_script_piped(INSTALL_SH, env)
     assert result.returncode == 0, (
-        f"sh -s -- --client failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        f"sh -s -- (default) failed:\nstdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
     )
 
     log = _read_log(env)
-    assert not _any_line_contains(log, "quarry install"), (
-        "piped --client mode must not run quarry install"
-    )
+    _index_of(log, "quarry install")
+    assert _any_line_contains(log, "claude plugin install")
 
 
 # ---------------------------------------------------------------------------

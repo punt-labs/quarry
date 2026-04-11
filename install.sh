@@ -3,40 +3,29 @@
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/<SHA>/install.sh | sh
-#   curl -fsSL ... | sh -s -- --server    # server-only (daemon + TLS, no plugin)
-#   curl -fsSL ... | sh -s -- --client    # client-only (CLI + plugin, no daemon)
+#   curl -fsSL ... | sh -s -- --network    # bind daemon to 0.0.0.0 (serve remote clients)
 #
-# Default (no flags): full install — daemon, TLS, plugin, local client login.
-# --server: installs quarry daemon with TLS.  No Claude Code required.
-# --client: installs quarry CLI and plugin.  No model download, no daemon.
+# Default (no flags): full install — daemon on localhost, TLS, plugin (if claude CLI found),
+# local quarry login.  This is what most users want.
+#
+# --network: same as default, but binds daemon to 0.0.0.0 instead of localhost.
+# Requires QUARRY_API_KEY.  Prints CA fingerprint and remote-login instructions.
 set -eu
 
 # --- Argument parsing ---
 
 usage() {
-  printf 'Usage: install.sh [--server | --client | --help]\n\n'
-  printf '  (default)   Full install: daemon + plugin + local TLS login\n'
-  printf '  --server    Server-only: daemon + TLS, no Claude Code plugin\n'
-  printf '  --client    Client-only: CLI + plugin, no model or daemon\n'
-  printf '  --help, -h  Show this help\n'
+  printf 'Usage: install.sh [--network | --help]\n\n'
+  printf '  (default)    Install quarry with local daemon on localhost\n'
+  printf '  --network    Install quarry with daemon on 0.0.0.0 (serves remote clients)\n'
+  printf '               Requires QUARRY_API_KEY to be set.\n'
+  printf '  --help, -h   Show this help\n'
 }
 
-MODE="full"
-MODE_SET=0
+NETWORK=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --server)
-      if [ "$MODE_SET" = "1" ]; then
-        printf 'Error: --server and --client are mutually exclusive.\n' >&2
-        usage >&2; exit 1
-      fi
-      MODE="server"; MODE_SET=1; shift ;;
-    --client)
-      if [ "$MODE_SET" = "1" ]; then
-        printf 'Error: --server and --client are mutually exclusive.\n' >&2
-        usage >&2; exit 1
-      fi
-      MODE="client"; MODE_SET=1; shift ;;
+    --network) NETWORK=1; shift ;;
     --help|-h) usage; exit 0 ;;
     *) printf 'Unknown option: %s\n' "$1" >&2; usage >&2; exit 1 ;;
   esac
@@ -65,13 +54,14 @@ BINARY="quarry"
 
 info "Checking prerequisites..."
 
-# claude CLI required for full and client modes (plugin install).
-if [ "$MODE" != "server" ]; then
-  if command -v claude >/dev/null 2>&1; then
-    ok "claude CLI found"
-  else
-    fail "'claude' CLI not found. Install Claude Code first: https://docs.anthropic.com/en/docs/claude-code"
-  fi
+# claude CLI is optional.  If present, install plugin + marketplace.
+# If absent, skip with a note.
+HAS_CLAUDE=0
+if command -v claude >/dev/null 2>&1; then
+  ok "claude CLI found"
+  HAS_CLAUDE=1
+else
+  warn "Claude Code not found -- skipping plugin install. Run 'quarry install' after installing Claude Code."
 fi
 
 if command -v git >/dev/null 2>&1; then
@@ -181,89 +171,82 @@ fi
 ok "$BINARY $(command -v "$BINARY")"
 
 # --- Step 5: Download embedding model and generate TLS certificates ---
-# Skipped in --client mode: clients connect to a remote server and do not
-# need the 120MB embedding model or local TLS certificates.
 
-if [ "$MODE" != "client" ]; then
-  # --server mode requires QUARRY_API_KEY before downloading (fail early).
-  if [ "$MODE" = "server" ]; then
-    if [ -z "${QUARRY_API_KEY:-}" ]; then
-      fail "QUARRY_API_KEY is not set. Export it before running this script: export QUARRY_API_KEY=<your-key>"
-    fi
-  fi
-
-  info "Downloading embedding model and generating TLS certificates..."
-  printf '\n'
-  if [ "$MODE" = "server" ]; then
-    QUARRY_SERVE_HOST=0.0.0.0 "$BINARY" install
-  else
-    "$BINARY" install
-  fi
-  printf '\n'
-
-  # Belt-and-suspenders restart of the service-managed daemon.
-  #
-  # `quarry install` (above) calls `_launchd_install` / `_systemd_install`,
-  # which DO restart the service when one was already registered.  If a stale
-  # daemon from a previous install is running with the old in-memory
-  # onnxruntime imports, force a restart here so it picks up the tool-venv
-  # swap from Step 4b before the health check.  Both commands are idempotent
-  # no-ops when the service is not registered.
-  if command -v systemctl >/dev/null 2>&1; then
-    systemctl --user restart quarry 2>/dev/null || true
-  elif command -v launchctl >/dev/null 2>&1; then
-    # Label must match _LABEL in src/quarry/service.py.
-    launchctl kickstart -k "gui/$(id -u)/com.punt-labs.quarry" 2>/dev/null || true
+# --network mode requires QUARRY_API_KEY before downloading (fail early).
+if [ "$NETWORK" = "1" ]; then
+  if [ -z "${QUARRY_API_KEY:-}" ]; then
+    fail "QUARRY_API_KEY is not set. Export it before running this script: export QUARRY_API_KEY=<your-key>"
   fi
 fi
 
+info "Downloading embedding model and generating TLS certificates..."
+printf '\n'
+if [ "$NETWORK" = "1" ]; then
+  QUARRY_SERVE_HOST=0.0.0.0 "$BINARY" install
+else
+  "$BINARY" install
+fi
+printf '\n'
+
+# Belt-and-suspenders restart of the service-managed daemon.
+#
+# `quarry install` (above) calls `_launchd_install` / `_systemd_install`,
+# which DO restart the service when one was already registered.  If a stale
+# daemon from a previous install is running with the old in-memory
+# onnxruntime imports, force a restart here so it picks up the tool-venv
+# swap from Step 4b before the health check.  Both commands are idempotent
+# no-ops when the service is not registered.
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl --user restart quarry 2>/dev/null || true
+elif command -v launchctl >/dev/null 2>&1; then
+  # Label must match _LABEL in src/quarry/service.py.
+  launchctl kickstart -k "gui/$(id -u)/com.punt-labs.quarry" 2>/dev/null || true
+fi
+
 # --- Step 6: Health-check the service-managed daemon ---
-# Runs for server and full modes (wherever quarry install ran).
 
-if [ "$MODE" != "client" ]; then
-  if [ "$MODE" = "server" ]; then
-    # Server mode: strict health check with TLS CA verification.
-    info "Waiting for daemon to be ready..."
-    printf '\n'
+if [ "$NETWORK" = "1" ]; then
+  # Network mode: strict health check with TLS CA verification.
+  info "Waiting for daemon to be ready..."
+  printf '\n'
 
-    HEALTH_URL="https://localhost:8420/health"
-    CA_CERT="${HOME}/.punt-labs/quarry/tls/ca.crt"
-    MAX_TRIES=10
-    _i=0
-    while [ "$_i" -lt "$MAX_TRIES" ]; do
-      _i=$((_i + 1))
-      if curl -fsS --cacert "$CA_CERT" "$HEALTH_URL" >/dev/null 2>&1; then
-        ok "Quarry daemon is healthy (attempt $_i/$MAX_TRIES)"
-        break
-      fi
-      if [ "$_i" -eq "$MAX_TRIES" ]; then
-        fail "Daemon did not become healthy after $MAX_TRIES attempts -- check service logs"
-      fi
-      sleep 2
-    done
-    printf '\n'
-  else
-    # Full mode: lenient health check (used before login attempt).
-    info "Waiting for quarry daemon to be ready..."
-    _i=0
-    while [ $_i -lt 15 ]; do
-      if curl -fsk "https://localhost:8420/health" >/dev/null 2>&1; then
-        ok "Daemon is ready"
-        break
-      fi
-      sleep 2
-      _i=$((_i + 1))
-    done
-    if [ $_i -eq 15 ]; then
-      warn "Daemon did not respond after 30s -- login may fail (will retry automatically)"
+  HEALTH_URL="https://localhost:8420/health"
+  CA_CERT="${HOME}/.punt-labs/quarry/tls/ca.crt"
+  MAX_TRIES=10
+  _i=0
+  while [ "$_i" -lt "$MAX_TRIES" ]; do
+    _i=$((_i + 1))
+    if curl -fsS --cacert "$CA_CERT" "$HEALTH_URL" >/dev/null 2>&1; then
+      ok "Quarry daemon is healthy (attempt $_i/$MAX_TRIES)"
+      break
     fi
+    if [ "$_i" -eq "$MAX_TRIES" ]; then
+      fail "Daemon did not become healthy after $MAX_TRIES attempts -- check service logs"
+    fi
+    sleep 2
+  done
+  printf '\n'
+else
+  # Default mode: lenient health check (used before login attempt).
+  info "Waiting for quarry daemon to be ready..."
+  _i=0
+  while [ $_i -lt 15 ]; do
+    if curl -fsk "https://localhost:8420/health" >/dev/null 2>&1; then
+      ok "Daemon is ready"
+      break
+    fi
+    sleep 2
+    _i=$((_i + 1))
+  done
+  if [ $_i -eq 15 ]; then
+    warn "Daemon did not respond after 30s -- login may fail (will retry automatically)"
   fi
 fi
 
 # --- Step 7: Marketplace registration ---
-# Runs for full and client modes (wherever the plugin is installed).
+# Runs only when claude CLI is available.
 
-if [ "$MODE" != "server" ]; then
+if [ "$HAS_CLAUDE" = "1" ]; then
   info "Registering Punt Labs marketplace..."
 
   if claude plugin marketplace list < /dev/null 2>/dev/null | grep -q "$MARKETPLACE_NAME"; then
@@ -276,7 +259,7 @@ if [ "$MODE" != "server" ]; then
 fi
 
 # --- Step 8: SSH fallback for plugin install ---
-# Runs for full and client modes.
+# Runs only when claude CLI is available.
 
 NEED_HTTPS_REWRITE=0
 cleanup_https_rewrite() {
@@ -286,7 +269,7 @@ cleanup_https_rewrite() {
   fi
 }
 
-if [ "$MODE" != "server" ]; then
+if [ "$HAS_CLAUDE" = "1" ]; then
   trap cleanup_https_rewrite EXIT INT TERM
 
   if ! ssh -n -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=5 -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
@@ -297,9 +280,9 @@ if [ "$MODE" != "server" ]; then
 fi
 
 # --- Step 9: Install plugin ---
-# Runs for full and client modes.
+# Runs only when claude CLI is available.
 
-if [ "$MODE" != "server" ]; then
+if [ "$HAS_CLAUDE" = "1" ]; then
   info "Installing $PLUGIN_NAME plugin..."
 
   claude plugin uninstall "${PLUGIN_NAME}@${MARKETPLACE_NAME}" < /dev/null 2>/dev/null || true
@@ -317,19 +300,16 @@ if [ "$MODE" != "server" ]; then
 fi
 
 # --- Step 10: Configure local TLS access ---
-# Runs only in full mode (local server + local client).
 
-if [ "$MODE" = "full" ]; then
-  info "Configuring local TLS connection..."
-  printf '\n'
-  if QUARRY_API_KEY="${QUARRY_API_KEY:-}" "$BINARY" login localhost --yes 2>/dev/null; then
-    ok "Local TLS connection configured -- plugin will use wss://localhost:8420/mcp"
-  else
-    warn "quarry login localhost failed -- plugin will use local stdio fallback (quarry mcp)"
-    warn "To configure TLS later: quarry login localhost --yes"
-  fi
-  printf '\n'
+info "Configuring local TLS connection..."
+printf '\n'
+if QUARRY_API_KEY="${QUARRY_API_KEY:-}" "$BINARY" login localhost --yes 2>/dev/null; then
+  ok "Local TLS connection configured -- plugin will use wss://localhost:8420/mcp"
+else
+  warn "quarry login localhost failed -- plugin will use local stdio fallback (quarry mcp)"
+  warn "To configure TLS later: quarry login localhost --yes"
 fi
+printf '\n'
 
 # --- Step 11: Verify ---
 
@@ -340,32 +320,28 @@ printf '\n'
 
 # --- Done ---
 
-if [ "$MODE" = "server" ]; then
+if [ "$NETWORK" = "1" ]; then
   printf '%b%b%s server is ready!%b\n\n' "$GREEN" "$BOLD" "$BINARY" "$NC"
   printf 'The server daemon is running on port 8420 with TLS.\n\n'
   printf 'To connect a client machine:\n'
   printf '  1. Install quarry on the client:\n'
-  printf '     curl -fsSL <install.sh URL> | sh -s -- --client\n'
+  printf '     curl -fsSL <install.sh URL> | sh\n'
   printf '  2. Connect: quarry login <this-host> --api-key <your-api-key>\n\n'
   printf 'The CA fingerprint is shown above -- clients will see it during login.\n'
-elif [ "$MODE" = "client" ]; then
-  printf '%b%b%s client is ready!%b\n\n' "$GREEN" "$BOLD" "$PLUGIN_NAME" "$NC"
-  printf 'Restart Claude Code, then connect to your server:\n\n'
-  printf '  quarry login <server-host> --api-key <your-api-key>\n\n'
-  printf 'The login command will:\n'
-  printf '  1. Fetch and display the server CA fingerprint\n'
-  printf '  2. Ask you to confirm trust (TOFU)\n'
-  printf '  3. Configure Claude Code to use the remote server\n\n'
-  printf 'After login, restart Claude Code to activate the remote connection.\n'
 else
   printf '%b%b%s is ready!%b\n\n' "$GREEN" "$BOLD" "$PLUGIN_NAME" "$NC"
-  printf 'Restart Claude Code to activate the plugin.\n\n'
+  if [ "$HAS_CLAUDE" = "1" ]; then
+    printf 'Restart Claude Code to activate the plugin.\n\n'
+  else
+    printf 'Claude Code was not found. After installing it, run:\n'
+    printf '  quarry install\n\n'
+  fi
   printf 'Quick start:\n'
   printf '  /find <query>                     # semantic search\n'
   printf '  /ingest <url>                     # index a webpage\n'
   printf '  quarry ingest notes.md            # index a file from CLI\n\n'
-  printf 'To connect another machine to this server:\n'
-  printf '  1. Install the client:\n'
-  printf '     curl -fsSL <install.sh URL> | sh -s -- --client\n'
-  printf '  2. Connect: quarry login <this-host> --api-key <your-api-key>\n\n'
+  printf 'To serve remote clients from this machine:\n'
+  # shellcheck disable=SC2016
+  printf '  export QUARRY_API_KEY=$(openssl rand -hex 32)\n'
+  printf '  Re-run with --network flag.\n\n'
 fi
