@@ -58,7 +58,7 @@ Run quarry on a GPU server and connect from any Mac or Linux client over TLS.
 **Server** (no Claude Code required):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/fa18b25/install-server.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/a1f0a6c76f8f8ae595f35bb7779d992c112e4ebb/install-server.sh | sh
 ```
 
 Generates TLS certificates, registers a systemd service, and prints a CA fingerprint. NVIDIA GPUs are auto-detected for CUDA inference.
@@ -66,7 +66,7 @@ Generates TLS certificates, registers a systemd service, and prints a CA fingerp
 **Client** (connects to a remote server):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/fa18b25/install-client.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/a1f0a6c76f8f8ae595f35bb7779d992c112e4ebb/install-client.sh | sh
 quarry login <server-hostname> --api-key <token>
 ```
 
