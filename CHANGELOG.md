@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [1.12.3] - 2026-04-11
+
 ### Changed
 
 - **infra**: Simplified `install.sh` from three modes (`--server`/`--client`/default)
