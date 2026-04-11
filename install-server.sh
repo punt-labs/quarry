@@ -78,6 +78,16 @@ if [ "$HAVE_PYTHON" = "0" ]; then
   PYTHON_FLAG="--python 3.13"
 fi
 
+# --- Step 3b: Detect NVIDIA GPU ---
+
+HAS_NVIDIA=0
+if command -v nvidia-smi >/dev/null 2>&1; then
+  if nvidia-smi >/dev/null 2>&1; then
+    ok "NVIDIA GPU detected"
+    HAS_NVIDIA=1
+  fi
+fi
+
 # --- Step 4: Install quarry CLI ---
 
 info "Installing $PACKAGE..."
@@ -93,7 +103,36 @@ if ! command -v "$BINARY" >/dev/null 2>&1; then
   fi
 fi
 
-# GPU runtime handled by 'quarry install' below
+# --- Step 4b: Swap onnxruntime for onnxruntime-gpu when an NVIDIA GPU is present ---
+#
+# MUST run AFTER `uv tool install --force` (which re-pins the CPU wheel from
+# pyproject.toml) and BEFORE `quarry install` (so the service-managed daemon
+# starts with CUDA providers available).  The Python-side swap in
+# `ensure_gpu_runtime()` reports success but does not stick inside the tool
+# venv under real conditions — see bead quarry-mxi9.
+#
+# The two packages conflict (same `onnxruntime` Python module, different PyPI
+# names), so we uninstall CPU before installing GPU.  `uv pip --python` targets
+# the venv that owns that interpreter.
+#
+# Keep in sync with install.sh, install-client.sh, install-both.sh.  See bead
+# quarry-0z84 for the shared-fragment refactor.
+if [ "$HAS_NVIDIA" = "1" ]; then
+  info "Installing CUDA support (onnxruntime-gpu)..."
+  TOOL_PYTHON="$(head -1 "$(command -v "$BINARY")" | sed 's/^#!//')"
+  if [ -f "$TOOL_PYTHON" ]; then
+    uv pip uninstall --python "$TOOL_PYTHON" onnxruntime < /dev/null 2>/dev/null || true
+    if uv pip install --python "$TOOL_PYTHON" "onnxruntime-gpu>=1.18.0" < /dev/null; then
+      ok "onnxruntime-gpu installed"
+    else
+      warn "Failed to install onnxruntime-gpu — restoring CPU onnxruntime"
+      uv pip install --python "$TOOL_PYTHON" "onnxruntime>=1.18.0" < /dev/null || fail "Could not restore onnxruntime — re-run install-server.sh"
+      ok "onnxruntime (CPU) restored"
+    fi
+  else
+    warn "Could not locate tool Python — CUDA support skipped"
+  fi
+fi
 
 ok "$BINARY $(command -v "$BINARY")"
 
@@ -108,7 +147,22 @@ printf '\n'
 QUARRY_SERVE_HOST=0.0.0.0 "$BINARY" install
 printf '\n'
 
-# --- Step 5: Health-check the service-managed daemon ---
+# --- Step 5b: Belt-and-suspenders restart of the service-managed daemon ---
+#
+# `quarry install` (above) calls `_launchd_install` / `_systemd_install`, which
+# DO restart the service when one was already registered.  Belt-and-suspenders:
+# if a stale daemon from a previous install is running with the old in-memory
+# onnxruntime imports, force a restart here so it picks up the tool-venv swap
+# from Step 4b before the health check.  Both commands are idempotent no-ops
+# when the service is not registered.
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl --user restart quarry 2>/dev/null || true
+elif command -v launchctl >/dev/null 2>&1; then
+  # Label must match _LABEL in src/quarry/service.py.
+  launchctl kickstart -k "gui/$(id -u)/com.punt-labs.quarry" 2>/dev/null || true
+fi
+
+# --- Step 6: Health-check the service-managed daemon ---
 
 # quarry install (above) registered quarry as a launchd/systemd service with
 # KeepAlive/Restart=on-failure and --host 0.0.0.0 --tls baked in.  The service
@@ -136,7 +190,7 @@ while [ "$i" -lt "$MAX_TRIES" ]; do
 done
 printf '\n'
 
-# --- Step 6: Verify ---
+# --- Step 7: Verify ---
 
 info "Verifying installation..."
 printf '\n'

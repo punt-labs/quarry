@@ -17,6 +17,28 @@ across `transform`, `index`, and `connector`).
 ### Fixed
 
 - **infra**: Install scripts (`install-server.sh`, `install-client.sh`,
+  `install-both.sh`) regressed the shell-level onnxruntime → onnxruntime-gpu
+  swap when they were split out of `install.sh`, so NVIDIA users ran the
+  one-liner and silently ended up on `CPUExecutionProvider` with a CPU-only
+  `onnxruntime` wheel in the tool venv. The split installers deferred GPU
+  detection to `ensure_gpu_runtime()` in `src/quarry/service.py`, which under
+  real conditions returned `"onnxruntime-gpu installed"` (rc=0) while the GPU
+  wheel was absent from `site-packages` afterward (quarry-mxi9, needs rmh
+  investigation). Ported the 40-line shell-level GPU swap block from
+  `install.sh` into all three split installers. The swap runs after
+  `uv tool install --force` (which re-pins the CPU wheel from `pyproject.toml`)
+  and before `quarry install` (so the service-managed daemon starts with CUDA
+  providers available). Added `tests/test_install_scripts.py`, a shell
+  integration test that invokes each script against a mock `quarry` + mock
+  `uv` + mock `nvidia-smi` under a restricted `PATH` and asserts the required
+  call ordering (`uv tool install --force` → `uv pip uninstall onnxruntime` →
+  `uv pip install onnxruntime-gpu` → `quarry install`). `install-server.sh`
+  and `install-both.sh` also force a `systemctl --user restart quarry` /
+  `launchctl kickstart -k` between `quarry install` and the health check, as
+  belt-and-suspenders against a stale daemon that started before the tool-venv
+  swap. See bead quarry-e4c2 and follow-up bead quarry-0z84 (factor into a
+  shared sourced fragment so the drift can't recur).
+- **infra**: Install scripts (`install-server.sh`, `install-client.sh`,
   `install-both.sh`) pinned `VERSION=1.11.0` after the 1.12.1 release, so the
   one-liner silently installed a version-behind release. Bumped to `1.12.1`.
   README.md install URLs repinned from a stale commit SHA (`fa18b25`, predates
