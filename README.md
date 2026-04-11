@@ -15,7 +15,7 @@ Quarry indexes documents in 20+ formats, embeds them with a local ONNX model (sn
 ## Quick Start
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/6f5efa51e699e6758b23b2a881d553e105befeda/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/ec4ec433284f380eb18cba5b3a1e886d2da6a25c/install.sh | sh
 ```
 
 Restart Claude Code, then:
@@ -43,7 +43,7 @@ quarry doctor
 <summary>Verify before running</summary>
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/6f5efa51e699e6758b23b2a881d553e105befeda/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/ec4ec433284f380eb18cba5b3a1e886d2da6a25c/install.sh -o install.sh
 shasum -a 256 install.sh
 cat install.sh
 sh install.sh
@@ -59,7 +59,7 @@ Run quarry on a GPU server and connect from any Mac or Linux client over TLS.
 
 ```bash
 export QUARRY_API_KEY=$(openssl rand -hex 32)
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/<SHA>/install.sh | sh -s -- --network
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/ec4ec433284f380eb18cba5b3a1e886d2da6a25c/install.sh | sh -s -- --network
 ```
 
 Generates TLS certificates, binds daemon to 0.0.0.0, registers a systemd service, and prints a CA fingerprint. NVIDIA GPUs are auto-detected for CUDA inference.
@@ -67,7 +67,7 @@ Generates TLS certificates, binds daemon to 0.0.0.0, registers a systemd service
 **Client** (connects to remote server):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/<SHA>/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/ec4ec433284f380eb18cba5b3a1e886d2da6a25c/install.sh | sh
 quarry login <server-hostname> --api-key <token>
 ```
 
