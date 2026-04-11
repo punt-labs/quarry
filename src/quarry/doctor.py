@@ -362,6 +362,15 @@ def _check_claude_code_mcp() -> CheckResult:
     Reads the plugin registry JSON directly instead of shelling out to
     ``claude mcp list``, which spawns every configured MCP server and
     exceeds the timeout when many plugins are installed.
+
+    NOTE: This check reads the plugin registry (installed_plugins.json),
+    which is populated by ``claude plugin install``.  The write path in
+    ``_configure_claude_code()`` uses ``claude mcp add``, which writes to a
+    different store.  In practice these are in sync because quarry is
+    always installed as a plugin via the install scripts.  If a user
+    runs ``quarry install`` standalone (without the plugin), this check
+    may report "not configured" even though the MCP server was added.
+    This is acceptable for a ``required=False`` diagnostic check.
     """
     plugins_path = _CLAUDE_CODE_PLUGINS_PATH
     if not plugins_path.exists():
@@ -392,7 +401,15 @@ def _check_claude_code_mcp() -> CheckResult:
                 message="not configured (run 'quarry install')",
                 required=False,
             )
-        install_path = Path(entries[0].get("installPath", ""))
+        raw_path = entries[0].get("installPath", "")
+        if not raw_path:
+            return CheckResult(
+                name="Claude Code MCP",
+                passed=False,
+                message="plugin registry has empty installPath",
+                required=False,
+            )
+        install_path = Path(raw_path)
         plugin_json = install_path / ".claude-plugin" / "plugin.json"
         if not plugin_json.exists():
             return CheckResult(
@@ -414,7 +431,7 @@ def _check_claude_code_mcp() -> CheckResult:
             passed=True,
             message="configured",
         )
-    except (json.JSONDecodeError, OSError, KeyError) as exc:
+    except (json.JSONDecodeError, OSError, KeyError, TypeError, AttributeError) as exc:
         return CheckResult(
             name="Claude Code MCP",
             passed=False,
