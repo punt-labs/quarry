@@ -20,7 +20,7 @@ across `transform`, `index`, and `connector`).
   `install-both.sh`) pinned `VERSION=1.11.0` after the 1.12.1 release, so the
   one-liner silently installed a version-behind release. Bumped to `1.12.1`.
   README.md install URLs repinned from a stale commit SHA (`fa18b25`, predates
-  1.12.1) to the merge commit that contains the bumped scripts — keeping the
+  1.12.1) to the commit that contains the bumped scripts — keeping the
   install-time source immutable while fetching the up-to-date `VERSION`.
 
 ## [1.12.1] - 2026-04-09
