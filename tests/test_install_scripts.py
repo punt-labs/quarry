@@ -52,8 +52,9 @@ def mock_bin(tmp_path: Path) -> Path:
     """Mock ``bin`` directory with stubs for every external command the
     install scripts invoke.
 
-    Each mock appends its argv (one arg per line, prefixed by the mock name)
-    to ``$LOG_FILE`` so tests can assert on call ordering.
+    Each mock appends one line per invocation to ``$LOG_FILE``: the mock
+    name followed by its argv, space-separated, so tests can assert on call
+    ordering.
     """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
