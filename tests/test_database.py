@@ -17,6 +17,7 @@ from quarry.database import (
     delete_document,
     get_db,
     get_page_text,
+    hybrid_search,
     insert_chunks,
     list_collections,
     list_documents,
@@ -620,3 +621,97 @@ class TestConcurrentInsert:
 
         assert errors == [], f"Concurrent insert raised: {errors}"
         assert count_chunks(db) == len(tasks)
+
+
+class TestOptimizeRebuildsFtsIndex:
+    """Verify that optimize_table rebuilds the FTS index.
+
+    The Tantivy FTS index stores row references by fragment ID.  When
+    ``table.optimize()`` compacts fragments, those IDs change and the
+    stale FTS index causes ``RuntimeError`` on hybrid_search.
+    Rebuilding the FTS index after compaction fixes this.
+    """
+
+    def test_hybrid_search_works_after_optimize(self, tmp_path: Path):
+        """hybrid_search must not raise after delete + optimize."""
+        db = get_db(tmp_path / "db")
+
+        # Insert two batches so optimize has fragments to compact.
+        batch1 = [
+            _make_chunk(chunk_index=0, text="quantum entanglement physics"),
+            _make_chunk(chunk_index=1, text="classical mechanics newton"),
+        ]
+        batch2 = [
+            _make_chunk(chunk_index=2, text="general relativity einstein"),
+            _make_chunk(chunk_index=3, text="thermodynamics entropy heat"),
+        ]
+        vecs1 = _random_vectors(2)
+        vecs2 = _random_vectors(2)
+        insert_chunks(db, batch1, vecs1)
+        insert_chunks(db, batch2, vecs2)
+
+        # Delete one batch to create deletion markers.
+        delete_document(db, "test.pdf")
+
+        # Re-insert so we have data to search.
+        batch3 = [
+            _make_chunk(chunk_index=0, text="quantum entanglement physics"),
+            _make_chunk(chunk_index=1, text="classical mechanics newton"),
+            _make_chunk(chunk_index=2, text="general relativity einstein"),
+        ]
+        vecs3 = _random_vectors(3)
+        insert_chunks(db, batch3, vecs3)
+
+        # Optimize compacts fragments — this is where the old FTS index
+        # would become stale.
+        optimize_table(db)
+
+        # hybrid_search must work without RuntimeError.
+        query_vec = _random_vectors(1)[0]
+        results = hybrid_search(db, "quantum physics", query_vec, limit=5)
+        assert len(results) >= 1
+
+    def test_fts_results_nonempty_after_optimize(self, tmp_path: Path):
+        """FTS channel must return results after optimize, not degrade
+        to vector-only.
+        """
+        db = get_db(tmp_path / "db")
+
+        chunks = [
+            _make_chunk(chunk_index=i, text=f"unique keyword xylophone chunk {i}")
+            for i in range(5)
+        ]
+        vectors = _random_vectors(5)
+        insert_chunks(db, chunks, vectors)
+
+        # Force multiple fragments by inserting a second batch.
+        more = [
+            _make_chunk(chunk_index=5, text="unique keyword xylophone extra"),
+        ]
+        insert_chunks(db, more, _random_vectors(1))
+
+        optimize_table(db)
+
+        # Search for a term that only matches via FTS keyword.
+        query_vec = _random_vectors(1)[0]
+        results = hybrid_search(db, "xylophone", query_vec, limit=10)
+        texts = [r["text"] for r in results]
+        assert any("xylophone" in t for t in texts)
+
+    def test_optimize_passes_cleanup_older_than(self, tmp_path: Path):
+        """optimize_table calls table.optimize(cleanup_older_than=7d)."""
+        db = get_db(tmp_path / "db")
+        chunks = [_make_chunk(chunk_index=0, text="data")]
+        insert_chunks(db, chunks, _random_vectors(1))
+
+        # Run optimize twice to create versions worth pruning.
+        optimize_table(db)
+        insert_chunks(
+            db,
+            [_make_chunk(chunk_index=1, text="more data")],
+            _random_vectors(1),
+        )
+        optimize_table(db)
+
+        # Data still accessible — no corruption.
+        assert count_chunks(db) == 2

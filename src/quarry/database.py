@@ -7,6 +7,7 @@ import math
 import threading
 from collections import defaultdict
 from dataclasses import asdict
+from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -722,9 +723,16 @@ def create_collection_index(db: LanceDB) -> None:
 
 
 def optimize_table(db: LanceDB) -> None:
-    """Compact table data after bulk inserts.
+    """Compact table data and rebuild the FTS index.
 
-    Merges small data fragments for better query performance.
+    Merges small data fragments for better query performance, then
+    rebuilds the Tantivy full-text index so it references the new
+    fragment layout.  Without the rebuild, the FTS index retains stale
+    row references to compacted-away fragments, causing RuntimeError
+    on hybrid_search queries.
+
+    Also prunes old manifest versions older than 7 days to reclaim
+    disk space from the ``_versions/`` directory.
 
     Args:
         db: LanceDB connection.
@@ -733,8 +741,22 @@ def optimize_table(db: LanceDB) -> None:
         return
 
     table = db.open_table(TABLE_NAME)
-    table.optimize()
-    logger.info("Optimized table %s", TABLE_NAME)
+    table.optimize(cleanup_older_than=timedelta(days=7))
+    logger.info("Optimized table %s (compacted + pruned versions >7d)", TABLE_NAME)
+
+    # Rebuild FTS index — compaction changes fragment IDs, so the old
+    # Tantivy index has stale references.  replace=True forces a full
+    # rebuild.  This is O(n) in table size but only runs after bulk
+    # sync operations, not on every query.
+    try:
+        table.create_fts_index("text", replace=True)
+        logger.info("Rebuilt FTS index after optimization")
+    except (OSError, RuntimeError, ValueError):
+        logger.warning(
+            "FTS index rebuild after optimize failed; "
+            "hybrid search may use vector-only until next sync",
+            exc_info=True,
+        )
 
 
 def format_size(size_bytes: int) -> str:

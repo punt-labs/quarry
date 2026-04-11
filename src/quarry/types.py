@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
+    from datetime import timedelta
     from pathlib import Path
 
     import numpy as np
@@ -47,7 +48,7 @@ class LanceTable(Protocol):
         self,
         transforms: dict[str, str],
     ) -> None: ...
-    def optimize(self) -> object: ...
+    def optimize(self, *, cleanup_older_than: timedelta | None = ...) -> object: ...
     @property
     def schema(self) -> pa.Schema: ...
 
