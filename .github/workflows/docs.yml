@@ -13,6 +13,7 @@ jobs:
   docs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # markdownlint across all tracked .md files
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: DavidAnson/markdownlint-cli2-action@2256fe35224a451507c8848ec825a4212e9eeb00 # v22

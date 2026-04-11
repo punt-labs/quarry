@@ -103,7 +103,7 @@ Apply an exponential decay function to score memories by recency. A memory acces
 
 A simple decay function:
 
-```
+```text
 temporal_score = exp(-decay_rate * hours_since_creation)
 ```
 
@@ -115,7 +115,7 @@ Each channel returns a ranked list of memories. RRF combines them without needin
 
 The algorithm:
 
-```
+```text
 For each memory m that appears in any channel's results:
     RRF_score(m) = Σ (1 / (k + rank_in_channel))
 ```

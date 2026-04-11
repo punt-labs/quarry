@@ -84,6 +84,7 @@ Remove the `ONNX_MODEL_FILE` constant (line 17). It is replaced by
 `PROVIDER_MODEL_MAP` in `provider.py`.
 
 Keep all other constants unchanged:
+
 - `ONNX_MODEL_REPO`
 - `ONNX_MODEL_REVISION`
 - `ONNX_TOKENIZER_FILE`
@@ -92,6 +93,7 @@ Keep all other constants unchanged:
 ### MODIFY: `src/quarry/embeddings.py`
 
 **Imports:** Remove `ONNX_MODEL_FILE` from the config import. Add:
+
 ```python
 from quarry.provider import select_provider
 ```
@@ -99,12 +101,14 @@ from quarry.provider import select_provider
 **`download_model_files(model_file: str = "onnx/model_int8.onnx")`:**
 Add `model_file` parameter with default. Replace the hardcoded
 `ONNX_MODEL_FILE` reference with the parameter. Signature:
+
 ```python
 def download_model_files(model_file: str = "onnx/model_int8.onnx") -> tuple[str, str]:
 ```
 
 **`_load_local_model_files(model_file: str)`:**
 Add required `model_file` parameter. Replace `ONNX_MODEL_FILE` with it.
+
 ```python
 def _load_local_model_files(model_file: str) -> tuple[str, str]:
 ```
@@ -114,6 +118,7 @@ Add required `model_file` parameter. Pass it through to
 `_load_local_model_files(model_file)` and `download_model_files(model_file)`.
 Update the download size in the log message from "~500 MB" to "~120-220 MB"
 (depends on model variant).
+
 ```python
 def _load_model_files(model_file: str) -> tuple[str, str]:
 ```
@@ -176,6 +181,7 @@ def __init__(self) -> None:
 
 This is the CUDA validation that the design originally put in
 `provider.py`. Moving it here means:
+
 - `provider.py` stays pure (no model loading, no HF, no sessions).
 - The actual CUDA validation happens with the real model path
   (resolved by `_load_model_files`).
@@ -188,6 +194,7 @@ This is the CUDA validation that the design originally put in
   a check: if the env var is `cuda`, re-raise instead of falling back.
 
 Revised exception block:
+
 ```python
     except Exception:
         force_cuda = (
@@ -336,6 +343,7 @@ All tests mock `onnxruntime.get_available_providers`. No real ORT calls.
 | 8 | `test_empty_providers_returns_cpu` | Mock `get_available_providers` -> `[]`. No env var. | Returns `ProviderSelection("CPUExecutionProvider", "onnx/model_int8.onnx")`. (Edge case: ORT installed without any EP. Probe falls through to CPU fallback.) |
 
 **Mock pattern for all tests:**
+
 ```python
 with patch("onnxruntime.get_available_providers", return_value=[...]):
     result = select_provider()
