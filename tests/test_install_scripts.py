@@ -450,6 +450,10 @@ def test_client_mode_does_not_start_daemon(env: dict[str, str], mock_bin: Path) 
     assert not _any_line_contains(log, "launchctl"), (
         "--client mode must not call launchctl"
     )
+    # Health check uses curl against localhost:8420 -- client must skip it.
+    assert not _any_line_contains(log, "localhost:8420/health"), (
+        "--client mode must not health-check the daemon"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -463,6 +467,15 @@ def test_unknown_flag_fails(env: dict[str, str]) -> None:
     assert result.returncode != 0, "Unknown flag must exit non-zero"
     assert "Unknown option" in result.stderr, (
         "Error message must indicate unknown option"
+    )
+
+
+def test_mutually_exclusive_flags_fail(env: dict[str, str]) -> None:
+    """--server and --client are mutually exclusive; both must fail."""
+    result = _run_script(INSTALL_SH, env, args=["--server", "--client"])
+    assert result.returncode != 0, "--server --client must exit non-zero"
+    assert "mutually exclusive" in result.stderr, (
+        "Error must mention mutual exclusivity"
     )
 
 

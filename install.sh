@@ -22,10 +22,21 @@ usage() {
 }
 
 MODE="full"
+MODE_SET=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --server) MODE="server"; shift ;;
-    --client) MODE="client"; shift ;;
+    --server)
+      if [ "$MODE_SET" = "1" ]; then
+        printf 'Error: --server and --client are mutually exclusive.\n' >&2
+        usage >&2; exit 1
+      fi
+      MODE="server"; MODE_SET=1; shift ;;
+    --client)
+      if [ "$MODE_SET" = "1" ]; then
+        printf 'Error: --server and --client are mutually exclusive.\n' >&2
+        usage >&2; exit 1
+      fi
+      MODE="client"; MODE_SET=1; shift ;;
     --help|-h) usage; exit 0 ;;
     *) printf 'Unknown option: %s\n' "$1" >&2; usage >&2; exit 1 ;;
   esac
