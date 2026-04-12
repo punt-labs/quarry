@@ -14,6 +14,11 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Added
+
+- **tool**: `quarry doctor` now checks FTS index health, sync recency across
+  registered collections, and existence of registered sync directories.
+
 ## [1.12.4] - 2026-04-11
 
 ## [1.12.3] - 2026-04-11

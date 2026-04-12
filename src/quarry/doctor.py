@@ -11,6 +11,7 @@ import subprocess
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -217,6 +218,191 @@ def _human_size(nbytes: int) -> str:
             return f"{nbytes:.1f} {unit}" if nbytes >= 10 else f"{nbytes:.2f} {unit}"
         nbytes /= 1024  # type: ignore[assignment]
     return f"{nbytes:.1f} TB"  # unreachable but satisfies type checker
+
+
+def _check_fts_health(db_path: Path) -> CheckResult:
+    """Verify the Tantivy FTS index is queryable."""
+    from quarry.database import TABLE_NAME, get_db  # noqa: PLC0415
+
+    if not db_path.exists():
+        return CheckResult(
+            name="FTS index",
+            passed=True,
+            message="no database yet",
+            required=False,
+        )
+    try:
+        db = get_db(db_path)
+        if TABLE_NAME not in db.list_tables().tables:
+            return CheckResult(
+                name="FTS index",
+                passed=True,
+                message="no table yet",
+                required=False,
+            )
+        table = db.open_table(TABLE_NAME)
+        table.search("health", query_type="fts").limit(1).to_list()
+        return CheckResult(
+            name="FTS index",
+            passed=True,
+            message="healthy",
+            required=False,
+        )
+    except RuntimeError:
+        return CheckResult(
+            name="FTS index",
+            passed=False,
+            message="stale — run 'quarry sync' to rebuild",
+            required=False,
+        )
+    except (OSError, ValueError):
+        return CheckResult(
+            name="FTS index",
+            passed=False,
+            message="missing — will be created on next sync",
+            required=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult(
+            name="FTS index",
+            passed=False,
+            message=f"error: {exc}",
+            required=False,
+        )
+
+
+def _sync_age_result(count: int, oldest_age: float) -> CheckResult:
+    """Build a CheckResult for sync recency based on oldest collection age."""
+    stale_seconds = 24 * 3600
+    hours = int(oldest_age / 3600)
+    if oldest_age > stale_seconds:
+        return CheckResult(
+            name="Sync",
+            passed=False,
+            message=f"{count} collections, oldest sync {hours}h ago (>24h stale)",
+            required=False,
+        )
+    age_str = f"{hours}h ago" if hours > 0 else f"{int(oldest_age / 60)}m ago"
+    return CheckResult(
+        name="Sync",
+        passed=True,
+        message=f"{count} collections, oldest sync {age_str}",
+        required=False,
+    )
+
+
+def _check_sync_health(registry_path: Path) -> CheckResult:
+    """Check sync recency across all registered collections."""
+    from quarry.sync_registry import list_registrations, open_registry  # noqa: PLC0415
+
+    if not registry_path.exists():
+        return CheckResult(
+            name="Sync",
+            passed=True,
+            message="no registrations",
+            required=False,
+        )
+    conn = None
+    try:
+        conn = open_registry(registry_path)
+        regs = list_registrations(conn)
+        if not regs:
+            return CheckResult(
+                name="Sync",
+                passed=True,
+                message="no registrations",
+                required=False,
+            )
+        # Find the most recent ingested_at per collection from the files table
+        now = datetime.now(UTC)
+        count = len(regs)
+        oldest_age: float | None = None
+        never_synced: list[str] = []
+        for reg in regs:
+            row = conn.execute(
+                "SELECT MAX(ingested_at) FROM files WHERE collection = ?",
+                (reg.collection,),
+            ).fetchone()
+            last_ingested: str | None = row[0] if row else None
+            if last_ingested is None:
+                never_synced.append(reg.collection)
+            else:
+                age = now - datetime.fromisoformat(last_ingested)
+                age_seconds = age.total_seconds()
+                if oldest_age is None or age_seconds > oldest_age:
+                    oldest_age = age_seconds
+        if never_synced:
+            names = ", ".join(never_synced[:3])
+            msg = f"{count} collections, {len(never_synced)} never synced: {names}"
+            return CheckResult(
+                name="Sync",
+                passed=False,
+                message=msg,
+                required=False,
+            )
+        # All regs have files when never_synced is empty.
+        if oldest_age is None:  # pragma: no cover
+            oldest_age = 0.0
+        return _sync_age_result(count, oldest_age)
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult(
+            name="Sync",
+            passed=False,
+            message=f"registry error: {exc}",
+            required=False,
+        )
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def _check_sync_directories(registry_path: Path) -> CheckResult:
+    """Verify registered sync directories exist on disk."""
+    from quarry.sync_registry import list_registrations, open_registry  # noqa: PLC0415
+
+    if not registry_path.exists():
+        return CheckResult(
+            name="Sync directories",
+            passed=True,
+            message="no registrations",
+            required=False,
+        )
+    conn = None
+    try:
+        conn = open_registry(registry_path)
+        regs = list_registrations(conn)
+        if not regs:
+            return CheckResult(
+                name="Sync directories",
+                passed=True,
+                message="no registrations",
+                required=False,
+            )
+        missing = [reg.collection for reg in regs if not Path(reg.directory).is_dir()]
+        if missing:
+            names = ", ".join(missing[:3])
+            return CheckResult(
+                name="Sync directories",
+                passed=False,
+                message=f"{len(missing)} missing: {names}",
+                required=False,
+            )
+        return CheckResult(
+            name="Sync directories",
+            passed=True,
+            message=f"{len(regs)} directories OK",
+            required=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult(
+            name="Sync directories",
+            passed=False,
+            message=f"registry error: {exc}",
+            required=False,
+        )
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 _MCP_SERVER_NAME = "quarry"
@@ -834,6 +1020,9 @@ def check_environment(*, _skip_header: bool = False) -> int:
         print(f"punt-quarry {_quarry_version()}")  # noqa: T201
         print()  # noqa: T201
 
+    from quarry.config import Settings  # noqa: PLC0415
+
+    settings = Settings()
     with _quiet_logging():
         all_results: list[CheckResult | None] = [
             _check_python_version(),
@@ -846,6 +1035,9 @@ def check_environment(*, _skip_header: bool = False) -> int:
             _check_claude_code_mcp(),
             _check_claude_desktop_mcp(),
             _check_storage(),
+            _check_fts_health(settings.lancedb_path),
+            _check_sync_health(settings.registry_path),
+            _check_sync_directories(settings.registry_path),
         ]
         checks: list[CheckResult] = [c for c in all_results if c is not None]
 
