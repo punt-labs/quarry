@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-04-12
+
 ### Added
 
 - **tool**: `quarry doctor` now checks FTS index health, sync recency across

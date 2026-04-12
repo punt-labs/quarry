@@ -43,7 +43,7 @@ ok()   { printf '  %b\342\234\223%b %s\n' "$GREEN" "$NC" "$1"; }
 warn() { printf '  %b!%b %s\n' "$YELLOW" "$NC" "$1"; }
 fail() { printf '  %b\342\234\227%b %s\n' "$YELLOW" "$NC" "$1"; exit 1; }
 
-VERSION="1.12.4"
+VERSION="1.13.0"
 MARKETPLACE_REPO="punt-labs/claude-plugins"
 MARKETPLACE_NAME="punt-labs"
 PLUGIN_NAME="quarry"
