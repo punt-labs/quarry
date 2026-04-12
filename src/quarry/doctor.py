@@ -231,16 +231,16 @@ def _check_fts_health(db_path: Path) -> CheckResult:
             message="no database yet",
             required=False,
         )
-    db = get_db(db_path)
-    if TABLE_NAME not in db.list_tables().tables:
-        return CheckResult(
-            name="FTS index",
-            passed=True,
-            message="no table yet",
-            required=False,
-        )
-    table = db.open_table(TABLE_NAME)
     try:
+        db = get_db(db_path)
+        if TABLE_NAME not in db.list_tables().tables:
+            return CheckResult(
+                name="FTS index",
+                passed=True,
+                message="no table yet",
+                required=False,
+            )
+        table = db.open_table(TABLE_NAME)
         table.search("health", query_type="fts").limit(1).to_list()
         return CheckResult(name="FTS index", passed=True, message="healthy")
     except RuntimeError:
@@ -257,6 +257,32 @@ def _check_fts_health(db_path: Path) -> CheckResult:
             message="missing — will be created on next sync",
             required=False,
         )
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult(
+            name="FTS index",
+            passed=False,
+            message=f"error: {exc}",
+            required=False,
+        )
+
+
+def _sync_age_result(count: int, oldest_age: float) -> CheckResult:
+    """Build a CheckResult for sync recency based on oldest collection age."""
+    stale_seconds = 24 * 3600
+    hours = int(oldest_age / 3600)
+    if oldest_age > stale_seconds:
+        return CheckResult(
+            name="Sync",
+            passed=False,
+            message=f"{count} collections, oldest sync {hours}h ago (>24h stale)",
+            required=False,
+        )
+    age_str = f"{hours}h ago" if hours > 0 else f"{int(oldest_age / 60)}m ago"
+    return CheckResult(
+        name="Sync",
+        passed=True,
+        message=f"{count} collections, oldest sync {age_str}",
+    )
 
 
 def _check_sync_health(registry_path: Path) -> CheckResult:
@@ -270,8 +296,9 @@ def _check_sync_health(registry_path: Path) -> CheckResult:
             message="no registrations",
             required=False,
         )
-    conn = open_registry(registry_path)
+    conn = None
     try:
+        conn = open_registry(registry_path)
         regs = list_registrations(conn)
         if not regs:
             return CheckResult(
@@ -310,20 +337,7 @@ def _check_sync_health(registry_path: Path) -> CheckResult:
         # All regs have files when never_synced is empty.
         if oldest_age is None:  # pragma: no cover
             oldest_age = 0.0
-        hours = int(oldest_age / 3600)
-        if hours > 24:
-            return CheckResult(
-                name="Sync",
-                passed=False,
-                message=f"{count} collections, oldest sync {hours}h ago (>24h stale)",
-                required=False,
-            )
-        age_str = f"{hours}h ago" if hours > 0 else f"{int(oldest_age / 60)}m ago"
-        return CheckResult(
-            name="Sync",
-            passed=True,
-            message=f"{count} collections, last synced {age_str}",
-        )
+        return _sync_age_result(count, oldest_age)
     except Exception as exc:  # noqa: BLE001
         return CheckResult(
             name="Sync",
@@ -332,7 +346,8 @@ def _check_sync_health(registry_path: Path) -> CheckResult:
             required=False,
         )
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
 def _check_sync_directories(registry_path: Path) -> CheckResult:
@@ -346,8 +361,9 @@ def _check_sync_directories(registry_path: Path) -> CheckResult:
             message="no registrations",
             required=False,
         )
-    conn = open_registry(registry_path)
+    conn = None
     try:
+        conn = open_registry(registry_path)
         regs = list_registrations(conn)
         if not regs:
             return CheckResult(
@@ -378,7 +394,8 @@ def _check_sync_directories(registry_path: Path) -> CheckResult:
             required=False,
         )
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
 _MCP_SERVER_NAME = "quarry"

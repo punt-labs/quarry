@@ -847,7 +847,7 @@ class TestCheckSyncHealth:
         result = _check_sync_health(registry_path)
         assert result.passed is True
         assert "1 collections" in result.message
-        assert "last synced" in result.message
+        assert "oldest sync" in result.message
 
     def test_stale_sync(self, tmp_path: Path) -> None:
         """Collection with ingested_at > 24h ago triggers warning."""
