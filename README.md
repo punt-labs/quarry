@@ -1,5 +1,7 @@
 # punt-quarry
 
+[![SafeSkill 89/100](https://img.shields.io/badge/SafeSkill-89%2F100_Passes%20with%20Notes-yellow)](https://safeskill.dev/scan/punt-labs-quarry)
+
 > Local semantic search for AI agents and humans.
 
 [![License](https://img.shields.io/github/license/punt-labs/quarry)](LICENSE)
