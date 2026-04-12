@@ -5,8 +5,8 @@ Provides ``install`` and ``uninstall`` commands that register quarry as a
 system service (launchd on macOS, systemd on Linux) so the daemon starts
 at login and restarts on crash.
 
-The service runs ``quarry serve --port 8420`` using the Python interpreter
-that executed the install command, anchoring to the exact venv/installation.
+The service runs ``quarry serve --port 8420`` using the installed ``quarry``
+binary (from ``uv tool install`` or PATH), never ``sys.executable``.
 """
 
 from __future__ import annotations
@@ -64,30 +64,50 @@ def _write_env_file(api_key: str) -> None:
 def _quarry_exec_args() -> list[str]:
     """Return the command to invoke ``quarry serve``.
 
-    Prefers the installed ``quarry`` binary (from ``uv tool install``) over
-    ``sys.executable -m quarry``.  When run from a dev venv, ``sys.executable``
-    points to the venv Python — the daemon should use the prod binary instead
-    so it survives venv rebuilds and directory moves.
+    Resolution order:
+
+    1. ``~/.local/bin/quarry`` (uv tool install symlink) -- resolved to absolute.
+    2. ``shutil.which("quarry")`` -- picks up any quarry on PATH.
+    3. Refuse to register -- raise ``RuntimeError`` instead of silently using
+       ``sys.executable``, which may point at a dev venv.
+
+    The ``sys.executable`` fallback is deliberately removed.  When ``quarry
+    install`` runs from a dev venv, ``sys.executable`` is ``.venv/bin/python3``
+    which has CPU-only onnxruntime and no GPU provider.  The systemd/launchd
+    unit bakes this path permanently, and the daemon crash-loops until someone
+    manually edits the unit or re-runs the installer.
 
     Reads ``QUARRY_SERVE_HOST`` from the environment at registration time.
     When set and non-empty, ``--host <value>`` is baked into the service command
     so the daemon binds to the correct address after reboot.  If unset, the
     server defaults to loopback (``127.0.0.1``).
 
-    The API key is NOT included in exec args — it is passed to the daemon via
+    The API key is NOT included in exec args -- it is passed to the daemon via
     an env file (``~/.punt-labs/quarry/quarry.env``) to keep it out of
     ``ps aux`` output and world-readable service files.
 
     Appends ``--tls`` when TLS certificates are present in TLS_DIR.
     """
-    # Resolve the uv tool binary through its symlink to get the stable path.
+    # 1. Preferred: uv tool install symlink.
     local_bin = Path.home() / ".local" / "bin" / "quarry"
     if local_bin.exists():
         resolved = local_bin.resolve()
+        logger.info("Service binary: %s (uv tool)", resolved)
         base = [str(resolved), "serve", "--port", str(DEFAULT_PORT)]
     else:
-        # Fallback: use the current Python (works for non-uv installs).
-        base = [sys.executable, "-m", "quarry", "serve", "--port", str(DEFAULT_PORT)]
+        # 2. Fallback: quarry on PATH (may be the same, may be different).
+        which_quarry = shutil.which("quarry")
+        if which_quarry is not None:
+            resolved = Path(which_quarry).resolve()
+            logger.info("Service binary: %s (PATH)", resolved)
+            base = [str(resolved), "serve", "--port", str(DEFAULT_PORT)]
+        else:
+            # 3. No quarry binary found.  Do NOT fall back to sys.executable.
+            msg = (
+                "Cannot find 'quarry' binary at ~/.local/bin/quarry or on PATH. "
+                "Install quarry first: uv tool install punt-quarry"
+            )
+            raise RuntimeError(msg)
 
     serve_host = os.environ.get("QUARRY_SERVE_HOST", "").strip()
     if serve_host:

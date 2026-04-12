@@ -30,6 +30,11 @@ across `transform`, `index`, and `connector`).
 
 ### Fixed
 
+- **infra**: `_quarry_exec_args()` no longer falls back to `sys.executable`
+  when the uv tool binary is absent. Falls back to `shutil.which("quarry")`
+  instead, and raises `RuntimeError` if no quarry binary is found. Prevents
+  baking a dev venv Python path into systemd/launchd units, which caused
+  crash-loops from CPU-only onnxruntime.
 - **infra**: Updated stale "As of v1.11.0" remote routing references in
   DESIGN.md and architecture.tex to reflect v1.12.4 state (12 commands now
   route remotely).
