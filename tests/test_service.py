@@ -34,6 +34,15 @@ _PATCH_TLS = patch("quarry.service.write_tls_files")
 _PATCH_CERT_FP = patch("quarry.service.cert_fingerprint", return_value="")
 
 
+def _make_local_bin_quarry(home: Path) -> Path:
+    """Create a fake ~/.local/bin/quarry under *home* for tests."""
+    local_bin = home / ".local" / "bin" / "quarry"
+    local_bin.parent.mkdir(parents=True, exist_ok=True)
+    local_bin.write_text("#!/bin/sh\n")
+    local_bin.chmod(0o755)
+    return local_bin
+
+
 class TestGetTlsHostname:
     def test_env_var_takes_priority(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("QUARRY_TLS_HOSTNAME", "my.server.example.com")
@@ -87,28 +96,12 @@ class TestQuarryExecArgs:
         assert args[-3:] == ["serve", "--port", str(DEFAULT_PORT)]
         assert str(fake_bin) == args[0]
 
-    def test_falls_back_to_shutil_which(self, tmp_path: Path) -> None:
-        """When ~/.local/bin/quarry is absent, fall back to shutil.which."""
-        fake_quarry = tmp_path / "somewhere" / "quarry"
-        fake_quarry.parent.mkdir(parents=True, exist_ok=True)
-        fake_quarry.write_text("#!/bin/sh\n")
+    def test_raises_when_local_bin_missing(self, tmp_path: Path) -> None:
+        """Raise RuntimeError when ~/.local/bin/quarry is absent."""
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
             patch("quarry.service.TLS_DIR", tmp_path / "tls"),
-            patch("quarry.service.shutil.which", return_value=str(fake_quarry)),
-        ):
-            args = _quarry_exec_args()
-        resolved = str(fake_quarry.resolve())
-        assert args[0] == resolved
-        assert args[1:] == ["serve", "--port", str(DEFAULT_PORT)]
-
-    def test_raises_when_no_quarry_binary_found(self, tmp_path: Path) -> None:
-        """Raise RuntimeError when no quarry binary is found."""
-        with (
-            patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
-            patch("quarry.service.shutil.which", return_value=None),
-            pytest.raises(RuntimeError, match="Cannot find 'quarry' binary"),
+            pytest.raises(RuntimeError, match="Cannot find quarry binary"),
         ):
             _quarry_exec_args()
 
@@ -117,10 +110,10 @@ class TestQuarryExecArgs:
         tls_dir.mkdir()
         (tls_dir / "server.crt").write_text("CERT")
         (tls_dir / "server.key").write_text("KEY")
+        _make_local_bin_quarry(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
             patch("quarry.service.TLS_DIR", tls_dir),
-            patch("quarry.service.shutil.which", return_value="/usr/local/bin/quarry"),
         ):
             args = _quarry_exec_args()
         assert "--tls" in args
@@ -130,10 +123,10 @@ class TestQuarryExecArgs:
         tls_dir = tmp_path / "tls"
         tls_dir.mkdir()
         (tls_dir / "server.crt").write_text("CERT")
+        _make_local_bin_quarry(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
             patch("quarry.service.TLS_DIR", tls_dir),
-            patch("quarry.service.shutil.which", return_value="/usr/local/bin/quarry"),
         ):
             args = _quarry_exec_args()
         assert "--tls" not in args
@@ -144,10 +137,10 @@ class TestQuarryExecArgs:
         """QUARRY_SERVE_HOST set must produce --host <value> in args."""
         bind_addr = "0.0.0.0"  # noqa: S104
         monkeypatch.setenv("QUARRY_SERVE_HOST", bind_addr)
+        _make_local_bin_quarry(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
             patch("quarry.service.TLS_DIR", tmp_path / "tls"),
-            patch("quarry.service.shutil.which", return_value="/usr/local/bin/quarry"),
         ):
             args = _quarry_exec_args()
         assert "--host" in args
@@ -159,10 +152,10 @@ class TestQuarryExecArgs:
     ) -> None:
         """When QUARRY_SERVE_HOST is unset, --host must not appear in args."""
         monkeypatch.delenv("QUARRY_SERVE_HOST", raising=False)
+        _make_local_bin_quarry(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
             patch("quarry.service.TLS_DIR", tmp_path / "tls"),
-            patch("quarry.service.shutil.which", return_value="/usr/local/bin/quarry"),
         ):
             args = _quarry_exec_args()
         assert "--host" not in args
@@ -172,10 +165,10 @@ class TestQuarryExecArgs:
     ) -> None:
         """Empty QUARRY_SERVE_HOST must not produce --host in args."""
         monkeypatch.setenv("QUARRY_SERVE_HOST", "")
+        _make_local_bin_quarry(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
             patch("quarry.service.TLS_DIR", tmp_path / "tls"),
-            patch("quarry.service.shutil.which", return_value="/usr/local/bin/quarry"),
         ):
             args = _quarry_exec_args()
         assert "--host" not in args
@@ -185,10 +178,10 @@ class TestQuarryExecArgs:
     ) -> None:
         """QUARRY_API_KEY must never appear in exec args -- it stays in the env file."""
         monkeypatch.setenv("QUARRY_API_KEY", "testkey")
+        _make_local_bin_quarry(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
             patch("quarry.service.TLS_DIR", tmp_path / "tls"),
-            patch("quarry.service.shutil.which", return_value="/usr/local/bin/quarry"),
         ):
             args = _quarry_exec_args()
         assert "--api-key" not in args
@@ -199,10 +192,10 @@ class TestQuarryExecArgs:
     ) -> None:
         """When QUARRY_API_KEY is absent, --api-key must not appear in args."""
         monkeypatch.delenv("QUARRY_API_KEY", raising=False)
+        _make_local_bin_quarry(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
             patch("quarry.service.TLS_DIR", tmp_path / "tls"),
-            patch("quarry.service.shutil.which", return_value="/usr/local/bin/quarry"),
         ):
             args = _quarry_exec_args()
         assert "--api-key" not in args
@@ -300,10 +293,10 @@ class TestServiceFileApiKey:
     ) -> None:
         """_launchd_plist_content() embeds EnvironmentVariables and QUARRY_API_KEY."""
         monkeypatch.setenv("QUARRY_API_KEY", "k1")
+        _make_local_bin_quarry(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
             patch("quarry.service.TLS_DIR", tmp_path / "tls"),
-            patch("quarry.service.shutil.which", return_value="/usr/local/bin/quarry"),
         ):
             content = _launchd_plist_content()
         assert "EnvironmentVariables" in content
@@ -317,10 +310,10 @@ class TestServiceFileApiKey:
     ) -> None:
         """When QUARRY_API_KEY is unset, no EnvironmentVariables block appears."""
         monkeypatch.delenv("QUARRY_API_KEY", raising=False)
+        _make_local_bin_quarry(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
             patch("quarry.service.TLS_DIR", tmp_path / "tls"),
-            patch("quarry.service.shutil.which", return_value="/usr/local/bin/quarry"),
         ):
             content = _launchd_plist_content()
         assert "QUARRY_API_KEY" not in content
@@ -331,10 +324,10 @@ class TestServiceFileApiKey:
     ) -> None:
         """Characters &, <, > in QUARRY_API_KEY must be XML-escaped in the plist."""
         monkeypatch.setenv("QUARRY_API_KEY", "te&st<key>")
+        _make_local_bin_quarry(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
             patch("quarry.service.TLS_DIR", tmp_path / "tls"),
-            patch("quarry.service.shutil.which", return_value="/usr/local/bin/quarry"),
         ):
             content = _launchd_plist_content()
 
@@ -369,10 +362,10 @@ class TestServiceFileApiKey:
     ) -> None:
         """The plist must start with <?xml without leading whitespace."""
         monkeypatch.delenv("QUARRY_API_KEY", raising=False)
+        _make_local_bin_quarry(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
             patch("quarry.service.TLS_DIR", tmp_path / "tls"),
-            patch("quarry.service.shutil.which", return_value="/usr/local/bin/quarry"),
         ):
             result = _launchd_plist_content()
         assert result.startswith("<?xml"), (
@@ -384,10 +377,10 @@ class TestServiceFileApiKey:
     ) -> None:
         """Embedding an API key must not break the outer textwrap.dedent."""
         monkeypatch.setenv("QUARRY_API_KEY", "test-key-abc")
+        _make_local_bin_quarry(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
             patch("quarry.service.TLS_DIR", tmp_path / "tls"),
-            patch("quarry.service.shutil.which", return_value="/usr/local/bin/quarry"),
         ):
             result = _launchd_plist_content()
         assert result.startswith("<?xml"), (
@@ -401,10 +394,10 @@ class TestServiceFileApiKey:
     ) -> None:
         """_systemd_unit_content() must include EnvironmentFile= pointing to env."""
         monkeypatch.setenv("QUARRY_API_KEY", "k1")
+        _make_local_bin_quarry(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
             patch("quarry.service.TLS_DIR", tmp_path / "tls"),
-            patch("quarry.service.shutil.which", return_value="/usr/local/bin/quarry"),
             patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
         ):
             content = _systemd_unit_content()
@@ -474,7 +467,6 @@ class TestInstallHostKeyGuard:
         with pytest.raises(SystemExit, match="QUARRY_API_KEY is empty"):
             install()
 
-    @patch("quarry.service.shutil.which", return_value="/usr/local/bin/quarry")
     @patch("quarry.service.subprocess.run")
     @patch.object(platform, "system", return_value="Darwin")
     @patch("quarry.service.write_tls_files")
@@ -485,15 +477,16 @@ class TestInstallHostKeyGuard:
         _tls: MagicMock,
         _sys: MagicMock,
         mock_run: MagicMock,
-        _which: MagicMock,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """install() with QUARRY_SERVE_HOST=127.0.0.1 and no key must not raise."""
         monkeypatch.setenv("QUARRY_SERVE_HOST", "127.0.0.1")
         monkeypatch.delenv("QUARRY_API_KEY", raising=False)
+        _make_local_bin_quarry(tmp_path)
         plist_path = tmp_path / "com.punt-labs.quarry.plist"
         with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
             patch("quarry.service._LAUNCHD_DIR", tmp_path),
             patch("quarry.service._LAUNCHD_PLIST", plist_path),
         ):
@@ -505,7 +498,6 @@ class TestInstallHostKeyGuard:
             msg = install()
         assert "running" in msg
 
-    @patch("quarry.service.shutil.which", return_value="/usr/local/bin/quarry")
     @patch("quarry.service.subprocess.run")
     @patch.object(platform, "system", return_value="Darwin")
     @patch("quarry.service.write_tls_files")
@@ -516,15 +508,16 @@ class TestInstallHostKeyGuard:
         _tls: MagicMock,
         _sys: MagicMock,
         mock_run: MagicMock,
-        _which: MagicMock,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """install() with non-loopback host AND a valid API key must not raise."""
         monkeypatch.setenv("QUARRY_SERVE_HOST", "0.0.0.0")  # noqa: S104
         monkeypatch.setenv("QUARRY_API_KEY", "validkey")
+        _make_local_bin_quarry(tmp_path)
         plist_path = tmp_path / "com.punt-labs.quarry.plist"
         with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
             patch("quarry.service._LAUNCHD_DIR", tmp_path),
             patch("quarry.service._LAUNCHD_PLIST", plist_path),
             patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
@@ -539,18 +532,18 @@ class TestInstallHostKeyGuard:
 
 
 class TestInstallMacOS:
-    @patch("quarry.service.shutil.which", return_value="/usr/local/bin/quarry")
     @patch("quarry.service.subprocess.run")
     @patch.object(platform, "system", return_value="Darwin")
     def test_fresh_install_writes_plist_and_loads(
         self,
         _sys: MagicMock,
         mock_run: MagicMock,
-        _which: MagicMock,
         tmp_path: Path,
     ) -> None:
+        _make_local_bin_quarry(tmp_path)
         plist_path = tmp_path / "com.punt-labs.quarry.plist"
         with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
             patch("quarry.service._LAUNCHD_DIR", tmp_path),
             patch("quarry.service._LAUNCHD_PLIST", plist_path),
             patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
@@ -584,19 +577,19 @@ class TestInstallMacOS:
             )
             assert any("load" in c for c in calls)
 
-    @patch("quarry.service.shutil.which", return_value="/usr/local/bin/quarry")
     @patch("quarry.service.subprocess.run")
     @patch.object(platform, "system", return_value="Darwin")
     def test_upgrade_unloads_before_loading(
         self,
         _sys: MagicMock,
         mock_run: MagicMock,
-        _which: MagicMock,
         tmp_path: Path,
     ) -> None:
+        _make_local_bin_quarry(tmp_path)
         plist_path = tmp_path / "com.punt-labs.quarry.plist"
         plist_path.write_text("<plist>old binary</plist>")
         with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
             patch("quarry.service._LAUNCHD_DIR", tmp_path),
             patch("quarry.service._LAUNCHD_PLIST", plist_path),
             patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
@@ -661,22 +654,22 @@ class TestInstallMacOS:
             assert "uninstalled" in msg
             mock_run.assert_not_called()
 
-    @patch("quarry.service.shutil.which", return_value="/usr/local/bin/quarry")
     @patch("quarry.service.subprocess.run")
     @patch.object(platform, "system", return_value="Darwin")
     def test_plist_written_with_mode_0600(
         self,
         _sys: MagicMock,
         mock_run: MagicMock,
-        _which: MagicMock,
         tmp_path: Path,
     ) -> None:
         """_launchd_install() must chmod the plist to 0600.
 
         The plist embeds QUARRY_API_KEY so it must be owner-read-only.
         """
+        _make_local_bin_quarry(tmp_path)
         plist_path = tmp_path / "com.punt-labs.quarry.plist"
         with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
             patch("quarry.service._LAUNCHD_DIR", tmp_path),
             patch("quarry.service._LAUNCHD_PLIST", plist_path),
             patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
@@ -696,7 +689,6 @@ class TestInstallMacOS:
 
 
 class TestInstallLinux:
-    @patch("quarry.service.shutil.which", return_value="/usr/local/bin/quarry")
     @patch("quarry.service._has_linger", return_value=True)
     @patch("quarry.service.subprocess.run")
     @patch.object(platform, "system", return_value="Linux")
@@ -705,11 +697,12 @@ class TestInstallLinux:
         _sys: MagicMock,
         mock_run: MagicMock,
         _linger: MagicMock,
-        _which: MagicMock,
         tmp_path: Path,
     ) -> None:
+        _make_local_bin_quarry(tmp_path)
         unit_path = tmp_path / "quarry.service"
         with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
             patch("quarry.service._SYSTEMD_DIR", tmp_path),
             patch("quarry.service._SYSTEMD_UNIT", unit_path),
             patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
@@ -734,7 +727,6 @@ class TestInstallLinux:
             assert any("enable" in c for c in calls)
             assert any("restart" in c for c in calls)
 
-    @patch("quarry.service.shutil.which", return_value="/usr/local/bin/quarry")
     @patch("quarry.service._has_linger", return_value=False)
     @patch("quarry.service.subprocess.run")
     @patch.object(platform, "system", return_value="Linux")
@@ -743,11 +735,12 @@ class TestInstallLinux:
         _sys: MagicMock,
         mock_run: MagicMock,
         _linger: MagicMock,
-        _which: MagicMock,
         tmp_path: Path,
     ) -> None:
+        _make_local_bin_quarry(tmp_path)
         unit_path = tmp_path / "quarry.service"
         with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
             patch("quarry.service._SYSTEMD_DIR", tmp_path),
             patch("quarry.service._SYSTEMD_UNIT", unit_path),
             patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
@@ -974,7 +967,6 @@ class TestInstallMacOSSkipsEnvFile:
     Writing it to an env file is unnecessary and duplicates the secret on disk.
     """
 
-    @patch("quarry.service.shutil.which", return_value="/usr/local/bin/quarry")
     @patch("quarry.service.subprocess.run")
     @patch.object(platform, "system", return_value="Darwin")
     @patch("quarry.service.write_tls_files")
@@ -985,14 +977,15 @@ class TestInstallMacOSSkipsEnvFile:
         _tls: MagicMock,
         _sys: MagicMock,
         mock_run: MagicMock,
-        _which: MagicMock,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setenv("QUARRY_API_KEY", "sekrit")
+        _make_local_bin_quarry(tmp_path)
         plist_path = tmp_path / "com.punt-labs.quarry.plist"
         env_file = tmp_path / "quarry.env"
         with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
             patch("quarry.service._LAUNCHD_DIR", tmp_path),
             patch("quarry.service._LAUNCHD_PLIST", plist_path),
             patch("quarry.service._ENV_FILE", env_file),
@@ -1009,7 +1002,6 @@ class TestInstallMacOSSkipsEnvFile:
             "the API key goes into the plist EnvironmentVariables block"
         )
 
-    @patch("quarry.service.shutil.which", return_value="/usr/local/bin/quarry")
     @patch("quarry.service.subprocess.run")
     @patch.object(platform, "system", return_value="Linux")
     @patch("quarry.service._has_linger", return_value=True)
@@ -1022,15 +1014,16 @@ class TestInstallMacOSSkipsEnvFile:
         _linger: MagicMock,
         _sys: MagicMock,
         mock_run: MagicMock,
-        _which: MagicMock,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Verify the complementary path: Linux does write the env file."""
         monkeypatch.setenv("QUARRY_API_KEY", "sekrit")
+        _make_local_bin_quarry(tmp_path)
         unit_path = tmp_path / "quarry.service"
         env_file = tmp_path / "quarry.env"
         with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
             patch("quarry.service._SYSTEMD_DIR", tmp_path),
             patch("quarry.service._SYSTEMD_UNIT", unit_path),
             patch("quarry.service._ENV_FILE", env_file),

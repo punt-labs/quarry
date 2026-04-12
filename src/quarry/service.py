@@ -6,7 +6,7 @@ system service (launchd on macOS, systemd on Linux) so the daemon starts
 at login and restarts on crash.
 
 The service runs ``quarry serve --port 8420`` using the installed ``quarry``
-binary (from ``uv tool install`` or PATH), never ``sys.executable``.
+binary (from ``uv tool install``), never ``sys.executable``.
 """
 
 from __future__ import annotations
@@ -67,9 +67,9 @@ def _quarry_exec_args() -> list[str]:
     Resolution order:
 
     1. ``~/.local/bin/quarry`` (uv tool install symlink) -- resolved to absolute.
-    2. ``shutil.which("quarry")`` -- picks up any quarry on PATH.
-    3. Refuse to register -- raise ``RuntimeError`` instead of silently using
-       ``sys.executable``, which may point at a dev venv.
+    2. Refuse to register -- raise ``RuntimeError`` instead of silently using
+       ``sys.executable`` or ``shutil.which()``, either of which may resolve
+       to a dev venv binary.
 
     The ``sys.executable`` fallback is deliberately removed.  When ``quarry
     install`` runs from a dev venv, ``sys.executable`` is ``.venv/bin/python3``
@@ -95,19 +95,11 @@ def _quarry_exec_args() -> list[str]:
         logger.info("Service binary: %s (uv tool)", resolved)
         base = [str(resolved), "serve", "--port", str(DEFAULT_PORT)]
     else:
-        # 2. Fallback: quarry on PATH (may be the same, may be different).
-        which_quarry = shutil.which("quarry")
-        if which_quarry is not None:
-            resolved = Path(which_quarry).resolve()
-            logger.info("Service binary: %s (PATH)", resolved)
-            base = [str(resolved), "serve", "--port", str(DEFAULT_PORT)]
-        else:
-            # 3. No quarry binary found.  Do NOT fall back to sys.executable.
-            msg = (
-                "Cannot find 'quarry' binary at ~/.local/bin/quarry or on PATH. "
-                "Install quarry first: uv tool install punt-quarry"
-            )
-            raise RuntimeError(msg)
+        msg = (
+            "Cannot find quarry binary at ~/.local/bin/quarry. "
+            "Install quarry first: uv tool install punt-quarry"
+        )
+        raise RuntimeError(msg)
 
     serve_host = os.environ.get("QUARRY_SERVE_HOST", "").strip()
     if serve_host:
