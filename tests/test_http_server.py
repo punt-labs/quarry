@@ -1184,48 +1184,22 @@ class TestIngest:
 
 
 class TestSync:
-    """Tests for POST /sync endpoint."""
+    """Tests for POST /sync and GET /sync/<task_id> endpoints.
 
-    def _sync_result(
-        self,
-        collection: str = "math",
-        *,
-        ingested: int = 3,
-        refreshed: int = 2,
-        deleted: int = 1,
-        skipped: int = 5,
-        failed: int = 0,
-        errors: list[str] | None = None,
-    ) -> object:
-        from quarry.sync import SyncResult
+    Fix 5: POST /sync returns 202 Accepted with a task_id.  The sync runs
+    as a background asyncio task.  GET /sync/<task_id> returns the status.
+    Fix 1: concurrent POST /sync returns 409 Conflict.
+    """
 
-        return SyncResult(
-            collection=collection,
-            ingested=ingested,
-            refreshed=refreshed,
-            deleted=deleted,
-            skipped=skipped,
-            failed=failed,
-            errors=errors or [],
-        )
-
-    def test_success(self, client: TestClient) -> None:
-        mock_results = {"math": self._sync_result()}
-        with patch("quarry.sync.sync_all", return_value=mock_results):
+    def test_returns_202_with_task_id(self, client: TestClient) -> None:
+        """POST /sync returns 202 Accepted with a task_id."""
+        with patch("quarry.sync.sync_all", return_value={}):
             resp = client.post("/sync", json={})
 
-        assert resp.status_code == 200
+        assert resp.status_code == 202
         data = resp.json()
-        assert data == {
-            "math": {
-                "ingested": 3,
-                "refreshed": 2,
-                "deleted": 1,
-                "skipped": 5,
-                "failed": 0,
-                "errors": [],
-            }
-        }
+        assert "task_id" in data
+        assert data["status"] == "accepted"
 
     def test_empty_body_accepted(self, client: TestClient) -> None:
         with patch("quarry.sync.sync_all", return_value={}):
@@ -1234,8 +1208,7 @@ class TestSync:
                 content=b"",
                 headers={"Content-Length": "0"},
             )
-        assert resp.status_code == 200
-        assert resp.json() == {}
+        assert resp.status_code == 202
 
     def test_invalid_json_returns_400(self, client: TestClient) -> None:
         resp = client.post(
@@ -1260,19 +1233,7 @@ class TestSync:
                 json={},
                 headers={"Authorization": f"Bearer {_TEST_API_KEY}"},
             )
-        assert resp.status_code == 200
-
-    def test_pipeline_value_error_returns_400(self, client: TestClient) -> None:
-        with patch("quarry.sync.sync_all", side_effect=ValueError("bad reg")):
-            resp = client.post("/sync", json={})
-        assert resp.status_code == 400
-        assert "bad reg" in resp.json()["error"]
-
-    def test_pipeline_os_error_returns_502(self, client: TestClient) -> None:
-        with patch("quarry.sync.sync_all", side_effect=OSError("disk full")):
-            resp = client.post("/sync", json={})
-        assert resp.status_code == 502
-        assert "disk full" in resp.json()["error"]
+        assert resp.status_code == 202
 
     def test_rejects_oversized_body(self, client: TestClient) -> None:
         from quarry.http_server import MAX_SYNC_BODY_BYTES
@@ -1289,19 +1250,68 @@ class TestSync:
         assert resp.status_code == 413
         assert "too large" in resp.json()["error"].lower()
 
-    def test_errors_list_passed_through(self, client: TestClient) -> None:
-        mock_results = {
-            "col": self._sync_result(
-                "col",
-                ingested=1,
-                failed=2,
-                errors=["a.pdf: corrupt", "b.pdf: timeout"],
-            )
-        }
-        with patch("quarry.sync.sync_all", return_value=mock_results):
-            resp = client.post("/sync", json={})
+    def test_concurrent_sync_returns_409(self, tmp_path: Path) -> None:
+        """Fix 1: Second POST while sync is running returns 409 with task_id."""
+        import time
+
+        settings = _mock_settings(tmp_path)
+        ctx = _QuarryContext(settings)
+        ctx.__dict__["db"] = _SHARED_DB
+        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        app = build_app(ctx)
+        sync_client = TestClient(app, raise_server_exceptions=False)
+
+        def slow_sync(*_args: object, **_kw: object) -> dict[str, object]:
+            time.sleep(1)
+            return {}
+
+        with patch("quarry.sync.sync_all", side_effect=slow_sync):
+            # First request starts sync.
+            resp1 = sync_client.post("/sync", json={})
+            assert resp1.status_code == 202
+            task_id = resp1.json()["task_id"]
+
+            # Second request while sync is running.
+            resp2 = sync_client.post("/sync", json={})
+            assert resp2.status_code == 409
+            assert resp2.json()["task_id"] == task_id
+            assert "already in progress" in resp2.json()["error"].lower()
+
+    def test_sync_status_not_found(self, client: TestClient) -> None:
+        """GET /sync/<task_id> returns 404 for unknown task."""
+        resp = client.get("/sync/nonexistent-id")
+        assert resp.status_code == 404
+
+    def test_sync_status_completed(self, tmp_path: Path) -> None:
+        """GET /sync/<task_id> returns completed state when directly set.
+
+        The background asyncio task does not complete in TestClient because
+        the event loop does not run between synchronous requests.  This test
+        verifies the status endpoint by directly setting the task state.
+        """
+        from quarry.http_server import SyncTaskState
+
+        settings = _mock_settings(tmp_path)
+        ctx = _QuarryContext(settings)
+        ctx.__dict__["db"] = _SHARED_DB
+        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+
+        # Simulate a completed sync task.
+        ctx.sync_task = SyncTaskState(
+            task_id="sync-test-123",
+            status="completed",
+            results={"math": {"ingested": 3}},
+        )
+
+        app = build_app(ctx)
+        sync_client = TestClient(app, raise_server_exceptions=False)
+
+        resp = sync_client.get("/sync/sync-test-123")
         assert resp.status_code == 200
-        assert resp.json()["col"]["errors"] == ["a.pdf: corrupt", "b.pdf: timeout"]
+        data = resp.json()
+        assert data["task_id"] == "sync-test-123"
+        assert data["status"] == "completed"
+        assert data["results"]["math"]["ingested"] == 3
 
 
 class TestDatabases:
@@ -1819,20 +1829,32 @@ class TestDatabasesMissingTable:
 
 
 class TestSyncGenericFailure:
-    """Fix 8: ``_sync_route`` wraps generic exceptions in a JSON envelope."""
+    """Background sync errors are captured in task state, not in the POST response."""
 
-    def test_runtime_error_returns_500_json(self, client: TestClient) -> None:
-        with patch(
-            "quarry.sync.sync_all",
-            side_effect=RuntimeError("embedder crashed"),
-        ):
-            resp = client.post("/sync", json={})
+    def test_sync_failure_captured_in_task_state(self, tmp_path: Path) -> None:
+        """GET /sync/<task_id> returns failed state with error message."""
+        from quarry.http_server import SyncTaskState
 
-        assert resp.status_code == 500
-        assert resp.headers["content-type"].startswith("application/json")
-        body = resp.json()
-        assert "embedder crashed" in body["error"]
-        assert "sync failed" in body["error"]
+        settings = _mock_settings(tmp_path)
+        ctx = _QuarryContext(settings)
+        ctx.__dict__["db"] = _SHARED_DB
+        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+
+        # Simulate a failed sync task.
+        ctx.sync_task = SyncTaskState(
+            task_id="sync-fail-456",
+            status="failed",
+            error="embedder crashed",
+        )
+
+        app = build_app(ctx)
+        sync_client = TestClient(app, raise_server_exceptions=False)
+
+        resp = sync_client.get("/sync/sync-fail-456")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "failed"
+        assert "embedder crashed" in data["error"]
 
     def test_remember_runtime_error_returns_500_json(self, client: TestClient) -> None:
         with patch(

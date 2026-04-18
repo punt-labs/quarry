@@ -13,6 +13,7 @@ Lifecycle:
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import ipaddress
 import logging
@@ -21,8 +22,10 @@ import pwd
 import re
 import socket as socket_module
 import time
+import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
 from socket import socket
@@ -228,6 +231,16 @@ def _check_body_size(request: Request, limit: int) -> JSONResponse | None:
     return None
 
 
+@dataclass
+class SyncTaskState:
+    """Tracks the state of an in-progress or completed background sync."""
+
+    task_id: str
+    status: str = "running"
+    results: dict[str, object] = field(default_factory=dict)
+    error: str = ""
+
+
 class _QuarryContext:
     """Shared state for the HTTP server: settings, database, embeddings."""
 
@@ -242,6 +255,8 @@ class _QuarryContext:
         self.api_key = api_key
         self.cors_origins = cors_origins or _DEFAULT_CORS_ORIGINS
         self.start_time = time.monotonic()
+        # Fix 1 + Fix 5: track the current sync task for concurrency control.
+        self.sync_task: SyncTaskState | None = None
 
     @cached_property
     def db(self) -> LanceDB:
@@ -574,11 +589,12 @@ async def _ingest_route(request: Request) -> JSONResponse:
 
 
 async def _sync_route(request: Request) -> JSONResponse:
-    """Run ``sync_all`` against the registered directories.  Body is ignored.
+    """Accept a sync request and run ``sync_all`` as a background task.
 
-    The local ``sync_all`` function has no per-collection filter: it walks
-    every registration in the registry and returns a ``{collection: result}``
-    mapping.  The endpoint mirrors that shape.
+    Fix 1: Uses a non-blocking lock to reject concurrent requests with
+    HTTP 409.  Fix 5: Returns 202 Accepted immediately with a task_id;
+    the actual sync runs as an asyncio background task.  ``GET /sync/<id>``
+    returns the task status.
     """
     auth_resp = _check_auth(request)
     if auth_resp is not None:
@@ -600,27 +616,77 @@ async def _sync_route(request: Request) -> JSONResponse:
                 {"error": "Body must be a JSON object"}, status_code=400
             )
 
-    from quarry.sync import sync_all  # noqa: PLC0415
-
     ctx = _ctx(request)
-    try:
-        results = await run_in_threadpool(sync_all, ctx.db, ctx.settings)
-    except Exception as exc:  # noqa: BLE001 — routed through _pipeline_error_response
-        return _pipeline_error_response(exc, "sync")
+
+    # Fix 1: reject if a sync task is already running.  Check the task
+    # state rather than the asyncio lock, because the state is set
+    # synchronously before the background task starts.
+    if ctx.sync_task is not None and ctx.sync_task.status == "running":
+        return JSONResponse(
+            {
+                "error": "Sync already in progress",
+                "status": "running",
+                "task_id": ctx.sync_task.task_id,
+            },
+            status_code=409,
+        )
+
+    task_id = f"sync-{uuid.uuid4().hex[:12]}"
+    state = SyncTaskState(task_id=task_id)
+    ctx.sync_task = state
+
+    async def _run_sync() -> None:
+        from quarry.sync import sync_all  # noqa: PLC0415
+
+        try:
+            results = await run_in_threadpool(sync_all, ctx.db, ctx.settings)
+            state.status = "completed"
+            state.results = {
+                collection: {
+                    "ingested": res.ingested,
+                    "refreshed": res.refreshed,
+                    "deleted": res.deleted,
+                    "skipped": res.skipped,
+                    "failed": res.failed,
+                    "errors": list(res.errors),
+                }
+                for collection, res in results.items()
+            }
+        except Exception as exc:
+            logger.exception("Background sync failed")
+            state.status = "failed"
+            state.error = str(exc)
+
+    asyncio.create_task(_run_sync())  # noqa: RUF006
 
     return JSONResponse(
-        {
-            collection: {
-                "ingested": res.ingested,
-                "refreshed": res.refreshed,
-                "deleted": res.deleted,
-                "skipped": res.skipped,
-                "failed": res.failed,
-                "errors": list(res.errors),
-            }
-            for collection, res in results.items()
-        }
+        {"task_id": task_id, "status": "accepted"},
+        status_code=202,
     )
+
+
+def _sync_status_route(request: Request) -> JSONResponse:
+    """Return the status of a sync task by task_id."""
+    auth_resp = _check_auth(request)
+    if auth_resp is not None:
+        return auth_resp
+
+    task_id = request.path_params.get("task_id", "")
+    ctx = _ctx(request)
+
+    if ctx.sync_task is None or ctx.sync_task.task_id != task_id:
+        return JSONResponse({"error": "Task not found"}, status_code=404)
+
+    state = ctx.sync_task
+    response: dict[str, object] = {
+        "task_id": state.task_id,
+        "status": state.status,
+    }
+    if state.status == "completed":
+        response["results"] = state.results
+    elif state.status == "failed":
+        response["error"] = state.error
+    return JSONResponse(response)
 
 
 def _databases_route(request: Request) -> JSONResponse:
@@ -1027,6 +1093,7 @@ def build_app(
         Route("/remember", _remember_route, methods=["POST"]),
         Route("/ingest", _ingest_route, methods=["POST"]),
         Route("/sync", _sync_route, methods=["POST"]),
+        Route("/sync/{task_id}", _sync_status_route, methods=["GET"]),
         Route("/databases", _databases_route, methods=["GET"]),
         Route("/use", _use_route, methods=["POST"]),
         Route(

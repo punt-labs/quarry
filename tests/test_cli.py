@@ -2542,14 +2542,8 @@ class TestSyncCmdRemote:
 
     def test_remote_routing_posts_to_sync(self):
         remote_resp = {
-            "math": {
-                "ingested": 3,
-                "refreshed": 2,
-                "deleted": 1,
-                "skipped": 5,
-                "failed": 0,
-                "errors": [],
-            }
+            "task_id": "sync-abc123",
+            "status": "accepted",
         }
         with (
             patch(
@@ -2566,11 +2560,8 @@ class TestSyncCmdRemote:
         mock_req.assert_called_once()
         assert mock_req.call_args[0][0] == "POST"
         assert mock_req.call_args[0][1] == "/sync"
-        # Fix 5: remote sync must use the long timeout (not 15s default).
-        assert mock_req.call_args.kwargs["timeout"] >= 60.0
-        assert "3 ingested" in result.output
-        assert "2 refreshed" in result.output
-        assert "1 deleted" in result.output
+        assert "accepted" in result.output
+        assert "sync-abc123" in result.output
 
     def test_remote_routing_warns_on_workers_flag(self):
         """Fix 6: --workers is meaningless over HTTP; the CLI must warn."""
@@ -2619,16 +2610,11 @@ class TestSyncCmdRemote:
         assert result.exit_code == 1
         assert "pipeline failed" in result.output
 
-    def test_remote_prints_errors(self):
+    def test_remote_prints_task_id(self):
+        """Remote sync now returns task_id for fire-and-forget."""
         remote_resp = {
-            "col": {
-                "ingested": 1,
-                "refreshed": 0,
-                "deleted": 0,
-                "skipped": 0,
-                "failed": 2,
-                "errors": ["a.pdf: corrupt", "b.pdf: timeout"],
-            }
+            "task_id": "sync-fire-forget",
+            "status": "accepted",
         }
         with (
             patch(
@@ -2640,8 +2626,7 @@ class TestSyncCmdRemote:
             result = runner.invoke(app, ["sync"])
 
         assert result.exit_code == 0
-        assert "corrupt" in result.output
-        assert "timeout" in result.output
+        assert "sync-fire-forget" in result.output
 
     def test_local_fallback_when_no_proxy(self):
         from quarry.sync import SyncResult

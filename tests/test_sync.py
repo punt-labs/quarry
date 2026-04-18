@@ -5,8 +5,10 @@ import sqlite3
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
 
+from quarry.models import Chunk
 from quarry.sync import (
     _DEFAULT_IGNORE_PATTERNS,
     _content_hash,
@@ -24,6 +26,33 @@ from quarry.sync_registry import (
     register_directory,
     upsert_file,
 )
+
+
+def _fake_prepare(
+    fp: Path,
+    settings: object,
+    **kwargs: object,
+) -> tuple[list[Chunk], np.ndarray]:
+    """Return a minimal (chunks, vectors) pair for testing."""
+    from datetime import UTC, datetime
+
+    doc_name = kwargs.get("document_name", fp.name)
+    assert isinstance(doc_name, str)
+    chunk = Chunk(
+        document_name=doc_name,
+        document_path=str(fp),
+        collection=str(kwargs.get("collection", "default")),
+        page_number=1,
+        total_pages=1,
+        chunk_index=0,
+        text="test",
+        page_raw_text="test",
+        page_type="text",
+        source_format=fp.suffix,
+        ingestion_timestamp=datetime.now(UTC),
+    )
+    vectors = np.zeros((1, 768), dtype=np.float32)
+    return [chunk], vectors
 
 
 class TestDiscoverFiles:
@@ -549,14 +578,17 @@ class TestSyncCollection:
         db = MagicMock()
         settings = _mock_settings(tmp_path)
 
-        with patch("quarry.sync.ingest_document") as mock_ingest:
-            mock_ingest.return_value = {"chunks": 2}
+        with (
+            patch("quarry.sync.prepare_document", side_effect=_fake_prepare),
+            patch("quarry.sync.delete_document"),
+            patch("quarry.sync.batch_insert_chunks", return_value=1) as mock_batch,
+        ):
             result = sync_collection(d, "col", db, settings, conn, max_workers=1)
 
         assert result.ingested == 1
         assert result.failed == 0
         assert result.skipped == 0
-        mock_ingest.assert_called_once()
+        mock_batch.assert_called_once()
         # Verify file record was created
         rec = get_file(conn, str((d / "a.txt").resolve()))
         assert rec is not None
@@ -571,13 +603,19 @@ class TestSyncCollection:
         db = MagicMock()
         settings = _mock_settings(tmp_path)
 
-        def side_effect(fp: Path, *args: object, **kwargs: object) -> dict[str, object]:
+        def side_effect(
+            fp: Path, settings: object, **kwargs: object
+        ) -> tuple[list[Chunk], np.ndarray]:
             if fp.name == "bad.txt":
                 msg = "boom"
                 raise RuntimeError(msg)
-            return {"chunks": 1}
+            return _fake_prepare(fp, settings, **kwargs)
 
-        with patch("quarry.sync.ingest_document", side_effect=side_effect):
+        with (
+            patch("quarry.sync.prepare_document", side_effect=side_effect),
+            patch("quarry.sync.delete_document"),
+            patch("quarry.sync.batch_insert_chunks", return_value=0),
+        ):
             result = sync_collection(d, "col", db, settings, conn, max_workers=1)
 
         assert result.ingested == 1
@@ -605,13 +643,18 @@ class TestSyncCollection:
         settings = _mock_settings(tmp_path)
 
         with (
-            patch("quarry.sync.ingest_document"),
+            patch("quarry.sync.prepare_document", side_effect=_fake_prepare),
             patch("quarry.sync.delete_document") as mock_del,
+            patch("quarry.sync.batch_insert_chunks", return_value=0),
         ):
             result = sync_collection(d, "col", db, settings, conn, max_workers=1)
 
         assert result.deleted == 1
-        mock_del.assert_called_once_with(db, "gone.txt", collection="col")
+        # delete_document called for both the "gone" file in _delete_documents
+        # and potentially for overwrite in _ingest_files.  Check at least the
+        # deletion path call is present.
+        del_calls = [c for c in mock_del.call_args_list if c.args[1] == "gone.txt"]
+        assert len(del_calls) == 1
         conn.close()
 
     def test_registry_updated_after_sync(self, tmp_path: Path):
@@ -621,7 +664,11 @@ class TestSyncCollection:
         db = MagicMock()
         settings = _mock_settings(tmp_path)
 
-        with patch("quarry.sync.ingest_document", return_value={"chunks": 1}):
+        with (
+            patch("quarry.sync.prepare_document", side_effect=_fake_prepare),
+            patch("quarry.sync.delete_document"),
+            patch("quarry.sync.batch_insert_chunks", return_value=1),
+        ):
             sync_collection(d, "col", db, settings, conn, max_workers=1)
 
         files = list_files(conn, "col")
@@ -634,9 +681,7 @@ class TestSyncCollection:
 
         When syncing a directory with subdirectories, the document_name for
         each file is a relative path (e.g. "sub/file.txt").  Both the
-        ingest call (which stores in LanceDB) and the registry upsert (which
-        stores in SQLite) must use this relative name.  If they diverge,
-        deregister cannot find the LanceDB chunks to delete.
+        prepare call and the registry upsert must use this relative name.
 
         See quarry-5sg.
         """
@@ -648,11 +693,17 @@ class TestSyncCollection:
         db = MagicMock()
         settings = _mock_settings(tmp_path)
 
-        with patch("quarry.sync.ingest_document", return_value={"chunks": 1}) as mock:
+        with (
+            patch(
+                "quarry.sync.prepare_document", side_effect=_fake_prepare
+            ) as mock_prepare,
+            patch("quarry.sync.delete_document"),
+            patch("quarry.sync.batch_insert_chunks", return_value=1),
+        ):
             sync_collection(d, "col", db, settings, conn, max_workers=1)
 
-        # The document_name passed to ingest_document must be the relative path
-        _, kwargs = mock.call_args
+        # The document_name passed to prepare_document must be the relative path
+        _, kwargs = mock_prepare.call_args
         assert kwargs["document_name"] == "pkg/mod.py"
 
         # The registry must store the same relative path
@@ -676,12 +727,10 @@ class TestSyncCollectionDurabilityAndRefresh:
     def test_sync_collection_ingest_is_durable_on_crash(self, tmp_path: Path):
         """A crash mid-sync must leave already-ingested rows on disk.
 
-        Monkeypatches ``ingest_document`` to raise ``KeyboardInterrupt`` on
-        the third call so it escapes the ``_RECOVERABLE`` tuple in
+        Monkeypatches ``prepare_document`` to raise ``KeyboardInterrupt``
+        on the third call so it escapes the ``_RECOVERABLE`` tuple in
         ``_ingest_files``.  After the raise, opens a *fresh* connection to
-        the same registry path and asserts the first two rows are visible
-        — proving per-row commits made it to disk rather than sitting in
-        an uncommitted transaction.
+        the same registry path and asserts the first two rows are visible.
         """
         conn, d, registry_path = self._setup(tmp_path)
         for name in ("a.txt", "b.txt", "c.txt", "d.txt"):
@@ -692,21 +741,23 @@ class TestSyncCollectionDurabilityAndRefresh:
 
         calls: list[str] = []
 
-        def _ingest(
+        def _prepare(
             fp: Path,
-            *_args: object,
+            settings_arg: object,
             **kwargs: object,
-        ) -> dict[str, object]:
+        ) -> tuple[list[Chunk], np.ndarray]:
             name = kwargs["document_name"]
             assert isinstance(name, str)
             calls.append(name)
             if len(calls) == 3:
                 msg = "user interrupt"
                 raise KeyboardInterrupt(msg)
-            return {"chunks": 1}
+            return _fake_prepare(fp, settings_arg, **kwargs)
 
         with (
-            patch("quarry.sync.ingest_document", side_effect=_ingest),
+            patch("quarry.sync.prepare_document", side_effect=_prepare),
+            patch("quarry.sync.delete_document"),
+            patch("quarry.sync.batch_insert_chunks", return_value=0),
             pytest.raises(KeyboardInterrupt),
         ):
             sync_collection(d, "col", db, settings, conn, max_workers=1)
@@ -742,14 +793,17 @@ class TestSyncCollectionDurabilityAndRefresh:
         db = MagicMock()
         settings = _mock_settings(tmp_path)
 
-        with patch(
-            "quarry.sync.ingest_document",
-            return_value={"chunks": 1},
-        ) as mock_ingest:
+        with (
+            patch(
+                "quarry.sync.prepare_document", side_effect=_fake_prepare
+            ) as mock_prepare,
+            patch("quarry.sync.delete_document"),
+            patch("quarry.sync.batch_insert_chunks", return_value=1),
+        ):
             first = sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert first.ingested == 3
         assert first.refreshed == 0
-        assert mock_ingest.call_count == 3
+        assert mock_prepare.call_count == 3
 
         # Capture post-ingest mtimes from the registry.
         pre_refresh = {r.path: r.mtime for r in list_files(conn, "col")}
@@ -760,15 +814,18 @@ class TestSyncCollectionDurabilityAndRefresh:
             stat = f.stat()
             os.utime(f, (stat.st_atime, stat.st_mtime + 100))
 
-        with patch(
-            "quarry.sync.ingest_document",
-            return_value={"chunks": 1},
-        ) as mock_ingest:
+        with (
+            patch(
+                "quarry.sync.prepare_document", side_effect=_fake_prepare
+            ) as mock_prepare,
+            patch("quarry.sync.delete_document"),
+            patch("quarry.sync.batch_insert_chunks", return_value=0),
+        ):
             second = sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert second.ingested == 0
         assert second.refreshed == 3
         assert second.skipped == 0
-        assert mock_ingest.call_count == 0
+        assert mock_prepare.call_count == 0
 
         post_refresh = {r.path: r.mtime for r in list_files(conn, "col")}
         assert set(pre_refresh) == set(post_refresh)
@@ -781,12 +838,7 @@ class TestSyncCollectionDurabilityAndRefresh:
     def test_refresh_files_partial_failure(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        """Class 2 failure-injection: _refresh_files catches OSError per file.
-
-        If ``upsert_file`` raises ``OSError`` on one file, the other
-        files must still be refreshed.  The failed file's mtime must
-        remain unchanged in the registry.
-        """
+        """Class 2 failure-injection: _refresh_files catches OSError per file."""
         conn, d, registry_path = self._setup(tmp_path)
         for name in ("a.txt", "b.txt"):
             (d / name).write_text(f"content of {name}")
@@ -795,9 +847,10 @@ class TestSyncCollectionDurabilityAndRefresh:
         settings = _mock_settings(tmp_path)
 
         # Initial ingest so content_hash is populated.
-        with patch(
-            "quarry.sync.ingest_document",
-            return_value={"chunks": 1},
+        with (
+            patch("quarry.sync.prepare_document", side_effect=_fake_prepare),
+            patch("quarry.sync.delete_document"),
+            patch("quarry.sync.batch_insert_chunks", return_value=1),
         ):
             first = sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert first.ingested == 2
@@ -828,9 +881,10 @@ class TestSyncCollectionDurabilityAndRefresh:
 
         monkeypatch.setattr("quarry.sync.upsert_file", _failing_upsert)
 
-        with patch(
-            "quarry.sync.ingest_document",
-            return_value={"chunks": 1},
+        with (
+            patch("quarry.sync.prepare_document", side_effect=_fake_prepare),
+            patch("quarry.sync.delete_document"),
+            patch("quarry.sync.batch_insert_chunks", return_value=0),
         ):
             second = sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert second.refreshed == 1
@@ -868,7 +922,11 @@ class TestSyncAll:
         # Mock table operations used by create_collection_index and optimize_table
         db.list_tables.return_value.tables = []
 
-        with patch("quarry.sync.ingest_document", return_value={"chunks": 1}):
+        with (
+            patch("quarry.sync.prepare_document", side_effect=_fake_prepare),
+            patch("quarry.sync.delete_document"),
+            patch("quarry.sync.batch_insert_chunks", return_value=1),
+        ):
             results = sync_all(db, settings, max_workers=1)
 
         assert "alpha" in results

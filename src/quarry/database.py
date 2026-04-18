@@ -229,6 +229,44 @@ def insert_chunks(
     return len(records)
 
 
+def batch_insert_chunks(
+    db: LanceDB,
+    batch: list[tuple[list[Chunk], NDArray[np.float32]]],
+) -> int:
+    """Insert multiple documents' chunks in a single LanceDB write.
+
+    Each element of *batch* is a ``(chunks, vectors)`` pair from one
+    document.  All pairs are flattened into a single ``table.add()``
+    call, reducing N write transactions to 1.
+
+    Args:
+        db: LanceDB connection.
+        batch: List of (chunks, vectors) pairs to insert.
+
+    Returns:
+        Total number of rows inserted.
+    """
+    if not batch:
+        return 0
+
+    records: list[dict[str, object]] = []
+    for chunks, vectors in batch:
+        for chunk, vector in zip(chunks, vectors, strict=True):
+            record: dict[str, object] = asdict(chunk)
+            record["vector"] = vector.tolist()
+            records.append(record)
+
+    if not records:
+        return 0
+
+    table = _get_or_create_table(db, records)
+    if table is not None:
+        table.add(records)
+
+    logger.info("Batch-inserted %d chunks into %s", len(records), TABLE_NAME)
+    return len(records)
+
+
 def search(
     db: LanceDB,
     query_vector: NDArray[np.float32],
@@ -722,7 +760,33 @@ def create_collection_index(db: LanceDB) -> None:
     logger.info("Created BITMAP index on collection column")
 
 
-def optimize_table(db: LanceDB) -> None:
+_FRAGMENT_THRESHOLD: int = 10_000
+
+
+def count_fragments(db: LanceDB) -> int:
+    """Count data fragments in the chunks table.
+
+    Approximates fragment count by counting entries in the lance data
+    directory on disk.  Returns 0 if the table does not exist or the
+    data directory cannot be enumerated.
+    """
+    if TABLE_NAME not in db.list_tables().tables:
+        return 0
+    table = db.open_table(TABLE_NAME)
+    # LanceDB 0.30 does not expose fragment count via the Python API.
+    # The best proxy is counting subdirectories under the lance data/ dir.
+    try:
+        uri = str(getattr(table, "uri", "")) or str(getattr(table, "_uri", ""))
+        if uri:
+            data_dir = Path(uri) / "data"
+            if data_dir.is_dir():
+                return sum(1 for _ in data_dir.iterdir())
+    except (OSError, TypeError):
+        pass
+    return 0
+
+
+def optimize_table(db: LanceDB, *, force: bool = False) -> None:
     """Compact table data and rebuild the FTS index.
 
     Merges small data fragments for better query performance, then
@@ -734,11 +798,29 @@ def optimize_table(db: LanceDB) -> None:
     Also prunes old manifest versions older than 7 days to reclaim
     disk space from the ``_versions/`` directory.
 
+    When the fragment count exceeds ``_FRAGMENT_THRESHOLD`` (10,000),
+    optimization is skipped to prevent a compaction death spiral — unless
+    *force* is True.  The operator should run ``quarry optimize --force``
+    manually for degraded databases.
+
     Args:
         db: LanceDB connection.
+        force: Bypass the fragment-count safety guard.
     """
     if TABLE_NAME not in db.list_tables().tables:
         return
+
+    if not force:
+        fragments = count_fragments(db)
+        if fragments > _FRAGMENT_THRESHOLD:
+            logger.warning(
+                "LanceDB table has %d fragments (threshold: %d). "
+                "Skipping optimization — manual compaction required. "
+                "Run: quarry optimize --force",
+                fragments,
+                _FRAGMENT_THRESHOLD,
+            )
+            return
 
     table = db.open_table(TABLE_NAME)
     table.optimize(cleanup_older_than=timedelta(days=7))

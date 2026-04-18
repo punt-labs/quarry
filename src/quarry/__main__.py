@@ -90,6 +90,7 @@ _COMMAND_ORDER: list[str] = [
     "register",
     "deregister",
     "sync",
+    "optimize",
     "login",
     "logout",
     "remote",
@@ -1197,21 +1198,29 @@ def sync_cmd(
                 "configured",
                 style="yellow",
             )
+        # Fire-and-forget: POST /sync returns 202 with task_id.
+        # The CLI prints the task_id and exits immediately.
         try:
             remote_resp = _remote_https_request(
                 "POST",
                 "/sync",
                 proxy_config,
                 body={},
-                timeout=_SYNC_REMOTE_TIMEOUT,
+                timeout=_DEFAULT_REMOTE_TIMEOUT,
             )
         except RemoteError as exc:
+            # 409 means sync already running — show task_id to poll.
+            if exc.status == 409:
+                err_console.print(f"Sync already in progress: {exc}", style="yellow")
+                raise typer.Exit(code=0) from exc
             err_console.print(f"Error: {exc}", style="red")
             raise typer.Exit(code=1) from exc
-        remote_data: dict[str, dict[str, object]] = {
-            col: dict(val) for col, val in remote_resp.items() if isinstance(val, dict)
-        }
-        _emit(remote_data, _format_sync_results(remote_data))
+        task_id = remote_resp.get("task_id", "")
+        status = remote_resp.get("status", "")
+        _emit(
+            remote_resp,
+            f"Sync {status}: task_id={task_id}",
+        )
         return
 
     settings = _resolved_settings()
@@ -1239,6 +1248,54 @@ def sync_cmd(
         for col, res in results.items()
     }
     _emit(json_data, _format_sync_results(json_data))
+
+
+@app.command(name="optimize")
+@_cli_errors
+def optimize_cmd(
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Bypass the fragment-count safety guard.",
+        ),
+    ] = False,
+) -> None:
+    """Compact the LanceDB table and rebuild indexes.
+
+    When the database has more than 10,000 fragments, optimization is
+    skipped by default to prevent a compaction death spiral. Use --force
+    to bypass this safety guard for manual recovery.
+    """
+    from quarry.database import (  # noqa: PLC0415
+        count_fragments,
+        optimize_table as db_optimize_table,
+    )
+
+    settings = _resolved_settings()
+    db = get_db(settings.lancedb_path)
+
+    fragments = count_fragments(db)
+    if not _quiet:
+        err_console.print(f"Fragment count: {fragments}")
+
+    if not force and fragments > 10_000:
+        err_console.print(
+            f"Skipping: {fragments} fragments exceed threshold (10,000). "
+            "Use --force to override.",
+            style="yellow",
+        )
+        raise typer.Exit(code=1)
+
+    if not _quiet:
+        err_console.print("Running optimization...")
+
+    db_optimize_table(db, force=force)
+
+    _emit(
+        {"optimized": True, "fragments_before": fragments, "force": force},
+        "Optimization complete.",
+    )
 
 
 @app.command(name="login")

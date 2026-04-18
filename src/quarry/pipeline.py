@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    import numpy as np
+    from numpy.typing import NDArray
     from PIL.Image import Image as PILImage
 
     from quarry.sitemap import SitemapEntry
@@ -27,7 +29,7 @@ from quarry.image_analyzer import (
     SUPPORTED_IMAGE_EXTENSIONS,
     analyze_image,
 )
-from quarry.models import PageContent, PageType
+from quarry.models import Chunk, PageContent, PageType
 from quarry.pdf_analyzer import analyze_pdf
 from quarry.presentation_processor import (
     SUPPORTED_PRESENTATION_EXTENSIONS,
@@ -1442,3 +1444,146 @@ def _chunk_embed_store(
     if file_format is not None:
         result["format"] = file_format
     return result
+
+
+def prepare_document(
+    file_path: Path,
+    settings: Settings,
+    *,
+    collection: str = "default",
+    document_name: str | None = None,
+    agent_handle: str = "",
+    memory_type: str = "",
+    summary: str = "",
+) -> tuple[list[Chunk], NDArray[np.float32]] | None:
+    """Chunk and embed a document without writing to LanceDB.
+
+    Returns a ``(chunks, vectors)`` pair ready for batch insertion, or
+    ``None`` if the document produces no chunks.  Used by the sync
+    pipeline to accumulate chunks across documents and batch-write them.
+
+    Raises:
+        FileNotFoundError: If *file_path* does not exist.
+        ValueError: If the file format is not supported.
+    """
+    if not file_path.exists():
+        msg = f"File not found: {file_path}"
+        raise FileNotFoundError(msg)
+
+    document_name = document_name or file_path.name
+    suffix = file_path.suffix.lower()
+
+    pages: list[PageContent] = _extract_pages(
+        file_path, suffix, document_name, settings
+    )
+    if not pages:
+        return None
+
+    source_format = suffix if suffix != ".pdf" else ".pdf"
+    chunks = chunk_pages(
+        pages,
+        max_chars=settings.chunk_max_chars,
+        overlap_chars=settings.chunk_overlap_chars,
+        collection=collection,
+        source_format=source_format,
+        agent_handle=agent_handle,
+        memory_type=memory_type,
+        summary=summary,
+    )
+    if not chunks:
+        return None
+
+    embedder = get_embedding_backend(settings)
+    texts = [c.text for c in chunks]
+    vectors: NDArray[np.float32] = embedder.embed_texts(texts)
+    return chunks, vectors
+
+
+def _extract_pdf_pages(
+    file_path: Path,
+    document_name: str,
+    settings: Settings,
+) -> list[PageContent]:
+    """Extract pages from a PDF file."""
+    analyses = analyze_pdf(file_path)
+    total_pages = len(analyses)
+    text_page_nums = [a.page_number for a in analyses if a.page_type == PageType.TEXT]
+    image_page_nums = [a.page_number for a in analyses if a.page_type == PageType.IMAGE]
+    all_pages: list[PageContent] = []
+    if text_page_nums:
+        all_pages.extend(
+            extract_text_pages(
+                file_path, text_page_nums, total_pages, document_name=document_name
+            )
+        )
+    if image_page_nums:
+        ocr = get_ocr_backend(settings)
+        all_pages.extend(
+            ocr.ocr_document(
+                file_path,
+                image_page_nums,
+                total_pages,
+                document_name=document_name,
+            )
+        )
+    all_pages.sort(key=lambda p: p.page_number)
+    return all_pages
+
+
+def _extract_image_pages(
+    file_path: Path,
+    document_name: str,
+    settings: Settings,
+) -> list[PageContent]:
+    """Extract pages from an image file."""
+    analysis = analyze_image(file_path)
+    if analysis.page_count > 1:
+        ocr = get_ocr_backend(settings)
+        return ocr.ocr_document(
+            file_path,
+            list(range(1, analysis.page_count + 1)),
+            analysis.page_count,
+            document_name=document_name,
+        )
+    image_bytes = _prepare_image_bytes(
+        file_path, needs_conversion=analysis.needs_conversion
+    )
+    ocr = get_ocr_backend(settings)
+    return [
+        ocr.ocr_image_bytes(
+            image_bytes,
+            document_name=document_name,
+            document_path=file_path.resolve(),
+        )
+    ]
+
+
+def _extract_pages(
+    file_path: Path,
+    suffix: str,
+    document_name: str,
+    settings: Settings,
+) -> list[PageContent]:
+    """Extract pages from a file based on its suffix."""
+    if suffix == ".pdf":
+        return _extract_pdf_pages(file_path, document_name, settings)
+    if suffix in SUPPORTED_CODE_EXTENSIONS:
+        return process_code_file(file_path, document_name=document_name)
+    if suffix in SUPPORTED_TEXT_EXTENSIONS:
+        return process_text_file(file_path, document_name=document_name)
+    if suffix in SUPPORTED_IMAGE_EXTENSIONS:
+        return _extract_image_pages(file_path, document_name, settings)
+    if suffix in SUPPORTED_SPREADSHEET_EXTENSIONS:
+        pages, _ = process_spreadsheet_file(
+            file_path,
+            max_chars=settings.chunk_max_chars,
+            document_name=document_name,
+        )
+        return pages
+    if suffix in SUPPORTED_HTML_EXTENSIONS:
+        return process_html_file(file_path, document_name=document_name)
+    if suffix in SUPPORTED_PRESENTATION_EXTENSIONS:
+        return process_presentation_file(file_path, document_name=document_name)
+
+    msg = f"Unsupported file format: {suffix}"
+    raise ValueError(msg)

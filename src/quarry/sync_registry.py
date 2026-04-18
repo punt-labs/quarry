@@ -54,15 +54,43 @@ def register_directory(
 ) -> DirectoryRegistration:
     """Register a directory for incremental sync.
 
+    Subsumption rules:
+
+    - If *directory* is an ancestor of existing registrations, the children
+      are deregistered (the parent subsumes them).
+    - If an existing registration is an ancestor of *directory*, the
+      registration is rejected — the child is already covered.
+
     Raises:
         FileNotFoundError: If *directory* does not exist.
-        ValueError: If *directory* is already registered or *collection*
-            name is already in use.
+        ValueError: If *directory* is already registered, *collection*
+            name is already in use, or *directory* is a child of an
+            existing registration.
     """
     resolved = directory.resolve()
     if not resolved.is_dir():
         msg = f"Directory not found: {resolved}"
         raise FileNotFoundError(msg)
+
+    # --- Subsumption check ---
+    existing_regs = list_registrations(conn)
+    for reg in existing_regs:
+        reg_path = Path(reg.directory)
+        if _is_ancestor_of(reg_path, resolved):
+            msg = (
+                f"directory already covered by parent registration "
+                f"'{reg.collection}' ({reg.directory})"
+            )
+            raise ValueError(msg)
+    # Deregister children that the new parent subsumes.
+    subsumed: list[str] = []
+    for reg in existing_regs:
+        reg_path = Path(reg.directory)
+        if _is_ancestor_of(resolved, reg_path):
+            subsumed.append(reg.collection)
+    for child_collection in subsumed:
+        deregister_directory(conn, child_collection)
+
     now = datetime.now(UTC).isoformat()
     try:
         conn.execute(
@@ -89,6 +117,22 @@ def register_directory(
         collection=collection,
         registered_at=now,
     )
+
+
+def _is_ancestor_of(ancestor: Path, descendant: Path) -> bool:
+    """Return True if *ancestor* is a strict ancestor of *descendant*.
+
+    Both paths should be resolved (absolute, no symlinks).  Uses
+    ``Path.is_relative_to`` (stdlib since 3.9) for the containment
+    check and requires strict inequality (same path is not an ancestor).
+    """
+    if ancestor == descendant:
+        return False
+    try:
+        descendant.relative_to(ancestor)
+    except ValueError:
+        return False
+    return True
 
 
 def deregister_directory(

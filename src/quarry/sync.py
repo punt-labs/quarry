@@ -12,17 +12,24 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Final
+from typing import TYPE_CHECKING, Final
+
+if TYPE_CHECKING:
+    import numpy as np
+    from numpy.typing import NDArray
+
+    from quarry.models import Chunk
 
 import pathspec
 
 from quarry.config import Settings
 from quarry.database import (
+    batch_insert_chunks,
     create_collection_index,
     delete_document,
     optimize_table,
 )
-from quarry.pipeline import SUPPORTED_EXTENSIONS, ingest_document
+from quarry.pipeline import SUPPORTED_EXTENSIONS, prepare_document
 from quarry.sync_registry import (
     FileRecord,
     delete_file,
@@ -275,48 +282,57 @@ def _ingest_files(
     conn: sqlite3.Connection,
     max_workers: int,
     progress: Callable[[str], None],
-) -> tuple[int, int, list[str]]:
-    """Ingest files from a sync plan, returning (ingested, failed, errors).
+) -> tuple[int, int, list[str], list[tuple[list[Chunk], NDArray[np.float32]]]]:
+    """Ingest files from a sync plan.
 
-    Commits each row to the registry immediately after a successful
-    ingest so an interrupted sync does not lose progress.  Without
-    per-row commits, a crash mid-sync leaves every row in SQLite's
-    WAL; restart rolls them back, and the next sync re-embeds every
-    document on top of the LanceDB chunks that did make it to disk.
+    Returns ``(ingested, failed, errors, chunk_batch)`` where *chunk_batch*
+    is a list of ``(chunks, vectors)`` pairs ready for a single batched
+    ``table.add()`` call.  The caller (``sync_collection``) performs the
+    batch write after all documents have been processed.
+
+    Per-document deletes (for overwrite semantics) happen inside each
+    worker thread.  Per-document embedding happens in the worker thread
+    too, but the results are accumulated and written in one shot at the
+    end to reduce LanceDB fragment churn.
+
+    Commits each registry row immediately after a successful prepare so
+    an interrupted sync does not lose progress.
     """
     ingested = 0
     failed = 0
     errors: list[str] = []
+    chunk_batch: list[tuple[list[Chunk], NDArray[np.float32]]] = []
 
-    def _timed_ingest(
+    def _timed_prepare(
         fp: Path, document_name: str
-    ) -> tuple[float, os.stat_result, str | None]:
+    ) -> tuple[
+        float,
+        os.stat_result,
+        str | None,
+        tuple[list[Chunk], NDArray[np.float32]] | None,
+    ]:
         t = time.perf_counter()
-        ingest_document(
+        # Delete existing chunks for overwrite semantics.
+        delete_document(db, document_name, collection=collection)
+        # Chunk + embed without writing to LanceDB.
+        prepared = prepare_document(
             fp,
-            db,
             settings,
-            overwrite=True,
             collection=collection,
             document_name=document_name,
         )
         elapsed = time.perf_counter() - t
-        # Capture stat and hash immediately after ingest, inside the
-        # worker thread, so the values match the content that was
-        # actually embedded.  Moving these to the as_completed callback
-        # would introduce a TOCTOU race if the file is modified between
-        # ingest and the callback.
-        stat = fp.stat()  # if this fails it is a real failure — let it propagate
+        stat = fp.stat()
         try:
             content_hash: str | None = _content_hash(fp)
         except OSError:
-            content_hash = None  # record without hash; next sync will backfill
-        return elapsed, stat, content_hash
+            content_hash = None
+        return elapsed, stat, content_hash, prepared
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
             executor.submit(
-                _timed_ingest,
+                _timed_prepare,
                 fp,
                 str(fp.relative_to(resolved)),
             ): fp
@@ -326,7 +342,7 @@ def _ingest_files(
             fp = futures[future]
             document_name = str(fp.relative_to(resolved))
             try:
-                elapsed, stat, content_hash = future.result()
+                elapsed, stat, content_hash, prepared = future.result()
                 upsert_file(
                     conn,
                     FileRecord(
@@ -340,6 +356,8 @@ def _ingest_files(
                     ),
                     commit=True,
                 )
+                if prepared is not None:
+                    chunk_batch.append(prepared)
                 ingested += 1
                 progress(f"[{collection}] Ingested {document_name} in {elapsed:.2f}s")
             except _RECOVERABLE as exc:
@@ -347,7 +365,7 @@ def _ingest_files(
                 errors.append(f"{document_name}: {exc}")
                 logger.exception("Ingest failed for %s", document_name)
                 progress(f"[{collection}] Failed {document_name}: {exc}")
-    return ingested, failed, errors
+    return ingested, failed, errors, chunk_batch
 
 
 def _refresh_files(
@@ -486,9 +504,10 @@ def sync_collection(
     refreshed = 0
     failed = 0
     errors: list[str] = []
+    chunk_batch: list[tuple[list[Chunk], NDArray[np.float32]]] = []
 
     if plan.to_ingest:
-        ingested, failed, errors = _ingest_files(
+        ingested, failed, errors, chunk_batch = _ingest_files(
             plan.to_ingest,
             resolved,
             collection,
@@ -520,6 +539,17 @@ def sync_collection(
     deleted = del_count
     failed += del_failed
     errors.extend(del_errors)
+
+    # Batch-write all accumulated chunks in a single LanceDB transaction.
+    if chunk_batch:
+        t0 = time.perf_counter()
+        total_inserted = batch_insert_chunks(db, chunk_batch)
+        logger.info(
+            "sync: [%s] batch-inserted %d chunks in %.2fs",
+            collection,
+            total_inserted,
+            time.perf_counter() - t0,
+        )
 
     # Belt-and-suspenders: all three helpers commit per-row now.
     # Flush any residual writes so the registry is durable before
