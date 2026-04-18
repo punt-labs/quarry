@@ -14,6 +14,20 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- **index**: `delete_document` called `count_rows()` twice per file
+  during sync, scanning all fragment metadata on every deletion.
+  On a 62K-row table this added 4-7 seconds per file. Added
+  `count=False` fast path; sync and pipeline callers skip counting.
+- **index**: `optimize_table` cleanup window reduced from 7 days to
+  1 hour. Daily syncs that re-embed files produced tombstoned
+  fragments that accumulated for a week, causing 416 MB disk growth
+  per sync cycle.
+- **index**: Explicit `del chunk_batch` + `gc.collect(0)` after
+  batch insert in `sync_collection` to release numpy arrays
+  promptly. Full `gc.collect(2)` + RSS logging at end of `sync_all`.
+
 ### Changed
 
 - **api**: All mutating HTTP endpoints now return 202 + task_id.

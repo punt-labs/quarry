@@ -233,7 +233,7 @@ def ingest_pdf(
     progress("Analyzing: %s", document_name)
 
     if overwrite:
-        delete_document(db, document_name, collection=collection)
+        delete_document(db, document_name, collection=collection, count=False)
 
     analyses = analyze_pdf(file_path)
     total_pages = len(analyses)
@@ -319,7 +319,7 @@ def ingest_text_file(
     progress("Reading: %s", document_name)
 
     if overwrite:
-        delete_document(db, document_name, collection=collection)
+        delete_document(db, document_name, collection=collection, count=False)
 
     pages = process_text_file(file_path, document_name=document_name)
     progress("Sections: %d", len(pages))
@@ -374,7 +374,7 @@ def ingest_code_file(
     progress("Parsing: %s", document_name)
 
     if overwrite:
-        delete_document(db, document_name, collection=collection)
+        delete_document(db, document_name, collection=collection, count=False)
 
     pages = process_code_file(file_path, document_name=document_name)
     progress("Definitions: %d", len(pages))
@@ -429,7 +429,7 @@ def ingest_spreadsheet(
     progress("Reading: %s", document_name)
 
     if overwrite:
-        delete_document(db, document_name, collection=collection)
+        delete_document(db, document_name, collection=collection, count=False)
 
     pages, sheet_count = process_spreadsheet_file(
         file_path,
@@ -488,7 +488,7 @@ def ingest_html_file(
     progress("Reading: %s", document_name)
 
     if overwrite:
-        delete_document(db, document_name, collection=collection)
+        delete_document(db, document_name, collection=collection, count=False)
 
     pages = process_html_file(file_path, document_name=document_name)
     progress("Sections: %d", len(pages))
@@ -543,7 +543,7 @@ def ingest_presentation(
     progress("Reading: %s", document_name)
 
     if overwrite:
-        delete_document(db, document_name, collection=collection)
+        delete_document(db, document_name, collection=collection, count=False)
 
     pages = process_presentation_file(file_path, document_name=document_name)
     progress("Slides: %d", len(pages))
@@ -602,7 +602,7 @@ def ingest_image(
     progress("Analyzing image: %s", document_name)
 
     if overwrite:
-        delete_document(db, document_name, collection=collection)
+        delete_document(db, document_name, collection=collection, count=False)
 
     analysis = analyze_image(file_path)
     progress(
@@ -834,7 +834,7 @@ def ingest_content(
     progress("Processing: %s", document_name)
 
     if overwrite:
-        delete_document(db, document_name, collection=collection)
+        delete_document(db, document_name, collection=collection, count=False)
 
     pages = process_raw_text(content, document_name, format_hint=format_hint)
     progress("Sections: %d", len(pages))
@@ -935,7 +935,7 @@ def ingest_url(
     progress("Fetched %d characters", len(html))
 
     if overwrite:
-        delete_document(db, document_name, collection=collection)
+        delete_document(db, document_name, collection=collection, count=False)
 
     pages = process_html_text(html, document_name, url)
     progress("Sections: %d", len(pages))

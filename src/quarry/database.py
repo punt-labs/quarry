@@ -656,6 +656,8 @@ def delete_document(
     db: LanceDB,
     document_name: str,
     collection: str | None = None,
+    *,
+    count: bool = True,
 ) -> int:
     """Delete all chunks for a document, optionally scoped to a collection.
 
@@ -663,21 +665,33 @@ def delete_document(
         db: LanceDB connection.
         document_name: Document filename to delete.
         collection: If provided, only delete within this collection.
+        count: If False, skip the expensive ``count_rows()`` calls and
+            return 0.  Use this from sync/pipeline callers that discard
+            the return value — saves 2-4s per file on large tables.
 
     Returns:
-        Number of rows deleted (0 if document not found).
+        Number of rows deleted (0 if *count* is False or document not found).
     """
     if TABLE_NAME not in db.list_tables().tables:
         return 0
 
-    table = db.open_table(TABLE_NAME)
-    before = table.count_rows()
+    try:
+        table = db.open_table(TABLE_NAME)
+    except ValueError as exc:
+        if "not found" not in str(exc).lower():
+            raise
+        return 0
     predicate = f"document_name = '{_escape_sql(document_name)}'"
     if collection:
         predicate += f" AND collection = '{_escape_sql(collection)}'"
+
+    if not count:
+        table.delete(predicate)
+        logger.info("Issued chunk delete for %s (counting disabled)", document_name)
+        return 0
+
+    deleted = table.count_rows(predicate)
     table.delete(predicate)
-    after = table.count_rows()
-    deleted = before - after
     logger.info("Deleted %d chunks for %s", deleted, document_name)
     return deleted
 
@@ -795,7 +809,7 @@ def optimize_table(db: LanceDB, *, force: bool = False) -> None:
     row references to compacted-away fragments, causing RuntimeError
     on hybrid_search queries.
 
-    Also prunes old manifest versions older than 7 days to reclaim
+    Also prunes old manifest versions older than 1 hour to reclaim
     disk space from the ``_versions/`` directory.
 
     When the fragment count exceeds ``FRAGMENT_THRESHOLD`` (10,000),
@@ -823,8 +837,8 @@ def optimize_table(db: LanceDB, *, force: bool = False) -> None:
             return
 
     table = db.open_table(TABLE_NAME)
-    table.optimize(cleanup_older_than=timedelta(days=7))
-    logger.info("Optimized table %s (compacted + pruned versions >7d)", TABLE_NAME)
+    table.optimize(cleanup_older_than=timedelta(hours=1))
+    logger.info("Optimized table %s (compacted + pruned versions >1h)", TABLE_NAME)
 
     # Rebuild FTS index — compaction changes fragment IDs, so the old
     # Tantivy index has stale references.  replace=True forces a full

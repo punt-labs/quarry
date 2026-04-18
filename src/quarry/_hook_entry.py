@@ -137,7 +137,9 @@ def _ingest_background() -> None:
             existing = list_documents(db, collection_filter=collection)
             prior = [doc for doc in existing if doc["document_name"].startswith(prefix)]
             for doc in prior:
-                delete_document(db, doc["document_name"], collection=collection)
+                delete_document(
+                    db, doc["document_name"], collection=collection, count=False
+                )
             if prior:
                 logger.info(
                     "ingest-background: deleted %d prior capture(s) for session %s",
