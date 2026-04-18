@@ -228,7 +228,7 @@ class TestJsonShapeIngest:
             result = runner.invoke(app, ["--json", "ingest", "https://example.com/"])
         _reset_globals()
         assert result.exit_code == 0
-        data = json.loads(result.output)
+        data = json.loads(result.stdout)
         assert set(data.keys()) == {"task_id", "status"}
         assert isinstance(data["task_id"], str)
         assert data["status"] == "accepted"
@@ -255,7 +255,7 @@ class TestJsonShapeIngest:
             result = runner.invoke(app, ["--json", "ingest", "https://example.com/"])
         _reset_globals()
         assert result.exit_code == 0
-        data = json.loads(result.output)
+        data = json.loads(result.stdout)
         assert "document_name" in data
         assert "chunks" in data
         assert "errors" in data
@@ -283,7 +283,7 @@ class TestJsonShapeRemember:
             )
         _reset_globals()
         assert result.exit_code == 0
-        data = json.loads(result.output)
+        data = json.loads(result.stdout)
         assert set(data.keys()) == {"task_id", "status"}
         assert isinstance(data["task_id"], str)
         assert data["status"] == "accepted"
@@ -314,7 +314,7 @@ class TestJsonShapeRemember:
             )
         _reset_globals()
         assert result.exit_code == 0
-        data = json.loads(result.output)
+        data = json.loads(result.stdout)
         assert "document_name" in data
         assert "chunks" in data
         assert "errors" in data
@@ -338,7 +338,7 @@ class TestJsonShapeDelete:
             result = runner.invoke(app, ["--json", "delete", "report.pdf"])
         _reset_globals()
         assert result.exit_code == 0
-        data = json.loads(result.output)
+        data = json.loads(result.stdout)
         assert set(data.keys()) == {"task_id", "status"}
         assert isinstance(data["task_id"], str)
         assert data["status"] == "accepted"
@@ -356,7 +356,7 @@ class TestJsonShapeDelete:
             result = runner.invoke(app, ["--json", "delete", "report.pdf"])
         _reset_globals()
         assert result.exit_code == 0
-        data = json.loads(result.output)
+        data = json.loads(result.stdout)
         assert set(data.keys()) == {"deleted", "name", "type"}
         assert data["deleted"] == 10
         assert data["name"] == "report.pdf"
@@ -386,7 +386,7 @@ class TestJsonShapeRegister:
             )
         _reset_globals()
         assert result.exit_code == 0
-        data = json.loads(result.output)
+        data = json.loads(result.stdout)
         assert set(data.keys()) == {"task_id", "status"}
         assert isinstance(data["task_id"], str)
         assert data["status"] == "accepted"
@@ -409,7 +409,7 @@ class TestJsonShapeRegister:
             )
         _reset_globals()
         assert result.exit_code == 0
-        data = json.loads(result.output)
+        data = json.loads(result.stdout)
         assert "directory" in data
         assert "collection" in data
 
@@ -432,7 +432,7 @@ class TestJsonShapeDeregister:
             result = runner.invoke(app, ["--json", "deregister", "math"])
         _reset_globals()
         assert result.exit_code == 0
-        data = json.loads(result.output)
+        data = json.loads(result.stdout)
         assert set(data.keys()) == {"task_id", "status"}
         assert isinstance(data["task_id"], str)
         assert data["status"] == "accepted"
@@ -460,7 +460,7 @@ class TestJsonShapeDeregister:
             result = runner.invoke(app, ["--json", "deregister", "math"])
         _reset_globals()
         assert result.exit_code == 0
-        data = json.loads(result.output)
+        data = json.loads(result.stdout)
         assert "collection" in data
         assert "removed" in data
         assert "deleted_chunks" in data
@@ -484,7 +484,7 @@ class TestJsonShapeSync:
             result = runner.invoke(app, ["--json", "sync"])
         _reset_globals()
         assert result.exit_code == 0
-        data = json.loads(result.output)
+        data = json.loads(result.stdout)
         assert "task_id" in data
         assert data["status"] == "accepted"
 
@@ -517,7 +517,7 @@ class TestJsonShapeSync:
             result = runner.invoke(app, ["--json", "sync"])
         _reset_globals()
         assert result.exit_code == 0
-        data = json.loads(result.output)
+        data = json.loads(result.stdout)
         assert "col" in data
         entry_keys = set(data["col"].keys())
         expected_keys = {

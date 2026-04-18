@@ -27,7 +27,8 @@ def configure_logging(*, stderr_level: str = "WARNING") -> None:
     _LOG_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
 
     env_level = os.environ.get("QUARRY_LOG_LEVEL", "").upper()
-    if env_level and hasattr(logging, env_level):
+    valid_levels = logging.getLevelNamesMapping()
+    if env_level and env_level in valid_levels:
         effective_level = env_level
     else:
         effective_level = stderr_level

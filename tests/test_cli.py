@@ -4776,7 +4776,9 @@ def test_configure_logging_called_in_main_callback() -> None:
 
 def test_configure_logging_not_called_at_import() -> None:
     """Module-level code does not call configure_logging."""
-    src = Path("src/quarry/__main__.py").read_text()
+    import quarry.__main__ as cli_mod
+
+    src = Path(cli_mod.__file__).read_text(encoding="utf-8")
     tree = ast.parse(src)
     # Walk top-level statements only (not inside functions/classes)
     for node in tree.body:
