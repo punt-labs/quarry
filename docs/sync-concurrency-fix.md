@@ -89,7 +89,7 @@ return an error naming the parent registration.
 
 Subsumption logic — **the parent always wins**:
 
-```
+```text
 register(dir):
   for each existing registration R:
     if dir is ancestor of R.directory:
@@ -144,7 +144,7 @@ deletes are cheap compared to adds (no embedding work).
 Before calling `table.optimize()`, check the fragment count. If it
 exceeds a threshold (e.g. 10,000), log an error and skip:
 
-```
+```text
 WARNING: LanceDB table has N fragments (threshold: 10000).
 Skipping optimization — manual compaction required.
 Run: quarry optimize --force
@@ -203,16 +203,20 @@ engineered for a background batch operation. Polling is sufficient.
 2. Before restarting, the operator should delete the pathological
    LanceDB data and re-ingest from scratch. With 133K fragments,
    compaction will take longer than re-ingestion:
+
    ```bash
    quarry serve stop  # or kill the process
    rm -rf ~/.punt-labs/quarry/data/default/lancedb/chunks.lance/
    quarry serve --port 8420 --host 0.0.0.0 --tls &
    quarry sync
    ```
+
 3. Remove the overlapping `punt-labs` parent registration if present:
+
    ```bash
    quarry deregister punt-labs
    ```
+
    After Fix 2 ships, this case is handled automatically.
 
 ## Test plan
