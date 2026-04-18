@@ -34,18 +34,18 @@ _ENV_FILE: Path = Path.home() / ".punt-labs" / "quarry" / "quarry.env"
 _MALLOC_CONF = "dirty_decay_ms:1000,muzzy_decay_ms:1000"
 
 
-def _write_env_file(api_key: str) -> None:
-    """Write QUARRY_API_KEY and MALLOC_CONF to the env file atomically with mode 0600.
+def _write_env_file(api_key: str = "") -> None:
+    """Write daemon env file atomically with mode 0600.
+
+    Always writes MALLOC_CONF (jemalloc tuning).  Writes QUARRY_API_KEY
+    only when *api_key* is non-empty.
 
     Uses os.open() so the file is created with restrictive permissions
     from the start — no chmod race window.  Writes to a .tmp sibling then
     renames into place.
 
-    MALLOC_CONF tells jemalloc to return freed pages within 1 second,
-    reducing RSS from ~5.4 GB to ~2.5 GB under typical Arrow buffer churn.
-
     Args:
-        api_key: The API key value to store.
+        api_key: The API key value to store.  Empty string omits the line.
     """
     _ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = _ENV_FILE.with_name(_ENV_FILE.name + ".tmp")
@@ -59,8 +59,9 @@ def _write_env_file(api_key: str) -> None:
         raise
     try:
         with f:
-            escaped = api_key.replace("\\", "\\\\").replace('"', '\\"')
-            f.write(f'QUARRY_API_KEY="{escaped}"\n')
+            if api_key:
+                escaped = api_key.replace("\\", "\\\\").replace('"', '\\"')
+                f.write(f'QUARRY_API_KEY="{escaped}"\n')
             f.write(f'MALLOC_CONF="{_MALLOC_CONF}"\n')
         tmp_path.replace(_ENV_FILE)
     except BaseException:
@@ -504,12 +505,11 @@ def install() -> str:
 
     plat = detect_platform()
 
-    # Linux: API key written to ~/.punt-labs/quarry/quarry.env (0600) before
-    # service registration so systemd can read it via EnvironmentFile= on first
-    # start.  The key is NOT baked into ExecStart args to stay out of ps output.
-    # macOS: API key embedded in the plist EnvironmentVariables block only —
-    # no env file is written.
-    if api_key and plat == "linux":
+    # Linux: env file always written for MALLOC_CONF (jemalloc tuning).
+    # API key included when set.  The key is NOT baked into ExecStart args
+    # to stay out of ps output.
+    # macOS: both API key and MALLOC_CONF are in the plist EnvironmentVariables.
+    if plat == "linux":
         _write_env_file(api_key)
 
     # Generate TLS certificates before registering the service so that the
