@@ -866,14 +866,11 @@ async def _sync_route(request: Request) -> JSONResponse:
             status_code=409,
         )
 
-    _gc_tasks(ctx)
-    task_id = f"sync-{uuid.uuid4().hex[:12]}"
-    state = TaskState(task_id=task_id, kind="sync")
-    ctx.tasks[task_id] = state
-    ctx.task_refs[task_id] = asyncio.create_task(_run_sync_task(ctx, state))
+    state = _begin_task(ctx, "sync")
+    ctx.task_refs[state.task_id] = asyncio.create_task(_run_sync_task(ctx, state))
 
     return JSONResponse(
-        {"task_id": task_id, "status": "accepted"},
+        {"task_id": state.task_id, "status": "accepted"},
         status_code=202,
     )
 

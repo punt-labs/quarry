@@ -7,6 +7,7 @@ Each test class gets its own app instance via fixtures.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -21,6 +22,19 @@ from quarry.http_server import (
     _write_port_file,
     build_app,
 )
+
+
+def _poll_task_done(
+    tc: TestClient, task_id: str, max_polls: int = 50
+) -> dict[str, Any]:
+    """Poll GET /tasks/{task_id} until terminal status. Return the final JSON."""
+    data: dict[str, Any] = {}
+    for _ in range(max_polls):
+        resp = tc.get(f"/tasks/{task_id}")
+        data = resp.json()
+        if data["status"] != "running":
+            return data
+    return data
 
 
 def _mock_settings(tmp_path: Path) -> MagicMock:
@@ -862,9 +876,9 @@ class TestRemember:
             )
             assert resp.status_code == 202
             task_id = resp.json()["task_id"]
-            status_resp = tc.get(f"/tasks/{task_id}")
-        assert status_resp.json()["status"] == "failed"
-        assert "bad content encoding" in status_resp.json()["error"]
+            data = _poll_task_done(tc, task_id)
+        assert data["status"] == "failed"
+        assert "bad content encoding" in data["error"]
 
     def test_pipeline_os_error_marks_task_failed(self, tmp_path: Path) -> None:
         """ingest_content raising OSError marks the task as failed."""
@@ -886,9 +900,9 @@ class TestRemember:
             )
             assert resp.status_code == 202
             task_id = resp.json()["task_id"]
-            status_resp = tc.get(f"/tasks/{task_id}")
-        assert status_resp.json()["status"] == "failed"
-        assert "disk full" in status_resp.json()["error"]
+            data = _poll_task_done(tc, task_id)
+        assert data["status"] == "failed"
+        assert "disk full" in data["error"]
 
     def test_rejects_oversized_body(self, client: TestClient) -> None:
         """Remember body > 50 MB must be rejected with HTTP 413."""
@@ -919,7 +933,7 @@ class TestRemember:
             ) as mock_ingest,
             TestClient(app, raise_server_exceptions=False) as tc,
         ):
-            tc.post(
+            resp = tc.post(
                 "/remember",
                 json={
                     "name": "n.md",
@@ -932,6 +946,7 @@ class TestRemember:
                     "summary": "one line",
                 },
             )
+            _poll_task_done(tc, resp.json()["task_id"])
 
         assert mock_ingest.call_count == 1
         args, kwargs = mock_ingest.call_args
@@ -958,11 +973,13 @@ class TestRemember:
             ) as mock_ingest,
             TestClient(app, raise_server_exceptions=False) as tc,
         ):
-            tc.post(
+            resp = tc.post(
                 "/remember",
                 json={"name": "n.md", "content": "body"},
             )
-        assert mock_ingest.call_args.kwargs["overwrite"] is True
+            _poll_task_done(tc, resp.json()["task_id"])
+            assert mock_ingest.call_args is not None
+            assert mock_ingest.call_args.kwargs["overwrite"] is True
 
     def test_rejects_non_bool_overwrite(self, client: TestClient) -> None:
         """Strings like 'false' or '0' must not be silently coerced to True."""
@@ -1071,6 +1088,7 @@ class TestIngest:
                     "summary": "one line",
                 },
             )
+            _poll_task_done(tc, resp.json()["task_id"])
 
         assert resp.status_code == 202
         assert mock_ingest.call_count == 1
@@ -1178,9 +1196,9 @@ class TestIngest:
             resp = tc.post("/ingest", json={"source": "https://example.com/"})
             assert resp.status_code == 202
             task_id = resp.json()["task_id"]
-            status_resp = tc.get(f"/tasks/{task_id}")
-        assert status_resp.json()["status"] == "failed"
-        assert "unsupported URL" in status_resp.json()["error"]
+            data = _poll_task_done(tc, task_id)
+        assert data["status"] == "failed"
+        assert "unsupported URL" in data["error"]
 
     def test_pipeline_os_error_marks_task_failed(self, tmp_path: Path) -> None:
         """ingest_auto raising OSError marks the task as failed."""
@@ -1203,9 +1221,9 @@ class TestIngest:
             resp = tc.post("/ingest", json={"source": "https://example.com/"})
             assert resp.status_code == 202
             task_id = resp.json()["task_id"]
-            status_resp = tc.get(f"/tasks/{task_id}")
-        assert status_resp.json()["status"] == "failed"
-        assert "upstream refused connection" in status_resp.json()["error"]
+            data = _poll_task_done(tc, task_id)
+        assert data["status"] == "failed"
+        assert "upstream refused connection" in data["error"]
 
     def test_rejects_oversized_body(self, client: TestClient) -> None:
         """Ingest body > 1 MB must be rejected with HTTP 413."""
@@ -1879,10 +1897,9 @@ class TestSyncGenericFailure:
             )
             assert resp.status_code == 202
             task_id = resp.json()["task_id"]
-            status_resp = tc.get(f"/tasks/{task_id}")
-        body = status_resp.json()
-        assert body["status"] == "failed"
-        assert "embedder crashed" in body["error"]
+            data = _poll_task_done(tc, task_id)
+        assert data["status"] == "failed"
+        assert "embedder crashed" in data["error"]
 
     def test_ingest_runtime_error_marks_task_failed(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
@@ -1907,10 +1924,9 @@ class TestSyncGenericFailure:
             )
             assert resp.status_code == 202
             task_id = resp.json()["task_id"]
-            status_resp = tc.get(f"/tasks/{task_id}")
-        body = status_resp.json()
-        assert body["status"] == "failed"
-        assert "embedder crashed" in body["error"]
+            data = _poll_task_done(tc, task_id)
+        assert data["status"] == "failed"
+        assert "embedder crashed" in data["error"]
 
 
 class TestUnifiedTaskPolling:
