@@ -670,35 +670,46 @@ Profiling the running daemon (PID 2370838, 5.4 GB RSS):
 | Database on disk | 2.7 GB (62K chunks) |
 | Unexplained heap | ~4.2 GB |
 
-After restarting with `MALLOC_CONF=dirty_decay_ms:1000,muzzy_decay_ms:1000`:
+Empirical testing across 4 MALLOC_CONF variants (62K chunks, 3K docs):
 
-| Metric | Before | After |
-|--------|--------|-------|
-| Fresh start RSS | 671 MB | 671 MB |
-| Post-sync RSS | +178 MB/cycle (cumulative) | Peaks then settles ~2.5 GB |
-| After 1 day | 5.4 GB | ~2.5 GB (stable) |
+| Config | Post sync 1 | Post sync 2 | Growth/sync |
+|--------|-------------|-------------|-------------|
+| No MALLOC_CONF | 5,400 MB (1 day) | cumulative | +178 MB/cycle |
+| decay:1000 | 2,543 MB | 2,543 MB | stable |
+| + narenas:1 | 1,760 MB | 2,292 MB | +532 MB |
+| + tcache:false | 1,144 MB | 1,323 MB | +179 MB |
+| + muzzy:0 | 1,147 MB | 1,356 MB | +209 MB |
 
 ### Design
 
-Set `MALLOC_CONF=dirty_decay_ms:1000,muzzy_decay_ms:1000` in the
-daemon's environment:
+Set `MALLOC_CONF=dirty_decay_ms:1000,muzzy_decay_ms:0,narenas:1,tcache:false`
+in the daemon's environment:
 
 - **Linux**: Written to `~/.punt-labs/quarry/quarry.env` by
   `_write_env_file()` in `service.py`. Systemd reads it via
   `EnvironmentFile=`.
 - **macOS**: Set in the launchd plist `EnvironmentVariables` dict.
 
-The values tell jemalloc to return dirty pages (freed but not yet
-returned to OS) and muzzy pages (lazily purged) within 1 second.
-This is the standard tuning for long-running services that do
-periodic bulk allocations — the same approach used by ClickHouse
-and RocksDB deployments.
+The four settings:
+
+- `dirty_decay_ms:1000` — return dirty pages (freed, not yet
+  returned to OS) within 1 second. Amortizes madvise syscall cost.
+- `muzzy_decay_ms:0` — return muzzy pages (lazily purged) immediately.
+  These are already MADV_FREE'd; the zero cost makes immediate
+  return optimal.
+- `narenas:1` — single allocation arena. Quarry's daemon does bulk
+  writes in batches, not high-concurrency per-request allocation.
+  Fewer arenas = less fragmentation = less retained memory.
+- `tcache:false` — disable thread-local caching. Each thread's tcache
+  holds freed objects for fast reallocation, but with batch workloads
+  these caches hoard memory. No sync performance regression observed
+  (4.92s vs 6.62s baseline).
 
 ### Rejected Alternatives
 
-1. **`MALLOC_CONF=dirty_decay_ms:0,muzzy_decay_ms:0`** — Immediate
-   return. Rejected: causes excessive `madvise` syscalls during bulk
-   writes. 1-second decay amortizes the syscall cost.
+1. **`dirty_decay_ms:0`** — Immediate return for dirty pages too.
+   Rejected: causes excessive `madvise` syscalls during bulk Arrow
+   writes. 1-second decay amortizes the cost.
 2. **Replace jemalloc with glibc malloc** — Not feasible. LanceDB's
    Rust binary links jemalloc at compile time. We don't control the
    LanceDB build.
@@ -707,4 +718,7 @@ and RocksDB deployments.
    retention of Arrow's own buffers. A complementary optimization,
    not a replacement.
 4. **Periodic daemon restart** — Operational workaround, not a fix.
+5. **decay:1000 only (without narenas/tcache)** — Tested: reduces to
+   2.5 GB but still retains ~1.4 GB of fragmented arena memory.
+   narenas:1 + tcache:false eliminate the fragmentation.
    The daemon should be able to run indefinitely.
