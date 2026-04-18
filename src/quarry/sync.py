@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import hashlib
 import logging
 import os
@@ -315,7 +316,7 @@ def _ingest_files(
     ]:
         t = time.perf_counter()
         # Delete existing chunks for overwrite semantics.
-        delete_document(db, document_name, collection=collection)
+        delete_document(db, document_name, collection=collection, count=False)
         # Chunk + embed without writing to LanceDB.
         # Agent memory params (agent_handle, memory_type, summary) are not
         # passed — directory sync does not support per-document memory tagging.
@@ -456,7 +457,7 @@ def _delete_documents(
     errors: list[str] = []
     for document_name in plan_to_delete:
         try:
-            delete_document(db, document_name, collection=collection)
+            delete_document(db, document_name, collection=collection, count=False)
             for rec in files_by_document_name.get(document_name, []):
                 delete_file(conn, rec.path, commit=False)
             deleted += 1
@@ -567,6 +568,11 @@ def sync_collection(
             time.perf_counter() - t0,
         )
 
+    # Release numpy arrays promptly — chunk_batch holds all vectors
+    # for this collection and can be hundreds of MiB on large syncs.
+    del chunk_batch
+    gc.collect(0)
+
     # Commit registry rows AFTER the batch insert succeeds.  Ingest rows
     # are written with commit=False so a crash between prepare and
     # batch-write rolls back the registry — the next sync re-processes
@@ -633,6 +639,17 @@ def sync_all(
             "sync: all collections completed in %.2fs",
             time.perf_counter() - t_all_start,
         )
+
+        gc.collect(2)
+        try:
+            with Path("/proc/self/status").open() as f:
+                for line in f:
+                    if line.startswith("VmRSS:"):
+                        logger.info("sync: post-GC RSS: %s", line.split(":")[1].strip())
+                        break
+        except OSError:
+            pass
+
         return results
     finally:
         conn.close()

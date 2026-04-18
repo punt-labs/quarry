@@ -381,7 +381,7 @@ def _do_delete(name: str, kind: str, collection: str, db: LanceDB) -> None:
     if kind == "collection":
         db_delete_collection(db, name)
     else:
-        db_delete_document(db, name, collection=collection or None)
+        db_delete_document(db, name, collection=collection or None, count=False)
 
 
 @mcp.tool()
@@ -448,7 +448,7 @@ def _do_deregister(
 
     if not keep_data and doc_names:
         for name in doc_names:
-            db_delete_document(db, name, collection=collection)
+            db_delete_document(db, name, collection=collection, count=False)
 
 
 @mcp.tool()

@@ -276,6 +276,70 @@ class TestDeleteDocument:
         assert count_chunks(db) == 1
 
 
+class TestDeleteDocumentCountFalse:
+    """Verify the count=False fast path skips count_rows() and returns 0."""
+
+    def test_count_false_returns_zero(self, tmp_path: Path) -> None:
+        db = get_db(tmp_path / "db")
+        chunks = [
+            _make_chunk(chunk_index=0, document_name="a.pdf"),
+            _make_chunk(chunk_index=1, document_name="a.pdf"),
+        ]
+        vectors = _random_vectors(2)
+        insert_chunks(db, chunks, vectors)
+
+        result = delete_document(db, "a.pdf", count=False)
+        assert result == 0
+        # Document should actually be deleted from the table.
+        assert count_chunks(db) == 0
+
+    def test_count_false_does_not_call_count_rows(self, tmp_path: Path) -> None:
+        """count=False must not call table.count_rows() — the whole point."""
+        from unittest.mock import MagicMock
+
+        db = MagicMock()
+        db.list_tables.return_value.tables = ["chunks"]
+        table = MagicMock()
+        db.open_table.return_value = table
+
+        result = delete_document(db, "test.pdf", count=False)
+        assert result == 0
+        table.delete.assert_called_once()
+        table.count_rows.assert_not_called()
+
+    def test_count_true_still_returns_actual_count(self, tmp_path: Path) -> None:
+        db = get_db(tmp_path / "db")
+        chunks = [
+            _make_chunk(chunk_index=0, document_name="a.pdf"),
+            _make_chunk(chunk_index=1, document_name="a.pdf"),
+            _make_chunk(chunk_index=0, document_name="b.pdf"),
+        ]
+        vectors = _random_vectors(3)
+        insert_chunks(db, chunks, vectors)
+
+        result = delete_document(db, "a.pdf", count=True)
+        assert result == 2
+
+    def test_count_false_with_collection_scope(self, tmp_path: Path) -> None:
+        db = get_db(tmp_path / "db")
+        chunks = [
+            _make_chunk(chunk_index=0, document_name="a.pdf", collection="c1"),
+            _make_chunk(chunk_index=0, document_name="a.pdf", collection="c2"),
+        ]
+        vectors = _random_vectors(2)
+        insert_chunks(db, chunks, vectors)
+
+        result = delete_document(db, "a.pdf", collection="c1", count=False)
+        assert result == 0
+        # Only the c1 copy should be deleted.
+        assert count_chunks(db) == 1
+
+    def test_count_false_empty_table(self, tmp_path: Path) -> None:
+        db = get_db(tmp_path / "db")
+        result = delete_document(db, "nonexistent.pdf", count=False)
+        assert result == 0
+
+
 class TestSearchWithCollection:
     def test_collection_filter(self, tmp_path: Path):
         db = get_db(tmp_path / "db")
