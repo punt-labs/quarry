@@ -1,0 +1,6 @@
+# Font build artifacts from pdflatex + METAFONT
+*.pk
+*.tfm
+*.gf
+*.600gf
+missfont.log

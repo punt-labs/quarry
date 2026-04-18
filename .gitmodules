@@ -1,3 +1,4 @@
 [submodule ".punt-labs/ethos"]
 	path = .punt-labs/ethos
 	url = https://github.com/punt-labs/team.git
+	ignore = dirty
