@@ -675,14 +675,19 @@ def delete_document(
     if TABLE_NAME not in db.list_tables().tables:
         return 0
 
-    table = db.open_table(TABLE_NAME)
+    try:
+        table = db.open_table(TABLE_NAME)
+    except ValueError as exc:
+        if "not found" not in str(exc).lower():
+            raise
+        return 0
     predicate = f"document_name = '{_escape_sql(document_name)}'"
     if collection:
         predicate += f" AND collection = '{_escape_sql(collection)}'"
 
     if not count:
         table.delete(predicate)
-        logger.info("Deleted chunks for %s", document_name)
+        logger.info("Issued chunk delete for %s (counting disabled)", document_name)
         return 0
 
     before = table.count_rows()

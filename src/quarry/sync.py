@@ -640,15 +640,19 @@ def sync_all(
             time.perf_counter() - t_all_start,
         )
 
+        t_gc = time.perf_counter()
         gc.collect(2)
+        gc_elapsed = time.perf_counter() - t_gc
+        rss_str = "unknown"
         try:
             with Path("/proc/self/status").open() as f:
                 for line in f:
                     if line.startswith("VmRSS:"):
-                        logger.info("sync: post-GC RSS: %s", line.split(":")[1].strip())
+                        rss_str = line.split(":")[1].strip()
                         break
         except OSError:
             pass
+        logger.info("sync: post-sync GC in %.2fs, RSS: %s", gc_elapsed, rss_str)
 
         return results
     finally:
