@@ -690,10 +690,8 @@ def delete_document(
         logger.info("Issued chunk delete for %s (counting disabled)", document_name)
         return 0
 
-    before = table.count_rows()
+    deleted = table.count_rows(predicate)
     table.delete(predicate)
-    after = table.count_rows()
-    deleted = before - after
     logger.info("Deleted %d chunks for %s", deleted, document_name)
     return deleted
 

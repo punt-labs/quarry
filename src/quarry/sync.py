@@ -570,8 +570,9 @@ def sync_collection(
 
     # Release numpy arrays promptly — chunk_batch holds all vectors
     # for this collection and can be hundreds of MiB on large syncs.
-    del chunk_batch
-    gc.collect(0)
+    if chunk_batch:
+        del chunk_batch
+        gc.collect(0)
 
     # Commit registry rows AFTER the batch insert succeeds.  Ingest rows
     # are written with commit=False so a crash between prepare and
