@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [1.14.0] - 2026-04-17
+
 ### Fixed
 
 - **index**: compaction death spiral from unguarded concurrent sync.
