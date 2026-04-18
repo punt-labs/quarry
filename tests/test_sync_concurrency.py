@@ -17,7 +17,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from quarry.database import (
-    _FRAGMENT_THRESHOLD,
+    FRAGMENT_THRESHOLD,
     TABLE_NAME,
     batch_insert_chunks,
     count_fragments,
@@ -315,7 +315,7 @@ class TestOptimizeGuard:
 
         with patch(
             "quarry.database.count_fragments",
-            return_value=_FRAGMENT_THRESHOLD + 1,
+            return_value=FRAGMENT_THRESHOLD + 1,
         ):
             optimize_table(db)
 
@@ -340,7 +340,7 @@ class TestOptimizeGuard:
 
         with patch(
             "quarry.database.count_fragments",
-            return_value=_FRAGMENT_THRESHOLD + 1,
+            return_value=FRAGMENT_THRESHOLD + 1,
         ):
             optimize_table(db, force=True)
 
@@ -359,7 +359,7 @@ class TestOptimizeGuard:
         with (
             patch(
                 "quarry.database.count_fragments",
-                return_value=_FRAGMENT_THRESHOLD + 1,
+                return_value=FRAGMENT_THRESHOLD + 1,
             ),
             caplog.at_level(logging.WARNING),
         ):

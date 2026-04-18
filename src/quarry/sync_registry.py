@@ -82,14 +82,20 @@ def register_directory(
                 f"'{reg.collection}' ({reg.directory})"
             )
             raise ValueError(msg)
-    # Deregister children that the new parent subsumes.
+    # Deregister children that the new parent subsumes.  Inline the
+    # DELETE SQL instead of calling deregister_directory() so the child
+    # removals and parent INSERT are in a single transaction — if the
+    # INSERT fails, the children are preserved.
     subsumed: list[str] = []
     for reg in existing_regs:
         reg_path = Path(reg.directory).resolve()
         if _is_ancestor_of(resolved, reg_path):
             subsumed.append(reg.collection)
     for child_collection in subsumed:
-        deregister_directory(conn, child_collection)
+        conn.execute("DELETE FROM files WHERE collection = ?", (child_collection,))
+        conn.execute(
+            "DELETE FROM directories WHERE collection = ?", (child_collection,)
+        )
 
     now = datetime.now(UTC).isoformat()
     try:
@@ -99,6 +105,7 @@ def register_directory(
             (str(resolved), collection, now),
         )
     except sqlite3.IntegrityError:
+        conn.rollback()
         existing = conn.execute(
             "SELECT directory, collection FROM directories "
             "WHERE directory = ? OR collection = ?",

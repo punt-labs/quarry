@@ -295,8 +295,10 @@ def _ingest_files(
     too, but the results are accumulated and written in one shot at the
     end to reduce LanceDB fragment churn.
 
-    Commits each registry row immediately after a successful prepare so
-    an interrupted sync does not lose progress.
+    Registry rows are written with ``commit=False`` — the caller
+    (``sync_collection``) commits after ``batch_insert_chunks`` succeeds,
+    so a crash between prepare and batch-write rolls back the registry
+    and the next sync re-processes those files.
     """
     ingested = 0
     failed = 0
@@ -357,7 +359,7 @@ def _ingest_files(
                         ingested_at=datetime.now(UTC).isoformat(),
                         content_hash=content_hash,
                     ),
-                    commit=True,
+                    commit=False,
                 )
                 if prepared is not None:
                     chunk_batch.append(prepared)
@@ -558,9 +560,10 @@ def sync_collection(
             time.perf_counter() - t0,
         )
 
-    # Belt-and-suspenders: all three helpers commit per-row now.
-    # Flush any residual writes so the registry is durable before
-    # we return.
+    # Commit registry rows AFTER the batch insert succeeds.  Ingest rows
+    # are written with commit=False so a crash between prepare and
+    # batch-write rolls back the registry — the next sync re-processes
+    # those files instead of silently losing chunks.
     conn.commit()
 
     logger.info(

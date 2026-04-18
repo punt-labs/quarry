@@ -760,7 +760,7 @@ def create_collection_index(db: LanceDB) -> None:
     logger.info("Created BITMAP index on collection column")
 
 
-_FRAGMENT_THRESHOLD: int = 10_000
+FRAGMENT_THRESHOLD: int = 10_000
 
 
 def count_fragments(db: LanceDB) -> int:
@@ -798,7 +798,7 @@ def optimize_table(db: LanceDB, *, force: bool = False) -> None:
     Also prunes old manifest versions older than 7 days to reclaim
     disk space from the ``_versions/`` directory.
 
-    When the fragment count exceeds ``_FRAGMENT_THRESHOLD`` (10,000),
+    When the fragment count exceeds ``FRAGMENT_THRESHOLD`` (10,000),
     optimization is skipped to prevent a compaction death spiral — unless
     *force* is True.  The operator should run ``quarry optimize --force``
     manually for degraded databases.
@@ -812,13 +812,13 @@ def optimize_table(db: LanceDB, *, force: bool = False) -> None:
 
     if not force:
         fragments = count_fragments(db)
-        if fragments > _FRAGMENT_THRESHOLD:
+        if fragments > FRAGMENT_THRESHOLD:
             logger.warning(
                 "LanceDB table has %d fragments (threshold: %d). "
                 "Skipping optimization — manual compaction required. "
                 "Run: quarry optimize --force",
                 fragments,
-                _FRAGMENT_THRESHOLD,
+                FRAGMENT_THRESHOLD,
             )
             return
 

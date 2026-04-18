@@ -264,7 +264,6 @@ class RemoteError(RuntimeError):
 
 
 _DEFAULT_REMOTE_TIMEOUT = 15.0
-_SYNC_REMOTE_TIMEOUT = 600.0
 
 
 def _remote_https_request(
@@ -1209,9 +1208,23 @@ def sync_cmd(
                 timeout=_DEFAULT_REMOTE_TIMEOUT,
             )
         except RemoteError as exc:
-            # 409 means sync already running — show task_id to poll.
+            # 409 means sync already running — extract task_id from the
+            # JSON body so the user can poll it.
             if exc.status == 409:
-                err_console.print(f"Sync already in progress: {exc}", style="yellow")
+                conflict_task_id = "unknown"
+                msg = str(exc)
+                # The message embeds the raw body after the HTTP status prefix.
+                body_start = msg.find("{")
+                if body_start != -1:
+                    try:
+                        data = json.loads(msg[body_start:])
+                        conflict_task_id = str(data.get("task_id", "unknown"))
+                    except (json.JSONDecodeError, AttributeError):
+                        pass
+                err_console.print(
+                    f"Sync already in progress: task_id={conflict_task_id}",
+                    style="yellow",
+                )
                 raise typer.Exit(code=0) from exc
             err_console.print(f"Error: {exc}", style="red")
             raise typer.Exit(code=1) from exc
@@ -1268,6 +1281,7 @@ def optimize_cmd(
     to bypass this safety guard for manual recovery.
     """
     from quarry.database import (  # noqa: PLC0415
+        FRAGMENT_THRESHOLD,
         count_fragments,
         optimize_table as db_optimize_table,
     )
@@ -1279,10 +1293,10 @@ def optimize_cmd(
     if not _quiet:
         err_console.print(f"Fragment count: {fragments}")
 
-    if not force and fragments > 10_000:
+    if not force and fragments > FRAGMENT_THRESHOLD:
         err_console.print(
-            f"Skipping: {fragments} fragments exceed threshold (10,000). "
-            "Use --force to override.",
+            f"Skipping: {fragments} fragments exceed threshold "
+            f"({FRAGMENT_THRESHOLD:,}). Use --force to override.",
             style="yellow",
         )
         raise typer.Exit(code=1)

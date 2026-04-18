@@ -724,13 +724,17 @@ class TestSyncCollectionDurabilityAndRefresh:
         register_directory(conn, d, "col")
         return conn, d, registry_path
 
-    def test_sync_collection_ingest_is_durable_on_crash(self, tmp_path: Path):
-        """A crash mid-sync must leave already-ingested rows on disk.
+    def test_sync_collection_crash_before_batch_insert_leaves_no_registry_rows(
+        self, tmp_path: Path
+    ):
+        """A crash mid-ingest must leave zero registry rows.
 
-        Monkeypatches ``prepare_document`` to raise ``KeyboardInterrupt``
-        on the third call so it escapes the ``_RECOVERABLE`` tuple in
-        ``_ingest_files``.  After the raise, opens a *fresh* connection to
-        the same registry path and asserts the first two rows are visible.
+        Registry rows are written with ``commit=False`` during
+        ``_ingest_files``; the commit happens only after
+        ``batch_insert_chunks`` succeeds.  A crash before the batch
+        insert rolls back all uncommitted registry rows so the next sync
+        re-processes them — preventing silent data loss where the
+        registry says a file is synced but LanceDB has no chunks.
         """
         conn, d, registry_path = self._setup(tmp_path)
         for name in ("a.txt", "b.txt", "c.txt", "d.txt"):
@@ -774,13 +778,11 @@ class TestSyncCollectionDurabilityAndRefresh:
         ).fetchall()
         verify.close()
 
-        # The first two calls succeeded and should be committed.  The
-        # third raised before upsert, so at most two rows are present.
-        assert len(rows) == 2, (
-            f"expected 2 durable rows, got {len(rows)}; calls={calls}"
+        # No rows committed because the crash happened before
+        # batch_insert_chunks and the deferred conn.commit().
+        assert len(rows) == 0, (
+            f"expected 0 durable rows (deferred commit), got {len(rows)}; calls={calls}"
         )
-        for row in rows:
-            assert row["content_hash"] is not None
 
     def test_sync_collection_refresh_path_updates_registry_mtime_without_reingest(
         self, tmp_path: Path
