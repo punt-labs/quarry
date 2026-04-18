@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import logging.config
+import os
 from pathlib import Path
 
 _LOG_DIR = Path.home() / ".punt-labs" / "quarry" / "logs"
@@ -20,9 +21,16 @@ def configure_logging(*, stderr_level: str = "WARNING") -> None:
     """Configure logging with rotating file and stderr handlers.
 
     File handler is always active at INFO level.
-    Stderr handler level is controlled by the caller.
+    Stderr handler level is controlled by the caller, unless overridden
+    by the ``QUARRY_LOG_LEVEL`` environment variable.
     """
     _LOG_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+    env_level = os.environ.get("QUARRY_LOG_LEVEL", "").upper()
+    if env_level and hasattr(logging, env_level):
+        effective_level = env_level
+    else:
+        effective_level = stderr_level
 
     logging.config.dictConfig(
         {
@@ -48,8 +56,13 @@ def configure_logging(*, stderr_level: str = "WARNING") -> None:
                     "class": "logging.StreamHandler",
                     "stream": "ext://sys.stderr",
                     "formatter": "standard",
-                    "level": stderr_level,
+                    "level": effective_level,
                 },
+            },
+            "loggers": {
+                "lancedb": {"level": "WARNING"},
+                "onnxruntime": {"level": "WARNING"},
+                "httpx": {"level": "WARNING"},
             },
             "root": {
                 "level": "DEBUG",

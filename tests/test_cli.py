@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import tempfile
 from pathlib import Path
@@ -21,6 +22,7 @@ runner = CliRunner()
 def _mock_settings() -> MagicMock:
     s = MagicMock()
     s.embedding_model = "Snowflake/snowflake-arctic-embed-m-v1.5"
+    s.embedding_dimension = 768
     return s
 
 
@@ -4751,3 +4753,306 @@ class TestIngestExitCodes:
             )
         assert result.exit_code == 0
         assert "task_id=remember-abc" in result.output
+
+
+# ---------------------------------------------------------------------------
+# CLI Logging UX tests (Items 1a-4b)
+# ---------------------------------------------------------------------------
+
+
+def test_configure_logging_called_in_main_callback() -> None:
+    """configure_logging is called from main_callback, not at import time."""
+    _reset_globals()
+    with (
+        patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+        patch("quarry.__main__.get_db"),
+        patch("quarry.__main__.list_documents", return_value=[]),
+        patch("quarry.__main__.configure_logging") as mock_cfg,
+    ):
+        result = runner.invoke(app, ["list", "documents"])
+    assert result.exit_code == 0
+    mock_cfg.assert_called_once_with(stderr_level="WARNING")
+
+
+def test_configure_logging_not_called_at_import() -> None:
+    """Module-level code does not call configure_logging."""
+    src = Path("src/quarry/__main__.py").read_text()
+    tree = ast.parse(src)
+    # Walk top-level statements only (not inside functions/classes)
+    for node in tree.body:
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+            func = node.value.func
+            name = ""
+            if isinstance(func, ast.Name):
+                name = func.id
+            elif isinstance(func, ast.Attribute):
+                name = func.attr
+            assert name != "configure_logging", (
+                f"configure_logging called at module level (line {node.lineno})"
+            )
+
+
+def test_progress_uses_stderr_console() -> None:
+    """_progress creates a Rich Progress bar on err_console (stderr)."""
+    _reset_globals()
+    cli_mod._json_output = False
+    cli_mod._quiet = False
+    with patch("quarry.__main__.Progress") as mock_progress:
+        mock_instance = MagicMock()
+        mock_progress.return_value = mock_instance
+        mock_instance.add_task.return_value = 0
+        with cli_mod._progress("test"):
+            pass
+    mock_progress.assert_called_once_with(console=cli_mod.err_console)
+
+
+def test_progress_suppressed_in_quiet_mode() -> None:
+    """_progress yields None when --quiet is set."""
+    _reset_globals()
+    cli_mod._quiet = True
+    with cli_mod._progress("test") as cb:
+        pass
+    assert cb is None
+
+
+def test_progress_suppressed_in_json_mode() -> None:
+    """_progress yields None when --json is set (existing behavior)."""
+    _reset_globals()
+    cli_mod._json_output = True
+    with cli_mod._progress("test") as cb:
+        pass
+    assert cb is None
+
+
+def test_progress_yields_callback_in_default_mode() -> None:
+    """_progress yields a callable in default mode."""
+    _reset_globals()
+    cli_mod._json_output = False
+    cli_mod._quiet = False
+    with patch("quarry.__main__.Progress") as mock_progress:
+        mock_instance = MagicMock()
+        mock_progress.return_value = mock_instance
+        mock_instance.add_task.return_value = 0
+        with cli_mod._progress("test") as cb:
+            assert callable(cb)
+
+
+def test_verbose_flag_sets_info_level() -> None:
+    """--verbose causes configure_logging to be called with INFO."""
+    _reset_globals()
+    with (
+        patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+        patch("quarry.__main__.get_db"),
+        patch("quarry.__main__.list_documents", return_value=[]),
+        patch("quarry.__main__.configure_logging") as mock_cfg,
+    ):
+        result = runner.invoke(app, ["--verbose", "list", "documents"])
+    assert result.exit_code == 0
+    mock_cfg.assert_called_once_with(stderr_level="INFO")
+
+
+def test_quiet_flag_sets_critical_level() -> None:
+    """--quiet causes configure_logging to be called with CRITICAL."""
+    _reset_globals()
+    with (
+        patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+        patch("quarry.__main__.get_db"),
+        patch("quarry.__main__.list_documents", return_value=[]),
+        patch("quarry.__main__.configure_logging") as mock_cfg,
+    ):
+        result = runner.invoke(app, ["--quiet", "list", "documents"])
+    assert result.exit_code == 0
+    mock_cfg.assert_called_once_with(stderr_level="CRITICAL")
+
+
+def test_uninstall_result_on_stdout() -> None:
+    """uninstall_cmd emits its result via _emit (stdout), not console (stdout Rich)."""
+    _reset_globals()
+    with patch(
+        "quarry.service.uninstall",
+        return_value="Service removed.",
+    ):
+        result = runner.invoke(app, ["uninstall"])
+    assert result.exit_code == 0
+    assert "Service removed." in result.stdout
+
+
+def test_uninstall_json_mode() -> None:
+    """uninstall_cmd emits JSON when --json is set."""
+    _reset_globals()
+    with patch(
+        "quarry.service.uninstall",
+        return_value="Service removed.",
+    ):
+        result = runner.invoke(app, ["--json", "uninstall"])
+    _reset_globals()
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert data["message"] == "Service removed."
+
+
+def test_login_abort_message_on_stderr() -> None:
+    """login_cmd abort message goes to stderr, not stdout."""
+    _reset_globals()
+    fake_pem = b"-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n"
+    with (
+        patch("quarry.__main__.fetch_ca_cert", return_value=fake_pem),
+        patch(
+            "quarry.__main__.cert_fingerprint",
+            return_value="AA:BB:CC",
+        ),
+    ):
+        result = runner.invoke(app, ["login", "example.com"], input="n\n")
+    assert result.exit_code == 0
+    assert "Aborted" in result.stderr
+    assert "Aborted" not in result.stdout
+
+
+def test_no_stdout_console_variable() -> None:
+    """The module has no stdout Console instance (only err_console)."""
+    assert not hasattr(cli_mod, "console"), (
+        "cli_mod.console still exists -- all output should use err_console or _emit"
+    )
+
+
+def test_sync_409_quiet_suppresses_warning() -> None:
+    """--quiet suppresses the sync 409 warning on stderr."""
+    _reset_globals()
+    inner_config = {
+        "url": "wss://quarry.example.com:8420/mcp",
+        "ca_cert": "/path/to/ca.crt",
+        "headers": {"Authorization": "Bearer tok"},
+    }
+    proxy_config = {"quarry": inner_config}
+    exc = cli_mod.RemoteError(
+        409,
+        'Remote quarry server returned HTTP 409: {"task_id":"abc","detail":"busy"}',
+    )
+    with (
+        patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+        patch("quarry.__main__._remote_https_request", side_effect=exc),
+    ):
+        result = runner.invoke(app, ["--quiet", "sync"])
+    _reset_globals()
+    assert result.exit_code == 0
+    assert "Sync already in progress" not in result.stderr
+
+
+def test_sync_409_default_shows_warning() -> None:
+    """Default mode shows the sync 409 warning on stderr."""
+    _reset_globals()
+    inner_config = {
+        "url": "wss://quarry.example.com:8420/mcp",
+        "ca_cert": "/path/to/ca.crt",
+        "headers": {"Authorization": "Bearer tok"},
+    }
+    proxy_config = {"quarry": inner_config}
+    exc = cli_mod.RemoteError(
+        409,
+        'Remote quarry server returned HTTP 409: {"task_id":"abc","detail":"busy"}',
+    )
+    with (
+        patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+        patch("quarry.__main__._remote_https_request", side_effect=exc),
+    ):
+        result = runner.invoke(app, ["sync"])
+    assert result.exit_code == 0
+    assert "Sync already in progress" in result.stderr
+
+
+def test_login_fingerprint_quiet_suppressed() -> None:
+    """--quiet suppresses the fingerprint display during login."""
+    _reset_globals()
+    fake_pem = b"-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n"
+    with (
+        patch("quarry.__main__.fetch_ca_cert", return_value=fake_pem),
+        patch("quarry.__main__.cert_fingerprint", return_value="AA:BB:CC"),
+        patch(
+            "quarry.__main__.validate_connection",
+            return_value=(True, ""),
+        ),
+        patch("quarry.__main__.write_proxy_config"),
+        patch("quarry.__main__.store_ca_cert"),
+    ):
+        result = runner.invoke(app, ["--quiet", "login", "example.com", "--yes"])
+    _reset_globals()
+    assert result.exit_code == 0
+    assert "fingerprint" not in result.stderr.lower()
+
+
+def test_sync_workers_warning_quiet_suppressed() -> None:
+    """--quiet suppresses the --workers ignored warning in remote sync."""
+    _reset_globals()
+    inner_config = {
+        "url": "wss://quarry.example.com:8420/mcp",
+        "ca_cert": "/path/to/ca.crt",
+        "headers": {"Authorization": "Bearer tok"},
+    }
+    proxy_config = {"quarry": inner_config}
+    remote_resp = {"task_id": "xyz", "status": "accepted"}
+    with (
+        patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+        patch("quarry.__main__._remote_https_request", return_value=remote_resp),
+    ):
+        result = runner.invoke(app, ["--quiet", "sync", "--workers", "4"])
+    _reset_globals()
+    assert result.exit_code == 0
+    assert "--workers" not in result.stderr
+
+
+def test_remember_passes_progress_callback() -> None:
+    """remember_cmd passes a progress callback to ingest_content."""
+    _reset_globals()
+    cli_mod._json_output = False
+    cli_mod._quiet = False
+    with (
+        patch(
+            "quarry.__main__._resolved_settings",
+            return_value=_mock_settings(),
+        ),
+        patch("quarry.__main__.get_db"),
+        patch(
+            "quarry.__main__.ingest_content",
+            return_value={"document_name": "n.md", "chunks": 1},
+        ) as mock_ingest,
+        patch("quarry.__main__.Progress") as mock_progress,
+    ):
+        mock_instance = MagicMock()
+        mock_progress.return_value = mock_instance
+        mock_instance.add_task.return_value = 0
+        result = runner.invoke(
+            app,
+            ["remember", "--name", "n.md"],
+            input="some content",
+        )
+    _reset_globals()
+    assert result.exit_code == 0
+    assert mock_ingest.call_args[1]["progress_callback"] is not None
+
+
+def test_remember_quiet_no_progress() -> None:
+    """remember_cmd passes None callback to ingest_content in quiet mode."""
+    _reset_globals()
+    with (
+        patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+        patch("quarry.__main__.get_db"),
+        patch(
+            "quarry.__main__.ingest_content",
+            return_value={"document_name": "n.md", "chunks": 1},
+        ) as mock_ingest,
+    ):
+        result = runner.invoke(
+            app,
+            ["--quiet", "remember", "--name", "n.md"],
+            input="some content",
+        )
+    _reset_globals()
+    assert result.exit_code == 0
+    assert mock_ingest.call_args[1]["progress_callback"] is None
+
+
+def test_verbose_help_text_describes_stderr() -> None:
+    """--verbose help text mentions stderr and INFO-level logs."""
+    result = runner.invoke(app, ["--help"])
+    assert result.exit_code == 0
+    assert "INFO" in result.output or "stderr" in result.output
