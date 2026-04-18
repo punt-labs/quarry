@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [1.15.0] - 2026-04-18
+
 ### Fixed
 
 - **tool**: Progress bar wrote to stdout, polluting pipes. Moved to
