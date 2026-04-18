@@ -75,7 +75,6 @@ from quarry.sync_registry import (
 )
 from quarry.tls import TLS_DIR, cert_fingerprint
 
-configure_logging(stderr_level="WARNING")
 logger = logging.getLogger(__name__)
 
 _COMMAND_ORDER: list[str] = [
@@ -124,7 +123,6 @@ hooks_app = typer.Typer(
     rich_markup_mode=None,
 )
 app.add_typer(hooks_app, name="hooks", hidden=True)
-console = Console()
 err_console = Console(stderr=True)
 
 # Global state set by @app.callback
@@ -160,7 +158,11 @@ def main_callback(
     ] = False,
     verbose: Annotated[
         bool,
-        typer.Option("--verbose", "-v", help="Verbose output."),
+        typer.Option(
+            "--verbose",
+            "-v",
+            help="Show INFO-level diagnostic logs on stderr (timing, plans, counts).",
+        ),
     ] = False,
     quiet: Annotated[
         bool,
@@ -181,9 +183,17 @@ def main_callback(
         err_console.print("Error: --verbose and --quiet are mutually exclusive.")
         raise typer.Exit(code=1)
     _json_output = output_json
-    _verbose = verbose  # reserved: commands will use for extra output
-    _quiet = quiet  # reserved: commands will use to suppress non-essential output
+    _verbose = verbose
+    _quiet = quiet
     _global_db = database
+    # Determine stderr log level from flags.
+    if _verbose:
+        stderr_level = "INFO"
+    elif _quiet:
+        stderr_level = "CRITICAL"
+    else:
+        stderr_level = "WARNING"
+    configure_logging(stderr_level=stderr_level)
     if ctx.invoked_subcommand is None:
         print(ctx.get_help())
         raise typer.Exit(code=0)
@@ -207,15 +217,16 @@ def _emit(data: object, text: str = "") -> None:
 def _progress(
     label: str,
 ) -> Generator[Callable[[str], None] | None]:
-    """Yield a progress callback, or None in JSON mode.
+    """Yield a progress callback, or None when output is suppressed.
 
-    In human mode the Rich progress bar is started and guaranteed to stop
-    on exit (including exceptions).  In JSON mode nothing is rendered.
+    The Rich progress bar renders on stderr.  It is suppressed in
+    ``--json`` mode (no visual noise alongside machine output) and in
+    ``--quiet`` mode (stderr contract: only fatal errors).
     """
-    if _json_output:
+    if _json_output or _quiet:
         yield None
         return
-    p = Progress(console=console)
+    p = Progress(console=err_console)
     task = p.add_task(label, total=None)
     p.start()
     try:
@@ -850,18 +861,20 @@ def remember(
     settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
 
-    result = ingest_content(
-        content,
-        name,
-        db,
-        settings,
-        overwrite=overwrite,
-        collection=collection,
-        format_hint=format_hint,
-        agent_handle=agent_handle,
-        memory_type=memory_type,
-        summary=summary,
-    )
+    with _progress("Remembering") as cb:
+        result = ingest_content(
+            content,
+            name,
+            db,
+            settings,
+            overwrite=overwrite,
+            collection=collection,
+            format_hint=format_hint,
+            progress_callback=cb,
+            agent_handle=agent_handle,
+            memory_type=memory_type,
+            summary=summary,
+        )
 
     _emit(result, json.dumps(result, indent=2))
     local_errors_raw = result.get("errors")
@@ -914,6 +927,7 @@ def status_cmd() -> None:
         "database_size_bytes": db_size_bytes,
         "embedding_model": settings.embedding_model,
         "provider": provider_display(),
+        "embedding_dimension": settings.embedding_dimension,
     }
     _emit(data, format_status(data))
 
@@ -1166,7 +1180,7 @@ def sync_cmd(
     """Sync all registered directories: ingest new/changed, remove deleted."""
     proxy_config = _safe_proxy_config().get("quarry", {})
     if isinstance(proxy_config, dict) and "url" in proxy_config:
-        if workers is not None:
+        if workers is not None and not _quiet:
             err_console.print(
                 "Warning: --workers is ignored when a remote quarry server is "
                 "configured",
@@ -1196,10 +1210,11 @@ def sync_cmd(
                         conflict_task_id = str(data.get("task_id", "unknown"))
                     except (json.JSONDecodeError, AttributeError):
                         pass
-                err_console.print(
-                    f"Sync already in progress: task_id={conflict_task_id}",
-                    style="yellow",
-                )
+                if not _quiet:
+                    err_console.print(
+                        f"Sync already in progress: task_id={conflict_task_id}",
+                        style="yellow",
+                    )
                 raise typer.Exit(code=0) from exc
             err_console.print(f"Error: {exc}", style="red")
             raise typer.Exit(code=1) from exc
@@ -1289,7 +1304,7 @@ def optimize_cmd(
 
 @app.command(name="login")
 @_cli_errors
-def login_cmd(
+def login_cmd(  # noqa: C901
     host: Annotated[str, typer.Argument(help="Remote quarry host (hostname or IP)")],
     port: Annotated[int, typer.Option("--port", "-p", help="Port")] = DEFAULT_PORT,
     api_key: Annotated[
@@ -1326,13 +1341,15 @@ def login_cmd(
 
     # Step 2: Display fingerprint.
     fp = cert_fingerprint(ca_cert_pem)
-    err_console.print(f"Server CA fingerprint: {fp}")
+    if not _quiet:
+        err_console.print(f"Server CA fingerprint: {fp}")
 
     # Step 3: Prompt for trust (skip if --yes).
     if not yes:
         confirmed = typer.confirm("Trust this server?", default=False)
         if not confirmed:
-            print("Aborted. Not logged in.")
+            if not _quiet:
+                err_console.print("Aborted. Not logged in.")
             raise typer.Exit(code=0)
 
     # Step 4: Validate connection using a tempfile — store CA cert only on success
@@ -1776,7 +1793,7 @@ def uninstall() -> None:
     from quarry.service import uninstall as svc_uninstall  # noqa: PLC0415
 
     msg = svc_uninstall()
-    console.print(msg)
+    _emit({"message": msg}, msg)
 
 
 # ---------------------------------------------------------------------------

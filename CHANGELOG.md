@@ -16,6 +16,13 @@ across `transform`, `index`, and `connector`).
 
 ### Fixed
 
+- **tool**: Progress bar wrote to stdout, polluting pipes. Moved to
+  stderr via `err_console`.
+- **tool**: `uninstall` command wrote result to stdout via `console`
+  instead of `_emit`.
+- **tool**: `login` abort message used bare `print()` to stdout.
+- **tool**: `status` command missing `embedding_dimension` in local
+  JSON output (present in remote).
 - **infra**: Aggressive jemalloc tuning for daemon memory. MALLOC_CONF
   now sets `narenas:1,tcache:false,dirty_decay_ms:1000,muzzy_decay_ms:0`.
   LanceDB's Rust core retains freed Arrow buffer arenas indefinitely;
@@ -48,8 +55,22 @@ across `transform`, `index`, and `connector`).
 
 ### Added
 
+- **tool**: `--verbose` / `-v` now streams INFO-level diagnostic logs
+  to stderr (sync plans, embedding throughput, batch timing). Was a
+  no-op previously.
+- **tool**: `--quiet` / `-q` suppresses all stderr output (progress,
+  warnings, INFO logs). Fatal errors still shown.
+- **tool**: `quarry remember` now shows a progress spinner in local
+  mode.
+- **infra**: `QUARRY_LOG_LEVEL` env var overrides the flag-derived
+  stderr level. Third-party loggers (lancedb, onnxruntime, httpx)
+  pinned at WARNING.
 - **api**: Task garbage collection — completed/failed tasks evicted
   after 1-hour TTL on next task creation.
+- **test**: 14 JSON equivalence tests covering local/remote shape
+  divergence for all fire-and-forget commands (Class 3 pattern).
+- **test**: 57 edge-case tests for CLI flag combinations, pipe safety,
+  progress on stderr, fatal errors under --quiet.
 - **docs**: Operation concurrency model appendix in architecture.tex.
 - **infra**: `make docs` now builds Z-spec PDFs using local Oxford Z
   fonts in `docs/tex/` (was broken due to missing `oxsz10.mf`).

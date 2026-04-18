@@ -722,3 +722,43 @@ The four settings:
    2.5 GB but still retains ~1.4 GB of fragmented arena memory.
    narenas:1 + tcache:false eliminate the fragmentation.
    The daemon should be able to run indefinitely.
+
+## DES-028: CLI --verbose Maps to INFO, Not DEBUG
+
+**Date:** 2026-04-18
+**Status:** SETTLED
+**Topic:** --verbose stderr level deviates from org CLI standard
+
+### Problem
+
+The org CLI standard (`punt-kit/standards/cli.md` §Global Flags) says
+`--verbose` enables "debug logging." The logging standard
+(`punt-kit/standards/logging.md` §Levels) specifies
+`configure_logging(stderr_level="DEBUG")` for `--verbose`.
+
+Quarry maps `--verbose` to INFO instead of DEBUG.
+
+### Rationale
+
+40 `logger.debug()` calls across 12 modules, many in hot loops:
+database.py (11 per-query RRF stats), hooks.py (12 hook lifecycle),
+embeddings.py (2 per-batch timing), text_extractor.py (2 per-page).
+For a 100-file sync with 500 pages, DEBUG produces 1000+ lines
+dominated by per-query fusion stats and per-page character counts.
+INFO (80 calls across 16 modules) contains the operational messages
+users want: sync plans, embedding throughput, batch-insert timing.
+
+### Design
+
+- `--verbose` sets `stderr_level="INFO"` in `configure_logging`
+- `QUARRY_LOG_LEVEL=DEBUG` env var provides the developer escape hatch
+- Third-party loggers (lancedb, onnxruntime, httpx) pinned at WARNING
+  in the dictConfig `loggers` block to prevent noise at any level
+
+### Rejected Alternative
+
+Map `--verbose` to DEBUG per org standard. Rejected: 1000+ lines of
+per-query RRF fusion stats and per-page char counts overwhelm the
+terminal. The org standard's "debug logging" description fits tools
+with fewer, coarser DEBUG calls — quarry's DEBUG is developer-trace
+granularity.
