@@ -26,7 +26,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from functools import cached_property
+from functools import cached_property, partial
 from pathlib import Path
 from socket import socket
 from typing import TYPE_CHECKING
@@ -248,6 +248,11 @@ def _begin_task(
     return state
 
 
+def _on_task_done(ctx: _QuarryContext, task_id: str, _task: asyncio.Task[None]) -> None:
+    """Remove the asyncio.Task ref when the task reaches a terminal state."""
+    ctx.task_refs.pop(task_id, None)
+
+
 class _QuarryContext:
     """Shared state for the HTTP server: settings, database, embeddings."""
 
@@ -428,9 +433,9 @@ async def _documents_delete_route(request: Request) -> JSONResponse:
     collection = request.query_params.get("collection") or None
     ctx = _ctx(request)
     state = _begin_task(ctx, "delete")
-    ctx.task_refs[state.task_id] = asyncio.create_task(
-        _run_delete_document_task(ctx, state, name, collection)
-    )
+    task = asyncio.create_task(_run_delete_document_task(ctx, state, name, collection))
+    task.add_done_callback(partial(_on_task_done, ctx, state.task_id))
+    ctx.task_refs[state.task_id] = task
 
     return JSONResponse(
         {"task_id": state.task_id, "status": "accepted"},
@@ -489,9 +494,9 @@ async def _collections_delete_route(request: Request) -> JSONResponse:
 
     ctx = _ctx(request)
     state = _begin_task(ctx, "delete")
-    ctx.task_refs[state.task_id] = asyncio.create_task(
-        _run_delete_collection_task(ctx, state, name)
-    )
+    task = asyncio.create_task(_run_delete_collection_task(ctx, state, name))
+    task.add_done_callback(partial(_on_task_done, ctx, state.task_id))
+    ctx.task_refs[state.task_id] = task
 
     return JSONResponse(
         {"task_id": state.task_id, "status": "accepted"},
@@ -609,7 +614,7 @@ async def _remember_route(request: Request) -> JSONResponse:
 
     ctx = _ctx(request)
     state = _begin_task(ctx, "remember")
-    ctx.task_refs[state.task_id] = asyncio.create_task(
+    task = asyncio.create_task(
         _run_remember_task(
             ctx,
             state,
@@ -623,6 +628,8 @@ async def _remember_route(request: Request) -> JSONResponse:
             summary=str(summary),
         ),
     )
+    task.add_done_callback(partial(_on_task_done, ctx, state.task_id))
+    ctx.task_refs[state.task_id] = task
 
     return JSONResponse(
         {"task_id": state.task_id, "status": "accepted"},
@@ -724,7 +731,7 @@ async def _ingest_route(request: Request) -> JSONResponse:
 
     ctx = _ctx(request)
     state = _begin_task(ctx, "ingest")
-    ctx.task_refs[state.task_id] = asyncio.create_task(
+    task = asyncio.create_task(
         _run_ingest_task(
             ctx,
             state,
@@ -736,6 +743,8 @@ async def _ingest_route(request: Request) -> JSONResponse:
             summary=str(summary),
         ),
     )
+    task.add_done_callback(partial(_on_task_done, ctx, state.task_id))
+    ctx.task_refs[state.task_id] = task
 
     return JSONResponse(
         {"task_id": state.task_id, "status": "accepted"},
@@ -867,7 +876,9 @@ async def _sync_route(request: Request) -> JSONResponse:
         )
 
     state = _begin_task(ctx, "sync")
-    ctx.task_refs[state.task_id] = asyncio.create_task(_run_sync_task(ctx, state))
+    task = asyncio.create_task(_run_sync_task(ctx, state))
+    task.add_done_callback(partial(_on_task_done, ctx, state.task_id))
+    ctx.task_refs[state.task_id] = task
 
     return JSONResponse(
         {"task_id": state.task_id, "status": "accepted"},
@@ -1089,9 +1100,9 @@ async def _handle_add_registration(request: Request) -> JSONResponse:
 
     ctx = _ctx(request)
     state = _begin_task(ctx, "register")
-    ctx.task_refs[state.task_id] = asyncio.create_task(
-        _run_register_task(ctx, state, resolved, collection)
-    )
+    task = asyncio.create_task(_run_register_task(ctx, state, resolved, collection))
+    task.add_done_callback(partial(_on_task_done, ctx, state.task_id))
+    ctx.task_refs[state.task_id] = task
 
     return JSONResponse(
         {"task_id": state.task_id, "status": "accepted"},
@@ -1170,9 +1181,11 @@ async def _handle_delete_registration(request: Request) -> JSONResponse:
         return JSONResponse({"error": "Not found"}, status_code=404)
 
     state = _begin_task(ctx, "deregister")
-    ctx.task_refs[state.task_id] = asyncio.create_task(
+    task = asyncio.create_task(
         _run_deregister_task(ctx, state, collection, keep_data=keep_data)
     )
+    task.add_done_callback(partial(_on_task_done, ctx, state.task_id))
+    ctx.task_refs[state.task_id] = task
 
     return JSONResponse(
         {"task_id": state.task_id, "status": "accepted"},

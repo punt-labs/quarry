@@ -762,11 +762,13 @@ class TestDeleteDocuments:
             TestClient(app, raise_server_exceptions=False) as tc,
         ):
             resp = tc.delete("/documents?name=foo&collection=math")
-        assert resp.status_code == 202
-        # Background task should have called db_delete_document with collection.
-        mock_del.assert_called_once()
-        _, kwargs = mock_del.call_args
-        assert kwargs["collection"] == "math"
+            assert resp.status_code == 202
+            task_id = resp.json()["task_id"]
+            _poll_task_done(tc, task_id)
+            # Background task should have called db_delete_document with collection.
+            mock_del.assert_called_once()
+            _, kwargs = mock_del.call_args
+            assert kwargs["collection"] == "math"
 
 
 class TestDeleteCollections:

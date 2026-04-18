@@ -415,22 +415,27 @@ overridable with \texttt{-{}-port}.
 \textbf{Path} & \textbf{Method} & \textbf{Purpose} &
   \textbf{Auth} & \textbf{Model} \\
 \midrule
-\texttt{/health}       & GET  & Server uptime and status         & No  & sync \\
-\texttt{/ca.crt}       & GET  & CA certificate PEM (TOFU)        & No  & sync \\
-\texttt{/search}       & GET  & Hybrid search                    & Yes & sync \\
-\texttt{/show}         & GET  & Document metadata or page text   & Yes & sync \\
-\texttt{/documents}    & GET, DELETE & List or delete documents   & Yes & sync \\
-\texttt{/collections}  & GET, DELETE & List or delete collections & Yes & sync \\
-\texttt{/registrations}& GET, POST, DELETE & Manage directory registrations & Yes & sync \\
-\texttt{/databases}    & GET  & List named databases             & Yes & sync \\
-\texttt{/status}       & GET  & Database statistics               & Yes & sync \\
-\texttt{/use}          & POST & Switch active database           & Yes & sync \\
-\texttt{/remember}     & POST & Ingest inline content            & Yes & sync \\
-\texttt{/ingest}       & POST & Ingest URL (returns 202)         & Yes & async \\
-\texttt{/ingest/\{id\}}& GET  & Poll ingest task status          & Yes & --- \\
-\texttt{/sync}         & POST & Sync registrations (returns 202) & Yes & async \\
-\texttt{/sync/\{id\}}  & GET  & Poll sync task status            & Yes & --- \\
-\texttt{/mcp}          & WS   & MCP JSON-RPC over WebSocket      & Yes & --- \\
+\texttt{/health}           & GET    & Server uptime and status         & No  & sync  \\
+\texttt{/ca.crt}           & GET    & CA certificate PEM (TOFU)        & No  & sync  \\
+\texttt{/search}           & GET    & Hybrid search                    & Yes & sync  \\
+\texttt{/show}             & GET    & Document metadata or page text   & Yes & sync  \\
+\texttt{/documents}        & GET    & List documents                   & Yes & sync  \\
+\texttt{/documents}        & DELETE & Delete document (returns 202)    & Yes & async \\
+\texttt{/collections}      & GET    & List collections                 & Yes & sync  \\
+\texttt{/collections}      & DELETE & Delete collection (returns 202)  & Yes & async \\
+\texttt{/registrations}    & GET    & List directory registrations      & Yes & sync  \\
+\texttt{/registrations}    & POST   & Register directory (returns 202) & Yes & async \\
+\texttt{/registrations}    & DELETE & Deregister directory (returns 202) & Yes & async \\
+\texttt{/databases}        & GET    & List named databases             & Yes & sync  \\
+\texttt{/status}           & GET    & Database statistics               & Yes & sync  \\
+\texttt{/use}              & POST   & Switch active database           & Yes & sync  \\
+\texttt{/remember}         & POST   & Ingest inline content (returns 202) & Yes & async \\
+\texttt{/ingest}           & POST   & Ingest URL (returns 202)         & Yes & async \\
+\texttt{/sync}             & POST   & Sync registrations (returns 202) & Yes & async \\
+\texttt{/tasks/\{task\_id\}} & GET  & Poll task status (unified)       & Yes & sync  \\
+\texttt{/sync/\{task\_id\}}  & GET  & Alias for \texttt{/tasks/\{task\_id\}} & Yes & sync \\
+\texttt{/ingest/\{task\_id\}}& GET  & Alias for \texttt{/tasks/\{task\_id\}} & Yes & sync \\
+\texttt{/mcp}              & WS     & MCP JSON-RPC over WebSocket      & Yes & ---   \\
 \bottomrule
 \end{tabular}
 \end{center}

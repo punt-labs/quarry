@@ -1,6 +1,6 @@
 # Async Operations: Unified Task Model for HTTP API
 
-**Status**: PROPOSED
+**Status**: IMPLEMENTED
 **Date**: 2026-04-18
 **Author**: rmh
 
