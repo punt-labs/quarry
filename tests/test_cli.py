@@ -753,7 +753,7 @@ class TestDeleteCmd:
         assert result.exit_code == 1
 
     def test_remote_routing_delete_document(self):
-        remote_resp = {"deleted": 15, "name": "report.pdf", "type": "document"}
+        remote_resp = {"task_id": "delete-abc123", "status": "accepted"}
         inner_config = {
             "url": "wss://quarry.example.com:8420/mcp",
             "ca_cert": "/path/to/ca.crt",
@@ -775,10 +775,10 @@ class TestDeleteCmd:
         assert call_method == "DELETE"
         assert "/documents?" in call_path
         assert "name=report.pdf" in call_path
-        assert "Deleted 15 chunks" in result.output
+        assert "task_id=delete-abc123" in result.output
 
     def test_remote_routing_delete_document_with_collection(self):
-        remote_resp = {"deleted": 5, "name": "doc.pdf", "type": "document"}
+        remote_resp = {"task_id": "delete-xyz", "status": "accepted"}
         inner_config = {
             "url": "wss://quarry.example.com:8420/mcp",
             "headers": {"Authorization": "Bearer tok"},
@@ -796,7 +796,7 @@ class TestDeleteCmd:
         assert "collection=math" in call_path
 
     def test_remote_routing_delete_collection(self):
-        remote_resp = {"deleted": 50, "name": "math", "type": "collection"}
+        remote_resp = {"task_id": "delete-col789", "status": "accepted"}
         inner_config = {
             "url": "wss://quarry.example.com:8420/mcp",
             "ca_cert": "/path/to/ca.crt",
@@ -817,7 +817,7 @@ class TestDeleteCmd:
         assert call_method == "DELETE"
         assert "/collections?" in call_path
         assert "name=math" in call_path
-        assert "Deleted 50 chunks" in result.output
+        assert "task_id=delete-col789" in result.output
 
     def test_remote_routing_unknown_type(self):
         inner_config = {
@@ -843,10 +843,9 @@ class TestDeleteCmd:
         assert result.exit_code == 1
         assert "No data found" in result.output
 
-    def test_remote_json_delete_document_includes_all_fields(self):
-        """Remote delete path emits the same JSON field names as the local path."""
-        # Remote path
-        remote_resp = {"deleted": 15, "name": "report.pdf", "type": "document"}
+    def test_remote_json_delete_emits_task_id(self):
+        """Remote delete path emits task_id and status as fire-and-forget."""
+        remote_resp = {"task_id": "delete-abc", "status": "accepted"}
         inner_config = {
             "url": "wss://quarry.example.com:8420/mcp",
             "headers": {"Authorization": "Bearer tok"},
@@ -861,26 +860,8 @@ class TestDeleteCmd:
 
         assert remote_result.exit_code == 0
         remote_data = json.loads(remote_result.output)
-        remote_keys = set(remote_data.keys())
-
-        # Local path
-        with (
-            patch("quarry.__main__.read_proxy_config", return_value={}),
-            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.get_db"),
-            patch("quarry.__main__.db_delete_document", return_value=15),
-        ):
-            local_result = runner.invoke(app, ["--json", "delete", "report.pdf"])
-        _reset_globals()
-
-        assert local_result.exit_code == 0
-        local_data = json.loads(local_result.output)
-        local_keys = set(local_data.keys())
-
-        assert remote_keys == local_keys, (
-            f"Field mismatch: remote-only={remote_keys - local_keys}, "
-            f"local-only={local_keys - remote_keys}"
-        )
+        assert "task_id" in remote_data
+        assert remote_data["status"] == "accepted"
 
 
 class TestFindCmd:
@@ -2180,11 +2161,7 @@ class TestRememberCmd:
         assert mock_ingest.call_args[1]["collection"] == "notes"
 
     def test_remote_routing_posts_json_body(self):
-        remote_resp = {
-            "document_name": "notes.md",
-            "collection": "default",
-            "chunks": 2,
-        }
+        remote_resp = {"task_id": "remember-abc", "status": "accepted"}
         proxy_config = {
             "quarry": {
                 "url": "wss://quarry.example.com:8420/mcp",
@@ -2235,11 +2212,7 @@ class TestRememberCmd:
         assert body["summary"] == "one line"
 
     def test_remote_routing_does_not_call_local(self):
-        remote_resp = {
-            "document_name": "a.md",
-            "collection": "default",
-            "chunks": 1,
-        }
+        remote_resp = {"task_id": "remember-xyz", "status": "accepted"}
         proxy_config = {
             "quarry": {
                 "url": "wss://quarry.example.com:8420/mcp",
@@ -2292,15 +2265,9 @@ class TestRememberCmd:
         assert result.exit_code == 0
         mock_local.assert_called_once()
 
-    def test_json_equivalence_remote_local(self):
-        """Remote and local paths emit the same top-level JSON keys."""
-        mock_result = {
-            "document_name": "notes.md",
-            "collection": "default",
-            "chunks": 2,
-        }
-
-        # Remote path
+    def test_json_remote_emits_task_id(self):
+        """Remote remember path emits task_id and status as fire-and-forget."""
+        remote_resp = {"task_id": "remember-abc", "status": "accepted"}
         proxy_config = {
             "quarry": {
                 "url": "wss://quarry.example.com:8420/mcp",
@@ -2309,7 +2276,7 @@ class TestRememberCmd:
         }
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
-            patch("quarry.__main__._remote_https_request", return_value=mock_result),
+            patch("quarry.__main__._remote_https_request", return_value=remote_resp),
         ):
             remote_res = runner.invoke(
                 app,
@@ -2318,25 +2285,9 @@ class TestRememberCmd:
             )
         _reset_globals()
         assert remote_res.exit_code == 0
-        remote_keys = set(json.loads(remote_res.output).keys())
-
-        # Local path
-        with (
-            patch("quarry.__main__.read_proxy_config", return_value={}),
-            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.get_db"),
-            patch("quarry.__main__.ingest_content", return_value=mock_result),
-        ):
-            local_res = runner.invoke(
-                app,
-                ["--json", "remember", "--name", "notes.md"],
-                input="body",
-            )
-        _reset_globals()
-        assert local_res.exit_code == 0
-        local_keys = set(json.loads(local_res.output).keys())
-
-        assert remote_keys == local_keys
+        remote_data = json.loads(remote_res.output)
+        assert "task_id" in remote_data
+        assert remote_data["status"] == "accepted"
 
 
 class TestIngestCmdRemote:
@@ -2804,11 +2755,7 @@ class TestRegisterCmdRemote:
     def test_remote_routing_posts_to_registrations(self, tmp_path: Path):
         d = tmp_path / "docs"
         d.mkdir()
-        remote_resp = {
-            "directory": str(d),
-            "collection": "docs",
-            "registered_at": "2026-01-01T00:00:00",
-        }
+        remote_resp = {"task_id": "register-abc", "status": "accepted"}
         with (
             patch(
                 "quarry.__main__.read_proxy_config",
@@ -2827,16 +2774,12 @@ class TestRegisterCmdRemote:
         body = mock_req.call_args[1]["body"]
         assert body["directory"] == str(d.resolve())
         assert body["collection"] == "docs"
-        assert "Registered" in result.output
+        assert "task_id=register-abc" in result.output
 
     def test_remote_routing_default_collection_from_dir_name(self, tmp_path: Path):
         d = tmp_path / "ml-101"
         d.mkdir()
-        remote_resp = {
-            "directory": str(d),
-            "collection": "ml-101",
-            "registered_at": "2026-01-01T00:00:00",
-        }
+        remote_resp = {"task_id": "register-xyz", "status": "accepted"}
         with (
             patch(
                 "quarry.__main__.read_proxy_config",
@@ -2889,11 +2832,7 @@ class TestRegisterCmdRemote:
         d = tmp_path / "course"
         d.mkdir()
 
-        remote_resp = {
-            "directory": str(d.resolve()),
-            "collection": "course",
-            "registered_at": "2026-01-01T00:00:00",
-        }
+        remote_resp = {"task_id": "register-xyz", "status": "accepted"}
         with (
             patch(
                 "quarry.__main__.read_proxy_config",
@@ -2906,7 +2845,10 @@ class TestRegisterCmdRemote:
             )
         _reset_globals()
         assert remote_res.exit_code == 0
-        remote_keys = set(json.loads(remote_res.output).keys())
+        remote_data = json.loads(remote_res.output)
+        # Fire-and-forget: remote emits task_id + status
+        assert "task_id" in remote_data
+        assert remote_data["status"] == "accepted"
 
         settings = _mock_settings()
         settings.registry_path = tmp_path / "registry.db"
@@ -2919,21 +2861,17 @@ class TestRegisterCmdRemote:
             )
         _reset_globals()
         assert local_res.exit_code == 0
-        local_keys = set(json.loads(local_res.output).keys())
-
-        assert remote_keys == local_keys
+        local_data = json.loads(local_res.output)
+        # Local path still returns full result; remote is fire-and-forget.
+        assert "directory" in local_data
+        assert "collection" in local_data
 
 
 class TestDeregisterCmdRemote:
     """Remote-routing tests for ``quarry deregister``."""
 
     def test_remote_routing_sends_delete(self):
-        remote_resp = {
-            "collection": "docs",
-            "removed": 7,
-            "deleted_chunks": 42,
-            "type": "registration",
-        }
+        remote_resp = {"task_id": "deregister-abc", "status": "accepted"}
         with (
             patch(
                 "quarry.__main__.read_proxy_config",
@@ -2950,21 +2888,12 @@ class TestDeregisterCmdRemote:
         sent_path = mock_req.call_args[0][1]
         assert "/registrations?" in sent_path
         assert "collection=docs" in sent_path
-        # Fix 1: remote path must propagate keep_data so the server purges
-        # LanceDB chunks in step with the registry rows.
         assert "keep_data=false" in sent_path
-        assert "Deregistered" in result.output
-        assert "7 files" in result.output
-        assert "42 chunks deleted" in result.output
+        assert "task_id=deregister-abc" in result.output
 
     def test_remote_deregister_cleans_data(self):
         """Default deregister must tell the server to delete chunks too."""
-        remote_resp = {
-            "collection": "math",
-            "removed": 2,
-            "deleted_chunks": 9,
-            "type": "registration",
-        }
+        remote_resp = {"task_id": "deregister-xyz", "status": "accepted"}
         with (
             patch(
                 "quarry.__main__.read_proxy_config",
@@ -2982,12 +2911,7 @@ class TestDeregisterCmdRemote:
 
     def test_remote_deregister_keep_data_flag(self):
         """--keep-data must pass keep_data=true in the URL."""
-        remote_resp = {
-            "collection": "math",
-            "removed": 2,
-            "deleted_chunks": 0,
-            "type": "registration",
-        }
+        remote_resp = {"task_id": "deregister-kd", "status": "accepted"}
         with (
             patch(
                 "quarry.__main__.read_proxy_config",
@@ -3019,10 +2943,10 @@ class TestDeregisterCmdRemote:
             result = runner.invoke(app, ["deregister", "missing"])
 
         assert result.exit_code == 1
-        assert "No registration" in result.output
+        assert "Not found" in result.output
 
     def test_remote_routing_does_not_call_local(self):
-        remote_resp = {"collection": "c", "removed": 0, "type": "registration"}
+        remote_resp = {"task_id": "deregister-x", "status": "accepted"}
         with (
             patch(
                 "quarry.__main__.read_proxy_config",
@@ -3053,12 +2977,7 @@ class TestDeregisterCmdRemote:
         assert result.exit_code == 0
 
     def test_json_equivalence_remote_local(self, tmp_path: Path):
-        remote_resp = {
-            "collection": "math",
-            "removed": 3,
-            "deleted_chunks": 12,
-            "type": "registration",
-        }
+        remote_resp = {"task_id": "deregister-abc", "status": "accepted"}
         with (
             patch(
                 "quarry.__main__.read_proxy_config",
@@ -3069,7 +2988,10 @@ class TestDeregisterCmdRemote:
             remote_res = runner.invoke(app, ["--json", "deregister", "math"])
         _reset_globals()
         assert remote_res.exit_code == 0
-        remote_keys = set(json.loads(remote_res.output).keys())
+        remote_data = json.loads(remote_res.output)
+        # Fire-and-forget: remote emits task_id + status
+        assert "task_id" in remote_data
+        assert remote_data["status"] == "accepted"
 
         settings = _mock_settings()
         settings.registry_path = tmp_path / "registry.db"
@@ -3087,9 +3009,10 @@ class TestDeregisterCmdRemote:
             local_res = runner.invoke(app, ["--json", "deregister", "math"])
         _reset_globals()
         assert local_res.exit_code == 0
-        local_keys = set(json.loads(local_res.output).keys())
-
-        assert remote_keys == local_keys
+        local_data = json.loads(local_res.output)
+        # Local path still returns full result; remote is fire-and-forget.
+        assert "collection" in local_data
+        assert "removed" in local_data
 
 
 class TestListRegistrationsCmdRemote:
@@ -4810,37 +4733,9 @@ class TestIngestExitCodes:
         assert result.exit_code == 1
         assert "embedding failed" in result.output
 
-    def test_remote_remember_exits_1_on_errors_with_zero_chunks(self) -> None:
-        remote_resp = {
-            "document_name": "notes.md",
-            "collection": "default",
-            "chunks": 0,
-            "errors": ["server problem"],
-        }
-        proxy_config = {
-            "quarry": {
-                "url": "wss://quarry.example.com:8420/mcp",
-                "headers": {"Authorization": "Bearer tok"},
-            }
-        }
-        with (
-            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
-            patch("quarry.__main__._remote_https_request", return_value=remote_resp),
-        ):
-            result = runner.invoke(
-                app, ["remember", "--name", "notes.md"], input="body"
-            )
-        assert result.exit_code == 1
-        assert "server problem" in result.output
-
-    def test_remote_remember_mirrors_errors_to_stderr(self) -> None:
-        """The remote remember path must print the errors list (Fix 6)."""
-        remote_resp = {
-            "document_name": "notes.md",
-            "collection": "default",
-            "chunks": 2,
-            "errors": ["warning: stripped html"],
-        }
+    def test_remote_remember_fire_and_forget_exits_0(self) -> None:
+        """Remote remember is fire-and-forget: always exits 0 on 202."""
+        remote_resp = {"task_id": "remember-abc", "status": "accepted"}
         proxy_config = {
             "quarry": {
                 "url": "wss://quarry.example.com:8420/mcp",
@@ -4855,4 +4750,4 @@ class TestIngestExitCodes:
                 app, ["remember", "--name", "notes.md"], input="body"
             )
         assert result.exit_code == 0
-        assert "stripped html" in result.output
+        assert "task_id=remember-abc" in result.output

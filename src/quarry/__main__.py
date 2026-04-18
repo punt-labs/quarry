@@ -834,6 +834,7 @@ def remember(
             "memory_type": memory_type,
             "summary": summary,
         }
+        # Fire-and-forget: POST /remember returns 202 with task_id.
         try:
             remote_resp = _remote_https_request(
                 "POST", "/remember", proxy_config, body=body
@@ -841,12 +842,9 @@ def remember(
         except RemoteError as exc:
             err_console.print(f"Error: {exc}", style="red")
             raise typer.Exit(code=1) from exc
-        _emit(remote_resp, json.dumps(remote_resp, indent=2))
-        remote_errors_raw = remote_resp.get("errors", [])
-        if isinstance(remote_errors_raw, list):
-            for err_msg in remote_errors_raw:
-                err_console.print(f"  {err_msg}", style="red")
-        _exit_on_ingest_failure(remote_resp)
+        task_id = remote_resp.get("task_id", "")
+        status = remote_resp.get("status", "")
+        _emit(remote_resp, f"Remember {status}: task_id={task_id}")
         return
 
     settings = _resolved_settings()
@@ -980,20 +978,15 @@ def delete_cmd(
                 style="red",
             )
             raise typer.Exit(code=1)
-        label = f"collection {name!r}" if kind == "collection" else f"{name!r}"
+        # Fire-and-forget: DELETE returns 202 with task_id.
         try:
             remote_resp = _remote_https_request("DELETE", path, proxy_config)
         except RemoteError as exc:
-            if exc.status == 404:
-                err_console.print(f"No data found for {label}", style="red")
-                raise typer.Exit(code=1) from exc
             err_console.print(f"Error: {exc}", style="red")
             raise typer.Exit(code=1) from exc
-        deleted = remote_resp.get("deleted", 0)
-        _emit(
-            remote_resp,
-            f"Deleted {deleted} chunks for {label}",
-        )
+        task_id = remote_resp.get("task_id", "")
+        status = remote_resp.get("status", "")
+        _emit(remote_resp, f"Delete {status}: task_id={task_id}")
         return
 
     settings = _resolved_settings()
@@ -1038,6 +1031,7 @@ def register(
         resolved_str = str(directory.expanduser().resolve())
         col = collection or directory.name or Path(resolved_str).name
         body: dict[str, object] = {"directory": resolved_str, "collection": col}
+        # Fire-and-forget: POST /registrations returns 202 with task_id.
         try:
             remote_resp = _remote_https_request(
                 "POST", "/registrations", proxy_config, body=body
@@ -1045,12 +1039,9 @@ def register(
         except RemoteError as exc:
             err_console.print(f"Error: {exc}", style="red")
             raise typer.Exit(code=1) from exc
-        reg_dir = remote_resp.get("directory", resolved_str)
-        reg_col = remote_resp.get("collection", col)
-        _emit(
-            {"directory": str(reg_dir), "collection": str(reg_col)},
-            f"Registered {reg_dir} as collection {reg_col!r}",
-        )
+        task_id = remote_resp.get("task_id", "")
+        status = remote_resp.get("status", "")
+        _emit(remote_resp, f"Register {status}: task_id={task_id}")
         return
 
     settings = _resolved_settings()
@@ -1084,33 +1075,15 @@ def deregister(
             "keep_data": "true" if keep_data else "false",
         }
         path = f"/registrations?{urllib.parse.urlencode(params)}"
+        # Fire-and-forget: DELETE /registrations returns 202 with task_id.
         try:
             remote_resp = _remote_https_request("DELETE", path, proxy_config)
         except RemoteError as exc:
-            if exc.status == 404:
-                err_console.print(
-                    f"No registration found for {collection!r}", style="red"
-                )
-                raise typer.Exit(code=1) from exc
             err_console.print(f"Error: {exc}", style="red")
             raise typer.Exit(code=1) from exc
-        removed_raw = remote_resp.get("removed", 0)
-        removed = int(removed_raw) if isinstance(removed_raw, int | float) else 0
-        deleted_chunks_raw = remote_resp.get("deleted_chunks", 0)
-        deleted_chunks = (
-            int(deleted_chunks_raw)
-            if isinstance(deleted_chunks_raw, int | float)
-            else 0
-        )
-        _emit(
-            {
-                "collection": collection,
-                "removed": removed,
-                "deleted_chunks": deleted_chunks,
-            },
-            f"Deregistered collection {collection!r} "
-            f"({removed} files, {deleted_chunks} chunks deleted)",
-        )
+        task_id = remote_resp.get("task_id", "")
+        status = remote_resp.get("status", "")
+        _emit(remote_resp, f"Deregister {status}: task_id={task_id}")
         return
 
     settings = _resolved_settings()

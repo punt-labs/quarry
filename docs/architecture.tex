@@ -1156,25 +1156,20 @@ list databases      & sync   & sync & sync & sync \\
 health              & sync   & ---  & ---  & ---  \\
 \midrule
 %
-% --- Write operations (short, sync acceptable) ---
-\multicolumn{5}{l}{\emph{Short write operations}} \\
+% --- Mutating operations (all async on HTTP) ---
+\multicolumn{5}{l}{\emph{Mutating operations}} \\
 \midrule
-register            & sync   & sync & sync & fire-and-forget \\
-deregister          & sync   & sync & sync & fire-and-forget \\
-delete (document)   & sync   & sync & sync & fire-and-forget \\
-delete (collection) & sync   & sync & sync & fire-and-forget \\
-use (switch db)     & sync   & sync & sync & sync \\
-\midrule
-%
-% --- Long-running operations ---
-\multicolumn{5}{l}{\emph{Long-running operations}} \\
-\midrule
+register            & fire-and-forget & sync & fire-and-forget & fire-and-forget \\
+deregister          & fire-and-forget & sync & fire-and-forget & fire-and-forget \\
+delete (document)   & fire-and-forget & sync & fire-and-forget & fire-and-forget \\
+delete (collection) & fire-and-forget & sync & fire-and-forget & fire-and-forget \\
+remember            & fire-and-forget & sync & fire-and-forget & fire-and-forget \\
 ingest (URL)        & fire-and-forget & sync & fire-and-forget
                     & fire-and-forget \\
 ingest (file)       & ---    & sync & ---  & fire-and-forget \\
-remember            & sync   & sync & sync & fire-and-forget \\
 sync                & fire-and-forget & sync & fire-and-forget
                     & fire-and-forget \\
+use (switch db)     & sync   & sync & sync & sync \\
 optimize            & ---    & sync & ---  & ---  \\
 \end{longtable}
 
@@ -1185,32 +1180,20 @@ search (embedding + vector similarity + BM25) completes in
 $<$100\,ms after model load; the overhead of task tracking would
 exceed the operation itself.
 
-\textbf{Short writes} (register, deregister, delete) are synchronous
-on HTTP and CLI because they complete in milliseconds.  MCP uses
-fire-and-forget to avoid blocking the LLM response stream, even for
-fast operations --- the bounded thread pool (4~workers) is cheap
-insurance.
-
-\textbf{Long-running operations} must be fire-and-forget on HTTP
-because the CLI client has a finite connection timeout.  Sitemap
-crawls, multi-file syncs, and large-document embedding routinely
-exceed 15~seconds.
+\textbf{Mutating operations} are all fire-and-forget on HTTP.  Every
+mutating endpoint returns 202~Accepted with a \field{task\_id}; work
+runs in a background \texttt{asyncio.Task}.  This eliminates the
+15-second CLI timeout as a failure mode for any write operation.
 
 \begin{itemize}
-  \item \textbf{Ingest} and \textbf{sync} use the 202~Accepted
-    pattern: \texttt{POST} returns a \field{task\_id} immediately;
-    \texttt{GET /ingest/\{task\_id\}} or
-    \texttt{GET /sync/\{task\_id\}} returns
-    \texttt{running}/\texttt{completed}/\texttt{failed} status.
+  \item All mutating endpoints use \texttt{GET /tasks/\{task\_id\}}
+    for status polling.  \texttt{/sync/\{id\}} and
+    \texttt{/ingest/\{id\}} are backwards-compatible aliases.
   \item \textbf{Sync} rejects concurrent requests with HTTP~409
     because a second sync against the same registrations would
-    race on LanceDB writes.
-  \item \textbf{Ingest} allows concurrent requests --- each operates
-    on independent documents and gets its own task.
-  \item \textbf{Remember} remains synchronous on HTTP because inline
-    content is already in memory; no network fetch is required.  If
-    embedding latency becomes a concern for very large inputs, it
-    should follow the same 202 pattern.
+    race on LanceDB writes.  All other operations allow concurrency.
+  \item Completed and failed tasks are garbage-collected after a
+    1-hour TTL on the next task creation.
   \item \textbf{Optimize} is CLI-only (no HTTP or MCP surface).  It
     runs LanceDB compaction and index rebuilds, which are
     CPU-intensive and should not be triggered remotely without
@@ -1219,7 +1202,7 @@ exceed 15~seconds.
 
 \subsection{Task Lifecycle}
 
-Background tasks (ingest, sync) follow the same lifecycle:
+All background tasks follow the same lifecycle:
 
 \begin{enumerate}
   \item \texttt{POST} validates input, creates a \texttt{TaskState}

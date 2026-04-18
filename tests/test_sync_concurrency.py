@@ -23,7 +23,7 @@ from quarry.database import (
     count_fragments,
     optimize_table,
 )
-from quarry.http_server import IngestTaskState, SyncTaskState, _QuarryContext, build_app
+from quarry.http_server import TaskState, _QuarryContext, build_app
 from quarry.models import Chunk
 from quarry.sync_registry import (
     list_registrations,
@@ -87,7 +87,9 @@ class TestSyncLock:
         ctx.__dict__["embedder"] = _SHARED_EMBEDDER
 
         # Simulate a running sync task.
-        ctx.sync_task = SyncTaskState(task_id="sync-existing", status="running")
+        ctx.tasks["sync-existing"] = TaskState(
+            task_id="sync-existing", kind="sync", status="running"
+        )
 
         app = build_app(ctx)
         client = TestClient(app, raise_server_exceptions=False)
@@ -105,7 +107,9 @@ class TestSyncLock:
         ctx.__dict__["embedder"] = _SHARED_EMBEDDER
 
         # Previous sync completed.
-        ctx.sync_task = SyncTaskState(task_id="sync-old", status="completed")
+        ctx.tasks["sync-old"] = TaskState(
+            task_id="sync-old", kind="sync", status="completed"
+        )
 
         app = build_app(ctx)
         client = TestClient(app, raise_server_exceptions=False)
@@ -121,8 +125,8 @@ class TestSyncLock:
         ctx.__dict__["embedder"] = _SHARED_EMBEDDER
 
         # Previous sync failed.
-        ctx.sync_task = SyncTaskState(
-            task_id="sync-bad", status="failed", error="disk full"
+        ctx.tasks["sync-bad"] = TaskState(
+            task_id="sync-bad", kind="sync", status="failed", error="disk full"
         )
 
         app = build_app(ctx)
@@ -139,7 +143,9 @@ class TestSyncLock:
         ctx.__dict__["db"] = _SHARED_DB
         ctx.__dict__["embedder"] = _SHARED_EMBEDDER
 
-        ctx.sync_task = SyncTaskState(task_id="sync-done", status="completed")
+        ctx.tasks["sync-done"] = TaskState(
+            task_id="sync-done", kind="sync", status="completed"
+        )
 
         # A new POST should succeed, not 409.
         app = build_app(ctx)
@@ -475,7 +481,9 @@ class TestAsyncSyncEndpoint:
         ctx = _QuarryContext(settings)
         ctx.__dict__["db"] = _SHARED_DB
         ctx.__dict__["embedder"] = _SHARED_EMBEDDER
-        ctx.sync_task = SyncTaskState(task_id="sync-abc", status="running")
+        ctx.tasks["sync-abc"] = TaskState(
+            task_id="sync-abc", kind="sync", status="running"
+        )
 
         client = TestClient(build_app(ctx), raise_server_exceptions=False)
         resp = client.get("/sync/sync-abc")
@@ -489,8 +497,9 @@ class TestAsyncSyncEndpoint:
         ctx = _QuarryContext(settings)
         ctx.__dict__["db"] = _SHARED_DB
         ctx.__dict__["embedder"] = _SHARED_EMBEDDER
-        ctx.sync_task = SyncTaskState(
+        ctx.tasks["sync-done"] = TaskState(
             task_id="sync-done",
+            kind="sync",
             status="completed",
             results={"math": {"ingested": 5}},
         )
@@ -506,8 +515,9 @@ class TestAsyncSyncEndpoint:
         ctx = _QuarryContext(settings)
         ctx.__dict__["db"] = _SHARED_DB
         ctx.__dict__["embedder"] = _SHARED_EMBEDDER
-        ctx.sync_task = SyncTaskState(
+        ctx.tasks["sync-bad"] = TaskState(
             task_id="sync-bad",
+            kind="sync",
             status="failed",
             error="disk full",
         )
@@ -524,7 +534,9 @@ class TestAsyncSyncEndpoint:
         ctx = _QuarryContext(settings)
         ctx.__dict__["db"] = _SHARED_DB
         ctx.__dict__["embedder"] = _SHARED_EMBEDDER
-        ctx.sync_task = SyncTaskState(task_id="sync-running", status="running")
+        ctx.tasks["sync-running"] = TaskState(
+            task_id="sync-running", kind="sync", status="running"
+        )
 
         client = TestClient(build_app(ctx), raise_server_exceptions=False)
         resp = client.post("/sync", json={})
@@ -579,8 +591,8 @@ class TestAsyncIngestEndpoint:
         ctx = _QuarryContext(settings)
         ctx.__dict__["db"] = _SHARED_DB
         ctx.__dict__["embedder"] = _SHARED_EMBEDDER
-        ctx.ingest_tasks["ingest-abc"] = IngestTaskState(
-            task_id="ingest-abc", status="running"
+        ctx.tasks["ingest-abc"] = TaskState(
+            task_id="ingest-abc", kind="ingest", status="running"
         )
 
         client = TestClient(build_app(ctx), raise_server_exceptions=False)
@@ -595,8 +607,9 @@ class TestAsyncIngestEndpoint:
         ctx = _QuarryContext(settings)
         ctx.__dict__["db"] = _SHARED_DB
         ctx.__dict__["embedder"] = _SHARED_EMBEDDER
-        ctx.ingest_tasks["ingest-done"] = IngestTaskState(
+        ctx.tasks["ingest-done"] = TaskState(
             task_id="ingest-done",
+            kind="ingest",
             status="completed",
             results={"document_name": "example.com", "chunks": 5},
         )
@@ -613,8 +626,9 @@ class TestAsyncIngestEndpoint:
         ctx = _QuarryContext(settings)
         ctx.__dict__["db"] = _SHARED_DB
         ctx.__dict__["embedder"] = _SHARED_EMBEDDER
-        ctx.ingest_tasks["ingest-bad"] = IngestTaskState(
+        ctx.tasks["ingest-bad"] = TaskState(
             task_id="ingest-bad",
+            kind="ingest",
             status="failed",
             error="connection timed out",
         )

@@ -104,6 +104,9 @@ _METADATA_HOSTNAMES = frozenset(
 # this range, so we check it explicitly.
 _CGNAT_NETWORK = ipaddress.ip_network("100.64.0.0/10")
 
+# Task GC: completed/failed tasks are evicted after this many seconds.
+TASK_TTL_SECONDS = 3600  # 1 hour
+
 
 def _validate_ingest_url(url: str) -> str | None:
     """Return None if *url* is safe to fetch, else a human-readable reason.
@@ -182,29 +185,6 @@ def _coerce_bool_field(
     )
 
 
-def _pipeline_error_response(exc: Exception, label: str) -> JSONResponse:
-    """Map an ingest/sync pipeline exception to a JSON error response.
-
-    The split is intentional:
-
-    * ``ValueError`` means the caller sent something the pipeline could not
-      parse — return 400 so the client can fix its input.
-    * ``OSError`` means a downstream transport failure (disk, network);
-      502 signals the issue is upstream of the client.
-    * Anything else is logged with the full traceback and wrapped in a 500
-      JSON envelope so the CLI never sees an HTML error page.
-    """
-    if isinstance(exc, ValueError):
-        return JSONResponse({"error": str(exc)}, status_code=400)
-    if isinstance(exc, OSError):
-        return JSONResponse({"error": str(exc)}, status_code=502)
-    logger.exception("%s pipeline failure", label)
-    return JSONResponse(
-        {"error": f"{label} failed: {exc}"},
-        status_code=500,
-    )
-
-
 def _check_body_size(request: Request, limit: int) -> JSONResponse | None:
     """Reject requests whose advertised body size exceeds *limit*.
 
@@ -232,23 +212,40 @@ def _check_body_size(request: Request, limit: int) -> JSONResponse | None:
 
 
 @dataclass
-class SyncTaskState:
-    """Tracks the state of an in-progress or completed background sync."""
+class TaskState:
+    """Tracks the state of an in-progress or completed background task."""
 
     task_id: str
+    kind: str  # "sync", "ingest", "remember", "delete", "register", "deregister"
     status: str = "running"
     results: dict[str, object] = field(default_factory=dict)
     error: str = ""
+    created_at: float = field(default_factory=time.monotonic)
 
 
-@dataclass
-class IngestTaskState:
-    """Tracks the state of an in-progress or completed background ingest."""
+def _gc_tasks(ctx: _QuarryContext) -> None:
+    """Evict completed/failed tasks older than TASK_TTL_SECONDS."""
+    now = time.monotonic()
+    expired = [
+        tid
+        for tid, t in ctx.tasks.items()
+        if t.status != "running" and (now - t.created_at) > TASK_TTL_SECONDS
+    ]
+    for tid in expired:
+        del ctx.tasks[tid]
+        ctx.task_refs.pop(tid, None)
 
-    task_id: str
-    status: str = "running"
-    results: dict[str, object] = field(default_factory=dict)
-    error: str = ""
+
+def _begin_task(
+    ctx: _QuarryContext,
+    kind: str,
+) -> TaskState:
+    """Create a TaskState, register it, and run GC. Caller schedules the coro."""
+    _gc_tasks(ctx)
+    task_id = f"{kind}-{uuid.uuid4().hex[:12]}"
+    state = TaskState(task_id=task_id, kind=kind)
+    ctx.tasks[task_id] = state
+    return state
 
 
 class _QuarryContext:
@@ -265,13 +262,9 @@ class _QuarryContext:
         self.api_key = api_key
         self.cors_origins = cors_origins or _DEFAULT_CORS_ORIGINS
         self.start_time = time.monotonic()
-        # Fix 1 + Fix 5: track the current sync task for concurrency control.
-        self.sync_task: SyncTaskState | None = None
-        self.sync_task_ref: asyncio.Task[None] | None = None
-        # Ingest tasks — multiple concurrent ingests are allowed, each
-        # tracked independently by task_id.
-        self.ingest_tasks: dict[str, IngestTaskState] = {}
-        self.ingest_task_refs: dict[str, asyncio.Task[None]] = {}
+        # Unified task store — all async operations tracked here.
+        self.tasks: dict[str, TaskState] = {}
+        self.task_refs: dict[str, asyncio.Task[None]] = {}
 
     @cached_property
     def db(self) -> LanceDB:
@@ -414,13 +407,62 @@ def _documents_route(request: Request) -> JSONResponse:
     if auth_resp is not None:
         return auth_resp
 
-    if request.method == "DELETE":
-        return _handle_delete_document(request)
-
     collection = request.query_params.get("collection") or None
     ctx = _ctx(request)
     docs = list_documents(ctx.db, collection_filter=collection)
     return JSONResponse({"total_documents": len(docs), "documents": docs})
+
+
+async def _documents_delete_route(request: Request) -> JSONResponse:
+    """Handle DELETE /documents as an async 202 background task."""
+    auth_resp = _check_auth(request)
+    if auth_resp is not None:
+        return auth_resp
+
+    name = request.query_params.get("name", "")
+    if not name:
+        return JSONResponse(
+            {"error": "Missing required parameter: name"}, status_code=400
+        )
+
+    collection = request.query_params.get("collection") or None
+    ctx = _ctx(request)
+    state = _begin_task(ctx, "delete")
+    ctx.task_refs[state.task_id] = asyncio.create_task(
+        _run_delete_document_task(ctx, state, name, collection)
+    )
+
+    return JSONResponse(
+        {"task_id": state.task_id, "status": "accepted"},
+        status_code=202,
+    )
+
+
+async def _run_delete_document_task(
+    ctx: _QuarryContext,
+    state: TaskState,
+    name: str,
+    collection: str | None,
+) -> None:
+    """Execute document deletion in background and update task state."""
+    try:
+        count = await run_in_threadpool(
+            db_delete_document, ctx.db, name, collection=collection
+        )
+        state.status = "completed"
+        state.results = {"deleted": count, "name": name, "type": "document"}
+    except asyncio.CancelledError:
+        state.status = "failed"
+        state.error = "task was cancelled"
+        raise
+    except Exception as exc:
+        logger.exception("Background delete document failed")
+        state.status = "failed"
+        state.error = str(exc)
+    finally:
+        if state.status == "running":
+            state.status = "failed"
+            state.error = "task exited without setting terminal status"
 
 
 def _collections_route(request: Request) -> JSONResponse:
@@ -428,12 +470,57 @@ def _collections_route(request: Request) -> JSONResponse:
     if auth_resp is not None:
         return auth_resp
 
-    if request.method == "DELETE":
-        return _handle_delete_collection(request)
-
     ctx = _ctx(request)
     cols = db_list_collections(ctx.db)
     return JSONResponse({"total_collections": len(cols), "collections": cols})
+
+
+async def _collections_delete_route(request: Request) -> JSONResponse:
+    """Handle DELETE /collections as an async 202 background task."""
+    auth_resp = _check_auth(request)
+    if auth_resp is not None:
+        return auth_resp
+
+    name = request.query_params.get("name", "")
+    if not name:
+        return JSONResponse(
+            {"error": "Missing required parameter: name"}, status_code=400
+        )
+
+    ctx = _ctx(request)
+    state = _begin_task(ctx, "delete")
+    ctx.task_refs[state.task_id] = asyncio.create_task(
+        _run_delete_collection_task(ctx, state, name)
+    )
+
+    return JSONResponse(
+        {"task_id": state.task_id, "status": "accepted"},
+        status_code=202,
+    )
+
+
+async def _run_delete_collection_task(
+    ctx: _QuarryContext,
+    state: TaskState,
+    name: str,
+) -> None:
+    """Execute collection deletion in background and update task state."""
+    try:
+        count = await run_in_threadpool(db_delete_collection, ctx.db, name)
+        state.status = "completed"
+        state.results = {"deleted": count, "name": name, "type": "collection"}
+    except asyncio.CancelledError:
+        state.status = "failed"
+        state.error = "task was cancelled"
+        raise
+    except Exception as exc:
+        logger.exception("Background delete collection failed")
+        state.status = "failed"
+        state.error = str(exc)
+    finally:
+        if state.status == "running":
+            state.status = "failed"
+            state.error = "task exited without setting terminal status"
 
 
 def _show_route(request: Request) -> JSONResponse:
@@ -483,7 +570,10 @@ def _show_route(request: Request) -> JSONResponse:
 
 
 async def _remember_route(request: Request) -> JSONResponse:
-    """Ingest inline text content. Body: {name, content, ...optional}."""
+    """Ingest inline text content as a background task.
+
+    Body: {name, content, ...optional}. Returns 202 Accepted with a task_id.
+    """
     auth_resp = _check_auth(request)
     if auth_resp is not None:
         return auth_resp
@@ -517,11 +607,45 @@ async def _remember_route(request: Request) -> JSONResponse:
     memory_type = body.get("memory_type") or ""
     summary = body.get("summary") or ""
 
+    ctx = _ctx(request)
+    state = _begin_task(ctx, "remember")
+    ctx.task_refs[state.task_id] = asyncio.create_task(
+        _run_remember_task(
+            ctx,
+            state,
+            name=name,
+            content=content,
+            collection=str(collection),
+            format_hint=str(format_hint),
+            overwrite=overwrite,
+            agent_handle=str(agent_handle),
+            memory_type=str(memory_type),
+            summary=str(summary),
+        ),
+    )
+
+    return JSONResponse(
+        {"task_id": state.task_id, "status": "accepted"},
+        status_code=202,
+    )
+
+
+async def _run_remember_task(
+    ctx: _QuarryContext,
+    state: TaskState,
+    *,
+    name: str,
+    content: str,
+    collection: str,
+    format_hint: str,
+    overwrite: bool,
+    agent_handle: str,
+    memory_type: str,
+    summary: str,
+) -> None:
+    """Execute ingest_content in a background thread and update task state."""
     from quarry.pipeline import ingest_content  # noqa: PLC0415
 
-    ctx = _ctx(request)
-    # ingest_content is synchronous and performs embedding + DB writes.
-    # Run it in the threadpool so the event loop stays responsive.
     try:
         result = await run_in_threadpool(
             ingest_content,
@@ -530,15 +654,26 @@ async def _remember_route(request: Request) -> JSONResponse:
             ctx.db,
             ctx.settings,
             overwrite=overwrite,
-            collection=str(collection),
-            format_hint=str(format_hint),
-            agent_handle=str(agent_handle),
-            memory_type=str(memory_type),
-            summary=str(summary),
+            collection=collection,
+            format_hint=format_hint,
+            agent_handle=agent_handle,
+            memory_type=memory_type,
+            summary=summary,
         )
-    except Exception as exc:  # noqa: BLE001 — routed through _pipeline_error_response
-        return _pipeline_error_response(exc, "remember")
-    return JSONResponse(dict(result))
+        state.status = "completed"
+        state.results = dict(result)
+    except asyncio.CancelledError:
+        state.status = "failed"
+        state.error = "task was cancelled"
+        raise
+    except Exception as exc:
+        logger.exception("Background remember failed")
+        state.status = "failed"
+        state.error = str(exc)
+    finally:
+        if state.status == "running":
+            state.status = "failed"
+            state.error = "task exited without setting terminal status"
 
 
 async def _ingest_route(request: Request) -> JSONResponse:
@@ -546,7 +681,7 @@ async def _ingest_route(request: Request) -> JSONResponse:
 
     Body: {source, ...optional}. File upload not supported.
     Returns 202 Accepted immediately with a task_id; the actual ingest
-    runs as an asyncio background task.  ``GET /ingest/<task_id>`` returns
+    runs as an asyncio background task.  ``GET /tasks/<task_id>`` returns
     the task status.  Unlike sync, multiple concurrent ingests are allowed.
     """
     auth_resp = _check_auth(request)
@@ -588,10 +723,8 @@ async def _ingest_route(request: Request) -> JSONResponse:
     summary = body.get("summary") or ""
 
     ctx = _ctx(request)
-    task_id = f"ingest-{uuid.uuid4().hex[:12]}"
-    state = IngestTaskState(task_id=task_id)
-    ctx.ingest_tasks[task_id] = state
-    ctx.ingest_task_refs[task_id] = asyncio.create_task(
+    state = _begin_task(ctx, "ingest")
+    ctx.task_refs[state.task_id] = asyncio.create_task(
         _run_ingest_task(
             ctx,
             state,
@@ -601,42 +734,18 @@ async def _ingest_route(request: Request) -> JSONResponse:
             agent_handle=str(agent_handle),
             memory_type=str(memory_type),
             summary=str(summary),
-        )
+        ),
     )
 
     return JSONResponse(
-        {"task_id": task_id, "status": "accepted"},
+        {"task_id": state.task_id, "status": "accepted"},
         status_code=202,
     )
 
 
-def _ingest_status_route(request: Request) -> JSONResponse:
-    """Return the status of an ingest task by task_id."""
-    auth_resp = _check_auth(request)
-    if auth_resp is not None:
-        return auth_resp
-
-    task_id = request.path_params.get("task_id", "")
-    ctx = _ctx(request)
-
-    state = ctx.ingest_tasks.get(task_id)
-    if state is None:
-        return JSONResponse({"error": "Task not found"}, status_code=404)
-
-    response: dict[str, object] = {
-        "task_id": state.task_id,
-        "status": state.status,
-    }
-    if state.status == "completed":
-        response["results"] = state.results
-    elif state.status == "failed":
-        response["error"] = state.error
-    return JSONResponse(response)
-
-
 async def _run_ingest_task(
     ctx: _QuarryContext,
-    state: IngestTaskState,
+    state: TaskState,
     *,
     source: str,
     overwrite: bool,
@@ -645,7 +754,7 @@ async def _run_ingest_task(
     memory_type: str,
     summary: str,
 ) -> None:
-    """Execute ingest_auto in a background thread and update *state*."""
+    """Execute ingest_auto in a background thread and update task state."""
     from quarry.pipeline import ingest_auto  # noqa: PLC0415
 
     try:
@@ -678,7 +787,7 @@ async def _run_ingest_task(
             state.error = "task exited without setting terminal status"
 
 
-async def _run_sync_task(ctx: _QuarryContext, state: SyncTaskState) -> None:
+async def _run_sync_task(ctx: _QuarryContext, state: TaskState) -> None:
     """Execute sync_all in a background thread and update *state*."""
     from quarry.sync import sync_all  # noqa: PLC0415
 
@@ -715,10 +824,10 @@ async def _run_sync_task(ctx: _QuarryContext, state: SyncTaskState) -> None:
 async def _sync_route(request: Request) -> JSONResponse:
     """Accept a sync request and run ``sync_all`` as a background task.
 
-    Fix 1: Uses a non-blocking lock to reject concurrent requests with
-    HTTP 409.  Fix 5: Returns 202 Accepted immediately with a task_id;
-    the actual sync runs as an asyncio background task.  ``GET /sync/<id>``
-    returns the task status.
+    Uses a non-blocking check to reject concurrent requests with HTTP 409.
+    Returns 202 Accepted immediately with a task_id; the actual sync runs
+    as an asyncio background task.  ``GET /tasks/<task_id>`` returns the
+    task status.
     """
     auth_resp = _check_auth(request)
     if auth_resp is not None:
@@ -742,23 +851,26 @@ async def _sync_route(request: Request) -> JSONResponse:
 
     ctx = _ctx(request)
 
-    # Fix 1: reject if a sync task is already running.  Check the task
-    # state rather than the asyncio lock, because the state is set
-    # synchronously before the background task starts.
-    if ctx.sync_task is not None and ctx.sync_task.status == "running":
+    # Reject if a sync task is already running (dict scan).
+    running_sync = next(
+        (t for t in ctx.tasks.values() if t.kind == "sync" and t.status == "running"),
+        None,
+    )
+    if running_sync is not None:
         return JSONResponse(
             {
                 "error": "Sync already in progress",
                 "status": "running",
-                "task_id": ctx.sync_task.task_id,
+                "task_id": running_sync.task_id,
             },
             status_code=409,
         )
 
+    _gc_tasks(ctx)
     task_id = f"sync-{uuid.uuid4().hex[:12]}"
-    state = SyncTaskState(task_id=task_id)
-    ctx.sync_task = state
-    ctx.sync_task_ref = asyncio.create_task(_run_sync_task(ctx, state))
+    state = TaskState(task_id=task_id, kind="sync")
+    ctx.tasks[task_id] = state
+    ctx.task_refs[task_id] = asyncio.create_task(_run_sync_task(ctx, state))
 
     return JSONResponse(
         {"task_id": task_id, "status": "accepted"},
@@ -766,8 +878,12 @@ async def _sync_route(request: Request) -> JSONResponse:
     )
 
 
-def _sync_status_route(request: Request) -> JSONResponse:
-    """Return the status of a sync task by task_id."""
+def _task_status_route(request: Request) -> JSONResponse:
+    """Return the status of any task by task_id.
+
+    Registered on /tasks/{task_id}, /sync/{task_id}, and /ingest/{task_id}
+    for backwards compatibility.
+    """
     auth_resp = _check_auth(request)
     if auth_resp is not None:
         return auth_resp
@@ -775,10 +891,10 @@ def _sync_status_route(request: Request) -> JSONResponse:
     task_id = request.path_params.get("task_id", "")
     ctx = _ctx(request)
 
-    if ctx.sync_task is None or ctx.sync_task.task_id != task_id:
+    state = ctx.tasks.get(task_id)
+    if state is None:
         return JSONResponse({"error": "Task not found"}, status_code=404)
 
-    state = ctx.sync_task
     response: dict[str, object] = {
         "task_id": state.task_id,
         "status": state.status,
@@ -943,6 +1059,7 @@ def _register_sync(
 
 
 async def _handle_add_registration(request: Request) -> JSONResponse:
+    """Register a directory as an async 202 background task."""
     size_err = _check_body_size(request, MAX_REGISTRATIONS_BODY_BYTES)
     if size_err is not None:
         return size_err
@@ -974,22 +1091,52 @@ async def _handle_add_registration(request: Request) -> JSONResponse:
         )
 
     ctx = _ctx(request)
+    state = _begin_task(ctx, "register")
+    ctx.task_refs[state.task_id] = asyncio.create_task(
+        _run_register_task(ctx, state, resolved, collection)
+    )
+
+    return JSONResponse(
+        {"task_id": state.task_id, "status": "accepted"},
+        status_code=202,
+    )
+
+
+async def _run_register_task(
+    ctx: _QuarryContext,
+    state: TaskState,
+    resolved: Path,
+    collection: str,
+) -> None:
+    """Execute register_directory in background and update task state."""
     try:
         reg = await run_in_threadpool(
             _register_sync, ctx.settings.registry_path, resolved, collection
         )
-    except FileNotFoundError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
-    except ValueError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=409)
-
-    return JSONResponse(
-        {
+        state.status = "completed"
+        state.results = {
             "directory": reg.directory,
             "collection": reg.collection,
             "registered_at": reg.registered_at,
         }
-    )
+    except asyncio.CancelledError:
+        state.status = "failed"
+        state.error = "task was cancelled"
+        raise
+    except FileNotFoundError as exc:
+        state.status = "failed"
+        state.error = str(exc)
+    except ValueError as exc:
+        state.status = "failed"
+        state.error = str(exc)
+    except Exception as exc:
+        logger.exception("Background register failed")
+        state.status = "failed"
+        state.error = str(exc)
+    finally:
+        if state.status == "running":
+            state.status = "failed"
+            state.error = "task exited without setting terminal status"
 
 
 def _deregister_sync(registry_path: Path, collection: str) -> tuple[bool, list[str]]:
@@ -1006,6 +1153,7 @@ def _deregister_sync(registry_path: Path, collection: str) -> tuple[bool, list[s
 
 
 async def _handle_delete_registration(request: Request) -> JSONResponse:
+    """Deregister a directory as an async 202 background task."""
     collection = request.query_params.get("collection", "")
     if not collection:
         return JSONResponse(
@@ -1024,60 +1172,64 @@ async def _handle_delete_registration(request: Request) -> JSONResponse:
     if not ctx.settings.registry_path.exists():
         return JSONResponse({"error": "Not found"}, status_code=404)
 
-    found, removed_docs = await run_in_threadpool(
-        _deregister_sync, ctx.settings.registry_path, collection
+    state = _begin_task(ctx, "deregister")
+    ctx.task_refs[state.task_id] = asyncio.create_task(
+        _run_deregister_task(ctx, state, collection, keep_data=keep_data)
     )
-    if not found:
-        return JSONResponse({"error": "Not found"}, status_code=404)
-
-    deleted_chunks = 0
-    if not keep_data and removed_docs:
-
-        def _purge() -> int:
-            total = 0
-            for doc_name in removed_docs:
-                total += db_delete_document(ctx.db, doc_name, collection=collection)
-            return total
-
-        deleted_chunks = await run_in_threadpool(_purge)
 
     return JSONResponse(
-        {
+        {"task_id": state.task_id, "status": "accepted"},
+        status_code=202,
+    )
+
+
+async def _run_deregister_task(
+    ctx: _QuarryContext,
+    state: TaskState,
+    collection: str,
+    *,
+    keep_data: bool,
+) -> None:
+    """Execute deregister_directory in background and update task state."""
+    try:
+        found, removed_docs = await run_in_threadpool(
+            _deregister_sync, ctx.settings.registry_path, collection
+        )
+        if not found:
+            state.status = "failed"
+            state.error = "Not found"
+            return
+
+        deleted_chunks = 0
+        if not keep_data and removed_docs:
+
+            def _purge() -> int:
+                total = 0
+                for doc_name in removed_docs:
+                    total += db_delete_document(ctx.db, doc_name, collection=collection)
+                return total
+
+            deleted_chunks = await run_in_threadpool(_purge)
+
+        state.status = "completed"
+        state.results = {
             "collection": collection,
             "removed": len(removed_docs),
             "deleted_chunks": deleted_chunks,
             "type": "registration",
         }
-    )
-
-
-def _handle_delete_document(request: Request) -> JSONResponse:
-    name = request.query_params.get("name", "")
-    if not name:
-        return JSONResponse(
-            {"error": "Missing required parameter: name"}, status_code=400
-        )
-
-    collection = request.query_params.get("collection") or None
-    ctx = _ctx(request)
-    count = db_delete_document(ctx.db, name, collection=collection)
-    if count == 0:
-        return JSONResponse({"error": "Not found"}, status_code=404)
-    return JSONResponse({"deleted": count, "name": name, "type": "document"})
-
-
-def _handle_delete_collection(request: Request) -> JSONResponse:
-    name = request.query_params.get("name", "")
-    if not name:
-        return JSONResponse(
-            {"error": "Missing required parameter: name"}, status_code=400
-        )
-
-    ctx = _ctx(request)
-    count = db_delete_collection(ctx.db, name)
-    if count == 0:
-        return JSONResponse({"error": "Not found"}, status_code=404)
-    return JSONResponse({"deleted": count, "name": name, "type": "collection"})
+    except asyncio.CancelledError:
+        state.status = "failed"
+        state.error = "task was cancelled"
+        raise
+    except Exception as exc:
+        logger.exception("Background deregister failed")
+        state.status = "failed"
+        state.error = str(exc)
+    finally:
+        if state.status == "running":
+            state.status = "failed"
+            state.error = "task exited without setting terminal status"
 
 
 def _status_route(request: Request) -> JSONResponse:
@@ -1189,13 +1341,17 @@ def build_app(
         Route("/ca.crt", _ca_cert_route, methods=["GET"]),
         Route("/search", _search_route, methods=["GET"]),
         Route("/show", _show_route, methods=["GET"]),
-        Route("/documents", _documents_route, methods=["GET", "DELETE"]),
-        Route("/collections", _collections_route, methods=["GET", "DELETE"]),
+        Route("/documents", _documents_route, methods=["GET"]),
+        Route("/documents", _documents_delete_route, methods=["DELETE"]),
+        Route("/collections", _collections_route, methods=["GET"]),
+        Route("/collections", _collections_delete_route, methods=["DELETE"]),
         Route("/remember", _remember_route, methods=["POST"]),
         Route("/ingest", _ingest_route, methods=["POST"]),
-        Route("/ingest/{task_id}", _ingest_status_route, methods=["GET"]),
         Route("/sync", _sync_route, methods=["POST"]),
-        Route("/sync/{task_id}", _sync_status_route, methods=["GET"]),
+        # Unified task status endpoint with backwards-compatible aliases.
+        Route("/tasks/{task_id}", _task_status_route, methods=["GET"]),
+        Route("/sync/{task_id}", _task_status_route, methods=["GET"]),
+        Route("/ingest/{task_id}", _task_status_route, methods=["GET"]),
         Route("/databases", _databases_route, methods=["GET"]),
         Route("/use", _use_route, methods=["POST"]),
         Route(

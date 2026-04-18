@@ -14,20 +14,25 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
-### Fixed
+### Changed
 
-- **tool**: `POST /ingest` is now async — returns 202 + task_id
-  immediately, with `GET /ingest/{task_id}` for status polling. The
-  previous synchronous endpoint caused CLI timeouts on sitemap crawls
-  exceeding the 15s default. Multiple concurrent ingests are allowed
-  (each gets its own task). CLI uses fire-and-forget pattern matching
-  `/sync`.
+- **api**: All mutating HTTP endpoints now return 202 + task_id.
+  Unified `TaskState` with `kind` field replaces per-operation
+  `SyncTaskState` and `IngestTaskState`. Single polling endpoint
+  `GET /tasks/{task_id}` (with `/sync/{id}` and `/ingest/{id}` as
+  aliases). Endpoints converted: `/remember`, `/documents` DELETE,
+  `/collections` DELETE, `/registrations` POST/DELETE. `/sync` keeps
+  409 for concurrent requests; all others allow concurrency.
+- **tool**: CLI remote paths for remember, delete, register, and
+  deregister switched to fire-and-forget (print task_id, exit 0).
 
 ### Added
 
-- **docs**: Operation concurrency model appendix in architecture.tex
-  classifying every operation across HTTP, CLI, and MCP surfaces as
-  synchronous or fire-and-forget.
+- **api**: Task garbage collection — completed/failed tasks evicted
+  after 1-hour TTL on next task creation.
+- **docs**: Operation concurrency model appendix in architecture.tex.
+- **infra**: `make docs` now builds Z-spec PDFs using local Oxford Z
+  fonts in `docs/tex/` (was broken due to missing `oxsz10.mf`).
 
 ## [1.14.0] - 2026-04-17
 

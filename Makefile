@@ -29,6 +29,10 @@ clean: ## Remove build artifacts
 	rm -rf dist/ .tmp/
 
 TEX_DOCS := prfaq docs/architecture docs/claude-code-quarry
+# Z-spec docs need fuzz.sty and Oxford Z fonts (oxsz*.mf).
+FUZZ_TEX := $(CURDIR)/docs/tex//
+export TEXINPUTS := $(FUZZ_TEX):
+export MFINPUTS := $(FUZZ_TEX):
 
 docs: ## Build all LaTeX documents
 	@set -e; \
