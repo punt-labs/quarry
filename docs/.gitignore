@@ -1,5 +1,5 @@
 # Font build artifacts from pdflatex + METAFONT
-*.pk
+*pk
 *.tfm
 *.gf
 *.600gf
