@@ -410,28 +410,33 @@ overridable with \texttt{-{}-port}.
 \subsection{Endpoints}
 
 \begin{center}
-\begin{tabular}{llp{6cm}l}
+\begin{tabular}{llp{5.5cm}ll}
 \toprule
 \textbf{Path} & \textbf{Method} & \textbf{Purpose} &
-  \textbf{Auth} \\
+  \textbf{Auth} & \textbf{Model} \\
 \midrule
-\texttt{/health}      & GET & \texttt{\{"status":"ok",
-  "uptime\_seconds":N\}} & No \\
-\texttt{/ca.crt}      & GET & CA certificate PEM (TOFU bootstrap) & No \\
-\texttt{/search}      & GET & Hybrid search
-  (\field{q}, \field{limit}, \field{collection}, \field{page\_type}, \field{source\_format}, \field{agent\_handle}, \field{memory\_type}) & Yes \\
-\texttt{/documents}   & GET & List indexed documents & Yes \\
-\texttt{/collections} & GET & List collections & Yes \\
-\texttt{/status}      & GET & Database statistics & Yes \\
-\texttt{/mcp}         & WS  & MCP JSON-RPC over WebSocket & Yes \\
+\texttt{/health}       & GET  & Server uptime and status         & No  & sync \\
+\texttt{/ca.crt}       & GET  & CA certificate PEM (TOFU)        & No  & sync \\
+\texttt{/search}       & GET  & Hybrid search                    & Yes & sync \\
+\texttt{/show}         & GET  & Document metadata or page text   & Yes & sync \\
+\texttt{/documents}    & GET, DELETE & List or delete documents   & Yes & sync \\
+\texttt{/collections}  & GET, DELETE & List or delete collections & Yes & sync \\
+\texttt{/registrations}& GET, POST, DELETE & Manage directory registrations & Yes & sync \\
+\texttt{/databases}    & GET  & List named databases             & Yes & sync \\
+\texttt{/status}       & GET  & Database statistics               & Yes & sync \\
+\texttt{/use}          & POST & Switch active database           & Yes & sync \\
+\texttt{/remember}     & POST & Ingest inline content            & Yes & sync \\
+\texttt{/ingest}       & POST & Ingest URL (returns 202)         & Yes & async \\
+\texttt{/ingest/\{id\}}& GET  & Poll ingest task status          & Yes & --- \\
+\texttt{/sync}         & POST & Sync registrations (returns 202) & Yes & async \\
+\texttt{/sync/\{id\}}  & GET  & Poll sync task status            & Yes & --- \\
+\texttt{/mcp}          & WS   & MCP JSON-RPC over WebSocket      & Yes & --- \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-\textbf{Planned endpoints} (DES-021, epic quarry-g0ed): \texttt{GET /show},
-\texttt{POST /ingest}, \texttt{POST /remember}, \texttt{DELETE /documents},
-\texttt{DELETE /collections}, \texttt{GET|POST|DELETE /registrations},
-\texttt{POST /sync}, \texttt{GET /databases}, \texttt{POST /use}.
+See Appendix~\ref{app:concurrency} for the full concurrency matrix
+across HTTP, CLI, and MCP surfaces.
 
 \subsection{Port File}
 
@@ -1093,5 +1098,142 @@ The specification covers:
 
 The specification can be type-checked with \texttt{fuzz -t
 claude-code-quarry.tex}.
+
+% ===================================================================
+\appendix
+% ===================================================================
+
+\section{Operation Concurrency Model}
+\label{app:concurrency}
+
+Every quarry operation is exposed on up to three surfaces: the HTTP
+API (daemon), the CLI, and the MCP server (stdio or WebSocket).  The
+concurrency model differs by surface because each has different
+constraints: HTTP connections time out, MCP tool calls block the LLM
+response stream, and CLI commands run in a user's terminal.
+
+Table~\ref{tab:concurrency} classifies each operation.  The
+\textbf{Client model} column describes what the caller experiences:
+
+\begin{description}[style=nextline,leftmargin=2.5cm]
+  \item[sync] The caller blocks until the operation completes and
+    receives the result inline.
+  \item[fire-and-forget] The caller receives an acknowledgement
+    immediately (HTTP~202 or a short string).  Work runs in the
+    background; the caller polls or ignores the outcome.
+  \item[---] The operation is not available on that surface.
+\end{description}
+
+\subsection{Concurrency Matrix}
+
+\begin{longtable}{l l l l l}
+\caption{Operation concurrency by surface.
+  \emph{Long-running} = involves network~I/O, embedding, or bulk
+  LanceDB writes.}\label{tab:concurrency} \\
+\toprule
+\textbf{Operation} & \textbf{HTTP API} & \textbf{CLI (local)}
+  & \textbf{CLI (remote)} & \textbf{MCP} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Operation} & \textbf{HTTP API} & \textbf{CLI (local)}
+  & \textbf{CLI (remote)} & \textbf{MCP} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+%
+% --- Read operations (fast, sync everywhere) ---
+\multicolumn{5}{l}{\emph{Read operations}} \\
+\midrule
+find (search)       & sync   & sync & sync & sync \\
+show                & sync   & sync & sync & sync \\
+status              & sync   & sync & sync & sync \\
+list documents      & sync   & sync & sync & sync \\
+list collections    & sync   & sync & sync & sync \\
+list registrations  & sync   & sync & sync & sync \\
+list databases      & sync   & sync & sync & sync \\
+health              & sync   & ---  & ---  & ---  \\
+\midrule
+%
+% --- Write operations (short, sync acceptable) ---
+\multicolumn{5}{l}{\emph{Short write operations}} \\
+\midrule
+register            & sync   & sync & sync & fire-and-forget \\
+deregister          & sync   & sync & sync & fire-and-forget \\
+delete (document)   & sync   & sync & sync & fire-and-forget \\
+delete (collection) & sync   & sync & sync & fire-and-forget \\
+use (switch db)     & sync   & sync & sync & sync \\
+\midrule
+%
+% --- Long-running operations ---
+\multicolumn{5}{l}{\emph{Long-running operations}} \\
+\midrule
+ingest (URL)        & fire-and-forget & sync & fire-and-forget
+                    & fire-and-forget \\
+ingest (file)       & ---    & sync & ---  & fire-and-forget \\
+remember            & sync   & sync & sync & fire-and-forget \\
+sync                & fire-and-forget & sync & fire-and-forget
+                    & fire-and-forget \\
+optimize            & ---    & sync & ---  & ---  \\
+\end{longtable}
+
+\subsection{Design Rationale}
+
+\textbf{Read operations} are synchronous on all surfaces.  Hybrid
+search (embedding + vector similarity + BM25) completes in
+$<$100\,ms after model load; the overhead of task tracking would
+exceed the operation itself.
+
+\textbf{Short writes} (register, deregister, delete) are synchronous
+on HTTP and CLI because they complete in milliseconds.  MCP uses
+fire-and-forget to avoid blocking the LLM response stream, even for
+fast operations --- the bounded thread pool (4~workers) is cheap
+insurance.
+
+\textbf{Long-running operations} must be fire-and-forget on HTTP
+because the CLI client has a finite connection timeout.  Sitemap
+crawls, multi-file syncs, and large-document embedding routinely
+exceed 15~seconds.
+
+\begin{itemize}
+  \item \textbf{Ingest} and \textbf{sync} use the 202~Accepted
+    pattern: \texttt{POST} returns a \field{task\_id} immediately;
+    \texttt{GET /ingest/\{task\_id\}} or
+    \texttt{GET /sync/\{task\_id\}} returns
+    \texttt{running}/\texttt{completed}/\texttt{failed} status.
+  \item \textbf{Sync} rejects concurrent requests with HTTP~409
+    because a second sync against the same registrations would
+    race on LanceDB writes.
+  \item \textbf{Ingest} allows concurrent requests --- each operates
+    on independent documents and gets its own task.
+  \item \textbf{Remember} remains synchronous on HTTP because inline
+    content is already in memory; no network fetch is required.  If
+    embedding latency becomes a concern for very large inputs, it
+    should follow the same 202 pattern.
+  \item \textbf{Optimize} is CLI-only (no HTTP or MCP surface).  It
+    runs LanceDB compaction and index rebuilds, which are
+    CPU-intensive and should not be triggered remotely without
+    explicit intent.
+\end{itemize}
+
+\subsection{Task Lifecycle}
+
+Background tasks (ingest, sync) follow the same lifecycle:
+
+\begin{enumerate}
+  \item \texttt{POST} validates input, creates a \texttt{TaskState}
+    record on the server context, spawns an \texttt{asyncio.Task}
+    wrapping \texttt{run\_in\_threadpool()}, and returns HTTP~202
+    with \field{task\_id} and \field{status}~=~\texttt{accepted}.
+  \item The background task updates \field{status} to
+    \texttt{completed} (with \field{results}) or \texttt{failed}
+    (with \field{error}) on completion.
+  \item A \texttt{finally} guard marks any task that exits without
+    setting a terminal status as \texttt{failed}.
+  \item \texttt{CancelledError} is caught before \texttt{Exception}
+    to ensure clean shutdown on server stop.
+  \item The CLI prints the \field{task\_id} and exits~0 (fire-and-forget).
+\end{enumerate}
 
 \end{document}

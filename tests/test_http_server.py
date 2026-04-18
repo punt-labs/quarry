@@ -947,15 +947,14 @@ class TestIngest:
                 "quarry.http_server.socket_module.getaddrinfo",
                 side_effect=_fake_public_addrinfo,
             ),
-            patch(
-                "quarry.pipeline.ingest_auto", return_value=mock_result
-            ) as mock_ingest,
+            patch("quarry.pipeline.ingest_auto", return_value=mock_result),
         ):
             resp = client.post("/ingest", json={"source": "https://example.com/docs"})
 
-        assert resp.status_code == 200
-        assert resp.json() == mock_result
-        mock_ingest.assert_called_once()
+        assert resp.status_code == 202
+        data = resp.json()
+        assert data["status"] == "accepted"
+        assert data["task_id"].startswith("ingest-")
 
     def test_missing_source_returns_400(self, client: TestClient) -> None:
         resp = client.post("/ingest", json={})
@@ -990,7 +989,7 @@ class TestIngest:
                 return_value={"document_name": "d", "collection": "c", "chunks": 1},
             ) as mock_ingest,
         ):
-            client.post(
+            resp = client.post(
                 "/ingest",
                 json={
                     "source": "https://example.com/docs",
@@ -1002,6 +1001,11 @@ class TestIngest:
                 },
             )
 
+        assert resp.status_code == 202
+        # The background task runs within the TestClient's event loop,
+        # so ingest_auto will have been called by the time the client
+        # context exits.
+        assert mock_ingest.call_count == 1
         args, kwargs = mock_ingest.call_args
         assert args[0] == "https://example.com/docs"
         assert kwargs["overwrite"] is True
@@ -1085,8 +1089,8 @@ class TestIngest:
         assert resp.status_code == 400
         assert "rejected" in resp.json()["error"].lower()
 
-    def test_pipeline_value_error_returns_400(self, client: TestClient) -> None:
-        """ingest_auto raising ValueError maps to HTTP 400."""
+    def test_pipeline_value_error_marks_task_failed(self, client: TestClient) -> None:
+        """ingest_auto raising ValueError marks the task as failed."""
         with (
             patch(
                 "quarry.http_server.socket_module.getaddrinfo",
@@ -1098,11 +1102,17 @@ class TestIngest:
             ),
         ):
             resp = client.post("/ingest", json={"source": "https://example.com/"})
-        assert resp.status_code == 400
-        assert "unsupported URL" in resp.json()["error"]
+        assert resp.status_code == 202
+        task_id = resp.json()["task_id"]
+        # Background task should have run and failed within the TestClient.
+        status_resp = client.get(f"/ingest/{task_id}")
+        assert status_resp.status_code == 200
+        data = status_resp.json()
+        assert data["status"] == "failed"
+        assert "unsupported URL" in data["error"]
 
-    def test_pipeline_os_error_returns_502(self, client: TestClient) -> None:
-        """ingest_auto raising OSError maps to HTTP 502 (bad gateway)."""
+    def test_pipeline_os_error_marks_task_failed(self, client: TestClient) -> None:
+        """ingest_auto raising OSError marks the task as failed."""
         with (
             patch(
                 "quarry.http_server.socket_module.getaddrinfo",
@@ -1114,8 +1124,13 @@ class TestIngest:
             ),
         ):
             resp = client.post("/ingest", json={"source": "https://example.com/"})
-        assert resp.status_code == 502
-        assert "upstream refused connection" in resp.json()["error"]
+        assert resp.status_code == 202
+        task_id = resp.json()["task_id"]
+        status_resp = client.get(f"/ingest/{task_id}")
+        assert status_resp.status_code == 200
+        data = status_resp.json()
+        assert data["status"] == "failed"
+        assert "upstream refused connection" in data["error"]
 
     def test_rejects_oversized_body(self, client: TestClient) -> None:
         """Ingest body > 1 MB must be rejected with HTTP 413."""
@@ -1155,14 +1170,12 @@ class TestIngest:
                 "quarry.http_server.socket_module.getaddrinfo",
                 side_effect=_fake_public_addrinfo,
             ),
-            patch(
-                "quarry.pipeline.ingest_auto", return_value=mock_result
-            ) as mock_ingest,
+            patch("quarry.pipeline.ingest_auto", return_value=mock_result),
         ):
             resp = client.post("/ingest", json={"source": "HTTPS://example.com/docs"})
 
-        assert resp.status_code == 200
-        mock_ingest.assert_called_once()
+        assert resp.status_code == 202
+        assert resp.json()["task_id"].startswith("ingest-")
 
     def test_rejects_cgnat(self, client: TestClient) -> None:
         """RFC 6598 CGNAT addresses (100.64.0.0/10) must be blocked."""
@@ -1868,7 +1881,7 @@ class TestSyncGenericFailure:
         assert "embedder crashed" in body["error"]
         assert "remember failed" in body["error"]
 
-    def test_ingest_runtime_error_returns_500_json(self, client: TestClient) -> None:
+    def test_ingest_runtime_error_marks_task_failed(self, client: TestClient) -> None:
         with (
             patch(
                 "quarry.http_server.socket_module.getaddrinfo",
@@ -1883,7 +1896,9 @@ class TestSyncGenericFailure:
                 "/ingest",
                 json={"source": "https://example.com/"},
             )
-        assert resp.status_code == 500
-        body = resp.json()
+        assert resp.status_code == 202
+        task_id = resp.json()["task_id"]
+        status_resp = client.get(f"/ingest/{task_id}")
+        body = status_resp.json()
+        assert body["status"] == "failed"
         assert "embedder crashed" in body["error"]
-        assert "ingest failed" in body["error"]

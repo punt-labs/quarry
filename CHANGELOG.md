@@ -14,6 +14,21 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- **tool**: `POST /ingest` is now async — returns 202 + task_id
+  immediately, with `GET /ingest/{task_id}` for status polling. The
+  previous synchronous endpoint caused CLI timeouts on sitemap crawls
+  exceeding the 15s default. Multiple concurrent ingests are allowed
+  (each gets its own task). CLI uses fire-and-forget pattern matching
+  `/sync`.
+
+### Added
+
+- **docs**: Operation concurrency model appendix in architecture.tex
+  classifying every operation across HTTP, CLI, and MCP surfaces as
+  synchronous or fire-and-forget.
+
 ## [1.14.0] - 2026-04-17
 
 ### Fixed

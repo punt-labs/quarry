@@ -23,7 +23,7 @@ from quarry.database import (
     count_fragments,
     optimize_table,
 )
-from quarry.http_server import SyncTaskState, _QuarryContext, build_app
+from quarry.http_server import IngestTaskState, SyncTaskState, _QuarryContext, build_app
 from quarry.models import Chunk
 from quarry.sync_registry import (
     list_registrations,
@@ -230,6 +230,64 @@ class TestRegistrationSubsumption:
         regs = list_registrations(conn)
         assert len(regs) == 1
         assert regs[0].collection == "root"
+        conn.close()
+
+    def test_deeply_nested_child_rejected(self, tmp_path: Path) -> None:
+        """Grandchild /a/b/c/d is rejected when /a is registered."""
+        conn = open_registry(tmp_path / "r.db")
+        ancestor = tmp_path / "a"
+        ancestor.mkdir()
+        deep = ancestor / "b" / "c" / "d"
+        deep.mkdir(parents=True)
+
+        register_directory(conn, ancestor, "ancestor")
+
+        with pytest.raises(ValueError, match="already covered by parent"):
+            register_directory(conn, deep, "deep")
+        conn.close()
+
+    def test_grandparent_subsumes_grandchild(self, tmp_path: Path) -> None:
+        """Register /a/b/c, then /a — grandchild is removed."""
+        conn = open_registry(tmp_path / "r.db")
+        grandparent = tmp_path / "a"
+        grandparent.mkdir()
+        grandchild = grandparent / "b" / "c"
+        grandchild.mkdir(parents=True)
+
+        register_directory(conn, grandchild, "gc")
+        assert len(list_registrations(conn)) == 1
+
+        register_directory(conn, grandparent, "gp")
+        regs = list_registrations(conn)
+        assert len(regs) == 1
+        assert regs[0].collection == "gp"
+        conn.close()
+
+    def test_subsumption_is_transactional_on_insert_failure(
+        self, tmp_path: Path
+    ) -> None:
+        """If parent INSERT fails, children are NOT deregistered."""
+        conn = open_registry(tmp_path / "r.db")
+        parent = tmp_path / "parent"
+        parent.mkdir()
+        child = parent / "child"
+        child.mkdir()
+
+        register_directory(conn, child, "child-col")
+
+        # Register a different directory with the collection name we'll
+        # try to use for the parent — forces a uniqueness violation.
+        other = tmp_path / "other"
+        other.mkdir()
+        register_directory(conn, other, "taken-name")
+
+        with pytest.raises(ValueError, match="already in use"):
+            register_directory(conn, parent, "taken-name")
+
+        # Child must still be registered — rollback preserved it.
+        regs = list_registrations(conn)
+        collections = {r.collection for r in regs}
+        assert "child-col" in collections
         conn.close()
 
 
@@ -473,3 +531,119 @@ class TestAsyncSyncEndpoint:
         assert resp.status_code == 409
         data = resp.json()
         assert data["task_id"] == "sync-running"
+
+
+# ---------------------------------------------------------------------------
+# Async ingest endpoint
+# ---------------------------------------------------------------------------
+
+
+def _fake_public_addrinfo(
+    _host: str,
+    *_args: object,
+    **_kwargs: object,
+) -> list[tuple[object, object, object, str, tuple[str, int]]]:
+    """Stand in for socket.getaddrinfo() — resolves every host to 93.184.216.34."""
+    return [(None, None, None, "", ("93.184.216.34", 0))]
+
+
+class TestAsyncIngestEndpoint:
+    """POST /ingest returns 202 + task_id; GET /ingest/<id> returns status."""
+
+    def test_post_returns_202_with_task_id(self, tmp_path: Path) -> None:
+        client = _make_client(tmp_path)
+        with (
+            patch(
+                "quarry.http_server.socket_module.getaddrinfo",
+                side_effect=_fake_public_addrinfo,
+            ),
+            patch(
+                "quarry.pipeline.ingest_auto",
+                return_value={"document_name": "x", "chunks": 1},
+            ),
+        ):
+            resp = client.post("/ingest", json={"source": "https://example.com/docs"})
+        assert resp.status_code == 202
+        data = resp.json()
+        assert "task_id" in data
+        assert data["status"] == "accepted"
+        assert data["task_id"].startswith("ingest-")
+
+    def test_get_unknown_task_returns_404(self, tmp_path: Path) -> None:
+        client = _make_client(tmp_path)
+        resp = client.get("/ingest/nonexistent")
+        assert resp.status_code == 404
+
+    def test_get_running_task(self, tmp_path: Path) -> None:
+        settings = _mock_settings(tmp_path)
+        ctx = _QuarryContext(settings)
+        ctx.__dict__["db"] = _SHARED_DB
+        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        ctx.ingest_tasks["ingest-abc"] = IngestTaskState(
+            task_id="ingest-abc", status="running"
+        )
+
+        client = TestClient(build_app(ctx), raise_server_exceptions=False)
+        resp = client.get("/ingest/ingest-abc")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "running"
+        assert data["task_id"] == "ingest-abc"
+
+    def test_get_completed_task_includes_results(self, tmp_path: Path) -> None:
+        settings = _mock_settings(tmp_path)
+        ctx = _QuarryContext(settings)
+        ctx.__dict__["db"] = _SHARED_DB
+        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        ctx.ingest_tasks["ingest-done"] = IngestTaskState(
+            task_id="ingest-done",
+            status="completed",
+            results={"document_name": "example.com", "chunks": 5},
+        )
+
+        client = TestClient(build_app(ctx), raise_server_exceptions=False)
+        resp = client.get("/ingest/ingest-done")
+        data = resp.json()
+        assert data["status"] == "completed"
+        assert data["results"]["document_name"] == "example.com"
+        assert data["results"]["chunks"] == 5
+
+    def test_get_failed_task_includes_error(self, tmp_path: Path) -> None:
+        settings = _mock_settings(tmp_path)
+        ctx = _QuarryContext(settings)
+        ctx.__dict__["db"] = _SHARED_DB
+        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        ctx.ingest_tasks["ingest-bad"] = IngestTaskState(
+            task_id="ingest-bad",
+            status="failed",
+            error="connection timed out",
+        )
+
+        client = TestClient(build_app(ctx), raise_server_exceptions=False)
+        resp = client.get("/ingest/ingest-bad")
+        data = resp.json()
+        assert data["status"] == "failed"
+        assert data["error"] == "connection timed out"
+
+    def test_concurrent_ingests_allowed(self, tmp_path: Path) -> None:
+        """Two POST /ingest requests should both return 202 with different task_ids."""
+        client = _make_client(tmp_path)
+        with (
+            patch(
+                "quarry.http_server.socket_module.getaddrinfo",
+                side_effect=_fake_public_addrinfo,
+            ),
+            patch(
+                "quarry.pipeline.ingest_auto",
+                return_value={"document_name": "x", "chunks": 1},
+            ),
+        ):
+            resp1 = client.post("/ingest", json={"source": "https://example.com/a"})
+            resp2 = client.post("/ingest", json={"source": "https://example.com/b"})
+        assert resp1.status_code == 202
+        assert resp2.status_code == 202
+        id1 = resp1.json()["task_id"]
+        id2 = resp2.json()["task_id"]
+        assert id1 != id2
+        assert id1.startswith("ingest-")
+        assert id2.startswith("ingest-")

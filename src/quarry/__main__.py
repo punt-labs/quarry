@@ -628,6 +628,8 @@ def ingest_cmd(
             "memory_type": memory_type,
             "summary": summary,
         }
+        # Fire-and-forget: POST /ingest returns 202 with task_id.
+        # The CLI prints the task_id and exits immediately.
         try:
             remote_resp = _remote_https_request(
                 "POST", "/ingest", proxy_config, body=body
@@ -635,12 +637,12 @@ def ingest_cmd(
         except RemoteError as exc:
             err_console.print(f"Error: {exc}", style="red")
             raise typer.Exit(code=1) from exc
-        _emit(remote_resp, json.dumps(remote_resp, indent=2))
-        remote_errors_raw = remote_resp.get("errors", [])
-        if isinstance(remote_errors_raw, list):
-            for err_msg in remote_errors_raw:
-                err_console.print(f"  {err_msg}", style="red")
-        _exit_on_ingest_failure(remote_resp)
+        task_id = remote_resp.get("task_id", "")
+        status = remote_resp.get("status", "")
+        _emit(
+            remote_resp,
+            f"Ingest {status}: task_id={task_id}",
+        )
         return
 
     settings = _resolved_settings()

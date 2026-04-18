@@ -241,6 +241,16 @@ class SyncTaskState:
     error: str = ""
 
 
+@dataclass
+class IngestTaskState:
+    """Tracks the state of an in-progress or completed background ingest."""
+
+    task_id: str
+    status: str = "running"
+    results: dict[str, object] = field(default_factory=dict)
+    error: str = ""
+
+
 class _QuarryContext:
     """Shared state for the HTTP server: settings, database, embeddings."""
 
@@ -258,6 +268,10 @@ class _QuarryContext:
         # Fix 1 + Fix 5: track the current sync task for concurrency control.
         self.sync_task: SyncTaskState | None = None
         self.sync_task_ref: asyncio.Task[None] | None = None
+        # Ingest tasks — multiple concurrent ingests are allowed, each
+        # tracked independently by task_id.
+        self.ingest_tasks: dict[str, IngestTaskState] = {}
+        self.ingest_task_refs: dict[str, asyncio.Task[None]] = {}
 
     @cached_property
     def db(self) -> LanceDB:
@@ -528,7 +542,13 @@ async def _remember_route(request: Request) -> JSONResponse:
 
 
 async def _ingest_route(request: Request) -> JSONResponse:
-    """Ingest a URL. Body: {source, ...optional}. File upload not supported."""
+    """Ingest a URL as a background task.
+
+    Body: {source, ...optional}. File upload not supported.
+    Returns 202 Accepted immediately with a task_id; the actual ingest
+    runs as an asyncio background task.  ``GET /ingest/<task_id>`` returns
+    the task status.  Unlike sync, multiple concurrent ingests are allowed.
+    """
     auth_resp = _check_auth(request)
     if auth_resp is not None:
         return auth_resp
@@ -567,11 +587,67 @@ async def _ingest_route(request: Request) -> JSONResponse:
     memory_type = body.get("memory_type") or ""
     summary = body.get("summary") or ""
 
+    ctx = _ctx(request)
+    task_id = f"ingest-{uuid.uuid4().hex[:12]}"
+    state = IngestTaskState(task_id=task_id)
+    ctx.ingest_tasks[task_id] = state
+    ctx.ingest_task_refs[task_id] = asyncio.create_task(
+        _run_ingest_task(
+            ctx,
+            state,
+            source=source,
+            overwrite=overwrite,
+            collection=str(collection),
+            agent_handle=str(agent_handle),
+            memory_type=str(memory_type),
+            summary=str(summary),
+        )
+    )
+
+    return JSONResponse(
+        {"task_id": task_id, "status": "accepted"},
+        status_code=202,
+    )
+
+
+def _ingest_status_route(request: Request) -> JSONResponse:
+    """Return the status of an ingest task by task_id."""
+    auth_resp = _check_auth(request)
+    if auth_resp is not None:
+        return auth_resp
+
+    task_id = request.path_params.get("task_id", "")
+    ctx = _ctx(request)
+
+    state = ctx.ingest_tasks.get(task_id)
+    if state is None:
+        return JSONResponse({"error": "Task not found"}, status_code=404)
+
+    response: dict[str, object] = {
+        "task_id": state.task_id,
+        "status": state.status,
+    }
+    if state.status == "completed":
+        response["results"] = state.results
+    elif state.status == "failed":
+        response["error"] = state.error
+    return JSONResponse(response)
+
+
+async def _run_ingest_task(
+    ctx: _QuarryContext,
+    state: IngestTaskState,
+    *,
+    source: str,
+    overwrite: bool,
+    collection: str,
+    agent_handle: str,
+    memory_type: str,
+    summary: str,
+) -> None:
+    """Execute ingest_auto in a background thread and update *state*."""
     from quarry.pipeline import ingest_auto  # noqa: PLC0415
 
-    ctx = _ctx(request)
-    # ingest_auto fetches the URL, embeds pages, and writes to LanceDB —
-    # all synchronous blocking work.  Offload to the threadpool.
     try:
         result = await run_in_threadpool(
             ingest_auto,
@@ -579,14 +655,27 @@ async def _ingest_route(request: Request) -> JSONResponse:
             ctx.db,
             ctx.settings,
             overwrite=overwrite,
-            collection=str(collection),
-            agent_handle=str(agent_handle),
-            memory_type=str(memory_type),
-            summary=str(summary),
+            collection=collection,
+            agent_handle=agent_handle,
+            memory_type=memory_type,
+            summary=summary,
         )
-    except Exception as exc:  # noqa: BLE001 — routed through _pipeline_error_response
-        return _pipeline_error_response(exc, "ingest")
-    return JSONResponse(dict(result))
+        state.status = "completed"
+        state.results = dict(result)
+    except asyncio.CancelledError:
+        state.status = "failed"
+        state.error = "task was cancelled"
+        raise
+    except Exception as exc:
+        logger.exception("Background ingest failed")
+        state.status = "failed"
+        state.error = str(exc)
+    finally:
+        # Belt-and-suspenders: if a future code path exits the try
+        # without setting a terminal status, mark it failed.
+        if state.status == "running":
+            state.status = "failed"
+            state.error = "task exited without setting terminal status"
 
 
 async def _run_sync_task(ctx: _QuarryContext, state: SyncTaskState) -> None:
@@ -1104,6 +1193,7 @@ def build_app(
         Route("/collections", _collections_route, methods=["GET", "DELETE"]),
         Route("/remember", _remember_route, methods=["POST"]),
         Route("/ingest", _ingest_route, methods=["POST"]),
+        Route("/ingest/{task_id}", _ingest_status_route, methods=["GET"]),
         Route("/sync", _sync_route, methods=["POST"]),
         Route("/sync/{task_id}", _sync_status_route, methods=["GET"]),
         Route("/databases", _databases_route, methods=["GET"]),

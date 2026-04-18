@@ -2344,9 +2344,8 @@ class TestIngestCmdRemote:
 
     def test_remote_routing_url_posts_json_body(self):
         remote_resp = {
-            "document_name": "https://example.com",
-            "collection": "example.com",
-            "chunks": 5,
+            "task_id": "ingest-abc123",
+            "status": "accepted",
         }
         proxy_config = {
             "quarry": {
@@ -2379,6 +2378,7 @@ class TestIngestCmdRemote:
             )
 
         assert result.exit_code == 0
+        assert "ingest-abc123" in result.output
         mock_req.assert_called_once()
         method = mock_req.call_args[0][0]
         path = mock_req.call_args[0][1]
@@ -2393,7 +2393,7 @@ class TestIngestCmdRemote:
         assert body["summary"] == "one line"
 
     def test_remote_routing_url_does_not_call_local(self):
-        remote_resp = {"document_name": "x", "collection": "c", "chunks": 1}
+        remote_resp = {"task_id": "ingest-xyz", "status": "accepted"}
         proxy_config = {
             "quarry": {
                 "url": "wss://quarry.example.com:8420/mcp",
@@ -2450,12 +2450,10 @@ class TestIngestCmdRemote:
         assert result.exit_code == 1
         assert "boom" in result.output
 
-    def test_remote_prints_errors_list(self):
+    def test_remote_prints_task_id(self):
         remote_resp = {
-            "document_name": "x",
-            "collection": "c",
-            "chunks": 3,
-            "errors": ["page /broken: 404", "page /gone: 410"],
+            "task_id": "ingest-t1234",
+            "status": "accepted",
         }
         proxy_config = {
             "quarry": {
@@ -2470,8 +2468,7 @@ class TestIngestCmdRemote:
             result = runner.invoke(app, ["ingest", "https://example.com/"])
 
         assert result.exit_code == 0
-        assert "404" in result.output
-        assert "410" in result.output
+        assert "ingest-t1234" in result.output
 
     def test_local_fallback_when_no_proxy_url(self):
         with (
@@ -2488,15 +2485,12 @@ class TestIngestCmdRemote:
         assert result.exit_code == 0
         mock_local.assert_called_once()
 
-    def test_json_equivalence_remote_local(self):
-        """Remote and local paths emit the same top-level JSON keys for URLs."""
-        mock_result = {
-            "document_name": "https://example.com",
-            "collection": "example.com",
-            "chunks": 5,
+    def test_json_remote_emits_task_id_and_status(self):
+        """Remote path emits task_id and status in JSON mode."""
+        remote_resp = {
+            "task_id": "ingest-j5678",
+            "status": "accepted",
         }
-
-        # Remote path
         proxy_config = {
             "quarry": {
                 "url": "wss://quarry.example.com:8420/mcp",
@@ -2505,28 +2499,14 @@ class TestIngestCmdRemote:
         }
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
-            patch("quarry.__main__._remote_https_request", return_value=mock_result),
+            patch("quarry.__main__._remote_https_request", return_value=remote_resp),
         ):
-            remote_res = runner.invoke(
-                app, ["--json", "ingest", "https://example.com/"]
-            )
+            result = runner.invoke(app, ["--json", "ingest", "https://example.com/"])
         _reset_globals()
-        assert remote_res.exit_code == 0
-        remote_keys = set(json.loads(remote_res.output).keys())
-
-        # Local path
-        with (
-            patch("quarry.__main__.read_proxy_config", return_value={}),
-            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.get_db"),
-            patch("quarry.__main__.ingest_auto", return_value=mock_result),
-        ):
-            local_res = runner.invoke(app, ["--json", "ingest", "https://example.com/"])
-        _reset_globals()
-        assert local_res.exit_code == 0
-        local_keys = set(json.loads(local_res.output).keys())
-
-        assert remote_keys == local_keys
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["task_id"] == "ingest-j5678"
+        assert data["status"] == "accepted"
 
 
 _REMOTE_INNER_CONFIG = {
@@ -4793,12 +4773,11 @@ class TestIngestExitCodes:
         assert result.exit_code == 0
         assert "404" in result.output
 
-    def test_remote_ingest_exits_1_on_errors_with_zero_chunks(self) -> None:
+    def test_remote_ingest_fire_and_forget_exits_0(self) -> None:
+        """Remote ingest is fire-and-forget: always exits 0 on 202."""
         remote_resp = {
-            "document_name": "x",
-            "collection": "c",
-            "chunks": 0,
-            "errors": ["fetch failed"],
+            "task_id": "ingest-err42",
+            "status": "accepted",
         }
         proxy_config = {
             "quarry": {
@@ -4811,8 +4790,8 @@ class TestIngestExitCodes:
             patch("quarry.__main__._remote_https_request", return_value=remote_resp),
         ):
             result = runner.invoke(app, ["ingest", "https://example.com/"])
-        assert result.exit_code == 1
-        assert "fetch failed" in result.output
+        assert result.exit_code == 0
+        assert "ingest-err42" in result.output
 
     def test_local_remember_exits_1_on_errors_with_zero_chunks(self) -> None:
         mock_result = {
