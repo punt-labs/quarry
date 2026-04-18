@@ -14,6 +14,7 @@ import pytest
 from quarry.config import DEFAULT_PORT
 from quarry.service import (
     _LABEL,
+    _MALLOC_CONF,
     _get_tls_hostname,
     _launchd_install,
     _launchd_plist_content,
@@ -214,6 +215,14 @@ class TestWriteEnvFile:
         content = env_file.read_text()
         assert 'QUARRY_API_KEY="s3cr3t"' in content
 
+    def test_writes_malloc_conf(self, tmp_path: Path) -> None:
+        """_write_env_file writes MALLOC_CONF for jemalloc memory tuning."""
+        env_file = tmp_path / "quarry.env"
+        with patch("quarry.service._ENV_FILE", env_file):
+            _write_env_file("k1")
+        content = env_file.read_text()
+        assert f'MALLOC_CONF="{_MALLOC_CONF}"' in content
+
     def test_key_containing_hash_not_truncated(self, tmp_path: Path) -> None:
         """A key containing # must be written in full, not truncated at the #.
 
@@ -305,10 +314,24 @@ class TestServiceFileApiKey:
         # Must NOT appear in ProgramArguments args
         assert "--api-key" not in content
 
-    def test_launchd_plist_no_env_vars_when_no_key(
+    def test_launchd_plist_contains_malloc_conf_with_api_key(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """When QUARRY_API_KEY is unset, no EnvironmentVariables block appears."""
+        """_launchd_plist_content() embeds MALLOC_CONF alongside QUARRY_API_KEY."""
+        monkeypatch.setenv("QUARRY_API_KEY", "k1")
+        _make_local_bin_quarry(tmp_path)
+        with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
+            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+        ):
+            content = _launchd_plist_content()
+        assert "MALLOC_CONF" in content
+        assert _MALLOC_CONF in content
+
+    def test_launchd_plist_contains_malloc_conf_without_api_key(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """MALLOC_CONF must appear in plist even when QUARRY_API_KEY is unset."""
         monkeypatch.delenv("QUARRY_API_KEY", raising=False)
         _make_local_bin_quarry(tmp_path)
         with (
@@ -316,6 +339,8 @@ class TestServiceFileApiKey:
             patch("quarry.service.TLS_DIR", tmp_path / "tls"),
         ):
             content = _launchd_plist_content()
+        assert "MALLOC_CONF" in content
+        assert _MALLOC_CONF in content
         assert "QUARRY_API_KEY" not in content
         assert "--api-key" not in content
 

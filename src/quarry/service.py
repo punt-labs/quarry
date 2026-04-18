@@ -31,15 +31,21 @@ _LABEL = "com.punt-labs.quarry"
 _ENV_FILE: Path = Path.home() / ".punt-labs" / "quarry" / "quarry.env"
 
 
-def _write_env_file(api_key: str) -> None:
-    """Write QUARRY_API_KEY to the env file atomically with mode 0600.
+_MALLOC_CONF = "dirty_decay_ms:1000,muzzy_decay_ms:1000"
+
+
+def _write_env_file(api_key: str = "") -> None:
+    """Write daemon env file atomically with mode 0600.
+
+    Always writes MALLOC_CONF (jemalloc tuning).  Writes QUARRY_API_KEY
+    only when *api_key* is non-empty.
 
     Uses os.open() so the file is created with restrictive permissions
     from the start — no chmod race window.  Writes to a .tmp sibling then
     renames into place.
 
     Args:
-        api_key: The API key value to store.
+        api_key: The API key value to store.  Empty string omits the line.
     """
     _ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = _ENV_FILE.with_name(_ENV_FILE.name + ".tmp")
@@ -53,8 +59,10 @@ def _write_env_file(api_key: str) -> None:
         raise
     try:
         with f:
-            escaped = api_key.replace("\\", "\\\\").replace('"', '\\"')
-            f.write(f'QUARRY_API_KEY="{escaped}"\n')
+            if api_key:
+                escaped = api_key.replace("\\", "\\\\").replace('"', '\\"')
+                f.write(f'QUARRY_API_KEY="{escaped}"\n')
+            f.write(f'MALLOC_CONF="{_MALLOC_CONF}"\n')
         tmp_path.replace(_ENV_FILE)
     except BaseException:
         tmp_path.unlink(missing_ok=True)
@@ -131,25 +139,35 @@ def _launchd_plist_content() -> str:
     args = _quarry_exec_args()
     program_args = "\n".join(f"        <string>{_xml_escape(a)}</string>" for a in args)
     log_dir = Path.home() / ".punt-labs" / "quarry" / "logs"
-    # launchd does not support EnvironmentFile — embed the API key directly in the
-    # plist EnvironmentVariables dict.  The plist is written at install time (0700
-    # LaunchAgents dir, 0600 plist) by the installing user, so this matches the
-    # security posture of any other credential in a launchd plist.
+    # launchd does not support EnvironmentFile — embed environment variables
+    # directly in the plist EnvironmentVariables dict.  The plist is written at
+    # install time (0700 LaunchAgents dir, 0600 plist) by the installing user,
+    # so this matches the security posture of any other credential in a launchd plist.
+    #
+    # MALLOC_CONF is always set to tell jemalloc to return freed pages within
+    # 1 second — reduces RSS from ~5.4 GB to ~2.5 GB under Arrow buffer churn.
     api_key = os.environ.get("QUARRY_API_KEY", "").strip()
-    env_vars_block = ""
+    # Do NOT use textwrap.dedent here — the outer dedent computes minimum
+    # indent across ALL lines including the substituted env_vars_block.
+    # A nested dedent produces 0-space lines, defeating the outer dedent.
+    escaped_malloc = _xml_escape(_MALLOC_CONF)
+    env_entries = (
+        "            <key>MALLOC_CONF</key>\n"
+        f"            <string>{escaped_malloc}</string>\n"
+    )
     if api_key:
         escaped_key = _xml_escape(api_key)
-        # Do NOT use textwrap.dedent here — the outer dedent computes minimum
-        # indent across ALL lines including the substituted env_vars_block.
-        # A nested dedent produces 0-space lines, defeating the outer dedent.
-        env_vars_block = (
-            "<key>EnvironmentVariables</key>\n"
-            "        <dict>\n"
+        env_entries += (
             "            <key>QUARRY_API_KEY</key>\n"
             f"            <string>{escaped_key}</string>\n"
-            "        </dict>\n"
-            "        "
         )
+    env_vars_block = (
+        "<key>EnvironmentVariables</key>\n"
+        "        <dict>\n"
+        f"{env_entries}"
+        "        </dict>\n"
+        "        "
+    )
     return textwrap.dedent(f"""\
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -487,12 +505,11 @@ def install() -> str:
 
     plat = detect_platform()
 
-    # Linux: API key written to ~/.punt-labs/quarry/quarry.env (0600) before
-    # service registration so systemd can read it via EnvironmentFile= on first
-    # start.  The key is NOT baked into ExecStart args to stay out of ps output.
-    # macOS: API key embedded in the plist EnvironmentVariables block only —
-    # no env file is written.
-    if api_key and plat == "linux":
+    # Linux: env file always written for MALLOC_CONF (jemalloc tuning).
+    # API key included when set.  The key is NOT baked into ExecStart args
+    # to stay out of ps output.
+    # macOS: both API key and MALLOC_CONF are in the plist EnvironmentVariables.
+    if plat == "linux":
         _write_env_file(api_key)
 
     # Generate TLS certificates before registering the service so that the

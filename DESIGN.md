@@ -633,3 +633,78 @@ Five changes:
 3. **Partial compaction** — LanceDB 0.30 does not support it.
 4. **WebSocket streaming of sync progress** — Over-engineered for a
    background batch operation. Polling is sufficient.
+
+## DES-027: jemalloc Memory Tuning for LanceDB Arrow Buffers
+
+**Date:** 2026-04-18
+**Status:** SETTLED
+**Topic:** Daemon RSS growth from jemalloc arena retention
+
+### Problem
+
+The quarry daemon's RSS grew monotonically — +178 MB per sync cycle,
+reaching 5.4 GB after one day of operation. `gc.collect()` did not
+reclaim the memory. `tracemalloc` (Python-only) showed low Python
+allocation growth. The anonymous heap (4.35 GB) was not file-backed
+(not LanceDB mmap) and not attributable to the ONNX model (~110 MB).
+
+### Root Cause
+
+LanceDB's Rust core links jemalloc as its global allocator.
+`batch_insert_chunks` calls `table.add(records)`, which creates Arrow
+RecordBatches in Rust. After the write completes and the RecordBatch
+is dropped, jemalloc retains the freed memory arenas for potential
+reuse rather than returning them to the OS. With the default decay
+settings (effectively infinite on Linux), freed pages accumulate
+indefinitely.
+
+### Evidence
+
+Profiling the running daemon (PID 2370838, 5.4 GB RSS):
+
+| Metric | Value |
+|--------|-------|
+| VmRSS | 5,548 MB |
+| Pss_Anon | 4,349 MB (not mmap) |
+| ONNX model | ~110 MB |
+| Database on disk | 2.7 GB (62K chunks) |
+| Unexplained heap | ~4.2 GB |
+
+After restarting with `MALLOC_CONF=dirty_decay_ms:1000,muzzy_decay_ms:1000`:
+
+| Metric | Before | After |
+|--------|--------|-------|
+| Fresh start RSS | 671 MB | 671 MB |
+| Post-sync RSS | +178 MB/cycle (cumulative) | Peaks then settles ~2.5 GB |
+| After 1 day | 5.4 GB | ~2.5 GB (stable) |
+
+### Design
+
+Set `MALLOC_CONF=dirty_decay_ms:1000,muzzy_decay_ms:1000` in the
+daemon's environment:
+
+- **Linux**: Written to `~/.punt-labs/quarry/quarry.env` by
+  `_write_env_file()` in `service.py`. Systemd reads it via
+  `EnvironmentFile=`.
+- **macOS**: Set in the launchd plist `EnvironmentVariables` dict.
+
+The values tell jemalloc to return dirty pages (freed but not yet
+returned to OS) and muzzy pages (lazily purged) within 1 second.
+This is the standard tuning for long-running services that do
+periodic bulk allocations — the same approach used by ClickHouse
+and RocksDB deployments.
+
+### Rejected Alternatives
+
+1. **`MALLOC_CONF=dirty_decay_ms:0,muzzy_decay_ms:0`** — Immediate
+   return. Rejected: causes excessive `madvise` syscalls during bulk
+   writes. 1-second decay amortizes the syscall cost.
+2. **Replace jemalloc with glibc malloc** — Not feasible. LanceDB's
+   Rust binary links jemalloc at compile time. We don't control the
+   LanceDB build.
+3. **Use Arrow-native API instead of Python dicts** — Would reduce
+   intermediate allocation pressure but doesn't address jemalloc
+   retention of Arrow's own buffers. A complementary optimization,
+   not a replacement.
+4. **Periodic daemon restart** — Operational workaround, not a fix.
+   The daemon should be able to run indefinitely.
