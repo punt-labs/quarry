@@ -31,7 +31,7 @@ _LABEL = "com.punt-labs.quarry"
 _ENV_FILE: Path = Path.home() / ".punt-labs" / "quarry" / "quarry.env"
 
 
-_MALLOC_CONF = "dirty_decay_ms:1000,muzzy_decay_ms:1000"
+_MALLOC_CONF = "dirty_decay_ms:1000,muzzy_decay_ms:0,narenas:1,tcache:false"
 
 
 def _write_env_file(api_key: str = "") -> None:

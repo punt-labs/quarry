@@ -16,13 +16,12 @@ across `transform`, `index`, and `connector`).
 
 ### Fixed
 
-- **infra**: Daemon service now sets `MALLOC_CONF` to tune jemalloc
-  page retention. LanceDB's Rust core retains freed Arrow buffer
-  arenas indefinitely by default, causing RSS to grow 178 MB per
-  sync cycle (5.4 GB after 1 day). `dirty_decay_ms:1000` and
-  `muzzy_decay_ms:1000` tell jemalloc to return freed pages within
-  1 second, reducing steady-state RSS by 54% (5.4 GB → 2.5 GB).
-  Set in quarry.env (Linux) and launchd plist (macOS).
+- **infra**: Aggressive jemalloc tuning for daemon memory. MALLOC_CONF
+  now sets `narenas:1,tcache:false,dirty_decay_ms:1000,muzzy_decay_ms:0`.
+  LanceDB's Rust core retains freed Arrow buffer arenas indefinitely;
+  this config reduces post-sync RSS from 5.4 GB to 1.1 GB (80%
+  reduction). Empirically tested across 4 variants — single arena +
+  no thread-local cache eliminates fragmentation from batch writes.
 - **index**: `delete_document` called `count_rows()` twice per file
   during sync, scanning all fragment metadata on every deletion.
   On a 62K-row table this added 4-7 seconds per file. Added
