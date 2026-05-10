@@ -1,7 +1,9 @@
 ---
-notify: "y"
-speak: "n"
-voice: "helmut"
+vibe_tags: "[neutral]"
 vibe_signals: ""
-vibe_tags: ""
+notify: "y"
+speak: "y"
+voice: "nila"
+vibe: "neutral"
+vibe_mode: "manual"
 ---
