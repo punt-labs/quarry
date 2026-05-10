@@ -68,7 +68,7 @@ Ten review cycles on the TLS remote-access feature revealed five classes of bugs
 
 Identity: `agent: claude` per `.punt-labs/ethos.yaml`. Sub-agent calls (`Agent(subagent_type=…)`) match ethos identity handles.
 
-Quarry is Python with a heavy ML core (ONNX embeddings, LanceDB vectors), a hybrid search algorithm (vector + BM25 + RRF + temporal decay), a multi-surface API (CLI, MCP stdio + WebSocket, HTTP), and a TLS remote-access feature with a long history of subtle bug classes (see Testing section). Every domain has a clear specialist pair. Worker and evaluator must be distinct handles with no shared role. Claude is the leader, never the evaluator.
+Quarry is Python with a heavy ML core (ONNX embeddings, LanceDB vectors), a hybrid search algorithm (vector + BM25 + RRF + temporal decay), a multi-surface API (CLI, MCP stdio + WebSocket, HTTP), and a TLS remote-access feature with a long history of subtle bug classes (see Testing section). Every domain has a clear specialist pair. Within each row, the worker and evaluator must be distinct handles. Claude is the leader, never the evaluator.
 
 | Task type | Worker | Evaluator |
 |-----------|--------|-----------|
