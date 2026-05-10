@@ -64,6 +64,30 @@ Ten review cycles on the TLS remote-access feature revealed five classes of bugs
 5. **No new cert generation call without asserting** SAN type (IP vs DNS), `not_valid_before` is in the past, and pinned context excludes system roots.
 6. **Shell scripts must pass `shellcheck -x` in CI.** Logic tests via mock quarry binary for any script with conditional branching on quarry subcommand results.
 
+## Ethos & Delegation
+
+Identity: `agent: claude` per `.punt-labs/ethos.yaml`. Sub-agent calls (`Agent(subagent_type=…)`) match ethos identity handles.
+
+Quarry is Python with a heavy ML core (ONNX embeddings, LanceDB vectors), a hybrid search algorithm (vector + BM25 + RRF + temporal decay), a multi-surface API (CLI, MCP stdio + WebSocket, HTTP), and a TLS remote-access feature with a long history of subtle bug classes (see Testing section). Every domain has a clear specialist pair. Worker and evaluator must be distinct handles with no shared role. Claude is the leader, never the evaluator.
+
+| Task type | Worker | Evaluator |
+|-----------|--------|-----------|
+| Embedding pipeline / ONNX provider selection | `kpz` (Karpathy) | `rmh` (Hettinger) |
+| Quantization, GPU/CPU dispatch, model loading | `kpz` | `gvr` (van Rossum) |
+| Search algorithm (hybrid, RRF, temporal decay, BM25) | `kpz` | `rmh` |
+| LanceDB schema / chunks table / migrations | `rmh` | `gvr` |
+| Python implementation (CLI commands, library API) | `rmh` | `gvr` |
+| MCP server (stdio + WebSocket on port 8420) | `rmh` | `mdm` (Pike) |
+| HTTP API / `/search` endpoint / param contracts | `rmh` | `djb` (Bernstein) |
+| TLS / cert generation / pinned-CA contexts | `djb` | `rmh` |
+| Install scripts / launchd / systemd service | `adb` (Lovelace) | `djb` |
+| Agent memory: identity tagging, summary, decay | `rmh` | `kpz` |
+| Document loaders / format ingestion (20+ types) | `gvr` | `rmh` |
+| CLI surface (`quarry find`, `ingest`, `remember`) | `mdm` | `rmh` |
+| Performance / latency / index-build benchmarks | `kpz` | `adb` |
+
+Apply the five recurring bug classes from the Testing section as evaluator checklists — file I/O safety, exception boundaries, remote/local divergence, TLS semantics, install-script logic. Use the `standard` pipeline for any change touching `/search`, the embedding pipeline, or TLS. Use `quick` only for documented bugfixes inside a single module that doesn't cross the local/remote boundary.
+
 ## Key Design Documents
 
 - `DESIGN.md` — ADR log (DES-001 through DES-018)
