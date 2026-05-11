@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -117,6 +118,7 @@ def disable_project(
     )
     from quarry.sync_registry import (  # noqa: PLC0415
         deregister_directory,
+        list_registrations,
         open_registry,
     )
 
@@ -126,6 +128,16 @@ def disable_project(
         collection = _collection_for_cwd_conn(conn, str(directory))  # pyright: ignore[reportPrivateUsage]
         if collection is None:
             msg = f"no registration covers {directory}"
+            raise ValueError(msg)
+
+        # Guard against walk-up match deleting a parent registration.
+        registrations = list_registrations(conn)
+        match = next((r for r in registrations if r.collection == collection), None)
+        if match is not None and match.directory != str(directory):
+            msg = (
+                f"no registration for {directory}; "
+                f"it is covered by parent registration at {match.directory}"
+            )
             raise ValueError(msg)
 
         captures_collection = f"{collection}-captures"
@@ -234,7 +246,11 @@ def _bootstrap_ethos_memory() -> tuple[list[str], list[str], list[str], bool]:
             )
             created.append(handle)
 
-        result = _write_ethos_ext_session_context(quarry_yaml, handle)
+        try:
+            result = _write_ethos_ext_session_context(quarry_yaml, handle)
+        except Exception:  # noqa: BLE001
+            logger.warning("failed to write session context for %s", handle)
+            continue
         if result == "updated":
             updated.append(handle)
         elif result == "already_set":
@@ -244,13 +260,20 @@ def _bootstrap_ethos_memory() -> tuple[list[str], list[str], list[str], bool]:
 
 
 def _write_project_config(directory: Path) -> str:
-    """Write .punt-labs/quarry/config.md. Idempotent: no overwrite.
+    """Write .punt-labs/quarry/config.md atomically. Idempotent: no overwrite.
 
+    Uses O_CREAT | O_EXCL to avoid TOCTOU races.
     Returns the config file path as a string.
     """
     config_dir = directory / ".punt-labs" / "quarry"
     config_dir.mkdir(parents=True, exist_ok=True)
     config_path = config_dir / "config.md"
-    if not config_path.exists():
-        config_path.write_text(_CONFIG_TEMPLATE, encoding="utf-8")
+    try:
+        fd = os.open(str(config_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        try:
+            os.write(fd, _CONFIG_TEMPLATE.encode())
+        finally:
+            os.close(fd)
+    except FileExistsError:
+        pass
     return str(config_path)

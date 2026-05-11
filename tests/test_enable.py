@@ -557,3 +557,171 @@ class TestWriteProjectConfig:
         config.write_text("custom content")
         _write_project_config(tmp_path)
         assert config.read_text() == "custom content"
+
+    def test_atomic_no_overwrite_existing(self, tmp_path: Path) -> None:
+        """Verify O_CREAT|O_EXCL path: pre-existing file is never opened for write."""
+        config_dir = tmp_path / ".punt-labs" / "quarry"
+        config_dir.mkdir(parents=True)
+        config_path = config_dir / "config.md"
+        original = "do not touch\n"
+        config_path.write_text(original)
+
+        _write_project_config(tmp_path)
+
+        assert config_path.read_text() == original
+
+    def test_atomic_fd_closed_on_write_failure(self, tmp_path: Path) -> None:
+        """Verify fd is closed even if os.write raises."""
+        import os as _os
+
+        real_open = _os.open
+
+        captured_fd: list[int] = []
+
+        def tracking_open(path: str, flags: int, mode: int = 0o777) -> int:
+            fd = real_open(path, flags, mode)
+            captured_fd.append(fd)
+            return fd
+
+        with (
+            patch("quarry.enable.os.open", side_effect=tracking_open),
+            patch("quarry.enable.os.write", side_effect=OSError("disk full")),
+            patch("quarry.enable.os.close") as mock_close,
+            pytest.raises(OSError, match="disk full"),
+        ):
+            _write_project_config(tmp_path)
+
+        assert len(captured_fd) == 1
+        mock_close.assert_called_once_with(captured_fd[0])
+
+
+# -----------------------------------------------------------------------
+# T15: disable on child of registered parent raises (not silent deletion)
+# -----------------------------------------------------------------------
+
+
+class TestT15DisableOnChildOfRegisteredParentRaises:
+    def test_disable_on_child_of_registered_parent_raises(self, tmp_path: Path) -> None:
+        parent = tmp_path / "project"
+        parent.mkdir()
+        child = parent / "src"
+        child.mkdir()
+
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+
+        conn = open_registry(settings.registry_path)
+        register_directory(conn, parent, "project")
+        conn.close()
+
+        with (
+            patch(
+                "quarry.config.resolve_db_paths",
+                return_value=settings,
+            ),
+            patch("quarry.config.load_settings", return_value=MagicMock()),
+            pytest.raises(ValueError, match="covered by parent registration"),
+        ):
+            disable_project(child)
+
+        # Verify parent registration was NOT deleted.
+        conn = open_registry(settings.registry_path)
+        regs = list_registrations(conn)
+        conn.close()
+        assert len(regs) == 1
+        assert regs[0].collection == "project"
+
+
+# -----------------------------------------------------------------------
+# T16: _bootstrap_ethos_memory skips bad YAML without crashing
+# -----------------------------------------------------------------------
+
+
+class TestT16BootstrapEthosMemorySkipsBadYaml:
+    def test_skips_bad_yaml_continues(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        identities_dir = tmp_path / "identities"
+        identities_dir.mkdir()
+
+        # Valid identity.
+        (identities_dir / "alice.yaml").write_text("agent: alice\n")
+        # Malformed identity — will cause _write_ethos_ext_session_context to
+        # raise when it tries to yaml.safe_load the quarry.yaml we create for
+        # it (the quarry.yaml itself is valid, so we need to make the ext call
+        # raise). We simulate this by making the ext call raise for "bad".
+        (identities_dir / "bad.yaml").write_text("agent: bad\n")
+
+        monkeypatch.setattr("quarry.enable._GLOBAL_IDENTITIES", identities_dir)
+
+        # Make the session context writer raise for "bad" handle only.
+        original_write = None
+        try:
+            from quarry.doctor import (
+                _write_ethos_ext_session_context as _orig,
+            )
+
+            original_write = _orig
+        except ImportError:
+            pass
+
+        def selective_raise(quarry_yaml: Path, handle: str) -> str:
+            if handle == "bad":
+                msg = "simulated YAML parse failure"
+                raise ValueError(msg)
+            assert original_write is not None
+            return original_write(quarry_yaml, handle)
+
+        monkeypatch.setattr(
+            "quarry.doctor._write_ethos_ext_session_context",
+            selective_raise,
+        )
+
+        created, updated, already_set, skipped = _bootstrap_ethos_memory()
+
+        assert skipped is False
+        # alice was processed.
+        assert "alice" in created
+        # bad was also created (quarry.yaml file written) but the session
+        # context call failed — it should not appear in updated/already_set.
+        assert "bad" in created
+        assert "bad" not in updated
+        assert "bad" not in already_set
+
+        # alice's ext file exists.
+        assert (identities_dir / "alice.ext" / "quarry.yaml").exists()
+        # bad's ext file also exists (file was created before the call failed).
+        assert (identities_dir / "bad.ext" / "quarry.yaml").exists()
+
+
+# -----------------------------------------------------------------------
+# T17: enable with collection override on child of registered parent raises
+# -----------------------------------------------------------------------
+
+
+class TestT17EnableWithOverrideOnChildRaises:
+    def test_override_does_not_bypass_parent_check(self, tmp_path: Path) -> None:
+        parent = tmp_path / "project"
+        parent.mkdir()
+        child = parent / "src"
+        child.mkdir()
+
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+
+        conn = open_registry(settings.registry_path)
+        register_directory(conn, parent, "project")
+        conn.close()
+
+        with (
+            patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
+            patch(
+                "quarry.config.resolve_db_paths",
+                return_value=settings,
+            ),
+            patch("quarry.config.load_settings", return_value=MagicMock()),
+            pytest.raises(ValueError, match="already covered by the registration"),
+        ):
+            enable_project(child, collection_override="custom")
