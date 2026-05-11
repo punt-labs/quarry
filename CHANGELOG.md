@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [1.16.0] - 2026-05-11
+
 ### Added
 
 - **cli**: `quarry enable` and `quarry disable` commands. Single command
