@@ -1003,3 +1003,678 @@ Assert: stdout is valid JSON with expected fields.
 | `tests/test_enable.py` | New: enable/disable unit tests |
 | `tests/test_hooks.py` | Modify: add hook routing tests |
 | `tests/test_enable_cli.py` | New: CLI integration tests |
+
+---
+
+## Implementation Spec
+
+This section refines the design above into a mechanical implementation
+plan. Every function signature, import path, and test fixture is
+specified exactly. Implementation should require no architectural
+judgment.
+
+### S1. Module: `src/quarry/enable.py` (new)
+
+All enable/disable logic lives here. Heavy imports (lancedb, sync
+registry) are top-level -- this is not a hook entry point, so startup
+latency does not matter.
+
+```python
+"""Enable and disable quarry knowledge capture for project directories."""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+```
+
+#### S1.1 Result dataclasses
+
+```python
+@dataclass(frozen=True)
+class EnableResult:
+    """Result of enabling quarry for a project directory."""
+
+    directory: str
+    collection: str
+    captures_collection: str
+    memory_collections: list[str] = field(default_factory=list)
+    config_path: str = ""
+    created_registration: bool = False
+    ethos_skipped: bool = False
+    ethos_updated: list[str] = field(default_factory=list)
+    ethos_already_set: list[str] = field(default_factory=list)
+    ethos_created: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class DisableResult:
+    """Result of disabling quarry for a project directory."""
+
+    directory: str
+    collection: str
+    captures_collection: str
+    deleted_chunks: int = 0
+    config_removed: bool = False
+```
+
+Note: `EnableResult.memory_collections` uses `field(default_factory=list)`
+because mutable default arguments are forbidden on frozen dataclasses.
+
+#### S1.2 `enable_project`
+
+```python
+def enable_project(
+    directory: Path,
+    collection_override: str = "",
+) -> EnableResult:
+```
+
+Implementation steps (refer to design section 1 for rationale):
+
+1. Validate `directory.is_dir()` -- raise `ValueError` if not.
+2. Call `_resolve_or_register(conn, directory, collection_override)`.
+3. Derive `captures_collection = f"{collection}-captures"`.
+4. Call `_bootstrap_ethos_memory()`.
+5. Call `_write_project_config(directory)`.
+6. Build and return `EnableResult`.
+
+Registry interaction uses:
+- `from quarry.config import load_settings, resolve_db_paths`
+- `from quarry.sync_registry import open_registry, list_registrations,
+  register_directory, get_registration`
+- `from quarry.hooks import _collection_for_cwd_conn` (the new helper)
+
+#### S1.3 `_resolve_or_register`
+
+```python
+def _resolve_or_register(
+    conn: sqlite3.Connection,
+    directory: Path,
+    collection_override: str,
+) -> tuple[str, bool]:
+    """Find existing registration or create one.
+
+    Returns (collection_name, created_bool).
+    Raises ValueError for parent-covered-child case.
+    """
+```
+
+Implementation:
+1. Import `_collection_for_cwd_conn` from `quarry.hooks`.
+2. Call `_collection_for_cwd_conn(conn, str(directory))`.
+3. If found and `directory` exactly matches the registration's directory,
+   return `(collection, False)` -- exact match, reuse.
+4. If found but `directory` is a child of the registration's directory,
+   raise `ValueError` with the message from design section 1 step 2b.
+   To distinguish child-match from exact-match: compare
+   `str(directory)` against the registration's directory by iterating
+   `list_registrations(conn)` and checking which one matched.
+5. If not found, derive name via `_unique_collection_name(conn, directory)`
+   from `quarry.hooks` (or `collection_override` if non-empty), call
+   `register_directory(conn, directory, name)`, return `(name, True)`.
+
+**Important**: `_unique_collection_name` is currently in `hooks.py`.
+It should stay there (no module move in this change) -- `enable.py`
+imports it. The function is a pure helper with no hook-specific logic.
+
+#### S1.4 `_bootstrap_ethos_memory`
+
+Signature and implementation exactly as specified in design section 4.
+The function imports `_write_ethos_ext_session_context` from
+`quarry.doctor` -- this is an existing function (line 778 of
+`doctor.py`).
+
+```python
+_GLOBAL_IDENTITIES = Path.home() / ".punt-labs" / "ethos" / "identities"
+
+
+def _bootstrap_ethos_memory() -> tuple[list[str], list[str], list[str], bool]:
+    """Create quarry.yaml ext files and write session_context.
+
+    Returns (created, updated, already_set, skipped).
+    """
+```
+
+The monkeypatch target for testing is `quarry.enable._GLOBAL_IDENTITIES`.
+
+#### S1.5 `_write_project_config`
+
+```python
+_CONFIG_TEMPLATE = """\
+---
+auto_capture:
+  session_sync: true
+  web_fetch: true
+  compaction: true
+---
+
+# Quarry Project Configuration
+
+This file controls quarry's passive knowledge capture for this project.
+Set any field to `false` to disable that capture type.
+
+- `session_sync`: auto-index project files on session start
+- `web_fetch`: auto-ingest URLs fetched during research
+- `compaction`: capture session transcripts before context compaction
+"""
+
+
+def _write_project_config(directory: Path) -> str:
+    """Write .punt-labs/quarry/config.md. Idempotent: no overwrite.
+
+    Returns the config file path as a string.
+    """
+```
+
+Creates `directory / ".punt-labs" / "quarry"` with `mkdir(parents=True,
+exist_ok=True)`. Writes `_CONFIG_TEMPLATE` only if the file does not
+exist.
+
+#### S1.6 `disable_project`
+
+```python
+def disable_project(
+    directory: Path,
+    *,
+    keep_data: bool = False,
+) -> DisableResult:
+```
+
+Implementation uses:
+- `from quarry.hooks import _collection_for_cwd_conn`
+- `from quarry.sync_registry import open_registry, deregister_directory`
+- `from quarry.database import get_db, delete_collection as
+  db_delete_collection`
+
+Steps:
+1. Open registry, call `_collection_for_cwd_conn(conn, str(directory))`.
+2. If `None`, raise `ValueError(f"no registration covers {directory}")`.
+3. Derive `captures_collection = f"{collection}-captures"`.
+4. Call `deregister_directory(conn, collection)` -- this removes the
+   registration row and returns document names.
+5. If not `keep_data`: call `db_delete_collection(db, collection)` and
+   `db_delete_collection(db, captures_collection)`. Sum the deleted
+   counts.
+6. Remove `directory / ".punt-labs" / "quarry" / "config.md"` if it
+   exists.
+7. Remove `directory / ".punt-labs" / "quarry"` if empty after config
+   removal. Leave `.punt-labs/` untouched.
+8. Return `DisableResult`.
+
+### S2. Module: `src/quarry/hooks.py` (modify)
+
+#### S2.1 Extract `_collection_for_cwd_conn`
+
+New function, placed immediately before `_collection_for_cwd` (before
+line 286):
+
+```python
+def _collection_for_cwd_conn(
+    conn: sqlite3.Connection,
+    cwd: str,
+) -> str | None:
+    """Resolve the registered collection for cwd using an open connection.
+
+    Walk up from cwd to find a registered parent or exact match.
+    """
+    from quarry.sync_registry import list_registrations  # noqa: PLC0415
+
+    registrations = list_registrations(conn)
+    if not registrations:
+        return None
+
+    reg_map = {r.directory: r.collection for r in registrations}
+    current = Path(cwd).resolve()
+    while True:
+        key = str(current)
+        if key in reg_map:
+            return reg_map[key]
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return None
+```
+
+Refactor `_collection_for_cwd` to delegate:
+
+```python
+def _collection_for_cwd(cwd: str) -> str | None:
+    if not cwd:
+        return None
+    settings = _resolve_settings()
+    conn = open_registry(settings.registry_path)
+    try:
+        return _collection_for_cwd_conn(conn, cwd)
+    finally:
+        conn.close()
+```
+
+The `open_registry` import is already at the top of
+`_collection_for_cwd`; move it to the module-level deferred import
+block or keep it inline -- either works since this is not a hot path.
+
+#### S2.2 Fix `handle_session_start`
+
+Replace the body of `handle_session_start` (lines 208-279) with the
+logic from design section 3. Key changes:
+
+1. Import `_is_ancestor_of` from `quarry.sync_registry` (add to the
+   existing deferred import block at line 216).
+2. Replace `_find_registration` call with `_collection_for_cwd_conn`.
+3. Add the descendant-check guard before auto-registration.
+4. Add captures collection to the `additionalContext`.
+
+The exact code is in design section 3. The `_find_registration` function
+stays in the module (existing tests use it, and it costs nothing to
+keep). No behavioral change for callers other than `handle_session_start`.
+
+#### S2.3 Route captures to `<name>-captures`
+
+In `handle_post_web_fetch` (line 395):
+
+```python
+# Before:
+collection = _collection_for_cwd(cwd) or _WEB_CAPTURES_FALLBACK
+
+# After:
+base_collection = _collection_for_cwd(cwd)
+collection = f"{base_collection}-captures" if base_collection else _WEB_CAPTURES_FALLBACK
+```
+
+In `handle_pre_compact` (line 725):
+
+```python
+# Before:
+collection = _collection_for_cwd(cwd) or _SESSION_NOTES_FALLBACK
+
+# After:
+base_collection = _collection_for_cwd(cwd)
+collection = f"{base_collection}-captures" if base_collection else _SESSION_NOTES_FALLBACK
+```
+
+### S3. Module: `src/quarry/__main__.py` (modify)
+
+#### S3.1 Update `_COMMAND_ORDER`
+
+Add `"enable"` and `"disable"` after `"sync"` and before `"optimize"`:
+
+```python
+_COMMAND_ORDER: list[str] = [
+    # Product commands
+    "find",
+    "ingest",
+    "show",
+    "remember",
+    "status",
+    "use",
+    "delete",
+    "register",
+    "deregister",
+    "sync",
+    "enable",
+    "disable",
+    "optimize",
+    ...
+]
+```
+
+#### S3.2 Add `enable_cmd`
+
+Place after `sync_cmd` and before `optimize_cmd`:
+
+```python
+@app.command(name="enable")
+@_cli_errors
+def enable_cmd(
+    directory: Annotated[
+        Path,
+        typer.Argument(help="Project directory to enable (default: cwd)"),
+    ] = Path("."),
+    collection: Annotated[
+        str,
+        typer.Option("--collection", "-c", help="Override collection name"),
+    ] = "",
+) -> None:
+    """Enable quarry knowledge capture for a project directory."""
+    from quarry.enable import enable_project  # noqa: PLC0415
+
+    resolved = directory.resolve()
+    try:
+        result = enable_project(resolved, collection_override=collection)
+    except ValueError as exc:
+        _emit({"error": str(exc)}, "")
+        err_console.print(f"Error: {exc}", style="red")
+        raise typer.Exit(code=1) from None
+
+    import dataclasses  # noqa: PLC0415
+
+    lines: list[str] = [
+        f"Enabled quarry for {result.directory}",
+        f"  Collection: {result.collection}",
+        f"  Captures: {result.captures_collection}",
+    ]
+    if result.config_path:
+        lines.append(f"  Config: {result.config_path}")
+    if result.ethos_skipped:
+        lines.append("  Ethos: not installed (agent memory skipped)")
+    else:
+        if result.ethos_created:
+            lines.append(
+                f"  Ethos created: {', '.join(result.ethos_created)}"
+            )
+        if result.ethos_updated:
+            lines.append(
+                f"  Ethos updated: {', '.join(result.ethos_updated)}"
+            )
+        if result.memory_collections:
+            lines.append(
+                f"  Memory collections: {', '.join(result.memory_collections)}"
+            )
+
+    _emit(dataclasses.asdict(result), "\n".join(lines))
+```
+
+The `ValueError` catch uses `raise typer.Exit(code=1) from None`
+(not `from exc`) to suppress the traceback in non-verbose mode,
+matching the existing pattern in `__main__.py`.
+
+#### S3.3 Add `disable_cmd`
+
+Place immediately after `enable_cmd`:
+
+```python
+@app.command(name="disable")
+@_cli_errors
+def disable_cmd(
+    directory: Annotated[
+        Path,
+        typer.Argument(help="Project directory to disable (default: cwd)"),
+    ] = Path("."),
+    keep_data: Annotated[
+        bool,
+        typer.Option("--keep-data", help="Keep indexed data in LanceDB"),
+    ] = False,
+) -> None:
+    """Disable quarry knowledge capture for a project directory."""
+    from quarry.enable import disable_project  # noqa: PLC0415
+
+    resolved = directory.resolve()
+    try:
+        result = disable_project(resolved, keep_data=keep_data)
+    except ValueError as exc:
+        _emit({"error": str(exc)}, "")
+        err_console.print(f"Error: {exc}", style="red")
+        raise typer.Exit(code=1) from None
+
+    import dataclasses  # noqa: PLC0415
+
+    lines: list[str] = [f"Disabled quarry for {result.directory}"]
+    if result.deleted_chunks > 0:
+        lines.append(f"  Deleted {result.deleted_chunks} chunks")
+    if result.config_removed:
+        lines.append("  Config file removed")
+
+    _emit(dataclasses.asdict(result), "\n".join(lines))
+```
+
+### S4. Module: `src/quarry/doctor.py` (modify)
+
+#### S4.1 `_check_enable_status`
+
+Add after `_check_sync_directories` (line 407):
+
+```python
+def _check_enable_status(registry_path: Path, cwd: str) -> CheckResult:
+    """Check if the cwd has quarry enabled."""
+    from quarry.hooks import _collection_for_cwd  # noqa: PLC0415
+
+    collection = _collection_for_cwd(cwd)
+    if collection is None:
+        return CheckResult(
+            name="Enable status",
+            passed=False,
+            message="not enabled -- run 'quarry enable'",
+            required=False,
+        )
+    captures = f"{collection}-captures"
+    config_path = Path(cwd) / ".punt-labs" / "quarry" / "config.md"
+    config_exists = config_path.is_file()
+    parts = [f"collection: {collection}, captures: {captures}"]
+    if not config_exists:
+        parts.append("config.md missing (run 'quarry enable')")
+    return CheckResult(
+        name="Enable status",
+        passed=True,
+        message=", ".join(parts),
+        required=False,
+    )
+```
+
+#### S4.2 `_check_orphaned_captures`
+
+```python
+def _check_orphaned_captures(
+    registry_path: Path,
+    db_path: Path,
+) -> CheckResult:
+    """Report captures collections whose base has no registration."""
+    from quarry.database import get_db, list_collections as db_list_collections  # noqa: PLC0415
+    from quarry.sync_registry import list_registrations, open_registry  # noqa: PLC0415
+
+    if not db_path.exists() or not registry_path.exists():
+        return CheckResult(
+            name="Orphaned captures",
+            passed=True,
+            message="no data yet",
+            required=False,
+        )
+
+    db = get_db(db_path)
+    cols = db_list_collections(db)
+    col_names = {
+        c["collection"] for c in cols if isinstance(c.get("collection"), str)
+    }
+
+    conn = open_registry(registry_path)
+    try:
+        regs = list_registrations(conn)
+    finally:
+        conn.close()
+
+    registered = {r.collection for r in regs}
+    orphans: list[str] = []
+    for name in sorted(col_names):
+        if name.endswith("-captures"):
+            base = name.removesuffix("-captures")
+            if base not in registered:
+                orphans.append(name)
+
+    if orphans:
+        return CheckResult(
+            name="Orphaned captures",
+            passed=True,
+            message=f"orphaned: {', '.join(orphans)}",
+            required=False,
+        )
+    return CheckResult(
+        name="Orphaned captures",
+        passed=True,
+        message="no orphaned captures collections",
+        required=False,
+    )
+```
+
+#### S4.3 Add to `check_environment`
+
+Add these two checks to the `all_results` list in `check_environment`
+(line 1034), after `_check_sync_directories`:
+
+```python
+_check_enable_status(settings.registry_path, os.getcwd()),
+_check_orphaned_captures(settings.registry_path, settings.lancedb_path),
+```
+
+Import `os` is already at the top of `doctor.py`.
+
+### S5. MCP Tool Changes
+
+No MCP tool changes are needed. The MCP server
+(`src/quarry/mcp_server.py`) operates on collections by name. The
+enable/disable commands modify the registry and create collections,
+but the MCP tools (find, ingest, remember, delete, register,
+deregister, sync) are collection-agnostic -- they accept collection
+names as parameters and operate on them. The captures routing change
+in hooks affects which collection name is passed to ingestion, but
+the MCP tools themselves do not need modification.
+
+### S6. Test Plan
+
+All tests use pytest. Fixtures use `tmp_path` for isolated filesystem
+state. Registry fixtures open a fresh SQLite database per test.
+Monkeypatch `quarry.hooks._resolve_settings` and
+`quarry.enable._GLOBAL_IDENTITIES` for isolation.
+
+#### S6.1 `tests/test_enable.py` (new file)
+
+Fixture:
+
+```python
+@pytest.fixture()
+def registry(tmp_path: Path) -> tuple[sqlite3.Connection, Path]:
+    """Open a fresh registry and return (conn, registry_path)."""
+    db_path = tmp_path / "registry.db"
+    conn = open_registry(db_path)
+    return conn, db_path
+```
+
+Tests T1-T14 as specified in design section 10, with these
+clarifications:
+
+- **T3**: The parent path and collection name must appear in the
+  `ValueError` message. Use `pytest.raises(ValueError, match=...)`.
+- **T7**: Monkeypatch `quarry.enable._GLOBAL_IDENTITIES` to a
+  `tmp_path` subdirectory. Create `claude.yaml` and `rmh.yaml` as
+  minimal YAML files (`agent: claude\n`). Assert `.ext/quarry.yaml`
+  files contain exact `memory_collection: memory-<handle>` text.
+- **T7b**: Pre-create `claude.ext/quarry.yaml` with
+  `memory_collection: wrong-name`. Assert file content is unchanged
+  after `_bootstrap_ethos_memory()`.
+- **T8**: Monkeypatch `_GLOBAL_IDENTITIES` to a nonexistent path.
+- **T10-T13**: These need a `_resolved_settings` mock that returns
+  a settings object with valid `registry_path` and `lancedb_path`
+  pointing to `tmp_path` subdirectories.
+
+#### S6.2 `tests/test_hooks.py` (extend existing)
+
+Tests T15-T20 as specified in design section 10.
+
+For T15 (child directory uses parent collection): the key assertion
+is that `handle_session_start` returns a context dict with the parent's
+collection name and does NOT raise `ValueError`. This test proves the
+child-directory crash is fixed.
+
+For T16b (parent of children skips auto-register): register two child
+directories, then call `handle_session_start` with the parent as cwd.
+Assert no new registration is created and the returned context contains
+the subsumption warning text.
+
+For T17-T20 (captures routing): mock `ingest_content` / `ingest_url`
+or `_spawn_background_ingest` and capture the `collection` argument
+passed to them.
+
+#### S6.3 `tests/test_enable_cli.py` (new file)
+
+Tests T21-T25. Use `typer.testing.CliRunner` and the `app` from
+`quarry.__main__`. Each test needs `_resolve_settings` monkeypatched
+to use `tmp_path`-based paths.
+
+For T25 (`--json` output): pass `["--json", "enable", str(tmp_dir)]`
+and parse stdout as JSON. Assert the JSON contains keys: `directory`,
+`collection`, `captures_collection`, `created_registration`.
+
+### S7. Dependency Order
+
+The implementation must proceed in this order because each step depends
+on the previous:
+
+1. **`src/quarry/hooks.py`** -- extract `_collection_for_cwd_conn`.
+   This is a pure refactor with no behavioral change. All existing
+   tests must continue passing. Run `make check`.
+
+2. **`src/quarry/enable.py`** -- new module. Imports
+   `_collection_for_cwd_conn` from hooks and
+   `_write_ethos_ext_session_context` from doctor. Can be written
+   immediately after step 1 since it depends on the new helper.
+
+3. **`src/quarry/__main__.py`** -- add `enable` and `disable` commands.
+   Imports from `enable.py`. Depends on step 2.
+
+4. **`src/quarry/hooks.py`** -- fix `handle_session_start` and update
+   captures routing. Depends on step 1 (`_collection_for_cwd_conn`
+   exists). Import `_is_ancestor_of` from `sync_registry`.
+
+5. **`src/quarry/doctor.py`** -- add `_check_enable_status` and
+   `_check_orphaned_captures`. No dependencies on steps 1-4 beyond
+   `_collection_for_cwd` (already exists).
+
+6. **`tests/test_enable.py`** -- test enable/disable logic. Depends
+   on steps 1-2.
+
+7. **`tests/test_hooks.py`** -- extend with T15-T20. Depends on
+   steps 1, 4.
+
+8. **`tests/test_enable_cli.py`** -- CLI integration tests. Depends
+   on steps 1-3.
+
+After all steps: `make check` must pass with zero violations.
+
+### S8. Codebase-Specific Notes
+
+These observations come from reading the actual source. They prevent
+implementation surprises.
+
+1. **`register_directory` raises on child-of-parent**: The existing
+   `register_directory` in `sync_registry.py` (line 50) already raises
+   `ValueError("directory already covered by parent registration
+   ...")`. The fix in `handle_session_start` prevents this path from
+   being reached by checking `_collection_for_cwd_conn` first.
+
+2. **`_find_registration` does exact match only**: The existing helper
+   at hooks.py line 39 checks `reg.directory == directory`. This is
+   why child directories crash -- the exact match fails, the code falls
+   through to `register_directory`, which raises. The new
+   `_collection_for_cwd_conn` does walk-up matching.
+
+3. **`deregister_directory` takes collection name, not directory path**:
+   The `sync_registry.deregister_directory(conn, collection)` signature
+   takes a collection name as string. The `disable_project` function
+   must find the collection name first via `_collection_for_cwd_conn`,
+   then pass that to `deregister_directory`.
+
+4. **`_is_ancestor_of` is private in `sync_registry.py`**: It must be
+   imported with the private name. This is acceptable -- both hooks.py
+   and sync_registry.py are internal modules.
+
+5. **`_write_ethos_ext_session_context` signature**: Takes
+   `(quarry_yaml: Path, handle: str)` and returns a string literal:
+   `"updated"`, `"already_set"`, or `"no_collection"`. The
+   `_bootstrap_ethos_memory` function handles all three return values.
+
+6. **`load_hook_config` is stdlib-only**: It lives in `_stdlib.py`
+   and uses no third-party imports. The `enable.py` module does not
+   need to call it -- hook config is only relevant during hook
+   execution, not during `quarry enable`.
+
+7. **`_emit` handles both JSON and text**: In `__main__.py`, `_emit`
+   checks the global `_json_output` flag. Commands must pass both a
+   structured data dict and a text string. The `enable_cmd` and
+   `disable_cmd` implementations follow this pattern exactly.
+
+8. **No remote path for enable/disable**: These commands are local-only.
+   There is no remote quarry server equivalent. The `proxy_config`
+   check that other commands do is not needed here.
