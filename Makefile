@@ -1,4 +1,4 @@
-.PHONY: help test lint type check format build clean depot bench-cuda docs docs-clean
+.PHONY: help test lint type check check-full format build test-wheel clean depot bench-cuda docs docs-clean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -16,6 +16,8 @@ type: ## Type check with mypy and pyright
 
 check: lint type test ## Run all quality gates
 
+check-full: check test-wheel ## Full quality gate including wheel test
+
 format: ## Auto-format code
 	uv run ruff format .
 	uv run ruff check --fix .
@@ -24,6 +26,9 @@ build: ## Build wheel and sdist
 	rm -rf dist/
 	uv build
 	uvx twine check dist/*
+
+test-wheel: build ## Test the built wheel in an isolated venv on port 8422
+	bash scripts/test-wheel.sh
 
 clean: ## Remove build artifacts
 	rm -rf dist/ .tmp/

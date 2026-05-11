@@ -9,7 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
-from collections.abc import Iterator
+from collections.abc import Generator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -30,7 +30,7 @@ def _quarry_version() -> str:
 
 
 @contextlib.contextmanager
-def _quiet_logging() -> Iterator[None]:
+def _quiet_logging() -> Generator[None]:
     """Temporarily suppress third-party logging during checks.
 
     RapidOCR adds its own StreamHandler that writes to stderr during init.
