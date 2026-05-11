@@ -89,6 +89,8 @@ _COMMAND_ORDER: list[str] = [
     "register",
     "deregister",
     "sync",
+    "enable",
+    "disable",
     "optimize",
     "login",
     "logout",
@@ -1251,6 +1253,87 @@ def sync_cmd(
         for col, res in results.items()
     }
     _emit(json_data, _format_sync_results(json_data))
+
+
+@app.command(name="enable")
+@_cli_errors
+def enable_cmd(
+    directory: Annotated[
+        Path,
+        typer.Argument(help="Project directory to enable (default: cwd)"),
+    ] = Path(),
+    collection: Annotated[
+        str,
+        typer.Option("--collection", "-c", help="Override collection name"),
+    ] = "",
+) -> None:
+    """Enable quarry knowledge capture for a project directory."""
+    from quarry.enable import enable_project  # noqa: PLC0415
+
+    resolved = directory.resolve()
+    try:
+        result = enable_project(resolved, collection_override=collection)
+    except ValueError as exc:
+        _emit({"error": str(exc)}, "")
+        err_console.print(f"Error: {exc}", style="red")
+        raise typer.Exit(code=1) from None
+
+    import dataclasses  # noqa: PLC0415
+
+    lines: list[str] = [
+        f"Enabled quarry for {result.directory}",
+        f"  Collection: {result.collection}",
+        f"  Captures: {result.captures_collection}",
+    ]
+    if result.config_path:
+        lines.append(f"  Config: {result.config_path}")
+    if result.ethos_skipped:
+        lines.append("  Ethos: not installed (agent memory skipped)")
+    else:
+        if result.ethos_created:
+            lines.append(f"  Ethos created: {', '.join(result.ethos_created)}")
+        if result.ethos_updated:
+            lines.append(f"  Ethos updated: {', '.join(result.ethos_updated)}")
+        if result.memory_collections:
+            lines.append(
+                f"  Memory collections: {', '.join(result.memory_collections)}"
+            )
+
+    _emit(dataclasses.asdict(result), "\n".join(lines))
+
+
+@app.command(name="disable")
+@_cli_errors
+def disable_cmd(
+    directory: Annotated[
+        Path,
+        typer.Argument(help="Project directory to disable (default: cwd)"),
+    ] = Path(),
+    keep_data: Annotated[
+        bool,
+        typer.Option("--keep-data", help="Keep indexed data in LanceDB"),
+    ] = False,
+) -> None:
+    """Disable quarry knowledge capture for a project directory."""
+    from quarry.enable import disable_project  # noqa: PLC0415
+
+    resolved = directory.resolve()
+    try:
+        result = disable_project(resolved, keep_data=keep_data)
+    except ValueError as exc:
+        _emit({"error": str(exc)}, "")
+        err_console.print(f"Error: {exc}", style="red")
+        raise typer.Exit(code=1) from None
+
+    import dataclasses  # noqa: PLC0415
+
+    lines: list[str] = [f"Disabled quarry for {result.directory}"]
+    if result.deleted_chunks > 0:
+        lines.append(f"  Deleted {result.deleted_chunks} chunks")
+    if result.config_removed:
+        lines.append("  Config file removed")
+
+    _emit(dataclasses.asdict(result), "\n".join(lines))
 
 
 @app.command(name="optimize")

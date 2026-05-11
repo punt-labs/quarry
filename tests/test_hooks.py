@@ -879,7 +879,7 @@ class TestHandlePostWebFetch:
         ):
             handle_post_web_fetch(payload)
 
-        assert mock_url.call_args[1]["collection"] == "myapp"
+        assert mock_url.call_args[1]["collection"] == "myapp-captures"
 
     def test_falls_back_to_web_captures_when_unregistered(self) -> None:
         """Web captures use fallback collection when cwd has no registration."""
@@ -1252,7 +1252,7 @@ class TestHandlePreCompact:
         # args[4] is the text file path
         assert args[4].endswith(".txt")
         assert "session-abc12345-" in args[5]  # document_name
-        assert args[6] == "myapp"  # collection
+        assert args[6] == "myapp-captures"  # collection
         assert args[7] == str(Path("/fake/lancedb"))  # lancedb_path
         assert args[8] == "abc12345"  # session_prefix
 
@@ -1305,8 +1305,8 @@ class TestHandlePreCompact:
                 }
             )
 
-        assert '"myapp"' in str(result["systemMessage"])
-        assert mock_popen.call_args[0][0][6] == "myapp"
+        assert '"myapp-captures"' in str(result["systemMessage"])
+        assert mock_popen.call_args[0][0][6] == "myapp-captures"
 
     def test_falls_back_to_session_notes_when_unregistered(
         self, tmp_path: Path
@@ -1531,7 +1531,7 @@ class TestHandlePreCompact:
         assert "systemMessage" in result
         msg = str(result["systemMessage"])
         assert "session-abc12345-" in msg
-        assert '"quarry"' in msg
+        assert '"quarry-captures"' in msg
         assert "/find" in msg
         # No chunk count in new format.
         assert "chunks" not in msg
