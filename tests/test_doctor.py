@@ -1168,7 +1168,9 @@ class TestRunInstall:
         with patch("quarry.embeddings.download_model_files") as mock_dl:
             mock_dl.return_value = ("/fake/model.onnx", "/fake/tokenizer.json")
             run_install()
-        mock_dl.assert_called_once()
+        # Called once for INT8 model, and optionally again for FP16 if CUDA
+        # is available in the test environment.
+        assert mock_dl.call_count >= 1
 
     def test_idempotent(self, tmp_path: Path, monkeypatch: MP):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)

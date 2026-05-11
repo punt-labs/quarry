@@ -9,7 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
-from collections.abc import Iterator
+from collections.abc import Generator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -30,7 +30,7 @@ def _quarry_version() -> str:
 
 
 @contextlib.contextmanager
-def _quiet_logging() -> Iterator[None]:
+def _quiet_logging() -> Generator[None]:
     """Temporarily suppress third-party logging during checks.
 
     RapidOCR adds its own StreamHandler that writes to stderr during init.
@@ -405,6 +405,86 @@ def _check_sync_directories(registry_path: Path) -> CheckResult:
     finally:
         if conn is not None:
             conn.close()
+
+
+def _check_enable_status(registry_path: Path, cwd: str) -> CheckResult:  # noqa: ARG001
+    """Check if the cwd has quarry enabled."""
+    from quarry.hooks import (  # noqa: PLC0415
+        _collection_for_cwd,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    collection = _collection_for_cwd(cwd)  # pyright: ignore[reportPrivateUsage]
+    if collection is None:
+        return CheckResult(
+            name="Enable status",
+            passed=False,
+            message="not enabled -- run 'quarry enable'",
+            required=False,
+        )
+    captures = f"{collection}-captures"
+    config_path = Path(cwd) / ".punt-labs" / "quarry" / "config.md"
+    config_exists = config_path.is_file()
+    parts = [f"collection: {collection}, captures: {captures}"]
+    if not config_exists:
+        parts.append("config.md missing (run 'quarry enable')")
+    return CheckResult(
+        name="Enable status",
+        passed=config_exists,
+        message=", ".join(parts),
+        required=False,
+    )
+
+
+def _check_orphaned_captures(
+    registry_path: Path,
+    db_path: Path,
+) -> CheckResult:
+    """Report captures collections whose base has no registration."""
+    from quarry.database import (  # noqa: PLC0415
+        get_db,
+        list_collections as db_list_collections,
+    )
+    from quarry.sync_registry import list_registrations, open_registry  # noqa: PLC0415
+
+    if not db_path.exists() or not registry_path.exists():
+        return CheckResult(
+            name="Orphaned captures",
+            passed=True,
+            message="no data yet",
+            required=False,
+        )
+
+    db = get_db(db_path)
+    cols = db_list_collections(db)
+    col_names = {c["collection"] for c in cols}
+
+    conn = open_registry(registry_path)
+    try:
+        regs = list_registrations(conn)
+    finally:
+        conn.close()
+
+    registered = {r.collection for r in regs}
+    orphans: list[str] = []
+    for name in sorted(col_names):
+        if name.endswith("-captures"):
+            base = name.removesuffix("-captures")
+            if base not in registered:
+                orphans.append(name)
+
+    if orphans:
+        return CheckResult(
+            name="Orphaned captures",
+            passed=False,
+            message=f"orphaned: {', '.join(orphans)}",
+            required=False,
+        )
+    return CheckResult(
+        name="Orphaned captures",
+        passed=True,
+        message="no orphaned captures collections",
+        required=False,
+    )
 
 
 _MCP_SERVER_NAME = "quarry"
@@ -1045,6 +1125,8 @@ def check_environment(*, _skip_header: bool = False) -> int:
             _check_fts_health(settings.lancedb_path),
             _check_sync_health(settings.registry_path),
             _check_sync_directories(settings.registry_path),
+            _check_enable_status(settings.registry_path, str(Path.cwd())),
+            _check_orphaned_captures(settings.registry_path, settings.lancedb_path),
         ]
         checks: list[CheckResult] = [c for c in all_results if c is not None]
 

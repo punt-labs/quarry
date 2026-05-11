@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _find_registration(
+def _find_registration(  # pyright: ignore[reportUnusedFunction]
     registrations: list[DirectoryRegistration],
     directory: str,
 ) -> DirectoryRegistration | None:
@@ -212,8 +212,14 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
     field) with quarry and kicks off a background sync.  Returns
     ``additionalContext`` immediately so Claude knows quarry is available
     without waiting for the sync to complete.
+
+    Walk-up matching: if cwd is a child of an existing registration, the
+    parent's collection is reused (no new registration).  Auto-register
+    only fires when no coverage exists.  If cwd is a parent of existing
+    child registrations, auto-register is skipped to prevent subsumption.
     """
     from quarry.sync_registry import (  # noqa: PLC0415
+        _is_ancestor_of,  # pyright: ignore[reportPrivateUsage]
         list_registrations,
         open_registry,
         register_directory,
@@ -238,14 +244,47 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
     settings = _resolve_settings()
     conn = open_registry(settings.registry_path)
     try:
-        # Idempotent registration: check first, register if missing.
-        existing = _find_registration(list_registrations(conn), str(directory))
-        if existing:
-            collection = existing.collection
-        else:
+        # Step 1: Walk up from cwd to find covering registration.
+        collection = _collection_for_cwd_conn(conn, str(directory))
+
+        if collection is None:
+            # Step 2: No coverage -- check for descendant registrations
+            # before auto-registering.  A parent registration would
+            # subsume existing child registrations, causing data loss.
+            registrations = list_registrations(conn)
+            has_children = any(
+                _is_ancestor_of(directory, Path(r.directory))  # pyright: ignore[reportPrivateUsage]
+                for r in registrations
+            )
+            if has_children:
+                logger.warning(
+                    "session-start: existing child registrations found "
+                    "under %s; skipping auto-register to prevent "
+                    "subsumption. Run 'quarry enable %s' to explicitly "
+                    "register the parent.",
+                    directory,
+                    directory,
+                )
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": "SessionStart",
+                        "additionalContext": (
+                            f"Quarry: child registrations exist under {directory}. "
+                            "Auto-register skipped to prevent subsumption. "
+                            f"Run 'quarry enable {directory}' to register the parent."
+                        ),
+                    },
+                }
+
             collection = _unique_collection_name(conn, directory)
             register_directory(conn, directory, collection)
-            logger.info("session-start: registered %s as '%s'", directory, collection)
+            logger.info(
+                "session-start: auto-registered %s as '%s'",
+                directory,
+                collection,
+            )
+
+        captures_collection = f"{collection}-captures"
 
         # Return context immediately; sync runs in background.
         sync_status = _sync_in_background()
@@ -261,6 +300,7 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
             "and conversations are already indexed here.\n"
             "Quarry semantic search is active for this project.\n"
             f'Collection: "{collection}" ({directory})\n'
+            f'Captures: "{captures_collection}"\n'
             f"{sync_line}\n"
             "Use the quarry MCP tools (find, show, ingest, remember) "
             "to search this codebase semantically.\n"
@@ -283,6 +323,33 @@ _WEB_CAPTURES_FALLBACK = "web-captures"
 _SESSION_NOTES_FALLBACK = "session-notes"
 
 
+def _collection_for_cwd_conn(
+    conn: sqlite3.Connection,
+    cwd: str,
+) -> str | None:
+    """Resolve the registered collection for cwd using an open connection.
+
+    Walk up from cwd to find a registered parent or exact match.
+    """
+    from quarry.sync_registry import list_registrations  # noqa: PLC0415
+
+    registrations = list_registrations(conn)
+    if not registrations:
+        return None
+
+    reg_map = {r.directory: r.collection for r in registrations}
+    current = Path(cwd).resolve()
+    while True:
+        key = str(current)
+        if key in reg_map:
+            return reg_map[key]
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return None
+
+
 def _collection_for_cwd(cwd: str) -> str | None:
     """Resolve the registered collection for a working directory.
 
@@ -293,33 +360,14 @@ def _collection_for_cwd(cwd: str) -> str | None:
     if not cwd:
         return None
 
-    from quarry.sync_registry import list_registrations, open_registry  # noqa: PLC0415
+    from quarry.sync_registry import open_registry  # noqa: PLC0415
 
     settings = _resolve_settings()
     conn = open_registry(settings.registry_path)
     try:
-        registrations = list_registrations(conn)
+        return _collection_for_cwd_conn(conn, cwd)
     finally:
         conn.close()
-
-    if not registrations:
-        return None
-
-    # Build a set of registered directory paths for fast lookup.
-    reg_map: dict[str, str] = {r.directory: r.collection for r in registrations}
-
-    # Walk from cwd upward to find the first registered ancestor.
-    current = Path(cwd).resolve()
-    while True:
-        key = str(current)
-        if key in reg_map:
-            return reg_map[key]
-        parent = current.parent
-        if parent == current:
-            break
-        current = parent
-
-    return None
 
 
 def _extract_url(payload: dict[str, object]) -> str | None:
@@ -392,7 +440,10 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     from quarry.database import get_db  # noqa: PLC0415
     from quarry.pipeline import ingest_content, ingest_url  # noqa: PLC0415
 
-    collection = _collection_for_cwd(cwd) or _WEB_CAPTURES_FALLBACK
+    base_collection = _collection_for_cwd(cwd)
+    collection = (
+        f"{base_collection}-captures" if base_collection else _WEB_CAPTURES_FALLBACK
+    )
 
     settings = _resolve_settings()
     db = get_db(settings.lancedb_path)
@@ -722,7 +773,10 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
 
     from datetime import UTC, datetime  # noqa: PLC0415
 
-    collection = _collection_for_cwd(cwd) or _SESSION_NOTES_FALLBACK
+    base_collection = _collection_for_cwd(cwd)
+    collection = (
+        f"{base_collection}-captures" if base_collection else _SESSION_NOTES_FALLBACK
+    )
     settings = _resolve_settings()
     agent_handle = _read_ethos_agent_handle(cwd) if cwd else ""
 

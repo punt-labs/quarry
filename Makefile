@@ -1,4 +1,4 @@
-.PHONY: help test lint type check format build clean depot bench-cuda docs docs-clean
+.PHONY: help test lint lint-docs type check check-full format build test-wheel clean depot bench-cuda docs docs-clean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -6,15 +6,20 @@ help: ## Show available targets
 test: ## Run tests (excludes slow integration tests)
 	uv run pytest
 
-lint: ## Lint and format check
+lint: lint-docs ## Lint and format check
 	uv run ruff check .
 	uv run ruff format --check .
+
+lint-docs: ## Lint markdown files (matches CI docs job)
+	npx markdownlint-cli2 CLAUDE.md "docs/**/*.md"
 
 type: ## Type check with mypy and pyright
 	uv run mypy src/ tests/
 	uv run pyright src/ tests/
 
 check: lint type test ## Run all quality gates
+
+check-full: check test-wheel ## Full quality gate including wheel test
 
 format: ## Auto-format code
 	uv run ruff format .
@@ -24,6 +29,9 @@ build: ## Build wheel and sdist
 	rm -rf dist/
 	uv build
 	uvx twine check dist/*
+
+test-wheel: build ## Test the built wheel in an isolated venv on port 8422
+	bash scripts/test-wheel.sh
 
 clean: ## Remove build artifacts
 	rm -rf dist/ .tmp/

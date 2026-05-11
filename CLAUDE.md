@@ -21,15 +21,24 @@ Local semantic search for AI agents and humans. Indexes 20+ document formats, em
 
 ## Testing
 
-### Current pyramid (1046 tests after quarry-ccji-tls)
+### Pyramid (1498 tests collected, 22 deselected in CI)
 
-| Layer | Count | Coverage |
-|-------|-------|----------|
-| Unit | ~1024 | DB, embedding, search logic, CLI commands |
-| Integration | 22 (deselected in CI) | Require real filesystem/model |
-| HTTP API contract | sparse | Several param/shape gaps found in code review |
-| Shell scripts | 0 | No automated tests; shellcheck only |
-| Remote/local equivalence | 0 | Mode divergence found repeatedly |
+| Layer | Count | Make target | Runs in CI | Coverage |
+|-------|-------|-------------|------------|----------|
+| Unit | ~1470 | `make test` | yes | DB, embedding, search, CLI, doctor, hooks, service, install scripts |
+| Integration | 22 | `make test-integration` | no (needs real model) | Real filesystem + ONNX model |
+| Shell scripts | ~18 | `make test` (via pytest) | yes | Install script ordering, shellcheck |
+| HTTP API contract | partial | `make test` | yes | Endpoint shape/param, growing |
+| Wheel install | 6 | `make test-wheel` | local pre-PR gate | Build wheel, install in isolated venv, run on port 8422 alongside prod 8420 |
+| MCP smoke test | 0 automated | qae agent + `docs/smoke-test.md` | post-release manual | 35 checks: all MCP tools + CLI mirror + install verification |
+
+**Make targets:**
+
+- `make check` = `make lint` + `make type` + `make test` (CI gate)
+- `make test-integration` = pytest with `--run-slow` (local only, needs real model)
+- `make test-wheel` = build wheel → isolated venv → `quarry serve --port 8422` → smoke checks → teardown (local pre-PR gate)
+- `make check-full` = `make check` + `make test-wheel` (local pre-PR gate)
+- `make build` = `uv build` + `twine check` (existing)
 
 ### Recurring bug classes from code review (quarry-ccji-tls, 10 rounds)
 

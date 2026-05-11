@@ -23,7 +23,7 @@ import re
 import socket as socket_module
 import time
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from functools import cached_property, partial
@@ -1485,7 +1485,7 @@ def serve(
     logger.info("Embedding model ready")
 
     @asynccontextmanager
-    async def lifespan(_app: Starlette) -> AsyncIterator[None]:
+    async def lifespan(_app: Starlette) -> AsyncGenerator[None]:
         yield
         # Shutdown
         _remove_port_file(port_path)
