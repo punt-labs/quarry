@@ -1,4 +1,4 @@
-.PHONY: help test lint type check check-full format build test-wheel clean depot bench-cuda docs docs-clean
+.PHONY: help test lint lint-docs type check check-full format build test-wheel clean depot bench-cuda docs docs-clean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -6,9 +6,12 @@ help: ## Show available targets
 test: ## Run tests (excludes slow integration tests)
 	uv run pytest
 
-lint: ## Lint and format check
+lint: lint-docs ## Lint and format check
 	uv run ruff check .
 	uv run ruff format --check .
+
+lint-docs: ## Lint markdown files (matches CI docs job)
+	npx markdownlint-cli2 CLAUDE.md "docs/**/*.md"
 
 type: ## Type check with mypy and pyright
 	uv run mypy src/ tests/
