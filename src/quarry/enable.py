@@ -274,8 +274,8 @@ def _write_project_config(directory: Path) -> str:
         fd = os.open(str(config_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
         try:
             with os.fdopen(fd, "w") as f:
+                fd = -1  # fdopen took ownership before write
                 f.write(_CONFIG_TEMPLATE)
-            fd = -1  # fdopen took ownership
         finally:
             if fd >= 0:
                 os.close(fd)
