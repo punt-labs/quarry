@@ -84,7 +84,7 @@ No special flag needed --- the default install runs a local daemon on localhost.
 - **20+ formats** --- PDFs (with OCR for scanned pages), source code (AST-aware splitting), spreadsheets, presentations, HTML, Markdown, LaTeX, DOCX, images
 - **Semantic search** --- retrieval is by meaning, not keyword. A query about "margins" finds passages about profitability even if they never use that word
 - **Daemon architecture** --- one `quarry serve` process loads the embedding model once and serves all Claude Code sessions via [mcp-proxy](https://github.com/punt-labs/mcp-proxy) over WebSocket
-- **Passive knowledge capture** --- SessionStart hook auto-indexes the working directory, PostToolUse hook auto-ingests fetched URLs, PreCompact hook captures transcripts before context compaction
+- **Passive knowledge capture** --- `quarry enable` sets up three scoped collections per project: file sync, passive captures (web fetches + session transcripts), and per-agent memory. Captures are separated from the code index so research doesn't pollute code search
 - **Named databases** --- isolated LanceDB directories with independent sync registries. Switch with `use` for work/personal separation
 - **Research agent** --- `researcher` subagent combines quarry local search with web research, auto-ingests valuable findings
 
@@ -161,6 +161,8 @@ quarry list documents                          # list indexed documents
 quarry register ~/Documents/notes              # watch a directory
 quarry sync                                    # re-index registered dirs
 quarry use work                                # switch database
+quarry enable                                  # set up project collections + captures
+quarry disable                                 # remove project registration + data
 quarry status                                  # database dashboard
 quarry doctor                                  # health check
 quarry serve                                   # start daemon on :8420
@@ -199,8 +201,8 @@ Beyond explicit `/ingest` and `/find` commands, quarry runs as a Claude Code plu
 | Hook | When it fires | What it does |
 |------|--------------|-------------|
 | **Session start** | On every session start | Auto-registers your project directory and syncs it in the background. Your codebase is searchable without manual ingestion. |
-| **Web fetch** | After any `WebFetch` tool call | URLs Claude fetches during research are auto-ingested into a `web-captures` collection. Reuses already-retrieved content when available, falls back to URL ingest otherwise. |
-| **Pre-compact** | Before context compaction | Captures the conversation transcript into a `session-notes` collection. Discoveries that would be lost when the context window shrinks are preserved as searchable chunks. |
+| **Web fetch** | After any `WebFetch` tool call | URLs Claude fetches during research are auto-ingested into the project's `<name>-captures` collection (or global `web-captures` if no project is enabled). |
+| **Pre-compact** | Before context compaction | Captures the conversation transcript into the project's `<name>-captures` collection (or global `session-notes` if no project is enabled). |
 
 All hooks are fail-open — failures are ignored and never block Claude Code. Each hook is individually toggleable via `.punt-labs/quarry/config.md` YAML frontmatter. See [AGENTS.md](AGENTS.md) for the full integration model.
 
