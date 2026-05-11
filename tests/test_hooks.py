@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
+
+if TYPE_CHECKING:
+    import pytest
 
 from quarry.__main__ import app
 from quarry._stdlib import HookConfig, load_hook_config, read_hook_stdin
@@ -1883,3 +1888,274 @@ class TestReadHookStdin:
             r.close()
             os.close(w_fd)
         assert result == ""
+
+
+# ---------------------------------------------------------------------------
+# Enable/disable hook routing tests — T15 through T20
+# ---------------------------------------------------------------------------
+
+
+class TestT15SessionStartChildUsesParentCollection:
+    """T15: session-start on child directory uses parent collection."""
+
+    def test_child_directory_uses_parent_collection(self, tmp_path: Path) -> None:
+        parent = tmp_path / "project"
+        parent.mkdir()
+        child = parent / "src"
+        child.mkdir()
+
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+
+        # Register the parent directory.
+        conn = open_registry(settings.registry_path)
+        register_directory(conn, parent, "proj")
+        conn.close()
+
+        with (
+            patch("quarry.hooks._resolve_settings", return_value=settings),
+            patch("quarry.hooks._sync_in_background", return_value="launched"),
+        ):
+            result = handle_session_start({"cwd": str(child)})
+
+        # No ValueError raised -- the child-directory crash is fixed.
+        assert "hookSpecificOutput" in result
+        output = result["hookSpecificOutput"]
+        assert isinstance(output, dict)
+        ctx = str(output["additionalContext"])
+        assert "proj" in ctx
+
+        # Verify no new registration was created.
+        conn = open_registry(settings.registry_path)
+        regs = list_registrations(conn)
+        conn.close()
+        assert len(regs) == 1
+        assert regs[0].collection == "proj"
+
+
+class TestT16SessionStartAutoRegisters:
+    """T16: session-start on unregistered directory auto-registers."""
+
+    def test_auto_registers_unregistered_directory(self, tmp_path: Path) -> None:
+        project = tmp_path / "newproject"
+        project.mkdir()
+
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+
+        # Create empty registry.
+        conn = open_registry(settings.registry_path)
+        conn.close()
+
+        with (
+            patch("quarry.hooks._resolve_settings", return_value=settings),
+            patch("quarry.hooks._sync_in_background", return_value="launched"),
+        ):
+            result = handle_session_start({"cwd": str(project)})
+
+        assert "hookSpecificOutput" in result
+        output = result["hookSpecificOutput"]
+        assert isinstance(output, dict)
+
+        # Verify registration was created.
+        conn = open_registry(settings.registry_path)
+        regs = list_registrations(conn)
+        conn.close()
+        assert len(regs) == 1
+        assert regs[0].directory == str(project)
+
+
+class TestT16bSessionStartParentOfChildrenSkipsAutoRegister:
+    """T16b: session-start on parent of existing children skips auto-register."""
+
+    def test_skips_auto_register_with_children(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        parent = tmp_path / "parent"
+        parent.mkdir()
+        child_a = parent / "child-a"
+        child_a.mkdir()
+        child_b = parent / "child-b"
+        child_b.mkdir()
+
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+
+        # Register children only.
+        conn = open_registry(settings.registry_path)
+        register_directory(conn, child_a, "child-a")
+        register_directory(conn, child_b, "child-b")
+        conn.close()
+
+        with (
+            patch("quarry.hooks._resolve_settings", return_value=settings),
+            patch("quarry.hooks._sync_in_background", return_value="launched"),
+            caplog.at_level(logging.WARNING, logger="quarry.hooks"),
+        ):
+            result = handle_session_start({"cwd": str(parent)})
+
+        # No new registration for /parent.
+        conn = open_registry(settings.registry_path)
+        regs = list_registrations(conn)
+        conn.close()
+        assert len(regs) == 2
+        collections = {r.collection for r in regs}
+        assert "child-a" in collections
+        assert "child-b" in collections
+
+        # Warning logged.
+        assert any(
+            "existing child registrations found" in rec.message
+            for rec in caplog.records
+        )
+        assert any(
+            "skipping auto-register to prevent subsumption" in rec.message
+            for rec in caplog.records
+        )
+
+        # Context indicates subsumption warning.
+        assert "hookSpecificOutput" in result
+        output = result["hookSpecificOutput"]
+        assert isinstance(output, dict)
+        ctx = str(output.get("additionalContext", ""))
+        assert "child registrations exist" in ctx
+
+
+class TestT17WebFetchRoutesToCaptures:
+    """T17: web-fetch routes to captures collection."""
+
+    def test_web_fetch_uses_captures_collection(self) -> None:
+        payload: dict[str, object] = {
+            "cwd": "/projects/myapp",
+            "tool_input": {"url": "https://example.com/page"},
+            "tool_response": json.dumps({"result": "<html>Content</html>"}),
+        }
+        mock_ingest_result: dict[str, object] = {
+            "document_name": "https://example.com/page",
+            "collection": "proj-captures",
+            "chunks": 3,
+        }
+
+        from quarry.models import PageContent, PageType
+
+        mock_pages = [
+            PageContent(
+                text="Content",
+                page_number=1,
+                total_pages=1,
+                page_type=PageType.SECTION,
+                document_name="https://example.com/page",
+                document_path="https://example.com/page",
+            )
+        ]
+
+        with (
+            patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
+            patch("quarry.database.get_db", return_value=MagicMock()),
+            patch("quarry.hooks._is_already_ingested", return_value=False),
+            patch("quarry.hooks._collection_for_cwd", return_value="proj"),
+            patch(
+                "quarry.html_processor.process_html_text",
+                return_value=mock_pages,
+            ),
+            patch(
+                "quarry.pipeline.ingest_content",
+                return_value=mock_ingest_result,
+            ) as mock_ingest,
+        ):
+            handle_post_web_fetch(payload)
+
+        assert mock_ingest.call_args[1]["collection"] == "proj-captures"
+
+
+class TestT18PreCompactRoutesToCaptures:
+    """T18: pre-compact routes to captures collection."""
+
+    def test_pre_compact_uses_captures_collection(self, tmp_path: Path) -> None:
+        transcript = _make_transcript(tmp_path, "Working on proj")
+
+        with (
+            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
+            patch(
+                "quarry.hooks._resolve_settings",
+                return_value=_mock_settings(),
+            ),
+            patch("quarry.hooks._collection_for_cwd", return_value="proj"),
+            patch("quarry.hooks.subprocess.Popen") as mock_popen,
+        ):
+            handle_pre_compact(
+                {
+                    "cwd": "/projects/proj",
+                    "transcript_path": str(transcript),
+                    "session_id": "abc12345-full-id",
+                }
+            )
+
+        # The collection argument (args[6]) should be proj-captures.
+        args = mock_popen.call_args[0][0]
+        assert args[6] == "proj-captures"
+
+
+class TestT19WebFetchFallback:
+    """T19: web-fetch with no registration uses fallback."""
+
+    def test_uses_fallback_when_unregistered(self) -> None:
+        payload: dict[str, object] = {
+            "cwd": "/unknown/dir",
+            "tool_input": {"url": "https://example.com/page"},
+        }
+        mock_ingest_result: dict[str, object] = {
+            "document_name": "https://example.com/page",
+            "collection": "web-captures",
+            "chunks": 2,
+        }
+
+        with (
+            patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
+            patch("quarry.database.get_db", return_value=MagicMock()),
+            patch("quarry.hooks._is_already_ingested", return_value=False),
+            patch("quarry.hooks._collection_for_cwd", return_value=None),
+            patch(
+                "quarry.pipeline.ingest_url",
+                return_value=mock_ingest_result,
+            ) as mock_url,
+        ):
+            handle_post_web_fetch(payload)
+
+        from quarry.hooks import _WEB_CAPTURES_FALLBACK
+
+        assert mock_url.call_args[1]["collection"] == _WEB_CAPTURES_FALLBACK
+
+
+class TestT20PreCompactFallback:
+    """T20: pre-compact with no registration uses fallback."""
+
+    def test_uses_fallback_when_unregistered(self, tmp_path: Path) -> None:
+        transcript = _make_transcript(tmp_path, "Some unregistered work")
+
+        with (
+            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
+            patch(
+                "quarry.hooks._resolve_settings",
+                return_value=_mock_settings(),
+            ),
+            patch("quarry.hooks._collection_for_cwd", return_value=None),
+            patch("quarry.hooks.subprocess.Popen") as mock_popen,
+        ):
+            handle_pre_compact(
+                {
+                    "cwd": "/unknown/dir",
+                    "transcript_path": str(transcript),
+                    "session_id": "abc12345-full-id",
+                }
+            )
+
+        from quarry.hooks import _SESSION_NOTES_FALLBACK
+
+        args = mock_popen.call_args[0][0]
+        assert args[6] == _SESSION_NOTES_FALLBACK
