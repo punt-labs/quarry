@@ -29,14 +29,14 @@ Local semantic search for AI agents and humans. Indexes 20+ document formats, em
 | Integration | 22 | `make test-integration` | no (needs real model) | Real filesystem + ONNX model |
 | Shell scripts | ~18 | `make test` (via pytest) | yes | Install script ordering, shellcheck |
 | HTTP API contract | partial | `make test` | yes | Endpoint shape/param, growing |
-| Wheel install | 0 (planned) | `make test-wheel` | local pre-PR gate | Build wheel, install in isolated venv, run on port 8421 alongside prod 8420 |
-| MCP smoke test | 0 automated | qae agent + `docs/MCP-SMOKE-TEST.md` | post-release manual | 35 checks: all MCP tools + CLI mirror + install verification |
+| Wheel install | 6 | `make test-wheel` | local pre-PR gate | Build wheel, install in isolated venv, run on port 8422 alongside prod 8420 |
+| MCP smoke test | 0 automated | qae agent + `docs/smoke-test.md` | post-release manual | 35 checks: all MCP tools + CLI mirror + install verification |
 
 **Make targets:**
 - `make check` = `make lint` + `make type` + `make test` (CI gate)
 - `make test-integration` = pytest with `--run-slow` (local only, needs real model)
-- `make test-wheel` = build wheel → isolated venv → `quarry serve --port 8421` → smoke checks → teardown (local pre-PR gate, planned)
-- `make check-full` = `make check` + `make test-wheel` (local pre-PR gate, planned)
+- `make test-wheel` = build wheel → isolated venv → `quarry serve --port 8422` → smoke checks → teardown (local pre-PR gate)
+- `make check-full` = `make check` + `make test-wheel` (local pre-PR gate)
 - `make build` = `uv build` + `twine check` (existing)
 
 ### Recurring bug classes from code review (quarry-ccji-tls, 10 rounds)
