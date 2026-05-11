@@ -12,3 +12,13 @@
 # This file is intentionally minimal. Most legacy keys (no-db, no-daemon,
 # no-auto-flush, no-auto-import, sync-branch) were removed in bd 1.0+
 # and reading them would be misleading.
+
+directory:
+  labels:
+    quarry: repo:quarry
+
+backup:
+  enabled: false
+export:
+  auto: false
+  git-add: false
