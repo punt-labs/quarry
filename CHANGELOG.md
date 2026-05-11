@@ -14,6 +14,40 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Added
+
+- **cli**: `quarry enable` and `quarry disable` commands. Single command
+  to set up all three knowledge capture types for a project: file sync
+  (directory registration), passive captures (web fetches and session
+  transcripts routed to `<name>-captures` collection), and agent memory
+  (ethos identity extensions bootstrapped automatically).
+- **cli**: `quarry disable --keep-data` flag to remove registration
+  without deleting indexed data.
+- **hooks**: Session-start captures and web-fetch captures now route to
+  `<name>-captures` instead of mixing into the file-sync collection.
+  Falls back to `web-captures` / `session-notes` when no registration
+  covers the cwd.
+- **hooks**: Session-start walk-up matching — opening a session in a
+  subdirectory of a registered parent uses the parent's collection
+  instead of crashing with ValueError.
+- **hooks**: Descendant guard — auto-registration skips when the cwd
+  is a parent of existing child registrations, preventing subsumption.
+- **doctor**: `Enable status` check reports whether the cwd has quarry
+  enabled and whether config.md exists.
+- **doctor**: `Orphaned captures` check reports captures collections
+  whose base registration has been removed.
+- **test**: `make test-wheel` target builds the wheel, installs in an
+  isolated venv, and runs smoke checks on port 8422 alongside the
+  production daemon. Caught two dependency bugs on first run
+  (tree-sitter-language-pack 1.x, starlette 1.0).
+- **test**: `make check-full` = `make check` + `make test-wheel`.
+
+### Fixed
+
+- **deps**: Pin `tree-sitter-language-pack<1.0.0` — v1.x removed
+  `SupportedLanguage`, breaking quarry on fresh wheel installs.
+- **deps**: Pin `starlette<1.0.0` — v1.0 breaks route handling.
+
 ## [1.15.0] - 2026-04-18
 
 ### Fixed

@@ -762,3 +762,35 @@ per-query RRF fusion stats and per-page char counts overwhelm the
 terminal. The org standard's "debug logging" description fits tools
 with fewer, coarser DEBUG calls — quarry's DEBUG is developer-trace
 granularity.
+
+---
+
+## DES-029: quarry enable — Unified Project Activation
+
+**Date:** 2026-05-11
+**Status:** SETTLED
+**Topic:** How projects activate all three knowledge capture types
+
+### Design
+
+`quarry enable <directory>` sets up three scoped collections in one command:
+
+1. **File sync** — registers the directory for incremental sync (existing mechanism). Collection name derived from directory basename or `--collection` override.
+2. **Passive captures** — web fetches and session transcripts route to `<name>-captures` (separate from the file-sync collection). Falls back to global `web-captures` / `session-notes` when no registration covers the cwd.
+3. **Agent memory** — bootstraps ethos identity extensions (`quarry.yaml` with `memory_collection: memory-<handle>`) for all agent identities in `~/.punt-labs/ethos/identities/`.
+
+`quarry disable <directory>` reverses: deregisters, optionally deletes indexed data (`--keep-data` to preserve), removes `.punt-labs/quarry/config.md`.
+
+Session-start hook uses walk-up matching (child directories inherit the parent's collection) with a descendant guard (won't auto-register a parent that would subsume existing child registrations).
+
+### Why This Design
+
+Before `quarry enable`, the three capture types were configured through disconnected mechanisms: SessionStart auto-registration (crashed on child directories), hardcoded fallback collections (mixed content across projects), and manual ethos extension setup (nobody did it). One command replaces all three.
+
+The captures separation (`<name>-captures` vs `<name>`) prevents web research and session transcripts from polluting the file-sync collection. Users searching their codebase get code, not browser tabs.
+
+### Alternatives Considered
+
+1. **Separate commands for each capture type** — Rejected. Three commands to set up what is conceptually one thing. Users forget the ethos step.
+2. **Auto-enable on first session** — Rejected. CEO constraint: auto-registration stays for basic functionality, but `quarry enable` is for explicit configuration with captures separation and ethos bootstrap.
+3. **Per-project config file only (no CLI)** — Rejected. The config file is written by `quarry enable`, not hand-authored. The command is the interface.
