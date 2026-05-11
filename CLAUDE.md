@@ -33,6 +33,7 @@ Local semantic search for AI agents and humans. Indexes 20+ document formats, em
 | MCP smoke test | 0 automated | qae agent + `docs/smoke-test.md` | post-release manual | 35 checks: all MCP tools + CLI mirror + install verification |
 
 **Make targets:**
+
 - `make check` = `make lint` + `make type` + `make test` (CI gate)
 - `make test-integration` = pytest with `--run-slow` (local only, needs real model)
 - `make test-wheel` = build wheel → isolated venv → `quarry serve --port 8422` → smoke checks → teardown (local pre-PR gate)

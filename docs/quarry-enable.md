@@ -72,7 +72,7 @@ files with `memory_collection` and `session_context`.
 
 ### CLI Interface
 
-```
+```text
 quarry enable [DIRECTORY] [--collection NAME]
 ```
 
@@ -243,7 +243,7 @@ Running `quarry enable` twice in the same directory:
 
 ### CLI Interface
 
-```
+```text
 quarry disable [DIRECTORY] [--keep-data]
 ```
 
@@ -359,6 +359,7 @@ class DisableResult:
 ### Current Behavior (broken)
 
 `handle_session_start` in `hooks.py`:
+
 1. Reads cwd from payload.
 2. Checks if cwd has an existing registration (exact match only).
 3. If no match: derives a collection name and calls
@@ -593,9 +594,11 @@ For each `<handle>.yaml` in the identities directory:
 1. Check if `<handle>.ext/` exists. Create it if not.
 2. Check if `<handle>.ext/quarry.yaml` exists.
 3. If not, create it with:
+
    ```yaml
    memory_collection: memory-<handle>
    ```
+
 4. Run `_write_ethos_ext_session_context(quarry_yaml, handle)` to
    append `session_context` if missing. This reuses the existing
    function from `doctor.py`.
@@ -756,6 +759,7 @@ def _check_enable_status(registry_path: Path, cwd: str) -> CheckResult:
 ```
 
 Returns:
+
 - Pass: "enabled (collection: quarry, captures: quarry-captures)"
 - Fail (not required): "not enabled -- run 'quarry enable'"
 
@@ -779,6 +783,7 @@ file-sync registration but left the captures collection behind (since
 `deregister` does not clean up captures -- only `quarry disable` does).
 
 Returns:
+
 - Pass: "no orphaned captures collections"
 - Warning: "orphaned captures: foo-captures, bar-captures (no registration for foo, bar)"
 
@@ -1083,6 +1088,7 @@ Implementation steps (refer to design section 1 for rationale):
 6. Build and return `EnableResult`.
 
 Registry interaction uses:
+
 - `from quarry.config import load_settings, resolve_db_paths`
 - `from quarry.sync_registry import open_registry, list_registrations,
   register_directory, get_registration`
@@ -1104,6 +1110,7 @@ def _resolve_or_register(
 ```
 
 Implementation:
+
 1. Import `_collection_for_cwd_conn` from `quarry.hooks`.
 2. Call `_collection_for_cwd_conn(conn, str(directory))`.
 3. If found and `directory` exactly matches the registration's directory,
@@ -1185,12 +1192,14 @@ def disable_project(
 ```
 
 Implementation uses:
+
 - `from quarry.hooks import _collection_for_cwd_conn`
 - `from quarry.sync_registry import open_registry, deregister_directory`
 - `from quarry.database import get_db, delete_collection as
   db_delete_collection`
 
 Steps:
+
 1. Open registry, call `_collection_for_cwd_conn(conn, str(directory))`.
 2. If `None`, raise `ValueError(f"no registration covers {directory}")`.
 3. Derive `captures_collection = f"{collection}-captures"`.
