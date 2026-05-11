@@ -64,6 +64,7 @@ def enable_project(
     collection_override: str = "",
 ) -> EnableResult:
     """Enable quarry knowledge capture for a project directory."""
+    directory = directory.resolve()
     if not directory.is_dir():
         msg = f"directory not found: {directory}"
         raise ValueError(msg)
@@ -108,6 +109,7 @@ def disable_project(
     keep_data: bool = False,
 ) -> DisableResult:
     """Disable quarry knowledge capture for a project directory."""
+    directory = directory.resolve()
     from quarry.config import load_settings, resolve_db_paths  # noqa: PLC0415
     from quarry.database import (  # noqa: PLC0415
         delete_collection as db_delete_collection,
@@ -271,9 +273,12 @@ def _write_project_config(directory: Path) -> str:
     try:
         fd = os.open(str(config_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
         try:
-            os.write(fd, _CONFIG_TEMPLATE.encode())
+            with os.fdopen(fd, "w") as f:
+                f.write(_CONFIG_TEMPLATE)
+            fd = -1  # fdopen took ownership
         finally:
-            os.close(fd)
+            if fd >= 0:
+                os.close(fd)
     except FileExistsError:
         pass
     return str(config_path)

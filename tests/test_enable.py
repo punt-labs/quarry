@@ -570,8 +570,8 @@ class TestWriteProjectConfig:
 
         assert config_path.read_text() == original
 
-    def test_atomic_fd_closed_on_write_failure(self, tmp_path: Path) -> None:
-        """Verify fd is closed even if os.write raises."""
+    def test_fd_closed_when_fdopen_raises(self, tmp_path: Path) -> None:
+        """Verify fd is closed if os.fdopen raises before taking ownership."""
         import os as _os
 
         real_open = _os.open
@@ -585,9 +585,9 @@ class TestWriteProjectConfig:
 
         with (
             patch("quarry.enable.os.open", side_effect=tracking_open),
-            patch("quarry.enable.os.write", side_effect=OSError("disk full")),
+            patch("quarry.enable.os.fdopen", side_effect=OSError("fdopen failed")),
             patch("quarry.enable.os.close") as mock_close,
-            pytest.raises(OSError, match="disk full"),
+            pytest.raises(OSError, match="fdopen failed"),
         ):
             _write_project_config(tmp_path)
 
@@ -725,3 +725,146 @@ class TestT17EnableWithOverrideOnChildRaises:
             pytest.raises(ValueError, match="already covered by the registration"),
         ):
             enable_project(child, collection_override="custom")
+
+
+# -----------------------------------------------------------------------
+# T18: enable resolves relative paths
+# -----------------------------------------------------------------------
+
+
+class TestT18EnableResolvesRelativePath:
+    def test_enable_with_relative_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        project = tmp_path / "myproject"
+        project.mkdir()
+        monkeypatch.chdir(project)
+
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+
+        conn = open_registry(settings.registry_path)
+        conn.close()
+
+        with (
+            patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
+            patch(
+                "quarry.config.resolve_db_paths",
+                return_value=settings,
+            ),
+            patch("quarry.config.load_settings", return_value=MagicMock()),
+        ):
+            result = enable_project(Path("."))  # noqa: PTH201
+
+        # Directory should be the resolved absolute path, not ".".
+        assert result.directory == str(project)
+        assert result.created_registration is True
+
+
+# -----------------------------------------------------------------------
+# T19: disable resolves relative paths
+# -----------------------------------------------------------------------
+
+
+class TestT19DisableResolvesRelativePath:
+    def test_disable_with_relative_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        project = tmp_path / "myproject"
+        project.mkdir()
+        monkeypatch.chdir(project)
+
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+
+        conn = open_registry(settings.registry_path)
+        conn.close()
+
+        with (
+            patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
+            patch(
+                "quarry.config.resolve_db_paths",
+                return_value=settings,
+            ),
+            patch("quarry.config.load_settings", return_value=MagicMock()),
+        ):
+            enable_project(project)
+            result = disable_project(Path("."))  # noqa: PTH201
+
+        assert result.directory == str(project)
+
+
+# -----------------------------------------------------------------------
+# T20: _check_enable_status returns passed=False when config.md missing
+# -----------------------------------------------------------------------
+
+
+class TestT20CheckEnableStatusConfigMissing:
+    def test_config_missing_returns_not_passed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from quarry.doctor import _check_enable_status
+
+        project = tmp_path / "myproject"
+        project.mkdir()
+        monkeypatch.chdir(project)
+
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+
+        conn = open_registry(settings.registry_path)
+        register_directory(conn, project, "myproject")
+        conn.close()
+
+        # No config.md on disk — only the registration exists.
+        with (
+            patch(
+                "quarry.config.resolve_db_paths",
+                return_value=settings,
+            ),
+            patch("quarry.config.load_settings", return_value=MagicMock()),
+        ):
+            result = _check_enable_status(settings.registry_path, str(project))
+
+        assert result.passed is False
+        assert "config.md missing" in result.message
+        assert result.required is False
+
+    def test_config_present_returns_passed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from quarry.doctor import _check_enable_status
+
+        project = tmp_path / "myproject"
+        project.mkdir()
+        monkeypatch.chdir(project)
+
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+
+        conn = open_registry(settings.registry_path)
+        register_directory(conn, project, "myproject")
+        conn.close()
+
+        # Create config.md so it's present.
+        config_dir = project / ".punt-labs" / "quarry"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.md").write_text(
+            "---\nauto_capture:\n  session_sync: true\n---\n"
+        )
+
+        with (
+            patch(
+                "quarry.config.resolve_db_paths",
+                return_value=settings,
+            ),
+            patch("quarry.config.load_settings", return_value=MagicMock()),
+        ):
+            result = _check_enable_status(settings.registry_path, str(project))
+
+        assert result.passed is True
+        assert "config.md missing" not in result.message

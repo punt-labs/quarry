@@ -429,7 +429,7 @@ def _check_enable_status(registry_path: Path, cwd: str) -> CheckResult:  # noqa:
         parts.append("config.md missing (run 'quarry enable')")
     return CheckResult(
         name="Enable status",
-        passed=True,
+        passed=config_exists,
         message=", ".join(parts),
         required=False,
     )
