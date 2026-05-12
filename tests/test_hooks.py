@@ -643,7 +643,7 @@ class TestHandleSessionStart:
         output = result["hookSpecificOutput"]
         assert isinstance(output, dict)
         ctx = str(output["additionalContext"])
-        assert ctx.startswith("Before researching")
+        assert ctx.startswith("Quarry semantic search is active")
 
 
 class TestExtractUrl:

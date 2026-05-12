@@ -3138,7 +3138,7 @@ class TestDatabasesCmdSizeFormatting:
         settings.quarry_root = tmp_path
         lance_dir = tmp_path / "small" / "lancedb"
         lance_dir.mkdir(parents=True)
-        (lance_dir / "data.lance").write_bytes(b"x" * 512)
+        (lance_dir / "data.lance").write_bytes(b"x" * 2048)
         with (
             patch(
                 "quarry.__main__._resolved_settings",
@@ -3149,7 +3149,7 @@ class TestDatabasesCmdSizeFormatting:
         ):
             result = runner.invoke(app, ["list", "databases"])
         assert result.exit_code == 0
-        assert "512 bytes" in result.output
+        assert "KB" in result.output
 
     def test_skips_non_database_dirs(self, tmp_path: Path):
         settings = _mock_settings()
