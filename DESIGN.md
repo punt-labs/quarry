@@ -807,6 +807,7 @@ Claude Code stores session transcripts as `<session-uuid>.jsonl` files under `~/
 Claude Code deletes transcript `.jsonl` files older than `cleanupPeriodDays` (default: **30 days**) at startup. This is non-configurable per-project — it's a global setting in `~/.claude/settings.json`. The cleanup also covers `tool-results/`, `plans/`, `debug/`, and other session artifacts.
 
 Known issues (as of May 2026):
+
 - Auto-updates have silently deleted `.jsonl` files ([#41591](https://github.com/anthropics/claude-code/issues/41591))
 - `--setting-sources local` ignores the setting and uses the 30-day default ([#45903](https://github.com/anthropics/claude-code/issues/45903))
 - No warning or notification before deletion ([#46175](https://github.com/anthropics/claude-code/issues/46175))
@@ -821,7 +822,7 @@ Known issues (as of May 2026):
 
 ### Filesystem Structure
 
-```
+```text
 ~/.claude/projects/<encoded-project-dir>/
     <session-uuid>.jsonl          # Main transcript (cleaned up after 30 days)
     <session-uuid>/
