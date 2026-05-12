@@ -769,6 +769,16 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
         logger.debug("pre-compact: no conversation text found")
         return {}
 
+    from quarry.artifacts import (  # noqa: PLC0415
+        extract_artifacts,
+        format_artifacts_header,
+    )
+
+    artifacts = extract_artifacts(text)
+    header = format_artifacts_header(artifacts)
+    if header:
+        text = header + "\n\n" + text
+
     from datetime import UTC, datetime  # noqa: PLC0415
 
     base_collection = _collection_for_cwd(cwd)
