@@ -4,11 +4,40 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+_CLAUDEMD_BEGIN = "<!-- quarry:begin -->"
+_CLAUDEMD_END = "<!-- quarry:end -->"
+
+_CLAUDEMD_BLOCK = """\
+<!-- quarry:begin -->
+# Quarry
+
+Local semantic search is available via quarry. Use it to search indexed
+documents by meaning, ingest new content, and recall knowledge across sessions.
+
+- Before using WebSearch or WebFetch for research, run `/find` with the query
+  first. Quarry indexes this codebase, design docs, prior session transcripts,
+  and web pages from previous research. If quarry returns relevant results,
+  use them — do not re-research what has already been found.
+- Use grep for symbol lookups and value lookups; use quarry for "why", "how",
+  and "what did we decide about X" questions.
+- **Slash commands**: `/find`, `/ingest`, `/remember`, `/explain`, `/source`,
+  `/quarry`
+- **Research agent**: `researcher` — combines quarry local search with web
+  research. Use for deep investigation across local docs and the web.
+- **Auto-behaviors**: working directory is auto-indexed at session start;
+  URLs fetched via WebFetch are auto-ingested; transcripts are captured before
+  context compaction.
+- **Search tip**: natural language queries work best ("What were Q3 margins?"
+  outperforms "Q3 margins").
+<!-- quarry:end -->
+"""
 
 
 @dataclass(frozen=True)
@@ -21,6 +50,7 @@ class EnableResult:
     memory_collections: list[str] = field(default_factory=list)
     config_path: str = ""
     created_registration: bool = False
+    claudemd_appended: bool = False
     ethos_skipped: bool = False
     ethos_updated: list[str] = field(default_factory=list)
     ethos_already_set: list[str] = field(default_factory=list)
@@ -36,6 +66,7 @@ class DisableResult:
     captures_collection: str
     deleted_chunks: int = 0
     config_removed: bool = False
+    claudemd_removed: bool = False
 
 
 _GLOBAL_IDENTITIES = Path.home() / ".punt-labs" / "ethos" / "identities"
@@ -88,6 +119,9 @@ def enable_project(
     memory_collections = [f"memory-{h}" for h in created_handles]
 
     config_path = _write_project_config(directory)
+    claudemd_appended = _append_claudemd_block(directory)
+    if claudemd_appended:
+        logger.info("Appended quarry instructions to CLAUDE.md")
 
     return EnableResult(
         directory=str(directory),
@@ -96,6 +130,7 @@ def enable_project(
         memory_collections=memory_collections,
         config_path=config_path,
         created_registration=created,
+        claudemd_appended=claudemd_appended,
         ethos_skipped=ethos_skipped,
         ethos_updated=updated_handles,
         ethos_already_set=already_set_handles,
@@ -161,12 +196,17 @@ def disable_project(
         if quarry_dir.is_dir() and not any(quarry_dir.iterdir()):
             quarry_dir.rmdir()
 
+        claudemd_removed = _remove_claudemd_block(directory)
+        if claudemd_removed:
+            logger.info("Removed quarry instructions from CLAUDE.md")
+
         return DisableResult(
             directory=str(directory),
             collection=collection,
             captures_collection=captures_collection,
             deleted_chunks=deleted_chunks,
             config_removed=config_removed,
+            claudemd_removed=claudemd_removed,
         )
     finally:
         conn.close()
@@ -282,3 +322,49 @@ def _write_project_config(directory: Path) -> str:
     except FileExistsError:
         pass
     return str(config_path)
+
+
+def _append_claudemd_block(directory: Path) -> bool:
+    """Append quarry instruction block to CLAUDE.md. Idempotent.
+
+    Creates the file if it does not exist. Returns True if the block
+    was appended, False if it was already present.
+    """
+    claudemd = directory / "CLAUDE.md"
+    if claudemd.exists():
+        content = claudemd.read_text()
+        if _CLAUDEMD_BEGIN in content:
+            return False
+        # Ensure a blank line before the block.
+        if content and not content.endswith("\n"):
+            content += "\n"
+        content += "\n" + _CLAUDEMD_BLOCK
+    else:
+        content = _CLAUDEMD_BLOCK
+    claudemd.write_text(content)
+    return True
+
+
+def _remove_claudemd_block(directory: Path) -> bool:
+    """Remove quarry instruction block from CLAUDE.md.
+
+    Removes everything from ``<!-- quarry:begin -->`` through
+    ``<!-- quarry:end -->`` inclusive. Cleans up extra trailing
+    blank lines left by removal. Returns True if a block was
+    removed, False otherwise.
+    """
+    claudemd = directory / "CLAUDE.md"
+    if not claudemd.exists():
+        return False
+    content = claudemd.read_text()
+    if _CLAUDEMD_BEGIN not in content:
+        return False
+    # Remove the block and any single leading blank line before it.
+    pattern = (
+        r"\n?" + re.escape(_CLAUDEMD_BEGIN) + r".*?" + re.escape(_CLAUDEMD_END) + r"\n?"
+    )
+    cleaned = re.sub(pattern, "", content, flags=re.DOTALL)
+    # Collapse trailing whitespace to at most one newline.
+    cleaned = cleaned.rstrip() + "\n"
+    claudemd.write_text(cleaned)
+    return True

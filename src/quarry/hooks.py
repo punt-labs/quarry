@@ -296,8 +296,6 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
         else:
             sync_line = "Background sync failed to launch."
         context = (
-            "Before researching a topic, check quarry first — prior research "
-            "and conversations are already indexed here.\n"
             "Quarry semantic search is active for this project.\n"
             f'Collection: "{collection}" ({directory})\n'
             f'Captures: "{captures_collection}"\n'

@@ -1287,6 +1287,8 @@ def enable_cmd(
     ]
     if result.config_path:
         lines.append(f"  Config: {result.config_path}")
+    if result.claudemd_appended:
+        lines.append("  Appended quarry instructions to CLAUDE.md")
     if result.ethos_skipped:
         lines.append("  Ethos: not installed (agent memory skipped)")
     else:
@@ -1332,6 +1334,8 @@ def disable_cmd(
         lines.append(f"  Deleted {result.deleted_chunks} chunks")
     if result.config_removed:
         lines.append("  Config file removed")
+    if result.claudemd_removed:
+        lines.append("  Removed quarry instructions from CLAUDE.md")
 
     _emit(dataclasses.asdict(result), "\n".join(lines))
 

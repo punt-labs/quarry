@@ -8,10 +8,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from quarry.enable import (
+    _CLAUDEMD_BEGIN,
+    _CLAUDEMD_BLOCK,
+    _CLAUDEMD_END,
     _CONFIG_TEMPLATE,
     DisableResult,
     EnableResult,
+    _append_claudemd_block,
     _bootstrap_ethos_memory,
+    _remove_claudemd_block,
     _write_project_config,
     disable_project,
     enable_project,
@@ -868,3 +873,195 @@ class TestT20CheckEnableStatusConfigMissing:
 
         assert result.passed is True
         assert "config.md missing" not in result.message
+
+
+# -----------------------------------------------------------------------
+# CLAUDE.md block injection tests
+# -----------------------------------------------------------------------
+
+
+class TestEnableAppendsCaudemdBlock:
+    def test_enable_creates_claudemd_with_markers(self, tmp_path: Path) -> None:
+        project = tmp_path / "myproject"
+        project.mkdir()
+
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+
+        conn = open_registry(settings.registry_path)
+        conn.close()
+
+        with (
+            patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
+            patch("quarry.config.resolve_db_paths", return_value=settings),
+            patch("quarry.config.load_settings", return_value=MagicMock()),
+        ):
+            result = enable_project(project)
+
+        assert result.claudemd_appended is True
+        claudemd = project / "CLAUDE.md"
+        assert claudemd.exists()
+        content = claudemd.read_text()
+        assert _CLAUDEMD_BEGIN in content
+        assert _CLAUDEMD_END in content
+        assert "Local semantic search is available via quarry." in content
+
+
+class TestEnableClaudemdIdempotent:
+    def test_running_enable_twice_does_not_duplicate(self, tmp_path: Path) -> None:
+        project = tmp_path / "myproject"
+        project.mkdir()
+
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+
+        conn = open_registry(settings.registry_path)
+        conn.close()
+
+        with (
+            patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
+            patch("quarry.config.resolve_db_paths", return_value=settings),
+            patch("quarry.config.load_settings", return_value=MagicMock()),
+        ):
+            result1 = enable_project(project)
+            result2 = enable_project(project)
+
+        assert result1.claudemd_appended is True
+        assert result2.claudemd_appended is False
+        content = (project / "CLAUDE.md").read_text()
+        assert content.count(_CLAUDEMD_BEGIN) == 1
+
+
+class TestEnableAppendsToExistingClaudemd:
+    def test_existing_content_preserved(self, tmp_path: Path) -> None:
+        project = tmp_path / "myproject"
+        project.mkdir()
+        claudemd = project / "CLAUDE.md"
+        claudemd.write_text("# My Project\n\nExisting content.\n")
+
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+
+        conn = open_registry(settings.registry_path)
+        conn.close()
+
+        with (
+            patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
+            patch("quarry.config.resolve_db_paths", return_value=settings),
+            patch("quarry.config.load_settings", return_value=MagicMock()),
+        ):
+            result = enable_project(project)
+
+        assert result.claudemd_appended is True
+        content = claudemd.read_text()
+        assert content.startswith("# My Project\n\nExisting content.\n")
+        assert _CLAUDEMD_BEGIN in content
+        assert _CLAUDEMD_END in content
+
+
+class TestDisableRemovesClaudemdBlock:
+    def test_disable_removes_markers_and_content(self, tmp_path: Path) -> None:
+        project = tmp_path / "myproject"
+        project.mkdir()
+
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+
+        conn = open_registry(settings.registry_path)
+        conn.close()
+
+        with (
+            patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
+            patch("quarry.config.resolve_db_paths", return_value=settings),
+            patch("quarry.config.load_settings", return_value=MagicMock()),
+        ):
+            enable_project(project)
+            result = disable_project(project)
+
+        assert result.claudemd_removed is True
+        claudemd = project / "CLAUDE.md"
+        assert claudemd.exists()
+        content = claudemd.read_text()
+        assert _CLAUDEMD_BEGIN not in content
+        assert _CLAUDEMD_END not in content
+
+
+class TestDisablePreservesOtherClaudemdContent:
+    def test_other_content_survives(self, tmp_path: Path) -> None:
+        project = tmp_path / "myproject"
+        project.mkdir()
+        claudemd = project / "CLAUDE.md"
+        claudemd.write_text("# My Project\n\nKeep this.\n")
+
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+
+        conn = open_registry(settings.registry_path)
+        conn.close()
+
+        with (
+            patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
+            patch("quarry.config.resolve_db_paths", return_value=settings),
+            patch("quarry.config.load_settings", return_value=MagicMock()),
+        ):
+            enable_project(project)
+            result = disable_project(project)
+
+        assert result.claudemd_removed is True
+        content = claudemd.read_text()
+        assert "# My Project" in content
+        assert "Keep this." in content
+        assert _CLAUDEMD_BEGIN not in content
+
+
+class TestDisableNoopWhenNoMarkers:
+    def test_no_markers_no_change(self, tmp_path: Path) -> None:
+        project = tmp_path / "myproject"
+        project.mkdir()
+        claudemd = project / "CLAUDE.md"
+        original = "# Untouched\n"
+        claudemd.write_text(original)
+
+        removed = _remove_claudemd_block(project)
+
+        assert removed is False
+        assert claudemd.read_text() == original
+
+
+class TestDisableNoopWhenNoClaudemd:
+    def test_missing_file_no_error(self, tmp_path: Path) -> None:
+        project = tmp_path / "myproject"
+        project.mkdir()
+
+        removed = _remove_claudemd_block(project)
+
+        assert removed is False
+
+
+class TestAppendClaudemdBlockDirect:
+    def test_creates_file_when_missing(self, tmp_path: Path) -> None:
+        appended = _append_claudemd_block(tmp_path)
+
+        assert appended is True
+        claudemd = tmp_path / "CLAUDE.md"
+        assert claudemd.exists()
+        content = claudemd.read_text()
+        assert content == _CLAUDEMD_BLOCK
+
+    def test_appends_newline_to_file_without_trailing_newline(
+        self, tmp_path: Path
+    ) -> None:
+        claudemd = tmp_path / "CLAUDE.md"
+        claudemd.write_text("no trailing newline")
+
+        appended = _append_claudemd_block(tmp_path)
+
+        assert appended is True
+        content = claudemd.read_text()
+        assert content.startswith("no trailing newline\n")
+        assert _CLAUDEMD_BEGIN in content

@@ -3149,7 +3149,9 @@ class TestDatabasesCmdSizeFormatting:
         ):
             result = runner.invoke(app, ["list", "databases"])
         assert result.exit_code == 0
-        assert "512 bytes" in result.output
+        # du includes directory overhead, so 512 bytes of file data
+        # rounds up to ~4.0 KB on most filesystems.
+        assert "KB" in result.output
 
     def test_skips_non_database_dirs(self, tmp_path: Path):
         settings = _mock_settings()
