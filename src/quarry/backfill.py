@@ -149,6 +149,11 @@ def _process_project(
     limit: int,
 ) -> None:
     """Process all transcripts for a single project mapping."""
+    from quarry.artifacts import (  # noqa: PLC0415
+        extract_artifacts,
+        format_artifacts_header,
+    )
+
     target_collection = collection_override or mapping.captures_collection
     transcripts = list_transcript_files(mapping.encoded_dir)
     if not transcripts:
@@ -180,11 +185,6 @@ def _process_project(
             acc.skipped_empty += 1
             acc.processed += 1
             continue
-
-        from quarry.artifacts import (  # noqa: PLC0415
-            extract_artifacts,
-            format_artifacts_header,
-        )
 
         artifacts = extract_artifacts(text)
         header = format_artifacts_header(artifacts)
