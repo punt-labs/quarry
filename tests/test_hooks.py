@@ -20,12 +20,12 @@ from quarry.__main__ import app
 from quarry._stdlib import HookConfig, load_hook_config, read_hook_stdin
 from quarry.hooks import (
     _collection_for_cwd,
-    _extract_message_text,
-    _extract_transcript_text,
     _extract_url,
     _extract_web_fetch_content,
     _find_registration,
     _unique_collection_name,
+    extract_message_text,
+    extract_transcript_text,
     handle_post_web_fetch,
     handle_pre_compact,
     handle_session_start,
@@ -930,7 +930,7 @@ class TestExtractMessageText:
                 ],
             },
         }
-        result = _extract_message_text(record)
+        result = extract_message_text(record)
         assert result is not None
         assert "[tool_result] 5 passed, 0 failed" in result
 
@@ -948,7 +948,7 @@ class TestExtractMessageText:
                 ],
             },
         }
-        result = _extract_message_text(record)
+        result = extract_message_text(record)
         assert result is not None
         assert "[tool_result] No matches found" in result
 
@@ -967,7 +967,7 @@ class TestExtractMessageText:
                 ],
             },
         }
-        result = _extract_message_text(record)
+        result = extract_message_text(record)
         assert result is None
 
     def test_skips_tool_use_blocks(self) -> None:
@@ -985,7 +985,7 @@ class TestExtractMessageText:
                 ],
             },
         }
-        result = _extract_message_text(record)
+        result = extract_message_text(record)
         assert result is None
 
 
@@ -1015,7 +1015,7 @@ class TestExtractTranscriptText:
                 },
             ],
         )
-        text = _extract_transcript_text(str(transcript))
+        text = extract_transcript_text(str(transcript))
         assert "[user] Hello" in text
         assert "[assistant] Hi there" in text
 
@@ -1035,7 +1035,7 @@ class TestExtractTranscriptText:
                 },
             ],
         )
-        text = _extract_transcript_text(str(transcript))
+        text = extract_transcript_text(str(transcript))
         assert "[user] Real" in text
         assert "snapshot" not in text
         assert "system" not in text
@@ -1057,17 +1057,17 @@ class TestExtractTranscriptText:
                 },
             ],
         )
-        text = _extract_transcript_text(str(transcript))
+        text = extract_transcript_text(str(transcript))
         assert "[assistant] Done" in text
         assert "Bash" not in text
 
     def test_returns_empty_for_nonexistent_file(self) -> None:
-        assert _extract_transcript_text("/nonexistent/path.jsonl") == ""
+        assert extract_transcript_text("/nonexistent/path.jsonl") == ""
 
     def test_returns_empty_for_empty_file(self, tmp_path: Path) -> None:
         transcript = tmp_path / "empty.jsonl"
         transcript.write_text("")
-        assert _extract_transcript_text(str(transcript)) == ""
+        assert extract_transcript_text(str(transcript)) == ""
 
     def test_respects_char_limit(self, tmp_path: Path) -> None:
         transcript = tmp_path / "big.jsonl"
@@ -1090,7 +1090,7 @@ class TestExtractTranscriptText:
 
         from quarry.hooks import _MAX_TRANSCRIPT_CHARS
 
-        text = _extract_transcript_text(str(transcript))
+        text = extract_transcript_text(str(transcript))
         # Total includes "\n\n" separators between entries, so allow
         # a small margin above the content limit.
         assert len(text) < _MAX_TRANSCRIPT_CHARS * 1.02
@@ -1132,7 +1132,7 @@ class TestExtractTranscriptText:
                 },
             ],
         )
-        text = _extract_transcript_text(str(transcript))
+        text = extract_transcript_text(str(transcript))
         # First message (AAA...) should be dropped, last two kept.
         assert "A" * 50 not in text
         assert msg2_text in text
@@ -1141,7 +1141,7 @@ class TestExtractTranscriptText:
     def test_returns_empty_for_unreadable_file(self, tmp_path: Path) -> None:
         transcript = tmp_path / "binary.jsonl"
         transcript.write_bytes(b"\x80\x81\x82\xff\xfe")
-        assert _extract_transcript_text(str(transcript)) == ""
+        assert extract_transcript_text(str(transcript)) == ""
 
 
 def _make_transcript(tmp_path: Path, text: str = "Build a feature") -> Path:

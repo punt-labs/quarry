@@ -16,7 +16,7 @@ _CLAUDEMD_END = "<!-- quarry:end -->"
 
 _CLAUDEMD_BLOCK = """\
 <!-- quarry:begin -->
-# Quarry
+## Quarry
 
 Local semantic search is available via quarry. Use it to search indexed
 documents by meaning, ingest new content, and recall knowledge across sessions.

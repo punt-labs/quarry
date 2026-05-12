@@ -92,6 +92,7 @@ _COMMAND_ORDER: list[str] = [
     "enable",
     "disable",
     "optimize",
+    "backfill-sessions",
     "login",
     "logout",
     "remote",
@@ -1387,6 +1388,92 @@ def optimize_cmd(
         {"optimized": True, "fragments_before": fragments, "force": force},
         "Optimization complete.",
     )
+
+
+@app.command(name="backfill-sessions")
+@_cli_errors
+def backfill_sessions_cmd(
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Scan and report what would be ingested without writing.",
+        ),
+    ] = False,
+    collection: Annotated[
+        str,
+        typer.Option(
+            "--collection",
+            "-c",
+            help="Override target collection (all transcripts go here).",
+        ),
+    ] = "",
+    project: Annotated[
+        str,
+        typer.Option(
+            "--project",
+            help="Only backfill transcripts for this project path.",
+        ),
+    ] = "",
+    limit: Annotated[
+        int,
+        typer.Option(
+            "--limit",
+            "-n",
+            help="Max number of transcripts to process.",
+        ),
+    ] = 0,
+    provider: Annotated[  # noqa: ARG001
+        str,
+        typer.Option(
+            "--provider",
+            help="ONNX execution provider override.",
+        ),
+    ] = "",
+) -> None:
+    """Backfill historical Claude Code session transcripts.
+
+    Scans ~/.claude/projects/ for JSONL transcripts and ingests them
+    into per-project capture collections based on quarry registrations.
+    """
+    from quarry.backfill import backfill_sessions  # noqa: PLC0415
+
+    settings = _resolved_settings()
+    stats = backfill_sessions(
+        settings,
+        dry_run=dry_run,
+        collection_override=collection,
+        project_filter=project,
+        limit=limit,
+    )
+
+    data = {
+        "ingested": stats.ingested,
+        "skipped_existing": stats.skipped_existing,
+        "skipped_unregistered": stats.skipped_unregistered,
+        "skipped_empty": stats.skipped_empty,
+        "errors": stats.errors,
+        "dry_run": dry_run,
+    }
+
+    if dry_run:
+        text = (
+            f"[DRY RUN] Would ingest {stats.ingested} transcripts "
+            f"({stats.skipped_existing} already present, "
+            f"{stats.skipped_unregistered} unregistered)"
+        )
+    else:
+        text = (
+            f"Backfill complete: {stats.ingested} ingested, "
+            f"{stats.skipped_existing} skipped (already present), "
+            f"{stats.skipped_unregistered} skipped (unregistered)"
+        )
+        if stats.skipped_empty:
+            text += f", {stats.skipped_empty} skipped (empty)"
+        if stats.errors:
+            text += f", {len(stats.errors)} errors"
+
+    _emit(data, text)
 
 
 @app.command(name="login")
