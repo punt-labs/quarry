@@ -178,6 +178,7 @@ def _process_project(
         text = extract_transcript_text(str(transcript))
         if not text.strip():
             acc.skipped_empty += 1
+            acc.processed += 1
             continue
 
         doc_name = document_name_for_transcript(transcript)
@@ -225,13 +226,17 @@ def backfill_sessions(
     finally:
         conn.close()
 
-    mappings = build_project_mappings(registrations)
+    all_mappings = build_project_mappings(registrations)
     if project_filter:
-        mappings = [m for m in mappings if m.project_path == project_filter]
+        mappings = [m for m in all_mappings if m.project_path == project_filter]
+    else:
+        mappings = all_mappings
 
     db = get_db(settings.lancedb_path)
     acc = _Accumulator()
-    skipped_unregistered = _count_unregistered_dirs({m.encoded_dir for m in mappings})
+    skipped_unregistered = _count_unregistered_dirs(
+        {m.encoded_dir for m in all_mappings}
+    )
 
     for mapping in mappings:
         _process_project(
