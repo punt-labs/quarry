@@ -903,9 +903,9 @@ def status_cmd() -> None:
     settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
 
-    docs = list_documents(db)
     chunks = count_chunks(db)
     cols = db_list_collections(db)
+    doc_count = sum(c["document_count"] for c in cols)
 
     if settings.registry_path.exists():
         conn = open_registry(settings.registry_path)
@@ -921,7 +921,7 @@ def status_cmd() -> None:
     )
 
     data = {
-        "document_count": len(docs),
+        "document_count": doc_count,
         "collection_count": len(cols),
         "chunk_count": chunks,
         "registered_directories": len(regs),

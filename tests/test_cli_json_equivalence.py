@@ -182,14 +182,13 @@ class TestJsonEquivalenceStatus:
                 return_value=mock_settings,
             ),
             patch("quarry.__main__.get_db"),
-            patch(
-                "quarry.__main__.list_documents",
-                return_value=[{"doc": 1}] * 5,
-            ),
             patch("quarry.__main__.count_chunks", return_value=100),
             patch(
                 "quarry.__main__.db_list_collections",
-                return_value=[{"c": 1}, {"c": 2}],
+                return_value=[
+                    {"collection": "a", "document_count": 3, "chunk_count": 60},
+                    {"collection": "b", "document_count": 2, "chunk_count": 40},
+                ],
             ),
             patch("quarry.__main__.provider_display", return_value="cpu"),
         ):

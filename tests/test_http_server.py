@@ -359,7 +359,6 @@ class TestCollections:
 class TestStatus:
     def test_returns_status(self, client: TestClient) -> None:
         with (
-            patch("quarry.http_server.list_documents", return_value=[]),
             patch("quarry.http_server.count_chunks", return_value=0),
             patch("quarry.http_server.db_list_collections", return_value=[]),
         ):
@@ -383,7 +382,6 @@ class TestStatus:
 
         fake_regs = [MagicMock(), MagicMock()]
         with (
-            patch("quarry.http_server.list_documents", return_value=[]),
             patch("quarry.http_server.count_chunks", return_value=0),
             patch("quarry.http_server.db_list_collections", return_value=[]),
             patch("quarry.http_server.open_registry", return_value=MagicMock()),
@@ -406,7 +404,6 @@ class TestStatus:
         no_reg_client = TestClient(build_app(ctx), raise_server_exceptions=False)
 
         with (
-            patch("quarry.http_server.list_documents", return_value=[]),
             patch("quarry.http_server.count_chunks", return_value=0),
             patch("quarry.http_server.db_list_collections", return_value=[]),
         ):

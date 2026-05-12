@@ -529,30 +529,15 @@ class TestStatusCmd:
         mock_settings = _mock_settings()
         mock_settings.registry_path.exists.return_value = False
         mock_settings.lancedb_path.exists.return_value = False
-        mock_docs = [
-            {
-                "document_name": "a.pdf",
-                "collection": "default",
-                "indexed_pages": 5,
-                "total_pages": 5,
-                "chunk_count": 20,
-            },
-            {
-                "document_name": "b.pdf",
-                "collection": "default",
-                "indexed_pages": 3,
-                "total_pages": 3,
-                "chunk_count": 10,
-            },
-        ]
         with (
             patch("quarry.__main__._resolved_settings", return_value=mock_settings),
             patch("quarry.__main__.get_db"),
-            patch("quarry.__main__.list_documents", return_value=mock_docs),
             patch("quarry.__main__.count_chunks", return_value=30),
             patch(
                 "quarry.__main__.db_list_collections",
-                return_value=[{"collection": "default"}],
+                return_value=[
+                    {"collection": "default", "document_count": 2, "chunk_count": 30},
+                ],
             ),
         ):
             result = runner.invoke(app, ["status"])
@@ -1273,7 +1258,6 @@ class TestProxyConfigIsinstanceGuard:
             ),
             patch("quarry.__main__._resolved_settings", return_value=mock_settings),
             patch("quarry.__main__.get_db"),
-            patch("quarry.__main__.list_documents", return_value=[]),
             patch("quarry.__main__.count_chunks", return_value=0),
             patch("quarry.__main__.db_list_collections", return_value=[]),
         ):
