@@ -2,7 +2,7 @@
 
 **Date:** 2026-02-28
 **Status:** Historical
-**Builds on:** [Automagic Knowledge Capture](automagic-knowledge-capture.md), [Entire.io Hook Architecture](../../punt-kit/research/entire-io-hook-architecture.md)
+**Builds on:** [Automagic Knowledge Capture](automagic-knowledge-capture.md)
 
 ## The Distinction
 

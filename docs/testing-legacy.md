@@ -1,6 +1,6 @@
 # Testing Strategy
 
-**Status:** Historical — snapshot from May 2026. Superseded by implementation.
+**Status:** Historical — snapshot from March 2026. Superseded by current CLAUDE.md testing pyramid.
 
 Quarry has **794 tests** across 35 test files. Tests are organized into three tiers that mirror the architecture: processors parse formats, the pipeline orchestrates ingestion, and surfaces (CLI, MCP, HTTP) expose functionality. Each tier tests its own concerns and mocks the tier below.
 

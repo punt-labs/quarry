@@ -53,7 +53,7 @@ Users invoke these; you execute the underlying MCP calls.
 | `/remember <name>` | Ingest inline text content under a document name. |
 | `/explain <topic>` | Search and synthesize an explanation of a document or topic. |
 | `/source <claim>` | Find which document(s) a claim comes from. Cite document name, page, and excerpt. |
-| `/quarry [subcommand]` | Manage the knowledge base: `status` (default), `sync`, `collections`, `databases`, `registrations`. |
+| `/quarry [subcommand]` | Manage the knowledge base: `status` (default), `sync`, `collections`, `databases`, `registrations`, `enable`, `disable`. |
 
 ### Hooks (Automatic Behaviors)
 

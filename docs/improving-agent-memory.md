@@ -1,8 +1,8 @@
 # Improving Agent Memory on LanceDB
 
-**Status:** Historical — snapshot from March 2026. Superseded by implementation.
+**Status:** Historical — implemented in March 2026. Archived rationale.
 
-> **Status: Implemented.** The strategies described below are now live in quarry.
+> The strategies described below are now live in quarry.
 > Tag memories with `quarry ingest file.md --agent-handle claude --memory-type fact`.
 > Filter with `quarry find "query" --agent-handle claude --memory-type procedure`.
 > Hybrid search (vector + BM25 via RRF) is used for all `find` calls.
