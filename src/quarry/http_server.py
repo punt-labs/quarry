@@ -1249,9 +1249,9 @@ def _status_route(request: Request) -> JSONResponse:
 
     ctx = _ctx(request)
     settings = ctx.settings
-    docs = list_documents(ctx.db)
     chunks = count_chunks(ctx.db)
     cols = db_list_collections(ctx.db)
+    doc_count = sum(c["document_count"] for c in cols)
 
     if settings.registry_path.exists():
         conn = open_registry(settings.registry_path)
@@ -1268,7 +1268,7 @@ def _status_route(request: Request) -> JSONResponse:
 
     return JSONResponse(
         {
-            "document_count": len(docs),
+            "document_count": doc_count,
             "collection_count": len(cols),
             "chunk_count": chunks,
             "registered_directories": len(regs),
