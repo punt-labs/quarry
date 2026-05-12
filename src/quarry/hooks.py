@@ -571,7 +571,7 @@ def _extract_content_texts(content: list[object]) -> list[str]:
     return texts
 
 
-def _extract_message_text(record: dict[str, object]) -> str | None:
+def extract_message_text(record: dict[str, object]) -> str | None:
     """Extract text from a single transcript record, or None if not a message."""
     record_type = record.get("type", "")
     if record_type not in ("user", "assistant"):
@@ -589,7 +589,7 @@ def _extract_message_text(record: dict[str, object]) -> str | None:
     return f"[{role}] {' '.join(texts)}"
 
 
-def _extract_transcript_text(transcript_path: str) -> str:
+def extract_transcript_text(transcript_path: str) -> str:
     """Read a Claude Code transcript JSONL and extract conversation text.
 
     Extracts user and assistant messages, prefixing each with the role.
@@ -613,7 +613,7 @@ def _extract_transcript_text(transcript_path: str) -> str:
             obj = _json.loads(line)
         except (ValueError, TypeError):
             continue
-        entry = _extract_message_text(obj)
+        entry = extract_message_text(obj)
         if entry:
             parts.append(entry)
 
@@ -764,7 +764,7 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
     except Exception:
         logger.exception("pre-compact: archival failed, proceeding with ingest")
 
-    text = _extract_transcript_text(transcript_path)
+    text = extract_transcript_text(transcript_path)
     if not text:
         logger.debug("pre-compact: no conversation text found")
         return {}
