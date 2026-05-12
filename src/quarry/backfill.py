@@ -181,6 +181,16 @@ def _process_project(
             acc.processed += 1
             continue
 
+        from quarry.artifacts import (  # noqa: PLC0415
+            extract_artifacts,
+            format_artifacts_header,
+        )
+
+        artifacts = extract_artifacts(text)
+        header = format_artifacts_header(artifacts)
+        if header:
+            text = header + "\n\n" + text
+
         doc_name = document_name_for_transcript(transcript)
         try:
             ingest_content(

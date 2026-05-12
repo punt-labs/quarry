@@ -793,3 +793,47 @@ The captures separation (`<name>-captures` vs `<name>`) prevents web research an
 1. **Separate commands for each capture type** — Rejected. Three commands to set up what is conceptually one thing. Users forget the ethos step.
 2. **Auto-enable on first session** — Rejected. CEO constraint: auto-registration stays for basic functionality, but `quarry enable` is for explicit configuration with captures separation and ethos bootstrap.
 3. **Per-project config file only (no CLI)** — Rejected. The config file is written by `quarry enable`, not hand-authored. The command is the interface.
+
+## DES-030: Session Transcript Lifecycle and Capture Strategy
+
+**Status**: SETTLED (May 2026)
+
+### Context
+
+Claude Code stores session transcripts as `<session-uuid>.jsonl` files under `~/.claude/projects/<encoded-project-dir>/`. These are the primary source material for quarry's knowledge capture — each transcript contains the full conversation: research, debugging, design decisions, tool use.
+
+### The Cleanup Problem
+
+Claude Code deletes transcript `.jsonl` files older than `cleanupPeriodDays` (default: **30 days**) at startup. This is non-configurable per-project — it's a global setting in `~/.claude/settings.json`. The cleanup also covers `tool-results/`, `plans/`, `debug/`, and other session artifacts.
+
+Known issues (as of May 2026):
+- Auto-updates have silently deleted `.jsonl` files ([#41591](https://github.com/anthropics/claude-code/issues/41591))
+- `--setting-sources local` ignores the setting and uses the 30-day default ([#45903](https://github.com/anthropics/claude-code/issues/45903))
+- No warning or notification before deletion ([#46175](https://github.com/anthropics/claude-code/issues/46175))
+
+### Decision
+
+**PreCompact hook is the primary capture mechanism.** The hook fires before context compaction, while the transcript still exists in memory. It extracts conversation text and ingests it into quarry before Claude Code can clean it up. This is reliable regardless of `cleanupPeriodDays`.
+
+**`quarry backfill-sessions` is a secondary, bounded recovery tool.** It ingests `.jsonl` files that still exist on disk — typically only sessions from the last 30 days. It cannot recover transcripts that have already been cleaned up. Its value is: (a) capturing the recent window when quarry is first installed, and (b) re-ingesting after a quarry database reset.
+
+**The two mechanisms are complementary, not redundant.** PreCompact captures going forward; backfill captures the recent past. Neither can capture sessions older than `cleanupPeriodDays` unless the user has extended that setting.
+
+### Filesystem Structure
+
+```
+~/.claude/projects/<encoded-project-dir>/
+    <session-uuid>.jsonl          # Main transcript (cleaned up after 30 days)
+    <session-uuid>/
+        subagents/                # Subagent transcripts
+            agent-<id>.jsonl
+        tool-results/             # Tool output artifacts
+```
+
+The encoded project dir replaces `/` with `-` and preserves the leading dash (e.g., `/Users/jm/code` → `-Users-jm-code`).
+
+### Implications
+
+1. Users who want full history should set `cleanupPeriodDays` to a high value (e.g., 365) in `~/.claude/settings.json` before sessions are lost.
+2. `quarry enable` should advise users about the cleanup window.
+3. Subagent transcripts (`subagents/agent-<id>.jsonl`) are not currently ingested by either mechanism — they are a future opportunity but not the primary knowledge source.
