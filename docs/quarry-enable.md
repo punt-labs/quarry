@@ -1,5 +1,7 @@
 # quarry enable -- Task-Level Implementation Design
 
+**Status:** Historical — snapshot from May 2026. Superseded by implementation.
+
 ## Problem
 
 Quarry captures three kinds of knowledge per project: file sync,

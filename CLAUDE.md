@@ -21,11 +21,11 @@ Local semantic search for AI agents and humans. Indexes 20+ document formats, em
 
 ## Testing
 
-### Pyramid (1498 tests collected, 22 deselected in CI)
+### Pyramid (1559 tests collected, 22 deselected in CI)
 
 | Layer | Count | Make target | Runs in CI | Coverage |
 |-------|-------|-------------|------------|----------|
-| Unit | ~1470 | `make test` | yes | DB, embedding, search, CLI, doctor, hooks, service, install scripts |
+| Unit | ~1530 | `make test` | yes | DB, embedding, search, CLI, doctor, hooks, enable/disable, service, install scripts |
 | Integration | 22 | `make test-integration` | no (needs real model) | Real filesystem + ONNX model |
 | Shell scripts | ~18 | `make test` (via pytest) | yes | Install script ordering, shellcheck |
 | HTTP API contract | partial | `make test` | yes | Endpoint shape/param, growing |
@@ -99,7 +99,7 @@ Apply the five recurring bug classes from the Testing section as evaluator check
 
 ## Key Design Documents
 
-- `DESIGN.md` — ADR log (DES-001 through DES-018)
+- `DESIGN.md` — ADR log (DES-001 through DES-029)
 - `docs/architecture.tex` → `docs/architecture.pdf` — system architecture, module responsibilities, search and retrieval, deployment
 - `prfaq.tex` → `prfaq.pdf` — product direction and risk assumptions
 - `docs/improving-agent-memory.md` — agent memory design rationale

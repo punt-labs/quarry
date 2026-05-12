@@ -62,8 +62,8 @@ These fire without user action. All are fail-open — errors are logged, never b
 | Hook | Event | What it does |
 |------|-------|-------------|
 | **Session start** | `SessionStart` | Auto-registers the working directory and launches a background sync so the codebase starts getting indexed shortly after session start. |
-| **Web fetch capture** | `PostToolUse` on `WebFetch` | URLs you fetch during research are auto-ingested into the `web-captures` collection. Deduplicates by document name. Uses the already-fetched content (no re-fetch). |
-| **Pre-compact capture** | `PreCompact` | Before context compaction, captures the conversation transcript into the `session-notes` collection. User/assistant messages are extracted, tool-use blocks skipped, capped at 500K chars. |
+| **Web fetch capture** | `PostToolUse` on `WebFetch` | URLs you fetch during research are auto-ingested. When a project is enabled (`quarry enable`), captures route to the `<name>-captures` collection; otherwise they fall back to the global `web-captures` collection. Deduplicates by document name. Uses the already-fetched content (no re-fetch). |
+| **Pre-compact capture** | `PreCompact` | Before context compaction, captures the conversation transcript. When a project is enabled (`quarry enable`), captures route to the `<name>-captures` collection; otherwise they fall back to `session-notes`. User/assistant messages are extracted, tool-use blocks skipped, capped at 500K chars. |
 | **Output suppression** | `PostToolUse` on quarry tools | Formats quarry tool output for display. |
 
 ### Subagents

@@ -1,5 +1,7 @@
 # CLI Logging UX -- Implementation Design
 
+**Status:** Historical — snapshot from April 2026. Superseded by implementation.
+
 Task-level implementation plan for the CLI logging UX overhaul defined
 in `docs/cli-logging-ux.md`. Each item specifies exact code changes,
 line numbers (as of commit `324841d`), and test cases.

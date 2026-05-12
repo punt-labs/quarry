@@ -1,5 +1,7 @@
 # Review: Provider Auto-Detection Design (DES-016 Implementation)
 
+**Status:** Historical — snapshot from March 2026. Superseded by implementation.
+
 Reviewer: kpz
 Date: 2026-03-27
 

@@ -1,5 +1,7 @@
 # Design: Fix Compaction Death Spiral from Unguarded Concurrent Sync
 
+**Status:** Historical — snapshot from April 2026. Superseded by implementation.
+
 **Bead**: quarry-jms6
 **Pipeline**: standard-2026-04-18-b600de
 **Author**: claude (COO)

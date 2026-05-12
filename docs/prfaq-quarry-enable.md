@@ -1,5 +1,7 @@
 # PR/FAQ: quarry enable
 
+**Status:** Historical — snapshot from May 2026. Superseded by implementation.
+
 ## CEO Override
 
 Q9 and Q13 in the Internal FAQ originally proposed removing auto-registration

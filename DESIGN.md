@@ -406,7 +406,7 @@ Quarry servers hold the user's entire document corpus. Plaintext connections exp
 ## DES-021: Remote CLI Routing — No Split Horizon
 
 **Date:** 2026-04-01
-**Status:** PROPOSED
+**Status:** SETTLED
 **Topic:** How CLI commands route when a remote server is configured
 
 ### Design
@@ -419,13 +419,12 @@ When a remote quarry server is configured (via `quarry login`), **every data com
 
 The CLI detects remote configuration via `_safe_proxy_config()` and routes through `_remote_https_get()`, `_remote_https_post()`, and `_remote_https_delete()` helpers with the pinned CA cert and Bearer token.
 
-**Current state (v1.12.4):** The following commands route remotely: `find` (/search), `show` (/show), `status` (/status), `ingest` (/ingest POST), `remember` (/remember POST), `delete document` (DELETE /documents), `delete collection` (DELETE /collections), `sync` (POST /sync), `list documents` (GET /documents), `list collections` (GET /collections), `list registrations` (GET /registrations), `list databases` (GET /databases).
+**Current state (v1.16.0):** All data commands route remotely: `find` (/search), `show` (/show), `status` (/status), `ingest` (/ingest POST), `remember` (/remember POST), `delete document` (DELETE /documents), `delete collection` (DELETE /collections), `sync` (POST /sync), `list documents` (GET /documents), `list collections` (GET /collections), `list registrations` (GET /registrations), `list databases` (GET /databases), `register` (POST /registrations), `deregister` (DELETE /registrations). Register and deregister use fire-and-forget (return task_id, exit 0) since v1.15.0.
 
 **Remaining endpoint surface:**
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/registrations` | POST/DELETE | Directory registration create/delete (needs endpoint) |
 | `/use` | POST | Switch active database (needs endpoint) |
 
 ### Why This Design

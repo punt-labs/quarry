@@ -1,5 +1,7 @@
 # Build Plan: quarry-g0ed — Remote CLI Parity
 
+**Status:** Historical — snapshot from April 2026. Superseded by implementation.
+
 Epic: **quarry-g0ed** — all data commands route to remote server when configured.
 No silent local fallback. Only `login`/`logout`/`remote` stay local.
 

@@ -1,6 +1,7 @@
 # Async Operations: Unified Task Model for HTTP API
 
-**Status**: IMPLEMENTED
+**Status:** Historical — snapshot from April 2026. Superseded by implementation.
+
 **Date**: 2026-04-18
 **Author**: rmh
 
