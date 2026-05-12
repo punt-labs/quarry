@@ -332,16 +332,15 @@ def _append_claudemd_block(directory: Path) -> bool:
     """
     claudemd = directory / "CLAUDE.md"
     if claudemd.exists():
-        content = claudemd.read_text()
+        content = claudemd.read_text(encoding="utf-8")
         if _CLAUDEMD_BEGIN in content:
             return False
-        # Ensure a blank line before the block.
         if content and not content.endswith("\n"):
             content += "\n"
         content += "\n" + _CLAUDEMD_BLOCK
     else:
         content = _CLAUDEMD_BLOCK
-    claudemd.write_text(content)
+    claudemd.write_text(content, encoding="utf-8")
     return True
 
 
@@ -349,22 +348,20 @@ def _remove_claudemd_block(directory: Path) -> bool:
     """Remove quarry instruction block from CLAUDE.md.
 
     Removes everything from ``<!-- quarry:begin -->`` through
-    ``<!-- quarry:end -->`` inclusive. Cleans up extra trailing
-    blank lines left by removal. Returns True if a block was
-    removed, False otherwise.
+    ``<!-- quarry:end -->`` inclusive. Both markers must be present.
+    Cleans up extra trailing blank lines left by removal. Returns
+    True if a block was removed, False otherwise.
     """
     claudemd = directory / "CLAUDE.md"
     if not claudemd.exists():
         return False
-    content = claudemd.read_text()
-    if _CLAUDEMD_BEGIN not in content:
+    content = claudemd.read_text(encoding="utf-8")
+    if _CLAUDEMD_BEGIN not in content or _CLAUDEMD_END not in content:
         return False
-    # Remove the block and any single leading blank line before it.
     pattern = (
         r"\n?" + re.escape(_CLAUDEMD_BEGIN) + r".*?" + re.escape(_CLAUDEMD_END) + r"\n?"
     )
     cleaned = re.sub(pattern, "", content, flags=re.DOTALL)
-    # Collapse trailing whitespace to at most one newline.
     cleaned = cleaned.rstrip() + "\n"
-    claudemd.write_text(cleaned)
+    claudemd.write_text(cleaned, encoding="utf-8")
     return True

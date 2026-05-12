@@ -880,7 +880,7 @@ class TestT20CheckEnableStatusConfigMissing:
 # -----------------------------------------------------------------------
 
 
-class TestEnableAppendsCaudemdBlock:
+class TestEnableAppendsClaudemdBlock:
     def test_enable_creates_claudemd_with_markers(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
