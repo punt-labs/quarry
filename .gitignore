@@ -46,6 +46,7 @@ htmlcov/
 *.out
 *.toc
 *.synctex.gz
+*.pk
 
 # Claude Flow (deprecated)
 .claude-flow/

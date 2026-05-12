@@ -275,6 +275,13 @@ Hooks       & \modpath{hooks.py}        & Claude Code plugin hooks:
               session-start (auto-register), post-web-fetch
               (auto-ingest), pre-compact (capture transcript).
               All fail-open. \\
+Hook Entry  & \modpath{\_hook\_entry.py} & Lightweight hook dispatcher
+              that bypasses full CLI import chain.  Dispatches
+              via \texttt{sys.argv} with lazy imports
+              ($\sim$0.1\,s vs $\sim$1.5\,s for full CLI). \\
+Remote      & \modpath{remote.py}       & Remote server HTTP client:
+              mcp-proxy config read/write, TOFU CA cert fetch
+              and storage, connection validation. \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -296,6 +303,18 @@ Sitemap    & \modpath{sitemap.py}    & Sitemap discovery and URL
 Doctor     & \modpath{doctor.py}     & Health checks and install flow:
              model availability, database access, MCP
              configuration, ethos extension setup. \\
+Enable     & \modpath{enable.py}     & Project activation and
+             deactivation: register directory, bootstrap ethos
+             memory extensions, write per-project config. \\
+TLS        & \modpath{tls.py}        & TLS certificate generation:
+             self-signed EC\,P-256 CA and server cert with
+             atomic file writes and TOFU-safe CA reuse. \\
+Proxy      & \modpath{proxy.py}      & \texttt{mcp-proxy} binary
+             download, SHA256 verification, and
+             platform-specific installation. \\
+Logging    & \modpath{logging\_config.py} & Structured logging
+             configuration: rotating file handler + stderr,
+             \texttt{QUARRY\_LOG\_LEVEL} override. \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -1004,6 +1023,10 @@ user/assistant message text, skipping tool-use blocks.  Capped at
 \texttt{register <directory>} & Register for incremental sync \\
 \texttt{deregister <collection>} & Remove directory registration \\
 \texttt{sync}                 & Sync all registered directories \\
+\texttt{enable [directory]}   & Enable quarry knowledge capture for a project directory \\
+\texttt{disable [directory]}  & Disable quarry knowledge capture; remove registration and data \\
+\texttt{optimize}             & Compact LanceDB table and rebuild indexes (CLI-only).
+  Flags: \texttt{-{}-force} \\
 \texttt{list documents}       & List indexed documents \\
 \texttt{list collections}     & List collections with counts \\
 \texttt{list databases}       & List named databases \\
@@ -1040,7 +1063,7 @@ Registration create/delete and \texttt{use} remain local-only.
 \section{Test Architecture}
 % ===================================================================
 
-821 tests across 33 files.  Three tiers plus integration:
+1559 tests across 44 files.  Three tiers plus integration:
 
 \begin{center}
 \begin{tabular}{lp{5cm}p{5cm}}

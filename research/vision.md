@@ -1,8 +1,8 @@
 # Quarry Vision: Ambient Knowledge for Claude Code
 
 **Date:** 2026-02-28
-**Status:** Active
-**Builds on:** [Automagic Knowledge Capture](automagic-knowledge-capture.md), [Entire.io Hook Architecture](../../punt-kit/research/entire-io-hook-architecture.md)
+**Status:** Historical
+**Builds on:** [Automagic Knowledge Capture](automagic-knowledge-capture.md)
 
 ## The Distinction
 

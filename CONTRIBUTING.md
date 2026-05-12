@@ -5,7 +5,7 @@
 ```bash
 git clone https://github.com/punt-labs/quarry.git
 cd quarry
-uv sync --frozen --extra dev
+uv sync --extra dev
 ```
 
 ## Quality Gates
@@ -13,11 +13,10 @@ uv sync --frozen --extra dev
 Every commit must pass:
 
 ```bash
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy src/ tests/
-uv run pytest
+make check
 ```
+
+This runs lint, type checking, and tests in one command (`make lint` + `make type` + `make test`).
 
 ## Branch Discipline
 
@@ -68,6 +67,8 @@ Input -> Pages -> Chunks -> Vectors -> LanceDB
 ### Design Documents
 
 - [Architecture](docs/architecture.tex) -- system architecture, logging and exception handling standards
+- [DESIGN.md](DESIGN.md) -- architectural decision records (29 ADRs)
+- [Z Specification](docs/claude-code-quarry.tex) -- formal specification of the Claude Code plugin state machine
 
 ### Key Abstractions
 

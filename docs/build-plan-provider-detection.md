@@ -1,5 +1,7 @@
 # Build Plan: Provider Auto-Detection (DES-016)
 
+**Status:** Historical — snapshot from March 2026. Superseded by implementation.
+
 Spec for rmh. Implements provider auto-detection with all kpz review
 findings incorporated.
 

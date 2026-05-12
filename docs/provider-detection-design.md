@@ -1,13 +1,15 @@
 # Provider Auto-Detection and Model Selection
 
+**Status:** Historical — snapshot from March 2026. Superseded by implementation.
+
 Design for DES-016 implementation. Adds runtime provider probing, model
 precision selection, and graceful fallback to `quarry`'s embedding layer.
 
 > **Note:** This document is the original design proposal. The review at
 > `provider-detection-review.md` identified structural changes (drop session
 > from ProviderSelection, support QUARRY_PROVIDER=cuda). The build plan at
-> `build-plan-quarry-b9m.md` is the authoritative implementation spec and
-> supersedes this document where they differ.
+> `build-plan-provider-detection.md` was the authoritative implementation spec and
+> superseded this document where they differed.
 
 ## 1. Provider Probe Algorithm
 

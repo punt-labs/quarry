@@ -1,5 +1,7 @@
 # Improving Agent Memory on LanceDB
 
+**Status:** Historical — snapshot from March 2026. Superseded by implementation.
+
 ## The Problem
 
 You have an agent that needs to remember a large body of seeded knowledge and accumulate new memories as it works. Your current setup uses LanceDB with custom ingestion and recall. This document covers what the highest-performing memory systems do differently and how to apply those techniques locally, without remote API calls.

@@ -1,5 +1,7 @@
 # CLI Logging and Output UX Design
 
+**Status:** Historical — snapshot from April 2026. Superseded by implementation.
+
 **Scope**: This design covers all code paths in `__main__.py` — local
 and remote modes. Every command, flag, and output channel is in scope
 regardless of whether the transport is a local LanceDB call or an HTTP
