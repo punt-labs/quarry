@@ -5,7 +5,7 @@
 ```bash
 git clone https://github.com/punt-labs/quarry.git
 cd quarry
-uv sync
+uv sync --extra dev
 ```
 
 ## Quality Gates
