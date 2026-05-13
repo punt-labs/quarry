@@ -5,6 +5,7 @@ from __future__ import annotations
 from quarry.artifacts import (
     SessionArtifacts,
     extract_artifacts,
+    format_artifacts_frontmatter,
     format_artifacts_header,
 )
 
@@ -210,3 +211,60 @@ def test_empty_artifacts_returns_empty() -> None:
         bead_ids=(),
     )
     assert format_artifacts_header(arts) == ""
+
+
+# -- format_artifacts_frontmatter -------------------------------------------
+
+
+def test_frontmatter_all_fields() -> None:
+    arts = SessionArtifacts(
+        commit_shas=("a950c1c", "0dcdbd5"),
+        pr_numbers=(269, 270),
+        branch_names=("fix/status-performance",),
+        bead_ids=("quarry-vdh6",),
+    )
+    fm = format_artifacts_frontmatter("ed821224-abcd", "2026-05-12T21:44:17Z", arts)
+    assert fm.startswith("---\n")
+    assert fm.endswith("\n---")
+    assert "session_id: ed821224-abcd" in fm
+    assert 'timestamp: "2026-05-12T21:44:17Z"' in fm
+    assert "  - a950c1c" in fm
+    assert "  - 269" in fm
+    assert "  - fix/status-performance" in fm
+    assert "  - quarry-vdh6" in fm
+
+
+def test_frontmatter_partial() -> None:
+    arts = SessionArtifacts(
+        commit_shas=("abc1234",),
+        pr_numbers=(),
+        branch_names=(),
+        bead_ids=(),
+    )
+    fm = format_artifacts_frontmatter("sess-1234", "2026-01-01T00:00:00Z", arts)
+    assert "commits:" in fm
+    assert "prs:" not in fm
+    assert "branches:" not in fm
+    assert "beads:" not in fm
+
+
+def test_frontmatter_empty_artifacts() -> None:
+    arts = SessionArtifacts(
+        commit_shas=(),
+        pr_numbers=(),
+        branch_names=(),
+        bead_ids=(),
+    )
+    fm = format_artifacts_frontmatter("sess-1234", "2026-01-01T00:00:00Z", arts)
+    assert fm.startswith("---\n")
+    assert "session_id: sess-1234" in fm
+
+
+def test_frontmatter_empty_session_id() -> None:
+    arts = SessionArtifacts(
+        commit_shas=("abc1234",),
+        pr_numbers=(),
+        branch_names=(),
+        bead_ids=(),
+    )
+    assert format_artifacts_frontmatter("", "2026-01-01T00:00:00Z", arts) == ""

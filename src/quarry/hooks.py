@@ -818,14 +818,16 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
     settings = _resolve_settings()
     agent_handle = _read_ethos_agent_handle(cwd) if cwd else ""
 
-    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
+    now = datetime.now(UTC)
+    timestamp = now.strftime("%Y%m%dT%H%M%S")
+    iso_timestamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     # Write capture file to project directory.
     if cwd:
         _write_capture_file(
             project_dir=Path(cwd),
             session_id=session_id,
-            timestamp=timestamp,
+            timestamp=iso_timestamp,
             artifacts=artifacts,
             text=raw_text,
         )
