@@ -108,20 +108,35 @@ select = [
     "ISC",  # flake8-implicit-str-concat
     "FBT",  # flake8-boolean-trap
     "C90",  # mccabe complexity
+    "PLR",  # pylint refactor (god classes, long functions, too many args)
 ]
 extend-select = ["PLC0415"]
 
 ignore = [
     "TC001",  # Move import into TYPE_CHECKING - too aggressive
     "TC003",  # Move standard lib import into TYPE_CHECKING
+    "PLR2004",  # Magic value in comparison — too noisy for config/thresholds
+    "PLR0911",  # Too many return statements — early returns are fine
+    "PLR0912",  # Too many branches — defer to mccabe for this
 ]
 
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pylint]
+max-args = 8
+max-statements = 60
+
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S101", "S106", "S108", "T20", "SLF001", "ARG", "PLC0415", "A002"]
+"tests/*" = ["S101", "S106", "S108", "T20", "SLF001", "ARG", "PLC0415", "A002", "PLR2004", "PLR0913"]
 "benchmarks/*" = ["T20", "S311", "BLE001", "PLC0415", "SIM905"]
-"src/quarry/__main__.py" = ["T20", "FBT"]
-"src/quarry/mcp_server.py" = ["T20", "FBT"]
-"src/quarry/hooks.py" = ["S603"]  # Popen calls use sys.executable — trusted
+"src/quarry/__main__.py" = ["T20", "FBT", "PLR0913"]
+"src/quarry/database.py" = ["PLR0913"]
+"src/quarry/doctor.py" = ["PLR0915"]
+"src/quarry/hooks.py" = ["S603", "PLR0913"]
+"src/quarry/http_server.py" = ["PLR0913"]
+"src/quarry/mcp_server.py" = ["T20", "FBT", "PLR0913"]
+"src/quarry/pipeline.py" = ["PLR0913"]
 
 [tool.ruff.format]
 quote-style = "double"

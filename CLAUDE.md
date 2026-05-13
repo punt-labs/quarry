@@ -16,8 +16,22 @@ Local semantic search for AI agents and humans. Indexes 20+ document formats, em
 - **Quality gates**: always use `make check` — never ad-hoc individual lint/type/test commands.
 - `make check` = `make lint` + `make type` + `make test`
 - `make docs` builds all LaTeX documents (prfaq, architecture, Z spec). PDFs are committed.
+- `make metrics` — ABC complexity analysis. Any module over magnitude 200 needs attention.
+- `make coverage` — test coverage with HTML report in `htmlcov/`.
 - **Full test suite** needs `timeout=300000` on the Bash tool (5 minutes). During development, use targeted tests: `uv run pytest tests/test_specific.py -v`.
 - **Never retry a command that produces no output.** Diagnose first.
+
+## Code Quality Standards
+
+**Module size limits.** No module over 500 lines without a design reason. Known violations: `__main__.py` (2,008), `pipeline.py` (1,589), `http_server.py` (1,530), `doctor.py` (1,141), `database.py` (925), `hooks.py` (868), `sync.py` (660), `mcp_server.py` (581). When a module grows past the limit, the next change to that module must include extraction.
+
+**Class design.** Classes have a single responsibility. Prefer composition over inheritance. Use `Protocol` for structural typing at boundaries. A module with zero classes and 20+ module-level functions is procedural — it needs a design pass, not more functions.
+
+**Function design.** Functions that share a pattern signal a missing abstraction. Extract the pattern after the third occurrence. Use `make metrics` to measure ABC complexity — high-magnitude functions need decomposition.
+
+**No copy-paste.** If the same structure appears a third time, extract it. Three similar functions is not "better than a premature abstraction" when the pattern is proven.
+
+**Design-first delegation.** Every non-trivial delegation has two phases: (1) design mission — describes the problem, constraints, and invariants, does NOT prescribe a write set; (2) implementation mission — uses the write set produced by the design phase. The specialist decides what to create, split, or extract based on quality standards. Never skip the design phase.
 
 ## Testing
 
