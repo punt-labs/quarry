@@ -7,6 +7,11 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+from quarry.artifacts import (
+    SessionArtifacts,
+    extract_artifacts,
+    format_artifacts_header,
+)
 from quarry.config import Settings
 from quarry.database import get_db, list_documents
 from quarry.hooks import extract_transcript_text
@@ -138,6 +143,33 @@ def _count_unregistered_dirs(mapped_dirs: set[str]) -> int:
     return len(all_dirs - mapped_dirs)
 
 
+def _write_backfill_capture_file(
+    project_path: str,
+    session_id: str,
+    transcript: Path,
+    artifacts: SessionArtifacts,
+    text: str,
+) -> None:
+    """Write capture file during backfill. Fails silently."""
+    try:
+        from quarry.artifacts import format_artifacts_frontmatter  # noqa: PLC0415
+
+        mtime = transcript.stat().st_mtime
+        timestamp = datetime.fromtimestamp(mtime, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        frontmatter = format_artifacts_frontmatter(session_id, timestamp, artifacts)
+        if not frontmatter:
+            return
+
+        captures_dir = Path(project_path) / ".punt-labs" / "quarry" / "captures"
+        captures_dir.mkdir(parents=True, exist_ok=True)
+
+        filename = f"session-{session_id[:8]}.md"
+        capture_file = captures_dir / filename
+        capture_file.write_text(frontmatter + "\n\n" + text, encoding="utf-8")
+    except Exception:
+        logger.exception("backfill: capture file write failed for %s", session_id[:8])
+
+
 def _process_project(
     mapping: ProjectMapping,
     db: LanceDB,
@@ -149,11 +181,6 @@ def _process_project(
     limit: int,
 ) -> None:
     """Process all transcripts for a single project mapping."""
-    from quarry.artifacts import (  # noqa: PLC0415
-        extract_artifacts,
-        format_artifacts_header,
-    )
-
     target_collection = collection_override or mapping.captures_collection
     transcripts = list_transcript_files(mapping.encoded_dir)
     if not transcripts:
@@ -187,6 +214,16 @@ def _process_project(
             continue
 
         artifacts = extract_artifacts(text)
+
+        # Write capture file to project directory.
+        _write_backfill_capture_file(
+            project_path=mapping.project_path,
+            session_id=transcript.stem,
+            transcript=transcript,
+            artifacts=artifacts,
+            text=text,
+        )
+
         header = format_artifacts_header(artifacts)
         if header:
             text = header + "\n\n" + text
