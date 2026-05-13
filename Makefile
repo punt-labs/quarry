@@ -1,4 +1,4 @@
-.PHONY: help test lint lint-docs type check check-full check-oo report format build test-wheel clean depot bench-cuda docs docs-clean
+.PHONY: help test lint lint-docs type check check-full check-oo update-oo report format build test-wheel clean depot bench-cuda docs docs-clean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -17,10 +17,13 @@ type: ## Type check with mypy and pyright
 	uv run mypy src/ tests/
 	uv run pyright src/ tests/
 
-check: check-oo lint type test ## Run all quality gates
+check: lint type test check-oo ## Run all quality gates
 
-check-oo: ## OO structure score (tools/oo_score.py)
-	uv run python tools/oo_score.py src/quarry/
+check-oo: ## OO ratchet — must improve over baseline, never regress
+	uv run python tools/oo_score.py src/quarry/ --check
+
+update-oo: ## Update OO baseline after improvements (stage .oo-baseline.json and .oo-audit.jsonl)
+	uv run python tools/oo_score.py src/quarry/ --update
 
 report: ## Full diagnostics (OO score + all checks, no fail-fast)
 	-uv run python tools/oo_score.py src/quarry/ --threshold

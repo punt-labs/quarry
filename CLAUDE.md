@@ -68,9 +68,24 @@ See `docs/architecture.tex` for the full system description.
 
 **No copy-paste.** If the same structure appears a third time, extract it.
 
+**Known pyright debt:** 6 `reportUnknown*` checks are suppressed project-wide because lancedb, rapidocr, onnxruntime, fitz, and pyarrow ship no type stubs. This means pyright cannot catch unknown-type bugs in modules that don't import these libraries either. The suppressions should be narrowed as these libraries add stubs. Pyright's `executionEnvironments` scopes by directory, not by import, so the only current alternative is 591 inline `# pyright: ignore` comments.
+
+**OO ratchet:** `make check-oo` (part of `make check`) compares current OO scores against `.oo-baseline.json`. It passes only if no metric regressed on touched files and at least one metric improved. It fails if any metric got worse or nothing improved. This is how the codebase converges to the OO standard — every commit ratchets forward.
+
+Workflow:
+
+1. Write code that improves OO quality on the files you touch.
+2. `make check` runs `check-oo --check` automatically. If it fails, fix the regression.
+3. After all checks pass, run `make update-oo` to write the new baseline.
+4. Stage `.oo-baseline.json` and `.oo-audit.jsonl` with your commit — they are committed files.
+
+Bootstrap (first time only): run `make update-oo` to create the initial baseline. After that, the ratchet is active.
+
 **Metrics tools:**
 
-- `make check-oo` — OO structure score via `tools/oo_score.py`. Part of `make check`. Measures method_ratio, encapsulation, params, complexity, module size, init violations, public attribute violations.
+- `make check-oo` — OO ratchet against baseline (11 metrics: method_ratio, encapsulation, params, complexity, module size, class ratios, init violations, public attribute violations, future_annotations).
+- `make update-oo` — update baseline and append to audit log after improvements.
+- `make report` — full diagnostics including per-file OO breakdown (no fail-fast).
 - `make metrics` — ABC complexity analysis. Any module over magnitude 200 needs attention.
 - `make coverage` — test coverage with HTML report in `htmlcov/`.
 

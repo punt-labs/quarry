@@ -4,6 +4,9 @@ module is. Produces JSON output with numeric scores for agent consumption.
 
 Usage:
     python tools/oo_score.py <file_or_directory> [--json] [--threshold]
+    python tools/oo_score.py <file_or_directory> --check     # ratchet check
+    python tools/oo_score.py <file_or_directory> --update    # update baseline
+    python tools/oo_score.py <file_or_directory> --log       # audit history
 
 Metrics produced:
     method_ratio        % of functions that are class methods (target: >= 80%)
@@ -18,13 +21,21 @@ Metrics produced:
     public_attr_violations count of self.X = without underscore (target: 0)
     future_annotations   whether from __future__ import annotations present (target: 1)
 """
+
 from __future__ import annotations
 
 import ast
+import datetime
 import json
+import subprocess
 import sys
 from pathlib import Path
-from typing import Self
+from typing import ClassVar, Self
+
+
+def _writeln(text: str = "") -> None:
+    """Write a line to stdout."""
+    sys.stdout.write(text + "\n")
 
 
 class ModuleMetrics:
@@ -36,7 +47,7 @@ class ModuleMetrics:
         self = super().__new__(cls)
         self._path = path
         self._tree = ast.parse(source, filename=path)
-        self._source_lines = len([l for l in source.splitlines() if l.strip()])
+        self._source_lines = len([line for line in source.splitlines() if line.strip()])
         return self
 
     def compute(self) -> dict[str, float | int | str]:
@@ -59,9 +70,9 @@ class ModuleMetrics:
 
     def _count_classes(self) -> int:
         return sum(
-            1 for node in ast.iter_child_nodes(self._tree)
-            if isinstance(node, ast.ClassDef)
-            and not self._is_type_definition(node)
+            1
+            for node in ast.iter_child_nodes(self._tree)
+            if isinstance(node, ast.ClassDef) and not self._is_type_definition(node)
         )
 
     @staticmethod
@@ -70,26 +81,38 @@ class ModuleMetrics:
         for base in node.bases:
             if isinstance(base, ast.Name) and base.id in type_bases:
                 return True
-            if isinstance(base, ast.Subscript) and isinstance(base.value, ast.Name) and base.value.id in type_bases:
+            if (
+                isinstance(base, ast.Subscript)
+                and isinstance(base.value, ast.Name)
+                and base.value.id in type_bases
+            ):
                 return True
         return False
 
     def _count_top_level_functions(self) -> int:
         return sum(
-            1 for node in ast.iter_child_nodes(self._tree)
+            1
+            for node in ast.iter_child_nodes(self._tree)
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         )
 
     def _count_top_level_statements(self) -> int:
         skip_types = (
-            ast.Import, ast.ImportFrom, ast.ClassDef,
-            ast.FunctionDef, ast.AsyncFunctionDef,
+            ast.Import,
+            ast.ImportFrom,
+            ast.ClassDef,
+            ast.FunctionDef,
+            ast.AsyncFunctionDef,
         )
         count = 0
         for node in ast.iter_child_nodes(self._tree):
             if isinstance(node, skip_types):
                 continue
-            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            if (
+                isinstance(node, ast.Expr)
+                and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)
+            ):
                 continue
             count += 1
         return count
@@ -164,21 +187,25 @@ class ModuleMetrics:
         return max_cc
 
     def _avg_complexity(self) -> float:
-        complexities = []
-        for node in ast.walk(self._tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                complexities.append(self._cyclomatic_complexity(node))
+        complexities = [
+            self._cyclomatic_complexity(node)
+            for node in ast.walk(self._tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ]
         if not complexities:
             return 0.0
         return round(sum(complexities) / len(complexities), 2)
 
     @staticmethod
-    def _cyclomatic_complexity(func_node: ast.FunctionDef | ast.AsyncFunctionDef) -> int:
+    def _cyclomatic_complexity(
+        func_node: ast.FunctionDef | ast.AsyncFunctionDef,
+    ) -> int:
         cc = 1
         for node in ast.walk(func_node):
-            if isinstance(node, (ast.If, ast.While, ast.For, ast.AsyncFor)):
-                cc += 1
-            elif isinstance(node, ast.ExceptHandler):
+            if isinstance(
+                node,
+                (ast.If, ast.While, ast.For, ast.AsyncFor, ast.ExceptHandler),
+            ):
                 cc += 1
             elif isinstance(node, ast.BoolOp):
                 cc += len(node.values) - 1
@@ -193,7 +220,11 @@ class ModuleMetrics:
         for d in node.decorator_list:
             if isinstance(d, ast.Name) and d.id == "dataclass":
                 return True
-            if isinstance(d, ast.Call) and isinstance(d.func, ast.Name) and d.func.id == "dataclass":
+            if (
+                isinstance(d, ast.Call)
+                and isinstance(d.func, ast.Name)
+                and d.func.id == "dataclass"
+            ):
                 return True
             if isinstance(d, ast.Attribute) and d.attr == "dataclass":
                 return True
@@ -229,11 +260,12 @@ class ModuleMetrics:
 
     def _has_future_annotations(self) -> int:
         for node in ast.iter_child_nodes(self._tree):
-            if isinstance(node, ast.ImportFrom):
-                if node.module == "__future__" and any(
-                    alias.name == "annotations" for alias in node.names
-                ):
-                    return 1
+            if (
+                isinstance(node, ast.ImportFrom)
+                and node.module == "__future__"
+                and any(alias.name == "annotations" for alias in node.names)
+            ):
+                return 1
         return 0
 
 
@@ -243,7 +275,7 @@ class Scorer:
     _thresholds: dict[str, tuple[str, float]]
     _results: list[dict[str, float | int | str]]
 
-    THRESHOLDS: dict[str, tuple[str, float]] = {
+    THRESHOLDS: ClassVar[dict[str, tuple[str, float]]] = {
         "method_ratio": (">=", 0.80),
         "encapsulation_ratio": (">=", 1.0),
         "avg_params": ("<=", 4.0),
@@ -279,8 +311,7 @@ class Scorer:
     @property
     def grades(self) -> dict[str, str]:
         return {
-            k: "PASS" if self._check(k, v) else "FAIL"
-            for k, v in self.summary.items()
+            k: "PASS" if self._check(k, v) else "FAIL" for k, v in self.summary.items()
         }
 
     @property
@@ -328,7 +359,12 @@ class Scorer:
         for k, values in agg.items():
             if not values:
                 continue
-            if k in ("max_complexity", "module_size", "init_violations", "public_attr_violations"):
+            if k in (
+                "max_complexity",
+                "module_size",
+                "init_violations",
+                "public_attr_violations",
+            ):
                 summary[k] = max(values)
             elif k in ("future_annotations",):
                 summary[k] = min(values)
@@ -339,25 +375,25 @@ class Scorer:
     def print_table(self) -> None:
         summary = self.summary
         grades = self.grades
-        print(f"\n{'Metric':<28} {'Value':>8} {'Target':>10} {'Grade':>6}")
-        print("-" * 56)
+        _writeln(f"\n{'Metric':<28} {'Value':>8} {'Target':>10} {'Grade':>6}")
+        _writeln("-" * 56)
         for k in self._thresholds:
             if k in summary:
                 op, target_val = self._thresholds[k]
                 g = grades[k]
                 marker = "  " if g == "PASS" else " *"
-                print(f"{k:<28} {summary[k]:>8.2f} {op} {target_val:<8} {g}{marker}")
+                _writeln(f"{k:<28} {summary[k]:>8.2f} {op} {target_val:<8} {g}{marker}")
 
     def print_per_file(self) -> None:
-        print("\n--- Per-file breakdown ---")
+        _writeln("\n--- Per-file breakdown ---")
         for r in self._results:
-            print(f"\n  {r.get('file', '?')}")
+            _writeln(f"\n  {r.get('file', '?')}")
             for k, v in r.items():
                 if k == "file":
                     continue
                 if k in self._thresholds:
                     g = "PASS" if self._check(k, float(v)) else "FAIL"
-                    print(f"    {k:<26} {v:>8} {g}")
+                    _writeln(f"    {k:<26} {v:>8} {g}")
 
     def to_json(self) -> str:
         output = {
@@ -369,20 +405,434 @@ class Scorer:
         return json.dumps(output, indent=2)
 
 
+class Ratchet:
+    """Baseline persistence, regression checking, and audit logging."""
+
+    _baseline_path: Path
+    _audit_path: Path
+    _baseline: dict[str, dict[str, float]]
+
+    BASELINE_FILE: ClassVar[str] = ".oo-baseline.json"
+    AUDIT_FILE: ClassVar[str] = ".oo-audit.jsonl"
+
+    # Metrics tracked in the baseline — must match Scorer.THRESHOLDS keys.
+    METRIC_KEYS: ClassVar[tuple[str, ...]] = tuple(Scorer.THRESHOLDS)
+
+    def __new__(cls, root: Path | None = None) -> Self:
+        self = super().__new__(cls)
+        base = root if root is not None else Path.cwd()
+        self._baseline_path = base / cls.BASELINE_FILE
+        self._audit_path = base / cls.AUDIT_FILE
+        self._baseline = self._load_baseline()
+        return self
+
+    @property
+    def has_baseline(self) -> bool:
+        """Return whether a baseline file exists on disk."""
+        return self._baseline_path.exists()
+
+    @property
+    def baseline(self) -> dict[str, dict[str, float]]:
+        return self._baseline
+
+    # ------------------------------------------------------------------
+    # Baseline I/O
+    # ------------------------------------------------------------------
+
+    def _load_baseline(self) -> dict[str, dict[str, float]]:
+        if not self._baseline_path.exists():
+            return {}
+        text = self._baseline_path.read_text()
+        raw: dict[str, dict[str, float]] = json.loads(text)
+        return raw
+
+    def _save_baseline(self, data: dict[str, dict[str, float]]) -> None:
+        sorted_data = dict(sorted(data.items()))
+        self._baseline_path.write_text(
+            json.dumps(sorted_data, indent=2) + "\n",
+        )
+        self._baseline = sorted_data
+
+    # ------------------------------------------------------------------
+    # Git helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _git_commit_short() -> str | None:
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+        return None
+
+    @staticmethod
+    def _git_touched_files() -> list[str] | None:
+        """Return repo-relative paths changed vs HEAD, or None if git unavailable."""
+        try:
+            result = subprocess.run(
+                ["git", "diff", "--name-only", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                return [line for line in result.stdout.strip().splitlines() if line]
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+        return None
+
+    # ------------------------------------------------------------------
+    # Metric comparison helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _meets_threshold(metric: str, value: float) -> bool:
+        """Return True if value meets the absolute threshold for the metric."""
+        op, target = Scorer.THRESHOLDS[metric]
+        if op == ">=":
+            return value >= target
+        if op == "<=":
+            return value <= target
+        return value == target
+
+    @staticmethod
+    def _is_better_or_equal(
+        metric: str,
+        current: float,
+        baseline_val: float,
+    ) -> bool:
+        """Return True if current is at least as good as baseline for the metric."""
+        op, target = Scorer.THRESHOLDS[metric]
+        if op == ">=":
+            return current >= baseline_val
+        if op == "<=":
+            return current <= baseline_val
+        # op == "==" — closer to target is better (or equal)
+        return abs(current - target) <= abs(baseline_val - target)
+
+    @staticmethod
+    def _is_strictly_better(
+        metric: str,
+        current: float,
+        baseline_val: float,
+    ) -> bool:
+        """Return True if current is strictly better than baseline."""
+        op, target = Scorer.THRESHOLDS[metric]
+        if op == ">=":
+            return current > baseline_val
+        if op == "<=":
+            return current < baseline_val
+        # op == "==" — strictly closer to target
+        return abs(current - target) < abs(baseline_val - target)
+
+    # ------------------------------------------------------------------
+    # Extract per-file metric dicts from Scorer results
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _results_by_file(
+        results: list[dict[str, float | int | str]],
+    ) -> dict[str, dict[str, float]]:
+        """Build {repo_relative_path: {metric: value}} from scorer results."""
+        out: dict[str, dict[str, float]] = {}
+        for r in results:
+            if "error" in r:
+                continue
+            fpath = str(r["file"])
+            metrics: dict[str, float] = {}
+            for k in Ratchet.METRIC_KEYS:
+                if k in r:
+                    metrics[k] = float(r[k])
+            out[fpath] = metrics
+        return out
+
+    # ------------------------------------------------------------------
+    # --check
+    # ------------------------------------------------------------------
+
+    def check(self, scorer: Scorer) -> int:
+        """Compare touched files against baseline. Return exit code."""
+        if not self.has_baseline:
+            _writeln("No baseline -- run --update to create one")
+            return 0
+
+        current_by_file = self._results_by_file(scorer.results)
+
+        # Determine which files are "touched"
+        git_touched = self._git_touched_files()
+        scored_files = set(current_by_file)
+
+        if git_touched is not None:
+            touched = scored_files & set(git_touched)
+        else:
+            # Git unavailable — compare all scored files against baseline
+            touched = scored_files
+
+        # Filter to only Python files
+        touched = {f for f in touched if f.endswith(".py")}
+
+        if not touched:
+            _writeln("No Python files touched -- trivial pass")
+            return 0
+
+        any_regression = False
+        any_improvement = False
+        rows: list[tuple[str, str, str, str, str, str]] = []
+
+        for fpath in sorted(touched):
+            current = current_by_file.get(fpath)
+            if current is None:
+                continue
+            baseline_entry = self._baseline.get(fpath)
+
+            if baseline_entry is None:
+                # New file — check against absolute thresholds only
+                for metric in self.METRIC_KEYS:
+                    if metric not in current:
+                        continue
+                    val = current[metric]
+                    passed = self._meets_threshold(metric, val)
+                    grade = "PASS" if passed else "FAIL"
+                    rows.append((fpath, metric, "NEW", f"{val:.3f}", "--", grade))
+                    if not passed:
+                        any_regression = True
+                continue
+
+            for metric in self.METRIC_KEYS:
+                if metric not in current or metric not in baseline_entry:
+                    continue
+                cur_val = current[metric]
+                base_val = baseline_entry[metric]
+                delta = cur_val - base_val
+
+                if self._is_strictly_better(metric, cur_val, base_val):
+                    grade = "IMPROVED"
+                    any_improvement = True
+                elif self._is_better_or_equal(metric, cur_val, base_val):
+                    grade = "PASS"
+                else:
+                    grade = "REGRESSED"
+                    any_regression = True
+
+                if delta != 0.0 or grade == "REGRESSED":
+                    rows.append(
+                        (
+                            fpath,
+                            metric,
+                            f"{base_val:.3f}",
+                            f"{cur_val:.3f}",
+                            f"{delta:+.3f}",
+                            grade,
+                        )
+                    )
+
+        # Print comparison table
+        _writeln(
+            f"\n{'File':<40} {'Metric':<26} {'Baseline':>10} "
+            f"{'Current':>10} {'Delta':>8} {'Status':>10}",
+        )
+        _writeln("-" * 108)
+        for row in rows:
+            _writeln(
+                f"{row[0]:<40} {row[1]:<26} {row[2]:>10} "
+                f"{row[3]:>10} {row[4]:>8} {row[5]:>10}",
+            )
+
+        if not rows:
+            _writeln("  (all metrics unchanged)")
+
+        if any_regression:
+            _writeln("\nFAIL: regression detected")
+            return 1
+        if not any_improvement:
+            _writeln("\nFAIL: no metric improved on any touched file")
+            return 1
+
+        _writeln("\nPASS: at least one metric improved, no regressions")
+        return 0
+
+    # ------------------------------------------------------------------
+    # --update
+    # ------------------------------------------------------------------
+
+    def update(self, scorer: Scorer) -> int:
+        """Update baseline for files that did not regress. Return exit code."""
+        current_by_file = self._results_by_file(scorer.results)
+        new_baseline = dict(self._baseline)
+        refused: list[tuple[str, str]] = []
+        updated_count = 0
+        added_count = 0
+
+        # Track deltas for audit
+        deltas: dict[str, dict[str, list[float]]] = {}
+
+        for fpath in sorted(current_by_file):
+            current = current_by_file[fpath]
+            baseline_entry = self._baseline.get(fpath)
+
+            if baseline_entry is None:
+                # New file — add unconditionally
+                new_baseline[fpath] = current
+                added_count += 1
+                # Record all metrics as deltas for new files
+                file_deltas: dict[str, list[float]] = {}
+                for metric in self.METRIC_KEYS:
+                    if metric in current:
+                        file_deltas[metric] = [0.0, current[metric]]
+                if file_deltas:
+                    deltas[fpath] = file_deltas
+                continue
+
+            # Check for regressions
+            has_regression = False
+            for metric in self.METRIC_KEYS:
+                if metric not in current or metric not in baseline_entry:
+                    continue
+                cur_val = current[metric]
+                base_val = baseline_entry[metric]
+                if not self._is_better_or_equal(metric, cur_val, base_val):
+                    refused.append((fpath, metric))
+                    has_regression = True
+
+            if has_regression:
+                continue
+
+            # No regression — update and record deltas
+            file_deltas = {}
+            for metric in self.METRIC_KEYS:
+                if metric not in current or metric not in baseline_entry:
+                    continue
+                if current[metric] != baseline_entry[metric]:
+                    file_deltas[metric] = [baseline_entry[metric], current[metric]]
+
+            new_baseline[fpath] = current
+            updated_count += 1
+            if file_deltas:
+                deltas[fpath] = file_deltas
+
+        # Remove deleted files (in baseline but not on disk)
+        removed_count = 0
+        for fpath in list(new_baseline):
+            if fpath not in current_by_file:
+                del new_baseline[fpath]
+                removed_count += 1
+
+        self._save_baseline(new_baseline)
+
+        # Count improved files (files where at least one metric changed for the better)
+        files_improved = sum(1 for d in deltas.values() if d)
+
+        # Append audit log
+        self._append_audit(
+            files_scored=len(current_by_file),
+            files_improved=files_improved,
+            files_regressed=len({f for f, _ in refused}),
+            verdict="pass" if not refused else "fail",
+            deltas=deltas,
+        )
+
+        # Report
+        _writeln(f"\nBaseline updated: {self._baseline_path}")
+        _writeln(f"  files scored:  {len(current_by_file)}")
+        _writeln(f"  files added:   {added_count}")
+        _writeln(f"  files updated: {updated_count}")
+        _writeln(f"  files removed: {removed_count}")
+
+        if refused:
+            _writeln(f"\n  REFUSED ({len({f for f, _ in refused})} files):")
+            for fpath, metric in refused:
+                _writeln(f"    {fpath}: {metric} regressed")
+            return 1
+
+        return 0
+
+    # ------------------------------------------------------------------
+    # Audit log
+    # ------------------------------------------------------------------
+
+    def _append_audit(
+        self,
+        *,
+        files_scored: int,
+        files_improved: int,
+        files_regressed: int,
+        verdict: str,
+        deltas: dict[str, dict[str, list[float]]],
+    ) -> None:
+        commit = self._git_commit_short()
+        entry = {
+            "ts": datetime.datetime.now(datetime.UTC).strftime(
+                "%Y-%m-%dT%H:%M:%SZ",
+            ),
+            "commit": commit,
+            "files_scored": files_scored,
+            "files_improved": files_improved,
+            "files_regressed": files_regressed,
+            "verdict": verdict,
+            "deltas": deltas,
+        }
+        with self._audit_path.open("a") as f:
+            f.write(json.dumps(entry, separators=(",", ":")) + "\n")
+
+    # ------------------------------------------------------------------
+    # --log
+    # ------------------------------------------------------------------
+
+    def show_log(self) -> int:
+        """Print audit history. Return exit code."""
+        if not self._audit_path.exists():
+            _writeln("No audit log found")
+            return 0
+
+        _writeln(
+            f"\n{'Timestamp':<22} {'Commit':<10} {'Scored':>7} "
+            f"{'Improved':>9} {'Regressed':>10} {'Verdict':>8}",
+        )
+        _writeln("-" * 70)
+
+        for line in self._audit_path.read_text().splitlines():
+            if not line.strip():
+                continue
+            entry = json.loads(line)
+            _writeln(
+                f"{entry['ts']:<22} {entry.get('commit') or '?'!s:<10} "
+                f"{entry['files_scored']:>7} {entry['files_improved']:>9} "
+                f"{entry['files_regressed']:>10} {entry['verdict']:>8}",
+            )
+        return 0
+
+
 def main() -> None:
     if len(sys.argv) < 2:
-        print(f"Usage: {sys.argv[0]} <file_or_directory> [--json] [--threshold]")
+        _writeln(
+            f"Usage: {sys.argv[0]} <file_or_directory> "
+            f"[--json] [--threshold] [--check] [--update] [--log]",
+        )
         sys.exit(1)
 
     target = Path(sys.argv[1])
     if not target.exists():
-        print(f"Not found: {target}")
+        _writeln(f"Not found: {target}")
         sys.exit(1)
 
     scorer = Scorer(target)
+    ratchet = Ratchet()
 
-    if "--json" in sys.argv:
-        print(scorer.to_json())
+    if "--check" in sys.argv:
+        sys.exit(ratchet.check(scorer))
+    elif "--update" in sys.argv:
+        sys.exit(ratchet.update(scorer))
+    elif "--log" in sys.argv:
+        sys.exit(ratchet.show_log())
+    elif "--json" in sys.argv:
+        _writeln(scorer.to_json())
     else:
         scorer.print_table()
         if "--threshold" in sys.argv:
