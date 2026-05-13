@@ -1,4 +1,4 @@
-.PHONY: help test lint lint-docs type check check-full format build test-wheel clean depot bench-cuda docs docs-clean
+.PHONY: help test lint lint-docs type check check-full check-oo report format build test-wheel clean depot bench-cuda docs docs-clean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -17,7 +17,19 @@ type: ## Type check with mypy and pyright
 	uv run mypy src/ tests/
 	uv run pyright src/ tests/
 
-check: lint type test ## Run all quality gates
+check: check-oo lint type test ## Run all quality gates
+
+check-oo: ## OO structure score (tools/oo_score.py)
+	uv run python tools/oo_score.py src/quarry/
+
+report: ## Full diagnostics (OO score + all checks, no fail-fast)
+	-uv run python tools/oo_score.py src/quarry/ --threshold
+	-uv run mypy src/ tests/
+	-uv run ruff format --check .
+	-uv run ruff check --preview --select PLR6301,PLR0913,UP035,UP040,UP007,N,I,SIM,C1901,S101 .
+	-uv run pyright src/ tests/
+	-uv run pytest
+	@echo "Report complete."
 
 check-full: check test-wheel ## Full quality gate including wheel test
 

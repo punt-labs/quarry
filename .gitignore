@@ -80,3 +80,5 @@ prfaq*.run.xml
 uv.toml
 /Lux.ini
 .envrc.local
+# Capture files — pending scrub review before committing
+.punt-labs/quarry/captures/
