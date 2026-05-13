@@ -30,7 +30,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Self
 
 
 def _writeln(text: str = "") -> None:
@@ -43,10 +43,12 @@ class ModuleMetrics:
     _tree: ast.Module
     _source_lines: int
 
-    def __init__(self, path: str, source: str) -> None:
+    def __new__(cls, path: str, source: str) -> Self:
+        self = super().__new__(cls)
         self._path = path
         self._tree = ast.parse(source, filename=path)
         self._source_lines = len([line for line in source.splitlines() if line.strip()])
+        return self
 
     def compute(self) -> dict[str, float | int | str]:
         return {
@@ -293,14 +295,16 @@ class Scorer:
         "future_annotations": ("==", 1),
     }
 
-    def __init__(self, target: Path) -> None:
-        self._thresholds = self.THRESHOLDS
+    def __new__(cls, target: Path) -> Self:
+        self = super().__new__(cls)
+        self._thresholds = cls.THRESHOLDS
         if target.is_file():
             self._results = [self._score_file(target)]
         elif target.is_dir():
             self._results = self._score_directory(target)
         else:
             self._results = []
+        return self
 
     @property
     def results(self) -> list[dict[str, float | int | str]]:
@@ -421,11 +425,13 @@ class Ratchet:
     # Metrics tracked in the baseline — must match Scorer.THRESHOLDS keys.
     METRIC_KEYS: ClassVar[tuple[str, ...]] = tuple(Scorer.THRESHOLDS)
 
-    def __init__(self, root: Path | None = None) -> None:
+    def __new__(cls, root: Path | None = None) -> Self:
+        self = super().__new__(cls)
         base = root if root is not None else Path.cwd()
-        self._baseline_path = base / self.BASELINE_FILE
-        self._audit_path = base / self.AUDIT_FILE
+        self._baseline_path = base / cls.BASELINE_FILE
+        self._audit_path = base / cls.AUDIT_FILE
         self._baseline = self._load_baseline()
+        return self
 
     @property
     def has_baseline(self) -> bool:
