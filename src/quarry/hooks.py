@@ -582,6 +582,8 @@ def extract_message_text(record: dict[str, object]) -> str | None:
         return None
     role = message.get("role", record_type)
     content = message.get("content")
+    if isinstance(content, str):
+        return f"[{role}] {content}" if content.strip() else None
     if not isinstance(content, list):
         return None
     texts = _extract_content_texts(content)
