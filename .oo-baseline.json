@@ -235,7 +235,7 @@
   },
   "src/quarry/http_server.py": {
     "method_ratio": 0.08,
-    "encapsulation_ratio": 0.25,
+    "encapsulation_ratio": 0.167,
     "avg_params": 1.84,
     "max_complexity": 16.0,
     "avg_complexity": 4.22,
@@ -243,7 +243,7 @@
     "classes_per_module": 2.0,
     "class_to_func_ratio": 0.042,
     "init_violations": 1.0,
-    "public_attr_violations": 3.0,
+    "public_attr_violations": 5.0,
     "future_annotations": 1.0
   },
   "src/quarry/image_analyzer.py": {

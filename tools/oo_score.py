@@ -30,7 +30,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import ClassVar, Self
+from typing import ClassVar
 
 
 def _writeln(text: str = "") -> None:
@@ -43,12 +43,10 @@ class ModuleMetrics:
     _tree: ast.Module
     _source_lines: int
 
-    def __new__(cls, path: str, source: str) -> Self:
-        self = super().__new__(cls)
+    def __init__(self, path: str, source: str) -> None:
         self._path = path
         self._tree = ast.parse(source, filename=path)
         self._source_lines = len([line for line in source.splitlines() if line.strip()])
-        return self
 
     def compute(self) -> dict[str, float | int | str]:
         return {
@@ -148,9 +146,12 @@ class ModuleMetrics:
         total_attrs = 0
         private_attrs = 0
         for node in ast.walk(self._tree):
-            if not isinstance(node, ast.Assign):
-                continue
-            for target in node.targets:
+            targets: list[ast.expr] = []
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, ast.AnnAssign) and node.target is not None:
+                targets = [node.target]
+            for target in targets:
                 if not isinstance(target, ast.Attribute):
                     continue
                 if not isinstance(target.value, ast.Name):
@@ -245,9 +246,12 @@ class ModuleMetrics:
     def _count_public_attrs(self) -> int:
         count = 0
         for node in ast.walk(self._tree):
-            if not isinstance(node, ast.Assign):
-                continue
-            for target in node.targets:
+            targets: list[ast.expr] = []
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, ast.AnnAssign) and node.target is not None:
+                targets = [node.target]
+            for target in targets:
                 if not isinstance(target, ast.Attribute):
                     continue
                 if not isinstance(target.value, ast.Name):
@@ -289,16 +293,14 @@ class Scorer:
         "future_annotations": ("==", 1),
     }
 
-    def __new__(cls, target: Path) -> Self:
-        self = super().__new__(cls)
-        self._thresholds = cls.THRESHOLDS
+    def __init__(self, target: Path) -> None:
+        self._thresholds = self.THRESHOLDS
         if target.is_file():
             self._results = [self._score_file(target)]
         elif target.is_dir():
             self._results = self._score_directory(target)
         else:
             self._results = []
-        return self
 
     @property
     def results(self) -> list[dict[str, float | int | str]]:
@@ -362,6 +364,7 @@ class Scorer:
             if k in (
                 "max_complexity",
                 "module_size",
+                "classes_per_module",
                 "init_violations",
                 "public_attr_violations",
             ):
@@ -418,13 +421,11 @@ class Ratchet:
     # Metrics tracked in the baseline — must match Scorer.THRESHOLDS keys.
     METRIC_KEYS: ClassVar[tuple[str, ...]] = tuple(Scorer.THRESHOLDS)
 
-    def __new__(cls, root: Path | None = None) -> Self:
-        self = super().__new__(cls)
+    def __init__(self, root: Path | None = None) -> None:
         base = root if root is not None else Path.cwd()
-        self._baseline_path = base / cls.BASELINE_FILE
-        self._audit_path = base / cls.AUDIT_FILE
+        self._baseline_path = base / self.BASELINE_FILE
+        self._audit_path = base / self.AUDIT_FILE
         self._baseline = self._load_baseline()
-        return self
 
     @property
     def has_baseline(self) -> bool:
@@ -474,16 +475,18 @@ class Ratchet:
 
     @staticmethod
     def _git_touched_files() -> list[str] | None:
-        """Return repo-relative paths changed vs HEAD, or None if git unavailable."""
+        """Return repo-relative paths changed in the latest commit."""
         try:
+            # Compare HEAD against its parent — works in CI (clean checkout)
             result = subprocess.run(
-                ["git", "diff", "--name-only", "HEAD"],
+                ["git", "diff", "--name-only", "HEAD~1..HEAD"],
                 capture_output=True,
                 text=True,
                 timeout=5,
             )
             if result.returncode == 0:
                 return [line for line in result.stdout.strip().splitlines() if line]
+            # HEAD~1 may not exist (initial commit) — fall through to None
         except (FileNotFoundError, subprocess.TimeoutExpired):
             pass
         return None
@@ -594,6 +597,7 @@ class Ratchet:
 
             if baseline_entry is None:
                 # New file — check against absolute thresholds only
+                all_passed = True
                 for metric in self.METRIC_KEYS:
                     if metric not in current:
                         continue
@@ -603,6 +607,10 @@ class Ratchet:
                     rows.append((fpath, metric, "NEW", f"{val:.3f}", "--", grade))
                     if not passed:
                         any_regression = True
+                        all_passed = False
+                # A new file that passes all thresholds counts as improvement
+                if all_passed:
+                    any_improvement = True
                 continue
 
             for metric in self.METRIC_KEYS:
