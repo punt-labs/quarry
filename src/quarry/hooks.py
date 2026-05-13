@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING
 from quarry._stdlib import load_hook_config
 
 if TYPE_CHECKING:
+    from quarry.artifacts import SessionArtifacts
     from quarry.config import Settings
     from quarry.sync_registry import DirectoryRegistration
     from quarry.types import LanceDB
@@ -729,6 +730,34 @@ def _spawn_background_ingest(
     return True
 
 
+def _write_capture_file(
+    project_dir: Path,
+    session_id: str,
+    timestamp: str,
+    artifacts: SessionArtifacts,
+    text: str,
+) -> None:
+    """Write session capture file to project .punt-labs/quarry/captures/.
+
+    Fails silently so capture file issues never block the main ingest flow.
+    """
+    try:
+        from quarry.artifacts import format_artifacts_frontmatter  # noqa: PLC0415
+
+        frontmatter = format_artifacts_frontmatter(session_id, timestamp, artifacts)
+        if not frontmatter:
+            return
+
+        captures_dir = project_dir / ".punt-labs" / "quarry" / "captures"
+        captures_dir.mkdir(parents=True, exist_ok=True)
+
+        filename = f"session-{session_id[:8]}.md"
+        capture_file = captures_dir / filename
+        capture_file.write_text(frontmatter + "\n\n" + text, encoding="utf-8")
+    except Exception:
+        logger.exception("pre-compact: capture file write failed")
+
+
 def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
     """Handle PreCompact hook.
 
@@ -775,6 +804,7 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
     )
 
     artifacts = extract_artifacts(text)
+    raw_text = text  # preserve before header prepend for capture file
     header = format_artifacts_header(artifacts)
     if header:
         text = header + "\n\n" + text
@@ -788,7 +818,19 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
     settings = _resolve_settings()
     agent_handle = _read_ethos_agent_handle(cwd) if cwd else ""
 
-    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
+    now = datetime.now(UTC)
+    timestamp = now.strftime("%Y%m%dT%H%M%S")
+    iso_timestamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Write capture file to project directory.
+    if cwd:
+        _write_capture_file(
+            project_dir=Path(cwd),
+            session_id=session_id,
+            timestamp=iso_timestamp,
+            artifacts=artifacts,
+            text=raw_text,
+        )
     document_name = f"session-{session_id[:8]}-{timestamp}"
 
     # Write extracted text and spawn background ingestion.

@@ -98,6 +98,35 @@ def extract_artifacts(text: str) -> SessionArtifacts:
     )
 
 
+def format_artifacts_frontmatter(
+    session_id: str,
+    timestamp: str,
+    artifacts: SessionArtifacts,
+) -> str:
+    """Format artifacts as YAML frontmatter for the capture file."""
+    if not session_id:
+        return ""
+    lines = [
+        "---",
+        f"session_id: {session_id}",
+        f'timestamp: "{timestamp}"',
+    ]
+    if artifacts.commit_shas:
+        lines.append("commits:")
+        lines.extend(f"  - {sha}" for sha in artifacts.commit_shas)
+    if artifacts.pr_numbers:
+        lines.append("prs:")
+        lines.extend(f"  - {n}" for n in artifacts.pr_numbers)
+    if artifacts.branch_names:
+        lines.append("branches:")
+        lines.extend(f"  - {b}" for b in artifacts.branch_names)
+    if artifacts.bead_ids:
+        lines.append("beads:")
+        lines.extend(f"  - {bid}" for bid in artifacts.bead_ids)
+    lines.append("---")
+    return "\n".join(lines)
+
+
 def format_artifacts_header(artifacts: SessionArtifacts) -> str:
     """Format extracted artifacts as a structured text header."""
     lines: list[str] = []
