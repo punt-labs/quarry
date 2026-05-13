@@ -741,10 +741,13 @@ def _write_capture_file(
 ) -> None:
     """Write session capture file to project .punt-labs/quarry/captures/.
 
-    Fails silently so capture file issues never block the main ingest flow.
+    Scrubs secrets and profanity before writing — capture files are
+    git-tracked.  Fails silently so capture file issues never block
+    the main ingest flow.
     """
     try:
         from quarry.artifacts import format_artifacts_frontmatter  # noqa: PLC0415
+        from quarry.scrub import scrub_and_log  # noqa: PLC0415
 
         frontmatter = format_artifacts_frontmatter(session_id, timestamp, artifacts)
         if not frontmatter:
@@ -753,9 +756,10 @@ def _write_capture_file(
         captures_dir = project_dir / ".punt-labs" / "quarry" / "captures"
         captures_dir.mkdir(parents=True, exist_ok=True)
 
+        content = scrub_and_log(frontmatter + "\n\n" + text, "pre-compact")
         filename = f"session-{session_id[:8]}.md"
         capture_file = captures_dir / filename
-        capture_file.write_text(frontmatter + "\n\n" + text, encoding="utf-8")
+        capture_file.write_text(content, encoding="utf-8")
     except Exception:
         logger.exception("pre-compact: capture file write failed")
 

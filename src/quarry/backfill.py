@@ -150,9 +150,14 @@ def _write_backfill_capture_file(
     artifacts: SessionArtifacts,
     text: str,
 ) -> None:
-    """Write capture file during backfill. Fails silently."""
+    """Write capture file during backfill.
+
+    Scrubs secrets and profanity before writing — capture files are
+    git-tracked.  Fails silently.
+    """
     try:
         from quarry.artifacts import format_artifacts_frontmatter  # noqa: PLC0415
+        from quarry.scrub import scrub_and_log  # noqa: PLC0415
 
         mtime = transcript.stat().st_mtime
         timestamp = datetime.fromtimestamp(mtime, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -163,9 +168,10 @@ def _write_backfill_capture_file(
         captures_dir = Path(project_path) / ".punt-labs" / "quarry" / "captures"
         captures_dir.mkdir(parents=True, exist_ok=True)
 
+        content = scrub_and_log(frontmatter + "\n\n" + text, "backfill")
         filename = f"session-{session_id[:8]}.md"
         capture_file = captures_dir / filename
-        capture_file.write_text(frontmatter + "\n\n" + text, encoding="utf-8")
+        capture_file.write_text(content, encoding="utf-8")
     except Exception:
         logger.exception("backfill: capture file write failed for %s", session_id[:8])
 
