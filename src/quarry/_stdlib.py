@@ -316,6 +316,87 @@ def _allow_mcp_tools(plugin_name: str, settings_path: Path) -> str | None:
     return f"Auto-allowed {plugin_name} MCP tools in permissions"
 
 
+def _list_deployable_commands(plugin_root: Path, plugin_name: str) -> list[str]:
+    """Return command names from ``commands/*.md`` for this plugin variant."""
+    commands_dir = plugin_root / "commands"
+    if not commands_dir.is_dir():
+        return []
+    is_dev = plugin_name.endswith("-dev")
+    names: list[str] = []
+    for cmd_file in sorted(commands_dir.glob("*.md")):
+        if not _should_deploy(cmd_file.name, is_dev=is_dev):
+            continue
+        names.append(cmd_file.stem)
+    return names
+
+
+def _allow_skill_permissions(
+    plugin_root: Path, plugin_name: str, settings_path: Path
+) -> str | None:
+    """Add ``Skill(<cmd>)`` rules for each deployed command.
+
+    Returns an action string if any permissions were added, None otherwise.
+    """
+    command_names = _list_deployable_commands(plugin_root, plugin_name)
+    if not command_names:
+        return None
+
+    if not settings_path.is_file():
+        return None
+
+    try:
+        text = settings_path.read_text()
+        settings = json.loads(text)
+    except (OSError, ValueError):
+        return None
+
+    allow_list = _ensure_allow_list(settings)
+    existing_skills = {
+        entry
+        for entry in allow_list
+        if isinstance(entry, str) and entry.startswith("Skill(")
+    }
+
+    added: list[str] = []
+    for name in command_names:
+        rule = f"Skill({name})"
+        if rule not in existing_skills:
+            allow_list.append(rule)
+            added.append(name)
+
+    if not added:
+        return None
+
+    return _write_settings(settings, settings_path, added)
+
+
+def _ensure_allow_list(settings: dict[str, object]) -> list[object]:
+    """Return the ``permissions.allow`` list, creating it if absent."""
+    permissions = settings.get("permissions")
+    if not isinstance(permissions, dict):
+        permissions = {}
+        settings["permissions"] = permissions
+    allow_list = permissions.get("allow")
+    if not isinstance(allow_list, list):
+        allow_list = []
+        permissions["allow"] = allow_list
+    return allow_list
+
+
+def _write_settings(
+    settings: dict[str, object], path: Path, added: list[str]
+) -> str | None:
+    """Atomically write settings and return action string."""
+    tmp_path = path.with_suffix(".json.tmp")
+    try:
+        tmp_path.write_text(json.dumps(settings, indent=2) + "\n")
+        tmp_path.replace(path)
+    except OSError:
+        tmp_path.unlink(missing_ok=True)
+        return None
+    return f"Auto-allowed Skill() permissions for: {', '.join(added)}"
+
+
 def handle_session_setup(payload: dict[str, object]) -> dict[str, object]:
     """Handle session-setup hook: deploy commands and allow MCP tools.
 
@@ -352,6 +433,10 @@ def handle_session_setup(payload: dict[str, object]) -> dict[str, object]:
     mcp_action = _allow_mcp_tools(plugin_name, settings_path)
     if mcp_action:
         actions.append(mcp_action)
+
+    skill_action = _allow_skill_permissions(plugin_root, plugin_name, settings_path)
+    if skill_action:
+        actions.append(skill_action)
 
     if not actions:
         return {}

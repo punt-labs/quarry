@@ -5,17 +5,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-
-@dataclass(frozen=True)
-class SessionArtifacts:
-    """Immutable container of identifiers extracted from a transcript."""
-
-    commit_shas: tuple[str, ...]
-    pr_numbers: tuple[int, ...]
-    branch_names: tuple[str, ...]
-    bead_ids: tuple[str, ...]
-
-
 # -- Commit SHAs: 7-12 hex chars in git context --------------------------
 
 _SHA_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -71,31 +60,88 @@ _BEAD_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 
-def extract_artifacts(text: str) -> SessionArtifacts:
-    """Scan transcript text for commit SHAs, PR numbers, branches, and bead IDs."""
-    shas: list[str] = []
-    for pat in _SHA_PATTERNS:
-        shas.extend(pat.findall(text))
+@dataclass(frozen=True)
+class SessionArtifacts:
+    """Immutable container of identifiers extracted from a transcript."""
 
-    prs: list[int] = []
-    for pat in _PR_PATTERNS:
-        prs.extend(int(m) for m in pat.findall(text))
+    commit_shas: tuple[str, ...]
+    pr_numbers: tuple[int, ...]
+    branch_names: tuple[str, ...]
+    bead_ids: tuple[str, ...]
 
-    branches: list[str] = []
-    for pat in _BRANCH_PATTERNS:
-        branches.extend(pat.findall(text))
+    @classmethod
+    def from_text(cls, text: str) -> SessionArtifacts:
+        """Scan transcript text for commit SHAs, PR numbers, branches, and bead IDs."""
+        return cls(
+            commit_shas=cls._scan_strings(text, _SHA_PATTERNS),
+            pr_numbers=cls._scan_ints(text, _PR_PATTERNS),
+            branch_names=cls._scan_strings(text, _BRANCH_PATTERNS),
+            bead_ids=cls._scan_strings(text, _BEAD_PATTERNS),
+        )
 
-    beads: list[str] = []
-    for pat in _BEAD_PATTERNS:
-        beads.extend(pat.findall(text))
+    @staticmethod
+    def _scan_strings(
+        text: str, patterns: tuple[re.Pattern[str], ...]
+    ) -> tuple[str, ...]:
+        """Collect unique string matches from a sequence of patterns."""
+        hits: list[str] = []
+        for pat in patterns:
+            hits.extend(pat.findall(text))
+        return tuple(dict.fromkeys(hits))
 
-    # Deduplicate while preserving first-seen order.
-    return SessionArtifacts(
-        commit_shas=tuple(dict.fromkeys(shas)),
-        pr_numbers=tuple(dict.fromkeys(prs)),
-        branch_names=tuple(dict.fromkeys(branches)),
-        bead_ids=tuple(dict.fromkeys(beads)),
-    )
+    @staticmethod
+    def _scan_ints(text: str, patterns: tuple[re.Pattern[str], ...]) -> tuple[int, ...]:
+        """Collect unique integer matches from a sequence of patterns."""
+        hits: list[int] = []
+        for pat in patterns:
+            hits.extend(int(m) for m in pat.findall(text))
+        return tuple(dict.fromkeys(hits))
+
+    def format_header(self) -> str:
+        """Format extracted artifacts as a structured text header."""
+        lines: list[str] = []
+        if self.commit_shas:
+            lines.append(f"Commits: {', '.join(self.commit_shas)}")
+        if self.pr_numbers:
+            lines.append(f"PRs: {', '.join(f'#{n}' for n in self.pr_numbers)}")
+        if self.branch_names:
+            lines.append(f"Branches: {', '.join(self.branch_names)}")
+        if self.bead_ids:
+            lines.append(f"Beads: {', '.join(self.bead_ids)}")
+        if not lines:
+            return ""
+        return "## Session Artifacts\n" + "\n".join(lines)
+
+    def format_frontmatter(self, session_id: str, timestamp: str) -> str:
+        """Format artifacts as YAML frontmatter for the capture file."""
+        if not session_id:
+            return ""
+        lines = [
+            "---",
+            f"session_id: {session_id}",
+            f'timestamp: "{timestamp}"',
+        ]
+        if self.commit_shas:
+            lines.append("commits:")
+            lines.extend(f"  - {sha}" for sha in self.commit_shas)
+        if self.pr_numbers:
+            lines.append("prs:")
+            lines.extend(f"  - {n}" for n in self.pr_numbers)
+        if self.branch_names:
+            lines.append("branches:")
+            lines.extend(f"  - {b}" for b in self.branch_names)
+        if self.bead_ids:
+            lines.append("beads:")
+            lines.extend(f"  - {bid}" for bid in self.bead_ids)
+        lines.append("---")
+        return "\n".join(lines)
+
+
+# -- Thin wrappers preserving the module-level API -----------------------
+
+# Direct aliases -- parameter order matches the method signatures.
+extract_artifacts = SessionArtifacts.from_text
+format_artifacts_header = SessionArtifacts.format_header
 
 
 def format_artifacts_frontmatter(
@@ -104,40 +150,4 @@ def format_artifacts_frontmatter(
     artifacts: SessionArtifacts,
 ) -> str:
     """Format artifacts as YAML frontmatter for the capture file."""
-    if not session_id:
-        return ""
-    lines = [
-        "---",
-        f"session_id: {session_id}",
-        f'timestamp: "{timestamp}"',
-    ]
-    if artifacts.commit_shas:
-        lines.append("commits:")
-        lines.extend(f"  - {sha}" for sha in artifacts.commit_shas)
-    if artifacts.pr_numbers:
-        lines.append("prs:")
-        lines.extend(f"  - {n}" for n in artifacts.pr_numbers)
-    if artifacts.branch_names:
-        lines.append("branches:")
-        lines.extend(f"  - {b}" for b in artifacts.branch_names)
-    if artifacts.bead_ids:
-        lines.append("beads:")
-        lines.extend(f"  - {bid}" for bid in artifacts.bead_ids)
-    lines.append("---")
-    return "\n".join(lines)
-
-
-def format_artifacts_header(artifacts: SessionArtifacts) -> str:
-    """Format extracted artifacts as a structured text header."""
-    lines: list[str] = []
-    if artifacts.commit_shas:
-        lines.append(f"Commits: {', '.join(artifacts.commit_shas)}")
-    if artifacts.pr_numbers:
-        lines.append(f"PRs: {', '.join(f'#{n}' for n in artifacts.pr_numbers)}")
-    if artifacts.branch_names:
-        lines.append(f"Branches: {', '.join(artifacts.branch_names)}")
-    if artifacts.bead_ids:
-        lines.append(f"Beads: {', '.join(artifacts.bead_ids)}")
-    if not lines:
-        return ""
-    return "## Session Artifacts\n" + "\n".join(lines)
+    return artifacts.format_frontmatter(session_id, timestamp)

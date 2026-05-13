@@ -1,48 +1,118 @@
 # Quarry
 
+Part of [Punt Labs](https://github.com/punt-labs). This repo must be checked out inside the `punt-labs/` workspace meta-repo so that org-wide configuration loads via Claude Code's ancestor directory walk:
+
+- **`punt-labs/CLAUDE.md`** — org workflow, delegation model, beads issue tracking, tool configuration
+- **`punt-labs/.claude/rules/python-*.md`** — 19 Python OO coding rules, scoped via `paths:` frontmatter (load on-demand when `.py` files are touched)
+- **`punt-labs/.envrc`** — git identity, beads DB connection, API keys from platform keychain
+- **`punt-kit/standards/`** — canonical reference docs
+
+If cloned outside the workspace, these rules and configuration will not be present.
+
+**OO Python standards adopted 2026-05-13.** The codebase does not yet fully comply. Every commit must improve OO scores (`make check-oo`), never regress. Do not match existing code patterns that violate the rules — write new code to the standard and improve touched files incrementally.
+
 Local semantic search for AI agents and humans. Indexes 20+ document formats, embeds with a local ONNX model (snowflake-arctic-embed-m-v1.5, 768-dim), stores vectors in LanceDB, serves via MCP (stdio or WebSocket daemon on port 8420).
+
+- **Package**: `punt-quarry`
+- **CLI**: `quarry`
+- **MCP server**: `quarry-server`
+- **Python**: 3.13+, managed with `uv`
 
 ## Architecture
 
-- **Embedding**: ONNX Runtime with snowflake-arctic-embed-m-v1.5. int8 on CPU (default), FP16 on CUDA (auto-detected). See DES-004 and DES-016 in DESIGN.md.
+### How a query works
+
+A user (human or agent) issues a search via any surface (CLI, MCP, HTTP, plugin). The query hits `search.py` which runs hybrid search: (1) vector similarity via the ONNX embedding model against LanceDB, (2) BM25 full-text via Tantivy, (3) results fused via Reciprocal Rank Fusion. Agent-scoped memories apply temporal decay — recent memories rank higher. Results return as ranked chunks with source metadata.
+
+### How ingestion works
+
+Documents enter via `pipeline.py`. The pipeline detects format (20+ types via `loaders/`), extracts text, splits into chunks, generates embeddings via ONNX Runtime, and writes vectors + metadata to LanceDB. Directory registration (`sync.py`) tracks which paths to re-index on change.
+
+### Key architectural boundary: local vs. remote
+
+Quarry has two operational modes. **Local mode**: direct LanceDB access via `database.py`. **Remote mode**: HTTP client → `http_server.py` → same database layer. The HTTP API must be a faithful proxy of every local operation — same parameters, same response fields, same behavior. Bug class 3 (remote/local divergence) documents the repeated failure mode where these paths drift. Every new query parameter or response field must exist on both paths simultaneously.
+
+### Subsystems
+
+- **Embedding**: ONNX Runtime with snowflake-arctic-embed-m-v1.5. int8 on CPU (default), FP16 on CUDA (auto-detected). See DES-004, DES-016.
 - **Storage**: LanceDB (Rust core via PyO3). Single `chunks` table per database with vector, text, and metadata columns.
-- **Search**: Hybrid search — vector similarity + BM25 full-text (Tantivy) fused via RRF. Temporal decay for agent-scoped memories. See DES-017 in DESIGN.md.
-- **Agent memory**: `agent_handle`, `memory_type`, `summary` columns on all chunks. Identity tagging from ethos config. See DES-018 in DESIGN.md.
-- **Surfaces**: CLI (`quarry`), MCP server (stdio + WebSocket), HTTP API, Claude Code plugin with slash commands.
+- **Search**: Hybrid — vector similarity + BM25 full-text (Tantivy) fused via RRF. Temporal decay for agent-scoped memories. See DES-017.
+- **Agent memory**: `agent_handle`, `memory_type`, `summary` columns on all chunks. Identity tagging from ethos config. See DES-018.
+- **Surfaces**: CLI (`quarry`), MCP server (stdio + WebSocket), HTTP API, Claude Code plugin.
 - **User data**: `~/.punt-labs/quarry/` per filesystem standard. Per-repo config at `.punt-labs/quarry/config.md`.
 
-## Project-Specific Conventions
+### Key modules
 
-- **Quality gates**: always use `make check` — never ad-hoc individual lint/type/test commands.
-- `make check` = `make lint` + `make type` + `make test`
-- `make docs` builds all LaTeX documents (prfaq, architecture, Z spec). PDFs are committed.
-- **Full test suite** needs `timeout=300000` on the Bash tool (5 minutes). During development, use targeted tests: `uv run pytest tests/test_specific.py -v`.
-- **Never retry a command that produces no output.** Diagnose first.
+| Module | Responsibility |
+|--------|---------------|
+| `pipeline.py` | Ingestion: format detection → chunking → embedding → LanceDB write |
+| `database.py` | LanceDB operations: table creation, writes, queries, migrations |
+| `search.py` | Hybrid search: vector + BM25 + RRF fusion, temporal decay |
+| `embedding.py` | ONNX provider: model loading, quantization, batch embedding |
+| `http_server.py` | REST API: must mirror every local operation faithfully |
+| `mcp_server.py` | FastMCP server (stdio + WebSocket on port 8420) |
+| `sync.py` | Directory registration, change tracking, re-indexing |
+| `doctor.py` | Health checks: model, DB, providers, registration state |
+| `hooks.py` | Claude Code event handlers (SessionStart, PostToolUse) |
+| `__main__.py` | Typer CLI: find, ingest, remember, sync, serve, doctor, etc. |
+
+See `docs/architecture.tex` for the full system description.
+
+## Code Quality
+
+**Module size limits.** No module over 500 lines without a design reason. Known violations: `__main__.py` (2,008), `pipeline.py` (1,589), `http_server.py` (1,530), `doctor.py` (1,141), `database.py` (925), `hooks.py` (868), `sync.py` (660), `mcp_server.py` (581). When a module grows past the limit, the next change to that module must include extraction.
+
+**Class design.** Classes have a single responsibility. Prefer composition over inheritance. Use `Protocol` for structural typing at boundaries. A module with zero classes and 20+ module-level functions is procedural — it needs a design pass, not more functions.
+
+**Function design.** Functions that share a pattern signal a missing abstraction. Extract the pattern after the third occurrence. Use `make metrics` to measure ABC complexity — high-magnitude functions need decomposition.
+
+**No copy-paste.** If the same structure appears a third time, extract it.
+
+**Known pyright debt:** 6 `reportUnknown*` checks are suppressed project-wide because lancedb, rapidocr, onnxruntime, fitz, and pyarrow ship no type stubs. This means pyright cannot catch unknown-type bugs in modules that don't import these libraries either. The suppressions should be narrowed as these libraries add stubs. Pyright's `executionEnvironments` scopes by directory, not by import, so the only current alternative is 591 inline `# pyright: ignore` comments.
+
+**OO ratchet:** `make check-oo` (part of `make check`) compares current OO scores against `.oo-baseline.json`. It passes only if no metric regressed on touched files and at least one metric improved. It fails if any metric got worse or nothing improved. This is how the codebase converges to the OO standard — every commit ratchets forward.
+
+Workflow:
+
+1. Write code that improves OO quality on the files you touch.
+2. `make check` runs `check-oo --check` automatically. If it fails, fix the regression.
+3. After all checks pass, run `make update-oo` to write the new baseline.
+4. Stage `.oo-baseline.json` and `.oo-audit.jsonl` with your commit — they are committed files.
+
+Bootstrap (first time only): run `make update-oo` to create the initial baseline. After that, the ratchet is active.
+
+**Metrics tools:**
+
+- `make check-oo` — OO ratchet against baseline (11 metrics: method_ratio, encapsulation, params, complexity, module size, class ratios, init violations, public attribute violations, future_annotations).
+- `make update-oo` — update baseline and append to audit log after improvements.
+- `make report` — full diagnostics including per-file OO breakdown (no fail-fast).
+- `make metrics` — ABC complexity analysis. Any module over magnitude 200 needs attention.
+- `make coverage` — test coverage with HTML report in `htmlcov/`.
 
 ## Testing
 
-### Pyramid (1559 tests collected, 22 deselected in CI)
+### Pyramid
 
-| Layer | Count | Make target | Runs in CI | Coverage |
-|-------|-------|-------------|------------|----------|
-| Unit | ~1530 | `make test` | yes | DB, embedding, search, CLI, doctor, hooks, enable/disable, service, install scripts |
-| Integration | 22 | `make test-integration` | no (needs real model) | Real filesystem + ONNX model |
-| Shell scripts | ~18 | `make test` (via pytest) | yes | Install script ordering, shellcheck |
-| HTTP API contract | partial | `make test` | yes | Endpoint shape/param, growing |
-| Wheel install | 6 | `make test-wheel` | local pre-PR gate | Build wheel, install in isolated venv, run on port 8422 alongside prod 8420 |
-| MCP smoke test | 0 automated | qae agent + `docs/smoke-test.md` | post-release manual | 35 checks: all MCP tools + CLI mirror + install verification |
+| Layer | Make target | Runs in CI | What it covers |
+|-------|-------------|------------|----------------|
+| Unit | `make test` | yes | DB, embedding, search, CLI, doctor, hooks, enable/disable, service, install scripts |
+| Integration | `make test-integration` | no (needs real ONNX model) | Real filesystem + ONNX model end-to-end |
+| Shell scripts | `make test` (via pytest) | yes | Install script ordering, shellcheck |
+| HTTP API contract | `make test` | yes | Endpoint shape, params, response fields (growing) |
+| Wheel install | `make test-wheel` | local pre-PR gate | Build wheel → isolated venv → serve on 8422 → smoke checks |
+| MCP smoke test | `docs/smoke-test.md` | post-release manual | 35 checks: all MCP tools + CLI mirror + install verification |
 
-**Make targets:**
+`make check-full` = `make check` + `make test-wheel`. Full test suite needs `timeout=300000` on the Bash tool (5 minutes). During development, use targeted tests: `uv run pytest tests/test_specific.py -v`.
 
-- `make check` = `make lint` + `make type` + `make test` (CI gate)
-- `make test-integration` = pytest with `--run-slow` (local only, needs real model)
-- `make test-wheel` = build wheel → isolated venv → `quarry serve --port 8422` → smoke checks → teardown (local pre-PR gate)
-- `make check-full` = `make check` + `make test-wheel` (local pre-PR gate)
-- `make build` = `uv build` + `twine check` (existing)
+### What good testing means in this project
 
-### Recurring bug classes from code review (quarry-ccji-tls, 10 rounds)
+Quarry has four surfaces (CLI, MCP, HTTP, plugin) backed by the same core. Every feature must work on all surfaces or explicitly document which surfaces it applies to. The recurring failure mode is surfaces drifting — a parameter added to the CLI but missing from the HTTP API, or a response field present locally but omitted remotely. The testing rules below exist because these bugs appeared repeatedly and were expensive to find.
 
-Ten review cycles on the TLS remote-access feature revealed five classes of bugs that appeared repeatedly. Each class points to a testing gap that must be closed with any future change in that area.
+**Never retry a command that produces no output.** Diagnose first — empty output usually means a silent exception or a missing code path, not a transient failure.
+
+### Recurring bug classes (quarry-ccji-tls, 10 review rounds)
+
+Ten review cycles on the TLS remote-access feature revealed five classes of bugs that appeared repeatedly. Each class points to a testing gap that must be closed with any future change in that area. These are evaluator checklists — every code review must check for these.
 
 **Class 1 — File I/O safety.** `os.write()` is not guaranteed to write all bytes. `os.fdopen()` can raise before taking ownership of the fd, leaking it. Atomic rename must be inside the try block or the temp file leaks on failure. Permissions race: creating a file then chmoding it leaves a window.
 
@@ -64,7 +134,7 @@ Ten review cycles on the TLS remote-access feature revealed five classes of bugs
 
 *Required tests:* At minimum, every install script must pass `shellcheck -x`. For logic correctness: write integration tests that invoke the scripts with a mock `quarry` binary (a shell function that records its invocations and returns success/failure). Assert: (a) QUARRY_API_KEY is checked before any slow step; (b) the service command baked into launchd/systemd includes `--host 0.0.0.0` when `QUARRY_SERVE_HOST=0.0.0.0` is set; (c) the script exits non-zero when the daemon fails to start; (d) `quarry login localhost --yes` is called after the daemon starts.
 
-### Rules
+### Testing rules
 
 1. **No new `os.open()`/`os.fdopen()` pattern without a failure-injection test** covering fd closure and temp file cleanup.
 2. **No new `(bool, str)` return function without a raises-then-returns-false test.**
@@ -77,7 +147,11 @@ Ten review cycles on the TLS remote-access feature revealed five classes of bugs
 
 Identity: `agent: claude` per `.punt-labs/ethos.yaml`. Sub-agent calls (`Agent(subagent_type=…)`) match ethos identity handles.
 
-Quarry is Python with a heavy ML core (ONNX embeddings, LanceDB vectors), a hybrid search algorithm (vector + BM25 + RRF + temporal decay), a multi-surface API (CLI, MCP stdio + WebSocket, HTTP), and a TLS remote-access feature with a long history of subtle bug classes (see Testing section). Every domain has a clear specialist pair. Within each row, the worker and evaluator must be distinct handles. Claude is the leader, never the evaluator.
+All code delegation uses ethos missions. Every non-trivial delegation has two phases: (1) **design mission** — describes the problem, constraints, and invariants but does NOT prescribe a write set; (2) **implementation mission** — uses the write set produced by the design phase. The design mission's output IS the write set — the specialist decides what to create, split, or extract. This is critical: prescribing a write set before design prevents refactoring and forces code into existing modules (which is how `__main__.py` reached 2,008 lines).
+
+### Why these pairings
+
+Quarry spans four technical domains that require distinct expertise: (1) **ML/numerical** — ONNX embedding, quantization, GPU dispatch, search algorithm design — owned by `kpz` because these are inference pipeline and hardware abstraction problems; (2) **data infrastructure** — LanceDB schema, migrations, chunk storage, agent memory — owned by `rmh` because these are Python data-layer problems with strict type contracts; (3) **network trust** — TLS cert generation, pinned CA contexts, HTTP API contracts — owned by `djb` because TLS semantics are security-critical and the bug class history proves subtle mistakes recur; (4) **user surface** — CLI commands, install scripts, system service lifecycle — split between `mdm` (CLI design) and `adb` (infrastructure/service).
 
 | Task type | Worker | Evaluator |
 |-----------|--------|-----------|
@@ -95,11 +169,17 @@ Quarry is Python with a heavy ML core (ONNX embeddings, LanceDB vectors), a hybr
 | CLI surface (`quarry find`, `ingest`, `remember`) | `mdm` | `rmh` |
 | Performance / latency / index-build benchmarks | `kpz` | `adb` |
 
-Apply the five recurring bug classes from the Testing section as evaluator checklists — file I/O safety, exception boundaries, remote/local divergence, TLS semantics, install-script logic. Use the `standard` pipeline for any change touching `/search`, the embedding pipeline, or TLS. Use `quick` only for documented bugfixes inside a single module that doesn't cross the local/remote boundary.
+### Pipeline selection
 
-## Key Design Documents
+Use `standard` pipeline (design → implement → test → review) for any change touching `/search`, the embedding pipeline, TLS, or work that crosses the local/remote boundary. Use `quick` (implement → review) only for documented bugfixes inside a single module that don't cross boundaries. Apply the five bug classes from the Testing section as evaluator checklists on every review. Review-cycle fix rounds (Copilot/Bugbot findings) use bare `Agent()`, not missions.
 
-- `DESIGN.md` — ADR log (DES-001 through DES-029)
+## Release
+
+Use `/punt:auto release [version=X.Y.Z]`. Quarry is a CLI + Plugin Hybrid — releases publish to both PyPI (`punt-quarry`) and the Claude Code plugin marketplace. Dev plugin testing: `claude --plugin-dir .` loads `quarry-dev` alongside the installed prod plugin.
+
+## Key Documents
+
+- `DESIGN.md` — ADR log (DES-001+). Read before proposing changes to settled architecture.
 - `docs/architecture.tex` → `docs/architecture.pdf` — system architecture, module responsibilities, search and retrieval, deployment
 - `prfaq.tex` → `prfaq.pdf` — product direction and risk assumptions
 - `docs/improving-agent-memory.md` — agent memory design rationale
