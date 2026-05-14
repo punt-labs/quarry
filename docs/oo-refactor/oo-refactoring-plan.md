@@ -5,8 +5,18 @@ Generated: 2026-05-13
 This is document 3 of 3 in the quarry OO redesign:
 
 1. [OO Design Report](oo-design-report.md) -- proposes ~44 classes across 3 sections
-2. [OO Design Review](oo-design-review.md) -- peer review with 7 revisions
-3. **This document** -- step-by-step execution plan. 74 steps, tests green at every step.
+2. [OO Design Review](oo-design-review.md) -- peer review with 7 revisions (R1-R7)
+3. **This document** -- step-by-step execution plan. 84 steps, tests green at every step.
+
+Incorporates 18 revisions from two review documents:
+
+- **Peer review (R1-R7):** HealthChecker size justification, McpContext extraction,
+  SyncConfig, BackfillConfig, IngestJob, SitemapOptions, commands/ as functions.
+- **Pattern review (PR1-PR11):** Database Facade, CollectionName Flyweight,
+  ConnectionValidator, ServiceManager, sync.py residual absorption, ChunkStore.db
+  removal, QuarryContext.api_key encapsulation, presentation-layer exemptions,
+  TaskState non-application of State pattern, PubSub non-application, frozen-dataclass
+  encapsulation exemption, draft contradiction resolution.
 
 ## Modules at target (no steps needed)
 
@@ -20,38 +30,41 @@ This is document 3 of 3 in the quarry OO redesign:
 
 ## Modules requiring additional steps (previously excluded)
 
-These 4 modules were incorrectly excluded. They fail OO metrics
-(method_ratio 0.00, class_to_func_ratio 0.00) and need refactoring.
+These 4 modules were incorrectly excluded from the design drafts. They
+fail OO metrics (method_ratio 0.00, class_to_func_ratio 0.00) and need
+refactoring. The drafts marked them "no structural change" but the plan
+supersedes the drafts for these modules. (pattern-review PR3)
 
 ### Step 0.7: Convert `latex_utils.py` to `LatexSerializer` class
 
 - **Source**: `latex_utils.py` (57 lines, 0 classes, 2 functions)
-- **Class**: `LatexSerializer` — owns escape rules and table serialization
-- **Absorbs**: `escape_latex` → `escape`, `rows_to_latex` → `serialize_table`
-- **Ratchet**: method_ratio 0.00→1.00, class_to_func_ratio 0.00→1.00
+- **Class**: `LatexSerializer` -- owns escape rules and table serialization
+- **Absorbs**: `escape_latex` -> `escape`, `rows_to_latex` -> `serialize_table`
+- **Ratchet**: method_ratio 0.00->1.00, class_to_func_ratio 0.00->1.00
 
 ### Step 0.8: Convert `logging_config.py` to `LoggingConfig` class
 
 - **Source**: `logging_config.py` (73 lines, 0 classes, 1 function)
-- **Class**: `LoggingConfig` — owns format strings, handler setup, level configuration
-- **Absorbs**: `configure_logging` → `configure` classmethod
-- **Ratchet**: method_ratio 0.00→1.00, class_to_func_ratio 0.00→1.00
+- **Class**: `LoggingConfig` -- owns format strings, handler setup, level configuration
+- **Absorbs**: `configure_logging` -> `configure` classmethod
+- **Ratchet**: method_ratio 0.00->1.00, class_to_func_ratio 0.00->1.00
 
 ### Step 0.9: Move `provider.py` functions into `ProviderSelection`
 
 - **Source**: `provider.py` (99 lines, 1 class, 2 functions)
-- **Class**: `ProviderSelection` (exists) — absorb `select_provider` as `from_environment` classmethod, `provider_display` as `display` method
-- **Ratchet**: method_ratio 0.00→1.00, class_to_func_ratio 0.33→1.00
+- **Class**: `ProviderSelection` (exists) -- absorb `select_provider` as `from_environment` classmethod, `provider_display` as `display` method
+- **Ratchet**: method_ratio 0.00->1.00, class_to_func_ratio 0.33->1.00
 
 ### Step 0.10: Move `sitemap.py` functions into `SitemapDiscovery` class
 
 - **Source**: `sitemap.py` (125 lines, 1 class SitemapEntry, 4 functions)
-- **Class**: `SitemapDiscovery` — owns discovery logic, URL filtering
+- **Class**: `SitemapDiscovery` -- owns discovery logic, URL filtering
 - **Absorbs**: `discover_pages`, `discover_urls`, `filter_entries`, `_pages_to_entries`
 - **Keeps**: `SitemapEntry` dataclass unchanged
-- **Ratchet**: method_ratio 0.00→0.80, class_to_func_ratio 0.20→0.60
+- **Ratchet**: method_ratio 0.00->0.80, class_to_func_ratio 0.20->0.60
 
 Sources: oo-design-report.md (44 classes), oo-design-review.md (7 revisions),
+oo-design-pattern-review.md (11 revisions),
 `_draft-core-data.md`, `_draft-ingestion.md`, `_draft-surfaces.md`
 
 Baseline: 42 modules, 15,635 LOC, 44 classes, 394 top-level functions,
@@ -119,25 +132,34 @@ These hold throughout the entire refactoring. Violations are bugs.
    classes (not functions) because the pipeline dispatches
    polymorphically via the protocol, which requires instances.
 
-10. **`commands/` and `routes/` modules contain functions, not
-    classes.** These are presentation-layer wiring. Per R7, command
-    modules export functions taking `CliContext` plus parsed args. Route
-    modules export async handler functions. Both are exempt from
-    class-per-module expectations and `method_ratio` scoring.
+10. **`commands/`, `routes/`, `formatting.py`, `_hook_entry.py`, and
+    `hooks/transcript.py` are presentation-layer modules exempt from
+    `class_to_func_ratio` and `method_ratio` scoring.** Per peer-review
+    R7, command modules export functions taking `CliContext` plus parsed
+    args. Route modules export async handler functions. Formatting functions
+    are stateless transforms calling `TableRenderer.render()`. Hook entry
+    and transcript modules are dispatch wiring and pure transforms
+    respectively. All are exempt from class-per-module expectations.
+    (peer-review R7, pattern-review PR9)
 
----
+11. **Frozen dataclasses are exempt from PY-EN-1's underscore
+    requirement.** Per PY-CC-6, frozen dataclasses are pure value objects
+    with no behavior beyond field storage. Their fields are immutable and
+    the dataclass decorator generates `__init__`, `__eq__`, and `__hash__`
+    from the field names. Public field names are correct for frozen
+    dataclasses. (pattern-review PR11)
 
-## Reviewer Revisions -- Disposition
+12. **`TaskState` does not use the State pattern (PY-DP-3).** The
+    transition logic is ~15 lines in `TaskManager`, not in `TaskState`
+    itself. Applying the State pattern would add ceremony disproportionate
+    to the complexity. `TaskState` remains a mutable dataclass with a
+    `status` field. (pattern-review PR10)
 
-| # | Revision | Status |
-|---|----------|--------|
-| R1 | Split HealthChecker or justify size | ADOPTED. `HealthChecker` stays as one class in its own `health_checker.py` module (~450 LOC). The 20 `_check_*` methods are tightly cohesive -- they all accumulate `CheckResult` on the same list. The 300-line exception for standalone classes with tightly cohesive methods applies. Documented in step 4.4. |
-| R2 | Extract `McpContext` from `McpSession` | ADOPTED. `McpContext` holds `_settings`, `_db`, `_background`, `_handle_errors`. `McpSession` owns `_context` and its tool methods become thinner. Symmetric with `CliContext`. Steps 6.8-6.9. |
-| R3 | Add `SyncConfig` for `CollectionSyncer` | ADOPTED. `SyncConfig` frozen dataclass bundles `directory`, `collection`, `max_workers`. Constructor becomes `CollectionSyncer(config, db, settings, conn)` -- 4 positional params. Step 1.5. |
-| R4 | Add `BackfillConfig` for `SessionBackfiller` | ADOPTED. `BackfillConfig` frozen dataclass bundles `dry_run`, `collection_override`, `project_filter`, `limit`. Constructor becomes `SessionBackfiller(settings, db, config)`. Step 1.6. |
-| R5 | Add `IngestJob` for `BackgroundIngester` | ADOPTED. `IngestJob` frozen dataclass bundles all 8 fields. `BackgroundIngester` owns `_job: IngestJob`. Step 1.7. |
-| R6 | Add `SitemapConfig` for `UrlIngester.ingest_sitemap` | ADOPTED. `SitemapOptions` frozen dataclass bundles `include`, `exclude`, `limit`, `workers`, `delay`, `timeout`. Method signature becomes `ingest_sitemap(url, *, options, overwrite, collection, progress_callback, chunk_config)`. Step 1.8. |
-| R7 | `commands/` uses functions, not classes | ADOPTED. Each command module exports a function (or small number of functions) taking `CliContext` plus parsed args. No command classes. Steps 7.1-7.16. |
+13. **The hooks system does not use PubSub (PY-DP-8).** The event set is
+    fixed by Claude Code (quarry cannot define new events), so loose
+    coupling between producer and consumer provides no value. The hardcoded
+    dispatch dict in `_hook_entry.py` is simpler and correct.
+    (pattern-review PR10)
 
 ---
 
@@ -265,7 +287,11 @@ combinations. Test empty filter returns `None`.
 Bundle the memory kwargs (`agent_handle`, `memory_type`, `summary`)
 plus chunking params (`max_chars`, `overlap_chars`, `collection`,
 `source_format`) into `ChunkConfig`. This is the canonical parameter
-object for the entire ingestion path per review section 5.2.
+object for the entire ingestion path -- not just the chunker, but all
+surfaces that thread memory kwargs: `IngestionPipeline.ingest_document`,
+`UrlIngester.ingest_url`, `UrlIngester.ingest_sitemap`,
+`SessionBackfiller.run`, `BackgroundIngester.run`,
+`WebFetchHandler.handle`, and `PreCompactHandler.handle`.
 
 **Target:** `src/quarry/models.py`
 **Class:** `ChunkConfig` (`@dataclass(frozen=True, slots=True)`)
@@ -278,23 +304,44 @@ Other callers adopt `ChunkConfig` as their respective classes are extracted.
 
 **Verification:** `make check`
 
-### Step 1.4: Create `CollectionName` value class
+### Step 1.4: Create `CollectionName` value class with Flyweight cache
 
 Convert `collections.py` from two functions to a `CollectionName`
-value class with validation in `__new__` and a `from_path` classmethod.
+value class with validation in `__new__`, a `from_path` classmethod,
+and a `WeakValueDictionary` cache for instance reuse. Mark the class
+`@final`. (pattern-review PR2)
+
+The same collection name string (`"default"`, project-derived names)
+appears in every ingestion call, every search call, and every sync
+operation. `CollectionName` is immutable and identity should equal
+equality. This is the textbook Flyweight trigger (PY-DP-1): immutable,
+high-frequency, identity=equality.
+
+Implementation:
+
+    _cache: ClassVar[WeakValueDictionary[str, CollectionName]]
+
+    def __new__(cls, name: str) -> Self:
+        if name in cls._cache:
+            return cls._cache[name]
+        instance = super().__new__(cls)
+        # ... validation ...
+        cls._cache[name] = instance
+        return instance
 
 **Source:** `src/quarry/collections.py`
 **Target:** `src/quarry/collections.py` (in-place refactor)
-**Class:** `CollectionName`
+**Class:** `CollectionName` (`@final`)
 **Absorbs:** `validate_collection_name` -> `__new__`, `derive_collection` -> `from_path`
 **Caller updates:** `pipeline.py`, `sync.py`, `hooks.py`, `__main__.py`,
 `mcp_server.py`, `http_server.py`
 **Tests:** Characterization tests for validation edge cases before refactor.
+Test Flyweight: `CollectionName("x") is CollectionName("x")`.
 **Ratchet:** `method_ratio` improves (2 functions -> methods).
 
 **Verification:** `make check`
 
-### Step 1.5: Create `SyncConfig` frozen dataclass (R3)
+### Step 1.5: Create `SyncConfig` frozen dataclass (peer-review R3)
 
 Bundle `directory`, `collection`, `max_workers` for `CollectionSyncer`.
 
@@ -305,7 +352,7 @@ Bundle `directory`, `collection`, `max_workers` for `CollectionSyncer`.
 
 **Verification:** `make check`
 
-### Step 1.6: Create `BackfillConfig` frozen dataclass (R4)
+### Step 1.6: Create `BackfillConfig` frozen dataclass (peer-review R4)
 
 Bundle `dry_run`, `collection_override`, `project_filter`, `limit`
 for `SessionBackfiller`.
@@ -313,11 +360,11 @@ for `SessionBackfiller`.
 **Target:** `src/quarry/backfill.py` (add to existing module)
 **Class:** `BackfillConfig` (`@dataclass(frozen=True, slots=True)`)
 **Tests:** Construction test.
-**Ratchet:** +1 dataclass. Enables step 4.8.
+**Ratchet:** +1 dataclass. Enables step 4.14.
 
 **Verification:** `make check`
 
-### Step 1.7: Create `IngestJob` frozen dataclass (R5)
+### Step 1.7: Create `IngestJob` frozen dataclass (peer-review R5)
 
 Bundle all 8 fields for `BackgroundIngester`: `text_file`,
 `document_name`, `collection`, `lancedb_path`, `session_prefix`,
@@ -326,11 +373,11 @@ Bundle all 8 fields for `BackgroundIngester`: `text_file`,
 **Target:** `src/quarry/_hook_entry.py` (add to existing module)
 **Class:** `IngestJob` (`@dataclass(frozen=True, slots=True)`)
 **Tests:** Construction test.
-**Ratchet:** +1 dataclass. Enables step 5.4.
+**Ratchet:** +1 dataclass. Enables step 5.6.
 
 **Verification:** `make check`
 
-### Step 1.8: Create `SitemapOptions` frozen dataclass (R6)
+### Step 1.8: Create `SitemapOptions` frozen dataclass (peer-review R6)
 
 Bundle `include`, `exclude`, `limit`, `workers`, `delay`, `timeout`
 for `UrlIngester.ingest_sitemap`.
@@ -338,7 +385,7 @@ for `UrlIngester.ingest_sitemap`.
 **Target:** `src/quarry/models.py` or `src/quarry/results.py`
 **Class:** `SitemapOptions` (`@dataclass(frozen=True, slots=True)`)
 **Tests:** Construction test.
-**Ratchet:** +1 dataclass. Enables step 3.11.
+**Ratchet:** +1 dataclass. Enables step 3.12.
 
 **Verification:** `make check`
 
@@ -357,12 +404,14 @@ the `extractors/` package with `__init__.py`.
 
 ### Step 1.10: Create `ServiceBackend` protocol
 
-Define the protocol in `src/quarry/service.py` (top of file).
+Define the protocol in `src/quarry/service.py` (top of file). Note:
+this makes adding a third platform a single new class with no
+modification to existing code (Open/Closed Principle).
 
 **Target:** `src/quarry/service.py`
 **Class:** `ServiceBackend` (Protocol) with `install()`, `uninstall()`, `status()` methods
 **Tests:** Protocol conformance test.
-**Ratchet:** +1 protocol class. Enables steps 4.5-4.6.
+**Ratchet:** +1 protocol class. Enables steps 4.8-4.9.
 
 **Verification:** `make check`
 
@@ -371,8 +420,9 @@ Define the protocol in `src/quarry/service.py` (top of file).
 ## Phase 2: Core data layer (database.py decomposition)
 
 database.py is 925 lines with 28 top-level functions and zero classes.
-After this phase it is deleted. Each extraction creates one class and
-updates all callers in the same PR.
+After this phase it is replaced by a `Database` facade that composes
+five extracted classes. Each extraction creates one class and updates
+all callers in the same PR.
 
 ### Step 2.1: Extract `SchemaManager`
 
@@ -397,7 +447,11 @@ updates all callers in the same PR.
 `delete_document` -> `delete_document`, `delete_collection` -> `delete_collection`,
 `count_chunks` -> `count`, `_get_or_create_table` -> private,
 `_try_open_table` -> private. `get_db` stays as module-level factory in
-`chunk_store.py`.
+`chunk_store.py` temporarily (replaced by `Database` facade in step 2.8).
+**Note:** Do NOT add a public `db` property. The raw `LanceDB` handle must not
+be exposed. Callers that need the handle for `ChunkSearch` or `ChunkCatalog`
+construction receive it via the `Database` facade (step 2.8), not by reaching
+through `ChunkStore`. (pattern-review PR7)
 **Caller updates:** `pipeline.py`, `http_server.py`, `mcp_server.py`,
 `__main__.py`, `hooks.py`, `sync.py`, `doctor.py`, tests
 **Tests:** Characterization tests for insert, delete, count operations.
@@ -455,6 +509,11 @@ Move `format_size`, `dir_size_bytes`, `discover_databases` from
 `database.py` to `src/quarry/storage.py`. These remain free functions
 (no shared state, no LanceDB dependency).
 
+Note: `discover_databases` uses deferred imports of `ChunkCatalog` and
+`ChunkStore` to avoid circular dependencies. This signals the function
+may belong on the `Database` facade (step 2.8). If so, move it there
+instead. Evaluate during implementation.
+
 **Source:** `src/quarry/database.py`
 **Target:** `src/quarry/storage.py`
 **Absorbs:** `format_size`, `dir_size_bytes`, `discover_databases`
@@ -474,6 +533,44 @@ remaining imports.
 **Caller updates:** Any remaining imports across the codebase.
 **Tests:** Full test suite.
 **Ratchet:** Largest module eliminated.
+
+**Verification:** `make check`
+
+### Step 2.8: Create `Database` facade (pattern-review PR1)
+
+Five classes (`ChunkStore`, `ChunkSearch`, `ChunkCatalog`,
+`SchemaManager`, `TableOptimizer`) all constructed from the same
+`LanceDB` handle. Without a facade, the decomposition of `database.py`
+trades one god module for a three-class construction ceremony repeated
+at every call site. The trigger condition for PY-DP-10 (Facade --
+single entry point to a subsystem) is unambiguously present.
+
+**Target:** `src/quarry/database_facade.py`
+**Class:** `Database`
+
+    Database
+      Owns: _store (ChunkStore), _search (ChunkSearch),
+            _catalog (ChunkCatalog), _schema (SchemaManager),
+            _optimizer (TableOptimizer)
+      Public interface:
+        Database(db: LanceDB)  [__new__]
+        @property store -> ChunkStore
+        @property search -> ChunkSearch
+        @property catalog -> ChunkCatalog
+        @property optimizer -> TableOptimizer
+        ensure_schema() -> None  [delegates to _schema]
+      Factory: get_db(path) -> Database  [replaces current get_db]
+
+~40 lines. Eliminates three-class construction ceremony at every call site.
+Replace all `get_db` call sites that construct separate classes with
+`Database(db)` or the updated `get_db` factory.
+
+**Caller updates:** Every module that previously constructed `ChunkStore`,
+`ChunkSearch`, or `ChunkCatalog` separately: `pipeline.py`, `http_server.py`,
+`mcp_server.py`, `__main__.py`, `hooks.py`, `sync.py`, `doctor.py`, tests.
+**Tests:** Construction test, verify all five components accessible,
+verify `get_db` returns `Database`.
+**Ratchet:** +1 class, eliminates raw `LanceDB` handle exposure.
 
 **Verification:** `make check`
 
@@ -554,9 +651,15 @@ and fallback.
 `process_html_text` -> `extract_from_html`,
 `_strip_boilerplate`, `_extract_title`, `_html_to_markdown`,
 `_has_markdown_headings`, `SUPPORTED_HTML_EXTENSIONS`, `_BOILERPLATE_TAGS`
+**Note:** `extract_from_html` is NOT part of `FormatExtractor`. This is
+an additional method specific to the URL ingestion path. `UrlIngester`
+and `WebFetchHandler` depend on `HtmlExtractor` specifically (not on
+`FormatExtractor`), creating a concrete dependency from the URL/hook
+layer to this specific extractor. This is acceptable because the protocol
+defines the minimum, and `HtmlExtractor` extends it for its unique
+consumer.
 **Caller updates:** `pipeline.py`, `hooks.py` (`WebFetchHandler` depends on
-`extract_from_html` specifically, not `FormatExtractor` -- document this
-concrete dependency)
+`extract_from_html`)
 **Tests:** Characterization tests for HTML extraction from file and raw string.
 **Ratchet:** `method_ratio` improves. `html_processor.py` eliminated.
 
@@ -612,6 +715,9 @@ concrete dependency)
 **Class:** `ImagePreparer`
 **Absorbs:** `_prepare_image_bytes` -> `prepare_bytes`,
 `_encode_image_to_fit` -> `_encode_to_fit`
+**Note:** This class is stateless with one public method. It exists as a
+class (not a function) for testability -- `ImageExtractor` composes
+`_preparer: ImagePreparer`, allowing mock injection in tests.
 **Caller updates:** `pipeline.py`
 **Tests:** Characterization tests for image preparation and encoding.
 **Ratchet:** `method_ratio` improves.
@@ -640,6 +746,9 @@ concrete dependency)
 **Target:** `src/quarry/url_fetcher.py`
 **Class:** `UrlFetcher`
 **Absorbs:** `_fetch_url` -> `fetch`
+**Note:** This class is stateless with one public method. It exists as a
+class (not a function) for testability -- `UrlIngester` composes
+`_fetcher: UrlFetcher`, allowing mock injection in tests.
 **Caller updates:** `pipeline.py`
 **Tests:** Characterization test for URL fetching with mock HTTP.
 **Ratchet:** `method_ratio` improves.
@@ -654,7 +763,7 @@ concrete dependency)
 **Absorbs:** `ingest_url` -> method, `_ingest_url_with_delay` -> `_ingest_with_delay`,
 `_bulk_ingest_entries` -> `_bulk_ingest`, `ingest_sitemap` -> method,
 `ingest_auto` -> method. Uses `SitemapOptions` (step 1.8) and `ChunkConfig`
-(step 1.3) to reduce `ingest_sitemap` from 13 params to 5.
+(step 1.3) to reduce `ingest_sitemap` from 13 params to 5. (peer-review R6)
 **Caller updates:** `__main__.py`, `mcp_server.py`, `http_server.py`, tests
 **Tests:** Characterization tests for URL ingestion, sitemap crawling,
 auto-detection.
@@ -674,6 +783,8 @@ if/elif chain), `_chunk_embed_store` -> private method,
 property from the extractor registry.
 All 7 format-specific `ingest_*` functions are eliminated -- replaced by
 generic dispatch through `FormatExtractor`.
+**Note:** Dependencies use post-refactor names: `ChunkStore.insert` (via
+`Database` facade), not `database.insert_chunks`.
 **Caller updates:** `__main__.py`, `mcp_server.py`, `http_server.py`,
 `hooks.py`, `sync.py`, `backfill.py`, tests
 **Tests:** Characterization tests for `ingest_document` with each format.
@@ -686,7 +797,13 @@ Verify extractor registry dispatch.
 ### Step 3.14: Refine `BackendRegistry` in `backends.py`
 
 Wrap module-level cache state (`_ocr_cache`, `_embedding_cache`, `_lock`)
-into a `BackendRegistry` class.
+into a `BackendRegistry` class. Use Singleton by convention: a module-level
+instance with thin wrapper functions.
+
+Note: PY-DP-7 (Singleton) trigger is present -- `BackendRegistry` wraps
+state that must have exactly one global instance. Module-level singleton
+is the Python idiom. A `__new__` guard is cleaner but not critical; either
+approach satisfies the intent.
 
 **Source:** `src/quarry/backends.py` (in-place refactor)
 **Target:** `src/quarry/backends.py`
@@ -729,10 +846,32 @@ formatting.
 **Class:** `CollectionSyncer`
 **Absorbs:** `sync_collection` -> `sync`, `_ingest_files` -> private,
 `_refresh_files` -> private, `_delete_documents` -> private.
-Uses `SyncConfig` (step 1.5) for constructor.
+Uses `SyncConfig` (step 1.5) for constructor. Constructor is
+`CollectionSyncer(config, db, settings, conn)` -- 4 positional params,
+satisfying PY-OO-3. (peer-review R3)
 **Caller updates:** `sync.py` (`sync_all` instantiates `CollectionSyncer`)
 **Tests:** Characterization tests for sync with adds, refreshes, deletes.
 **Ratchet:** `method_ratio` improves.
+
+**Verification:** `make check`
+
+### Step 4.1a: Absorb `compute_sync_plan` and `sync_all` into `CollectionSyncer` (pattern-review PR6)
+
+After step 4.1, `compute_sync_plan` and `sync_all` remain as module-level
+functions sharing `db`, `settings`, `conn`, `max_workers` -- the same
+parameter set as `CollectionSyncer`. This is the PY-OO-1 trigger
+(functions sharing a parameter).
+
+Move `compute_sync_plan` -> `CollectionSyncer.compute_plan` (classmethod
+or static method taking `SyncConfig` + `conn` + `extensions`).
+Move `sync_all` -> `CollectionSyncer.sync_all` (classmethod taking `db`,
+`settings`, `conn`, `max_workers` -- constructs instances internally).
+
+**Source:** `src/quarry/sync.py`
+**Caller updates:** `__main__.py`, `mcp_server.py`, `http_server.py`,
+`hooks.py`, tests
+**Tests:** Existing sync tests.
+**Ratchet:** 2 more functions become methods.
 
 **Verification:** `make check`
 
@@ -772,7 +911,7 @@ consumer is updated.
 
 **Verification:** `make check`
 
-### Step 4.4: Extract `HealthChecker`
+### Step 4.4: Extract `HealthChecker` (peer-review R1)
 
 **Source:** `src/quarry/doctor.py`
 **Target:** `src/quarry/health_checker.py`
@@ -780,9 +919,13 @@ consumer is updated.
 **Absorbs:** `check_environment` -> `run_all`, `_print_check` -> `print_results`,
 all 15 `_check_*` functions -> private methods, `_sync_age_result`,
 `_quiet_logging`, `_human_size`, `_quarry_version`
-**Note (R1):** ~450 LOC in a standalone module. The 20 `_check_*` methods are
-tightly cohesive -- they all accumulate `CheckResult` on the same list. The
-300-line exception for standalone classes with tightly cohesive methods applies.
+**Size justification (peer-review R1):** ~450 LOC in a standalone module. The 20
+`_check_*` methods are tightly cohesive -- they all accumulate `CheckResult`
+on the same list. The 300-line exception for standalone classes with tightly
+cohesive methods applies. Splitting into `HealthChecker` + `StorageHealthChecker`
+was considered but rejected: the checks share `_settings` and `_db` state, and
+the cohesion is high (all methods produce the same output type into the same
+accumulator). Keeping one class in its own module is the simpler design.
 **Caller updates:** `__main__.py`, `doctor.py` (becomes thin wrapper)
 **Tests:** Characterization tests for each health check category.
 **Ratchet:** `method_ratio` improves (20 functions -> methods). `doctor.py`
@@ -833,17 +976,33 @@ drops from 1,141 to ~30 lines.
 
 **Verification:** `make check`
 
-### Step 4.8: Extract `LaunchdBackend`
+### Step 4.8: Extract `ServiceManager` with `LaunchdBackend` (pattern-review PR5)
+
+Extract both the dispatch layer and the macOS backend in one step.
+After extracting `LaunchdBackend` and `SystemdBackend` (next step),
+7 functions would remain in `service.py`: `install`, `uninstall`,
+`detect_platform`, `_write_env_file`, `_quarry_exec_args`,
+`_get_tls_hostname`, `ensure_gpu_runtime`. These share `_LABEL`,
+`_ENV_FILE`, and platform detection logic -- the PY-OO-1 trigger.
+
+Create `ServiceManager` owning `_label`, `_env_file`, `_backend`
+(a `ServiceBackend` instance). The backends become an owned collaborator.
 
 **Source:** `src/quarry/service.py`
-**Target:** `src/quarry/service.py` (in-place, class added)
-**Class:** `LaunchdBackend` (implements `ServiceBackend`)
-**Absorbs:** `_launchd_plist_content` -> `_plist_content`,
+**Target:** `src/quarry/service.py` (in-place, classes added)
+**Classes:** `ServiceManager`, `LaunchdBackend` (implements `ServiceBackend`)
+**ServiceManager absorbs:** `install` -> method (dispatches to `_backend`),
+`uninstall` -> method, `detect_platform` -> classmethod,
+`_write_env_file` -> `_write_env_file`, `_quarry_exec_args` -> `_exec_args`,
+`_get_tls_hostname` -> `_tls_hostname`, `ensure_gpu_runtime` -> method,
+`_LABEL`, `_ENV_FILE` -> class constants
+**LaunchdBackend absorbs:** `_launchd_plist_content` -> `_plist_content`,
 `_launchd_install` -> `install`, `_launchd_uninstall` -> `uninstall`,
 `_launchd_status` -> `status`, `_LAUNCHD_DIR`, `_LAUNCHD_PLIST`
-**Caller updates:** `service.py` `install()`/`uninstall()` dispatch to backend
-**Tests:** Characterization tests for launchd plist generation and commands.
-**Ratchet:** `method_ratio` improves (4 functions -> methods).
+**Caller updates:** `__main__.py`, `http_server.py`, `doctor.py`
+**Tests:** Characterization tests for launchd plist generation, platform
+detection, env file writing.
+**Ratchet:** `method_ratio` improves (11 functions -> methods across 2 classes).
 
 **Verification:** `make check`
 
@@ -856,7 +1015,7 @@ drops from 1,141 to ~30 lines.
 `_systemd_install` -> `install`, `_systemd_uninstall` -> `uninstall`,
 `_systemd_status` -> `status`, `_systemd_escape` -> `_escape`,
 `_has_linger` -> `_has_linger`, `_SYSTEMD_DIR`, `_SYSTEMD_UNIT`
-**Caller updates:** `service.py` `install()`/`uninstall()` dispatch to backend
+**Caller updates:** `ServiceManager` dispatches to `SystemdBackend`
 **Tests:** Characterization tests for systemd unit generation and commands.
 **Ratchet:** `method_ratio` improves (6 functions -> methods).
 
@@ -876,6 +1035,31 @@ drops from 1,141 to ~30 lines.
 
 **Verification:** `make check`
 
+### Step 4.10a: Extract `ConnectionValidator` from `remote.py` (pattern-review PR4)
+
+After `ProxyConfig` extraction, 6 functions remain in `remote.py`:
+`ws_to_http`, `validate_connection`, `validate_connection_from_ws_url`,
+`mask_token`, `fetch_ca_cert`, `store_ca_cert`. Three of these
+(`validate_connection`, `fetch_ca_cert`, `store_ca_cert`) share CA
+certificate state and connection validation logic. This is textbook
+Extract Class (PY-RF-3).
+
+**Source:** `src/quarry/remote.py`
+**Target:** `src/quarry/remote.py` (in-place, class added)
+**Class:** `ConnectionValidator`
+**Absorbs:** `validate_connection` -> `validate`,
+`validate_connection_from_ws_url` -> `validate_from_ws_url`,
+`fetch_ca_cert` -> `fetch_ca_cert`, `store_ca_cert` -> `store_ca_cert`
+**Owns:** `_ca_cert_path: Path`
+**Keeps as module-level:** `ws_to_http` (pure string transform),
+`mask_token` (pure string transform)
+**Caller updates:** `__main__.py`, `doctor.py`, `mcp_server.py`
+**Tests:** Characterization tests for connection validation with mock
+HTTP, CA cert fetch/store.
+**Ratchet:** `method_ratio` improves (4 functions -> methods).
+
+**Verification:** `make check`
+
 ### Step 4.11: Extract `CertificateAuthority`
 
 **Source:** `src/quarry/tls.py`
@@ -884,8 +1068,10 @@ drops from 1,141 to ~30 lines.
 **Absorbs:** `generate_ca` -> method, `generate_server_cert` -> method,
 `write_tls_files` -> method, `cert_fingerprint` -> static,
 `_write_file` -> private, `_signing_public_key` -> private, `_now_utc` -> private
-**Note:** ~340 LOC in a standalone module. Internally cohesive. The 300-line
-exception applies (per review section 4.3).
+**Size justification:** ~340 LOC in a standalone module. Internally cohesive
+(all methods relate to TLS cert generation). The 300-line exception for
+standalone classes with tightly cohesive methods applies, same as
+`HealthChecker` (step 4.4).
 **Caller updates:** `service.py`, `http_server.py`, `__main__.py`
 **Tests:** Characterization tests per Bug Class 4 requirements: IP SANs,
 backdated certificates, pinned CA context, mismatched cert/key.
@@ -922,7 +1108,7 @@ backdated certificates, pinned CA context, mismatched cert/key.
 
 **Verification:** `make check`
 
-### Step 4.14: Extract `SessionBackfiller`
+### Step 4.14: Extract `SessionBackfiller` (peer-review R4)
 
 **Source:** `src/quarry/backfill.py`
 **Target:** `src/quarry/backfill.py` (in-place refactor)
@@ -930,7 +1116,14 @@ backdated certificates, pinned CA context, mismatched cert/key.
 **Absorbs:** `backfill_sessions` -> `run`, `_process_project` -> private,
 `_get_existing_doc_names` -> private, `_count_unregistered_dirs` -> private,
 `_write_backfill_capture_file` -> private.
-Uses `BackfillConfig` (step 1.6) for constructor.
+Uses `BackfillConfig` (step 1.6) for constructor. Constructor becomes
+`SessionBackfiller(settings, db, config)` -- 3 positional params.
+**Remaining module-level functions:** `encode_project_path`,
+`build_project_mappings`, `list_transcript_files`,
+`document_name_for_transcript`, `is_already_ingested`. These are pure
+utility functions with no shared state -- justified as functions.
+`is_already_ingested` takes `db` but is consumed by tests and the backfiller
+internally; if usage grows, absorb into `SessionBackfiller`.
 **Caller updates:** `__main__.py`
 **Tests:** Characterization tests for backfill with mock transcripts.
 **Ratchet:** `method_ratio` improves (5 functions -> methods).
@@ -962,6 +1155,9 @@ Uses `BackfillConfig` (step 1.6) for constructor.
 Owns layout constants: `_width`, `_col_sep`, `_header_prefix`, `_row_prefix`.
 **Note:** The 15+ `format_*` functions remain as module-level (stateless
 transformations calling `TableRenderer.render()`). Module stays at ~400 LOC.
+This is a known exception -- `formatting.py` is a presentation-layer module
+exempt from `class_to_func_ratio` scoring per invariant 10.
+(pattern-review PR9)
 **Caller updates:** All functions in `formatting.py` that call `format_table`
 **Tests:** Characterization tests for table rendering with various column specs.
 **Ratchet:** `method_ratio` improves.
@@ -978,7 +1174,7 @@ a package with ~30 lines in `__init__.py`.
 ### Step 5.1: Extract `hooks/transcript.py`
 
 Pure transcript extraction functions. No class -- these are stateless
-transforms.
+transforms. Exempt from class expectations per invariant 10.
 
 **Source:** `src/quarry/hooks.py`
 **Target:** `src/quarry/hooks/transcript.py`
@@ -1028,7 +1224,8 @@ Collection resolution functions. No class -- pure functions.
 `_extract_url` -> private, `_extract_web_fetch_content` -> private,
 `_is_already_ingested` -> private
 **Note:** Depends on `HtmlExtractor.extract_from_html` specifically
-(not `FormatExtractor`) per review section 4.2.
+(not `FormatExtractor`). This is a concrete dependency, documented and
+accepted (see step 3.5 note).
 **Caller updates:** `hooks.py` `__init__.py`, `_hook_entry.py`
 **Tests:** Characterization tests for web fetch auto-ingestion.
 **Ratchet:** `method_ratio` improves (4 functions -> methods).
@@ -1049,15 +1246,16 @@ Collection resolution functions. No class -- pure functions.
 
 **Verification:** `make check`
 
-### Step 5.6: Extract `BackgroundIngester` (R5)
+### Step 5.6: Extract `BackgroundIngester` (peer-review R5)
 
 **Source:** `src/quarry/_hook_entry.py`
 **Target:** `src/quarry/hooks/background_ingester.py`
 **Class:** `BackgroundIngester`
 **Absorbs:** `_ingest_background` core logic -> `run`.
 Uses `IngestJob` (step 1.7) for constructor.
-**Note (O5):** Moved out of `_hook_entry.py` per review observation O5 --
-the class is a domain object, not dispatch wiring.
+**Note:** Moved out of `_hook_entry.py` -- the class is a domain object,
+not dispatch wiring. `_hook_entry.py` becomes pure dispatch (~60 lines,
+5 thin functions), exempt from class expectations per invariant 10.
 **Caller updates:** `_hook_entry.py`
 **Tests:** Characterization tests for background ingestion with dedup.
 **Ratchet:** `method_ratio` improves.
@@ -1088,18 +1286,28 @@ backward compatibility during transition.
 **Class:** `TaskManager`
 **Absorbs:** `_gc_tasks` -> `gc`, `_begin_task` -> `begin`,
 `_on_task_done` -> `on_done`, `TaskState` (moved to same module)
+**Note (invariant 12):** `TaskState` remains a mutable dataclass. The State
+pattern (PY-DP-3) is not applied because the transition logic is ~15 lines
+in `TaskManager`, not in `TaskState` itself.
 **Caller updates:** `http_server.py`
 **Tests:** Characterization tests for task lifecycle and GC.
 **Ratchet:** `method_ratio` improves.
 
 **Verification:** `make check`
 
-### Step 6.2: Rename `_QuarryContext` to `QuarryContext`
+### Step 6.2: Rename `_QuarryContext` to `QuarryContext` and fix encapsulation (pattern-review PR8)
 
 **Source:** `src/quarry/http_server.py` (in-place)
 **Class:** `QuarryContext` (was `_QuarryContext`)
-**Caller updates:** All references in `http_server.py`
-**Tests:** Existing tests.
+**Changes:**
+
+- Rename to `QuarryContext` (public class).
+- `db` property returns `Database` facade (step 2.8), not raw `LanceDB` handle.
+- `api_key` becomes `_api_key` (private attribute). Auth checking accesses
+  `_api_key` internally via a `check_auth(token: str) -> bool` method or
+  via the auth middleware. The API key must not be a public property.
+**Caller updates:** All references in `http_server.py`, auth middleware
+**Tests:** Existing tests. Add test that `api_key` is not publicly accessible.
 **Ratchet:** No metric change; enables route extraction.
 
 **Verification:** `make check`
@@ -1171,15 +1379,17 @@ Each step follows the same pattern as 6.3-6.4.
 
 **Verification:** `make check` after each.
 
-### Step 6.8: Extract `McpContext` (R2)
+### Step 6.8: Extract `McpContext` (peer-review R2)
 
 **Source:** `src/quarry/mcp_server.py`
 **Target:** `src/quarry/mcp_server.py` (in-place, class added)
 **Class:** `McpContext`
 **Absorbs:** `_settings` -> method, `_db` -> method,
 `_background` -> method, `_handle_errors` -> method
-**Note (R2):** Analogous to `CliContext`. `McpSession` owns `_context`
-and delegates infrastructure concerns.
+**Note (peer-review R2):** Analogous to `CliContext`. `McpSession` owns
+`_context` and delegates infrastructure concerns. The symmetry between
+`CliContext` and `McpContext` is a feature -- both are presentation-layer
+context objects per PL-PA-3.
 **Caller updates:** `mcp_server.py` (internal)
 **Tests:** Characterization tests for settings/db resolution.
 **Ratchet:** `method_ratio` improves.
@@ -1213,7 +1423,7 @@ stay as module-level functions.
 `__main__.py` is 2,008 lines. After this phase it drops to ~400.
 Extract context first, then remote client, then commands one at a time.
 
-### Step 7.1: Extract `CliContext`
+### Step 7.1: Extract `CliContext` (peer-review R7)
 
 **Source:** `src/quarry/__main__.py`
 **Target:** `src/quarry/cli_context.py`
@@ -1242,12 +1452,14 @@ error handling.
 
 **Verification:** `make check`
 
-### Steps 7.3-7.16: Extract command modules
+### Steps 7.3-7.16: Extract command modules (peer-review R7)
 
 Each command module is extracted in a separate PR. The pattern is
 identical for each: extract the command body from `__main__.py` into
 a function in `commands/<module>.py` that takes `CliContext` plus
-parsed args (R7 -- functions, not classes).
+parsed args. Per peer-review R7, command modules export functions, not
+classes. Each command function is a stateless orchestration with no data
+to own and no invariant to maintain. The module is the namespace.
 
 | Step | Module | Absorbs | Est. LOC |
 |------|--------|---------|----------|
@@ -1308,16 +1520,51 @@ declarations, decorators, and thin delegation).
 
 | Phase | Steps | Description |
 |-------|-------|-------------|
-| 0 | 0.1-0.6 | Pre-flight: baselines, `__init__` -> `__new__`, in-place method absorption |
-| 1 | 1.1-1.10 | Shared types: `_sql.py`, `SearchFilter`, `ChunkConfig`, `CollectionName`, config dataclasses, protocols |
-| 2 | 2.1-2.7 | Core data: `database.py` decomposition into 5 classes + utilities, then delete |
+| 0 | 0.1-0.10 | Pre-flight: baselines, `__init__` -> `__new__`, in-place method absorption, excluded module fixes |
+| 1 | 1.1-1.10 | Shared types: `_sql.py`, `SearchFilter`, `ChunkConfig`, `CollectionName` (with Flyweight), config dataclasses, protocols |
+| 2 | 2.1-2.8 | Core data: `database.py` decomposition into 5 classes + utilities, delete, `Database` facade |
 | 3 | 3.1-3.15 | Ingestion: `text_splitter.py`, 7 extractors, `IngestionPipeline`, `UrlIngester`, backend refinement |
-| 4 | 4.1-4.16 | Services: `CollectionSyncer`, `FileDiscovery`, `SyncRegistry`, `HealthChecker`, `InstallWizard`, `EthosConfigurator`, service backends, `ProxyConfig`, `CertificateAuthority`, `ProxyInstaller`, `ProjectManager`, `SessionBackfiller`, `TextScrubber`, `TableRenderer` |
+| 4 | 4.1-4.16 | Services: `CollectionSyncer` (with sync absorption), `FileDiscovery`, `SyncRegistry`, `HealthChecker`, `InstallWizard`, `EthosConfigurator`, `ServiceManager` + backends, `ProxyConfig`, `ConnectionValidator`, `CertificateAuthority`, `ProxyInstaller`, `ProjectManager`, `SessionBackfiller`, `TextScrubber`, `TableRenderer` |
 | 5 | 5.1-5.7 | Hooks: transcript + resolver extraction, 3 handler classes, `BackgroundIngester`, package conversion |
-| 6 | 6.1-6.9 | Surfaces: `TaskManager`, `QuarryContext`, 9 route modules, `McpContext`, `McpSession` |
+| 6 | 6.1-6.9 | Surfaces: `TaskManager`, `QuarryContext` (with encapsulation fix), 9 route modules, `McpContext`, `McpSession` |
 | 7 | 7.1-7.19 | CLI: `CliContext`, `RemoteClient`, 16 command modules, `PluginSetup` |
 
-**Total steps: 72**
+**Total steps: 84**
+
+---
+
+## Revision Traceability
+
+All 18 revisions from the two review documents are incorporated inline.
+This table maps each revision to the step(s) that implement it.
+
+### Peer review (oo-design-review.md): 7 revisions
+
+| Revision | Description | Implemented in |
+|----------|-------------|----------------|
+| R1 | HealthChecker size justification | Step 4.4 (size justification block) |
+| R2 | Extract McpContext from McpSession | Step 6.8 |
+| R3 | SyncConfig for CollectionSyncer | Steps 1.5, 4.1 |
+| R4 | BackfillConfig for SessionBackfiller | Steps 1.6, 4.14 |
+| R5 | IngestJob for BackgroundIngester | Steps 1.7, 5.6 |
+| R6 | SitemapOptions for UrlIngester | Steps 1.8, 3.12 |
+| R7 | commands/ uses functions, not classes | Invariant 10, steps 7.1, 7.3-7.16 |
+
+### Pattern review (oo-design-pattern-review.md): 11 revisions
+
+| Revision | Description | Implemented in |
+|----------|-------------|----------------|
+| PR1 | Database Facade (PY-DP-10) | Step 2.8 |
+| PR2 | CollectionName Flyweight (PY-DP-1) | Step 1.4 |
+| PR3 | Resolve contradictions between steps 0.7-0.10 and drafts | Steps 0.7-0.10 header note |
+| PR4 | ConnectionValidator from remote.py | Step 4.10a |
+| PR5 | ServiceManager from service.py | Step 4.8 |
+| PR6 | sync.py residual absorption | Step 4.1a |
+| PR7 | Remove ChunkStore.db property | Step 2.2 (Note block) |
+| PR8 | QuarryContext.api_key encapsulation | Step 6.2 |
+| PR9 | Presentation-layer module exemptions | Invariant 10, step 4.16 note |
+| PR10 | Document non-application of State/PubSub | Invariants 12, 13 |
+| PR11 | Frozen-dataclass encapsulation exemption | Invariant 11 |
 
 ---
 
@@ -1328,8 +1575,9 @@ dependencies exist:
 
 - Phase 1 types and protocols have zero dependencies on new classes.
 - Phase 2 classes depend only on Phase 1 types (`SearchFilter`, `_sql.py`).
+  The `Database` facade (step 2.8) depends on all five Phase 2 classes.
 - Phase 3 extractors depend on Phase 1 (`FormatExtractor` protocol) and
-  Phase 2 (`ChunkStore` for pipeline).
+  Phase 2 (`Database` facade for pipeline).
 - Phase 4 services depend on Phase 1 config objects and Phase 2/3 core
   classes.
 - Phase 5 hooks depend on Phase 3 (`IngestionPipeline`, `HtmlExtractor`)
@@ -1357,8 +1605,9 @@ full test suite at each step.
 
 Every module that calls `database.insert_chunks`, `database.hybrid_search`,
 etc. must be updated. The migration order (extract classes one at a time,
-keep `get_db` as module-level factory) minimizes intermediate breakage.
-Estimate: 50-80 import statements across production code and tests.
+keep `get_db` as module-level factory, then replace with `Database` facade)
+minimizes intermediate breakage. Estimate: 50-80 import statements across
+production code and tests.
 
 ### Third: `pipeline.py` FormatExtractor migration
 
