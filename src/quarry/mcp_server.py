@@ -11,16 +11,10 @@ from typing import TYPE_CHECKING
 from mcp.server.fastmcp import FastMCP
 
 from quarry.backends import get_embedding_backend
-from quarry.chunk_catalog import ChunkCatalog
-from quarry.chunk_search import ChunkSearch
-from quarry.chunk_store import ChunkStore
 from quarry.collections import CollectionName
 from quarry.config import Settings
-from quarry.database import (
-    dir_size_bytes,
-    discover_databases,
-    get_db,
-)
+from quarry.db import ChunkCatalog, ChunkSearch, ChunkStore
+from quarry.db.storage import dir_size_bytes, discover_databases, get_db
 from quarry.formatting import (
     format_collections,
     format_databases,

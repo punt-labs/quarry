@@ -8,8 +8,8 @@ from collections import defaultdict
 from typing import TYPE_CHECKING, Self, cast
 
 from quarry._sql import escape_sql
+from quarry.db.schema import TABLE_NAME, SchemaManager
 from quarry.results import SearchResult
-from quarry.schema import TABLE_NAME, SchemaManager
 from quarry.types import LanceDB
 
 if TYPE_CHECKING:

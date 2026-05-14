@@ -23,9 +23,8 @@ if TYPE_CHECKING:
 
 import pathspec
 
-from quarry.chunk_store import ChunkStore
 from quarry.config import Settings
-from quarry.optimizer import TableOptimizer
+from quarry.db import ChunkStore, TableOptimizer
 from quarry.pipeline import SUPPORTED_EXTENSIONS, prepare_document
 from quarry.sync_registry import (
     FileRecord,

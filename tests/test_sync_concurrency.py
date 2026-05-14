@@ -16,11 +16,11 @@ import numpy as np
 import pytest
 from starlette.testclient import TestClient
 
-from quarry.chunk_store import ChunkStore
+from quarry.db import ChunkStore, TableOptimizer
+from quarry.db.optimizer import FRAGMENT_THRESHOLD
+from quarry.db.schema import TABLE_NAME
 from quarry.http_server import TaskState, _QuarryContext, build_app
 from quarry.models import Chunk
-from quarry.optimizer import FRAGMENT_THRESHOLD, TableOptimizer
-from quarry.schema import TABLE_NAME
 from quarry.sync_registry import (
     list_registrations,
     open_registry,
@@ -374,7 +374,7 @@ class TestOptimizeGuard:
         db.open_table.return_value = table
 
         with patch(
-            "quarry.optimizer.TableOptimizer.count_fragments",
+            "quarry.db.optimizer.TableOptimizer.count_fragments",
             return_value=FRAGMENT_THRESHOLD + 1,
         ):
             TableOptimizer(db).optimize()
@@ -387,7 +387,9 @@ class TestOptimizeGuard:
         table = MagicMock()
         db.open_table.return_value = table
 
-        with patch("quarry.optimizer.TableOptimizer.count_fragments", return_value=100):
+        with patch(
+            "quarry.db.optimizer.TableOptimizer.count_fragments", return_value=100
+        ):
             TableOptimizer(db).optimize()
 
         table.optimize.assert_called_once()
@@ -399,7 +401,7 @@ class TestOptimizeGuard:
         db.open_table.return_value = table
 
         with patch(
-            "quarry.optimizer.TableOptimizer.count_fragments",
+            "quarry.db.optimizer.TableOptimizer.count_fragments",
             return_value=FRAGMENT_THRESHOLD + 1,
         ):
             TableOptimizer(db).optimize(force=True)
@@ -418,7 +420,7 @@ class TestOptimizeGuard:
 
         with (
             patch(
-                "quarry.optimizer.TableOptimizer.count_fragments",
+                "quarry.db.optimizer.TableOptimizer.count_fragments",
                 return_value=FRAGMENT_THRESHOLD + 1,
             ),
             caplog.at_level(logging.WARNING),

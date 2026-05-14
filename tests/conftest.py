@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from quarry.config import Settings
-from quarry.database import get_db
+from quarry.db.storage import get_db
 from quarry.types import LanceDB
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"

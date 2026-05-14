@@ -13,11 +13,10 @@ import numpy as np
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
-from quarry.chunk_search import _RRF_K, ChunkSearch, _row_key, _temporal_weight
-from quarry.chunk_store import ChunkStore
-from quarry.database import get_db
+from quarry.db import ChunkSearch, ChunkStore, SchemaManager, get_db
+from quarry.db.chunk_search import _RRF_K, _row_key, _temporal_weight
+from quarry.db.schema import TABLE_NAME
 from quarry.models import Chunk
-from quarry.schema import TABLE_NAME, SchemaManager
 
 
 def _make_chunk(
@@ -784,7 +783,7 @@ class TestIngestUrlThreadsAgentHandle:
             patch("quarry.pipeline._fetch_url", return_value=html),
             patch("quarry.pipeline.process_html_text", return_value=[]),
             patch("quarry.pipeline._chunk_embed_store") as mock_ces,
-            patch("quarry.chunk_store.ChunkStore.delete_document"),
+            patch("quarry.db.chunk_store.ChunkStore.delete_document"),
         ):
             mock_ces.return_value = result
             ingest_url(

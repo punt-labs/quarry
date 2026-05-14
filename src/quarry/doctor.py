@@ -202,7 +202,7 @@ def _check_storage() -> CheckResult:
             message="no data yet",
             required=False,
         )
-    from quarry.database import dir_size_bytes  # noqa: PLC0415
+    from quarry.db.storage import dir_size_bytes  # noqa: PLC0415
 
     total = dir_size_bytes(data_dir)
     return CheckResult(
@@ -224,8 +224,8 @@ def _human_size(nbytes: int) -> str:
 
 def _check_fts_health(db_path: Path) -> CheckResult:
     """Verify the Tantivy FTS index is queryable."""
-    from quarry.database import get_db  # noqa: PLC0415
-    from quarry.schema import TABLE_NAME  # noqa: PLC0415
+    from quarry.db.schema import TABLE_NAME  # noqa: PLC0415
+    from quarry.db.storage import get_db  # noqa: PLC0415
 
     if not db_path.exists():
         return CheckResult(
@@ -441,8 +441,8 @@ def _check_orphaned_captures(
     db_path: Path,
 ) -> CheckResult:
     """Report captures collections whose base has no registration."""
-    from quarry.chunk_catalog import ChunkCatalog  # noqa: PLC0415
-    from quarry.database import get_db  # noqa: PLC0415
+    from quarry.db.chunk_catalog import ChunkCatalog  # noqa: PLC0415
+    from quarry.db.storage import get_db  # noqa: PLC0415
     from quarry.sync_registry import list_registrations, open_registry  # noqa: PLC0415
 
     if not db_path.exists() or not registry_path.exists():

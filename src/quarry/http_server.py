@@ -41,15 +41,9 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route, WebSocketRoute
 
 from quarry.backends import get_embedding_backend
-from quarry.chunk_catalog import ChunkCatalog
-from quarry.chunk_search import ChunkSearch
-from quarry.chunk_store import ChunkStore
 from quarry.config import DEFAULT_PORT, Settings
-from quarry.database import (
-    dir_size_bytes,
-    format_size,
-    get_db,
-)
+from quarry.db import ChunkCatalog, ChunkSearch, ChunkStore
+from quarry.db.storage import dir_size_bytes, format_size, get_db
 from quarry.provider import ProviderSelection
 from quarry.sync_registry import (
     DirectoryRegistration,

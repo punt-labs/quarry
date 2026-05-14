@@ -6,8 +6,8 @@ import logging
 from typing import Self
 
 from quarry._sql import escape_sql
+from quarry.db.schema import TABLE_NAME
 from quarry.results import CollectionSummary, DocumentSummary
-from quarry.schema import TABLE_NAME
 from quarry.types import LanceDB
 
 logger = logging.getLogger(__name__)

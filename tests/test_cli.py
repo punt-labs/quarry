@@ -50,7 +50,7 @@ class TestListDocumentsCmd:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_documents",
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
                 return_value=mock_docs,
             ),
         ):
@@ -67,7 +67,7 @@ class TestListDocumentsCmd:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
             ) as mock_list,
         ):
             runner.invoke(app, ["list", "documents", "--collection", "math"])
@@ -79,7 +79,9 @@ class TestListDocumentsCmd:
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+            ),
         ):
             result = runner.invoke(app, ["list", "documents"])
 
@@ -141,7 +143,9 @@ class TestListDocumentsCmd:
             patch("quarry.__main__.read_proxy_config", return_value={}),
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+            ),
         ):
             result = runner.invoke(app, ["list", "documents"])
 
@@ -189,7 +193,7 @@ class TestListDocumentsCmd:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_documents",
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
                 return_value=[doc_fields],
             ),
         ):
@@ -213,7 +217,7 @@ class TestShowCmd:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.get_page_text",
+                "quarry.db.chunk_catalog.ChunkCatalog.get_page_text",
                 return_value="Hello world",
             ),
         ):
@@ -238,7 +242,7 @@ class TestShowCmd:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_documents",
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
                 return_value=[mock_doc],
             ),
         ):
@@ -252,7 +256,9 @@ class TestShowCmd:
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+            ),
         ):
             result = runner.invoke(app, ["show", "missing.pdf"])
 
@@ -263,7 +269,9 @@ class TestShowCmd:
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_catalog.ChunkCatalog.get_page_text", return_value=None),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.get_page_text", return_value=None
+            ),
         ):
             result = runner.invoke(app, ["show", "report.pdf", "--page", "999"])
 
@@ -292,7 +300,7 @@ class TestShowCmd:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.get_page_text",
+                "quarry.db.chunk_catalog.ChunkCatalog.get_page_text",
                 return_value="page text",
             ) as mock_get_page,
         ):
@@ -394,7 +402,9 @@ class TestShowCmd:
             patch("quarry.__main__.read_proxy_config", return_value={}),
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+            ),
         ):
             result = runner.invoke(app, ["show", "missing.pdf"])
 
@@ -433,7 +443,7 @@ class TestShowCmd:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.get_page_text",
+                "quarry.db.chunk_catalog.ChunkCatalog.get_page_text",
                 return_value="page content",
             ),
         ):
@@ -486,7 +496,7 @@ class TestShowCmd:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_documents",
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
                 return_value=[doc_fields],
             ),
         ):
@@ -511,10 +521,12 @@ class TestStatusCmd:
         with (
             patch("quarry.__main__._resolved_settings", return_value=mock_settings),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
-            patch("quarry.chunk_store.ChunkStore.count", return_value=0),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+            ),
+            patch("quarry.db.chunk_store.ChunkStore.count", return_value=0),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
             ),
         ):
             result = runner.invoke(app, ["status"])
@@ -531,10 +543,12 @@ class TestStatusCmd:
         with (
             patch("quarry.__main__._resolved_settings", return_value=mock_settings),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
-            patch("quarry.chunk_store.ChunkStore.count", return_value=0),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+            ),
+            patch("quarry.db.chunk_store.ChunkStore.count", return_value=0),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
             ),
             patch("quarry.__main__.open_registry") as mock_open,
             patch(
@@ -554,9 +568,9 @@ class TestStatusCmd:
         with (
             patch("quarry.__main__._resolved_settings", return_value=mock_settings),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_store.ChunkStore.count", return_value=30),
+            patch("quarry.db.chunk_store.ChunkStore.count", return_value=30),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_collections",
+                "quarry.db.chunk_catalog.ChunkCatalog.list_collections",
                 return_value=[
                     {"collection": "default", "document_count": 2, "chunk_count": 30},
                 ],
@@ -605,10 +619,12 @@ class TestStatusCmd:
             patch("quarry.__main__.read_proxy_config", return_value={}),
             patch("quarry.__main__._resolved_settings", return_value=mock_settings),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
-            patch("quarry.chunk_store.ChunkStore.count", return_value=0),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+            ),
+            patch("quarry.db.chunk_store.ChunkStore.count", return_value=0),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
             ),
         ):
             result = runner.invoke(app, ["status"])
@@ -628,10 +644,12 @@ class TestStatusCmd:
             ),
             patch("quarry.__main__._resolved_settings", return_value=mock_settings),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
-            patch("quarry.chunk_store.ChunkStore.count", return_value=0),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+            ),
+            patch("quarry.db.chunk_store.ChunkStore.count", return_value=0),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
             ),
         ):
             result = runner.invoke(app, ["status"])
@@ -715,7 +733,7 @@ class TestDeleteCmd:
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_store.ChunkStore.delete_document", return_value=15),
+            patch("quarry.db.chunk_store.ChunkStore.delete_document", return_value=15),
         ):
             result = runner.invoke(app, ["delete", "report.pdf"])
 
@@ -727,7 +745,7 @@ class TestDeleteCmd:
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_store.ChunkStore.delete_document", return_value=0),
+            patch("quarry.db.chunk_store.ChunkStore.delete_document", return_value=0),
         ):
             result = runner.invoke(app, ["delete", "missing.pdf"])
 
@@ -739,7 +757,7 @@ class TestDeleteCmd:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch(
-                "quarry.chunk_store.ChunkStore.delete_document", return_value=5
+                "quarry.db.chunk_store.ChunkStore.delete_document", return_value=5
             ) as mock_del,
         ):
             result = runner.invoke(app, ["delete", "doc.pdf", "--collection", "math"])
@@ -762,7 +780,7 @@ class TestDeleteCmd:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch(
-                "quarry.chunk_store.ChunkStore.delete_document",
+                "quarry.db.chunk_store.ChunkStore.delete_document",
                 side_effect=RuntimeError("db locked"),
             ),
         ):
@@ -854,7 +872,7 @@ class TestDeleteCmd:
             patch("quarry.__main__.read_proxy_config", return_value={}),
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_store.ChunkStore.delete_document", return_value=0),
+            patch("quarry.db.chunk_store.ChunkStore.delete_document", return_value=0),
         ):
             result = runner.invoke(app, ["delete", "missing.pdf"])
 
@@ -905,7 +923,7 @@ class TestFindCmd:
                 return_value=mock_backend,
             ),
             patch(
-                "quarry.chunk_search.ChunkSearch.hybrid_search",
+                "quarry.db.chunk_search.ChunkSearch.hybrid_search",
                 return_value=mock_results,
             ),
         ):
@@ -928,7 +946,7 @@ class TestFindCmd:
                 "quarry.__main__.get_embedding_backend",
                 return_value=mock_backend,
             ),
-            patch("quarry.chunk_search.ChunkSearch.hybrid_search", return_value=[]),
+            patch("quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]),
         ):
             result = runner.invoke(app, ["find", "nonexistent topic"])
 
@@ -953,7 +971,7 @@ class TestFindCmd:
                 return_value=mock_backend,
             ),
             patch(
-                "quarry.chunk_search.ChunkSearch.hybrid_search", return_value=[]
+                "quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]
             ) as mock_search,
         ):
             result = runner.invoke(app, ["find", "query", cli_flag, cli_value])
@@ -997,7 +1015,7 @@ class TestFindCmd:
                 return_value=mock_backend,
             ),
             patch(
-                "quarry.chunk_search.ChunkSearch.hybrid_search", return_value=[]
+                "quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]
             ) as mock_search,
         ):
             result = runner.invoke(app, ["find", "query"])
@@ -1020,7 +1038,7 @@ class TestFindCmd:
                 return_value=mock_backend,
             ),
             patch(
-                "quarry.chunk_search.ChunkSearch.hybrid_search", return_value=[]
+                "quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]
             ) as mock_search,
         ):
             result = runner.invoke(app, ["find", "query", "--limit", "5"])
@@ -1048,7 +1066,7 @@ class TestFindCmd:
                 return_value=mock_backend,
             ),
             patch(
-                "quarry.chunk_search.ChunkSearch.hybrid_search", return_value=[]
+                "quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]
             ) as mock_search,
         ):
             result = runner.invoke(app, ["find", "query"])
@@ -1077,7 +1095,7 @@ class TestFindCmd:
                 return_value=mock_backend,
             ),
             patch(
-                "quarry.chunk_search.ChunkSearch.hybrid_search",
+                "quarry.db.chunk_search.ChunkSearch.hybrid_search",
                 return_value=mock_results,
             ),
         ):
@@ -1190,7 +1208,7 @@ class TestFindCmd:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.get_embedding_backend", return_value=mock_backend),
-            patch("quarry.chunk_search.ChunkSearch.hybrid_search", return_value=[]),
+            patch("quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]),
         ):
             result = runner.invoke(app, ["find", "query"])
 
@@ -1209,7 +1227,7 @@ class TestFindCmd:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.get_embedding_backend", return_value=mock_backend),
-            patch("quarry.chunk_search.ChunkSearch.hybrid_search", return_value=[]),
+            patch("quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]),
         ):
             result = runner.invoke(app, ["find", "query"])
 
@@ -1285,7 +1303,7 @@ class TestProxyConfigIsinstanceGuard:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.get_embedding_backend", return_value=mock_backend),
-            patch("quarry.chunk_search.ChunkSearch.hybrid_search", return_value=[]),
+            patch("quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]),
         ):
             result = runner.invoke(app, ["find", "query"])
 
@@ -1303,9 +1321,9 @@ class TestProxyConfigIsinstanceGuard:
             ),
             patch("quarry.__main__._resolved_settings", return_value=mock_settings),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_store.ChunkStore.count", return_value=0),
+            patch("quarry.db.chunk_store.ChunkStore.count", return_value=0),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
+                "quarry.db.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
             ),
         ):
             result = runner.invoke(app, ["status"])
@@ -1319,7 +1337,9 @@ class TestDeleteCollectionCmd:
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_store.ChunkStore.delete_collection", return_value=50),
+            patch(
+                "quarry.db.chunk_store.ChunkStore.delete_collection", return_value=50
+            ),
         ):
             result = runner.invoke(app, ["delete", "math", "--type", "collection"])
 
@@ -1331,7 +1351,7 @@ class TestDeleteCollectionCmd:
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_store.ChunkStore.delete_collection", return_value=0),
+            patch("quarry.db.chunk_store.ChunkStore.delete_collection", return_value=0),
         ):
             result = runner.invoke(app, ["delete", "unknown", "--type", "collection"])
 
@@ -1343,7 +1363,7 @@ class TestDeleteCollectionCmd:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch(
-                "quarry.chunk_store.ChunkStore.delete_collection",
+                "quarry.db.chunk_store.ChunkStore.delete_collection",
                 side_effect=RuntimeError("db corrupt"),
             ),
         ):
@@ -1362,7 +1382,7 @@ class TestListCollectionsCmd:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_collections",
+                "quarry.db.chunk_catalog.ChunkCatalog.list_collections",
                 return_value=mock_cols,
             ),
         ):
@@ -1379,7 +1399,7 @@ class TestListCollectionsCmd:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
+                "quarry.db.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
             ),
         ):
             result = runner.invoke(app, ["list", "collections"])
@@ -1421,7 +1441,7 @@ class TestListCollectionsCmd:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
+                "quarry.db.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
             ),
         ):
             result = runner.invoke(app, ["list", "collections"])
@@ -1462,7 +1482,7 @@ class TestListCollectionsCmd:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_collections",
+                "quarry.db.chunk_catalog.ChunkCatalog.list_collections",
                 return_value=[col_fields],
             ),
         ):
@@ -1577,7 +1597,7 @@ class TestDeregisterCmd:
             ),
             patch("quarry.__main__.deregister_directory", return_value=["a.pdf"]),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_store.ChunkStore.delete_document", return_value=3),
+            patch("quarry.db.chunk_store.ChunkStore.delete_document", return_value=3),
         ):
             result = runner.invoke(app, ["deregister", "math"])
         assert result.exit_code == 0
@@ -1596,7 +1616,7 @@ class TestDeregisterCmd:
             ),
             patch("quarry.__main__.deregister_directory", return_value=["a.pdf"]),
             patch("quarry.__main__.get_db") as mock_get_db,
-            patch("quarry.chunk_store.ChunkStore.delete_document") as mock_del,
+            patch("quarry.db.chunk_store.ChunkStore.delete_document") as mock_del,
         ):
             result = runner.invoke(app, ["deregister", "math", "--keep-data"])
         assert result.exit_code == 0
@@ -1628,7 +1648,7 @@ class TestDeregisterCmd:
             patch("quarry.__main__.deregister_directory", return_value=["a.pdf"]),
             patch("quarry.__main__.get_db"),
             patch(
-                "quarry.chunk_store.ChunkStore.delete_document",
+                "quarry.db.chunk_store.ChunkStore.delete_document",
                 side_effect=RuntimeError("db locked"),
             ),
         ):
@@ -1789,7 +1809,9 @@ class TestDatabasesCmd:
                 return_value=settings,
             ),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+            ),
         ):
             result = runner.invoke(app, ["list", "databases"])
 
@@ -1817,7 +1839,9 @@ class TestDatabasesCmd:
                 return_value=settings,
             ),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+            ),
         ):
             result = runner.invoke(app, ["--json", "list", "databases"])
 
@@ -1855,7 +1879,9 @@ class TestDbOption:
         with (
             patch("quarry.config.Settings.load", return_value=mock_loaded),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+            ),
         ):
             result = runner.invoke(app, ["--db", "work", "list", "documents"])
         assert result.exit_code == 0
@@ -1874,7 +1900,7 @@ class TestDbOption:
                 "quarry.__main__.get_embedding_backend",
                 return_value=mock_backend,
             ),
-            patch("quarry.chunk_search.ChunkSearch.hybrid_search", return_value=[]),
+            patch("quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]),
         ):
             result = runner.invoke(app, ["--db", "work", "find", "query"])
         assert result.exit_code == 0
@@ -1887,7 +1913,7 @@ class TestDbOption:
         with (
             patch("quarry.config.Settings.load", return_value=mock_loaded),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_store.ChunkStore.delete_document", return_value=1),
+            patch("quarry.db.chunk_store.ChunkStore.delete_document", return_value=1),
         ):
             result = runner.invoke(app, ["--db", "work", "delete", "x.pdf"])
         assert result.exit_code == 0
@@ -1901,7 +1927,7 @@ class TestDbOption:
             patch("quarry.config.Settings.load", return_value=mock_loaded),
             patch("quarry.__main__.get_db"),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
+                "quarry.db.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
             ),
         ):
             result = runner.invoke(app, ["--db", "work", "list", "collections"])
@@ -1916,7 +1942,9 @@ class TestDbOption:
             patch("quarry.config.Settings.load", return_value=mock_loaded),
             patch.object(Settings, "read_default_db", return_value=None),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+            ),
         ):
             runner.invoke(app, ["list", "documents"])
         mock_loaded.resolve_db_paths.assert_called_once_with(None)
@@ -2708,7 +2736,9 @@ class TestListDatabasesCmdRemote:
             patch("quarry.__main__.read_proxy_config", return_value={}),
             patch("quarry.__main__._resolved_settings", return_value=settings),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+            ),
         ):
             result = runner.invoke(app, ["list", "databases"])
 
@@ -2748,7 +2778,9 @@ class TestListDatabasesCmdRemote:
             patch("quarry.__main__.read_proxy_config", return_value={}),
             patch("quarry.__main__._resolved_settings", return_value=settings),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+            ),
         ):
             local_res = runner.invoke(app, ["--json", "list", "databases"])
         _reset_globals()
@@ -3037,7 +3069,7 @@ class TestDeregisterCmdRemote:
             ),
             patch("quarry.__main__.deregister_directory", return_value=["a", "b", "c"]),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_store.ChunkStore.delete_document", return_value=4),
+            patch("quarry.db.chunk_store.ChunkStore.delete_document", return_value=4),
         ):
             local_res = runner.invoke(app, ["--json", "deregister", "math"])
         _reset_globals()
@@ -3174,7 +3206,9 @@ class TestDatabasesCmdSizeFormatting:
                 return_value=settings,
             ),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+            ),
         ):
             result = runner.invoke(app, ["list", "databases"])
         assert result.exit_code == 0
@@ -3192,7 +3226,9 @@ class TestDatabasesCmdSizeFormatting:
                 return_value=settings,
             ),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+            ),
         ):
             result = runner.invoke(app, ["list", "databases"])
         assert result.exit_code == 0
@@ -3210,7 +3246,9 @@ class TestDatabasesCmdSizeFormatting:
                 return_value=settings,
             ),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+            ),
         ):
             result = runner.invoke(app, ["list", "databases"])
         assert result.exit_code == 0
@@ -3288,7 +3326,9 @@ class TestGlobalFlags:
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+            ),
         ):
             result = runner.invoke(app, ["--verbose", "list", "documents"])
         assert result.exit_code == 0
@@ -3299,7 +3339,9 @@ class TestGlobalFlags:
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+            ),
         ):
             result = runner.invoke(app, ["--quiet", "list", "documents"])
         assert result.exit_code == 0
@@ -3312,7 +3354,7 @@ class TestCliErrors:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_documents",
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
                 side_effect=RuntimeError("db corrupt"),
             ),
         ):
@@ -3325,7 +3367,7 @@ class TestCliErrors:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_documents",
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
                 side_effect=RuntimeError("specific failure message"),
             ),
         ):
@@ -3339,7 +3381,7 @@ class TestCliErrors:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_documents",
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
                 side_effect=KeyboardInterrupt,
             ),
         ):
@@ -3354,7 +3396,7 @@ class TestCliErrors:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_documents",
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
                 side_effect=SystemExit(42),
             ),
         ):
@@ -3394,7 +3436,7 @@ class TestJsonOutput:
                 return_value=mock_backend,
             ),
             patch(
-                "quarry.chunk_search.ChunkSearch.hybrid_search",
+                "quarry.db.chunk_search.ChunkSearch.hybrid_search",
                 return_value=mock_results,
             ),
         ):
@@ -3422,7 +3464,7 @@ class TestJsonOutput:
                 "quarry.__main__.get_embedding_backend",
                 return_value=mock_backend,
             ),
-            patch("quarry.chunk_search.ChunkSearch.hybrid_search", return_value=[]),
+            patch("quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]),
         ):
             result = runner.invoke(app, ["--json", "find", "query"])
 
@@ -3444,7 +3486,7 @@ class TestJsonOutput:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_documents",
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
                 return_value=mock_docs,
             ),
         ):
@@ -3460,7 +3502,9 @@ class TestJsonOutput:
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+            ),
         ):
             result = runner.invoke(app, ["--json", "list", "documents"])
 
@@ -3473,7 +3517,7 @@ class TestJsonOutput:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.get_page_text",
+                "quarry.db.chunk_catalog.ChunkCatalog.get_page_text",
                 return_value="Hello world",
             ),
         ):
@@ -3500,7 +3544,7 @@ class TestJsonOutput:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_documents",
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
                 return_value=[mock_doc],
             ),
         ):
@@ -3519,10 +3563,12 @@ class TestJsonOutput:
         with (
             patch("quarry.__main__._resolved_settings", return_value=mock_settings),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
-            patch("quarry.chunk_store.ChunkStore.count", return_value=0),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+            ),
+            patch("quarry.db.chunk_store.ChunkStore.count", return_value=0),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
             ),
         ):
             result = runner.invoke(app, ["--json", "status"])
@@ -3552,7 +3598,7 @@ class TestJsonOutput:
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_store.ChunkStore.delete_document", return_value=15),
+            patch("quarry.db.chunk_store.ChunkStore.delete_document", return_value=15),
         ):
             result = runner.invoke(app, ["--json", "delete", "report.pdf"])
 
@@ -3567,7 +3613,9 @@ class TestJsonOutput:
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_store.ChunkStore.delete_collection", return_value=50),
+            patch(
+                "quarry.db.chunk_store.ChunkStore.delete_collection", return_value=50
+            ),
         ):
             result = runner.invoke(
                 app, ["--json", "delete", "math", "--type", "collection"]
@@ -3587,7 +3635,7 @@ class TestJsonOutput:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_collections",
+                "quarry.db.chunk_catalog.ChunkCatalog.list_collections",
                 return_value=mock_cols,
             ),
         ):
@@ -3626,7 +3674,7 @@ class TestJsonOutput:
             ),
             patch("quarry.__main__.deregister_directory", return_value=["a.pdf"]),
             patch("quarry.__main__.get_db"),
-            patch("quarry.chunk_store.ChunkStore.delete_document", return_value=4),
+            patch("quarry.db.chunk_store.ChunkStore.delete_document", return_value=4),
         ):
             result = runner.invoke(app, ["--json", "deregister", "math"])
 
@@ -4820,7 +4868,7 @@ def test_configure_logging_called_in_main_callback() -> None:
     with (
         patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
         patch("quarry.__main__.get_db"),
-        patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
+        patch("quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
         patch("quarry.__main__.LoggingConfig.configure") as mock_cfg,
     ):
         result = runner.invoke(app, ["list", "documents"])
@@ -4899,7 +4947,7 @@ def test_verbose_flag_sets_info_level() -> None:
     with (
         patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
         patch("quarry.__main__.get_db"),
-        patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
+        patch("quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
         patch("quarry.__main__.LoggingConfig.configure") as mock_cfg,
     ):
         result = runner.invoke(app, ["--verbose", "list", "documents"])
@@ -4913,7 +4961,7 @@ def test_quiet_flag_sets_critical_level() -> None:
     with (
         patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
         patch("quarry.__main__.get_db"),
-        patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
+        patch("quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
         patch("quarry.__main__.LoggingConfig.configure") as mock_cfg,
     ):
         result = runner.invoke(app, ["--quiet", "list", "documents"])

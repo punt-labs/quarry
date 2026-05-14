@@ -7,7 +7,7 @@ import threading
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Self
 
-from quarry.schema import TABLE_NAME, SchemaManager
+from quarry.db.schema import TABLE_NAME, SchemaManager
 from quarry.types import LanceDB, LanceTable
 
 if TYPE_CHECKING:
