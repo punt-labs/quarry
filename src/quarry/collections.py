@@ -30,8 +30,9 @@ class CollectionName:
         if "'" in name:
             msg = f"Collection name must not contain single quotes: {name!r}"
             raise ValueError(msg)
-        if name in cls._cache:
-            return cast("Self", cls._cache[name])  # type: ignore[redundant-cast]  # pyright needs this
+        cached = cls._cache.get(name)
+        if cached is not None:
+            return cast("Self", cached)  # type: ignore[redundant-cast]  # pyright needs this
         self = super().__new__(cls)
         self._name = name
         cls._cache[name] = self
