@@ -107,7 +107,7 @@ class TestIngestDocument:
         )
         _mock_embedding_backend(monkeypatch, vectors)
         monkeypatch.setattr(
-            "quarry.pipeline.insert_chunks",
+            "quarry.chunk_store.ChunkStore.insert",
             lambda _db, _chunks, _vectors: 1,
         )
 
@@ -161,7 +161,7 @@ class TestIngestDocument:
         )
         _mock_embedding_backend(monkeypatch, vectors)
         monkeypatch.setattr(
-            "quarry.pipeline.insert_chunks",
+            "quarry.chunk_store.ChunkStore.insert",
             lambda _db, _chunks, _vectors: 1,
         )
 
@@ -225,7 +225,9 @@ class TestIngestDocument:
             delete_called_with.append(name)
             return 0
 
-        monkeypatch.setattr("quarry.pipeline.delete_document", _mock_delete)
+        monkeypatch.setattr(
+            "quarry.chunk_store.ChunkStore.delete_document", _mock_delete
+        )
 
         from quarry.pipeline import ingest_document
 
@@ -289,7 +291,7 @@ class TestIngestDocument:
         )
         _mock_embedding_backend(monkeypatch, vectors)
         monkeypatch.setattr(
-            "quarry.pipeline.insert_chunks",
+            "quarry.chunk_store.ChunkStore.insert",
             lambda _db, _chunks, _vectors: 1,
         )
 
@@ -331,7 +333,7 @@ class TestIngestDocument:
         )
         _mock_embedding_backend(monkeypatch, vectors)
         monkeypatch.setattr(
-            "quarry.pipeline.insert_chunks",
+            "quarry.chunk_store.ChunkStore.insert",
             lambda _db, _chunks, _vectors: 1,
         )
 
@@ -373,7 +375,7 @@ class TestIngestDocument:
         )
         _mock_embedding_backend(monkeypatch, vectors)
         monkeypatch.setattr(
-            "quarry.pipeline.insert_chunks",
+            "quarry.chunk_store.ChunkStore.insert",
             lambda _db, _chunks, _vectors: 1,
         )
 
@@ -421,7 +423,7 @@ class TestIngestText:
         )
         _mock_embedding_backend(monkeypatch, vectors)
         monkeypatch.setattr(
-            "quarry.pipeline.insert_chunks",
+            "quarry.chunk_store.ChunkStore.insert",
             lambda _db, _chunks, _vectors: 1,
         )
 
@@ -448,7 +450,9 @@ class TestIngestText:
             delete_called.append(name)
             return 0
 
-        monkeypatch.setattr("quarry.pipeline.delete_document", _mock_delete)
+        monkeypatch.setattr(
+            "quarry.chunk_store.ChunkStore.delete_document", _mock_delete
+        )
 
         from quarry.pipeline import ingest_content
 

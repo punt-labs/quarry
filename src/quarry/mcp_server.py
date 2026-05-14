@@ -11,19 +11,15 @@ from typing import TYPE_CHECKING
 from mcp.server.fastmcp import FastMCP
 
 from quarry.backends import get_embedding_backend
+from quarry.chunk_catalog import ChunkCatalog
+from quarry.chunk_search import ChunkSearch
+from quarry.chunk_store import ChunkStore
 from quarry.collections import CollectionName
 from quarry.config import Settings
 from quarry.database import (
-    count_chunks,
-    delete_collection as db_delete_collection,
-    delete_document as db_delete_document,
     dir_size_bytes,
     discover_databases,
     get_db,
-    get_page_text,
-    hybrid_search,
-    list_collections as db_list_collections,
-    list_documents,
 )
 from quarry.formatting import (
     format_collections,
@@ -146,8 +142,7 @@ def find(
 
     query_vector = get_embedding_backend(settings).embed_query(query)
 
-    results = hybrid_search(
-        db,
+    results = ChunkSearch(db).hybrid_search(
         query,
         query_vector,
         limit=limit,
@@ -309,11 +304,11 @@ def list_resources(
     """
     if kind == "documents":
         db = _db()
-        docs = list_documents(db, collection_filter=collection or None)
+        docs = ChunkCatalog(db).list_documents(collection_filter=collection or None)
         return format_documents(docs)
     if kind == "collections":
         db = _db()
-        cols = db_list_collections(db)
+        cols = ChunkCatalog(db).list_collections()
         return format_collections(cols)
     if kind == "databases":
         settings = _settings()
@@ -362,14 +357,14 @@ def show(
     db = _db()
 
     if page_number > 0:
-        text = get_page_text(
-            db, document_name, page_number, collection=collection or None
+        text = ChunkCatalog(db).get_page_text(
+            document_name, page_number, collection=collection or None
         )
         if text is None:
             return f"No data found for {document_name} page {page_number}"
         return f"Document: {document_name}\nPage: {page_number}\n---\n{text}"
 
-    docs = list_documents(db, collection_filter=collection or None)
+    docs = ChunkCatalog(db).list_documents(collection_filter=collection or None)
     match = [d for d in docs if d["document_name"] == document_name]
     if not match:
         return f"Document {document_name!r} not found"
@@ -378,10 +373,11 @@ def show(
 
 def _do_delete(name: str, kind: str, collection: str, db: LanceDB) -> None:
     """Blocking delete — runs in background thread."""
+    store = ChunkStore(db)
     if kind == "collection":
-        db_delete_collection(db, name)
+        store.delete_collection(name)
     else:
-        db_delete_document(db, name, collection=collection or None, count=False)
+        store.delete_document(name, collection=collection or None, count=False)
 
 
 @mcp.tool()
@@ -447,8 +443,9 @@ def _do_deregister(
         conn.close()
 
     if not keep_data and doc_names:
+        store = ChunkStore(db)
         for name in doc_names:
-            db_delete_document(db, name, collection=collection, count=False)
+            store.delete_document(name, collection=collection, count=False)
 
 
 @mcp.tool()
@@ -496,9 +493,10 @@ def status() -> str:
     settings = _settings()
     db = _db()
 
-    docs = list_documents(db)
-    chunks = count_chunks(db)
-    cols = db_list_collections(db)
+    catalog = ChunkCatalog(db)
+    docs = catalog.list_documents()
+    chunks = ChunkStore(db).count()
+    cols = catalog.list_collections()
 
     if settings.registry_path.exists():
         conn = open_registry(settings.registry_path)

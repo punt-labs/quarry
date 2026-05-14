@@ -143,7 +143,9 @@ class TestConcurrency:
             return []
 
         with (
-            patch("quarry.http_server.hybrid_search", side_effect=slow_search),
+            patch(
+                "quarry.chunk_search.ChunkSearch.hybrid_search", side_effect=slow_search
+            ),
             concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool,
         ):
             start = time.monotonic()
@@ -180,7 +182,9 @@ class TestSearch:
                 "_distance": 0.1,
             }
         ]
-        with patch("quarry.http_server.hybrid_search", return_value=mock_results):
+        with patch(
+            "quarry.chunk_search.ChunkSearch.hybrid_search", return_value=mock_results
+        ):
             data = client.get("/search?q=hello").json()
 
         assert data["query"] == "hello"
@@ -204,7 +208,9 @@ class TestSearch:
                 "summary": "a brief summary",
             }
         ]
-        with patch("quarry.http_server.hybrid_search", return_value=mock_results):
+        with patch(
+            "quarry.chunk_search.ChunkSearch.hybrid_search", return_value=mock_results
+        ):
             data = client.get("/search?q=content").json()
 
         result = data["results"][0]
@@ -227,41 +233,51 @@ class TestSearch:
                 # no summary key
             }
         ]
-        with patch("quarry.http_server.hybrid_search", return_value=mock_results):
+        with patch(
+            "quarry.chunk_search.ChunkSearch.hybrid_search", return_value=mock_results
+        ):
             data = client.get("/search?q=content").json()
 
         assert data["results"][0]["summary"] == ""
 
     def test_search_with_limit(self, client: TestClient) -> None:
-        with patch("quarry.http_server.hybrid_search", return_value=[]) as mock_search:
+        with patch(
+            "quarry.chunk_search.ChunkSearch.hybrid_search", return_value=[]
+        ) as mock_search:
             client.get("/search?q=hello&limit=5")
 
         _, kwargs = mock_search.call_args
         assert kwargs["limit"] == 5
 
     def test_search_limit_capped_at_50(self, client: TestClient) -> None:
-        with patch("quarry.http_server.hybrid_search", return_value=[]) as mock_search:
+        with patch(
+            "quarry.chunk_search.ChunkSearch.hybrid_search", return_value=[]
+        ) as mock_search:
             client.get("/search?q=hello&limit=999")
 
         _, kwargs = mock_search.call_args
         assert kwargs["limit"] == 50
 
     def test_search_negative_limit_clamped_to_1(self, client: TestClient) -> None:
-        with patch("quarry.http_server.hybrid_search", return_value=[]) as mock_search:
+        with patch(
+            "quarry.chunk_search.ChunkSearch.hybrid_search", return_value=[]
+        ) as mock_search:
             client.get("/search?q=hello&limit=-5")
 
         _, kwargs = mock_search.call_args
         assert kwargs["limit"] == 1
 
     def test_search_with_collection_filter(self, client: TestClient) -> None:
-        with patch("quarry.http_server.hybrid_search", return_value=[]) as mock_search:
+        with patch(
+            "quarry.chunk_search.ChunkSearch.hybrid_search", return_value=[]
+        ) as mock_search:
             client.get("/search?q=hello&collection=research")
 
         _, kwargs = mock_search.call_args
         assert kwargs["collection_filter"] == "research"
 
     def test_search_empty_results(self, client: TestClient) -> None:
-        with patch("quarry.http_server.hybrid_search", return_value=[]):
+        with patch("quarry.chunk_search.ChunkSearch.hybrid_search", return_value=[]):
             data = client.get("/search?q=nonexistent").json()
 
         assert data["total_results"] == 0
@@ -271,7 +287,9 @@ class TestSearch:
         self, client: TestClient
     ) -> None:
         """agent_handle query param must reach hybrid_search as agent_handle_filter."""
-        with patch("quarry.http_server.hybrid_search", return_value=[]) as mock_search:
+        with patch(
+            "quarry.chunk_search.ChunkSearch.hybrid_search", return_value=[]
+        ) as mock_search:
             client.get("/search?q=hello&agent_handle=someagent")
 
         _, kwargs = mock_search.call_args
@@ -279,7 +297,9 @@ class TestSearch:
 
     def test_search_memory_type_filter_passed_through(self, client: TestClient) -> None:
         """memory_type query param must reach hybrid_search as memory_type_filter."""
-        with patch("quarry.http_server.hybrid_search", return_value=[]) as mock_search:
+        with patch(
+            "quarry.chunk_search.ChunkSearch.hybrid_search", return_value=[]
+        ) as mock_search:
             client.get("/search?q=hello&memory_type=episodic")
 
         _, kwargs = mock_search.call_args
@@ -287,7 +307,9 @@ class TestSearch:
 
     def test_search_document_filter_passed_through(self, client: TestClient) -> None:
         """document query param must reach hybrid_search as document_filter."""
-        with patch("quarry.http_server.hybrid_search", return_value=[]) as mock_search:
+        with patch(
+            "quarry.chunk_search.ChunkSearch.hybrid_search", return_value=[]
+        ) as mock_search:
             client.get("/search?q=hello&document=report.pdf")
 
         _, kwargs = mock_search.call_args
@@ -311,7 +333,9 @@ class TestSearch:
                 "_distance": 0.2,
             }
         ]
-        with patch("quarry.http_server.hybrid_search", return_value=mock_results):
+        with patch(
+            "quarry.chunk_search.ChunkSearch.hybrid_search", return_value=mock_results
+        ):
             data = client.get("/search?q=remember").json()
 
         result = data["results"][0]
@@ -332,14 +356,18 @@ class TestDocuments:
                 "ingestion_timestamp": "2026-01-01T00:00:00",
             }
         ]
-        with patch("quarry.http_server.list_documents", return_value=mock_docs):
+        with patch(
+            "quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=mock_docs
+        ):
             data = client.get("/documents").json()
 
         assert data["total_documents"] == 1
         assert data["documents"][0]["document_name"] == "report.pdf"
 
     def test_list_documents_with_collection_filter(self, client: TestClient) -> None:
-        with patch("quarry.http_server.list_documents", return_value=[]) as mock_list:
+        with patch(
+            "quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+        ) as mock_list:
             client.get("/documents?collection=research")
 
         _, kwargs = mock_list.call_args
@@ -349,7 +377,9 @@ class TestDocuments:
 class TestCollections:
     def test_list_collections(self, client: TestClient) -> None:
         mock_cols = [{"collection": "default", "document_count": 3, "chunk_count": 50}]
-        with patch("quarry.http_server.db_list_collections", return_value=mock_cols):
+        with patch(
+            "quarry.chunk_catalog.ChunkCatalog.list_collections", return_value=mock_cols
+        ):
             data = client.get("/collections").json()
 
         assert data["total_collections"] == 1
@@ -359,8 +389,10 @@ class TestCollections:
 class TestStatus:
     def test_returns_status(self, client: TestClient) -> None:
         with (
-            patch("quarry.http_server.count_chunks", return_value=0),
-            patch("quarry.http_server.db_list_collections", return_value=[]),
+            patch("quarry.chunk_store.ChunkStore.count", return_value=0),
+            patch(
+                "quarry.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
+            ),
         ):
             data = client.get("/status").json()
 
@@ -382,8 +414,10 @@ class TestStatus:
 
         fake_regs = [MagicMock(), MagicMock()]
         with (
-            patch("quarry.http_server.count_chunks", return_value=0),
-            patch("quarry.http_server.db_list_collections", return_value=[]),
+            patch("quarry.chunk_store.ChunkStore.count", return_value=0),
+            patch(
+                "quarry.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
+            ),
             patch("quarry.http_server.open_registry", return_value=MagicMock()),
             patch("quarry.http_server.list_registrations", return_value=fake_regs),
         ):
@@ -404,8 +438,10 @@ class TestStatus:
         no_reg_client = TestClient(build_app(ctx), raise_server_exceptions=False)
 
         with (
-            patch("quarry.http_server.count_chunks", return_value=0),
-            patch("quarry.http_server.db_list_collections", return_value=[]),
+            patch("quarry.chunk_store.ChunkStore.count", return_value=0),
+            patch(
+                "quarry.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
+            ),
         ):
             data = no_reg_client.get("/status").json()
 
@@ -582,7 +618,7 @@ class TestApiKeyAuth:
         assert resp.status_code == 401
 
     def test_search_allowed_with_correct_key(self, auth_client: TestClient) -> None:
-        with patch("quarry.http_server.hybrid_search", return_value=[]):
+        with patch("quarry.chunk_search.ChunkSearch.hybrid_search", return_value=[]):
             data = auth_client.get(
                 "/search?q=test",
                 headers={"Authorization": f"Bearer {_TEST_API_KEY}"},
@@ -593,7 +629,7 @@ class TestApiKeyAuth:
         assert auth_client.get("/documents").status_code == 401
 
     def test_documents_allowed_with_key(self, auth_client: TestClient) -> None:
-        with patch("quarry.http_server.list_documents", return_value=[]):
+        with patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]):
             data = auth_client.get(
                 "/documents",
                 headers={"Authorization": f"Bearer {_TEST_API_KEY}"},
@@ -602,7 +638,7 @@ class TestApiKeyAuth:
 
     def test_no_auth_required_when_key_not_configured(self, client: TestClient) -> None:
         """The default client fixture has no api_key -- all open."""
-        with patch("quarry.http_server.hybrid_search", return_value=[]):
+        with patch("quarry.chunk_search.ChunkSearch.hybrid_search", return_value=[]):
             data = client.get("/search?q=test").json()
         assert data["query"] == "test"
 
@@ -614,7 +650,7 @@ class TestApiKeyAuth:
 
     def test_bearer_scheme_case_insensitive(self, auth_client: TestClient) -> None:
         """RFC 7235: auth scheme names are case-insensitive."""
-        with patch("quarry.http_server.hybrid_search", return_value=[]):
+        with patch("quarry.chunk_search.ChunkSearch.hybrid_search", return_value=[]):
             data = auth_client.get(
                 "/search?q=test",
                 headers={"Authorization": f"bearer {_TEST_API_KEY}"},
@@ -638,7 +674,7 @@ class TestEmptyApiKey:
     def test_empty_key_does_not_require_auth(
         self, empty_key_client: TestClient
     ) -> None:
-        with patch("quarry.http_server.hybrid_search", return_value=[]):
+        with patch("quarry.chunk_search.ChunkSearch.hybrid_search", return_value=[]):
             data = empty_key_client.get("/search?q=test").json()
         assert data["query"] == "test"
 
@@ -647,7 +683,10 @@ class TestShow:
     """Tests for GET /show endpoint."""
 
     def test_show_page_text(self, client: TestClient) -> None:
-        with patch("quarry.http_server.get_page_text", return_value="Hello world"):
+        with patch(
+            "quarry.chunk_catalog.ChunkCatalog.get_page_text",
+            return_value="Hello world",
+        ):
             data = client.get("/show?document=foo&page=1").json()
 
         assert data["document_name"] == "foo"
@@ -663,7 +702,9 @@ class TestShow:
             "indexed_pages": 10,
             "ingestion_timestamp": "2026-01-01T00:00:00",
         }
-        with patch("quarry.http_server.list_documents", return_value=[mock_doc]):
+        with patch(
+            "quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[mock_doc]
+        ):
             data = client.get("/show?document=foo").json()
 
         assert data["document_name"] == "foo"
@@ -679,14 +720,16 @@ class TestShow:
         assert resp.status_code == 400
 
     def test_show_page_not_found(self, client: TestClient) -> None:
-        with patch("quarry.http_server.get_page_text", return_value=None):
+        with patch(
+            "quarry.chunk_catalog.ChunkCatalog.get_page_text", return_value=None
+        ):
             resp = client.get("/show?document=foo&page=1")
 
         assert resp.status_code == 404
         assert resp.json()["error"] == "Not found"
 
     def test_show_document_not_found(self, client: TestClient) -> None:
-        with patch("quarry.http_server.list_documents", return_value=[]):
+        with patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]):
             resp = client.get("/show?document=missing")
 
         assert resp.status_code == 404
@@ -694,7 +737,7 @@ class TestShow:
 
     def test_show_with_collection(self, client: TestClient) -> None:
         with patch(
-            "quarry.http_server.get_page_text", return_value="page text"
+            "quarry.chunk_catalog.ChunkCatalog.get_page_text", return_value="page text"
         ) as mock_get_page:
             client.get("/show?document=foo&page=1&collection=math")
 
@@ -702,7 +745,9 @@ class TestShow:
         assert kwargs["collection"] == "math"
 
     def test_show_metadata_with_collection(self, client: TestClient) -> None:
-        with patch("quarry.http_server.list_documents", return_value=[]) as mock_list:
+        with patch(
+            "quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+        ) as mock_list:
             client.get("/show?document=foo&collection=math")
 
         _, kwargs = mock_list.call_args
@@ -735,7 +780,7 @@ class TestDeleteDocuments:
         app = build_app(ctx)
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
-            patch("quarry.http_server.db_delete_document", return_value=15),
+            patch("quarry.chunk_store.ChunkStore.delete_document", return_value=15),
         ):
             resp = tc.delete("/documents?name=foo")
         assert resp.status_code == 202
@@ -755,7 +800,9 @@ class TestDeleteDocuments:
         ctx.__dict__["embedder"] = _SHARED_EMBEDDER
         app = build_app(ctx)
         with (
-            patch("quarry.http_server.db_delete_document", return_value=5) as mock_del,
+            patch(
+                "quarry.chunk_store.ChunkStore.delete_document", return_value=5
+            ) as mock_del,
             TestClient(app, raise_server_exceptions=False) as tc,
         ):
             resp = tc.delete("/documents?name=foo&collection=math")
@@ -779,7 +826,7 @@ class TestDeleteCollections:
         app = build_app(ctx)
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
-            patch("quarry.http_server.db_delete_collection", return_value=50),
+            patch("quarry.chunk_store.ChunkStore.delete_collection", return_value=50),
         ):
             resp = tc.delete("/collections?name=math")
         assert resp.status_code == 202
@@ -1425,7 +1472,9 @@ class TestDatabases:
     """Tests for GET /databases endpoint."""
 
     def test_returns_single_entry_list(self, client: TestClient) -> None:
-        with patch("quarry.http_server.list_documents", return_value=[{"x": 1}]):
+        with patch(
+            "quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[{"x": 1}]
+        ):
             resp = client.get("/databases")
 
         assert resp.status_code == 200
@@ -1454,7 +1503,7 @@ class TestDatabases:
         app = build_app(ctx)
         client = TestClient(app, raise_server_exceptions=False)
 
-        with patch("quarry.http_server.list_documents", return_value=[]):
+        with patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]):
             data = client.get("/databases").json()
 
         assert data["databases"][0]["name"] == "work"
@@ -1646,7 +1695,7 @@ class TestRegistrations:
 
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
-            patch("quarry.http_server.db_delete_document", return_value=0),
+            patch("quarry.chunk_store.ChunkStore.delete_document", return_value=0),
             patch(
                 "quarry.http_server._deregister_sync",
                 return_value=(True, ["a.pdf"]),
@@ -1839,7 +1888,7 @@ class TestDatabasesMissingTable:
     def test_list_documents_failure_is_zero(self, client: TestClient) -> None:
         """A raise from list_documents must degrade to document_count=0."""
         with patch(
-            "quarry.http_server.list_documents",
+            "quarry.chunk_catalog.ChunkCatalog.list_documents",
             side_effect=ValueError("Table 'chunks' was not found"),
         ):
             resp = client.get("/databases")

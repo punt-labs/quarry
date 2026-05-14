@@ -189,7 +189,7 @@ class TestIngestUrl:
             )
             mock_embed_factory.return_value = mock_backend
 
-            with patch("quarry.pipeline.insert_chunks", return_value=1):
+            with patch("quarry.chunk_store.ChunkStore.insert", return_value=1):
                 result = ingest_url(
                     "https://docs.example.com/api",
                     db,
@@ -217,7 +217,7 @@ class TestIngestUrl:
 
         with (
             patch("quarry.pipeline.get_embedding_backend") as mock_embed_factory,
-            patch("quarry.pipeline.insert_chunks", return_value=1),
+            patch("quarry.chunk_store.ChunkStore.insert", return_value=1),
         ):
             mock_backend = MagicMock()
             mock_backend.model_name = "test-model"

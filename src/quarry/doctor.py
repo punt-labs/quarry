@@ -224,7 +224,8 @@ def _human_size(nbytes: int) -> str:
 
 def _check_fts_health(db_path: Path) -> CheckResult:
     """Verify the Tantivy FTS index is queryable."""
-    from quarry.database import TABLE_NAME, get_db  # noqa: PLC0415
+    from quarry.database import get_db  # noqa: PLC0415
+    from quarry.schema import TABLE_NAME  # noqa: PLC0415
 
     if not db_path.exists():
         return CheckResult(
@@ -440,10 +441,8 @@ def _check_orphaned_captures(
     db_path: Path,
 ) -> CheckResult:
     """Report captures collections whose base has no registration."""
-    from quarry.database import (  # noqa: PLC0415
-        get_db,
-        list_collections as db_list_collections,
-    )
+    from quarry.chunk_catalog import ChunkCatalog  # noqa: PLC0415
+    from quarry.database import get_db  # noqa: PLC0415
     from quarry.sync_registry import list_registrations, open_registry  # noqa: PLC0415
 
     if not db_path.exists() or not registry_path.exists():
@@ -455,7 +454,7 @@ def _check_orphaned_captures(
         )
 
     db = get_db(db_path)
-    cols = db_list_collections(db)
+    cols = ChunkCatalog(db).list_collections()
     col_names = {c["collection"] for c in cols}
 
     conn = open_registry(registry_path)

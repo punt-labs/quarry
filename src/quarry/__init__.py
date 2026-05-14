@@ -2,7 +2,7 @@
 
 Library API — import core types for programmatic use::
 
-    from quarry import Settings, get_db, search
+    from quarry import Settings, ChunkSearch, get_db
     from quarry import ingest_content, ingest_document, ingest_url
 
 All public symbols are lazy-loaded via PEP 562 to avoid pulling in
@@ -17,9 +17,10 @@ from importlib.metadata import version
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from quarry.chunk_search import ChunkSearch as ChunkSearch
     from quarry.collections import CollectionName as CollectionName
     from quarry.config import Settings as Settings
-    from quarry.database import get_db as get_db, search as search
+    from quarry.database import get_db as get_db
     from quarry.pipeline import (
         ingest_content as ingest_content,
         ingest_document as ingest_document,
@@ -29,6 +30,7 @@ if TYPE_CHECKING:
 __version__ = version("punt-quarry")
 
 __all__ = [
+    "ChunkSearch",
     "CollectionName",
     "Settings",
     "__version__",
@@ -36,15 +38,14 @@ __all__ = [
     "ingest_content",
     "ingest_document",
     "ingest_url",
-    "search",
 ]
 
 # Map each public name to (module_path, attribute_name).
 _LAZY_ATTRS: dict[str, tuple[str, str]] = {
+    "ChunkSearch": ("quarry.chunk_search", "ChunkSearch"),
     "CollectionName": ("quarry.collections", "CollectionName"),
     "Settings": ("quarry.config", "Settings"),
     "get_db": ("quarry.database", "get_db"),
-    "search": ("quarry.database", "search"),
     "ingest_content": ("quarry.pipeline", "ingest_content"),
     "ingest_document": ("quarry.pipeline", "ingest_document"),
     "ingest_url": ("quarry.pipeline", "ingest_url"),

@@ -209,7 +209,7 @@ class TestIngestSitemapDedup:
     """Test lastmod-based deduplication in ingest_sitemap."""
 
     @patch("quarry.pipeline.ingest_url")
-    @patch("quarry.pipeline.list_documents")
+    @patch("quarry.chunk_catalog.ChunkCatalog.list_documents")
     @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
     def test_skips_when_lastmod_older(
         self,
@@ -244,7 +244,7 @@ class TestIngestSitemapDedup:
         mock_ingest.assert_not_called()
 
     @patch("quarry.pipeline.ingest_url")
-    @patch("quarry.pipeline.list_documents")
+    @patch("quarry.chunk_catalog.ChunkCatalog.list_documents")
     @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
     def test_ingests_when_lastmod_newer(
         self,
@@ -279,7 +279,7 @@ class TestIngestSitemapDedup:
         assert result["ingested"] == 1
 
     @patch("quarry.pipeline.ingest_url")
-    @patch("quarry.pipeline.list_documents")
+    @patch("quarry.chunk_catalog.ChunkCatalog.list_documents")
     @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
     def test_ingests_when_no_existing_doc(
         self,
@@ -309,7 +309,7 @@ class TestIngestSitemapDedup:
         assert result["skipped"] == 0
 
     @patch("quarry.pipeline.ingest_url")
-    @patch("quarry.pipeline.list_documents")
+    @patch("quarry.chunk_catalog.ChunkCatalog.list_documents")
     @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
     def test_overwrite_bypasses_dedup(
         self,
@@ -345,7 +345,7 @@ class TestIngestSitemapDedup:
         assert result["skipped"] == 0
 
     @patch("quarry.pipeline.ingest_url")
-    @patch("quarry.pipeline.list_documents")
+    @patch("quarry.chunk_catalog.ChunkCatalog.list_documents")
     @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
     def test_no_lastmod_always_ingests(
         self,
@@ -415,8 +415,8 @@ class TestIngestSitemapIntegration:
 
         with (
             patch("quarry.pipeline.get_embedding_backend") as mock_embed_factory,
-            patch("quarry.pipeline.insert_chunks", return_value=1),
-            patch("quarry.pipeline.list_documents", return_value=[]),
+            patch("quarry.chunk_store.ChunkStore.insert", return_value=1),
+            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
         ):
             mock_backend = MagicMock()
             mock_backend.model_name = "test-model"
@@ -465,8 +465,8 @@ class TestIngestSitemapIntegration:
 
         with (
             patch("quarry.pipeline.get_embedding_backend") as mock_embed_factory,
-            patch("quarry.pipeline.insert_chunks", return_value=1),
-            patch("quarry.pipeline.list_documents", return_value=[]),
+            patch("quarry.chunk_store.ChunkStore.insert", return_value=1),
+            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
         ):
             mock_backend = MagicMock()
             mock_backend.model_name = "test-model"
@@ -488,7 +488,7 @@ class TestIngestSitemapIntegration:
         assert result["ingested"] == 2
 
     @patch("quarry.pipeline.ingest_url")
-    @patch("quarry.pipeline.list_documents")
+    @patch("quarry.chunk_catalog.ChunkCatalog.list_documents")
     @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
     def test_default_collection_from_domain(
         self,
@@ -510,7 +510,7 @@ class TestIngestSitemapIntegration:
         assert result["collection"] == "docs.python.org"
 
     @patch("quarry.pipeline.ingest_url")
-    @patch("quarry.pipeline.list_documents")
+    @patch("quarry.chunk_catalog.ChunkCatalog.list_documents")
     @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
     def test_handles_ingest_failure(
         self,

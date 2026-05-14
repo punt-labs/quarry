@@ -21,22 +21,18 @@ from rich.console import Console
 from rich.progress import Progress
 
 from quarry.backends import get_embedding_backend
+from quarry.chunk_catalog import ChunkCatalog
+from quarry.chunk_search import ChunkSearch
+from quarry.chunk_store import ChunkStore
 from quarry.collections import CollectionName
 from quarry.config import (
     DEFAULT_PORT,
     Settings,
 )
 from quarry.database import (
-    count_chunks,
-    delete_collection as db_delete_collection,
-    delete_document as db_delete_document,
     dir_size_bytes,
     discover_databases,
     get_db,
-    get_page_text,
-    hybrid_search,
-    list_collections as db_list_collections,
-    list_documents,
 )
 from quarry.formatting import (
     format_collections,
@@ -539,8 +535,7 @@ def find_cmd(
     db = get_db(settings.lancedb_path)
 
     query_vector = get_embedding_backend(settings).embed_query(query)
-    results = hybrid_search(
-        db,
+    results = ChunkSearch(db).hybrid_search(
         query,
         query_vector,
         limit=limit,
@@ -755,7 +750,9 @@ def show_cmd(
     db = get_db(settings.lancedb_path)
 
     if page is not None:
-        text = get_page_text(db, document_name, page, collection=collection or None)
+        text = ChunkCatalog(db).get_page_text(
+            document_name, page, collection=collection or None
+        )
         if text is None:
             err_console.print(
                 f"No data found for {document_name!r} page {page}",
@@ -768,7 +765,7 @@ def show_cmd(
         )
         return
 
-    docs = list_documents(db, collection_filter=collection or None)
+    docs = ChunkCatalog(db).list_documents(collection_filter=collection or None)
     match = [d for d in docs if d["document_name"] == document_name]
     if not match:
         err_console.print(f"Document {document_name!r} not found", style="red")
@@ -900,8 +897,8 @@ def status_cmd() -> None:
     settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
 
-    chunks = count_chunks(db)
-    cols = db_list_collections(db)
+    chunks = ChunkStore(db).count()
+    cols = ChunkCatalog(db).list_collections()
     doc_count = sum(c["document_count"] for c in cols)
 
     if settings.registry_path.exists():
@@ -1006,10 +1003,10 @@ def delete_cmd(
     db = get_db(settings.lancedb_path)
 
     if kind == "collection":
-        deleted = db_delete_collection(db, name)
+        deleted = ChunkStore(db).delete_collection(name)
         label = f"collection {name!r}"
     elif kind == "document":
-        deleted = db_delete_document(db, name, collection=collection or None)
+        deleted = ChunkStore(db).delete_document(name, collection=collection or None)
         label = f"{name!r}"
     else:
         err_console.print(
@@ -1115,7 +1112,9 @@ def deregister(
     if not keep_data and doc_names:
         db = get_db(settings.lancedb_path)
         for name in doc_names:
-            deleted_chunks += db_delete_document(db, name, collection=collection)
+            deleted_chunks += ChunkStore(db).delete_document(
+                name, collection=collection
+            )
     removed = len(doc_names)
     _emit(
         {
@@ -1349,16 +1348,13 @@ def optimize_cmd(
     skipped by default to prevent a compaction death spiral. Use --force
     to bypass this safety guard for manual recovery.
     """
-    from quarry.database import (  # noqa: PLC0415
-        FRAGMENT_THRESHOLD,
-        count_fragments,
-        optimize_table as db_optimize_table,
-    )
+    from quarry.optimizer import FRAGMENT_THRESHOLD, TableOptimizer  # noqa: PLC0415
 
     settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
+    opt = TableOptimizer(db)
 
-    fragments = count_fragments(db)
+    fragments = opt.count_fragments()
     if not _quiet:
         err_console.print(f"Fragment count: {fragments}")
 
@@ -1373,7 +1369,7 @@ def optimize_cmd(
     if not _quiet:
         err_console.print("Running optimization...")
 
-    db_optimize_table(db, force=force)
+    opt.optimize(force=force)
 
     _emit(
         {"optimized": True, "fragments_before": fragments, "force": force},
@@ -1703,7 +1699,7 @@ def list_documents_cmd(
 
     settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
-    local_docs = list_documents(db, collection_filter=collection or None)
+    local_docs = ChunkCatalog(db).list_documents(collection_filter=collection or None)
     _emit(local_docs, format_documents(local_docs))
 
 
@@ -1730,7 +1726,7 @@ def list_collections_cmd() -> None:
 
     settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
-    local_cols = db_list_collections(db)
+    local_cols = ChunkCatalog(db).list_collections()
     _emit(local_cols, format_collections(local_cols))
 
 

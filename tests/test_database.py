@@ -10,21 +10,12 @@ import numpy as np
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
-from quarry.database import (
-    count_chunks,
-    create_collection_index,
-    delete_collection,
-    delete_document,
-    get_db,
-    get_page_text,
-    hybrid_search,
-    insert_chunks,
-    list_collections,
-    list_documents,
-    optimize_table,
-    search,
-)
+from quarry.chunk_catalog import ChunkCatalog
+from quarry.chunk_search import ChunkSearch
+from quarry.chunk_store import ChunkStore
+from quarry.database import get_db
 from quarry.models import Chunk
+from quarry.optimizer import TableOptimizer
 
 
 def _make_chunk(
@@ -63,23 +54,23 @@ class TestInsertAndSearch:
         db = get_db(tmp_path / "db")
         chunks = [_make_chunk(chunk_index=i) for i in range(3)]
         vectors = _random_vectors(3)
-        count = insert_chunks(db, chunks, vectors)
+        count = ChunkStore(db).insert(chunks, vectors)
         assert count == 3
 
     def test_search_returns_results(self, tmp_path: Path):
         db = get_db(tmp_path / "db")
         chunks = [_make_chunk(chunk_index=0, text="financial report 2024")]
         vectors = _random_vectors(1)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        results = search(db, vectors[0], limit=5)
+        results = ChunkSearch(db).vector_search(vectors[0], limit=5)
         assert len(results) >= 1
         assert results[0]["text"] == "financial report 2024"
 
     def test_search_empty_table(self, tmp_path: Path):
         db = get_db(tmp_path / "db")
         query = _random_vectors(1)[0]
-        results = search(db, query, limit=5)
+        results = ChunkSearch(db).vector_search(query, limit=5)
         assert results == []
 
     def test_search_with_document_filter(self, tmp_path: Path):
@@ -89,9 +80,11 @@ class TestInsertAndSearch:
             _make_chunk(chunk_index=0, document_name="b.pdf", text="beta"),
         ]
         vectors = _random_vectors(2)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        results = search(db, vectors[0], limit=10, document_filter="a.pdf")
+        results = ChunkSearch(db).vector_search(
+            vectors[0], limit=10, document_filter="a.pdf"
+        )
         doc_names = {r["document_name"] for r in results}
         assert doc_names == {"a.pdf"}
 
@@ -99,9 +92,9 @@ class TestInsertAndSearch:
         db = get_db(tmp_path / "db")
         chunks = [_make_chunk(chunk_index=i) for i in range(5)]
         vectors = _random_vectors(5)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        results = search(db, vectors[0], limit=2)
+        results = ChunkSearch(db).vector_search(vectors[0], limit=2)
         assert len(results) == 2
 
 
@@ -110,23 +103,23 @@ class TestGetPageText:
         db = get_db(tmp_path / "db")
         chunks = [_make_chunk(page_number=3)]
         vectors = _random_vectors(1)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        text = get_page_text(db, "test.pdf", 3)
+        text = ChunkCatalog(db).get_page_text("test.pdf", 3)
         assert text == "raw text page 3"
 
     def test_returns_none_for_missing(self, tmp_path: Path):
         db = get_db(tmp_path / "db")
         chunks = [_make_chunk(page_number=1)]
         vectors = _random_vectors(1)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        text = get_page_text(db, "test.pdf", 99)
+        text = ChunkCatalog(db).get_page_text("test.pdf", 99)
         assert text is None
 
     def test_returns_none_empty_db(self, tmp_path: Path):
         db = get_db(tmp_path / "db")
-        text = get_page_text(db, "test.pdf", 1)
+        text = ChunkCatalog(db).get_page_text("test.pdf", 1)
         assert text is None
 
     def test_finds_page_in_large_table(self, tmp_path: Path):
@@ -153,9 +146,9 @@ class TestGetPageText:
         )
         all_chunks = [*fillers, target]
         vectors = _random_vectors(len(all_chunks))
-        insert_chunks(db, all_chunks, vectors)
+        ChunkStore(db).insert(all_chunks, vectors)
 
-        text = get_page_text(db, "big.pdf", 456)
+        text = ChunkCatalog(db).get_page_text("big.pdf", 456)
         assert text == "raw text page 456"
 
 
@@ -168,9 +161,9 @@ class TestListDocuments:
             _make_chunk(page_number=2, chunk_index=0, document_name="a.pdf"),
         ]
         vectors = _random_vectors(3)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        docs = list_documents(db)
+        docs = ChunkCatalog(db).list_documents()
         assert len(docs) == 1
         assert docs[0]["document_name"] == "a.pdf"
         assert docs[0]["chunk_count"] == 3
@@ -183,15 +176,15 @@ class TestListDocuments:
             _make_chunk(document_name="b.pdf"),
         ]
         vectors = _random_vectors(2)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        docs = list_documents(db)
+        docs = ChunkCatalog(db).list_documents()
         names = {str(d["document_name"]) for d in docs}
         assert names == {"a.pdf", "b.pdf"}
 
     def test_empty_db(self, tmp_path: Path):
         db = get_db(tmp_path / "db")
-        docs = list_documents(db)
+        docs = ChunkCatalog(db).list_documents()
         assert docs == []
 
 
@@ -200,12 +193,12 @@ class TestCountChunks:
         db = get_db(tmp_path / "db")
         chunks = [_make_chunk(chunk_index=i) for i in range(5)]
         vectors = _random_vectors(5)
-        insert_chunks(db, chunks, vectors)
-        assert count_chunks(db) == 5
+        ChunkStore(db).insert(chunks, vectors)
+        assert ChunkStore(db).count() == 5
 
     def test_empty_db(self, tmp_path: Path):
         db = get_db(tmp_path / "db")
-        assert count_chunks(db) == 0
+        assert ChunkStore(db).count() == 0
 
     def test_count_after_delete(self, tmp_path: Path):
         db = get_db(tmp_path / "db")
@@ -215,9 +208,9 @@ class TestCountChunks:
             _make_chunk(chunk_index=0, document_name="b.pdf"),
         ]
         vectors = _random_vectors(3)
-        insert_chunks(db, chunks, vectors)
-        delete_document(db, "a.pdf")
-        assert count_chunks(db) == 1
+        ChunkStore(db).insert(chunks, vectors)
+        ChunkStore(db).delete_document("a.pdf")
+        assert ChunkStore(db).count() == 1
 
 
 class TestDeleteDocument:
@@ -229,12 +222,12 @@ class TestDeleteDocument:
             _make_chunk(chunk_index=0, document_name="b.pdf"),
         ]
         vectors = _random_vectors(3)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        deleted = delete_document(db, "a.pdf")
+        deleted = ChunkStore(db).delete_document("a.pdf")
         assert deleted == 2
 
-        docs = list_documents(db)
+        docs = ChunkCatalog(db).list_documents()
         names = {str(d["document_name"]) for d in docs}
         assert names == {"b.pdf"}
 
@@ -242,25 +235,25 @@ class TestDeleteDocument:
         db = get_db(tmp_path / "db")
         chunks = [_make_chunk(document_name="a.pdf")]
         vectors = _random_vectors(1)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        deleted = delete_document(db, "nonexistent.pdf")
+        deleted = ChunkStore(db).delete_document("nonexistent.pdf")
         assert deleted == 0
 
     def test_delete_empty_db(self, tmp_path: Path):
         db = get_db(tmp_path / "db")
-        deleted = delete_document(db, "anything.pdf")
+        deleted = ChunkStore(db).delete_document("anything.pdf")
         assert deleted == 0
 
     def test_delete_document_with_single_quote(self, tmp_path: Path):
         db = get_db(tmp_path / "db")
         chunks = [_make_chunk(chunk_index=0, document_name="O'Reilly.pdf")]
         vectors = _random_vectors(1)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        deleted = delete_document(db, "O'Reilly.pdf")
+        deleted = ChunkStore(db).delete_document("O'Reilly.pdf")
         assert deleted == 1
-        assert list_documents(db) == []
+        assert ChunkCatalog(db).list_documents() == []
 
     def test_delete_scoped_to_collection(self, tmp_path: Path):
         db = get_db(tmp_path / "db")
@@ -269,11 +262,11 @@ class TestDeleteDocument:
             _make_chunk(chunk_index=0, document_name="a.pdf", collection="c2"),
         ]
         vectors = _random_vectors(2)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        deleted = delete_document(db, "a.pdf", collection="c1")
+        deleted = ChunkStore(db).delete_document("a.pdf", collection="c1")
         assert deleted == 1
-        assert count_chunks(db) == 1
+        assert ChunkStore(db).count() == 1
 
 
 class TestDeleteDocumentCountFalse:
@@ -286,12 +279,12 @@ class TestDeleteDocumentCountFalse:
             _make_chunk(chunk_index=1, document_name="a.pdf"),
         ]
         vectors = _random_vectors(2)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        result = delete_document(db, "a.pdf", count=False)
+        result = ChunkStore(db).delete_document("a.pdf", count=False)
         assert result == 0
         # Document should actually be deleted from the table.
-        assert count_chunks(db) == 0
+        assert ChunkStore(db).count() == 0
 
     def test_count_false_does_not_call_count_rows(self, tmp_path: Path) -> None:
         """count=False must not call table.count_rows() — the whole point."""
@@ -302,7 +295,7 @@ class TestDeleteDocumentCountFalse:
         table = MagicMock()
         db.open_table.return_value = table
 
-        result = delete_document(db, "test.pdf", count=False)
+        result = ChunkStore(db).delete_document("test.pdf", count=False)
         assert result == 0
         table.delete.assert_called_once()
         table.count_rows.assert_not_called()
@@ -315,9 +308,9 @@ class TestDeleteDocumentCountFalse:
             _make_chunk(chunk_index=0, document_name="b.pdf"),
         ]
         vectors = _random_vectors(3)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        result = delete_document(db, "a.pdf", count=True)
+        result = ChunkStore(db).delete_document("a.pdf", count=True)
         assert result == 2
 
     def test_count_false_with_collection_scope(self, tmp_path: Path) -> None:
@@ -327,16 +320,16 @@ class TestDeleteDocumentCountFalse:
             _make_chunk(chunk_index=0, document_name="a.pdf", collection="c2"),
         ]
         vectors = _random_vectors(2)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        result = delete_document(db, "a.pdf", collection="c1", count=False)
+        result = ChunkStore(db).delete_document("a.pdf", collection="c1", count=False)
         assert result == 0
         # Only the c1 copy should be deleted.
-        assert count_chunks(db) == 1
+        assert ChunkStore(db).count() == 1
 
     def test_count_false_empty_table(self, tmp_path: Path) -> None:
         db = get_db(tmp_path / "db")
-        result = delete_document(db, "nonexistent.pdf", count=False)
+        result = ChunkStore(db).delete_document("nonexistent.pdf", count=False)
         assert result == 0
 
 
@@ -348,9 +341,11 @@ class TestSearchWithCollection:
             _make_chunk(chunk_index=0, text="beta", collection="science"),
         ]
         vectors = _random_vectors(2)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        results = search(db, vectors[0], limit=10, collection_filter="math")
+        results = ChunkSearch(db).vector_search(
+            vectors[0], limit=10, collection_filter="math"
+        )
         collections = {r["collection"] for r in results}
         assert collections == {"math"}
 
@@ -377,10 +372,9 @@ class TestSearchWithCollection:
             ),
         ]
         vectors = _random_vectors(3)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        results = search(
-            db,
+        results = ChunkSearch(db).vector_search(
             vectors[0],
             limit=10,
             document_filter="a.pdf",
@@ -394,9 +388,11 @@ class TestSearchWithCollection:
         db = get_db(tmp_path / "db")
         chunks = [_make_chunk(chunk_index=0, collection="math")]
         vectors = _random_vectors(1)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        results = search(db, vectors[0], limit=10, collection_filter="unknown")
+        results = ChunkSearch(db).vector_search(
+            vectors[0], limit=10, collection_filter="unknown"
+        )
         assert results == []
 
 
@@ -408,9 +404,11 @@ class TestSearchWithMetadataFilters:
             _make_chunk(chunk_index=1, text="python", page_type="code"),
         ]
         vectors = _random_vectors(2)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        results = search(db, vectors[0], limit=10, page_type_filter="code")
+        results = ChunkSearch(db).vector_search(
+            vectors[0], limit=10, page_type_filter="code"
+        )
         page_types = {r["page_type"] for r in results}
         assert page_types == {"code"}
 
@@ -429,9 +427,11 @@ class TestSearchWithMetadataFilters:
             ),
         ]
         vectors = _random_vectors(2)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        results = search(db, vectors[0], limit=10, source_format_filter=".py")
+        results = ChunkSearch(db).vector_search(
+            vectors[0], limit=10, source_format_filter=".py"
+        )
         formats = {r["source_format"] for r in results}
         assert formats == {".py"}
 
@@ -458,10 +458,9 @@ class TestSearchWithMetadataFilters:
             ),
         ]
         vectors = _random_vectors(3)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        results = search(
-            db,
+        results = ChunkSearch(db).vector_search(
             vectors[0],
             limit=10,
             page_type_filter="code",
@@ -497,10 +496,9 @@ class TestSearchWithMetadataFilters:
             ),
         ]
         vectors = _random_vectors(3)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        results = search(
-            db,
+        results = ChunkSearch(db).vector_search(
             vectors[0],
             limit=10,
             collection_filter="math",
@@ -514,9 +512,11 @@ class TestSearchWithMetadataFilters:
         db = get_db(tmp_path / "db")
         chunks = [_make_chunk(chunk_index=0, page_type="text")]
         vectors = _random_vectors(1)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        results = search(db, vectors[0], limit=10, page_type_filter="spreadsheet")
+        results = ChunkSearch(db).vector_search(
+            vectors[0], limit=10, page_type_filter="spreadsheet"
+        )
         assert results == []
 
 
@@ -528,9 +528,9 @@ class TestListDocumentsWithCollection:
             _make_chunk(document_name="b.pdf", collection="science"),
         ]
         vectors = _random_vectors(2)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        docs = list_documents(db, collection_filter="math")
+        docs = ChunkCatalog(db).list_documents(collection_filter="math")
         assert len(docs) == 1
         assert docs[0]["document_name"] == "a.pdf"
         assert docs[0]["collection"] == "math"
@@ -539,9 +539,9 @@ class TestListDocumentsWithCollection:
         db = get_db(tmp_path / "db")
         chunks = [_make_chunk(document_name="a.pdf", collection="ml-101")]
         vectors = _random_vectors(1)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        docs = list_documents(db)
+        docs = ChunkCatalog(db).list_documents()
         assert docs[0]["collection"] == "ml-101"
 
 
@@ -554,11 +554,11 @@ class TestCountChunksWithCollection:
             _make_chunk(chunk_index=0, collection="science"),
         ]
         vectors = _random_vectors(3)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        assert count_chunks(db, collection_filter="math") == 2
-        assert count_chunks(db, collection_filter="science") == 1
-        assert count_chunks(db) == 3
+        assert ChunkStore(db).count(collection_filter="math") == 2
+        assert ChunkStore(db).count(collection_filter="science") == 1
+        assert ChunkStore(db).count() == 3
 
 
 class TestListCollections:
@@ -571,9 +571,9 @@ class TestListCollections:
             _make_chunk(chunk_index=0, document_name="c.pdf", collection="science"),
         ]
         vectors = _random_vectors(4)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        cols = list_collections(db)
+        cols = ChunkCatalog(db).list_collections()
         assert len(cols) == 2
 
         math = next(c for c in cols if c["collection"] == "math")
@@ -586,7 +586,7 @@ class TestListCollections:
 
     def test_empty_db(self, tmp_path: Path):
         db = get_db(tmp_path / "db")
-        assert list_collections(db) == []
+        assert ChunkCatalog(db).list_collections() == []
 
 
 class TestDeleteCollection:
@@ -598,25 +598,25 @@ class TestDeleteCollection:
             _make_chunk(chunk_index=0, collection="science"),
         ]
         vectors = _random_vectors(3)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        deleted = delete_collection(db, "math")
+        deleted = ChunkStore(db).delete_collection("math")
         assert deleted == 2
-        assert count_chunks(db) == 1
+        assert ChunkStore(db).count() == 1
 
     def test_delete_nonexistent_collection(self, tmp_path: Path):
         db = get_db(tmp_path / "db")
         chunks = [_make_chunk(collection="math")]
         vectors = _random_vectors(1)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        deleted = delete_collection(db, "unknown")
+        deleted = ChunkStore(db).delete_collection("unknown")
         assert deleted == 0
-        assert count_chunks(db) == 1
+        assert ChunkStore(db).count() == 1
 
     def test_delete_empty_db(self, tmp_path: Path):
         db = get_db(tmp_path / "db")
-        deleted = delete_collection(db, "anything")
+        deleted = ChunkStore(db).delete_collection("anything")
         assert deleted == 0
 
 
@@ -625,18 +625,20 @@ class TestCreateCollectionIndex:
         db = get_db(tmp_path / "db")
         chunks = [_make_chunk(chunk_index=i, collection="math") for i in range(3)]
         vectors = _random_vectors(3)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
         # Should not raise
-        create_collection_index(db)
+        TableOptimizer(db).create_collection_index()
 
         # Search still works after index creation
-        results = search(db, vectors[0], limit=5, collection_filter="math")
+        results = ChunkSearch(db).vector_search(
+            vectors[0], limit=5, collection_filter="math"
+        )
         assert len(results) == 3
 
     def test_noop_on_empty_db(self, tmp_path: Path):
         db = get_db(tmp_path / "db")
-        create_collection_index(db)  # No table, no error
+        TableOptimizer(db).create_collection_index()  # No table, no error
 
 
 class TestOptimizeTable:
@@ -644,17 +646,17 @@ class TestOptimizeTable:
         db = get_db(tmp_path / "db")
         chunks = [_make_chunk(chunk_index=i) for i in range(5)]
         vectors = _random_vectors(5)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
         # Should not raise
-        optimize_table(db)
+        TableOptimizer(db).optimize()
 
         # Data still accessible
-        assert count_chunks(db) == 5
+        assert ChunkStore(db).count() == 5
 
     def test_noop_on_empty_db(self, tmp_path: Path):
         db = get_db(tmp_path / "db")
-        optimize_table(db)  # No table, no error
+        TableOptimizer(db).optimize()  # No table, no error
 
 
 class TestConcurrentInsert:
@@ -673,7 +675,7 @@ class TestConcurrentInsert:
         errors: list[Exception] = []
 
         def _insert(idx: int) -> int:
-            return insert_chunks(db, tasks[idx], task_vectors[idx])
+            return ChunkStore(db).insert(tasks[idx], task_vectors[idx])
 
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
             futures = {executor.submit(_insert, i): i for i in range(len(tasks))}
@@ -684,7 +686,7 @@ class TestConcurrentInsert:
                     errors.append(exc)
 
         assert errors == [], f"Concurrent insert raised: {errors}"
-        assert count_chunks(db) == len(tasks)
+        assert ChunkStore(db).count() == len(tasks)
 
 
 class TestOptimizeRebuildsFtsIndex:
@@ -711,11 +713,11 @@ class TestOptimizeRebuildsFtsIndex:
         ]
         vecs1 = _random_vectors(2)
         vecs2 = _random_vectors(2)
-        insert_chunks(db, batch1, vecs1)
-        insert_chunks(db, batch2, vecs2)
+        ChunkStore(db).insert(batch1, vecs1)
+        ChunkStore(db).insert(batch2, vecs2)
 
         # Delete one batch to create deletion markers.
-        delete_document(db, "test.pdf")
+        ChunkStore(db).delete_document("test.pdf")
 
         # Re-insert so we have data to search.
         batch3 = [
@@ -724,15 +726,15 @@ class TestOptimizeRebuildsFtsIndex:
             _make_chunk(chunk_index=2, text="general relativity einstein"),
         ]
         vecs3 = _random_vectors(3)
-        insert_chunks(db, batch3, vecs3)
+        ChunkStore(db).insert(batch3, vecs3)
 
         # Optimize compacts fragments — this is where the old FTS index
         # would become stale.
-        optimize_table(db)
+        TableOptimizer(db).optimize()
 
         # hybrid_search must work without RuntimeError.
         query_vec = _random_vectors(1)[0]
-        results = hybrid_search(db, "quantum physics", query_vec, limit=5)
+        results = ChunkSearch(db).hybrid_search("quantum physics", query_vec, limit=5)
         assert len(results) >= 1
 
     def test_fts_results_nonempty_after_optimize(self, tmp_path: Path):
@@ -746,19 +748,19 @@ class TestOptimizeRebuildsFtsIndex:
             for i in range(5)
         ]
         vectors = _random_vectors(5)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
         # Force multiple fragments by inserting a second batch.
         more = [
             _make_chunk(chunk_index=5, text="unique keyword xylophone extra"),
         ]
-        insert_chunks(db, more, _random_vectors(1))
+        ChunkStore(db).insert(more, _random_vectors(1))
 
-        optimize_table(db)
+        TableOptimizer(db).optimize()
 
         # Search for a term that only matches via FTS keyword.
         query_vec = _random_vectors(1)[0]
-        results = hybrid_search(db, "xylophone", query_vec, limit=10)
+        results = ChunkSearch(db).hybrid_search("xylophone", query_vec, limit=10)
         texts = [r["text"] for r in results]
         assert any("xylophone" in t for t in texts)
 
@@ -766,19 +768,18 @@ class TestOptimizeRebuildsFtsIndex:
         """optimize_table calls table.optimize(cleanup_older_than=7d)."""
         db = get_db(tmp_path / "db")
         chunks = [_make_chunk(chunk_index=0, text="data")]
-        insert_chunks(db, chunks, _random_vectors(1))
+        ChunkStore(db).insert(chunks, _random_vectors(1))
 
         # Run optimize twice to create versions worth pruning.
-        optimize_table(db)
-        insert_chunks(
-            db,
+        TableOptimizer(db).optimize()
+        ChunkStore(db).insert(
             [_make_chunk(chunk_index=1, text="more data")],
             _random_vectors(1),
         )
-        optimize_table(db)
+        TableOptimizer(db).optimize()
 
         # Data still accessible — no corruption.
-        assert count_chunks(db) == 2
+        assert ChunkStore(db).count() == 2
 
 
 class TestDirSizeBytes:

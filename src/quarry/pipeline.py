@@ -16,10 +16,11 @@ if TYPE_CHECKING:
     from quarry.sitemap import SitemapEntry
 
 from quarry.backends import get_embedding_backend, get_ocr_backend
+from quarry.chunk_catalog import ChunkCatalog
+from quarry.chunk_store import ChunkStore
 from quarry.chunker import chunk_pages
 from quarry.code_processor import SUPPORTED_CODE_EXTENSIONS, process_code_file
 from quarry.config import Settings
-from quarry.database import delete_document, insert_chunks, list_documents
 from quarry.html_processor import (
     SUPPORTED_HTML_EXTENSIONS,
     process_html_file,
@@ -233,7 +234,9 @@ def ingest_pdf(
     progress("Analyzing: %s", document_name)
 
     if overwrite:
-        delete_document(db, document_name, collection=collection, count=False)
+        ChunkStore(db).delete_document(
+            document_name, collection=collection, count=False
+        )
 
     analyses = analyze_pdf(file_path)
     total_pages = len(analyses)
@@ -319,7 +322,9 @@ def ingest_text_file(
     progress("Reading: %s", document_name)
 
     if overwrite:
-        delete_document(db, document_name, collection=collection, count=False)
+        ChunkStore(db).delete_document(
+            document_name, collection=collection, count=False
+        )
 
     pages = process_text_file(file_path, document_name=document_name)
     progress("Sections: %d", len(pages))
@@ -374,7 +379,9 @@ def ingest_code_file(
     progress("Parsing: %s", document_name)
 
     if overwrite:
-        delete_document(db, document_name, collection=collection, count=False)
+        ChunkStore(db).delete_document(
+            document_name, collection=collection, count=False
+        )
 
     pages = process_code_file(file_path, document_name=document_name)
     progress("Definitions: %d", len(pages))
@@ -429,7 +436,9 @@ def ingest_spreadsheet(
     progress("Reading: %s", document_name)
 
     if overwrite:
-        delete_document(db, document_name, collection=collection, count=False)
+        ChunkStore(db).delete_document(
+            document_name, collection=collection, count=False
+        )
 
     pages, sheet_count = process_spreadsheet_file(
         file_path,
@@ -488,7 +497,9 @@ def ingest_html_file(
     progress("Reading: %s", document_name)
 
     if overwrite:
-        delete_document(db, document_name, collection=collection, count=False)
+        ChunkStore(db).delete_document(
+            document_name, collection=collection, count=False
+        )
 
     pages = process_html_file(file_path, document_name=document_name)
     progress("Sections: %d", len(pages))
@@ -543,7 +554,9 @@ def ingest_presentation(
     progress("Reading: %s", document_name)
 
     if overwrite:
-        delete_document(db, document_name, collection=collection, count=False)
+        ChunkStore(db).delete_document(
+            document_name, collection=collection, count=False
+        )
 
     pages = process_presentation_file(file_path, document_name=document_name)
     progress("Slides: %d", len(pages))
@@ -602,7 +615,9 @@ def ingest_image(
     progress("Analyzing image: %s", document_name)
 
     if overwrite:
-        delete_document(db, document_name, collection=collection, count=False)
+        ChunkStore(db).delete_document(
+            document_name, collection=collection, count=False
+        )
 
     analysis = analyze_image(file_path)
     progress(
@@ -834,7 +849,9 @@ def ingest_content(
     progress("Processing: %s", document_name)
 
     if overwrite:
-        delete_document(db, document_name, collection=collection, count=False)
+        ChunkStore(db).delete_document(
+            document_name, collection=collection, count=False
+        )
 
     pages = process_raw_text(content, document_name, format_hint=format_hint)
     progress("Sections: %d", len(pages))
@@ -935,7 +952,9 @@ def ingest_url(
     progress("Fetched %d characters", len(html))
 
     if overwrite:
-        delete_document(db, document_name, collection=collection, count=False)
+        ChunkStore(db).delete_document(
+            document_name, collection=collection, count=False
+        )
 
     pages = process_html_text(html, document_name, url)
     progress("Sections: %d", len(pages))
@@ -1035,7 +1054,7 @@ def _bulk_ingest_entries(
     progress("After filtering: %d URLs", after_filter)
 
     # Build lookup of existing documents for lastmod dedup
-    existing_docs = list_documents(db, collection_filter=collection)
+    existing_docs = ChunkCatalog(db).list_documents(collection_filter=collection)
     existing_timestamps: dict[str, str] = {
         doc["document_name"]: doc["ingestion_timestamp"] for doc in existing_docs
     }
@@ -1420,7 +1439,7 @@ def _chunk_embed_store(
 
         progress("Storing in LanceDB")
         t0 = time.perf_counter()
-        inserted = insert_chunks(db, chunks, vectors)
+        inserted = ChunkStore(db).insert(chunks, vectors)
         t_store = time.perf_counter() - t0
         logger.info("pipeline: stored %d chunks in %.2fs", inserted, t_store)
         progress("Done: %d chunks indexed from %s", inserted, document_name)
