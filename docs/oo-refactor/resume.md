@@ -22,7 +22,7 @@ Three design documents were produced:
 
 All 18 revisions were incorporated into the execution plan:
 
-4. `oo-refactoring-plan.md` (1,623 lines) — 84 steps across 8 phases,
+1. `oo-refactoring-plan.md` (1,623 lines) — 84 steps across 8 phases,
    self-contained, zero external references
 
 ## What to execute

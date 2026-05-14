@@ -53,7 +53,7 @@ dispatches via lookup instead of branching.
 
 ### Module: pipeline.py (1,589 lines)
 
-```
+```text
 Current: 0 classes, 24 top-level functions
 Domain nouns: pipeline orchestrator, ingest job, ingest result,
   image preparer, URL fetcher, sitemap crawler, bulk ingester
@@ -77,7 +77,7 @@ an identical pattern and should be eliminated once extractors implement the
 
 **Proposed classes:**
 
-```
+```text
 IngestionPipeline
   Module: src/quarry/pipeline.py
   Responsibility: Orchestrate format dispatch, chunking, embedding, and storage
@@ -160,6 +160,7 @@ computed property from the extractor registry. Module drops from
 1,589 to ~200 lines.
 
 **Eliminated functions (17):**
+
 - `ingest_pdf`, `ingest_text_file`, `ingest_code_file`, `ingest_spreadsheet`,
   `ingest_html_file`, `ingest_presentation`, `ingest_image` -- replaced by
   generic dispatch through `FormatExtractor` protocol
@@ -175,7 +176,7 @@ computed property from the extractor registry. Module drops from
 
 ### Module: text_processor.py (209 lines)
 
-```
+```text
 Current: 0 classes, 10 top-level functions
 Domain nouns: text document, text format, section splitter
 Shared state: format string threaded through _split_by_format -> split_* functions;
@@ -190,7 +191,7 @@ format determines which splitting algorithm to use.
 
 **Proposed classes:**
 
-```
+```text
 TextExtractor
   Module: src/quarry/extractors/text_extractor.py (new -- not to be confused
           with the existing text_extractor.py which handles PDF text pages)
@@ -247,7 +248,7 @@ shared state.
 
 ### Module: code_processor.py (202 lines)
 
-```
+```text
 Current: 0 classes, 3 top-level functions
 Domain nouns: code file, language grammar, tree-sitter parser, code section
 Shared state: language string derived from extension, threaded through functions
@@ -255,7 +256,7 @@ Shared state: language string derived from extension, threaded through functions
 
 **Proposed classes:**
 
-```
+```text
 CodeExtractor
   Module: src/quarry/extractors/code_extractor.py (new)
   Responsibility: Extract PageContent sections from source code files via tree-sitter
@@ -279,7 +280,7 @@ CodeExtractor
 
 ### Module: html_processor.py (137 lines)
 
-```
+```text
 Current: 0 classes, 6 top-level functions
 Domain nouns: HTML document, boilerplate, markdown conversion
 Shared state: BeautifulSoup object passed between _strip_boilerplate, _extract_title
@@ -287,7 +288,7 @@ Shared state: BeautifulSoup object passed between _strip_boilerplate, _extract_t
 
 **Proposed classes:**
 
-```
+```text
 HtmlExtractor
   Module: src/quarry/extractors/html_extractor.py (new)
   Responsibility: Extract PageContent sections from HTML files and raw HTML strings
@@ -315,7 +316,7 @@ HtmlExtractor
 
 ### Module: presentation_processor.py (169 lines)
 
-```
+```text
 Current: 0 classes, 6 top-level functions
 Domain nouns: presentation, slide, shape, table, speaker notes
 Shared state: pptx Slide object passed between _extract_shapes, _extract_notes,
@@ -324,7 +325,7 @@ Shared state: pptx Slide object passed between _extract_shapes, _extract_notes,
 
 **Proposed classes:**
 
-```
+```text
 PresentationExtractor
   Module: src/quarry/extractors/presentation_extractor.py (new)
   Responsibility: Extract PageContent pages from PPTX presentations
@@ -349,7 +350,7 @@ PresentationExtractor
 
 ### Module: spreadsheet_processor.py (154 lines)
 
-```
+```text
 Current: 0 classes, 4 top-level functions
 Domain nouns: spreadsheet, worksheet/sheet, row group, CSV file
 Shared state: (headers, rows) tuples passed between _read_xlsx/_read_csv
@@ -358,7 +359,7 @@ Shared state: (headers, rows) tuples passed between _read_xlsx/_read_csv
 
 **Proposed classes:**
 
-```
+```text
 SpreadsheetExtractor
   Module: src/quarry/extractors/spreadsheet_extractor.py (new)
   Responsibility: Extract PageContent sections from XLSX and CSV files
@@ -394,7 +395,7 @@ stays clean; SpreadsheetExtractor's constructor takes the extra config.
 
 ### Module: pdf_analyzer.py (54 lines)
 
-```
+```text
 Current: 0 classes, 1 top-level function
 Domain nouns: PDF page analysis, text/image classification
 Shared state: none (pure function)
@@ -405,7 +406,7 @@ is a pure transform. It does not need to become a class.
 
 **Proposed: absorb into PdfExtractor.**
 
-```
+```text
 PdfExtractor
   Module: src/quarry/extractors/pdf_extractor.py (new)
   Responsibility: Extract PageContent pages from PDF files (text + OCR)
@@ -429,7 +430,7 @@ become 20 lines inside `PdfExtractor._classify_pages`.
 
 ### Module: image_analyzer.py (85 lines)
 
-```
+```text
 Current: 1 class (ImageAnalysis dataclass), 1 top-level function
 Domain nouns: image analysis, format detection, conversion requirement
 Shared state: none (pure function + value object)
@@ -440,7 +441,7 @@ is a pure function. Absorb into ImageExtractor.
 
 **Proposed: absorb into ImageExtractor.**
 
-```
+```text
 ImageExtractor
   Module: src/quarry/extractors/image_extractor.py (new)
   Responsibility: Extract PageContent from image files (single and multi-page)
@@ -475,7 +476,7 @@ ImageAnalysis (existing dataclass, stays)
 
 ### Module: text_extractor.py (60 lines)
 
-```
+```text
 Current: 0 classes, 1 top-level function
 Domain nouns: PDF text page extraction
 Shared state: none (pure function)
@@ -489,7 +490,7 @@ a single pure function.
 **Proposed: no change.** Rename to `pdf_text_extractor.py` to avoid
 confusion with the new `extractors/text_extractor.py` module.
 
-```
+```text
 Module: src/quarry/pdf_text_extractor.py (renamed from text_extractor.py)
 Responsibility: Extract text from text-classified PDF pages via PyMuPDF
 Public interface: extract_text_pages(pdf_path, page_numbers, total_pages, *, document_name)
@@ -500,7 +501,7 @@ No class needed: single pure function, 60 lines, no shared state.
 
 ### Module: latex_utils.py (57 lines)
 
-```
+```text
 Current: 0 classes, 2 top-level functions
 Domain nouns: LaTeX escaping, LaTeX table rendering
 Shared state: none (pure functions + compiled translation table)
@@ -515,7 +516,7 @@ cohesive, and correctly structured.
 
 ### Module: ocr_local.py (188 lines)
 
-```
+```text
 Current: 3 classes (LocalOcrBackend, _OcrEngine Protocol, _OcrResult Protocol),
          4 top-level functions
 Domain nouns: OCR engine, OCR result, OCR backend, PDF page renderer
@@ -533,7 +534,7 @@ The module is well-structured. Two issues:
 
 **Proposed classes:**
 
-```
+```text
 LocalOcrBackend (existing, refine)
   Module: src/quarry/ocr_local.py (no move)
   Responsibility: OCR via RapidOCR with lazy engine initialization
@@ -557,7 +558,7 @@ _OcrResult (existing Protocol, keep)
 
 ### Module: sitemap.py (125 lines)
 
-```
+```text
 Current: 1 class (SitemapEntry dataclass), 4 top-level functions
 Domain nouns: sitemap, sitemap entry, URL discovery, URL filtering
 Shared state: none
@@ -576,7 +577,7 @@ small and cohesive -- the class would add ceremony without benefit.
 **Proposed: no structural change.** Move consumption from pipeline.py
 into `UrlIngester`. The module itself stays as-is.
 
-```
+```text
 SitemapEntry (existing dataclass, keep)
   Module: src/quarry/sitemap.py (no move)
 
@@ -591,7 +592,7 @@ Functions stay as module-level:
 
 ### Module: backends.py (48 lines)
 
-```
+```text
 Current: 0 classes, 3 top-level functions
 Domain nouns: backend factory, backend cache
 Shared state: module-level _ocr_cache, _embedding_cache, _lock
@@ -603,7 +604,7 @@ encapsulate this properly. This is a Singleton factory (PY-DP-7 trigger).
 
 **Proposed classes:**
 
-```
+```text
 BackendRegistry
   Module: src/quarry/backends.py (no move)
   Responsibility: Thread-safe factory and cache for OCR and embedding backends
@@ -632,7 +633,7 @@ backwards compatibility during migration.
 
 The six format-specific extractors form a natural package:
 
-```
+```text
 src/quarry/extractors/
     __init__.py          # __all__, re-exports FormatExtractor protocol + all extractors
     protocol.py          # FormatExtractor protocol definition
@@ -668,7 +669,7 @@ __all__ = [
 Utilities extracted from `text_processor.py` that are consumed by
 multiple extractor classes and the text extractor itself.
 
-```
+```text
 src/quarry/text_splitter.py
 
 Contents:
@@ -693,7 +694,7 @@ logic.
 
 ## New Module: image_preparer.py
 
-```
+```text
 src/quarry/image_preparer.py
 
 Contents:
@@ -708,7 +709,7 @@ Estimated LOC: 100
 
 ## New Module: url_fetcher.py
 
-```
+```text
 src/quarry/url_fetcher.py
 
 Contents:
@@ -722,7 +723,7 @@ Estimated LOC: 50
 
 ## New Module: url_ingester.py
 
-```
+```text
 src/quarry/url_ingester.py
 
 Contents:
@@ -741,7 +742,7 @@ Estimated LOC: 250
 
 ## Renamed Module
 
-```
+```text
 src/quarry/text_extractor.py -> src/quarry/pdf_text_extractor.py
 ```
 
@@ -848,7 +849,7 @@ via `_extract_pdf_pages` which is absorbed into `PdfExtractor`).
 
 ## Dependency Graph (After Refactoring)
 
-```
+```text
 IngestionPipeline
   -> FormatExtractor protocol
   -> TextExtractor, CodeExtractor, HtmlExtractor, PresentationExtractor,
