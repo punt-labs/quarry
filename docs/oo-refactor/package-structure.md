@@ -22,6 +22,7 @@ src/quarry/
     collections.py           # CollectionName (Flyweight, @final)
     config.py                # Settings (Pydantic)
     logging_config.py        # LoggingConfig
+    transcript.py            # extract_transcript_text (pure transforms, layer 0)
 
     db/
         __init__.py          # Re-exports: Database, ChunkStore, ChunkSearch, ...
@@ -57,11 +58,14 @@ src/quarry/
         provider.py          # ProviderSelection
         ocr_local.py         # LocalOcrBackend
 
+    sync/
+        __init__.py          # Re-exports: CollectionSyncer, FileDiscovery, SyncRegistry
+        syncer.py            # CollectionSyncer
+        discovery.py         # FileDiscovery
+        registry.py          # SyncRegistry
+
     services/
-        __init__.py          # Re-exports: CollectionSyncer, HealthChecker, ...
-        sync.py              # CollectionSyncer
-        sync_discovery.py    # FileDiscovery
-        sync_registry.py     # SyncRegistry
+        __init__.py          # Re-exports: HealthChecker, ServiceManager, ...
         health_checker.py    # HealthChecker
         install.py           # InstallWizard
         ethos_config.py      # EthosConfigurator
@@ -70,7 +74,7 @@ src/quarry/
         tls.py               # CertificateAuthority
         remote.py            # ProxyConfig, ConnectionValidator
         proxy.py             # ProxyInstaller
-        enable.py            # ProjectManager
+        enable.py            # ProjectManager (imports from ethos_config, not doctor)
         backfill.py          # SessionBackfiller, BackfillConfig
         scrub.py             # TextScrubber
         sitemap.py           # SitemapDiscovery, SitemapEntry
@@ -140,9 +144,9 @@ src/quarry/
                                |              |
   Layer 2 (process):      ingestion/ ---------+
                                |
-  Layer 3 (orchestrate):  services/
-                          /    |    \
-  Layer 4 (events):   hooks/   |     \
+  Layer 3 (orchestrate):  sync/   services/
+                          \     /    |    \
+  Layer 4 (events):   hooks/        |     \
                                |      \
   Layer 5 (present):      routes/   commands/   surfaces/
                                |        |          |
@@ -157,7 +161,8 @@ Allowed imports -- a module in layer N imports only from layers 0..N-1:
 | db/ | 1 | layer 0, _sql.py | ingestion, services, hooks, routes, commands, surfaces |
 | extractors/ | 1 | layer 0 | ingestion |
 | ingestion/ | 2 | layer 0, db/, extractors/ | services, hooks, routes, commands |
-| services/ | 3 | layers 0-2 | hooks, routes, commands, surfaces |
+| sync/ | 3 | layers 0-2 | services, hooks, routes, commands |
+| services/ | 3 | layers 0-2, sync/ | hooks, routes, commands, surfaces |
 | hooks/ | 4 | layers 0-3 | _hook_entry.py |
 | routes/ | 5 | layers 0-3, surfaces/ | surfaces/http_server.py |
 | commands/ | 5 | layers 0-3, surfaces/ | __main__.py |
@@ -173,27 +178,29 @@ consumer will import from.
 
 ### Cross-package import counts (post-refactoring, estimated)
 
-| Consumer -> | types layer | db/ | extractors/ | ingestion/ | services/ | hooks/ | surfaces/ |
-|-------------|-------------|-----|-------------|------------|-----------|--------|-----------|
-| db/ | 5 (types, results, _sql) | internal | 0 | 0 | 0 | 0 | 0 |
-| extractors/ | 3 (models) | 0 | internal | 0 | 0 | 0 | 0 |
-| ingestion/ | 4 (models, results, config) | 2 (ChunkStore, get_db) | 7 (all extractors) | internal | 0 | 0 | 0 |
-| services/ | 6 (config, types, collections) | 4 (Database, ChunkStore, ChunkCatalog, get_db) | 0 | 3 (pipeline, ingest_content) | internal | 0 | 0 |
-| hooks/ | 3 (config, types, artifacts) | 3 (ChunkCatalog, get_db) | 1 (HtmlExtractor) | 2 (ingest_content, ingest_url) | 4 (SyncRegistry, scrub, enable) | internal | 0 |
-| routes/ | 3 (config, results, types) | 3 (ChunkSearch, ChunkCatalog, get_db) | 0 | 2 (IngestionPipeline, UrlIngester) | 4 (SyncRegistry, sync, service) | 0 | 2 (QuarryContext, TaskManager) |
-| commands/ | 5 (config, collections, results) | 3 (ChunkSearch, ChunkCatalog, get_db) | 0 | 2 (IngestionPipeline, UrlIngester) | 5 (sync, enable, backfill, service) | 0 | 3 (CliContext, RemoteClient, formatting) |
-| surfaces/ | 3 (config, types) | 2 (Database, get_db) | 0 | 0 | 0 | 0 | internal |
+| Consumer -> | types layer | db/ | extractors/ | ingestion/ | sync/ | services/ | hooks/ | surfaces/ |
+|-------------|-------------|-----|-------------|------------|-------|-----------|--------|-----------|
+| db/ | 5 (types, results, _sql) | internal | 0 | 0 | 0 | 0 | 0 | 0 |
+| extractors/ | 3 (models) | 0 | internal | 0 | 0 | 0 | 0 | 0 |
+| ingestion/ | 4 (models, results, config) | 2 (ChunkStore, get_db) | 7+1 (7 concrete extractors + FormatExtractor protocol) | internal | 0 | 0 | 0 | 0 |
+| sync/ | 3 (config, collections, types) | 2 (Database, get_db) | 0 | 1 (IngestionPipeline) | internal | 0 | 0 | 0 |
+| services/ | 5 (config, types, collections) | 3 (Database, ChunkCatalog, get_db) | 0 | 2 (pipeline, ingest_content) | 3 (SyncRegistry, CollectionSyncer) | internal | 0 | 0 |
+| hooks/ | 3 (config, types, artifacts) | 3 (ChunkCatalog, get_db) | 1 (HtmlExtractor concrete) | 2 (ingest_content, ingest_url) | 1 (SyncRegistry) | 3 (scrub, enable) | internal | 0 |
+| routes/ | 3 (config, results, types) | 3 (ChunkSearch, ChunkCatalog, get_db) | 0 | 2 (IngestionPipeline, UrlIngester) | 2 (SyncRegistry, sync) | 2 (service, proxy) | 0 | 2 (QuarryContext, TaskManager) |
+| commands/ | 5 (config, collections, results) | 3 (ChunkSearch, ChunkCatalog, get_db) | 0 | 2 (IngestionPipeline, UrlIngester) | 2 (sync, SyncRegistry) | 3 (enable, backfill, service) | 0 | 3 (CliContext, RemoteClient, formatting) |
+| surfaces/ | 3 (config, types) | 2 (Database, get_db) | 0 | 0 | 0 | 0 | 0 | internal |
 
 ### Coupling assessment
 
 __Low coupling (0-3 imports):__ db/ -> types layer, extractors/ -> types layer,
 surfaces/ -> db/. These are narrow, well-defined interfaces.
 
-__Medium coupling (4-7 imports):__ ingestion/ -> extractors/ (7 extractors via
-the protocol), services/ -> db/ (4), commands/ -> services/ (5). The
-ingestion-to-extractors coupling is expected -- the pipeline dispatches to all
-7 format-specific extractors. The medium coupling to db/ and services/ is
-justified because these are the domain's core operations.
+__Medium coupling (4-8 imports):__ ingestion/ -> extractors/ (7 concrete
+extractor imports + 1 protocol import = 8 total; the protocol enables dispatch,
+the concrete imports are for registry registration -- both are required),
+services/ -> db/ (3), commands/ -> services/ (3). The ingestion-to-extractors
+coupling is the highest between any two packages and is inherent to the pipeline's
+role as the format dispatcher.
 
 __Highest afferent coupling (most consumers):__ The types layer is imported by
 every package -- this is correct for value objects and protocols that define the
@@ -210,6 +217,12 @@ __No package-to-package cycles.__ The layering is strict: every arrow points
 from higher layers to lower layers. hooks/ does not import from routes/ or
 commands/. routes/ does not import from commands/. services/ does not import
 from hooks/.
+
+__Notable cross-layer dependency:__ `routes/mcp_ws.py` imports
+`run_mcp_session` from `surfaces/mcp_server.py` (the HTTP server hosts
+the MCP WebSocket endpoint). This is a same-layer (5→5) dependency, not
+a cycle. It constrains any future splitting of surfaces/ -- mcp_server.py
+cannot be separated from routes/mcp_ws.py's reach. (Review finding S1.3)
 
 ---
 
@@ -280,31 +293,45 @@ embedding model calls). They change for different reasons: extractors
 change when formats change; ingestion changes when the pipeline topology
 changes.
 
-### services/ (15 modules, ~2,500 LOC post-refactoring)
+### sync/ (3 modules, ~500 LOC post-refactoring)
+
+__Responsibility:__ Directory synchronization -- tracking which files
+are registered, discovering changes, and syncing collections.
+
+__Cohesion:__ Very high. All 3 modules change together when sync logic
+changes. `CollectionSyncer` orchestrates `FileDiscovery` and
+`SyncRegistry` in a single workflow.
+
+__Binding abstraction:__ The registered-directory concept. Every module
+operates on the same data: directory paths, file hashes, collection
+names, and sync state in the SQLite registry.
+
+__Why split from services/:__ The sync sub-domain has 3 tightly coupled
+modules that change for the same reason (sync logic). Per the review
+(S1.1), dependency direction is not the same as cohesion -- these modules
+belong together because they change together, not just because they sit
+at the same layer. (Review finding S1.1)
+
+### services/ (12 modules, ~2,000 LOC post-refactoring)
 
 __Responsibility:__ Application-level operations that compose db/ and
-ingestion/ into user-facing behaviors: sync, health checks, service
+ingestion/ into user-facing behaviors: health checks, service
 management, TLS, project enable/disable, backfill, scrubbing.
 
-__Cohesion:__ Medium. This is the broadest package. The binding concept
-is "operations that an agent or CLI command invokes but that are not
-tied to any single presentation surface." sync.py and sync_discovery.py
-are tightly coupled (both change when sync logic changes). tls.py and
-service.py are tightly coupled (both change when deployment changes).
-The remaining modules (enable.py, backfill.py, scrub.py) are independent.
+__Cohesion:__ Medium. tls.py and service.py are tightly coupled (both
+change when deployment changes). The remaining modules (enable.py,
+backfill.py, scrub.py) are more independent. The binding concept is
+"domain workflows consumed by hooks/, commands/, and routes/."
 
-__Why not split further:__ The alternative is 4-5 micro-packages
-(`sync/`, `deploy/`, `health/`, etc.) with 2-3 modules each. This adds
-import depth without meaningful cohesion gain. The 15-module services/
-package has clear internal structure via naming (sync_*, service-related
-modules) without needing sub-packages. If any sub-group grows past 6
-modules, revisit.
+__Known intra-package dependency:__ `enable.py` (ProjectManager) imports
+from `ethos_config.py` (EthosConfigurator), not from `doctor.py`. This
+was resolved in step 4.6 by extracting EthosConfigurator to its own
+module. (Review finding S1.2)
 
-__Anti-pattern check -- is this a grab bag?__ No. Every module in
-services/ shares two properties: (1) it composes core operations
-(db/, ingestion/) into domain workflows, (2) it is consumed by hooks/,
-commands/, and routes/ but never by db/ or extractors/. The dependency
-direction is the cohesion criterion.
+__Splitting trigger:__ If any sub-group (deploy: service.py + tls.py +
+remote.py + proxy.py; health: health_checker.py + install.py +
+ethos_config.py + claudemd.py) grows past 6 modules, extract to
+sub-package.
 
 ### hooks/ (6 modules, ~400 LOC post-refactoring)
 
@@ -459,8 +486,9 @@ Specific potential cycles that do NOT exist:
 | `collections.py` | ~80 | CollectionName consumed everywhere. |
 | `config.py` | ~120 | Settings consumed everywhere. |
 | `logging_config.py` | ~73 | LoggingConfig consumed by entry points. |
+| `transcript.py` | ~80 | Pure transforms, no quarry deps. Avoids services/ → hooks/ cycle. |
 
-Total: ~1,180 LOC at top level (7% of codebase). These modules form layer 0
+Total: ~1,260 LOC at top level (8% of codebase). These modules form layer 0
 -- they have zero dependencies on quarry internals and are imported by
 every package above them.
 
@@ -468,11 +496,10 @@ every package above them.
 
 ## 7. Anti-Patterns Avoided
 
-__Grab-bag package.__ services/ is the highest risk for low cohesion (15
-modules, 4 sub-domains). Mitigated by: consistent dependency direction
-(all consume db/ingestion, all consumed by hooks/commands/routes), clear
-naming conventions (sync_*, service-related), and a size trigger (if any
-sub-group exceeds 6 modules, extract to sub-package).
+__Grab-bag package.__ services/ was the highest risk (originally 15
+modules, 4 sub-domains). Resolved by extracting sync/ (3 modules) as a
+separate package (review S1.1). Remaining services/ has 12 modules with
+a 6-module splitting trigger on sub-groups.
 
 __God package.__ No package exceeds 2,500 LOC post-refactoring (services/).
 For comparison, the current pipeline.py alone is 1,612 LOC.
@@ -487,10 +514,17 @@ __Circular dependency.__ The one near-cycle (services/backfill.py ->
 hooks/transcript.py) is resolved by moving transcript extraction to the
 types layer. See section 5.
 
-__Over-packaging.__ The proposal does not split services/ into sync/,
-deploy/, health/ sub-packages. At 2-3 modules each, these would add
-package ceremony (6 more `__init__.py` files) without improving
-navigability. The threshold for splitting is 6+ modules in a sub-domain.
+__Over-packaging.__ sync/ was extracted because its 3 modules are tightly
+coupled and meet the cohesion criterion (change together for the same
+reason). Further splitting of services/ into deploy/, health/ sub-packages
+is deferred -- at 2-3 modules each, the overhead exceeds the benefit.
+The threshold for splitting remains 6+ modules in a sub-domain.
+
+__Large leaf packages.__ commands/ has 17 modules (the second-largest
+package). This is standard for CLI frameworks (flat command directories).
+Splitting trigger: if commands/ exceeds 20 modules, group into
+sub-packages by domain (data, admin, registration, remote).
+(Review finding S2.3)
 
 ---
 
@@ -503,37 +537,76 @@ navigability. The threshold for splitting is 6+ modules in a sub-domain.
    3.16: move these 10 modules into `ingestion/`, create `__init__.py`
    with `__all__`.
 
-2. __New package: `services/`.__ Steps 4.1-4.16 create service classes in
-   their existing modules. Add step 4.17: move 15 modules into `services/`,
-   create `__init__.py`.
+2. __New package: `sync/`.__ After steps 4.1-4.3, move sync.py,
+   sync_discovery.py, sync_registry.py into `sync/`, create `__init__.py`.
+   Add step 4.3a.
 
-3. __New package: `surfaces/`.__ Steps 6.1-6.9 and 7.1-7.2 create
+3. __New package: `services/`.__ After steps 4.4-4.16, move remaining 12
+   service modules into `services/`, create `__init__.py`. Add step 4.17.
+
+4. __New package: `surfaces/`.__ Steps 6.1-6.9 and 7.1-7.2 create
    presentation infrastructure classes. Add step 7.20: move cli_context.py,
    remote_client.py, formatting.py, latex_utils.py, artifacts.py,
    task_manager.py, _stdlib.py, and residual http_server.py/mcp_server.py
    into `surfaces/`.
 
-4. __Move `transcript.py` to top level.__ The plan puts transcript
+5. __Move `transcript.py` to top level.__ The plan puts transcript
    functions in `hooks/transcript.py` (step 5.1). These are pure transforms
    with zero quarry dependencies -- they belong in the types layer to avoid
    a services/ -> hooks/ cycle (backfill.py imports extract_transcript_text).
    Move to `src/quarry/transcript.py` at top level.
 
-5. __`IngestJob` placement.__ Step 1.7 puts IngestJob in `_hook_entry.py`.
+6. __`IngestJob` placement.__ Step 1.7 puts IngestJob in `_hook_entry.py`.
    It should be created directly in `hooks/background_ingester.py` if the
    hooks/ package exists by then (step 5.6), or in models.py temporarily
    if not.
 
-6. __Package-move steps are bulk import updates.__ Each adds one step:
+7. __Package-move steps are bulk import updates.__ Each adds one step:
    create `__init__.py`, move files, update all import paths. These are
    mechanical but high-touch (every consumer import changes). One PR each.
 
-Total new steps: 4 (steps 3.16, 4.17, 5.1 modification, 7.20).
-Revised total: 88 steps.
+Total new steps: 5 (steps 3.16, 4.3a, 4.17, 5.1 modification, 7.20).
+Revised total: 89 steps.
 
 ---
 
-## 9. Migration Schedule by Phase
+## 9. Conventions (Review S3.4)
+
+### Test directory layout
+
+Tests remain flat in `tests/` — they do not mirror the package structure.
+Test files are named `test_<module>.py` regardless of which package the
+module lives in. When a package has many modules, test files use the
+package-qualified name: `test_db_facade.py`, `test_sync_registry.py`.
+Shared fixtures stay in `tests/conftest.py`.
+
+Rationale: pytest discovers tests by filename pattern, not by directory
+structure. Mirroring 10 packages in `tests/` would add 10 `__init__.py`
+files and complicate pytest collection without improving discoverability.
+
+### Import convention
+
+Consumers import from the package `__init__.py`, not from internal modules:
+
+```python
+from quarry.db import ChunkStore, get_db        # preferred
+from quarry.db.chunk_store import ChunkStore     # acceptable for type stubs
+```
+
+The package `__init__.py` is the public API. Internal module paths are
+implementation details. Mock patches must use the internal path
+(`quarry.db.chunk_store.ChunkStore`) because that is where the object
+lives at runtime.
+
+### Phase 2 status
+
+The `db/` package already exists on main (PR #286). `database.py` is
+deleted. The refactoring plan's steps 2.1-2.8 are complete. The
+remaining phases (3-7) build on this foundation.
+
+---
+
+## 10. Migration Schedule by Phase
 
 | Phase | Steps | Package moves |
 |-------|-------|--------------|
@@ -541,7 +614,7 @@ Revised total: 88 steps.
 | 1 (types) | 1.1-1.10 | none |
 | 2 (done) | 2.1-2.8 | db/ created |
 | 3 (ingestion) | 3.1-3.16 | extractors/ populated, ingestion/ created |
-| 4 (services) | 4.1-4.17 | services/ created |
+| 4 (services) | 4.1-4.17 | sync/ created (4.3a), services/ created (4.17) |
 | 5 (hooks) | 5.1-5.7 | hooks/ created, transcript.py to top level |
 | 6 (HTTP/MCP) | 6.1-6.9 | routes/ created |
 | 7 (CLI) | 7.1-7.20 | commands/ populated, surfaces/ created |
