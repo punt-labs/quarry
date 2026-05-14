@@ -17,7 +17,7 @@ def get_db(db_path: Path) -> LanceDB:
     import lancedb  # noqa: PLC0415
 
     db_path.mkdir(parents=True, exist_ok=True)
-    return cast("LanceDB", lancedb.connect(str(db_path)))
+    return cast("LanceDB", lancedb.connect(str(db_path)))  # type: ignore[attr-defined]
 
 
 def format_size(size_bytes: int) -> str:

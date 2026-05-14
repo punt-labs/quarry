@@ -156,7 +156,7 @@ module = "quarry.code_processor"
 disable_error_code = ["arg-type"]  # get_parser expects Literal union, we pass str from dict
 
 [[tool.mypy.overrides]]
-module = "quarry.database"
+module = "quarry.db.storage"
 warn_unused_ignores = false  # lancedb stubs differ across environments
 
 [[tool.mypy.overrides]]
