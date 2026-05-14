@@ -474,10 +474,10 @@ class TestCollectionDerivation:
             "adjusting model parameters in the direction of steepest descent."
         )
 
-        from quarry.collections import derive_collection
+        from quarry.collections import CollectionName
 
-        collection = derive_collection(notes)
-        ingest_document(notes, lance_db, integration_settings, collection=collection)
+        col = CollectionName.from_path(notes)
+        ingest_document(notes, lance_db, integration_settings, collection=str(col))
 
         docs = list_documents(lance_db)
         assert len(docs) == 1
@@ -497,10 +497,10 @@ class TestCollectionDerivation:
             "a body and the forces acting upon it."
         )
 
-        from quarry.collections import derive_collection
+        from quarry.collections import CollectionName
 
-        collection = derive_collection(notes, explicit="physics")
-        ingest_document(notes, lance_db, integration_settings, collection=collection)
+        col = CollectionName.from_path(notes, explicit="physics")
+        ingest_document(notes, lance_db, integration_settings, collection=str(col))
 
         docs = list_documents(lance_db)
         assert len(docs) == 1

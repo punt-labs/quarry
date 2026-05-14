@@ -15,6 +15,7 @@ from quarry.config import DEFAULT_PORT
 from quarry.service import (
     _LABEL,
     _MALLOC_CONF,
+    ServiceBackend,
     _get_tls_hostname,
     _launchd_install,
     _launchd_plist_content,
@@ -1282,3 +1283,23 @@ class TestEnsureGpuRuntime:
             assert "onnxruntime" not in _sys.modules
 
         assert result == "onnxruntime-gpu installed"
+
+
+class TestServiceBackendProtocol:
+    """Conformance tests for the ServiceBackend protocol."""
+
+    def test_stub_satisfies_service_backend(self) -> None:
+        class _StubBackend:
+            def install(self) -> None:
+                pass
+
+            def uninstall(self) -> None:
+                pass
+
+            def status(self) -> bool:
+                return False
+
+        assert isinstance(_StubBackend(), ServiceBackend)
+
+    def test_non_conforming_object_rejected(self) -> None:
+        assert not isinstance(object(), ServiceBackend)

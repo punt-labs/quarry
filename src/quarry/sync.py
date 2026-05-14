@@ -61,6 +61,15 @@ _DEFAULT_IGNORE_PATTERNS: Final[list[str]] = [
 _HASH_CHUNK_SIZE: Final[int] = 1 << 20  # 1 MiB
 
 
+@dataclass(frozen=True, slots=True)
+class SyncConfig:
+    """Configuration for a directory sync operation."""
+
+    directory: Path
+    collection: str
+    max_workers: int = 4
+
+
 def _content_hash(path: Path) -> str:
     """Return a fast content hash of *path* for change detection.
 

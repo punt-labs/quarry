@@ -20,10 +20,33 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 from xml.sax.saxutils import escape as _xml_escape
 
 from quarry.config import DEFAULT_PORT
 from quarry.tls import TLS_DIR, cert_fingerprint, write_tls_files
+
+
+@runtime_checkable
+class ServiceBackend(Protocol):
+    """Platform-specific daemon lifecycle operations.
+
+    Each platform (launchd on macOS, systemd on Linux) implements
+    install, uninstall, and status behind this protocol.
+    """
+
+    def install(self) -> None:
+        """Register and start the daemon service."""
+        ...
+
+    def uninstall(self) -> None:
+        """Stop and remove the daemon service."""
+        ...
+
+    def status(self) -> bool:
+        """Return ``True`` if the daemon is currently running."""
+        ...
+
 
 logger = logging.getLogger(__name__)
 

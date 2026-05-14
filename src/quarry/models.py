@@ -67,3 +67,28 @@ class Chunk:
     agent_handle: str = ""
     memory_type: str = ""
     summary: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class SitemapOptions:
+    """Options for sitemap-based ingestion."""
+
+    include: str | None = None
+    exclude: str | None = None
+    limit: int | None = None
+    workers: int = 4
+    delay: float = 0.0
+    timeout: float = 30.0
+
+
+@dataclass(frozen=True, slots=True)
+class ChunkConfig:
+    """Configuration for chunk creation during ingestion."""
+
+    agent_handle: str | None = None
+    memory_type: str | None = None
+    summary: str | None = None
+    max_chars: int = 2000
+    overlap_chars: int = 200
+    collection: str = "default"
+    source_format: str = ""

@@ -6,10 +6,12 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from typer.testing import CliRunner
 
 from quarry.__main__ import app
 from quarry.backfill import (
+    BackfillConfig,
     build_project_mappings,
     document_name_for_transcript,
     encode_project_path,
@@ -20,6 +22,37 @@ from quarry.config import Settings
 from quarry.sync_registry import DirectoryRegistration
 
 runner = CliRunner()
+
+
+# ---------------------------------------------------------------------------
+# BackfillConfig
+# ---------------------------------------------------------------------------
+
+
+class TestBackfillConfig:
+    def test_construction_defaults(self) -> None:
+        cfg = BackfillConfig()
+        assert cfg.dry_run is False
+        assert cfg.collection_override is None
+        assert cfg.project_filter is None
+        assert cfg.limit is None
+
+    def test_construction_explicit(self) -> None:
+        cfg = BackfillConfig(
+            dry_run=True,
+            collection_override="captures",
+            project_filter="/Users/me/proj",
+            limit=50,
+        )
+        assert cfg.dry_run is True
+        assert cfg.collection_override == "captures"
+        assert cfg.project_filter == "/Users/me/proj"
+        assert cfg.limit == 50
+
+    def test_frozen(self) -> None:
+        cfg = BackfillConfig()
+        with pytest.raises(AttributeError):
+            cfg.dry_run = True  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------

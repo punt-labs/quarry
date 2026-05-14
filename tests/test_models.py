@@ -5,7 +5,14 @@ from datetime import UTC, datetime
 
 import pytest
 
-from quarry.models import Chunk, PageAnalysis, PageContent, PageType
+from quarry.models import (
+    Chunk,
+    ChunkConfig,
+    PageAnalysis,
+    PageContent,
+    PageType,
+    SitemapOptions,
+)
 
 
 class TestPageType:
@@ -109,3 +116,76 @@ class TestChunk:
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
             chunk.chunk_index = 1  # type: ignore[misc]
+
+
+class TestSitemapOptions:
+    def test_construction_defaults(self) -> None:
+        opts = SitemapOptions()
+        assert opts.include is None
+        assert opts.exclude is None
+        assert opts.limit is None
+        assert opts.workers == 4
+        assert opts.delay == 0.0
+        assert opts.timeout == 30.0
+
+    def test_construction_explicit(self) -> None:
+        opts = SitemapOptions(
+            include="docs/*",
+            exclude="drafts/*",
+            limit=100,
+            workers=8,
+            delay=0.5,
+            timeout=60.0,
+        )
+        assert opts.include == "docs/*"
+        assert opts.exclude == "drafts/*"
+        assert opts.limit == 100
+        assert opts.workers == 8
+        assert opts.delay == 0.5
+        assert opts.timeout == 60.0
+
+    def test_frozen(self) -> None:
+        opts = SitemapOptions()
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            opts.workers = 2  # type: ignore[misc]
+
+
+class TestChunkConfig:
+    def test_defaults(self):
+        cfg = ChunkConfig()
+        assert cfg.agent_handle is None
+        assert cfg.memory_type is None
+        assert cfg.summary is None
+        assert cfg.max_chars == 2000
+        assert cfg.overlap_chars == 200
+        assert cfg.collection == "default"
+        assert cfg.source_format == ""
+
+    def test_explicit_values(self):
+        cfg = ChunkConfig(
+            agent_handle="rmh",
+            memory_type="fact",
+            summary="test summary",
+            max_chars=4000,
+            overlap_chars=400,
+            collection="memory-rmh",
+            source_format=".md",
+        )
+        assert cfg.agent_handle == "rmh"
+        assert cfg.memory_type == "fact"
+        assert cfg.summary == "test summary"
+        assert cfg.max_chars == 4000
+        assert cfg.overlap_chars == 400
+        assert cfg.collection == "memory-rmh"
+        assert cfg.source_format == ".md"
+
+    def test_frozen(self):
+        cfg = ChunkConfig()
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cfg.max_chars = 500  # type: ignore[misc]
+
+    def test_partial_override(self):
+        cfg = ChunkConfig(collection="docs", agent_handle="kpz")
+        assert cfg.collection == "docs"
+        assert cfg.agent_handle == "kpz"
+        assert cfg.max_chars == 2000  # default preserved

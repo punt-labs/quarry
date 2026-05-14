@@ -15,8 +15,24 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
 
 from quarry._stdlib import run_hook
+
+
+@dataclass(frozen=True, slots=True)
+class IngestJob:
+    """Parameters for a background ingestion subprocess."""
+
+    text_file: Path
+    document_name: str
+    collection: str
+    lancedb_path: str
+    session_prefix: str
+    agent_handle: str | None = None
+    memory_type: str | None = None
+    summary: str | None = None
 
 
 def main() -> None:

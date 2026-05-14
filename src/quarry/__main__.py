@@ -21,7 +21,7 @@ from rich.console import Console
 from rich.progress import Progress
 
 from quarry.backends import get_embedding_backend
-from quarry.collections import derive_collection
+from quarry.collections import CollectionName
 from quarry.config import (
     DEFAULT_PORT,
     Settings,
@@ -686,7 +686,7 @@ def ingest_cmd(
                 style="red",
             )
             raise typer.Exit(code=1)
-        col = derive_collection(file_path, explicit=collection or None)
+        col = CollectionName.from_path(file_path, explicit=collection or None)
 
         with _progress(f"Processing {file_path.name}") as cb:
             result = ingest_document(
@@ -694,7 +694,7 @@ def ingest_cmd(
                 db,
                 settings,
                 overwrite=overwrite,
-                collection=col,
+                collection=str(col),
                 progress_callback=cb,
                 agent_handle=agent_handle,
                 memory_type=memory_type,

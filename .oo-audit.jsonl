@@ -7,3 +7,4 @@
 {"ts":"2026-05-14T05:17:22Z","commit":"79eda7e","files_scored":42,"files_improved":4,"files_regressed":1,"verdict":"fail","deltas":{"src/quarry/__init__.py":{"module_size":[58.0,56.0]},"src/quarry/__main__.py":{"module_size":[1782.0,1778.0]},"src/quarry/_hook_entry.py":{"module_size":[149.0,146.0]},"src/quarry/config.py":{"method_ratio":[0.0,1.0],"avg_params":[0.75,0.5],"class_to_func_ratio":[0.2,1.0]}}}
 {"ts":"2026-05-14T13:56:11Z","commit":"d464c96","files_scored":42,"files_improved":1,"files_regressed":10,"verdict":"fail","deltas":{"src/quarry/__main__.py":{"module_size":[1778.0,1774.0]}}}
 {"ts":"2026-05-14T13:57:15Z","commit":"d464c96","files_scored":42,"files_improved":0,"files_regressed":0,"verdict":"rebaseline","deltas":{}}
+{"ts":"2026-05-14T14:39:56Z","commit":"6e32872","files_scored":45,"files_improved":0,"files_regressed":0,"verdict":"rebaseline","deltas":{}}

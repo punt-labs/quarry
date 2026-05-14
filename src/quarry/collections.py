@@ -1,51 +1,68 @@
-"""Collection name derivation and validation utilities."""
+"""Collection name value class with Flyweight caching."""
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import ClassVar, Self, cast, final
+from weakref import WeakValueDictionary
 
 
-def derive_collection(
-    file_path: Path,
-    explicit: str | None = None,
-) -> str:
-    """Derive a collection name from a file path or explicit override.
+@final
+class CollectionName:
+    """Validated, cached collection name.
 
-    Args:
-        file_path: Path to the document being ingested.
-        explicit: If provided, use this as the collection name.
-
-    Returns:
-        Validated collection name.
-
-    Raises:
-        ValueError: If the derived or explicit name is invalid.
+    Flyweight pattern: identical names yield the same object instance.
+    Validation happens once at construction time.
     """
-    if explicit is not None:
-        return validate_collection_name(explicit)
-    return validate_collection_name(file_path.resolve().parent.name)
 
+    _cache: ClassVar[WeakValueDictionary[str, CollectionName]] = WeakValueDictionary()
 
-def validate_collection_name(name: str) -> str:
-    """Validate and normalize a collection name.
+    __slots__ = ("__weakref__", "_name")
 
-    Strips whitespace. Rejects empty strings and names containing
-    single quotes (which would break SQL predicates).
+    _name: str
 
-    Args:
-        name: Raw collection name.
+    def __new__(cls, name: str) -> Self:
+        """Create or retrieve a validated CollectionName."""
+        name = name.strip()
+        if not name:
+            msg = "Collection name must not be empty"
+            raise ValueError(msg)
+        if "'" in name:
+            msg = f"Collection name must not contain single quotes: {name!r}"
+            raise ValueError(msg)
+        if name in cls._cache:
+            return cast("Self", cls._cache[name])  # type: ignore[redundant-cast]  # pyright needs this
+        self = super().__new__(cls)
+        self._name = name
+        cls._cache[name] = self
+        return self
 
-    Returns:
-        Validated collection name.
+    @classmethod
+    def from_path(
+        cls,
+        file_path: Path,
+        explicit: str | None = None,
+    ) -> CollectionName:
+        """Derive a collection name from a file path or explicit override."""
+        if explicit is not None:
+            return cls(explicit)
+        return cls(file_path.resolve().parent.name)
 
-    Raises:
-        ValueError: If name is empty or contains single quotes.
-    """
-    name = name.strip()
-    if not name:
-        msg = "Collection name must not be empty"
-        raise ValueError(msg)
-    if "'" in name:
-        msg = f"Collection name must not contain single quotes: {name!r}"
-        raise ValueError(msg)
-    return name
+    @property
+    def name(self) -> str:
+        """Return the validated name string."""
+        return self._name
+
+    def __str__(self) -> str:
+        return self._name
+
+    def __repr__(self) -> str:
+        return f"CollectionName({self._name!r})"
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, CollectionName):
+            return NotImplemented
+        return self._name == other._name
+
+    def __hash__(self) -> int:
+        return hash((CollectionName, self._name))
