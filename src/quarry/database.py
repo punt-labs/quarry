@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 
+from quarry._sql import escape_sql
 from quarry.models import Chunk
 from quarry.results import (
     CollectionSummary,
@@ -35,11 +36,6 @@ _table_lock = threading.Lock()
 # rows).  Non-vector filtered queries must set an explicit limit large enough
 # to cover the full table so the WHERE clause is evaluated against every row.
 _FULL_SCAN_LIMIT = 1_000_000
-
-
-def _escape_sql(value: str) -> str:
-    """Escape single quotes for LanceDB SQL predicates."""
-    return value.replace("'", "''")
 
 
 def _schema(embedding_dimension: int = 768) -> pa.Schema:
@@ -309,13 +305,13 @@ def search(
 
     predicates: list[str] = []
     if document_filter:
-        predicates.append(f"document_name = '{_escape_sql(document_filter)}'")
+        predicates.append(f"document_name = '{escape_sql(document_filter)}'")
     if collection_filter:
-        predicates.append(f"collection = '{_escape_sql(collection_filter)}'")
+        predicates.append(f"collection = '{escape_sql(collection_filter)}'")
     if page_type_filter:
-        predicates.append(f"page_type = '{_escape_sql(page_type_filter)}'")
+        predicates.append(f"page_type = '{escape_sql(page_type_filter)}'")
     if source_format_filter:
-        predicates.append(f"source_format = '{_escape_sql(source_format_filter)}'")
+        predicates.append(f"source_format = '{escape_sql(source_format_filter)}'")
     if predicates:
         query = query.where(" AND ".join(predicates))
 
@@ -339,17 +335,17 @@ def _build_predicates(
     """Build a SQL WHERE clause from optional filters."""
     parts: list[str] = []
     if document_filter:
-        parts.append(f"document_name = '{_escape_sql(document_filter)}'")
+        parts.append(f"document_name = '{escape_sql(document_filter)}'")
     if collection_filter:
-        parts.append(f"collection = '{_escape_sql(collection_filter)}'")
+        parts.append(f"collection = '{escape_sql(collection_filter)}'")
     if page_type_filter:
-        parts.append(f"page_type = '{_escape_sql(page_type_filter)}'")
+        parts.append(f"page_type = '{escape_sql(page_type_filter)}'")
     if source_format_filter:
-        parts.append(f"source_format = '{_escape_sql(source_format_filter)}'")
+        parts.append(f"source_format = '{escape_sql(source_format_filter)}'")
     if agent_handle_filter:
-        parts.append(f"agent_handle = '{_escape_sql(agent_handle_filter)}'")
+        parts.append(f"agent_handle = '{escape_sql(agent_handle_filter)}'")
     if memory_type_filter:
-        parts.append(f"memory_type = '{_escape_sql(memory_type_filter)}'")
+        parts.append(f"memory_type = '{escape_sql(memory_type_filter)}'")
     return " AND ".join(parts) if parts else None
 
 
@@ -552,11 +548,10 @@ def get_page_text(
         return None
 
     predicate = (
-        f"document_name = '{_escape_sql(document_name)}'"
-        f" AND page_number = {page_number}"
+        f"document_name = '{escape_sql(document_name)}' AND page_number = {page_number}"
     )
     if collection:
-        predicate += f" AND collection = '{_escape_sql(collection)}'"
+        predicate += f" AND collection = '{escape_sql(collection)}'"
 
     table = db.open_table(TABLE_NAME)
     results = (
@@ -606,7 +601,7 @@ def list_documents(
         )
     )
     if collection_filter:
-        query = query.where(f"collection = '{_escape_sql(collection_filter)}'")
+        query = query.where(f"collection = '{escape_sql(collection_filter)}'")
     rows = query.to_list()
 
     if not rows:
@@ -648,7 +643,7 @@ def count_chunks(
         return 0
     table = db.open_table(TABLE_NAME)
     if collection_filter:
-        return table.count_rows(f"collection = '{_escape_sql(collection_filter)}'")
+        return table.count_rows(f"collection = '{escape_sql(collection_filter)}'")
     return table.count_rows()
 
 
@@ -681,9 +676,9 @@ def delete_document(
         if "not found" not in str(exc).lower():
             raise
         return 0
-    predicate = f"document_name = '{_escape_sql(document_name)}'"
+    predicate = f"document_name = '{escape_sql(document_name)}'"
     if collection:
-        predicate += f" AND collection = '{_escape_sql(collection)}'"
+        predicate += f" AND collection = '{escape_sql(collection)}'"
 
     if not count:
         table.delete(predicate)
@@ -750,7 +745,7 @@ def delete_collection(db: LanceDB, collection: str) -> int:
 
     table = db.open_table(TABLE_NAME)
     before = table.count_rows()
-    table.delete(f"collection = '{_escape_sql(collection)}'")
+    table.delete(f"collection = '{escape_sql(collection)}'")
     after = table.count_rows()
     deleted = before - after
     logger.info("Deleted %d chunks for collection %s", deleted, collection)

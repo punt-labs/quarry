@@ -28,6 +28,16 @@ logger = logging.getLogger(__name__)
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 
 
+@dataclass(frozen=True, slots=True)
+class BackfillConfig:
+    """Configuration for a transcript backfill run."""
+
+    dry_run: bool = False
+    collection_override: str | None = None
+    project_filter: str | None = None
+    limit: int | None = None
+
+
 @dataclass(frozen=True)
 class BackfillStats:
     """Aggregate counts from a backfill run."""

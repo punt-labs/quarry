@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from mcp.server.fastmcp import FastMCP
 
 from quarry.backends import get_embedding_backend
-from quarry.collections import derive_collection
+from quarry.collections import CollectionName
 from quarry.config import Settings
 from quarry.database import (
     count_chunks,
@@ -187,8 +187,8 @@ def _do_ingest(
         return
 
     path = Path(source)
-    col = derive_collection(path, explicit=collection or None)
-    ingest_document(path, db, settings, overwrite=overwrite, collection=col)
+    col = CollectionName.from_path(path, explicit=collection or None)
+    ingest_document(path, db, settings, overwrite=overwrite, collection=str(col))
 
 
 @mcp.tool()

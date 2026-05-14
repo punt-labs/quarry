@@ -441,7 +441,7 @@ class TestProgressStderr:
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
-            patch("quarry.__main__.derive_collection", return_value="default"),
+            patch("quarry.__main__.CollectionName.from_path", return_value="default"),
             patch(
                 "quarry.__main__.ingest_document",
                 return_value=mock_result,
@@ -467,7 +467,7 @@ class TestProgressStderr:
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
-            patch("quarry.__main__.derive_collection", return_value="default"),
+            patch("quarry.__main__.CollectionName.from_path", return_value="default"),
             patch(
                 "quarry.__main__.ingest_document",
                 return_value=mock_result,
@@ -488,7 +488,7 @@ class TestProgressStderr:
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
-            patch("quarry.__main__.derive_collection", return_value="default"),
+            patch("quarry.__main__.CollectionName.from_path", return_value="default"),
             patch(
                 "quarry.__main__.ingest_document",
                 return_value=mock_result,
@@ -715,7 +715,7 @@ class TestFatalErrorsUnderQuiet:
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
-            patch("quarry.__main__.derive_collection", return_value="default"),
+            patch("quarry.__main__.CollectionName.from_path", return_value="default"),
             patch(
                 "quarry.__main__.ingest_document",
                 side_effect=FileNotFoundError("no such file"),

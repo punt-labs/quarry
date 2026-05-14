@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import NotRequired, TypedDict
+
+from quarry._sql import escape_sql
 
 
 class IngestResult(TypedDict):
@@ -89,3 +92,38 @@ class DatabaseSummary(TypedDict):
     document_count: int
     size_bytes: int
     size_description: str
+
+
+# ---------------------------------------------------------------------------
+# Filter bundling for hybrid search predicates
+# ---------------------------------------------------------------------------
+
+_FILTER_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("collection", "collection"),
+    ("document", "document_name"),
+    ("page_type", "page_type"),
+    ("source_format", "source_format"),
+    ("agent_handle", "agent_handle"),
+    ("memory_type", "memory_type"),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class SearchFilter:
+    """Bundle of optional filters for hybrid search predicates."""
+
+    collection: str | None = None
+    document: str | None = None
+    page_type: str | None = None
+    source_format: str | None = None
+    agent_handle: str | None = None
+    memory_type: str | None = None
+
+    def to_predicate(self) -> str | None:
+        """Return a SQL WHERE clause string, or None if no filters are set."""
+        parts: list[str] = []
+        for field_name, column_name in _FILTER_COLUMNS:
+            value = getattr(self, field_name)
+            if value:
+                parts.append(f"{column_name} = '{escape_sql(value)}'")
+        return " AND ".join(parts) if parts else None

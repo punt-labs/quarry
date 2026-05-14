@@ -17,7 +17,7 @@ from importlib.metadata import version
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from quarry.collections import derive_collection as derive_collection
+    from quarry.collections import CollectionName as CollectionName
     from quarry.config import Settings as Settings
     from quarry.database import get_db as get_db, search as search
     from quarry.pipeline import (
@@ -29,9 +29,9 @@ if TYPE_CHECKING:
 __version__ = version("punt-quarry")
 
 __all__ = [
+    "CollectionName",
     "Settings",
     "__version__",
-    "derive_collection",
     "get_db",
     "ingest_content",
     "ingest_document",
@@ -41,7 +41,7 @@ __all__ = [
 
 # Map each public name to (module_path, attribute_name).
 _LAZY_ATTRS: dict[str, tuple[str, str]] = {
-    "derive_collection": ("quarry.collections", "derive_collection"),
+    "CollectionName": ("quarry.collections", "CollectionName"),
     "Settings": ("quarry.config", "Settings"),
     "get_db": ("quarry.database", "get_db"),
     "search": ("quarry.database", "search"),

@@ -11,6 +11,7 @@ import pytest
 from quarry.models import Chunk
 from quarry.sync import (
     _DEFAULT_IGNORE_PATTERNS,
+    SyncConfig,
     _content_hash,
     _load_ignore_spec,
     compute_sync_plan,
@@ -26,6 +27,27 @@ from quarry.sync_registry import (
     register_directory,
     upsert_file,
 )
+
+# ---------------------------------------------------------------------------
+# SyncConfig
+# ---------------------------------------------------------------------------
+
+
+class TestSyncConfig:
+    def test_construction_with_defaults(self) -> None:
+        cfg = SyncConfig(directory=Path("/tmp/docs"), collection="test")
+        assert cfg.directory == Path("/tmp/docs")
+        assert cfg.collection == "test"
+        assert cfg.max_workers == 4
+
+    def test_construction_with_explicit_workers(self) -> None:
+        cfg = SyncConfig(directory=Path("/data"), collection="main", max_workers=8)
+        assert cfg.max_workers == 8
+
+    def test_frozen(self) -> None:
+        cfg = SyncConfig(directory=Path("/tmp"), collection="c")
+        with pytest.raises(AttributeError):
+            cfg.collection = "other"  # type: ignore[misc]
 
 
 def _fake_prepare(
