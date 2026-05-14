@@ -4,13 +4,14 @@ from pathlib import Path
 
 import pytest
 
+from quarry.extractors.spreadsheet_extractor import (
+    SUPPORTED_SPREADSHEET_EXTENSIONS,
+    SpreadsheetExtractor,
+)
 from quarry.latex_utils import LatexSerializer
 from quarry.models import PageType
-from quarry.spreadsheet_processor import (
-    SUPPORTED_SPREADSHEET_EXTENSIONS,
-    _split_rows_to_sections,
-    process_spreadsheet_file,
-)
+
+_extractor = SpreadsheetExtractor()
 
 
 class TestSupportedExtensions:
@@ -19,8 +20,8 @@ class TestSupportedExtensions:
         assert ".csv" in SUPPORTED_SPREADSHEET_EXTENSIONS
 
     def test_no_overlap_with_other_extensions(self):
-        from quarry.code_processor import SUPPORTED_CODE_EXTENSIONS
-        from quarry.text_processor import SUPPORTED_TEXT_EXTENSIONS
+        from quarry.extractors.code_extractor import SUPPORTED_CODE_EXTENSIONS
+        from quarry.extractors.text_extractor import SUPPORTED_TEXT_EXTENSIONS
 
         overlap = SUPPORTED_SPREADSHEET_EXTENSIONS & (
             SUPPORTED_CODE_EXTENSIONS | SUPPORTED_TEXT_EXTENSIONS
@@ -30,7 +31,7 @@ class TestSupportedExtensions:
 
 class TestSplitRowsToSections:
     def test_small_table_single_section(self):
-        sections = _split_rows_to_sections(
+        sections = SpreadsheetExtractor._split_rows_to_sections(
             ["A", "B"], [["1", "2"], ["3", "4"]], None, max_chars=5000
         )
         assert len(sections) == 1
@@ -38,7 +39,9 @@ class TestSplitRowsToSections:
     def test_large_table_splits(self):
         headers = ["Name", "Value"]
         rows = [[f"item_{i}", f"value_{i}"] for i in range(50)]
-        sections = _split_rows_to_sections(headers, rows, None, max_chars=200)
+        sections = SpreadsheetExtractor._split_rows_to_sections(
+            headers, rows, None, max_chars=200
+        )
         assert len(sections) > 1
         # Each section should have the headers
         for section in sections:
@@ -47,18 +50,24 @@ class TestSplitRowsToSections:
     def test_sheet_name_in_all_sections(self):
         headers = ["A"]
         rows = [[f"row_{i}"] for i in range(50)]
-        sections = _split_rows_to_sections(headers, rows, "MySheet", max_chars=100)
+        sections = SpreadsheetExtractor._split_rows_to_sections(
+            headers, rows, "MySheet", max_chars=100
+        )
         for section in sections:
             assert "% Sheet: MySheet" in section
 
     def test_single_row_never_split(self):
         headers = ["A" * 100]
         rows = [["B" * 100]]
-        sections = _split_rows_to_sections(headers, rows, None, max_chars=10)
+        sections = SpreadsheetExtractor._split_rows_to_sections(
+            headers, rows, None, max_chars=10
+        )
         assert len(sections) == 1
 
     def test_empty_rows_returns_empty(self):
-        sections = _split_rows_to_sections(["A"], [], None, max_chars=100)
+        sections = SpreadsheetExtractor._split_rows_to_sections(
+            ["A"], [], None, max_chars=100
+        )
         # Empty rows still produce a valid (header-only) table
         result = LatexSerializer.serialize_table(["A"], [])
         if result.strip():
@@ -70,9 +79,8 @@ class TestProcessSpreadsheetCSV:
         f = tmp_path / "data.csv"
         f.write_text("Name,Age\nAlice,30\nBob,25\n")
 
-        pages, sheet_count = process_spreadsheet_file(f)
+        pages = _extractor.extract_pages(f)
 
-        assert sheet_count == 1
         assert len(pages) == 1
         assert pages[0].page_type == PageType.SPREADSHEET
         assert pages[0].document_name == "data.csv"
@@ -84,7 +92,7 @@ class TestProcessSpreadsheetCSV:
         f = tmp_path / "test.csv"
         f.write_text("A,B\n1,2\n")
 
-        pages, _ = process_spreadsheet_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert pages[0].document_path == str(f.resolve())
         assert pages[0].page_number == 1
@@ -94,15 +102,14 @@ class TestProcessSpreadsheetCSV:
         f = tmp_path / "empty.csv"
         f.write_text("")
 
-        pages, sheet_count = process_spreadsheet_file(f)
+        pages = _extractor.extract_pages(f)
         assert pages == []
-        assert sheet_count == 0
 
     def test_header_only_csv(self, tmp_path: Path):
         f = tmp_path / "header.csv"
         f.write_text("A,B,C\n")
 
-        pages, _ = process_spreadsheet_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert len(pages) == 1
         assert "A & B & C" in pages[0].text
@@ -111,7 +118,7 @@ class TestProcessSpreadsheetCSV:
         f = tmp_path / "special.csv"
         f.write_text('Item,Price\nWidget,"$100"\n')
 
-        pages, _ = process_spreadsheet_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert r"\$100" in pages[0].text
 
@@ -120,9 +127,9 @@ class TestProcessSpreadsheetCSV:
         f = tmp_path / "large.csv"
         f.write_text("\n".join(rows) + "\n")
 
-        pages, sheet_count = process_spreadsheet_file(f, max_chars=300)
+        extractor = SpreadsheetExtractor(max_chars=300)
+        pages = extractor.extract_pages(f)
 
-        assert sheet_count == 1
         assert len(pages) > 1
         for page in pages:
             assert "Name & Value" in page.text
@@ -131,7 +138,7 @@ class TestProcessSpreadsheetCSV:
         f = tmp_path / "data.csv"
         f.write_text("A\n1\n")
 
-        pages, _ = process_spreadsheet_file(f)
+        pages = _extractor.extract_pages(f)
 
         # Single-sheet files should not have sheet name prefix
         assert "% Sheet" not in pages[0].text
@@ -140,7 +147,7 @@ class TestProcessSpreadsheetCSV:
         f = tmp_path / "data.csv"
         f.write_text("A\n1\n")
 
-        pages, _ = process_spreadsheet_file(f, document_name="subdir/data.csv")
+        pages = _extractor.extract_pages(f, document_name="subdir/data.csv")
 
         assert pages[0].document_name == "subdir/data.csv"
 
@@ -158,9 +165,8 @@ class TestProcessSpreadsheetXLSX:
         ws.append(["Bob", 25])
         wb.save(f)
 
-        pages, sheet_count = process_spreadsheet_file(f)
+        pages = _extractor.extract_pages(f)
 
-        assert sheet_count == 1
         assert len(pages) == 1
         assert pages[0].page_type == PageType.SPREADSHEET
         assert pages[0].document_name == "data.xlsx"
@@ -185,9 +191,8 @@ class TestProcessSpreadsheetXLSX:
 
         wb.save(f)
 
-        pages, sheet_count = process_spreadsheet_file(f)
+        pages = _extractor.extract_pages(f)
 
-        assert sheet_count == 2
         assert len(pages) == 2
         assert "% Sheet: Sales" in pages[0].text
         assert "% Sheet: Costs" in pages[1].text
@@ -199,7 +204,7 @@ class TestProcessSpreadsheetXLSX:
         wb = openpyxl.Workbook()
         wb.save(f)
 
-        pages, _sheet_count = process_spreadsheet_file(f)
+        pages = _extractor.extract_pages(f)
         assert pages == []
 
     def test_xlsx_with_none_cells(self, tmp_path: Path):
@@ -213,7 +218,7 @@ class TestProcessSpreadsheetXLSX:
         ws.append([1, None, 3])
         wb.save(f)
 
-        pages, _ = process_spreadsheet_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert len(pages) == 1
         # None cells should be empty strings
@@ -232,7 +237,7 @@ class TestProcessSpreadsheetXLSX:
         ws["C2"] = "=A2+B2"
         wb.save(f)
 
-        pages, _ = process_spreadsheet_file(f)
+        pages = _extractor.extract_pages(f)
 
         # data_only=True means formulas show cached value or None
         assert len(pages) == 1
@@ -257,9 +262,8 @@ class TestProcessSpreadsheetXLSX:
         ws3.append(["3"])
         wb.save(f)
 
-        pages, sheet_count = process_spreadsheet_file(f)
+        pages = _extractor.extract_pages(f)
 
-        assert sheet_count == 3
         assert len(pages) == 3
         for i, page in enumerate(pages):
             assert page.page_number == i + 1
@@ -276,7 +280,7 @@ class TestProcessSpreadsheetXLSX:
         ws.append(["1"])
         wb.save(f)
 
-        pages, _ = process_spreadsheet_file(f, document_name="subdir/data.xlsx")
+        pages = _extractor.extract_pages(f, document_name="subdir/data.xlsx")
 
         assert pages[0].document_name == "subdir/data.xlsx"
 
@@ -287,4 +291,4 @@ class TestProcessSpreadsheetErrors:
         f.write_bytes(b"\x00")
 
         with pytest.raises(ValueError, match="Unsupported spreadsheet format"):
-            process_spreadsheet_file(f)
+            _extractor.extract_pages(f)

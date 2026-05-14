@@ -25,7 +25,7 @@ import pathspec
 
 from quarry.config import Settings
 from quarry.db import ChunkStore, TableOptimizer
-from quarry.pipeline import SUPPORTED_EXTENSIONS, prepare_document
+from quarry.ingestion.pipeline import SUPPORTED_EXTENSIONS, prepare_document
 from quarry.sync_registry import (
     FileRecord,
     delete_file,

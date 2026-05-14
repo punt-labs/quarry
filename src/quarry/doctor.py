@@ -125,7 +125,7 @@ def _check_embedding_model() -> CheckResult:
 def _check_local_ocr() -> CheckResult:
     """Check that the local OCR engine (RapidOCR) can initialize."""
     try:
-        from quarry.ocr_local import get_engine  # noqa: PLC0415
+        from quarry.ingestion.ocr_local import get_engine  # noqa: PLC0415
 
         get_engine()
         return CheckResult(
@@ -143,7 +143,7 @@ def _check_local_ocr() -> CheckResult:
 
 def _check_provider() -> CheckResult:
     """Report which ONNX execution provider is selected."""
-    from quarry.provider import ProviderSelection  # noqa: PLC0415
+    from quarry.ingestion.provider import ProviderSelection  # noqa: PLC0415
 
     try:
         selection = ProviderSelection.from_environment()

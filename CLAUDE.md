@@ -94,6 +94,8 @@ Bootstrap (first time only): run `make update-oo` to create the initial baseline
 - `make report` — full diagnostics including per-file OO breakdown (no fail-fast).
 - `make metrics` — ABC complexity analysis. Any module over magnitude 200 needs attention.
 - `make coverage` — test coverage with HTML report in `htmlcov/`.
+- `make check-coupling` — coupling/cohesion analysis (efferent coupling between modules, public API surface, circular import detection, LCOM class cohesion). Informational — not in the `check` chain yet.
+- `make update-coupling` — update coupling baseline after improvements.
 
 ## Testing
 

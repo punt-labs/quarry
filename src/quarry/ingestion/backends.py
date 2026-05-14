@@ -20,7 +20,7 @@ def get_ocr_backend(settings: Settings) -> OcrBackend:
     if key not in _ocr_cache:
         with _lock:
             if key not in _ocr_cache:
-                from quarry.ocr_local import (  # noqa: PLC0415
+                from quarry.ingestion.ocr_local import (  # noqa: PLC0415
                     LocalOcrBackend,
                 )
 

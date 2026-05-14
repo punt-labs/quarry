@@ -6,10 +6,14 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from quarry.backends import clear_caches, get_embedding_backend, get_ocr_backend
 from quarry.config import Settings
 from quarry.embeddings import OnnxEmbeddingBackend
-from quarry.ocr_local import LocalOcrBackend
+from quarry.ingestion.backends import (
+    clear_caches,
+    get_embedding_backend,
+    get_ocr_backend,
+)
+from quarry.ingestion.ocr_local import LocalOcrBackend
 
 
 def _settings(**overrides: object) -> Settings:

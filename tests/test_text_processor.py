@@ -4,27 +4,30 @@ from pathlib import Path
 
 import pytest
 
+from quarry.extractors.text_extractor import TextExtractor
 from quarry.models import PageType
-from quarry.text_processor import (
-    SUPPORTED_TEXT_EXTENSIONS,
-    process_raw_text,
-    process_text_file,
-    read_text_with_fallback,
-)
+
+_extractor = TextExtractor()
 
 
 class TestSupportedExtensions:
     def test_includes_expected(self):
+        from quarry.extractors.text_extractor import SUPPORTED_TEXT_EXTENSIONS
+
         assert frozenset({".txt", ".md", ".tex", ".docx"}) == SUPPORTED_TEXT_EXTENSIONS
 
 
 class TestReadTextWithFallback:
     def test_utf8_file(self, tmp_path: Path):
+        from quarry.ingestion.text_splitter import read_text_with_fallback
+
         f = tmp_path / "utf8.txt"
         f.write_text("Hello world", encoding="utf-8")
         assert read_text_with_fallback(f) == "Hello world"
 
     def test_latin1_file(self, tmp_path: Path):
+        from quarry.ingestion.text_splitter import read_text_with_fallback
+
         f = tmp_path / "german.txt"
         f.write_bytes("Ärger mit Ü".encode("latin-1"))
         result = read_text_with_fallback(f)
@@ -32,11 +35,13 @@ class TestReadTextWithFallback:
         assert "Ü" in result
 
     def test_cp1252_file(self, tmp_path: Path):
+        from quarry.ingestion.text_splitter import read_text_with_fallback
+
         f = tmp_path / "windows.txt"
         # 0x93/0x94 are left/right double quotes in CP1252
         f.write_bytes(b"\x93Hello\x94")
         result = read_text_with_fallback(f)
-        assert result == "\u201cHello\u201d"
+        assert result == "“Hello”"
 
 
 class TestProcessTextFile:
@@ -44,7 +49,7 @@ class TestProcessTextFile:
         f = tmp_path / "notes.txt"
         f.write_text("First paragraph.\n\nSecond paragraph.\n\nThird paragraph.")
 
-        pages = process_text_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert len(pages) == 3
         assert pages[0].text == "First paragraph."
@@ -55,7 +60,7 @@ class TestProcessTextFile:
         f = tmp_path / "notes.txt"
         f.write_text("Hello.\n\nWorld.")
 
-        pages = process_text_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert pages[0].document_name == "notes.txt"
         assert pages[0].document_path == str(f.resolve())
@@ -67,7 +72,7 @@ class TestProcessTextFile:
         f = tmp_path / "notes.txt"
         f.write_text("Hello.\n\nWorld.")
 
-        pages = process_text_file(f, document_name="subdir/notes.txt")
+        pages = _extractor.extract_pages(f, document_name="subdir/notes.txt")
 
         assert pages[0].document_name == "subdir/notes.txt"
         assert pages[1].document_name == "subdir/notes.txt"
@@ -76,7 +81,7 @@ class TestProcessTextFile:
         f = tmp_path / "doc.md"
         f.write_text("# Intro\nSome text.\n\n## Details\nMore text.")
 
-        pages = process_text_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert len(pages) == 2
         assert pages[0].text.startswith("# Intro")
@@ -88,7 +93,7 @@ class TestProcessTextFile:
             "\\section{Intro}\nText here.\n\\subsection{Background}\nMore text."
         )
 
-        pages = process_text_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert len(pages) == 2
         assert "\\section{Intro}" in pages[0].text
@@ -99,13 +104,13 @@ class TestProcessTextFile:
         f.write_text("a,b,c")
 
         with pytest.raises(ValueError, match="Unsupported text format"):
-            process_text_file(f)
+            _extractor.extract_pages(f)
 
     def test_single_paragraph_produces_one_page(self, tmp_path: Path):
         f = tmp_path / "one.txt"
         f.write_text("Just one paragraph, no blank lines.")
 
-        pages = process_text_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert len(pages) == 1
         assert pages[0].page_number == 1
@@ -115,7 +120,7 @@ class TestProcessTextFile:
         f = tmp_path / "empty.txt"
         f.write_text("")
 
-        pages = process_text_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert pages == []
 
@@ -123,7 +128,7 @@ class TestProcessTextFile:
         f = tmp_path / "german.txt"
         f.write_bytes("Über die Brücke.\n\nZweiter Absatz.".encode("latin-1"))
 
-        pages = process_text_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert len(pages) == 2
         assert "Über" in pages[0].text
@@ -133,43 +138,43 @@ class TestProcessTextFile:
         f = tmp_path / "spacey.txt"
         f.write_text("Content.\n\n   \n\nMore content.")
 
-        pages = process_text_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert len(pages) == 2
 
 
 class TestProcessRawText:
     def test_auto_detects_markdown(self):
-        pages = process_raw_text("# Title\nBody text.", "notes.md")
+        pages = _extractor.extract_raw("# Title\nBody text.", "notes.md")
 
         assert len(pages) == 1
         assert pages[0].text.startswith("# Title")
 
     def test_auto_detects_latex(self):
-        pages = process_raw_text("\\section{Intro}\nText.", "paper.tex")
+        pages = _extractor.extract_raw("\\section{Intro}\nText.", "paper.tex")
 
         assert len(pages) == 1
         assert "\\section{Intro}" in pages[0].text
 
     def test_auto_detects_plain(self):
-        pages = process_raw_text("First.\n\nSecond.", "notes.txt")
+        pages = _extractor.extract_raw("First.\n\nSecond.", "notes.txt")
 
         assert len(pages) == 2
 
     def test_explicit_format_hint(self):
         text = "# Heading\nContent.\n\nParagraph two."
-        pages = process_raw_text(text, "doc.txt", format_hint="plain")
+        pages = _extractor.extract_raw(text, "doc.txt", format_hint="plain")
 
         # With plain hint, splits on blank lines, not headings
         assert len(pages) == 2
 
     def test_document_path_is_empty_for_inline(self):
-        pages = process_raw_text("Hello.", "test.txt")
+        pages = _extractor.extract_raw("Hello.", "test.txt")
 
         assert pages[0].document_path == ""
 
     def test_empty_text_produces_no_pages(self):
-        pages = process_raw_text("", "empty.txt")
+        pages = _extractor.extract_raw("", "empty.txt")
 
         assert pages == []
 
@@ -196,7 +201,7 @@ class TestDocxProcessing:
             ],
         )
 
-        pages = process_text_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert len(pages) == 2
         assert "Introduction" in pages[0].text
@@ -214,7 +219,7 @@ class TestDocxProcessing:
             ],
         )
 
-        pages = process_text_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert len(pages) == 1
         assert pages[0].text.startswith("Chapter One")
@@ -229,7 +234,7 @@ class TestDocxProcessing:
             ],
         )
 
-        pages = process_text_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert len(pages) == 1
         assert "Line one." in pages[0].text
@@ -239,7 +244,7 @@ class TestDocxProcessing:
         f = tmp_path / "report.docx"
         self._make_docx(f, [("Normal", "Content.")])
 
-        pages = process_text_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert pages[0].document_name == "report.docx"
         assert pages[0].page_type == PageType.SECTION

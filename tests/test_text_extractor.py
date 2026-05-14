@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+from quarry.ingestion.pdf_text_extractor import extract_text_pages
 from quarry.models import PageType
-from quarry.text_extractor import extract_text_pages
 
 
 def _mock_page(text: str) -> MagicMock:
@@ -33,7 +33,8 @@ class TestExtractTextPages:
         mock_doc.__getitem__ = lambda _, idx: pages[idx]
 
         with patch(
-            "quarry.text_extractor.fitz.open", return_value=_mock_doc_cm(mock_doc)
+            "quarry.ingestion.pdf_text_extractor.fitz.open",
+            return_value=_mock_doc_cm(mock_doc),
         ):
             results = extract_text_pages(pdf_path, [1, 3], total_pages=3)
 
@@ -51,7 +52,8 @@ class TestExtractTextPages:
         mock_doc.__getitem__ = lambda _, idx: _mock_page("content")
 
         with patch(
-            "quarry.text_extractor.fitz.open", return_value=_mock_doc_cm(mock_doc)
+            "quarry.ingestion.pdf_text_extractor.fitz.open",
+            return_value=_mock_doc_cm(mock_doc),
         ):
             results = extract_text_pages(pdf_path, [1], total_pages=10)
 
@@ -67,7 +69,8 @@ class TestExtractTextPages:
         mock_doc.__getitem__ = lambda _, idx: _mock_page("  text with spaces  \n")
 
         with patch(
-            "quarry.text_extractor.fitz.open", return_value=_mock_doc_cm(mock_doc)
+            "quarry.ingestion.pdf_text_extractor.fitz.open",
+            return_value=_mock_doc_cm(mock_doc),
         ):
             results = extract_text_pages(pdf_path, [1], total_pages=1)
 

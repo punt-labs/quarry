@@ -144,7 +144,7 @@ class TestCheckLocalOcr:
 
 class TestCheckProvider:
     def test_reports_provider_on_success(self) -> None:
-        from quarry.provider import ProviderSelection
+        from quarry.ingestion.provider import ProviderSelection
 
         selection = ProviderSelection(
             provider="CPUExecutionProvider",
@@ -161,7 +161,7 @@ class TestCheckProvider:
         assert "onnx/model_int8.onnx" in result.message
 
     def test_reports_cuda_provider(self) -> None:
-        from quarry.provider import ProviderSelection
+        from quarry.ingestion.provider import ProviderSelection
 
         selection = ProviderSelection(
             provider="CUDAExecutionProvider",
@@ -175,7 +175,7 @@ class TestCheckProvider:
         assert "CUDAExecutionProvider" in result.message
 
     def test_reports_failure_on_exception(self) -> None:
-        from quarry.provider import ProviderSelection
+        from quarry.ingestion.provider import ProviderSelection
 
         with patch.object(
             ProviderSelection,

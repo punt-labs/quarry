@@ -7,20 +7,19 @@ import pytest
 from pptx import Presentation
 from pptx.util import Inches
 
-from quarry.models import PageType
-from quarry.presentation_processor import (
+from quarry.extractors.presentation_extractor import (
     SUPPORTED_PRESENTATION_EXTENSIONS,
-    _extract_slide_text,
-    _format_slide_content,
-    _table_to_latex,
-    process_presentation_file,
+    PresentationExtractor,
 )
+from quarry.models import PageType
 
 if TYPE_CHECKING:
     from pptx.presentation import Presentation as PresentationType
     from pptx.shapes.base import BaseShape
     from pptx.slide import Slide
     from pptx.table import Table
+
+_extractor = PresentationExtractor()
 
 
 class _TextShape(Protocol):
@@ -30,12 +29,7 @@ class _TextShape(Protocol):
 
 
 def _set_shape_text(shape: BaseShape | None, text: str) -> None:
-    """Set .text on a pptx shape, narrowing away None.
-
-    ``BaseShape`` doesn't expose ``.text`` in its type stubs, but concrete
-    shape subclasses (title placeholders, body placeholders, text-boxes) do
-    have it at runtime.
-    """
+    """Set .text on a pptx shape, narrowing away None."""
     assert shape is not None, "expected a non-None shape"
     cast("_TextShape", shape).text = text
 
@@ -83,12 +77,12 @@ class TestSupportedExtensions:
         assert ".ppt" not in SUPPORTED_PRESENTATION_EXTENSIONS
 
     def test_no_overlap_with_other_extensions(self):
-        from quarry.code_processor import SUPPORTED_CODE_EXTENSIONS
-        from quarry.html_processor import SUPPORTED_HTML_EXTENSIONS
-        from quarry.spreadsheet_processor import (
+        from quarry.extractors.code_extractor import SUPPORTED_CODE_EXTENSIONS
+        from quarry.extractors.html_extractor import SUPPORTED_HTML_EXTENSIONS
+        from quarry.extractors.spreadsheet_extractor import (
             SUPPORTED_SPREADSHEET_EXTENSIONS,
         )
-        from quarry.text_processor import SUPPORTED_TEXT_EXTENSIONS
+        from quarry.extractors.text_extractor import SUPPORTED_TEXT_EXTENSIONS
 
         overlap = SUPPORTED_PRESENTATION_EXTENSIONS & (
             SUPPORTED_CODE_EXTENSIONS
@@ -111,7 +105,7 @@ class TestTableToLatex:
         table.cell(2, 0).text = "Bob"
         table.cell(2, 1).text = "25"
 
-        result = _table_to_latex(table)
+        result = PresentationExtractor._table_to_latex(table)
 
         assert r"\begin{tabular}" in result
         assert "Name & Age" in result
@@ -124,7 +118,7 @@ class TestTableToLatex:
         table = _add_table(slide, 1, 1, width=2, height=1)
         table.cell(0, 0).text = ""
 
-        result = _table_to_latex(table)
+        result = PresentationExtractor._table_to_latex(table)
 
         assert r"\begin{tabular}" in result
 
@@ -135,7 +129,7 @@ class TestTableToLatex:
         table.cell(0, 0).text = "Price"
         table.cell(1, 0).text = "$100"
 
-        result = _table_to_latex(table)
+        result = PresentationExtractor._table_to_latex(table)
 
         assert r"\$100" in result
 
@@ -147,7 +141,7 @@ class TestExtractSlideText:
         _set_shape_text(slide.shapes.title, "My Title")
         _set_shape_text(slide.placeholders[1], "Subtitle text")
 
-        title, body, _notes = _extract_slide_text(slide)
+        title, body, _notes = PresentationExtractor._extract_slide_text(slide)
 
         assert title == "My Title"
         assert "Subtitle text" in body
@@ -161,7 +155,7 @@ class TestExtractSlideText:
         assert notes_slide.notes_text_frame is not None
         notes_slide.notes_text_frame.text = "These are speaker notes."
 
-        _title, _body, notes = _extract_slide_text(slide)
+        _title, _body, notes = PresentationExtractor._extract_slide_text(slide)
 
         assert notes == "These are speaker notes."
 
@@ -169,7 +163,7 @@ class TestExtractSlideText:
         prs = _new_prs()
         slide = prs.slides.add_slide(prs.slide_layouts[5])
 
-        _title, _body, notes = _extract_slide_text(slide)
+        _title, _body, notes = PresentationExtractor._extract_slide_text(slide)
 
         assert notes == ""
 
@@ -182,7 +176,7 @@ class TestExtractSlideText:
         table.cell(1, 0).text = "1"
         table.cell(1, 1).text = "2"
 
-        _title, body, _notes = _extract_slide_text(slide)
+        _title, body, _notes = PresentationExtractor._extract_slide_text(slide)
 
         assert r"\begin{tabular}" in body
         assert "X & Y" in body
@@ -191,7 +185,7 @@ class TestExtractSlideText:
         prs = _new_prs()
         slide = prs.slides.add_slide(prs.slide_layouts[5])
 
-        title, body, notes = _extract_slide_text(slide)
+        title, body, notes = PresentationExtractor._extract_slide_text(slide)
 
         assert title == ""
         assert body == ""
@@ -200,7 +194,9 @@ class TestExtractSlideText:
 
 class TestFormatSlideContent:
     def test_full_content(self):
-        result = _format_slide_content("Title", "Body text", "Notes here")
+        result = PresentationExtractor._format_slide_content(
+            "Title", "Body text", "Notes here"
+        )
 
         assert result.startswith("# Title")
         assert "Body text" in result
@@ -208,25 +204,25 @@ class TestFormatSlideContent:
         assert "Notes here" in result
 
     def test_no_title(self):
-        result = _format_slide_content("", "Body only", "")
+        result = PresentationExtractor._format_slide_content("", "Body only", "")
 
         assert not result.startswith("#")
         assert "Body only" in result
 
     def test_no_notes(self):
-        result = _format_slide_content("Title", "Body", "")
+        result = PresentationExtractor._format_slide_content("Title", "Body", "")
 
         assert "Speaker Notes" not in result
 
     def test_no_body(self):
-        result = _format_slide_content("Title", "", "Notes")
+        result = PresentationExtractor._format_slide_content("Title", "", "Notes")
 
         assert "# Title" in result
         assert "Speaker Notes" in result
         assert "Notes" in result
 
     def test_all_empty(self):
-        result = _format_slide_content("", "", "")
+        result = PresentationExtractor._format_slide_content("", "", "")
         assert result == ""
 
 
@@ -239,7 +235,7 @@ class TestProcessPresentationFile:
         _set_shape_text(slide.placeholders[1], "Content here")
         _save(prs, f)
 
-        pages = process_presentation_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert len(pages) == 1
         assert pages[0].page_type == PageType.PRESENTATION
@@ -256,7 +252,7 @@ class TestProcessPresentationFile:
             _set_shape_text(slide.placeholders[1], f"Content {i + 1}")
         _save(prs, f)
 
-        pages = process_presentation_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert len(pages) == 3
         for i, page in enumerate(pages):
@@ -276,7 +272,7 @@ class TestProcessPresentationFile:
         _set_shape_text(slide3.placeholders[1], "More content")
         _save(prs, f)
 
-        pages = process_presentation_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert len(pages) == 2
         assert pages[0].page_number == 1
@@ -298,7 +294,7 @@ class TestProcessPresentationFile:
         table.cell(1, 1).text = "1000"
         _save(prs, f)
 
-        pages = process_presentation_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert len(pages) == 1
         assert "Revenue Data" in pages[0].text
@@ -317,7 +313,7 @@ class TestProcessPresentationFile:
         notes_slide.notes_text_frame.text = "Remember to mention X"
         _save(prs, f)
 
-        pages = process_presentation_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert len(pages) == 1
         assert "---\nSpeaker Notes:" in pages[0].text
@@ -331,7 +327,7 @@ class TestProcessPresentationFile:
         _set_shape_text(slide.placeholders[1], "Body")
         _save(prs, f)
 
-        pages = process_presentation_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert pages[0].document_name == "deck.pptx"
 
@@ -343,7 +339,7 @@ class TestProcessPresentationFile:
         _set_shape_text(slide.placeholders[1], "Body")
         _save(prs, f)
 
-        pages = process_presentation_file(f, document_name="subdir/deck.pptx")
+        pages = _extractor.extract_pages(f, document_name="subdir/deck.pptx")
 
         assert pages[0].document_name == "subdir/deck.pptx"
 
@@ -355,7 +351,7 @@ class TestProcessPresentationFile:
         _set_shape_text(slide.placeholders[1], "Body")
         _save(prs, f)
 
-        pages = process_presentation_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert pages[0].document_path == str(f.resolve())
 
@@ -366,7 +362,7 @@ class TestProcessPresentationFile:
         prs.slides.add_slide(prs.slide_layouts[5])
         _save(prs, f)
 
-        pages = process_presentation_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert pages == []
 
@@ -378,7 +374,7 @@ class TestProcessPresentationFile:
         _set_shape_text(slide.placeholders[1], "Details")
         _save(prs, f)
 
-        pages = process_presentation_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert r"\$4.2M" in pages[0].text
         assert r"\&" in pages[0].text
@@ -391,7 +387,7 @@ class TestProcessPresentationFile:
         txbox.text_frame.text = "Revenue was $4.2M (12% growth)"
         _save(prs, f)
 
-        pages = process_presentation_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert r"\$4.2M" in pages[0].text
         assert r"12\%" in pages[0].text
@@ -407,7 +403,7 @@ class TestProcessPresentationFile:
         notes_slide.notes_text_frame.text = "Budget: $500 & costs"
         _save(prs, f)
 
-        pages = process_presentation_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert r"\$500" in pages[0].text
         assert r"\&" in pages[0].text
@@ -421,7 +417,7 @@ class TestProcessPresentationFile:
         notes_slide.notes_text_frame.text = "Hidden context note"
         _save(prs, f)
 
-        pages = process_presentation_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert len(pages) == 1
         assert "Speaker Notes:" in pages[0].text
@@ -445,7 +441,7 @@ class TestProcessPresentationFile:
         txbox2.text_frame.text = "Second text"
         _save(prs, f)
 
-        pages = process_presentation_file(f)
+        pages = _extractor.extract_pages(f)
 
         text = pages[0].text
         first_pos = text.find("First text")
@@ -460,11 +456,11 @@ class TestProcessPresentationErrors:
         f.write_bytes(b"\x00")
 
         with pytest.raises(ValueError, match="Unsupported presentation format"):
-            process_presentation_file(f)
+            _extractor.extract_pages(f)
 
     def test_unsupported_extension_odp(self, tmp_path: Path):
         f = tmp_path / "data.odp"
         f.write_bytes(b"\x00")
 
         with pytest.raises(ValueError, match="Unsupported presentation format"):
-            process_presentation_file(f)
+            _extractor.extract_pages(f)

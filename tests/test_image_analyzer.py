@@ -5,11 +5,13 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from quarry.image_analyzer import (
+from quarry.extractors.image_extractor import (
     SUPPORTED_IMAGE_EXTENSIONS,
     ImageAnalysis,
-    analyze_image,
+    ImageExtractor,
 )
+
+analyze_image = ImageExtractor.analyze
 
 
 def _create_image(path: Path, fmt: str) -> None:

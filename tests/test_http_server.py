@@ -871,7 +871,7 @@ class TestRemember:
         app = build_app(ctx)
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
-            patch("quarry.pipeline.ingest_content", return_value=mock_result),
+            patch("quarry.ingestion.pipeline.ingest_content", return_value=mock_result),
         ):
             resp = tc.post(
                 "/remember",
@@ -927,7 +927,7 @@ class TestRemember:
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
             patch(
-                "quarry.pipeline.ingest_content",
+                "quarry.ingestion.pipeline.ingest_content",
                 side_effect=ValueError("bad content encoding"),
             ),
         ):
@@ -951,7 +951,7 @@ class TestRemember:
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
             patch(
-                "quarry.pipeline.ingest_content",
+                "quarry.ingestion.pipeline.ingest_content",
                 side_effect=OSError("disk full"),
             ),
         ):
@@ -989,7 +989,7 @@ class TestRemember:
         app = build_app(ctx)
         with (
             patch(
-                "quarry.pipeline.ingest_content",
+                "quarry.ingestion.pipeline.ingest_content",
                 return_value={"document_name": "n", "collection": "c", "chunks": 1},
             ) as mock_ingest,
             TestClient(app, raise_server_exceptions=False) as tc,
@@ -1029,7 +1029,7 @@ class TestRemember:
         app = build_app(ctx)
         with (
             patch(
-                "quarry.pipeline.ingest_content",
+                "quarry.ingestion.pipeline.ingest_content",
                 return_value={"document_name": "n", "collection": "c", "chunks": 1},
             ) as mock_ingest,
             TestClient(app, raise_server_exceptions=False) as tc,
@@ -1090,7 +1090,7 @@ class TestIngest:
                 "quarry.http_server.socket_module.getaddrinfo",
                 side_effect=_fake_public_addrinfo,
             ),
-            patch("quarry.pipeline.ingest_auto", return_value=mock_result),
+            patch("quarry.ingestion.pipeline.ingest_auto", return_value=mock_result),
         ):
             resp = tc.post("/ingest", json={"source": "https://example.com/docs"})
 
@@ -1133,7 +1133,7 @@ class TestIngest:
                 side_effect=_fake_public_addrinfo,
             ),
             patch(
-                "quarry.pipeline.ingest_auto",
+                "quarry.ingestion.pipeline.ingest_auto",
                 return_value={"document_name": "d", "collection": "c", "chunks": 1},
             ) as mock_ingest,
             TestClient(app, raise_server_exceptions=False) as tc,
@@ -1250,7 +1250,7 @@ class TestIngest:
                 side_effect=_fake_public_addrinfo,
             ),
             patch(
-                "quarry.pipeline.ingest_auto",
+                "quarry.ingestion.pipeline.ingest_auto",
                 side_effect=ValueError("unsupported URL"),
             ),
         ):
@@ -1275,7 +1275,7 @@ class TestIngest:
                 side_effect=_fake_public_addrinfo,
             ),
             patch(
-                "quarry.pipeline.ingest_auto",
+                "quarry.ingestion.pipeline.ingest_auto",
                 side_effect=OSError("upstream refused connection"),
             ),
         ):
@@ -1330,7 +1330,7 @@ class TestIngest:
                 "quarry.http_server.socket_module.getaddrinfo",
                 side_effect=_fake_public_addrinfo,
             ),
-            patch("quarry.pipeline.ingest_auto", return_value=mock_result),
+            patch("quarry.ingestion.pipeline.ingest_auto", return_value=mock_result),
         ):
             resp = tc.post("/ingest", json={"source": "HTTPS://example.com/docs"})
 
@@ -1953,7 +1953,7 @@ class TestSyncGenericFailure:
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
             patch(
-                "quarry.pipeline.ingest_content",
+                "quarry.ingestion.pipeline.ingest_content",
                 side_effect=RuntimeError("embedder crashed"),
             ),
         ):
@@ -1980,7 +1980,7 @@ class TestSyncGenericFailure:
                 side_effect=_fake_public_addrinfo,
             ),
             patch(
-                "quarry.pipeline.ingest_auto",
+                "quarry.ingestion.pipeline.ingest_auto",
                 side_effect=RuntimeError("embedder crashed"),
             ),
         ):
@@ -2080,7 +2080,7 @@ class TestTaskGC:
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
             patch(
-                "quarry.pipeline.ingest_content",
+                "quarry.ingestion.pipeline.ingest_content",
                 return_value={"chunks": 1},
             ),
         ):

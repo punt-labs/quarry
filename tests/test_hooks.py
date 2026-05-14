@@ -718,7 +718,7 @@ class TestHandlePostWebFetch:
             "cwd": str(project),
             "tool_input": {"url": "https://example.com/page"},
         }
-        with patch("quarry.pipeline.ingest_content") as mock_ingest:
+        with patch("quarry.ingestion.pipeline.ingest_content") as mock_ingest:
             result = handle_post_web_fetch(payload)
         assert result == {}
         mock_ingest.assert_not_called()
@@ -756,14 +756,14 @@ class TestHandlePostWebFetch:
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch("quarry.hooks._collection_for_cwd", return_value=None),
             patch(
-                "quarry.html_processor.process_html_text",
+                "quarry.extractors.html_extractor.HtmlExtractor.extract_from_html",
                 return_value=mock_pages,
             ),
             patch(
-                "quarry.pipeline.ingest_content",
+                "quarry.ingestion.pipeline.ingest_content",
                 return_value=mock_ingest_result,
             ) as mock_content,
-            patch("quarry.pipeline.ingest_url") as mock_url,
+            patch("quarry.ingestion.pipeline.ingest_url") as mock_url,
         ):
             result = handle_post_web_fetch(payload)
 
@@ -796,10 +796,10 @@ class TestHandlePostWebFetch:
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch("quarry.hooks._collection_for_cwd", return_value=None),
             patch(
-                "quarry.pipeline.ingest_url",
+                "quarry.ingestion.pipeline.ingest_url",
                 return_value=mock_ingest_result,
             ) as mock_url,
-            patch("quarry.pipeline.ingest_content") as mock_content,
+            patch("quarry.ingestion.pipeline.ingest_content") as mock_content,
         ):
             result = handle_post_web_fetch(payload)
 
@@ -829,9 +829,12 @@ class TestHandlePostWebFetch:
             patch("quarry.db.storage.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch("quarry.hooks._collection_for_cwd", return_value=None),
-            patch("quarry.html_processor.process_html_text", return_value=[]),
             patch(
-                "quarry.pipeline.ingest_url",
+                "quarry.extractors.html_extractor.HtmlExtractor.extract_from_html",
+                return_value=[],
+            ),
+            patch(
+                "quarry.ingestion.pipeline.ingest_url",
                 return_value=mock_ingest_result,
             ) as mock_url,
         ):
@@ -851,7 +854,7 @@ class TestHandlePostWebFetch:
             patch("quarry.db.storage.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=True),
             patch("quarry.hooks._collection_for_cwd", return_value=None),
-            patch("quarry.pipeline.ingest_url") as mock_ingest,
+            patch("quarry.ingestion.pipeline.ingest_url") as mock_ingest,
         ):
             result = handle_post_web_fetch(payload)
 
@@ -876,9 +879,12 @@ class TestHandlePostWebFetch:
             patch("quarry.db.storage.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch("quarry.hooks._collection_for_cwd", return_value="myapp"),
-            patch("quarry.html_processor.process_html_text", return_value=[]),
             patch(
-                "quarry.pipeline.ingest_url",
+                "quarry.extractors.html_extractor.HtmlExtractor.extract_from_html",
+                return_value=[],
+            ),
+            patch(
+                "quarry.ingestion.pipeline.ingest_url",
                 return_value=mock_ingest_result,
             ) as mock_url,
         ):
@@ -904,9 +910,12 @@ class TestHandlePostWebFetch:
             patch("quarry.db.storage.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch("quarry.hooks._collection_for_cwd", return_value=None),
-            patch("quarry.html_processor.process_html_text", return_value=[]),
             patch(
-                "quarry.pipeline.ingest_url",
+                "quarry.extractors.html_extractor.HtmlExtractor.extract_from_html",
+                return_value=[],
+            ),
+            patch(
+                "quarry.ingestion.pipeline.ingest_url",
                 return_value=mock_ingest_result,
             ) as mock_url,
         ):
@@ -1655,7 +1664,7 @@ class TestIngestBackground:
                 "quarry.db.chunk_store.ChunkStore.delete_document",
             ) as mock_delete,
             patch(
-                "quarry.pipeline.ingest_content",
+                "quarry.ingestion.pipeline.ingest_content",
                 return_value=mock_result,
             ) as mock_ingest,
         ):
@@ -1702,7 +1711,7 @@ class TestIngestBackground:
                 "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
             ),
             patch(
-                "quarry.pipeline.ingest_content",
+                "quarry.ingestion.pipeline.ingest_content",
                 side_effect=RuntimeError("embedding failed"),
             ),
         ):
@@ -2054,11 +2063,11 @@ class TestT17WebFetchRoutesToCaptures:
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch("quarry.hooks._collection_for_cwd", return_value="proj"),
             patch(
-                "quarry.html_processor.process_html_text",
+                "quarry.extractors.html_extractor.HtmlExtractor.extract_from_html",
                 return_value=mock_pages,
             ),
             patch(
-                "quarry.pipeline.ingest_content",
+                "quarry.ingestion.pipeline.ingest_content",
                 return_value=mock_ingest_result,
             ) as mock_ingest,
         ):
@@ -2115,7 +2124,7 @@ class TestT19WebFetchFallback:
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch("quarry.hooks._collection_for_cwd", return_value=None),
             patch(
-                "quarry.pipeline.ingest_url",
+                "quarry.ingestion.pipeline.ingest_url",
                 return_value=mock_ingest_result,
             ) as mock_url,
         ):

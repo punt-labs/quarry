@@ -287,7 +287,7 @@ class TestNewColumnsInPipeline:
 class TestChunkerThreading:
     def test_chunk_pages_passes_new_fields(self) -> None:
         """chunk_pages threads agent_handle, memory_type, summary to Chunks."""
-        from quarry.chunker import chunk_pages
+        from quarry.ingestion.chunker import chunk_pages
         from quarry.models import PageContent, PageType
 
         pages = [
@@ -313,7 +313,7 @@ class TestChunkerThreading:
 
     def test_chunk_pages_defaults_new_fields(self) -> None:
         """chunk_pages defaults new fields to empty strings."""
-        from quarry.chunker import chunk_pages
+        from quarry.ingestion.chunker import chunk_pages
         from quarry.models import PageContent, PageType
 
         pages = [
@@ -771,7 +771,7 @@ class TestIngestUrlThreadsAgentHandle:
         """ingest_url threads agent_handle/memory_type/summary to _chunk_embed_store."""
         from unittest.mock import MagicMock
 
-        from quarry.pipeline import ingest_url
+        from quarry.ingestion.pipeline import ingest_url
 
         html = "<html><body>hi</body></html>"
         result = {
@@ -780,9 +780,12 @@ class TestIngestUrlThreadsAgentHandle:
             "chunks": 0,
         }
         with (
-            patch("quarry.pipeline._fetch_url", return_value=html),
-            patch("quarry.pipeline.process_html_text", return_value=[]),
-            patch("quarry.pipeline._chunk_embed_store") as mock_ces,
+            patch("quarry.ingestion.pipeline._fetch_url", return_value=html),
+            patch(
+                "quarry.extractors.html_extractor.HtmlExtractor.extract_from_html",
+                return_value=[],
+            ),
+            patch("quarry.ingestion.pipeline._chunk_embed_store") as mock_ces,
             patch("quarry.db.chunk_store.ChunkStore.delete_document"),
         ):
             mock_ces.return_value = result

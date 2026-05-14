@@ -57,7 +57,7 @@ def embedding_model_name() -> str:
 @pytest.fixture(scope="session")
 def _warm_embedding_model(embedding_model_name: str) -> None:
     """Load ONNX embedding model once per session."""
-    from quarry.backends import get_embedding_backend
+    from quarry.ingestion.backends import get_embedding_backend
 
     settings = Settings(embedding_model=embedding_model_name)
     get_embedding_backend(settings).embed_texts(["warm up"])

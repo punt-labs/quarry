@@ -4,13 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from quarry.code_processor import (
+from quarry.extractors.code_extractor import (
     SUPPORTED_CODE_EXTENSIONS,
-    _fallback_split,
-    _split_with_treesitter,
-    process_code_file,
+    CodeExtractor,
 )
 from quarry.models import PageType
+
+_extractor = CodeExtractor()
 
 
 class TestSupportedExtensions:
@@ -19,7 +19,7 @@ class TestSupportedExtensions:
         assert expected <= SUPPORTED_CODE_EXTENSIONS
 
     def test_no_overlap_with_text_extensions(self):
-        from quarry.text_processor import SUPPORTED_TEXT_EXTENSIONS
+        from quarry.extractors.text_extractor import SUPPORTED_TEXT_EXTENSIONS
 
         overlap = SUPPORTED_CODE_EXTENSIONS & SUPPORTED_TEXT_EXTENSIONS
         assert overlap == frozenset(), f"Overlapping extensions: {overlap}"
@@ -32,7 +32,7 @@ class TestProcessCodeFile:
             "import os\n\n\ndef foo():\n    return 1\n\n\ndef bar():\n    return 2\n"
         )
 
-        pages = process_code_file(f)
+        pages = _extractor.extract_pages(f)
 
         # tree-sitter: imports group + 2 functions = 3 sections
         assert len(pages) == 3
@@ -51,18 +51,18 @@ class TestProcessCodeFile:
             '        return f"Hello, {self.name}"\n'
         )
 
-        pages = process_code_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert len(pages) == 1
         assert "class Greeter" in pages[0].text
-        # Methods stay inside the class — not split out
+        # Methods stay inside the class -- not split out
         assert "def greet" in pages[0].text
 
     def test_metadata(self, tmp_path: Path):
         f = tmp_path / "meta.py"
         f.write_text("def only():\n    pass\n")
 
-        pages = process_code_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert pages[0].document_name == "meta.py"
         assert pages[0].document_path == str(f.resolve())
@@ -73,7 +73,7 @@ class TestProcessCodeFile:
         f = tmp_path / "meta.py"
         f.write_text("def only():\n    pass\n")
 
-        pages = process_code_file(f, document_name="subdir/meta.py")
+        pages = _extractor.extract_pages(f, document_name="subdir/meta.py")
 
         assert pages[0].document_name == "subdir/meta.py"
 
@@ -81,20 +81,20 @@ class TestProcessCodeFile:
         f = tmp_path / "empty.py"
         f.write_text("")
 
-        assert process_code_file(f) == []
+        assert _extractor.extract_pages(f) == []
 
     def test_whitespace_only(self, tmp_path: Path):
         f = tmp_path / "blank.py"
         f.write_text("   \n\n  \n")
 
-        assert process_code_file(f) == []
+        assert _extractor.extract_pages(f) == []
 
     def test_unsupported_extension(self, tmp_path: Path):
         f = tmp_path / "data.csv"
         f.write_text("a,b,c")
 
         with pytest.raises(ValueError, match="Unsupported code format"):
-            process_code_file(f)
+            _extractor.extract_pages(f)
 
     def test_javascript_functions(self, tmp_path: Path):
         f = tmp_path / "app.js"
@@ -103,7 +103,7 @@ class TestProcessCodeFile:
             "function sub(a, b) {\n  return a - b;\n}\n"
         )
 
-        pages = process_code_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert len(pages) == 2
         assert "function add" in pages[0].text
@@ -117,7 +117,7 @@ class TestProcessCodeFile:
             "function fetchData() {\n  return fetch(API_URL);\n}\n"
         )
 
-        pages = process_code_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert len(pages) == 2
         assert "API_URL" in pages[0].text
@@ -133,7 +133,7 @@ class TestProcessCodeFile:
             "}\n"
         )
 
-        pages = process_code_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert len(pages) == 2
         assert "struct Point" in pages[0].text
@@ -148,7 +148,7 @@ class TestProcessCodeFile:
             "func add(a, b int) int {\n\treturn a + b\n}\n"
         )
 
-        pages = process_code_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert len(pages) >= 3
         texts = [p.text for p in pages]
@@ -161,7 +161,7 @@ class TestProcessCodeFile:
             "def a():\n    pass\n\n\ndef b():\n    pass\n\n\ndef c():\n    pass\n"
         )
 
-        pages = process_code_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert len(pages) == 3
         for i, page in enumerate(pages):
@@ -174,7 +174,7 @@ class TestProcessCodeFile:
             "import functools\n\n\n@functools.cache\ndef expensive():\n    return 42\n"
         )
 
-        pages = process_code_file(f)
+        pages = _extractor.extract_pages(f)
 
         # Decorator + function should be one section
         assert len(pages) == 2
@@ -186,24 +186,24 @@ class TestProcessCodeFile:
 class TestFallbackSplit:
     def test_splits_on_blank_lines(self):
         text = "def foo():\n    pass\n\ndef bar():\n    pass\n"
-        sections = _fallback_split(text)
+        sections = CodeExtractor._split_fallback(text)
         assert len(sections) == 2
 
     def test_skips_whitespace_only_sections(self):
         text = "code\n\n   \n\nmore code"
-        sections = _fallback_split(text)
+        sections = CodeExtractor._split_fallback(text)
         assert len(sections) == 2
 
 
 class TestTreeSitterEdgeCases:
     def test_returns_none_for_unknown_language(self):
-        result = _split_with_treesitter(
+        result = CodeExtractor._split_treesitter(
             "some code", "nonexistent_language_xyz", "test.xyz"
         )
         assert result is None
 
     def test_single_function_returns_one_section(self):
-        result = _split_with_treesitter(
+        result = CodeExtractor._split_treesitter(
             "def hello():\n    print('hi')\n", "python", "test.py"
         )
         assert result is not None
@@ -218,7 +218,7 @@ class TestImportsGrouped:
         f = tmp_path / "mod.py"
         f.write_text("import os\nimport sys\n\n\ndef main():\n    print(os.getcwd())\n")
 
-        pages = process_code_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert len(pages) == 2
         assert "import os" in pages[0].text
@@ -235,7 +235,7 @@ class TestImportsGrouped:
             "    return {}\n"
         )
 
-        pages = process_code_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert len(pages) == 2
         assert "import os" in pages[0].text

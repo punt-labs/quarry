@@ -4,10 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from quarry.backends import get_embedding_backend
 from quarry.config import Settings
 from quarry.db import ChunkCatalog, ChunkSearch, ChunkStore
-from quarry.pipeline import ingest_content, ingest_document
+from quarry.ingestion.backends import get_embedding_backend
+from quarry.ingestion.pipeline import ingest_content, ingest_document
 from quarry.results import SearchResult
 from quarry.types import LanceDB
 

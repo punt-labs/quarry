@@ -134,7 +134,7 @@ def _ingest_background() -> None:
         from quarry.config import Settings  # noqa: PLC0415
         from quarry.db import ChunkCatalog, ChunkStore  # noqa: PLC0415
         from quarry.db.storage import get_db  # noqa: PLC0415
-        from quarry.pipeline import ingest_content  # noqa: PLC0415
+        from quarry.ingestion.pipeline import ingest_content  # noqa: PLC0415
 
         # Re-resolve settings for embedding model config.  The db path is
         # taken from argv (parent already resolved it) to ensure consistency.

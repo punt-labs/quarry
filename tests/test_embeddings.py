@@ -37,7 +37,7 @@ def _mock_tokenizer() -> MagicMock:
 @contextlib.contextmanager
 def _patch_onnx_backend(session: MagicMock, tokenizer: MagicMock):
     """Patch provider selection, model loading, tokenizer, ORT session, and options."""
-    from quarry.provider import ProviderSelection
+    from quarry.ingestion.provider import ProviderSelection
 
     mock_opts = MagicMock()
     with (
@@ -229,7 +229,7 @@ class TestAutoDownloadFallback:
 class TestCudaFallback:
     def test_cuda_session_failure_falls_back_to_cpu(self, caplog):
         """CUDA selected but session creation fails -> CPU fallback."""
-        from quarry.provider import ProviderSelection
+        from quarry.ingestion.provider import ProviderSelection
 
         session = MagicMock()
         session.run.return_value = [[[0.1] * 768]]

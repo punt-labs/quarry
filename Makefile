@@ -1,4 +1,4 @@
-.PHONY: help test lint lint-docs type check check-full check-oo update-oo report format build test-wheel clean depot bench-cuda docs docs-clean metrics coverage
+.PHONY: help test lint lint-docs type check check-full check-oo update-oo check-coupling update-coupling report format build test-wheel clean depot bench-cuda docs docs-clean metrics coverage
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -24,6 +24,12 @@ check-oo: ## OO ratchet — must improve over baseline, never regress
 
 update-oo: ## Update OO baseline after improvements (stage .oo-baseline.json and .oo-audit.jsonl)
 	uv run python tools/oo_score.py src/quarry/ --update
+
+check-coupling: ## Coupling/cohesion analysis (informational, not in check chain)
+	uv run python tools/oo_coupling.py src/quarry/ --check
+
+update-coupling: ## Update coupling baseline after improvements
+	uv run python tools/oo_coupling.py src/quarry/ --update
 
 report: ## Full diagnostics (OO score + all checks, no fail-fast)
 	-uv run python tools/oo_score.py src/quarry/ --threshold

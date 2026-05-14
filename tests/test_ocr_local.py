@@ -10,18 +10,18 @@ import fitz
 import pytest
 from PIL import Image
 
-import quarry.ocr_local as ocr_local_mod
+import quarry.ingestion.ocr_local as ocr_local_mod
 from quarry.config import Settings
-from quarry.models import PageType
-from quarry.ocr_local import (
+from quarry.ingestion.ocr_local import (
     LocalOcrBackend,
     _extract_text,
     _render_pdf_page,
     get_engine,
 )
+from quarry.models import PageType
 
 if TYPE_CHECKING:
-    from quarry.ocr_local import _OcrResult
+    from quarry.ingestion.ocr_local import _OcrResult
 
 
 def _settings(**overrides: object) -> Settings:

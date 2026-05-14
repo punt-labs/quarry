@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from quarry.provider import ProviderSelection
+from quarry.ingestion.provider import ProviderSelection
 
 
 class TestFromEnvironment:
@@ -94,7 +94,7 @@ class TestFromEnvironment:
                 create=True,
                 return_value=["CPUExecutionProvider"],
             ),
-            caplog.at_level(logging.INFO, logger="quarry.provider"),
+            caplog.at_level(logging.INFO, logger="quarry.ingestion.provider"),
         ):
             ProviderSelection.from_environment()
 

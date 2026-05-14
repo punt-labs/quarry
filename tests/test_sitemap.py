@@ -208,7 +208,7 @@ _MOCK_RESULT: dict[str, object] = {
 class TestIngestSitemapDedup:
     """Test lastmod-based deduplication in ingest_sitemap."""
 
-    @patch("quarry.pipeline.ingest_url")
+    @patch("quarry.ingestion.pipeline.ingest_url")
     @patch("quarry.db.chunk_catalog.ChunkCatalog.list_documents")
     @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
     def test_skips_when_lastmod_older(
@@ -217,7 +217,7 @@ class TestIngestSitemapDedup:
         mock_list_docs: MagicMock,
         mock_ingest: MagicMock,
     ) -> None:
-        from quarry.pipeline import ingest_sitemap
+        from quarry.ingestion.pipeline import ingest_sitemap
 
         mock_discover.return_value = [
             SitemapEntry(
@@ -243,7 +243,7 @@ class TestIngestSitemapDedup:
         assert result["ingested"] == 0
         mock_ingest.assert_not_called()
 
-    @patch("quarry.pipeline.ingest_url")
+    @patch("quarry.ingestion.pipeline.ingest_url")
     @patch("quarry.db.chunk_catalog.ChunkCatalog.list_documents")
     @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
     def test_ingests_when_lastmod_newer(
@@ -252,7 +252,7 @@ class TestIngestSitemapDedup:
         mock_list_docs: MagicMock,
         mock_ingest: MagicMock,
     ) -> None:
-        from quarry.pipeline import ingest_sitemap
+        from quarry.ingestion.pipeline import ingest_sitemap
 
         mock_discover.return_value = [
             SitemapEntry(
@@ -278,7 +278,7 @@ class TestIngestSitemapDedup:
         assert result["skipped"] == 0
         assert result["ingested"] == 1
 
-    @patch("quarry.pipeline.ingest_url")
+    @patch("quarry.ingestion.pipeline.ingest_url")
     @patch("quarry.db.chunk_catalog.ChunkCatalog.list_documents")
     @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
     def test_ingests_when_no_existing_doc(
@@ -287,7 +287,7 @@ class TestIngestSitemapDedup:
         mock_list_docs: MagicMock,
         mock_ingest: MagicMock,
     ) -> None:
-        from quarry.pipeline import ingest_sitemap
+        from quarry.ingestion.pipeline import ingest_sitemap
 
         mock_discover.return_value = [
             SitemapEntry(
@@ -308,7 +308,7 @@ class TestIngestSitemapDedup:
         assert result["ingested"] == 1
         assert result["skipped"] == 0
 
-    @patch("quarry.pipeline.ingest_url")
+    @patch("quarry.ingestion.pipeline.ingest_url")
     @patch("quarry.db.chunk_catalog.ChunkCatalog.list_documents")
     @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
     def test_overwrite_bypasses_dedup(
@@ -317,7 +317,7 @@ class TestIngestSitemapDedup:
         mock_list_docs: MagicMock,
         mock_ingest: MagicMock,
     ) -> None:
-        from quarry.pipeline import ingest_sitemap
+        from quarry.ingestion.pipeline import ingest_sitemap
 
         mock_discover.return_value = [
             SitemapEntry(
@@ -344,7 +344,7 @@ class TestIngestSitemapDedup:
         assert result["ingested"] == 1
         assert result["skipped"] == 0
 
-    @patch("quarry.pipeline.ingest_url")
+    @patch("quarry.ingestion.pipeline.ingest_url")
     @patch("quarry.db.chunk_catalog.ChunkCatalog.list_documents")
     @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
     def test_no_lastmod_always_ingests(
@@ -353,7 +353,7 @@ class TestIngestSitemapDedup:
         mock_list_docs: MagicMock,
         mock_ingest: MagicMock,
     ) -> None:
-        from quarry.pipeline import ingest_sitemap
+        from quarry.ingestion.pipeline import ingest_sitemap
 
         mock_discover.return_value = [
             SitemapEntry(loc="https://example.com/page1", lastmod=None),
@@ -386,13 +386,13 @@ class TestIngestSitemapIntegration:
     """End-to-end integration following test_url_ingestion.py pattern."""
 
     @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
-    @patch("quarry.pipeline._fetch_url")
+    @patch("quarry.ingestion.pipeline._fetch_url")
     def test_end_to_end(
         self,
         mock_fetch_url: MagicMock,
         mock_discover: MagicMock,
     ) -> None:
-        from quarry.pipeline import ingest_sitemap
+        from quarry.ingestion.pipeline import ingest_sitemap
 
         mock_discover.return_value = [
             SitemapEntry(loc="https://docs.example.com/intro", lastmod=None),
@@ -414,7 +414,9 @@ class TestIngestSitemapIntegration:
         db.list_tables.return_value = MagicMock(tables=[])
 
         with (
-            patch("quarry.pipeline.get_embedding_backend") as mock_embed_factory,
+            patch(
+                "quarry.ingestion.pipeline.get_embedding_backend",
+            ) as mock_embed_factory,
             patch("quarry.db.chunk_store.ChunkStore.insert", return_value=1),
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
@@ -442,13 +444,13 @@ class TestIngestSitemapIntegration:
         assert result["errors"] == []
 
     @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
-    @patch("quarry.pipeline._fetch_url")
+    @patch("quarry.ingestion.pipeline._fetch_url")
     def test_with_filters(
         self,
         mock_fetch_url: MagicMock,
         mock_discover: MagicMock,
     ) -> None:
-        from quarry.pipeline import ingest_sitemap
+        from quarry.ingestion.pipeline import ingest_sitemap
 
         mock_discover.return_value = [
             SitemapEntry(loc="https://example.com/docs/api", lastmod=None),
@@ -466,7 +468,9 @@ class TestIngestSitemapIntegration:
         db.list_tables.return_value = MagicMock(tables=[])
 
         with (
-            patch("quarry.pipeline.get_embedding_backend") as mock_embed_factory,
+            patch(
+                "quarry.ingestion.pipeline.get_embedding_backend",
+            ) as mock_embed_factory,
             patch("quarry.db.chunk_store.ChunkStore.insert", return_value=1),
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
@@ -491,7 +495,7 @@ class TestIngestSitemapIntegration:
         assert result["after_filter"] == 2
         assert result["ingested"] == 2
 
-    @patch("quarry.pipeline.ingest_url")
+    @patch("quarry.ingestion.pipeline.ingest_url")
     @patch("quarry.db.chunk_catalog.ChunkCatalog.list_documents")
     @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
     def test_default_collection_from_domain(
@@ -500,7 +504,7 @@ class TestIngestSitemapIntegration:
         mock_list_docs: MagicMock,
         _mock_ingest: MagicMock,
     ) -> None:
-        from quarry.pipeline import ingest_sitemap
+        from quarry.ingestion.pipeline import ingest_sitemap
 
         mock_discover.return_value = []
         mock_list_docs.return_value = []
@@ -513,7 +517,7 @@ class TestIngestSitemapIntegration:
 
         assert result["collection"] == "docs.python.org"
 
-    @patch("quarry.pipeline.ingest_url")
+    @patch("quarry.ingestion.pipeline.ingest_url")
     @patch("quarry.db.chunk_catalog.ChunkCatalog.list_documents")
     @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
     def test_handles_ingest_failure(
@@ -522,7 +526,7 @@ class TestIngestSitemapIntegration:
         mock_list_docs: MagicMock,
         mock_ingest: MagicMock,
     ) -> None:
-        from quarry.pipeline import ingest_sitemap
+        from quarry.ingestion.pipeline import ingest_sitemap
 
         mock_discover.return_value = [
             SitemapEntry(loc="https://example.com/good", lastmod=None),
@@ -565,14 +569,14 @@ class TestIngestSitemapIntegration:
 class TestIngestAuto:
     """Test smart URL ingestion with sitemap auto-discovery."""
 
-    @patch("quarry.pipeline._bulk_ingest_entries")
+    @patch("quarry.ingestion.pipeline._bulk_ingest_entries")
     @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
     def test_routes_to_bulk_ingest_when_pages_discovered(
         self,
         mock_discover: MagicMock,
         mock_bulk: MagicMock,
     ) -> None:
-        from quarry.pipeline import ingest_auto
+        from quarry.ingestion.pipeline import ingest_auto
 
         mock_discover.return_value = [
             SitemapEntry(loc="https://example.com/docs/a", lastmod=None),
@@ -604,14 +608,14 @@ class TestIngestAuto:
         assert len(entries_arg) == 2
         assert all(e.loc.startswith("https://example.com/docs") for e in entries_arg)
 
-    @patch("quarry.pipeline.ingest_url")
+    @patch("quarry.ingestion.pipeline.ingest_url")
     @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
     def test_falls_back_to_single_page(
         self,
         mock_discover: MagicMock,
         mock_ingest_url: MagicMock,
     ) -> None:
-        from quarry.pipeline import ingest_auto
+        from quarry.ingestion.pipeline import ingest_auto
 
         mock_discover.return_value = []
         mock_ingest_url.return_value = {
@@ -630,14 +634,14 @@ class TestIngestAuto:
         assert result["chunks"] == 3  # type: ignore[typeddict-item]
         mock_ingest_url.assert_called_once()
 
-    @patch("quarry.pipeline._bulk_ingest_entries")
+    @patch("quarry.ingestion.pipeline._bulk_ingest_entries")
     @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
     def test_no_path_filter_for_root_url(
         self,
         mock_discover: MagicMock,
         mock_bulk: MagicMock,
     ) -> None:
-        from quarry.pipeline import ingest_auto
+        from quarry.ingestion.pipeline import ingest_auto
 
         mock_discover.return_value = [
             SitemapEntry(loc="https://example.com/page1", lastmod=None),
@@ -659,14 +663,14 @@ class TestIngestAuto:
         # Root URL has no path filter; include is not passed (defaults to None)
         assert call_kwargs.kwargs.get("include") is None
 
-    @patch("quarry.pipeline._bulk_ingest_entries")
+    @patch("quarry.ingestion.pipeline._bulk_ingest_entries")
     @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
     def test_collection_defaults_to_hostname(
         self,
         mock_discover: MagicMock,
         mock_bulk: MagicMock,
     ) -> None:
-        from quarry.pipeline import ingest_auto
+        from quarry.ingestion.pipeline import ingest_auto
 
         mock_discover.return_value = [
             SitemapEntry(loc="https://docs.python.org/3/library/os", lastmod=None),
@@ -687,14 +691,14 @@ class TestIngestAuto:
         call_kwargs = mock_bulk.call_args
         assert call_kwargs.kwargs["collection"] == "docs.python.org"
 
-    @patch("quarry.pipeline._bulk_ingest_entries")
+    @patch("quarry.ingestion.pipeline._bulk_ingest_entries")
     @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
     def test_explicit_collection_passed_through(
         self,
         mock_discover: MagicMock,
         mock_bulk: MagicMock,
     ) -> None:
-        from quarry.pipeline import ingest_auto
+        from quarry.ingestion.pipeline import ingest_auto
 
         mock_discover.return_value = [
             SitemapEntry(loc="https://example.com/docs/a", lastmod=None),
@@ -720,12 +724,12 @@ class TestIngestAuto:
         call_kwargs = mock_bulk.call_args
         assert call_kwargs.kwargs["collection"] == "my-docs"
 
-    @patch("quarry.pipeline.ingest_sitemap")
+    @patch("quarry.ingestion.pipeline.ingest_sitemap")
     def test_explicit_sitemap_url_skips_discovery(
         self,
         mock_ingest_sitemap: MagicMock,
     ) -> None:
-        from quarry.pipeline import ingest_auto
+        from quarry.ingestion.pipeline import ingest_auto
 
         mock_ingest_sitemap.return_value = {
             "sitemap_url": "https://example.com/sitemap.xml",
@@ -747,14 +751,14 @@ class TestIngestAuto:
         assert "sitemap_url" in result
         mock_ingest_sitemap.assert_called_once()
 
-    @patch("quarry.pipeline.ingest_url")
+    @patch("quarry.ingestion.pipeline.ingest_url")
     @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
     def test_discovery_error_falls_back_to_single_page(
         self,
         mock_discover: MagicMock,
         mock_ingest_url: MagicMock,
     ) -> None:
-        from quarry.pipeline import ingest_auto
+        from quarry.ingestion.pipeline import ingest_auto
 
         mock_discover.side_effect = ConnectionError("network error")
         mock_ingest_url.return_value = {
@@ -772,7 +776,7 @@ class TestIngestAuto:
         assert "document_name" in result
         mock_ingest_url.assert_called_once()
 
-    @patch("quarry.pipeline.ingest_url")
+    @patch("quarry.ingestion.pipeline.ingest_url")
     @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
     def test_explicit_collection_passed_through_single_page_fallback(
         self,
@@ -780,7 +784,7 @@ class TestIngestAuto:
         mock_ingest_url: MagicMock,
     ) -> None:
         """Explicit collection is preserved when falling back to single-page ingest."""
-        from quarry.pipeline import ingest_auto
+        from quarry.ingestion.pipeline import ingest_auto
 
         mock_discover.return_value = []
         mock_ingest_url.return_value = {
@@ -799,7 +803,7 @@ class TestIngestAuto:
         call_kwargs = mock_ingest_url.call_args
         assert call_kwargs.kwargs["collection"] == "my-custom-collection"
 
-    @patch("quarry.pipeline.ingest_url")
+    @patch("quarry.ingestion.pipeline.ingest_url")
     @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
     def test_explicit_collection_passed_through_filter_zero_fallback(
         self,
@@ -807,7 +811,7 @@ class TestIngestAuto:
         mock_ingest_url: MagicMock,
     ) -> None:
         """Explicit collection is preserved when sitemap filter yields zero pages."""
-        from quarry.pipeline import ingest_auto
+        from quarry.ingestion.pipeline import ingest_auto
 
         # Sitemap returns pages that don't match the requested path
         mock_discover.return_value = [
@@ -829,13 +833,13 @@ class TestIngestAuto:
         call_kwargs = mock_ingest_url.call_args
         assert call_kwargs.kwargs["collection"] == "docker-sandboxes"
 
-    @patch("quarry.pipeline.ingest_sitemap")
+    @patch("quarry.ingestion.pipeline.ingest_sitemap")
     def test_explicit_collection_passed_through_sitemap_url(
         self,
         mock_ingest_sitemap: MagicMock,
     ) -> None:
         """Explicit collection is preserved when URL is detected as a sitemap."""
-        from quarry.pipeline import ingest_auto
+        from quarry.ingestion.pipeline import ingest_auto
 
         mock_ingest_sitemap.return_value = {
             "sitemap_url": "https://example.com/sitemap.xml",
@@ -864,11 +868,11 @@ class TestIngestAuto:
         mock_discover: MagicMock,
     ) -> None:
         """A URL like /docs/sitemap-guide should NOT be treated as a sitemap."""
-        from quarry.pipeline import ingest_auto
+        from quarry.ingestion.pipeline import ingest_auto
 
         mock_discover.return_value = []
 
-        with patch("quarry.pipeline.ingest_url") as mock_ingest_url:
+        with patch("quarry.ingestion.pipeline.ingest_url") as mock_ingest_url:
             mock_ingest_url.return_value = {
                 "document_name": "https://example.com/docs/sitemap-guide",
                 "collection": "example.com",
@@ -883,7 +887,7 @@ class TestIngestAuto:
         # Should fall through to single-page, not route to ingest_sitemap
         assert "document_name" in result
 
-    @patch("quarry.pipeline.ingest_url")
+    @patch("quarry.ingestion.pipeline.ingest_url")
     @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
     def test_falls_back_to_single_page_when_filter_yields_zero(
         self,
@@ -891,7 +895,7 @@ class TestIngestAuto:
         mock_ingest_url: MagicMock,
     ) -> None:
         """Sitemap found but no pages match the requested path — fall back."""
-        from quarry.pipeline import ingest_auto
+        from quarry.ingestion.pipeline import ingest_auto
 
         # Sitemap returns pages that don't match the requested path
         mock_discover.return_value = [

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from quarry.chunker import _split_text, chunk_pages
+from quarry.ingestion.chunker import _split_text, chunk_pages
 from quarry.models import PageContent, PageType
 
 
