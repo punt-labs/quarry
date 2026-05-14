@@ -1648,11 +1648,11 @@ class TestIngestBackground:
                 return_value=MagicMock(),
             ),
             patch(
-                "quarry.database.list_documents",
+                "quarry.chunk_catalog.ChunkCatalog.list_documents",
                 return_value=existing_docs,
             ),
             patch(
-                "quarry.database.delete_document",
+                "quarry.chunk_store.ChunkStore.delete_document",
             ) as mock_delete,
             patch(
                 "quarry.pipeline.ingest_content",
@@ -1698,7 +1698,7 @@ class TestIngestBackground:
                 "quarry.database.get_db",
                 return_value=MagicMock(),
             ),
-            patch("quarry.database.list_documents", return_value=[]),
+            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
             patch(
                 "quarry.pipeline.ingest_content",
                 side_effect=RuntimeError("embedding failed"),

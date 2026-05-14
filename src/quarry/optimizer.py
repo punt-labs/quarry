@@ -1,0 +1,113 @@
+"""Table optimization: compaction, FTS rebuild, and collection indexing."""
+
+from __future__ import annotations
+
+import logging
+from datetime import timedelta
+from pathlib import Path
+from typing import Self
+
+from quarry.schema import TABLE_NAME
+from quarry.types import LanceDB
+
+logger = logging.getLogger(__name__)
+
+FRAGMENT_THRESHOLD: int = 10_000
+
+
+class TableOptimizer:
+    """Compact, index, and maintain the LanceDB chunks table."""
+
+    __slots__ = ("_db",)
+
+    _db: LanceDB
+
+    def __new__(cls, db: LanceDB) -> Self:
+        self = super().__new__(cls)
+        self._db = db
+        return self
+
+    def count_fragments(self) -> int:
+        """Count data fragments in the chunks table.
+
+        Approximates fragment count by counting entries in the lance data
+        directory on disk.  Returns 0 if the table does not exist or the
+        data directory cannot be enumerated.
+        """
+        if TABLE_NAME not in self._db.list_tables().tables:
+            return 0
+        table = self._db.open_table(TABLE_NAME)
+        # LanceDB 0.30 does not expose fragment count via the Python API.
+        # The best proxy is counting subdirectories under the lance data/ dir.
+        try:
+            uri = str(getattr(table, "uri", "")) or str(getattr(table, "_uri", ""))
+            if uri:
+                data_dir = Path(uri) / "data"
+                if data_dir.is_dir():
+                    return sum(1 for _ in data_dir.iterdir())
+        except (OSError, TypeError):
+            pass
+        return 0
+
+    def optimize(self, *, force: bool = False) -> None:
+        """Compact table data and rebuild the FTS index.
+
+        Merges small data fragments for better query performance, then
+        rebuilds the Tantivy full-text index so it references the new
+        fragment layout.  Without the rebuild, the FTS index retains stale
+        row references to compacted-away fragments, causing RuntimeError
+        on hybrid_search queries.
+
+        Also prunes old manifest versions older than 1 hour to reclaim
+        disk space from the ``_versions/`` directory.
+
+        When the fragment count exceeds ``FRAGMENT_THRESHOLD`` (10,000),
+        optimization is skipped to prevent a compaction death spiral -- unless
+        *force* is True.  The operator should run ``quarry optimize --force``
+        manually for degraded databases.
+        """
+        if TABLE_NAME not in self._db.list_tables().tables:
+            return
+
+        if not force:
+            fragments = self.count_fragments()
+            if fragments > FRAGMENT_THRESHOLD:
+                logger.warning(
+                    "LanceDB table has %d fragments (threshold: %d). "
+                    "Skipping optimization — manual compaction required. "
+                    "Run: quarry optimize --force",
+                    fragments,
+                    FRAGMENT_THRESHOLD,
+                )
+                return
+
+        table = self._db.open_table(TABLE_NAME)
+        table.optimize(cleanup_older_than=timedelta(hours=1))
+        logger.info("Optimized table %s (compacted + pruned versions >1h)", TABLE_NAME)
+
+        # Rebuild FTS index -- compaction changes fragment IDs, so the old
+        # Tantivy index has stale references.  replace=True forces a full
+        # rebuild.  This is O(n) in table size but only runs after bulk
+        # sync operations, not on every query.
+        try:
+            table.create_fts_index("text", replace=True)
+            logger.info("Rebuilt FTS index after optimization")
+        except (OSError, RuntimeError, ValueError):
+            logger.warning(
+                "FTS index rebuild after optimize failed; "
+                "hybrid search may use vector-only until next sync",
+                exc_info=True,
+            )
+
+    def create_collection_index(self) -> None:
+        """Create a BITMAP scalar index on the collection column.
+
+        Speeds up pre-filtering by collection during vector search.
+        Safe to call repeatedly -- uses replace=True.
+        """
+        if TABLE_NAME not in self._db.list_tables().tables:
+            return
+
+        table = self._db.open_table(TABLE_NAME)
+        table.create_scalar_index("collection", index_type="BITMAP", replace=True)
+        logger.info("Created BITMAP index on collection column")

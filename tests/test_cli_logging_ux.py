@@ -52,9 +52,9 @@ def _status_context() -> Generator[None]:
     with (
         patch("quarry.__main__._resolved_settings", return_value=s),
         patch("quarry.__main__.get_db"),
-        patch("quarry.__main__.list_documents", return_value=[]),
-        patch("quarry.__main__.count_chunks", return_value=0),
-        patch("quarry.__main__.db_list_collections", return_value=[]),
+        patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
+        patch("quarry.chunk_store.ChunkStore.count", return_value=0),
+        patch("quarry.chunk_catalog.ChunkCatalog.list_collections", return_value=[]),
     ):
         yield
 
@@ -81,7 +81,9 @@ def _find_context() -> Generator[None]:
         patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
         patch("quarry.__main__.get_db"),
         patch("quarry.__main__.get_embedding_backend", return_value=mock_backend),
-        patch("quarry.__main__.hybrid_search", return_value=mock_results),
+        patch(
+            "quarry.chunk_search.ChunkSearch.hybrid_search", return_value=mock_results
+        ),
     ):
         yield
 
@@ -122,7 +124,7 @@ class TestFlagCombinationMatrix:
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
-            patch("quarry.__main__.list_documents", return_value=[]),
+            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
             patch("quarry.__main__.LoggingConfig.configure") as mock_cfg,
         ):
             result = runner.invoke(app, ["list", "documents"])
@@ -146,9 +148,11 @@ class TestFlagCombinationMatrix:
         with (
             patch("quarry.__main__._resolved_settings", return_value=s),
             patch("quarry.__main__.get_db"),
-            patch("quarry.__main__.list_documents", return_value=[]),
-            patch("quarry.__main__.count_chunks", return_value=0),
-            patch("quarry.__main__.db_list_collections", return_value=[]),
+            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
+            patch("quarry.chunk_store.ChunkStore.count", return_value=0),
+            patch(
+                "quarry.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
+            ),
             patch("quarry.__main__.LoggingConfig.configure") as mock_cfg,
         ):
             result = runner.invoke(app, ["--verbose", "status"])
@@ -180,9 +184,11 @@ class TestFlagCombinationMatrix:
         with (
             patch("quarry.__main__._resolved_settings", return_value=s),
             patch("quarry.__main__.get_db"),
-            patch("quarry.__main__.list_documents", return_value=[]),
-            patch("quarry.__main__.count_chunks", return_value=0),
-            patch("quarry.__main__.db_list_collections", return_value=[]),
+            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
+            patch("quarry.chunk_store.ChunkStore.count", return_value=0),
+            patch(
+                "quarry.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
+            ),
             patch("quarry.__main__.LoggingConfig.configure") as mock_cfg,
         ):
             result = runner.invoke(app, ["--quiet", "status"])
@@ -217,9 +223,11 @@ class TestFlagCombinationMatrix:
         with (
             patch("quarry.__main__._resolved_settings", return_value=s),
             patch("quarry.__main__.get_db"),
-            patch("quarry.__main__.list_documents", return_value=[]),
-            patch("quarry.__main__.count_chunks", return_value=0),
-            patch("quarry.__main__.db_list_collections", return_value=[]),
+            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
+            patch("quarry.chunk_store.ChunkStore.count", return_value=0),
+            patch(
+                "quarry.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
+            ),
             patch("quarry.__main__.LoggingConfig.configure") as mock_cfg,
         ):
             result = runner.invoke(app, ["--json", "status"])
@@ -245,9 +253,11 @@ class TestFlagCombinationMatrix:
         with (
             patch("quarry.__main__._resolved_settings", return_value=s),
             patch("quarry.__main__.get_db"),
-            patch("quarry.__main__.list_documents", return_value=[]),
-            patch("quarry.__main__.count_chunks", return_value=0),
-            patch("quarry.__main__.db_list_collections", return_value=[]),
+            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
+            patch("quarry.chunk_store.ChunkStore.count", return_value=0),
+            patch(
+                "quarry.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
+            ),
             patch("quarry.__main__.LoggingConfig.configure") as mock_cfg,
         ):
             result = runner.invoke(app, ["--json", "--verbose", "status"])
@@ -273,9 +283,11 @@ class TestFlagCombinationMatrix:
         with (
             patch("quarry.__main__._resolved_settings", return_value=s),
             patch("quarry.__main__.get_db"),
-            patch("quarry.__main__.list_documents", return_value=[]),
-            patch("quarry.__main__.count_chunks", return_value=0),
-            patch("quarry.__main__.db_list_collections", return_value=[]),
+            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
+            patch("quarry.chunk_store.ChunkStore.count", return_value=0),
+            patch(
+                "quarry.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
+            ),
             patch("quarry.__main__.LoggingConfig.configure") as mock_cfg,
         ):
             result = runner.invoke(app, ["--json", "--quiet", "status"])
@@ -398,7 +410,10 @@ class TestPipeSafety:
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
-            patch("quarry.__main__.list_documents", return_value=mock_docs),
+            patch(
+                "quarry.chunk_catalog.ChunkCatalog.list_documents",
+                return_value=mock_docs,
+            ),
         ):
             result = runner.invoke(app, ["--json", "list", "documents"])
         assert result.exit_code == 0
@@ -578,9 +593,11 @@ class TestQuarryLogLevelOverride:
         with (
             patch("quarry.__main__._resolved_settings", return_value=s),
             patch("quarry.__main__.get_db"),
-            patch("quarry.__main__.list_documents", return_value=[]),
-            patch("quarry.__main__.count_chunks", return_value=0),
-            patch("quarry.__main__.db_list_collections", return_value=[]),
+            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
+            patch("quarry.chunk_store.ChunkStore.count", return_value=0),
+            patch(
+                "quarry.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
+            ),
             patch("quarry.logging_config.logging.config.dictConfig") as mock_dc,
         ):
             result = runner.invoke(app, ["status"])
@@ -598,9 +615,11 @@ class TestQuarryLogLevelOverride:
         with (
             patch("quarry.__main__._resolved_settings", return_value=s),
             patch("quarry.__main__.get_db"),
-            patch("quarry.__main__.list_documents", return_value=[]),
-            patch("quarry.__main__.count_chunks", return_value=0),
-            patch("quarry.__main__.db_list_collections", return_value=[]),
+            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
+            patch("quarry.chunk_store.ChunkStore.count", return_value=0),
+            patch(
+                "quarry.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
+            ),
             patch("quarry.logging_config.logging.config.dictConfig") as mock_dc,
         ):
             result = runner.invoke(app, ["--quiet", "status"])
@@ -657,7 +676,7 @@ class TestFatalErrorsUnderQuiet:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch(
-                "quarry.__main__.list_documents",
+                "quarry.chunk_catalog.ChunkCatalog.list_documents",
                 side_effect=RuntimeError("database corrupt"),
             ),
         ):
@@ -672,7 +691,7 @@ class TestFatalErrorsUnderQuiet:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch(
-                "quarry.__main__.count_chunks",
+                "quarry.chunk_store.ChunkStore.count",
                 side_effect=RuntimeError("lance failure"),
             ),
         ):
@@ -686,7 +705,7 @@ class TestFatalErrorsUnderQuiet:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch(
-                "quarry.__main__.list_documents",
+                "quarry.chunk_catalog.ChunkCatalog.list_documents",
                 side_effect=RuntimeError("broken table"),
             ),
         ):
@@ -701,7 +720,7 @@ class TestFatalErrorsUnderQuiet:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch(
-                "quarry.__main__.list_documents",
+                "quarry.chunk_catalog.ChunkCatalog.list_documents",
                 side_effect=RuntimeError("fatal error"),
             ),
         ):
@@ -738,7 +757,7 @@ class TestFatalErrorsUnderQuiet:
                 return_value=mock_backend,
             ),
             patch(
-                "quarry.__main__.hybrid_search",
+                "quarry.chunk_search.ChunkSearch.hybrid_search",
                 side_effect=RuntimeError("search index corrupt"),
             ),
         ):
@@ -752,8 +771,10 @@ class TestFatalErrorsUnderQuiet:
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
-            patch("quarry.database.count_fragments", return_value=20000),
-            patch("quarry.database.FRAGMENT_THRESHOLD", 10000),
+            patch(
+                "quarry.optimizer.TableOptimizer.count_fragments", return_value=20000
+            ),
+            patch("quarry.optimizer.FRAGMENT_THRESHOLD", 10000),
         ):
             result = runner.invoke(app, ["--quiet", "optimize"])
         assert result.exit_code == 1
@@ -920,8 +941,8 @@ class TestOptimizeQuietGuard:
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
-            patch("quarry.database.count_fragments", return_value=10),
-            patch("quarry.database.optimize_table"),
+            patch("quarry.optimizer.TableOptimizer.count_fragments", return_value=10),
+            patch("quarry.optimizer.TableOptimizer.optimize"),
         ):
             result = runner.invoke(app, ["--quiet", "optimize"])
         assert result.exit_code == 0
@@ -933,8 +954,8 @@ class TestOptimizeQuietGuard:
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
-            patch("quarry.database.count_fragments", return_value=42),
-            patch("quarry.database.optimize_table"),
+            patch("quarry.optimizer.TableOptimizer.count_fragments", return_value=42),
+            patch("quarry.optimizer.TableOptimizer.optimize"),
         ):
             result = runner.invoke(app, ["optimize"])
         assert result.exit_code == 0

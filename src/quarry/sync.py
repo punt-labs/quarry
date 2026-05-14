@@ -23,13 +23,9 @@ if TYPE_CHECKING:
 
 import pathspec
 
+from quarry.chunk_store import ChunkStore
 from quarry.config import Settings
-from quarry.database import (
-    batch_insert_chunks,
-    create_collection_index,
-    delete_document,
-    optimize_table,
-)
+from quarry.optimizer import TableOptimizer
 from quarry.pipeline import SUPPORTED_EXTENSIONS, prepare_document
 from quarry.sync_registry import (
     FileRecord,
@@ -325,7 +321,9 @@ def _ingest_files(
     ]:
         t = time.perf_counter()
         # Delete existing chunks for overwrite semantics.
-        delete_document(db, document_name, collection=collection, count=False)
+        ChunkStore(db).delete_document(
+            document_name, collection=collection, count=False
+        )
         # Chunk + embed without writing to LanceDB.
         # Agent memory params (agent_handle, memory_type, summary) are not
         # passed — directory sync does not support per-document memory tagging.
@@ -466,7 +464,9 @@ def _delete_documents(
     errors: list[str] = []
     for document_name in plan_to_delete:
         try:
-            delete_document(db, document_name, collection=collection, count=False)
+            ChunkStore(db).delete_document(
+                document_name, collection=collection, count=False
+            )
             for rec in files_by_document_name.get(document_name, []):
                 delete_file(conn, rec.path, commit=False)
             deleted += 1
@@ -569,7 +569,7 @@ def sync_collection(
     # Batch-write all accumulated chunks in a single LanceDB transaction.
     if chunk_batch:
         t0 = time.perf_counter()
-        total_inserted = batch_insert_chunks(db, chunk_batch)
+        total_inserted = ChunkStore(db).batch_insert(chunk_batch)
         logger.info(
             "sync: [%s] batch-inserted %d chunks in %.2fs",
             collection,
@@ -640,10 +640,11 @@ def sync_all(
                 progress_callback=progress_callback,
             )
         t0 = time.perf_counter()
-        create_collection_index(db)
+        opt = TableOptimizer(db)
+        opt.create_collection_index()
         logger.info("sync: create_collection_index in %.2fs", time.perf_counter() - t0)
         t0 = time.perf_counter()
-        optimize_table(db)
+        opt.optimize()
         logger.info("sync: optimize_table in %.2fs", time.perf_counter() - t0)
         logger.info(
             "sync: all collections completed in %.2fs",

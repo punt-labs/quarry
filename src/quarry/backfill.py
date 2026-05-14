@@ -12,8 +12,9 @@ from quarry.artifacts import (
     extract_artifacts,
     format_artifacts_header,
 )
+from quarry.chunk_catalog import ChunkCatalog
 from quarry.config import Settings
-from quarry.database import get_db, list_documents
+from quarry.database import get_db
 from quarry.hooks import extract_transcript_text
 from quarry.pipeline import ingest_content
 from quarry.sync_registry import (
@@ -141,7 +142,7 @@ def is_already_ingested(
 
 def _get_existing_doc_names(db: LanceDB, collection: str) -> set[str]:
     """Return the set of document names in a collection."""
-    docs = list_documents(db, collection_filter=collection)
+    docs = ChunkCatalog(db).list_documents(collection_filter=collection)
     return {d["document_name"] for d in docs}
 
 

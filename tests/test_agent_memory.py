@@ -13,20 +13,11 @@ import numpy as np
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
-from quarry.database import (
-    _RRF_K,
-    TABLE_NAME,
-    _ensure_fts_index,
-    _migrate_schema,
-    _schema,
-    _temporal_weight,
-    ensure_schema,
-    get_db,
-    hybrid_search,
-    insert_chunks,
-    search,
-)
+from quarry.chunk_search import _RRF_K, ChunkSearch, _row_key, _temporal_weight
+from quarry.chunk_store import ChunkStore
+from quarry.database import get_db
 from quarry.models import Chunk
+from quarry.schema import TABLE_NAME, SchemaManager
 
 
 def _make_chunk(
@@ -119,7 +110,7 @@ class TestSchemaMigration:
         assert "memory_type" not in field_names
         assert "summary" not in field_names
 
-        _migrate_schema(table)
+        SchemaManager(db).migrate(table)
 
         # Verify columns exist after migration
         field_names = {f.name for f in table.schema}
@@ -136,8 +127,8 @@ class TestSchemaMigration:
         db = get_db(db_path)
         table = db.open_table(TABLE_NAME)
 
-        _migrate_schema(table)
-        _migrate_schema(table)  # second call should be a no-op
+        SchemaManager(db).migrate(table)
+        SchemaManager(db).migrate(table)  # second call should be a no-op
 
         field_names = [f.name for f in table.schema]
         assert field_names.count("agent_handle") == 1
@@ -152,7 +143,7 @@ class TestSchemaMigration:
 
         db = get_db(db_path)
         table = db.open_table(TABLE_NAME)
-        _migrate_schema(table)
+        SchemaManager(db).migrate(table)
 
         rows = table.search().limit(10).to_list()
         assert len(rows) == 1
@@ -167,7 +158,7 @@ class TestSchemaMigration:
         _create_legacy_table(db_path)
 
         db = get_db(db_path)
-        ensure_schema(db)
+        SchemaManager(db).ensure()
 
         table = db.open_table(TABLE_NAME)
         field_names = {f.name for f in table.schema}
@@ -176,7 +167,7 @@ class TestSchemaMigration:
     def test_ensure_schema_noop_on_empty_db(self, tmp_path: Path) -> None:
         """ensure_schema() is a no-op when the table does not exist."""
         db = get_db(tmp_path / "db")
-        ensure_schema(db)  # should not raise
+        SchemaManager(db).ensure()  # should not raise
 
 
 class TestFTSIndex:
@@ -185,7 +176,7 @@ class TestFTSIndex:
         db = get_db(tmp_path / "db")
         chunks = [_make_chunk(text="LanceDB vector database for search")]
         vectors = _random_vectors(1)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
         # insert_chunks triggers _get_or_create_table which creates FTS index
         # Verify by doing an FTS search
@@ -212,7 +203,7 @@ class TestFTSIndex:
             ),
         ]
         vectors = _random_vectors(3)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
         table = db.open_table(TABLE_NAME)
         results = table.search("API", query_type="fts").limit(10).to_list()
@@ -226,11 +217,11 @@ class TestFTSIndex:
         db = get_db(tmp_path / "db")
         chunks = [_make_chunk(text="test data")]
         vectors = _random_vectors(1)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
         table = db.open_table(TABLE_NAME)
-        _ensure_fts_index(table)  # already created during insert
-        _ensure_fts_index(table)  # should not raise
+        SchemaManager(db).ensure_fts_index(table)  # already created during insert
+        SchemaManager(db).ensure_fts_index(table)  # should not raise
 
 
 class TestNewColumnsInPipeline:
@@ -264,9 +255,9 @@ class TestNewColumnsInPipeline:
             )
         ]
         vectors = _random_vectors(1)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        results = search(db, vectors[0], limit=1)
+        results = ChunkSearch(db).vector_search(vectors[0], limit=1)
         assert len(results) == 1
         assert results[0]["agent_handle"] == "rmh"
         assert results[0]["memory_type"] == "fact"
@@ -277,9 +268,9 @@ class TestNewColumnsInPipeline:
         db = get_db(tmp_path / "db")
         chunks = [_make_chunk(text="plain document chunk")]
         vectors = _random_vectors(1)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        results = search(db, vectors[0], limit=1)
+        results = ChunkSearch(db).vector_search(vectors[0], limit=1)
         assert len(results) == 1
         assert results[0]["agent_handle"] == ""
         assert results[0]["memory_type"] == ""
@@ -287,7 +278,7 @@ class TestNewColumnsInPipeline:
 
     def test_schema_includes_new_columns(self) -> None:
         """The canonical schema includes agent_handle, memory_type, summary."""
-        schema = _schema()
+        schema = SchemaManager.schema()
         field_names = {f.name for f in schema}
         assert "agent_handle" in field_names
         assert "memory_type" in field_names
@@ -358,9 +349,9 @@ class TestHybridSearch:
             ),
         ]
         vectors = _random_vectors(2)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        results = hybrid_search(db, "LanceDB vector", vectors[0], limit=5)
+        results = ChunkSearch(db).hybrid_search("LanceDB vector", vectors[0], limit=5)
         assert len(results) >= 1
         # The LanceDB chunk should rank highly due to both
         # vector similarity and keyword match
@@ -371,7 +362,7 @@ class TestHybridSearch:
         """Hybrid search returns empty list when table doesn't exist."""
         db = get_db(tmp_path / "db")
         vec = _random_vectors(1)[0]
-        results = hybrid_search(db, "test", vec)
+        results = ChunkSearch(db).hybrid_search("test", vec)
         assert results == []
 
     def test_hybrid_fts_boosts_keyword_matches(self, tmp_path: Path) -> None:
@@ -398,10 +389,10 @@ class TestHybridSearch:
                 chunk_index=2,
             ),
         ]
-        insert_chunks(db, chunks, vecs)
+        ChunkStore(db).insert(chunks, vecs)
 
         # Query with "OAuth2" — FTS should boost chunks 0 and 2
-        results = hybrid_search(db, "OAuth2", vecs[1], limit=10)
+        results = ChunkSearch(db).hybrid_search("OAuth2", vecs[1], limit=10)
         texts = [str(r["text"]) for r in results]
         assert any("OAuth2" in t for t in texts)
 
@@ -421,10 +412,9 @@ class TestHybridSearch:
             ),
         ]
         vectors = _random_vectors(2)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        results = hybrid_search(
-            db,
+        results = ChunkSearch(db).hybrid_search(
             "API rate limit",
             vectors[0],
             agent_handle_filter="rmh",
@@ -448,10 +438,9 @@ class TestHybridSearch:
             ),
         ]
         vectors = _random_vectors(2)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        results = hybrid_search(
-            db,
+        results = ChunkSearch(db).hybrid_search(
             "deploy",
             vectors[0],
             memory_type_filter="procedure",
@@ -481,11 +470,11 @@ class TestRRFFusion:
             ),
         ]
         vectors = _random_vectors(2)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
         # Use the first chunk's vector as query — it should match
         # on vector AND on FTS for "LanceDB"
-        results = hybrid_search(db, "LanceDB", vectors[0], limit=2)
+        results = ChunkSearch(db).hybrid_search("LanceDB", vectors[0], limit=2)
         assert len(results) >= 1
         # The dual-channel match should be ranked first
         assert "LanceDB" in str(results[0]["text"])
@@ -554,11 +543,10 @@ class TestTemporalDecay:
             ),
         ]
         vectors = _random_vectors(2)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
         # With high decay, the recent chunk should rank first
-        results = hybrid_search(
-            db,
+        results = ChunkSearch(db).hybrid_search(
             "API rate limit",
             vectors[0],
             limit=2,
@@ -608,10 +596,9 @@ class TestTemporalDecay:
             ),
         ]
         vectors = _random_vectors(2)
-        insert_chunks(db, chunks, vectors)
+        ChunkStore(db).insert(chunks, vectors)
 
-        results = hybrid_search(
-            db,
+        results = ChunkSearch(db).hybrid_search(
             "unscoped content",
             vectors[0],
             limit=2,
@@ -797,7 +784,7 @@ class TestIngestUrlThreadsAgentHandle:
             patch("quarry.pipeline._fetch_url", return_value=html),
             patch("quarry.pipeline.process_html_text", return_value=[]),
             patch("quarry.pipeline._chunk_embed_store") as mock_ces,
-            patch("quarry.pipeline.delete_document"),
+            patch("quarry.chunk_store.ChunkStore.delete_document"),
         ):
             mock_ces.return_value = result
             ingest_url(
@@ -841,14 +828,10 @@ class TestTemporalWeightEdgeCases:
 class TestRowKeyMissingFields:
     def test_missing_fields_no_crash(self) -> None:
         """_row_key returns defaults when dict keys are missing."""
-        from quarry.database import _row_key
-
         key = _row_key({})
         assert key == ("", 0, 0)
 
     def test_partial_fields(self) -> None:
         """_row_key handles partial dict without crashing."""
-        from quarry.database import _row_key
-
         key = _row_key({"document_name": "doc.pdf"})
         assert key == ("doc.pdf", 0, 0)

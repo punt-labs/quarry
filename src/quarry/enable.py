@@ -145,11 +145,9 @@ def disable_project(
 ) -> DisableResult:
     """Disable quarry knowledge capture for a project directory."""
     directory = directory.resolve()
+    from quarry.chunk_store import ChunkStore  # noqa: PLC0415
     from quarry.config import Settings  # noqa: PLC0415
-    from quarry.database import (  # noqa: PLC0415
-        delete_collection as db_delete_collection,
-        get_db,
-    )
+    from quarry.database import get_db  # noqa: PLC0415
     from quarry.hooks import (  # noqa: PLC0415
         _collection_for_cwd_conn,  # pyright: ignore[reportPrivateUsage]
     )
@@ -183,8 +181,9 @@ def disable_project(
         deleted_chunks = 0
         if not keep_data:
             db = get_db(settings.lancedb_path)
-            deleted_chunks += db_delete_collection(db, collection)
-            deleted_chunks += db_delete_collection(db, captures_collection)
+            store = ChunkStore(db)
+            deleted_chunks += store.delete_collection(collection)
+            deleted_chunks += store.delete_collection(captures_collection)
 
         config_path = directory / ".punt-labs" / "quarry" / "config.md"
         config_removed = False

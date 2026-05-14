@@ -41,18 +41,14 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route, WebSocketRoute
 
 from quarry.backends import get_embedding_backend
+from quarry.chunk_catalog import ChunkCatalog
+from quarry.chunk_search import ChunkSearch
+from quarry.chunk_store import ChunkStore
 from quarry.config import DEFAULT_PORT, Settings
 from quarry.database import (
-    count_chunks,
-    delete_collection as db_delete_collection,
-    delete_document as db_delete_document,
     dir_size_bytes,
     format_size,
     get_db,
-    get_page_text,
-    hybrid_search,
-    list_collections as db_list_collections,
-    list_documents,
 )
 from quarry.provider import ProviderSelection
 from quarry.sync_registry import (
@@ -371,8 +367,7 @@ def _search_route(request: Request) -> JSONResponse:
 
     ctx = _ctx(request)
     query_vector = ctx.embedder.embed_query(query)
-    results = hybrid_search(
-        ctx.db,
+    results = ChunkSearch(ctx.db).hybrid_search(
         query,
         query_vector,
         limit=limit,
@@ -414,7 +409,7 @@ def _documents_route(request: Request) -> JSONResponse:
 
     collection = request.query_params.get("collection") or None
     ctx = _ctx(request)
-    docs = list_documents(ctx.db, collection_filter=collection)
+    docs = ChunkCatalog(ctx.db).list_documents(collection_filter=collection)
     return JSONResponse({"total_documents": len(docs), "documents": docs})
 
 
@@ -452,7 +447,7 @@ async def _run_delete_document_task(
     """Execute document deletion in background and update task state."""
     try:
         count = await run_in_threadpool(
-            db_delete_document, ctx.db, name, collection=collection
+            ChunkStore(ctx.db).delete_document, name, collection=collection
         )
         state.status = "completed"
         state.results = {"deleted": count, "name": name, "type": "document"}
@@ -476,7 +471,7 @@ def _collections_route(request: Request) -> JSONResponse:
         return auth_resp
 
     ctx = _ctx(request)
-    cols = db_list_collections(ctx.db)
+    cols = ChunkCatalog(ctx.db).list_collections()
     return JSONResponse({"total_collections": len(cols), "collections": cols})
 
 
@@ -511,7 +506,7 @@ async def _run_delete_collection_task(
 ) -> None:
     """Execute collection deletion in background and update task state."""
     try:
-        count = await run_in_threadpool(db_delete_collection, ctx.db, name)
+        count = await run_in_threadpool(ChunkStore(ctx.db).delete_collection, name)
         state.status = "completed"
         state.results = {"deleted": count, "name": name, "type": "collection"}
     except asyncio.CancelledError:
@@ -559,7 +554,7 @@ def _show_route(request: Request) -> JSONResponse:
     ctx = _ctx(request)
 
     if page > 0:
-        text = get_page_text(ctx.db, document, page, collection=collection)
+        text = ChunkCatalog(ctx.db).get_page_text(document, page, collection=collection)
         if text is None:
             return JSONResponse({"error": "Not found"}, status_code=404)
         return JSONResponse(
@@ -567,7 +562,7 @@ def _show_route(request: Request) -> JSONResponse:
         )
 
     # No page or page == 0: return document metadata.
-    docs = list_documents(ctx.db, collection_filter=collection)
+    docs = ChunkCatalog(ctx.db).list_documents(collection_filter=collection)
     match = [d for d in docs if d["document_name"] == document]
     if not match:
         return JSONResponse({"error": "Not found"}, status_code=404)
@@ -934,7 +929,7 @@ def _databases_route(request: Request) -> JSONResponse:
     # remote /databases endpoint keeps the contract of ``discover_databases``.
     if lance_dir.exists():
         try:
-            docs = list_documents(ctx.db)
+            docs = ChunkCatalog(ctx.db).list_documents()
         except Exception:  # noqa: BLE001 — table may not exist yet
             logger.debug("list_documents failed on fresh database", exc_info=True)
             docs = []
@@ -1214,9 +1209,10 @@ async def _run_deregister_task(
         if not keep_data and removed_docs:
 
             def _purge() -> int:
+                store = ChunkStore(ctx.db)
                 total = 0
                 for doc_name in removed_docs:
-                    total += db_delete_document(ctx.db, doc_name, collection=collection)
+                    total += store.delete_document(doc_name, collection=collection)
                 return total
 
             deleted_chunks = await run_in_threadpool(_purge)
@@ -1249,8 +1245,8 @@ def _status_route(request: Request) -> JSONResponse:
 
     ctx = _ctx(request)
     settings = ctx.settings
-    chunks = count_chunks(ctx.db)
-    cols = db_list_collections(ctx.db)
+    chunks = ChunkStore(ctx.db).count()
+    cols = ChunkCatalog(ctx.db).list_collections()
     doc_count = sum(c["document_count"] for c in cols)
 
     if settings.registry_path.exists():

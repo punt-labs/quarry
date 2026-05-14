@@ -131,12 +131,10 @@ def _ingest_background() -> None:
         return
 
     try:
+        from quarry.chunk_catalog import ChunkCatalog  # noqa: PLC0415
+        from quarry.chunk_store import ChunkStore  # noqa: PLC0415
         from quarry.config import Settings  # noqa: PLC0415
-        from quarry.database import (  # noqa: PLC0415
-            delete_document,
-            get_db,
-            list_documents,
-        )
+        from quarry.database import get_db  # noqa: PLC0415
         from quarry.pipeline import ingest_content  # noqa: PLC0415
 
         # Re-resolve settings for embedding model config.  The db path is
@@ -147,11 +145,12 @@ def _ingest_background() -> None:
         # Deduplicate: remove prior captures for this session.
         try:
             prefix = f"session-{session_prefix}-"
-            existing = list_documents(db, collection_filter=collection)
+            existing = ChunkCatalog(db).list_documents(collection_filter=collection)
             prior = [doc for doc in existing if doc["document_name"].startswith(prefix)]
+            store = ChunkStore(db)
             for doc in prior:
-                delete_document(
-                    db, doc["document_name"], collection=collection, count=False
+                store.delete_document(
+                    doc["document_name"], collection=collection, count=False
                 )
             if prior:
                 logger.info(

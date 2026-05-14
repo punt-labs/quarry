@@ -602,8 +602,10 @@ class TestSyncCollection:
 
         with (
             patch("quarry.sync.prepare_document", side_effect=_fake_prepare),
-            patch("quarry.sync.delete_document"),
-            patch("quarry.sync.batch_insert_chunks", return_value=1) as mock_batch,
+            patch("quarry.chunk_store.ChunkStore.delete_document"),
+            patch(
+                "quarry.chunk_store.ChunkStore.batch_insert", return_value=1
+            ) as mock_batch,
         ):
             result = sync_collection(d, "col", db, settings, conn, max_workers=1)
 
@@ -635,8 +637,8 @@ class TestSyncCollection:
 
         with (
             patch("quarry.sync.prepare_document", side_effect=side_effect),
-            patch("quarry.sync.delete_document"),
-            patch("quarry.sync.batch_insert_chunks", return_value=0),
+            patch("quarry.chunk_store.ChunkStore.delete_document"),
+            patch("quarry.chunk_store.ChunkStore.batch_insert", return_value=0),
         ):
             result = sync_collection(d, "col", db, settings, conn, max_workers=1)
 
@@ -666,8 +668,8 @@ class TestSyncCollection:
 
         with (
             patch("quarry.sync.prepare_document", side_effect=_fake_prepare),
-            patch("quarry.sync.delete_document") as mock_del,
-            patch("quarry.sync.batch_insert_chunks", return_value=0),
+            patch("quarry.chunk_store.ChunkStore.delete_document") as mock_del,
+            patch("quarry.chunk_store.ChunkStore.batch_insert", return_value=0),
         ):
             result = sync_collection(d, "col", db, settings, conn, max_workers=1)
 
@@ -675,7 +677,7 @@ class TestSyncCollection:
         # delete_document called for both the "gone" file in _delete_documents
         # and potentially for overwrite in _ingest_files.  Check at least the
         # deletion path call is present.
-        del_calls = [c for c in mock_del.call_args_list if c.args[1] == "gone.txt"]
+        del_calls = [c for c in mock_del.call_args_list if c.args[0] == "gone.txt"]
         assert len(del_calls) == 1
         conn.close()
 
@@ -688,8 +690,8 @@ class TestSyncCollection:
 
         with (
             patch("quarry.sync.prepare_document", side_effect=_fake_prepare),
-            patch("quarry.sync.delete_document"),
-            patch("quarry.sync.batch_insert_chunks", return_value=1),
+            patch("quarry.chunk_store.ChunkStore.delete_document"),
+            patch("quarry.chunk_store.ChunkStore.batch_insert", return_value=1),
         ):
             sync_collection(d, "col", db, settings, conn, max_workers=1)
 
@@ -719,8 +721,8 @@ class TestSyncCollection:
             patch(
                 "quarry.sync.prepare_document", side_effect=_fake_prepare
             ) as mock_prepare,
-            patch("quarry.sync.delete_document"),
-            patch("quarry.sync.batch_insert_chunks", return_value=1),
+            patch("quarry.chunk_store.ChunkStore.delete_document"),
+            patch("quarry.chunk_store.ChunkStore.batch_insert", return_value=1),
         ):
             sync_collection(d, "col", db, settings, conn, max_workers=1)
 
@@ -782,8 +784,8 @@ class TestSyncCollectionDurabilityAndRefresh:
 
         with (
             patch("quarry.sync.prepare_document", side_effect=_prepare),
-            patch("quarry.sync.delete_document"),
-            patch("quarry.sync.batch_insert_chunks", return_value=0),
+            patch("quarry.chunk_store.ChunkStore.delete_document"),
+            patch("quarry.chunk_store.ChunkStore.batch_insert", return_value=0),
             pytest.raises(KeyboardInterrupt),
         ):
             sync_collection(d, "col", db, settings, conn, max_workers=1)
@@ -821,8 +823,8 @@ class TestSyncCollectionDurabilityAndRefresh:
             patch(
                 "quarry.sync.prepare_document", side_effect=_fake_prepare
             ) as mock_prepare,
-            patch("quarry.sync.delete_document"),
-            patch("quarry.sync.batch_insert_chunks", return_value=1),
+            patch("quarry.chunk_store.ChunkStore.delete_document"),
+            patch("quarry.chunk_store.ChunkStore.batch_insert", return_value=1),
         ):
             first = sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert first.ingested == 3
@@ -842,8 +844,8 @@ class TestSyncCollectionDurabilityAndRefresh:
             patch(
                 "quarry.sync.prepare_document", side_effect=_fake_prepare
             ) as mock_prepare,
-            patch("quarry.sync.delete_document"),
-            patch("quarry.sync.batch_insert_chunks", return_value=0),
+            patch("quarry.chunk_store.ChunkStore.delete_document"),
+            patch("quarry.chunk_store.ChunkStore.batch_insert", return_value=0),
         ):
             second = sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert second.ingested == 0
@@ -873,8 +875,8 @@ class TestSyncCollectionDurabilityAndRefresh:
         # Initial ingest so content_hash is populated.
         with (
             patch("quarry.sync.prepare_document", side_effect=_fake_prepare),
-            patch("quarry.sync.delete_document"),
-            patch("quarry.sync.batch_insert_chunks", return_value=1),
+            patch("quarry.chunk_store.ChunkStore.delete_document"),
+            patch("quarry.chunk_store.ChunkStore.batch_insert", return_value=1),
         ):
             first = sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert first.ingested == 2
@@ -907,8 +909,8 @@ class TestSyncCollectionDurabilityAndRefresh:
 
         with (
             patch("quarry.sync.prepare_document", side_effect=_fake_prepare),
-            patch("quarry.sync.delete_document"),
-            patch("quarry.sync.batch_insert_chunks", return_value=0),
+            patch("quarry.chunk_store.ChunkStore.delete_document"),
+            patch("quarry.chunk_store.ChunkStore.batch_insert", return_value=0),
         ):
             second = sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert second.refreshed == 1
@@ -948,8 +950,8 @@ class TestSyncAll:
 
         with (
             patch("quarry.sync.prepare_document", side_effect=_fake_prepare),
-            patch("quarry.sync.delete_document"),
-            patch("quarry.sync.batch_insert_chunks", return_value=1),
+            patch("quarry.chunk_store.ChunkStore.delete_document"),
+            patch("quarry.chunk_store.ChunkStore.batch_insert", return_value=1),
         ):
             results = sync_all(db, settings, max_workers=1)
 

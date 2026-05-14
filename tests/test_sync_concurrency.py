@@ -16,15 +16,11 @@ import numpy as np
 import pytest
 from starlette.testclient import TestClient
 
-from quarry.database import (
-    FRAGMENT_THRESHOLD,
-    TABLE_NAME,
-    batch_insert_chunks,
-    count_fragments,
-    optimize_table,
-)
+from quarry.chunk_store import ChunkStore
 from quarry.http_server import TaskState, _QuarryContext, build_app
 from quarry.models import Chunk
+from quarry.optimizer import FRAGMENT_THRESHOLD, TableOptimizer
+from quarry.schema import TABLE_NAME
 from quarry.sync_registry import (
     list_registrations,
     open_registry,
@@ -324,7 +320,7 @@ class TestBatchInsertChunks:
 
     def test_empty_batch_returns_zero(self) -> None:
         db = MagicMock()
-        assert batch_insert_chunks(db, []) == 0
+        assert ChunkStore(db).batch_insert([]) == 0
 
     def test_single_document_batch(self) -> None:
         db = MagicMock()
@@ -336,7 +332,7 @@ class TestBatchInsertChunks:
         chunks = [self._make_chunk("a.txt")]
         vectors = np.zeros((1, 768), dtype=np.float32)
 
-        count = batch_insert_chunks(db, [(chunks, vectors)])
+        count = ChunkStore(db).batch_insert([(chunks, vectors)])
         assert count == 1
         table.add.assert_called_once()
 
@@ -354,7 +350,7 @@ class TestBatchInsertChunks:
             vectors = np.zeros((1, 768), dtype=np.float32)
             batch.append((chunks, vectors))
 
-        count = batch_insert_chunks(db, batch)
+        count = ChunkStore(db).batch_insert(batch)
         assert count == 3
         # Only 1 add call, not 3.
         assert table.add.call_count == 1
@@ -378,10 +374,10 @@ class TestOptimizeGuard:
         db.open_table.return_value = table
 
         with patch(
-            "quarry.database.count_fragments",
+            "quarry.optimizer.TableOptimizer.count_fragments",
             return_value=FRAGMENT_THRESHOLD + 1,
         ):
-            optimize_table(db)
+            TableOptimizer(db).optimize()
 
         table.optimize.assert_not_called()
 
@@ -391,8 +387,8 @@ class TestOptimizeGuard:
         table = MagicMock()
         db.open_table.return_value = table
 
-        with patch("quarry.database.count_fragments", return_value=100):
-            optimize_table(db)
+        with patch("quarry.optimizer.TableOptimizer.count_fragments", return_value=100):
+            TableOptimizer(db).optimize()
 
         table.optimize.assert_called_once()
 
@@ -403,10 +399,10 @@ class TestOptimizeGuard:
         db.open_table.return_value = table
 
         with patch(
-            "quarry.database.count_fragments",
+            "quarry.optimizer.TableOptimizer.count_fragments",
             return_value=FRAGMENT_THRESHOLD + 1,
         ):
-            optimize_table(db, force=True)
+            TableOptimizer(db).optimize(force=True)
 
         table.optimize.assert_called_once()
 
@@ -422,12 +418,12 @@ class TestOptimizeGuard:
 
         with (
             patch(
-                "quarry.database.count_fragments",
+                "quarry.optimizer.TableOptimizer.count_fragments",
                 return_value=FRAGMENT_THRESHOLD + 1,
             ),
             caplog.at_level(logging.WARNING),
         ):
-            optimize_table(db)
+            TableOptimizer(db).optimize()
 
         assert any("Skipping optimization" in msg for msg in caplog.messages)
         assert any("quarry optimize --force" in msg for msg in caplog.messages)
@@ -435,7 +431,7 @@ class TestOptimizeGuard:
     def test_count_fragments_no_table(self) -> None:
         db = MagicMock()
         db.list_tables.return_value.tables = []
-        assert count_fragments(db) == 0
+        assert TableOptimizer(db).count_fragments() == 0
 
     def test_count_fragments_counts_data_dir(self, tmp_path: Path) -> None:
         """count_fragments counts entries in the data/ directory."""
@@ -450,7 +446,7 @@ class TestOptimizeGuard:
         table.uri = str(tmp_path)
         db.open_table.return_value = table
 
-        assert count_fragments(db) == 5
+        assert TableOptimizer(db).count_fragments() == 5
 
 
 # ---------------------------------------------------------------------------

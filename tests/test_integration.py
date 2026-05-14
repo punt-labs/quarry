@@ -5,14 +5,10 @@ from pathlib import Path
 import pytest
 
 from quarry.backends import get_embedding_backend
+from quarry.chunk_catalog import ChunkCatalog
+from quarry.chunk_search import ChunkSearch
+from quarry.chunk_store import ChunkStore
 from quarry.config import Settings
-from quarry.database import (
-    count_chunks,
-    get_page_text,
-    list_collections,
-    list_documents,
-    search,
-)
 from quarry.pipeline import ingest_content, ingest_document
 from quarry.results import SearchResult
 from quarry.types import LanceDB
@@ -36,8 +32,7 @@ def _search(
 ) -> list[SearchResult]:
     """Embed a query and search the database."""
     vector = get_embedding_backend(settings).embed_query(query)
-    return search(
-        db,
+    return ChunkSearch(db).vector_search(
         vector,
         limit=limit,
         document_filter=document_filter,
@@ -181,7 +176,7 @@ class TestPdfIngestion:
     ) -> None:
         ingest_document(pdf_fixture, lance_db, integration_settings)
 
-        raw = get_page_text(lance_db, pdf_fixture.name, 1)
+        raw = ChunkCatalog(lance_db).get_page_text(pdf_fixture.name, 1)
         assert raw is not None
         assert "software" in raw.lower() or "engineering" in raw.lower()
 
@@ -276,7 +271,7 @@ class TestCollectionIsolation:
             collection="history",
         )
 
-        docs = list_documents(lance_db, collection_filter="biology")
+        docs = ChunkCatalog(lance_db).list_documents(collection_filter="biology")
         assert len(docs) == 1
         assert str(docs[0]["document_name"]) == "photosynthesis.txt"
 
@@ -298,7 +293,7 @@ class TestCollectionIsolation:
             collection="history",
         )
 
-        collections = list_collections(lance_db)
+        collections = ChunkCatalog(lance_db).list_collections()
         assert len(collections) == 2
         names = {str(c["collection"]) for c in collections}
         assert names == {"biology", "history"}
@@ -338,7 +333,7 @@ class TestOverwriteBehavior:
         assert len(new_results) > 0
         assert "tectonic" in str(new_results[0]["text"]).lower()
 
-        docs = list_documents(lance_db)
+        docs = ChunkCatalog(lance_db).list_documents()
         assert len(docs) == 1
 
     def test_no_overwrite_duplicates(
@@ -352,7 +347,7 @@ class TestOverwriteBehavior:
             lance_db,
             integration_settings,
         )
-        count_before = count_chunks(lance_db)
+        count_before = ChunkStore(lance_db).count()
 
         ingest_content(
             "Helium is a noble gas with atomic number two.",
@@ -361,7 +356,7 @@ class TestOverwriteBehavior:
             integration_settings,
             overwrite=False,
         )
-        count_after = count_chunks(lance_db)
+        count_after = ChunkStore(lance_db).count()
 
         assert count_after == count_before * 2
 
@@ -451,7 +446,7 @@ class TestRawTextIngestion:
             collection="notes",
         )
 
-        collections = list_collections(lance_db)
+        collections = ChunkCatalog(lance_db).list_collections()
         names = {str(c["collection"]) for c in collections}
         assert "notes" in names
 
@@ -479,7 +474,7 @@ class TestCollectionDerivation:
         col = CollectionName.from_path(notes)
         ingest_document(notes, lance_db, integration_settings, collection=str(col))
 
-        docs = list_documents(lance_db)
+        docs = ChunkCatalog(lance_db).list_documents()
         assert len(docs) == 1
         assert str(docs[0]["collection"]) == "ml-101"
 
@@ -502,6 +497,6 @@ class TestCollectionDerivation:
         col = CollectionName.from_path(notes, explicit="physics")
         ingest_document(notes, lance_db, integration_settings, collection=str(col))
 
-        docs = list_documents(lance_db)
+        docs = ChunkCatalog(lance_db).list_documents()
         assert len(docs) == 1
         assert str(docs[0]["collection"]) == "physics"

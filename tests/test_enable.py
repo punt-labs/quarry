@@ -428,7 +428,7 @@ class TestT12DisableKeepData:
             patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
             patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
             patch(
-                "quarry.database.delete_collection",
+                "quarry.chunk_store.ChunkStore.delete_collection",
             ) as mock_delete,
         ):
             enable_project(project)
@@ -460,7 +460,7 @@ class TestT13DisablePreservesAgentMemory:
             patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
             patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
             patch(
-                "quarry.database.delete_collection",
+                "quarry.chunk_store.ChunkStore.delete_collection",
             ) as mock_delete,
         ):
             enable_project(project)
@@ -468,7 +468,7 @@ class TestT13DisablePreservesAgentMemory:
 
         # delete_collection should only be called for project + captures,
         # never for memory-* collections.
-        deleted_collections = [call.args[1] for call in mock_delete.call_args_list]
+        deleted_collections = [call.args[0] for call in mock_delete.call_args_list]
         assert all(not c.startswith("memory-") for c in deleted_collections), (
             f"Memory collection deleted: {deleted_collections}"
         )

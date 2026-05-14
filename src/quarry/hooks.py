@@ -407,9 +407,9 @@ def _extract_web_fetch_content(payload: dict[str, object]) -> str | None:
 
 def _is_already_ingested(url: str, db: LanceDB, collection: str) -> bool:
     """Check if *url* is already in the given collection."""
-    from quarry.database import list_documents  # noqa: PLC0415
+    from quarry.chunk_catalog import ChunkCatalog  # noqa: PLC0415
 
-    docs = list_documents(db, collection_filter=collection)
+    docs = ChunkCatalog(db).list_documents(collection_filter=collection)
     return any(d["document_name"] == url for d in docs)
 
 

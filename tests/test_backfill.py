@@ -369,7 +369,7 @@ class TestBackfillSessions:
                 env["projects_dir"],
             ),
             patch(
-                "quarry.backfill.list_documents",
+                "quarry.chunk_catalog.ChunkCatalog.list_documents",
                 return_value=[fake_doc],
             ),
             patch("quarry.backfill.ingest_content") as mock_ingest,

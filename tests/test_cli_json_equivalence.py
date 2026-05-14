@@ -121,7 +121,7 @@ class TestJsonEquivalenceFind:
                 return_value=mock_backend,
             ),
             patch(
-                "quarry.__main__.hybrid_search",
+                "quarry.chunk_search.ChunkSearch.hybrid_search",
                 return_value=[local_row],
             ),
         ):
@@ -182,9 +182,9 @@ class TestJsonEquivalenceStatus:
                 return_value=mock_settings,
             ),
             patch("quarry.__main__.get_db"),
-            patch("quarry.__main__.count_chunks", return_value=100),
+            patch("quarry.chunk_store.ChunkStore.count", return_value=100),
             patch(
-                "quarry.__main__.db_list_collections",
+                "quarry.chunk_catalog.ChunkCatalog.list_collections",
                 return_value=[
                     {"collection": "a", "document_count": 3, "chunk_count": 60},
                     {"collection": "b", "document_count": 2, "chunk_count": 40},
@@ -353,7 +353,7 @@ class TestJsonShapeDelete:
                 return_value=_mock_settings(),
             ),
             patch("quarry.__main__.get_db"),
-            patch("quarry.__main__.db_delete_document", return_value=10),
+            patch("quarry.chunk_store.ChunkStore.delete_document", return_value=10),
         ):
             result = runner.invoke(app, ["--json", "delete", "report.pdf"])
         _reset_globals()
@@ -457,7 +457,7 @@ class TestJsonShapeDeregister:
                 return_value=["a", "b"],
             ),
             patch("quarry.__main__.get_db"),
-            patch("quarry.__main__.db_delete_document", return_value=3),
+            patch("quarry.chunk_store.ChunkStore.delete_document", return_value=3),
         ):
             result = runner.invoke(app, ["--json", "deregister", "math"])
         _reset_globals()
