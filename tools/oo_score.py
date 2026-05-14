@@ -846,7 +846,7 @@ def main() -> None:
     if len(sys.argv) < 2:
         _writeln(
             f"Usage: {sys.argv[0]} <file_or_directory> "
-            f"[--json] [--threshold] [--check] [--update] [--log]",
+            f"[--json] [--threshold] [--check] [--update] [--rebaseline] [--log]",
         )
         sys.exit(1)
 
