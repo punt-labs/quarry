@@ -690,7 +690,7 @@ def _spawn_background_ingest(
 
     Uses ``sys.executable`` to avoid PATH trust issues (same pattern as
     ``_sync_in_background``).  Redirects stdin/stdout/stderr to DEVNULL;
-    the subprocess calls ``configure_logging()`` itself, so the rotating
+    the subprocess calls ``LoggingConfig.configure()`` itself, so the rotating
     file handler captures all diagnostics.
 
     Returns True on success, False if the spawn failed (temp file cleaned up).

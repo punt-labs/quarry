@@ -50,7 +50,7 @@ def _embedding_backend_patches() -> tuple[
     tokenizer.encode_batch.side_effect = lambda texts: [enc for _ in texts]
     return (
         patch(
-            "quarry.embeddings._load_model_files",
+            "quarry.embeddings.OnnxEmbeddingBackend._load_model_files",
             return_value=("/fake/model.onnx", "/fake/tokenizer.json"),
         ),
         patch("tokenizers.Tokenizer.from_file", return_value=tokenizer),
@@ -149,7 +149,7 @@ class TestOnnxEmbeddingBackend:
 
         with (
             patch(
-                "quarry.embeddings._load_model_files",
+                "quarry.embeddings.OnnxEmbeddingBackend._load_model_files",
                 return_value=("/fake/model.onnx", "/fake/tokenizer.json"),
             ),
             patch("tokenizers.Tokenizer.from_file", return_value=tokenizer),
@@ -165,7 +165,7 @@ class TestOnnxEmbeddingBackend:
 
         with (
             patch(
-                "quarry.embeddings._load_model_files",
+                "quarry.embeddings.OnnxEmbeddingBackend._load_model_files",
                 return_value=("/fake/model.onnx", "/fake/tokenizer.json"),
             ),
             patch("tokenizers.Tokenizer.from_file", return_value=tokenizer),

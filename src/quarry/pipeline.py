@@ -1020,12 +1020,17 @@ def _bulk_ingest_entries(
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed  # noqa: PLC0415
 
-    from quarry.sitemap import filter_entries  # noqa: PLC0415
+    from quarry.sitemap import SitemapDiscovery  # noqa: PLC0415
 
     workers = max(1, workers)
     total_discovered = len(entries)
 
-    filtered = filter_entries(entries, include=include, exclude=exclude, limit=limit)
+    filtered = SitemapDiscovery.filter_entries(
+        entries,
+        include=include,
+        exclude=exclude,
+        limit=limit,
+    )
     after_filter = len(filtered)
     progress("After filtering: %d URLs", after_filter)
 
@@ -1164,7 +1169,7 @@ def ingest_sitemap(
     """
     from urllib.parse import urlparse  # noqa: PLC0415
 
-    from quarry.sitemap import discover_urls  # noqa: PLC0415
+    from quarry.sitemap import SitemapDiscovery  # noqa: PLC0415
 
     progress = _make_progress(progress_callback)
 
@@ -1172,7 +1177,7 @@ def ingest_sitemap(
         collection = urlparse(url).hostname or "default"
 
     progress("Fetching sitemap: %s", url)
-    entries = discover_urls(url)
+    entries = SitemapDiscovery.discover_urls(url)
     progress("Discovered %d URLs", len(entries))
 
     return _bulk_ingest_entries(
@@ -1237,7 +1242,7 @@ def ingest_auto(
     """
     from urllib.parse import urlparse  # noqa: PLC0415
 
-    from quarry.sitemap import discover_pages  # noqa: PLC0415
+    from quarry.sitemap import SitemapDiscovery  # noqa: PLC0415
 
     progress = _make_progress(progress_callback)
     parsed = urlparse(url)
@@ -1272,7 +1277,7 @@ def ingest_auto(
 
     progress("Discovering sitemaps for %s://%s", parsed.scheme, parsed.netloc)
     try:
-        entries = discover_pages(url)
+        entries = SitemapDiscovery.discover_pages(url)
     except Exception:
         logger.exception("Sitemap discovery failed for %s", url)
         entries = []
@@ -1302,10 +1307,10 @@ def ingest_auto(
 
     # Apply include filter once up front to avoid double-filtering
     # inside _bulk_ingest_entries.
-    from quarry.sitemap import filter_entries  # noqa: PLC0415
+    from quarry.sitemap import SitemapDiscovery  # noqa: PLC0415
 
     if include:
-        entries = filter_entries(entries, include=include)
+        entries = SitemapDiscovery.filter_entries(entries, include=include)
 
     # If filtering dropped everything, fall back to single-page ingestion.
     # This handles sites whose sitemap is partially parseable but doesn't

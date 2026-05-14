@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-from quarry.embeddings import _EMBED_BATCH_SIZE, OnnxEmbeddingBackend, _load_model_files
+from quarry.embeddings import _EMBED_BATCH_SIZE, OnnxEmbeddingBackend
 
 
 def _mock_session() -> MagicMock:
@@ -42,15 +42,16 @@ def _patch_onnx_backend(session: MagicMock, tokenizer: MagicMock):
     mock_opts = MagicMock()
     with (
         patch(
-            "quarry.embeddings._load_model_files",
+            "quarry.embeddings.OnnxEmbeddingBackend._load_model_files",
             return_value=("/fake/model.onnx", "/fake/tokenizer.json"),
         ),
         patch("tokenizers.Tokenizer.from_file", return_value=tokenizer),
         patch("onnxruntime.InferenceSession", return_value=session, create=True),
         patch("onnxruntime.SessionOptions", return_value=mock_opts, create=True),
         patch("onnxruntime.GraphOptimizationLevel", create=True),
-        patch(
-            "quarry.embeddings.select_provider",
+        patch.object(
+            ProviderSelection,
+            "from_environment",
             return_value=ProviderSelection(
                 provider="CPUExecutionProvider",
                 model_file="onnx/model_int8.onnx",
@@ -188,12 +189,14 @@ class TestAutoDownloadFallback:
         """_load_model_files returns local paths without downloading."""
         with (
             patch(
-                "quarry.embeddings._load_local_model_files",
+                "quarry.embeddings.OnnxEmbeddingBackend._load_local_model_files",
                 return_value=("/cached/model.onnx", "/cached/tokenizer.json"),
             ) as local_mock,
-            patch("quarry.embeddings.download_model_files") as download_mock,
+            patch(
+                "quarry.embeddings.OnnxEmbeddingBackend.download_model_files",
+            ) as download_mock,
         ):
-            result = _load_model_files("onnx/model_int8.onnx")
+            result = OnnxEmbeddingBackend._load_model_files("onnx/model_int8.onnx")
 
         assert result == ("/cached/model.onnx", "/cached/tokenizer.json")
         local_mock.assert_called_once_with("onnx/model_int8.onnx")
@@ -203,18 +206,18 @@ class TestAutoDownloadFallback:
         """_load_model_files falls back to download when local raises OSError."""
         with (
             patch(
-                "quarry.embeddings._load_local_model_files",
+                "quarry.embeddings.OnnxEmbeddingBackend._load_local_model_files",
                 side_effect=OSError("not cached"),
             ),
             patch(
-                "quarry.embeddings.download_model_files",
+                "quarry.embeddings.OnnxEmbeddingBackend.download_model_files",
                 return_value=(
                     "/downloaded/model.onnx",
                     "/downloaded/tokenizer.json",
                 ),
             ) as download_mock,
         ):
-            result = _load_model_files("onnx/model_int8.onnx")
+            result = OnnxEmbeddingBackend._load_model_files("onnx/model_int8.onnx")
 
         assert result == (
             "/downloaded/model.onnx",
@@ -248,7 +251,7 @@ class TestCudaFallback:
 
         with (
             patch(
-                "quarry.embeddings._load_model_files",
+                "quarry.embeddings.OnnxEmbeddingBackend._load_model_files",
                 return_value=("/fake/model.onnx", "/fake/tokenizer.json"),
             ),
             patch("tokenizers.Tokenizer.from_file", return_value=tokenizer),
@@ -259,8 +262,9 @@ class TestCudaFallback:
             ),
             patch("onnxruntime.SessionOptions", return_value=MagicMock(), create=True),
             patch("onnxruntime.GraphOptimizationLevel", create=True),
-            patch(
-                "quarry.embeddings.select_provider",
+            patch.object(
+                ProviderSelection,
+                "from_environment",
                 return_value=ProviderSelection(
                     provider="CUDAExecutionProvider",
                     model_file="onnx/model_fp16.onnx",

@@ -143,10 +143,10 @@ def _check_local_ocr() -> CheckResult:
 
 def _check_provider() -> CheckResult:
     """Report which ONNX execution provider is selected."""
-    from quarry.provider import select_provider  # noqa: PLC0415
+    from quarry.provider import ProviderSelection  # noqa: PLC0415
 
     try:
-        selection = select_provider()
+        selection = ProviderSelection.from_environment()
         return CheckResult(
             name="ONNX provider",
             passed=True,
@@ -1023,9 +1023,9 @@ def run_install() -> int:  # noqa: C901
     # Step 3: embedding model
     print("[3/8] Downloading embedding model...")  # noqa: T201
     try:
-        from quarry.embeddings import download_model_files  # noqa: PLC0415
+        from quarry.embeddings import OnnxEmbeddingBackend  # noqa: PLC0415
 
-        download_model_files()
+        OnnxEmbeddingBackend.download_model_files()
         print("  \u2713 snowflake-arctic-embed-m-v1.5 (INT8 ONNX) cached")  # noqa: T201
         # Also download FP16 model if CUDA is available.
         # NOTE: This is an in-process import. If onnxruntime was already
@@ -1039,7 +1039,9 @@ def run_install() -> int:  # noqa: C901
             import onnxruntime as ort  # noqa: PLC0415
 
             if "CUDAExecutionProvider" in ort.get_available_providers():
-                download_model_files(model_file="onnx/model_fp16.onnx")
+                OnnxEmbeddingBackend.download_model_files(
+                    model_file="onnx/model_fp16.onnx"
+                )
                 print("  \u2713 FP16 model cached (for CUDA)")  # noqa: T201
         except Exception:  # noqa: BLE001, S110
             pass  # FP16 download is optional -- first-use fallback works

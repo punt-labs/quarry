@@ -54,7 +54,7 @@ from quarry.database import (
     list_collections as db_list_collections,
     list_documents,
 )
-from quarry.provider import provider_display
+from quarry.provider import ProviderSelection
 from quarry.sync_registry import (
     DirectoryRegistration,
     deregister_directory,
@@ -1275,7 +1275,7 @@ def _status_route(request: Request) -> JSONResponse:
             "database_path": str(settings.lancedb_path),
             "database_size_bytes": db_size_bytes,
             "embedding_model": settings.embedding_model,
-            "provider": provider_display(),
+            "provider": ProviderSelection.display_cached(),
             "embedding_dimension": settings.embedding_dimension,
         }
     )

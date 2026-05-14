@@ -103,9 +103,9 @@ def _ingest_background() -> None:
     text_file = Path(text_file_path)
 
     # Detached subprocess: configure its own logging per the standard.
-    from quarry.logging_config import configure_logging as _configure  # noqa: PLC0415
+    from quarry.logging_config import LoggingConfig  # noqa: PLC0415
 
-    _configure(stderr_level="WARNING")
+    LoggingConfig.configure(stderr_level="WARNING")
 
     try:
         text = text_file.read_text()

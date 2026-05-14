@@ -9,10 +9,8 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 
 from quarry.sitemap import (
+    SitemapDiscovery,
     SitemapEntry,
-    discover_pages,
-    discover_urls,
-    filter_entries,
 )
 
 # ---------------------------------------------------------------------------
@@ -34,7 +32,7 @@ class TestDiscoverPages:
         ]
         mock_tree_fn.return_value = mock_tree
 
-        entries = discover_pages("https://example.com/docs/guide")
+        entries = SitemapDiscovery.discover_pages("https://example.com/docs/guide")
         assert len(entries) == 2
         mock_tree_fn.assert_called_once_with("https://example.com/")
 
@@ -44,7 +42,7 @@ class TestDiscoverPages:
         mock_tree.all_pages.return_value = []
         mock_tree_fn.return_value = mock_tree
 
-        entries = discover_pages("https://example.com/")
+        entries = SitemapDiscovery.discover_pages("https://example.com/")
         assert entries == []
 
     @patch("usp.tree.sitemap_tree_for_homepage")
@@ -58,7 +56,7 @@ class TestDiscoverPages:
         ]
         mock_tree_fn.return_value = mock_tree
 
-        entries = discover_pages("https://example.com/")
+        entries = SitemapDiscovery.discover_pages("https://example.com/")
         assert entries[0].lastmod == ts
 
     @patch("usp.tree.sitemap_tree_for_homepage")
@@ -73,7 +71,7 @@ class TestDiscoverPages:
         ]
         mock_tree_fn.return_value = mock_tree
 
-        entries = discover_pages("https://example.com/")
+        entries = SitemapDiscovery.discover_pages("https://example.com/")
         assert len(entries) == 2
         locs = [e.loc for e in entries]
         assert locs.count("https://example.com/dup") == 1
@@ -100,7 +98,7 @@ class TestDiscoverUrls:
         mock_fetcher.sitemap.return_value = mock_sitemap
         mock_fetcher_cls.return_value = mock_fetcher
 
-        entries = discover_urls("https://example.com/sitemap.xml")
+        entries = SitemapDiscovery.discover_urls("https://example.com/sitemap.xml")
         assert len(entries) == 2
         assert entries[0].loc == "https://example.com/page1"
         mock_fetcher_cls.assert_called_once_with(
@@ -121,7 +119,7 @@ class TestDiscoverUrls:
         mock_fetcher.sitemap.return_value = mock_sitemap
         mock_fetcher_cls.return_value = mock_fetcher
 
-        entries = discover_urls("https://example.com/sitemap.xml")
+        entries = SitemapDiscovery.discover_urls("https://example.com/sitemap.xml")
         assert len(entries) == 2
 
     @patch("usp.fetch_parse.SitemapFetcher")
@@ -132,7 +130,7 @@ class TestDiscoverUrls:
         mock_fetcher.sitemap.return_value = mock_sitemap
         mock_fetcher_cls.return_value = mock_fetcher
 
-        entries = discover_urls("https://example.com/sitemap.xml")
+        entries = SitemapDiscovery.discover_urls("https://example.com/sitemap.xml")
         assert entries == []
 
 
@@ -155,20 +153,20 @@ class TestFilterEntries:
     _entries: ClassVar[list[SitemapEntry]] = _FILTER_ENTRIES
 
     def test_include_matches_path(self) -> None:
-        result = filter_entries(self._entries, include=["/docs/*"])
+        result = SitemapDiscovery.filter_entries(self._entries, include=["/docs/*"])
         locs = [e.loc for e in result]
         assert "https://example.com/docs/api" in locs
         assert "https://example.com/docs/guide" in locs
         assert "https://example.com/blog/post1" not in locs
 
     def test_exclude_removes_matching(self) -> None:
-        result = filter_entries(self._entries, exclude=["/blog/*"])
+        result = SitemapDiscovery.filter_entries(self._entries, exclude=["/blog/*"])
         locs = [e.loc for e in result]
         assert "https://example.com/blog/post1" not in locs
         assert len(locs) == 3
 
     def test_exclude_takes_precedence(self) -> None:
-        result = filter_entries(
+        result = SitemapDiscovery.filter_entries(
             self._entries,
             include=["/docs/*"],
             exclude=["/docs/v1/*"],
@@ -178,11 +176,11 @@ class TestFilterEntries:
         assert "https://example.com/docs/v1/old" not in locs
 
     def test_limit_caps_results(self) -> None:
-        result = filter_entries(self._entries, limit=2)
+        result = SitemapDiscovery.filter_entries(self._entries, limit=2)
         assert len(result) == 2
 
     def test_combined_include_exclude_limit(self) -> None:
-        result = filter_entries(
+        result = SitemapDiscovery.filter_entries(
             self._entries,
             include=["/docs/*"],
             exclude=["/docs/v1/*"],
@@ -192,7 +190,7 @@ class TestFilterEntries:
         assert result[0].loc == "https://example.com/docs/api"
 
     def test_no_filters_returns_all(self) -> None:
-        result = filter_entries(self._entries)
+        result = SitemapDiscovery.filter_entries(self._entries)
         assert len(result) == len(self._entries)
 
 
@@ -212,7 +210,7 @@ class TestIngestSitemapDedup:
 
     @patch("quarry.pipeline.ingest_url")
     @patch("quarry.pipeline.list_documents")
-    @patch("quarry.sitemap.discover_urls")
+    @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
     def test_skips_when_lastmod_older(
         self,
         mock_discover: MagicMock,
@@ -247,7 +245,7 @@ class TestIngestSitemapDedup:
 
     @patch("quarry.pipeline.ingest_url")
     @patch("quarry.pipeline.list_documents")
-    @patch("quarry.sitemap.discover_urls")
+    @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
     def test_ingests_when_lastmod_newer(
         self,
         mock_discover: MagicMock,
@@ -282,7 +280,7 @@ class TestIngestSitemapDedup:
 
     @patch("quarry.pipeline.ingest_url")
     @patch("quarry.pipeline.list_documents")
-    @patch("quarry.sitemap.discover_urls")
+    @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
     def test_ingests_when_no_existing_doc(
         self,
         mock_discover: MagicMock,
@@ -312,7 +310,7 @@ class TestIngestSitemapDedup:
 
     @patch("quarry.pipeline.ingest_url")
     @patch("quarry.pipeline.list_documents")
-    @patch("quarry.sitemap.discover_urls")
+    @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
     def test_overwrite_bypasses_dedup(
         self,
         mock_discover: MagicMock,
@@ -348,7 +346,7 @@ class TestIngestSitemapDedup:
 
     @patch("quarry.pipeline.ingest_url")
     @patch("quarry.pipeline.list_documents")
-    @patch("quarry.sitemap.discover_urls")
+    @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
     def test_no_lastmod_always_ingests(
         self,
         mock_discover: MagicMock,
@@ -387,7 +385,7 @@ class TestIngestSitemapDedup:
 class TestIngestSitemapIntegration:
     """End-to-end integration following test_url_ingestion.py pattern."""
 
-    @patch("quarry.sitemap.discover_urls")
+    @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
     @patch("quarry.pipeline._fetch_url")
     def test_end_to_end(
         self,
@@ -441,7 +439,7 @@ class TestIngestSitemapIntegration:
         assert result["failed"] == 0
         assert result["errors"] == []
 
-    @patch("quarry.sitemap.discover_urls")
+    @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
     @patch("quarry.pipeline._fetch_url")
     def test_with_filters(
         self,
@@ -491,7 +489,7 @@ class TestIngestSitemapIntegration:
 
     @patch("quarry.pipeline.ingest_url")
     @patch("quarry.pipeline.list_documents")
-    @patch("quarry.sitemap.discover_urls")
+    @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
     def test_default_collection_from_domain(
         self,
         mock_discover: MagicMock,
@@ -513,7 +511,7 @@ class TestIngestSitemapIntegration:
 
     @patch("quarry.pipeline.ingest_url")
     @patch("quarry.pipeline.list_documents")
-    @patch("quarry.sitemap.discover_urls")
+    @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
     def test_handles_ingest_failure(
         self,
         mock_discover: MagicMock,
@@ -564,7 +562,7 @@ class TestIngestAuto:
     """Test smart URL ingestion with sitemap auto-discovery."""
 
     @patch("quarry.pipeline._bulk_ingest_entries")
-    @patch("quarry.sitemap.discover_pages")
+    @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
     def test_routes_to_bulk_ingest_when_pages_discovered(
         self,
         mock_discover: MagicMock,
@@ -603,7 +601,7 @@ class TestIngestAuto:
         assert all(e.loc.startswith("https://example.com/docs") for e in entries_arg)
 
     @patch("quarry.pipeline.ingest_url")
-    @patch("quarry.sitemap.discover_pages")
+    @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
     def test_falls_back_to_single_page(
         self,
         mock_discover: MagicMock,
@@ -629,7 +627,7 @@ class TestIngestAuto:
         mock_ingest_url.assert_called_once()
 
     @patch("quarry.pipeline._bulk_ingest_entries")
-    @patch("quarry.sitemap.discover_pages")
+    @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
     def test_no_path_filter_for_root_url(
         self,
         mock_discover: MagicMock,
@@ -658,7 +656,7 @@ class TestIngestAuto:
         assert call_kwargs.kwargs.get("include") is None
 
     @patch("quarry.pipeline._bulk_ingest_entries")
-    @patch("quarry.sitemap.discover_pages")
+    @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
     def test_collection_defaults_to_hostname(
         self,
         mock_discover: MagicMock,
@@ -686,7 +684,7 @@ class TestIngestAuto:
         assert call_kwargs.kwargs["collection"] == "docs.python.org"
 
     @patch("quarry.pipeline._bulk_ingest_entries")
-    @patch("quarry.sitemap.discover_pages")
+    @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
     def test_explicit_collection_passed_through(
         self,
         mock_discover: MagicMock,
@@ -746,7 +744,7 @@ class TestIngestAuto:
         mock_ingest_sitemap.assert_called_once()
 
     @patch("quarry.pipeline.ingest_url")
-    @patch("quarry.sitemap.discover_pages")
+    @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
     def test_discovery_error_falls_back_to_single_page(
         self,
         mock_discover: MagicMock,
@@ -771,7 +769,7 @@ class TestIngestAuto:
         mock_ingest_url.assert_called_once()
 
     @patch("quarry.pipeline.ingest_url")
-    @patch("quarry.sitemap.discover_pages")
+    @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
     def test_explicit_collection_passed_through_single_page_fallback(
         self,
         mock_discover: MagicMock,
@@ -798,7 +796,7 @@ class TestIngestAuto:
         assert call_kwargs.kwargs["collection"] == "my-custom-collection"
 
     @patch("quarry.pipeline.ingest_url")
-    @patch("quarry.sitemap.discover_pages")
+    @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
     def test_explicit_collection_passed_through_filter_zero_fallback(
         self,
         mock_discover: MagicMock,
@@ -856,7 +854,7 @@ class TestIngestAuto:
         call_kwargs = mock_ingest_sitemap.call_args
         assert call_kwargs.kwargs["collection"] == "my-docs"
 
-    @patch("quarry.sitemap.discover_pages")
+    @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
     def test_sitemap_substring_not_misdetected(
         self,
         mock_discover: MagicMock,
@@ -882,7 +880,7 @@ class TestIngestAuto:
         assert "document_name" in result
 
     @patch("quarry.pipeline.ingest_url")
-    @patch("quarry.sitemap.discover_pages")
+    @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
     def test_falls_back_to_single_page_when_filter_yields_zero(
         self,
         mock_discover: MagicMock,

@@ -15,7 +15,7 @@ from quarry.config import (
     ONNX_QUERY_PREFIX,
     ONNX_TOKENIZER_FILE,
 )
-from quarry.provider import PROVIDER_MODEL_MAP, ProviderSelection, select_provider
+from quarry.provider import PROVIDER_MODEL_MAP, ProviderSelection
 
 if TYPE_CHECKING:
     import onnxruntime as ort
@@ -25,56 +25,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _EMBED_BATCH_SIZE: int = 32
-
-
-def download_model_files(
-    model_file: str = "onnx/model_int8.onnx",
-) -> tuple[str, str]:
-    """Download ONNX model and tokenizer from HuggingFace Hub."""
-    from huggingface_hub import hf_hub_download  # noqa: PLC0415
-
-    model_path = hf_hub_download(
-        repo_id=ONNX_MODEL_REPO,
-        filename=model_file,
-        revision=ONNX_MODEL_REVISION,
-    )
-    tokenizer_path = hf_hub_download(
-        repo_id=ONNX_MODEL_REPO,
-        filename=ONNX_TOKENIZER_FILE,
-        revision=ONNX_MODEL_REVISION,
-    )
-    return model_path, tokenizer_path
-
-
-def _load_model_files(model_file: str) -> tuple[str, str]:
-    """Load ONNX model and tokenizer, downloading if not cached."""
-    try:
-        return _load_local_model_files(model_file)
-    except OSError:
-        logger.info("Embedding model not cached -- downloading (~120-220 MB)")
-        return download_model_files(model_file)
-
-
-def _load_local_model_files(model_file: str) -> tuple[str, str]:
-    """Load ONNX model and tokenizer from local cache only.
-
-    No network requests. Raises ``OSError`` if files are not cached.
-    """
-    from huggingface_hub import hf_hub_download  # noqa: PLC0415
-
-    model_path = hf_hub_download(
-        repo_id=ONNX_MODEL_REPO,
-        filename=model_file,
-        revision=ONNX_MODEL_REVISION,
-        local_files_only=True,
-    )
-    tokenizer_path = hf_hub_download(
-        repo_id=ONNX_MODEL_REPO,
-        filename=ONNX_TOKENIZER_FILE,
-        revision=ONNX_MODEL_REVISION,
-        local_files_only=True,
-    )
-    return model_path, tokenizer_path
 
 
 class OnnxEmbeddingBackend:
@@ -88,17 +38,64 @@ class OnnxEmbeddingBackend:
     _tokenizer: Tokenizer
     _session: ort.InferenceSession
 
+    @classmethod
+    def download_model_files(
+        cls, model_file: str = "onnx/model_int8.onnx"
+    ) -> tuple[str, str]:
+        """Download ONNX model and tokenizer from HuggingFace Hub."""
+        from huggingface_hub import hf_hub_download  # noqa: PLC0415
+
+        model_path = hf_hub_download(
+            repo_id=ONNX_MODEL_REPO,
+            filename=model_file,
+            revision=ONNX_MODEL_REVISION,
+        )
+        tokenizer_path = hf_hub_download(
+            repo_id=ONNX_MODEL_REPO,
+            filename=ONNX_TOKENIZER_FILE,
+            revision=ONNX_MODEL_REVISION,
+        )
+        return model_path, tokenizer_path
+
+    @classmethod
+    def _load_model_files(cls, model_file: str) -> tuple[str, str]:
+        """Load ONNX model and tokenizer, downloading if not cached."""
+        try:
+            return cls._load_local_model_files(model_file)
+        except OSError:
+            logger.info("Embedding model not cached -- downloading (~120-220 MB)")
+            return cls.download_model_files(model_file)
+
+    @classmethod
+    def _load_local_model_files(cls, model_file: str) -> tuple[str, str]:
+        """Load ONNX model and tokenizer from local cache only."""
+        from huggingface_hub import hf_hub_download  # noqa: PLC0415
+
+        model_path = hf_hub_download(
+            repo_id=ONNX_MODEL_REPO,
+            filename=model_file,
+            revision=ONNX_MODEL_REVISION,
+            local_files_only=True,
+        )
+        tokenizer_path = hf_hub_download(
+            repo_id=ONNX_MODEL_REPO,
+            filename=ONNX_TOKENIZER_FILE,
+            revision=ONNX_MODEL_REVISION,
+            local_files_only=True,
+        )
+        return model_path, tokenizer_path
+
     def __new__(cls) -> Self:
         self = super().__new__(cls)
         self._dimension = 768
 
-        selection = select_provider()
+        selection = ProviderSelection.from_environment()
 
         force_cuda = os.environ.get("QUARRY_PROVIDER", "").strip().lower() == "cuda"
 
         if selection.provider == "CUDAExecutionProvider":
             try:
-                model_path, tokenizer_path = _load_model_files(selection.model_file)
+                model_path, tokenizer_path = cls._load_model_files(selection.model_file)
             except Exception as load_exc:
                 if not force_cuda:
                     logger.warning(
@@ -106,7 +103,7 @@ class OnnxEmbeddingBackend:
                         load_exc,
                     )
                     cpu_model_file = PROVIDER_MODEL_MAP["CPUExecutionProvider"]
-                    model_path, tokenizer_path = _load_model_files(cpu_model_file)
+                    model_path, tokenizer_path = cls._load_model_files(cpu_model_file)
                     selection = ProviderSelection(
                         provider="CPUExecutionProvider",
                         model_file=cpu_model_file,
@@ -114,7 +111,7 @@ class OnnxEmbeddingBackend:
                 else:
                     raise
         else:
-            model_path, tokenizer_path = _load_model_files(selection.model_file)
+            model_path, tokenizer_path = cls._load_model_files(selection.model_file)
 
         from tokenizers import Tokenizer  # noqa: PLC0415
 
@@ -163,7 +160,7 @@ class OnnxEmbeddingBackend:
                     exc_info=True,
                 )
                 cpu_model_file = PROVIDER_MODEL_MAP["CPUExecutionProvider"]
-                model_path, _ = _load_model_files(cpu_model_file)
+                model_path, _ = cls._load_model_files(cpu_model_file)
                 try:
                     self._session = ort.InferenceSession(
                         model_path,

@@ -44,9 +44,9 @@ from quarry.formatting import (
     format_documents,
     format_status,
 )
-from quarry.logging_config import configure_logging
+from quarry.logging_config import LoggingConfig
 from quarry.pipeline import ingest_auto, ingest_content, ingest_document
-from quarry.provider import provider_display
+from quarry.provider import ProviderSelection
 from quarry.remote import (
     CA_CERT_PATH,
     MCP_PROXY_CONFIG_PATH,
@@ -192,7 +192,7 @@ def main_callback(
         stderr_level = "CRITICAL"
     else:
         stderr_level = "WARNING"
-    configure_logging(stderr_level=stderr_level)
+    LoggingConfig.configure(stderr_level=stderr_level)
     if ctx.invoked_subcommand is None:
         print(ctx.get_help())
         raise typer.Exit(code=0)
@@ -925,7 +925,7 @@ def status_cmd() -> None:
         "database_path": str(settings.lancedb_path),
         "database_size_bytes": db_size_bytes,
         "embedding_model": settings.embedding_model,
-        "provider": provider_display(),
+        "provider": ProviderSelection.display_cached(),
         "embedding_dimension": settings.embedding_dimension,
     }
     _emit(data, format_status(data))
@@ -1129,17 +1129,12 @@ def deregister(
 
 
 def _auto_workers(settings: Settings) -> int:  # noqa: ARG001
-    """Select worker count based on the active ONNX execution provider.
-
-    Returns 4 when CUDAExecutionProvider is active (GPU-accelerated embedding
-    is fast; parsing is the bottleneck and is parallelizable). Returns 1 for
-    CPU-only deployments. Respects the QUARRY_PROVIDER environment variable.
-    Falls back to 1 on any error (broken runtime, missing dependency, etc.).
-    """
+    """Return 4 for CUDA (GPU), 1 for CPU; falls back to 1 on error."""
     try:
-        from quarry.provider import select_provider  # noqa: PLC0415
+        from quarry.provider import ProviderSelection  # noqa: PLC0415
 
-        return 4 if select_provider().provider == "CUDAExecutionProvider" else 1
+        prov = ProviderSelection.from_environment().provider
+        return 4 if prov == "CUDAExecutionProvider" else 1
     except Exception:  # noqa: BLE001
         return 1
 

@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from quarry.latex_utils import escape_latex, rows_to_latex
+from quarry.latex_utils import LatexSerializer
 from quarry.models import PageContent, PageType
 
 if TYPE_CHECKING:
@@ -27,14 +27,15 @@ def _table_to_latex(table: Table) -> str:
 
     headers = rows_data[0]
     data = rows_data[1:]
-    return rows_to_latex(headers, data)
+    return LatexSerializer.serialize_table(headers, data)
 
 
 def _extract_shapes(slide: Slide) -> tuple[str, list[str]]:
     """Extract title and content parts from slide shapes in order.
 
     Text shapes are LaTeX-escaped; tables are already escaped by
-    ``rows_to_latex``.  All non-title shapes are collected in iteration
+    ``LatexSerializer.serialize_table``.  All non-title shapes are collected
+    in iteration
     order so interleaved text and tables preserve their slide layout.
 
     Returns:
@@ -49,7 +50,7 @@ def _extract_shapes(slide: Slide) -> tuple[str, list[str]]:
 
     for shape in slide.shapes:
         if shape.has_table:
-            # Tables are LaTeX-escaped internally by rows_to_latex
+            # Tables are LaTeX-escaped internally by LatexSerializer.serialize_table
             latex = _table_to_latex(shape.table)  # type: ignore[attr-defined]
             if latex:
                 content_parts.append(latex)
@@ -59,7 +60,7 @@ def _extract_shapes(slide: Slide) -> tuple[str, list[str]]:
             tf = shape.text_frame  # type: ignore[attr-defined]
             text: str = tf.text.strip()
             if text:
-                content_parts.append(escape_latex(text))
+                content_parts.append(LatexSerializer.escape(text))
 
     return title, content_parts
 
@@ -103,13 +104,13 @@ def _format_slide_content(
     parts: list[str] = []
 
     if title:
-        parts.append(f"# {escape_latex(title)}")
+        parts.append(f"# {LatexSerializer.escape(title)}")
 
     if body:
         parts.append(body)
 
     if notes:
-        parts.append(f"---\nSpeaker Notes:\n{escape_latex(notes)}")
+        parts.append(f"---\nSpeaker Notes:\n{LatexSerializer.escape(notes)}")
 
     return "\n\n".join(parts)
 
