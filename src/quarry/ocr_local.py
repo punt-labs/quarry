@@ -7,7 +7,7 @@ import logging
 import threading
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Protocol, cast, runtime_checkable
+from typing import Protocol, Self, cast, runtime_checkable
 
 import fitz
 from PIL import Image
@@ -37,12 +37,7 @@ _engine_lock = threading.Lock()
 
 
 def get_engine() -> _OcrEngine:
-    """Return a cached RapidOCR engine instance.
-
-    Thread-safe via double-checked locking. The engine is initialized
-    once per process. ONNX models are bundled in the rapidocr package
-    (~17 MB) and loaded on first call.
-    """
+    """Return a cached RapidOCR engine instance (thread-safe, lazy init)."""
     global _engine
     engine = _engine
     if engine is None:
@@ -58,11 +53,7 @@ def get_engine() -> _OcrEngine:
 
 
 def _extract_text(result: _OcrResult) -> str:
-    """Extract text lines from a RapidOCR output.
-
-    RapidOCR v3 returns an object with a ``txts`` attribute that is
-    either a tuple of strings (text detected) or ``None`` (no text).
-    """
+    """Extract text lines from a RapidOCR output."""
     if result.txts is None:
         return ""
     return "\n".join(str(t) for t in result.txts)
@@ -113,8 +104,12 @@ class LocalOcrBackend:
     Uses PaddleOCR models via ONNX Runtime for CPU-only inference.
     """
 
-    def __init__(self, settings: Settings) -> None:
+    _settings: Settings
+
+    def __new__(cls, settings: Settings) -> Self:
+        self = super().__new__(cls)
         self._settings = settings
+        return self
 
     def ocr_document(
         self,

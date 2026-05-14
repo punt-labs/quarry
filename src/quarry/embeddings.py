@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Self
 
 import numpy as np
 
@@ -18,7 +18,9 @@ from quarry.config import (
 from quarry.provider import PROVIDER_MODEL_MAP, ProviderSelection, select_provider
 
 if TYPE_CHECKING:
+    import onnxruntime as ort
     from numpy.typing import NDArray
+    from tokenizers import Tokenizer
 
 logger = logging.getLogger(__name__)
 
@@ -28,13 +30,7 @@ _EMBED_BATCH_SIZE: int = 32
 def download_model_files(
     model_file: str = "onnx/model_int8.onnx",
 ) -> tuple[str, str]:
-    """Download ONNX model and tokenizer from HuggingFace Hub.
-
-    Makes network requests. Used by ``quarry install`` only.
-
-    Returns:
-        Tuple of (model_path, tokenizer_path) as absolute file paths.
-    """
+    """Download ONNX model and tokenizer from HuggingFace Hub."""
     from huggingface_hub import hf_hub_download  # noqa: PLC0415
 
     model_path = hf_hub_download(
@@ -51,15 +47,7 @@ def download_model_files(
 
 
 def _load_model_files(model_file: str) -> tuple[str, str]:
-    """Load ONNX model and tokenizer, downloading if not cached.
-
-    Tries local cache first (no network). Falls back to downloading
-    from HuggingFace Hub if the files are missing. This makes
-    ``quarry install`` optional -- the model is fetched on first use.
-
-    Returns:
-        Tuple of (model_path, tokenizer_path) as absolute file paths.
-    """
+    """Load ONNX model and tokenizer, downloading if not cached."""
     try:
         return _load_local_model_files(model_file)
     except OSError:
@@ -96,7 +84,12 @@ class OnnxEmbeddingBackend:
     Uses the INT8 quantized ONNX export of snowflake-arctic-embed-m-v1.5.
     """
 
-    def __init__(self) -> None:
+    _dimension: int
+    _tokenizer: Tokenizer
+    _session: ort.InferenceSession
+
+    def __new__(cls) -> Self:
+        self = super().__new__(cls)
         self._dimension = 768
 
         selection = select_provider()
@@ -189,6 +182,7 @@ class OnnxEmbeddingBackend:
                 )
             else:
                 raise
+        return self
 
     @property
     def dimension(self) -> int:
