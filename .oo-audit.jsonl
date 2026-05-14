@@ -2,3 +2,4 @@
 {"ts":"2026-05-13T21:56:17Z","commit":"c41a22c","files_scored":42,"files_improved":0,"files_regressed":1,"verdict":"fail","deltas":{}}
 {"ts":"2026-05-13T21:59:01Z","commit":"5fedda3","files_scored":42,"files_improved":0,"files_regressed":0,"verdict":"pass","deltas":{}}
 {"ts":"2026-05-13T22:07:30Z","commit":"5fedda3","files_scored":42,"files_improved":0,"files_regressed":1,"verdict":"fail","deltas":{}}
+{"ts":"2026-05-14T02:52:38Z","commit":"2204c3b","files_scored":42,"files_improved":2,"files_regressed":1,"verdict":"fail","deltas":{"src/quarry/embeddings.py":{"module_size":[223.0,220.0],"init_violations":[1.0,0.0]},"src/quarry/ocr_local.py":{"module_size":[154.0,150.0],"init_violations":[1.0,0.0]}}}
