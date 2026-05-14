@@ -8,19 +8,48 @@ This is document 3 of 3 in the quarry OO redesign:
 2. [OO Design Review](oo-design-review.md) -- peer review with 7 revisions
 3. **This document** -- step-by-step execution plan. 74 steps, tests green at every step.
 
-## Modules already at target (no refactoring steps needed)
+## Modules at target (no steps needed)
 
-These 6 modules are small, already class-based or pure-utility, and meet OO
-thresholds. They are in scope but require no extraction steps:
+3 of 42 modules pass all 11 OO metrics. Every other module has at least one step.
 
-| Module | Lines | Why no action |
-|--------|-------|---------------|
-| `artifacts.py` | 153 | Refactored to OO this session (SessionArtifacts with methods) |
-| `latex_utils.py` | 57 | 2 pure functions (escape, serialize) — no domain state |
-| `logging_config.py` | 73 | 1 configuration function — no domain state |
-| `provider.py` | 99 | Already has ProviderSelection class |
-| `sitemap.py` | 125 | Already has SitemapEntry class + 4 pure functions |
-| `types.py` | 117 | 6 Protocol classes — already well-structured |
+| Module | Lines | Why |
+|--------|-------|-----|
+| `artifacts.py` | 153 | SessionArtifacts with methods, method_ratio 0.83 |
+| `types.py` | 117 | 6 Protocol classes, method_ratio 1.0 |
+| `results.py` | 91 | 6 frozen dataclasses, all metrics pass |
+
+## Modules requiring additional steps (previously excluded)
+
+These 4 modules were incorrectly excluded. They fail OO metrics
+(method_ratio 0.00, class_to_func_ratio 0.00) and need refactoring.
+
+### Step 0.7: Convert `latex_utils.py` to `LatexSerializer` class
+
+- **Source**: `latex_utils.py` (57 lines, 0 classes, 2 functions)
+- **Class**: `LatexSerializer` — owns escape rules and table serialization
+- **Absorbs**: `escape_latex` → `escape`, `rows_to_latex` → `serialize_table`
+- **Ratchet**: method_ratio 0.00→1.00, class_to_func_ratio 0.00→1.00
+
+### Step 0.8: Convert `logging_config.py` to `LoggingConfig` class
+
+- **Source**: `logging_config.py` (73 lines, 0 classes, 1 function)
+- **Class**: `LoggingConfig` — owns format strings, handler setup, level configuration
+- **Absorbs**: `configure_logging` → `configure` classmethod
+- **Ratchet**: method_ratio 0.00→1.00, class_to_func_ratio 0.00→1.00
+
+### Step 0.9: Move `provider.py` functions into `ProviderSelection`
+
+- **Source**: `provider.py` (99 lines, 1 class, 2 functions)
+- **Class**: `ProviderSelection` (exists) — absorb `select_provider` as `from_environment` classmethod, `provider_display` as `display` method
+- **Ratchet**: method_ratio 0.00→1.00, class_to_func_ratio 0.33→1.00
+
+### Step 0.10: Move `sitemap.py` functions into `SitemapDiscovery` class
+
+- **Source**: `sitemap.py` (125 lines, 1 class SitemapEntry, 4 functions)
+- **Class**: `SitemapDiscovery` — owns discovery logic, URL filtering
+- **Absorbs**: `discover_pages`, `discover_urls`, `filter_entries`, `_pages_to_entries`
+- **Keeps**: `SitemapEntry` dataclass unchanged
+- **Ratchet**: method_ratio 0.00→0.80, class_to_func_ratio 0.20→0.60
 
 Sources: oo-design-report.md (44 classes), oo-design-review.md (7 revisions),
 `_draft-core-data.md`, `_draft-ingestion.md`, `_draft-surfaces.md`
