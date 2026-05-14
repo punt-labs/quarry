@@ -20,6 +20,9 @@ This is document 1 of 3 in the quarry OO redesign:
 | Methods | all | 47 | ~360 |
 | method_ratio | ~1.0 | 0.08 | >=0.80 |
 
+Note: Per-section "New classes" counts are proposed additions. The 44
+current classes are spread across existing modules.
+
 In merchants/game, every domain noun is a class. `Game` is a Facade.
 `Captain` owns cargo, gold, glory. `Deck` owns cards and discard. No
 module-level business logic. The ratio is inverted in quarry: 394
@@ -1458,7 +1461,7 @@ via `_extract_pdf_pages` which is absorbed into `PdfExtractor`).
 
 ### After: 15 modules, ~1,800 lines, 12 classes, ~15 module-level functions
 
-**New classes (10):**
+**New classes (13):**
 
 | Class | Module | Estimated LOC |
 |-------|--------|--------------|
@@ -3074,7 +3077,7 @@ and two coherent functions.
 
 ### Classes introduced
 
-Total new classes: 27
+Total new classes: 26
 
 1. `CliContext` — CLI output state and settings resolution
 2. `RemoteClient` — Authenticated HTTPS client for remote quarry
