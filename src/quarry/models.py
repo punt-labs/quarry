@@ -15,30 +15,25 @@ class PageType(enum.Enum):
     SPREADSHEET = "spreadsheet"
     PRESENTATION = "presentation"
 
-
-def stored_page_type(pt: PageType) -> str:
-    """Map a PageType enum to the string stored in LanceDB.
-
-    TEXT, IMAGE, and SECTION all represent prose content and map to
-    ``"text"``.  CODE maps to ``"code"``.  SPREADSHEET maps to
-    ``"spreadsheet"``.  PRESENTATION maps to ``"presentation"``.
-    """
-    mapping: dict[PageType, str] = {
-        PageType.CODE: "code",
-        PageType.SPREADSHEET: "spreadsheet",
-        PageType.PRESENTATION: "presentation",
-    }
-    return mapping.get(pt, "text")
+    @property
+    def stored(self) -> str:
+        """Return the string stored in LanceDB for this page type."""
+        mapping: dict[PageType, str] = {
+            PageType.CODE: "code",
+            PageType.SPREADSHEET: "spreadsheet",
+            PageType.PRESENTATION: "presentation",
+        }
+        return mapping.get(self, "text")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PageAnalysis:
     page_number: int
     page_type: PageType
     text_length: int
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PageContent:
     """Content from one page or logical section of a document.
 
@@ -56,7 +51,7 @@ class PageContent:
     page_type: PageType
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Chunk:
     document_name: str
     document_path: str

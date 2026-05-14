@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime
 
-from quarry.models import Chunk, PageContent, stored_page_type
+from quarry.models import Chunk, PageContent
 
 SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 
@@ -60,7 +60,7 @@ def chunk_pages(
                     chunk_index=chunk_index,
                     text=chunk_text,
                     page_raw_text=page.text,
-                    page_type=stored_page_type(page.page_type),
+                    page_type=page.page_type.stored,
                     source_format=source_format,
                     ingestion_timestamp=now,
                     agent_handle=agent_handle,

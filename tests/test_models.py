@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from quarry.models import Chunk, PageAnalysis, PageContent, PageType, stored_page_type
+from quarry.models import Chunk, PageAnalysis, PageContent, PageType
 
 
 class TestPageType:
@@ -16,16 +16,16 @@ class TestPageType:
 
 class TestStoredPageType:
     def test_text_maps_to_text(self):
-        assert stored_page_type(PageType.TEXT) == "text"
+        assert PageType.TEXT.stored == "text"
 
     def test_image_maps_to_text(self):
-        assert stored_page_type(PageType.IMAGE) == "text"
+        assert PageType.IMAGE.stored == "text"
 
     def test_section_maps_to_text(self):
-        assert stored_page_type(PageType.SECTION) == "text"
+        assert PageType.SECTION.stored == "text"
 
     def test_code_maps_to_code(self):
-        assert stored_page_type(PageType.CODE) == "code"
+        assert PageType.CODE.stored == "code"
 
 
 class TestPageAnalysis:
