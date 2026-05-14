@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
 import quarry.__main__ as cli_mod
 from quarry.__main__ import app
+from quarry.config import Settings
 
 runner = CliRunner()
 
@@ -639,9 +640,11 @@ class TestStatusCmd:
 
 class TestUseCmd:
     def test_sets_default_db(self):
+        mock_loaded = MagicMock()
+        mock_loaded.resolve_db_paths.return_value = _mock_settings()
         with (
-            patch("quarry.__main__.resolve_db_paths", return_value=_mock_settings()),
-            patch("quarry.__main__.write_default_db") as mock_write,
+            patch("quarry.config.Settings.load", return_value=mock_loaded),
+            patch.object(Settings, "write_default_db") as mock_write,
         ):
             result = runner.invoke(app, ["use", "work"])
 
@@ -650,29 +653,30 @@ class TestUseCmd:
         mock_write.assert_called_once_with("work")
 
     def test_invalid_db_name(self):
-        with patch(
-            "quarry.__main__.resolve_db_paths",
-            side_effect=ValueError("Invalid database name"),
-        ):
+        mock_loaded = MagicMock()
+        mock_loaded.resolve_db_paths.side_effect = ValueError("Invalid database name")
+        with patch("quarry.config.Settings.load", return_value=mock_loaded):
             result = runner.invoke(app, ["use", "../escape"])
 
         assert result.exit_code == 1
 
     def test_use_empty_name(self):
         """Empty string should fail validation in resolve_db_paths."""
-        with patch(
-            "quarry.__main__.resolve_db_paths",
-            side_effect=ValueError("empty name"),
-        ):
+        mock_loaded = MagicMock()
+        mock_loaded.resolve_db_paths.side_effect = ValueError("empty name")
+        with patch("quarry.config.Settings.load", return_value=mock_loaded):
             result = runner.invoke(app, ["use", ""])
 
         assert result.exit_code == 1
 
     def test_use_write_failure(self):
+        mock_loaded = MagicMock()
+        mock_loaded.resolve_db_paths.return_value = _mock_settings()
         with (
-            patch("quarry.__main__.resolve_db_paths", return_value=_mock_settings()),
-            patch(
-                "quarry.__main__.write_default_db",
+            patch("quarry.config.Settings.load", return_value=mock_loaded),
+            patch.object(
+                Settings,
+                "write_default_db",
                 side_effect=PermissionError("read-only"),
             ),
         ):
@@ -1793,30 +1797,25 @@ class TestDbOption:
 
     def test_list_passes_db_to_resolver(self):
         _reset_globals()
+        mock_loaded = MagicMock()
+        mock_loaded.resolve_db_paths.return_value = _mock_settings()
         with (
-            patch("quarry.__main__.load_settings", return_value=_mock_settings()),
-            patch(
-                "quarry.__main__.resolve_db_paths",
-                return_value=_mock_settings(),
-            ) as mock_resolve,
+            patch("quarry.config.Settings.load", return_value=mock_loaded),
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.list_documents", return_value=[]),
         ):
             result = runner.invoke(app, ["--db", "work", "list", "documents"])
         assert result.exit_code == 0
-        mock_resolve.assert_called_once()
-        assert mock_resolve.call_args[0][1] == "work"
+        mock_loaded.resolve_db_paths.assert_called_once_with("work")
 
     def test_search_passes_db_to_resolver(self):
         _reset_globals()
+        mock_loaded = MagicMock()
+        mock_loaded.resolve_db_paths.return_value = _mock_settings()
         mock_backend = MagicMock()
         mock_backend.embed_query.return_value = np.zeros(768, dtype=np.float32)
         with (
-            patch("quarry.__main__.load_settings", return_value=_mock_settings()),
-            patch(
-                "quarry.__main__.resolve_db_paths",
-                return_value=_mock_settings(),
-            ) as mock_resolve,
+            patch("quarry.config.Settings.load", return_value=mock_loaded),
             patch("quarry.__main__.get_db"),
             patch(
                 "quarry.__main__.get_embedding_backend",
@@ -1826,52 +1825,46 @@ class TestDbOption:
         ):
             result = runner.invoke(app, ["--db", "work", "find", "query"])
         assert result.exit_code == 0
-        assert mock_resolve.call_args[0][1] == "work"
+        mock_loaded.resolve_db_paths.assert_called_once_with("work")
 
     def test_delete_passes_db_to_resolver(self):
         _reset_globals()
+        mock_loaded = MagicMock()
+        mock_loaded.resolve_db_paths.return_value = _mock_settings()
         with (
-            patch("quarry.__main__.load_settings", return_value=_mock_settings()),
-            patch(
-                "quarry.__main__.resolve_db_paths",
-                return_value=_mock_settings(),
-            ) as mock_resolve,
+            patch("quarry.config.Settings.load", return_value=mock_loaded),
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.db_delete_document", return_value=1),
         ):
             result = runner.invoke(app, ["--db", "work", "delete", "x.pdf"])
         assert result.exit_code == 0
-        assert mock_resolve.call_args[0][1] == "work"
+        mock_loaded.resolve_db_paths.assert_called_once_with("work")
 
     def test_collections_passes_db_to_resolver(self):
         _reset_globals()
+        mock_loaded = MagicMock()
+        mock_loaded.resolve_db_paths.return_value = _mock_settings()
         with (
-            patch("quarry.__main__.load_settings", return_value=_mock_settings()),
-            patch(
-                "quarry.__main__.resolve_db_paths",
-                return_value=_mock_settings(),
-            ) as mock_resolve,
+            patch("quarry.config.Settings.load", return_value=mock_loaded),
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.db_list_collections", return_value=[]),
         ):
             result = runner.invoke(app, ["--db", "work", "list", "collections"])
         assert result.exit_code == 0
-        assert mock_resolve.call_args[0][1] == "work"
+        mock_loaded.resolve_db_paths.assert_called_once_with("work")
 
     def test_default_db_passes_none(self):
         _reset_globals()
+        mock_loaded = MagicMock()
+        mock_loaded.resolve_db_paths.return_value = _mock_settings()
         with (
-            patch("quarry.__main__.load_settings", return_value=_mock_settings()),
-            patch(
-                "quarry.__main__.resolve_db_paths",
-                return_value=_mock_settings(),
-            ) as mock_resolve,
-            patch("quarry.__main__.read_default_db", return_value=None),
+            patch("quarry.config.Settings.load", return_value=mock_loaded),
+            patch.object(Settings, "read_default_db", return_value=None),
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.list_documents", return_value=[]),
         ):
             runner.invoke(app, ["list", "documents"])
-        assert mock_resolve.call_args[0][1] is None
+        mock_loaded.resolve_db_paths.assert_called_once_with(None)
 
 
 class TestIngestCmd:
@@ -1932,12 +1925,10 @@ class TestIngestCmd:
         _reset_globals()
         f = tmp_path / "doc.txt"
         f.write_text("hello")
+        mock_loaded = MagicMock()
+        mock_loaded.resolve_db_paths.return_value = _mock_settings()
         with (
-            patch("quarry.__main__.load_settings", return_value=_mock_settings()),
-            patch(
-                "quarry.__main__.resolve_db_paths",
-                return_value=_mock_settings(),
-            ) as mock_resolve,
+            patch("quarry.config.Settings.load", return_value=mock_loaded),
             patch("quarry.__main__.get_db"),
             patch(
                 "quarry.__main__.ingest_document",
@@ -1946,7 +1937,7 @@ class TestIngestCmd:
         ):
             result = runner.invoke(app, ["--db", "work", "ingest", str(f)])
         assert result.exit_code == 0
-        assert mock_resolve.call_args[0][1] == "work"
+        mock_loaded.resolve_db_paths.assert_called_once_with("work")
 
     def test_ingest_nonexistent_file(self):
         with (
@@ -2717,14 +2708,15 @@ class TestUseCmdRemote:
     """``quarry use`` is client-side state; verify it does not touch the server."""
 
     def test_writes_client_config_when_remote(self, tmp_path: Path):
+        mock_loaded = MagicMock()
+        mock_loaded.resolve_db_paths.return_value = _mock_settings()
         with (
             patch(
                 "quarry.__main__.read_proxy_config",
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
-            patch("quarry.__main__.resolve_db_paths", return_value=_mock_settings()),
-            patch("quarry.__main__.load_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.write_default_db") as mock_write,
+            patch("quarry.config.Settings.load", return_value=mock_loaded),
+            patch.object(Settings, "write_default_db") as mock_write,
             patch("quarry.__main__._remote_https_request") as mock_req,
         ):
             result = runner.invoke(app, ["use", "work"])
@@ -3470,9 +3462,11 @@ class TestJsonOutput:
 
     def test_use_json(self):
         _reset_globals()
+        mock_loaded = MagicMock()
+        mock_loaded.resolve_db_paths.return_value = _mock_settings()
         with (
-            patch("quarry.__main__.resolve_db_paths", return_value=_mock_settings()),
-            patch("quarry.__main__.write_default_db"),
+            patch("quarry.config.Settings.load", return_value=mock_loaded),
+            patch.object(Settings, "write_default_db"),
         ):
             result = runner.invoke(app, ["--json", "use", "work"])
 

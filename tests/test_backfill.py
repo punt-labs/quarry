@@ -225,12 +225,9 @@ def _setup_registry(
 
 def _make_settings(db_path: Path, registry_path: Path) -> Settings:
     """Load settings with overridden paths."""
-    from quarry.config import (
-        load_settings,
-        resolve_db_paths,
-    )
+    from quarry.config import Settings
 
-    settings = resolve_db_paths(load_settings(), None)
+    settings = Settings.load().resolve_db_paths(None)
     return settings.model_copy(
         update={
             "lancedb_path": db_path,

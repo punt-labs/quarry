@@ -12,7 +12,7 @@ from mcp.server.fastmcp import FastMCP
 
 from quarry.backends import get_embedding_backend
 from quarry.collections import derive_collection
-from quarry.config import Settings, load_settings, resolve_db_paths
+from quarry.config import Settings
 from quarry.database import (
     count_chunks,
     delete_collection as db_delete_collection,
@@ -91,7 +91,7 @@ def _handle_errors(fn: Callable[..., str]) -> Callable[..., str]:
 
 
 def _settings() -> Settings:
-    return resolve_db_paths(load_settings(), _db_name.get())
+    return Settings.load().resolve_db_paths(_db_name.get())
 
 
 def _db() -> LanceDB:
@@ -543,7 +543,7 @@ def use_database(name: str) -> str:
     new_name = name if name != "default" else None
     # Validate before mutating: resolve_db_paths raises ValueError for
     # names containing path separators or traversal segments.
-    test_settings = resolve_db_paths(load_settings(), new_name)
+    test_settings = Settings.load().resolve_db_paths(new_name)
     summary = format_switch_summary(previous, name, str(test_settings.lancedb_path))
     _db_name.set(new_name)
     return summary

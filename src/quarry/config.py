@@ -1,13 +1,10 @@
-"""Application settings.
-
-Settings are grouped by concern: LanceDB paths, embedding model,
-and chunking params.
-"""
+"""Application settings: LanceDB paths, embedding model, and chunking."""
 
 from __future__ import annotations
 
 import tomllib
 from pathlib import Path
+from typing import ClassVar
 
 from pydantic_settings import BaseSettings
 
@@ -33,70 +30,67 @@ class Settings(BaseSettings):
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
-
-DEFAULT_PORT = 8420
-"""Well-known port for ``quarry serve``.  Used by mcp-proxy configs and
-service files (launchd, systemd) so the daemon URL is static."""
-
-_DEFAULT_LANCEDB = (
-    Path.home() / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
-)
-
-
-def resolve_db_paths(settings: Settings, db_name: str | None = None) -> Settings:
-    """Return a copy of *settings* with lancedb_path and registry_path resolved.
-
-    If *db_name* is provided, paths resolve to ``quarry_root / db_name / ...``.
-    If ``LANCEDB_PATH`` was overridden (via env var or ``.env``), the caller's
-    explicit path is preserved.
-    When *db_name* is None and no override, paths use the ``default`` database.
-
-    Raises ``ValueError`` if *db_name* contains path separators or traversal
-    segments.
-    """
-    if db_name is not None and (
-        "/" in db_name or "\\" in db_name or db_name in (".", "..")
-    ):
-        msg = f"Invalid database name: {db_name!r}"
-        raise ValueError(msg)
-
-    if settings.lancedb_path != _DEFAULT_LANCEDB:
-        return settings
-
-    name = db_name or "default"
-    return settings.model_copy(
-        update={
-            "lancedb_path": settings.quarry_root / name / "lancedb",
-            "registry_path": settings.quarry_root / name / "registry.db",
-        },
+    _DEFAULT_LANCEDB: ClassVar[Path] = (
+        Path.home() / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
     )
 
+    _CONFIG_PATH: ClassVar[Path] = Path.home() / ".punt-labs" / "quarry" / "config.toml"
 
-_CONFIG_PATH = Path.home() / ".punt-labs" / "quarry" / "config.toml"
+    def resolve_db_paths(self, db_name: str | None = None) -> Settings:
+        """Return a copy of this settings with lancedb_path and registry_path resolved.
 
+        If *db_name* is provided, paths resolve to ``quarry_root / db_name / ...``.
+        If ``LANCEDB_PATH`` was overridden (via env var or ``.env``), the caller's
+        explicit path is preserved.
+        When *db_name* is None and no override, paths use the ``default`` database.
 
-def read_default_db() -> str | None:
-    """Read the persistent default database name from config file."""
-    if not _CONFIG_PATH.exists():
+        Raises ``ValueError`` if *db_name* contains path separators or traversal
+        segments.
+        """
+        if db_name is not None and (
+            "/" in db_name or "\\" in db_name or db_name in (".", "..")
+        ):
+            msg = f"Invalid database name: {db_name!r}"
+            raise ValueError(msg)
+
+        if self.lancedb_path != Settings._DEFAULT_LANCEDB:
+            return self
+
+        name = db_name or "default"
+        return self.model_copy(
+            update={
+                "lancedb_path": self.quarry_root / name / "lancedb",
+                "registry_path": self.quarry_root / name / "registry.db",
+            },
+        )
+
+    @classmethod
+    def read_default_db(cls) -> str | None:
+        """Read the persistent default database name from config file."""
+        if not cls._CONFIG_PATH.exists():
+            return None
+        text = cls._CONFIG_PATH.read_text()
+        try:
+            data = tomllib.loads(text)
+        except tomllib.TOMLDecodeError:
+            return None
+        value = data.get("default", {}).get("database", "")
+        if value and value != "default":
+            return str(value)
         return None
-    text = _CONFIG_PATH.read_text()
-    try:
-        data = tomllib.loads(text)
-    except tomllib.TOMLDecodeError:
-        return None
-    value = data.get("default", {}).get("database", "")
-    if value and value != "default":
-        return str(value)
-    return None
+
+    @classmethod
+    def write_default_db(cls, name: str) -> None:
+        """Write the persistent default database name to config file."""
+        cls._CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        content = f'[default]\ndatabase = "{name}"\n'
+        cls._CONFIG_PATH.write_text(content)
+
+    @classmethod
+    def load(cls) -> Settings:
+        """Load application settings. Fresh instance each call."""
+        return cls()
 
 
-def write_default_db(name: str) -> None:
-    """Write the persistent default database name to config file."""
-    _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    content = f'[default]\ndatabase = "{name}"\n'
-    _CONFIG_PATH.write_text(content)
-
-
-def load_settings() -> Settings:
-    """Load application settings. Creates a fresh instance each call (no caching)."""
-    return Settings()
+DEFAULT_PORT = 8420
+"""Well-known port for ``quarry serve`` and mcp-proxy/service configs."""

@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from quarry.config import Settings
 from quarry.enable import (
     _CLAUDEMD_BEGIN,
     _CLAUDEMD_BLOCK,
@@ -26,6 +27,14 @@ from quarry.sync_registry import (
     open_registry,
     register_directory,
 )
+
+
+def _mock_settings_load(settings: MagicMock) -> MagicMock:
+    """Return a mock whose resolve_db_paths returns *settings*."""
+    mock_loaded = MagicMock()
+    mock_loaded.resolve_db_paths.return_value = settings
+    return mock_loaded
+
 
 # -----------------------------------------------------------------------
 # T1: enable registers a new directory
@@ -47,11 +56,7 @@ class TestT1EnableNewDirectory:
 
         with (
             patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch(
-                "quarry.config.resolve_db_paths",
-                return_value=settings,
-            ),
-            patch("quarry.config.load_settings", return_value=MagicMock()),
+            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
         ):
             result = enable_project(project)
 
@@ -89,11 +94,7 @@ class TestT2EnableIdempotent:
 
         with (
             patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch(
-                "quarry.config.resolve_db_paths",
-                return_value=settings,
-            ),
-            patch("quarry.config.load_settings", return_value=MagicMock()),
+            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
         ):
             result = enable_project(project)
 
@@ -123,11 +124,7 @@ class TestT3EnableChildRaisesValueError:
 
         with (
             patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch(
-                "quarry.config.resolve_db_paths",
-                return_value=settings,
-            ),
-            patch("quarry.config.load_settings", return_value=MagicMock()),
+            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
             pytest.raises(ValueError, match="already covered by the registration at"),
         ):
             enable_project(child)
@@ -152,11 +149,7 @@ class TestT4EnableCollectionOverride:
 
         with (
             patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch(
-                "quarry.config.resolve_db_paths",
-                return_value=settings,
-            ),
-            patch("quarry.config.load_settings", return_value=MagicMock()),
+            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
         ):
             result = enable_project(project, collection_override="custom")
 
@@ -183,11 +176,7 @@ class TestT5EnableCreatesConfig:
 
         with (
             patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch(
-                "quarry.config.resolve_db_paths",
-                return_value=settings,
-            ),
-            patch("quarry.config.load_settings", return_value=MagicMock()),
+            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
         ):
             result = enable_project(project)
 
@@ -224,11 +213,7 @@ class TestT6EnablePreservesExistingConfig:
 
         with (
             patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch(
-                "quarry.config.resolve_db_paths",
-                return_value=settings,
-            ),
-            patch("quarry.config.load_settings", return_value=MagicMock()),
+            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
         ):
             enable_project(project)
 
@@ -323,11 +308,7 @@ class TestT8EnableSkipsEthosWhenMissing:
                 "quarry.enable._GLOBAL_IDENTITIES",
                 tmp_path / "nonexistent-identities",
             ),
-            patch(
-                "quarry.config.resolve_db_paths",
-                return_value=settings,
-            ),
-            patch("quarry.config.load_settings", return_value=MagicMock()),
+            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
         ):
             result = enable_project(project)
 
@@ -353,11 +334,7 @@ class TestT9EnableCapturesCollectionName:
 
         with (
             patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch(
-                "quarry.config.resolve_db_paths",
-                return_value=settings,
-            ),
-            patch("quarry.config.load_settings", return_value=MagicMock()),
+            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
         ):
             result = enable_project(project)
 
@@ -384,11 +361,7 @@ class TestT10DisableRemovesRegistration:
 
         with (
             patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch(
-                "quarry.config.resolve_db_paths",
-                return_value=settings,
-            ),
-            patch("quarry.config.load_settings", return_value=MagicMock()),
+            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
         ):
             enable_result = enable_project(project)
             disable_result = disable_project(project)
@@ -422,11 +395,7 @@ class TestT11DisableRemovesConfig:
 
         with (
             patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch(
-                "quarry.config.resolve_db_paths",
-                return_value=settings,
-            ),
-            patch("quarry.config.load_settings", return_value=MagicMock()),
+            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
         ):
             enable_project(project)
             config_path = project / ".punt-labs" / "quarry" / "config.md"
@@ -457,11 +426,7 @@ class TestT12DisableKeepData:
 
         with (
             patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch(
-                "quarry.config.resolve_db_paths",
-                return_value=settings,
-            ),
-            patch("quarry.config.load_settings", return_value=MagicMock()),
+            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
             patch(
                 "quarry.database.delete_collection",
             ) as mock_delete,
@@ -493,11 +458,7 @@ class TestT13DisablePreservesAgentMemory:
 
         with (
             patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch(
-                "quarry.config.resolve_db_paths",
-                return_value=settings,
-            ),
-            patch("quarry.config.load_settings", return_value=MagicMock()),
+            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
             patch(
                 "quarry.database.delete_collection",
             ) as mock_delete,
@@ -534,11 +495,7 @@ class TestT14DisableUnregisteredRaises:
         conn.close()
 
         with (
-            patch(
-                "quarry.config.resolve_db_paths",
-                return_value=settings,
-            ),
-            patch("quarry.config.load_settings", return_value=MagicMock()),
+            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
             pytest.raises(ValueError, match="no registration covers"),
         ):
             disable_project(project)
@@ -621,11 +578,7 @@ class TestT15DisableOnChildOfRegisteredParentRaises:
         conn.close()
 
         with (
-            patch(
-                "quarry.config.resolve_db_paths",
-                return_value=settings,
-            ),
-            patch("quarry.config.load_settings", return_value=MagicMock()),
+            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
             pytest.raises(ValueError, match="covered by parent registration"),
         ):
             disable_project(child)
@@ -722,11 +675,7 @@ class TestT17EnableWithOverrideOnChildRaises:
 
         with (
             patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch(
-                "quarry.config.resolve_db_paths",
-                return_value=settings,
-            ),
-            patch("quarry.config.load_settings", return_value=MagicMock()),
+            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
             pytest.raises(ValueError, match="already covered by the registration"),
         ):
             enable_project(child, collection_override="custom")
@@ -754,11 +703,7 @@ class TestT18EnableResolvesRelativePath:
 
         with (
             patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch(
-                "quarry.config.resolve_db_paths",
-                return_value=settings,
-            ),
-            patch("quarry.config.load_settings", return_value=MagicMock()),
+            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
         ):
             result = enable_project(Path("."))  # noqa: PTH201
 
@@ -789,11 +734,7 @@ class TestT19DisableResolvesRelativePath:
 
         with (
             patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch(
-                "quarry.config.resolve_db_paths",
-                return_value=settings,
-            ),
-            patch("quarry.config.load_settings", return_value=MagicMock()),
+            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
         ):
             enable_project(project)
             result = disable_project(Path("."))  # noqa: PTH201
@@ -825,13 +766,7 @@ class TestT20CheckEnableStatusConfigMissing:
         conn.close()
 
         # No config.md on disk — only the registration exists.
-        with (
-            patch(
-                "quarry.config.resolve_db_paths",
-                return_value=settings,
-            ),
-            patch("quarry.config.load_settings", return_value=MagicMock()),
-        ):
+        with patch.object(Settings, "load", return_value=_mock_settings_load(settings)):
             result = _check_enable_status(settings.registry_path, str(project))
 
         assert result.passed is False
@@ -862,13 +797,7 @@ class TestT20CheckEnableStatusConfigMissing:
             "---\nauto_capture:\n  session_sync: true\n---\n"
         )
 
-        with (
-            patch(
-                "quarry.config.resolve_db_paths",
-                return_value=settings,
-            ),
-            patch("quarry.config.load_settings", return_value=MagicMock()),
-        ):
+        with patch.object(Settings, "load", return_value=_mock_settings_load(settings)):
             result = _check_enable_status(settings.registry_path, str(project))
 
         assert result.passed is True
@@ -894,8 +823,7 @@ class TestEnableAppendsClaudemdBlock:
 
         with (
             patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch("quarry.config.resolve_db_paths", return_value=settings),
-            patch("quarry.config.load_settings", return_value=MagicMock()),
+            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
         ):
             result = enable_project(project)
 
@@ -922,8 +850,7 @@ class TestEnableClaudemdIdempotent:
 
         with (
             patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch("quarry.config.resolve_db_paths", return_value=settings),
-            patch("quarry.config.load_settings", return_value=MagicMock()),
+            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
         ):
             result1 = enable_project(project)
             result2 = enable_project(project)
@@ -950,8 +877,7 @@ class TestEnableAppendsToExistingClaudemd:
 
         with (
             patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch("quarry.config.resolve_db_paths", return_value=settings),
-            patch("quarry.config.load_settings", return_value=MagicMock()),
+            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
         ):
             result = enable_project(project)
 
@@ -976,8 +902,7 @@ class TestDisableRemovesClaudemdBlock:
 
         with (
             patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch("quarry.config.resolve_db_paths", return_value=settings),
-            patch("quarry.config.load_settings", return_value=MagicMock()),
+            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
         ):
             enable_project(project)
             result = disable_project(project)
@@ -1006,8 +931,7 @@ class TestDisablePreservesOtherClaudemdContent:
 
         with (
             patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch("quarry.config.resolve_db_paths", return_value=settings),
-            patch("quarry.config.load_settings", return_value=MagicMock()),
+            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
         ):
             enable_project(project)
             result = disable_project(project)

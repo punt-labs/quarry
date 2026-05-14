@@ -100,10 +100,10 @@ def enable_project(
         msg = f"directory not found: {directory}"
         raise ValueError(msg)
 
-    from quarry.config import load_settings, resolve_db_paths  # noqa: PLC0415
+    from quarry.config import Settings  # noqa: PLC0415
     from quarry.sync_registry import open_registry  # noqa: PLC0415
 
-    settings = resolve_db_paths(load_settings(), None)
+    settings = Settings.load().resolve_db_paths(None)
     conn = open_registry(settings.registry_path)
     try:
         collection, created = _resolve_or_register(conn, directory, collection_override)
@@ -145,7 +145,7 @@ def disable_project(
 ) -> DisableResult:
     """Disable quarry knowledge capture for a project directory."""
     directory = directory.resolve()
-    from quarry.config import load_settings, resolve_db_paths  # noqa: PLC0415
+    from quarry.config import Settings  # noqa: PLC0415
     from quarry.database import (  # noqa: PLC0415
         delete_collection as db_delete_collection,
         get_db,
@@ -159,7 +159,7 @@ def disable_project(
         open_registry,
     )
 
-    settings = resolve_db_paths(load_settings(), None)
+    settings = Settings.load().resolve_db_paths(None)
     conn = open_registry(settings.registry_path)
     try:
         collection = _collection_for_cwd_conn(conn, str(directory))  # pyright: ignore[reportPrivateUsage]

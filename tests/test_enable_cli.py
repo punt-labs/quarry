@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 from typer.testing import CliRunner
 
 from quarry.__main__ import app
+from quarry.config import Settings
 from quarry.sync_registry import open_registry, register_directory
 
 runner = CliRunner()
@@ -18,7 +19,7 @@ runner = CliRunner()
 
 @contextlib.contextmanager
 def _patch_for_cli(tmp_path: Path) -> Generator[MagicMock]:
-    """Patch settings, ethos identities, and load_settings for CLI isolation."""
+    """Patch settings, ethos identities, and Settings methods for CLI isolation."""
     settings = MagicMock()
     settings.registry_path = tmp_path / "registry.db"
     settings.lancedb_path = tmp_path / "lancedb"
@@ -27,9 +28,11 @@ def _patch_for_cli(tmp_path: Path) -> Generator[MagicMock]:
     conn = open_registry(settings.registry_path)
     conn.close()
 
+    mock_loaded = MagicMock()
+    mock_loaded.resolve_db_paths.return_value = settings
+
     with (
-        patch("quarry.config.resolve_db_paths", return_value=settings),
-        patch("quarry.config.load_settings", return_value=MagicMock()),
+        patch.object(Settings, "load", return_value=mock_loaded),
         patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
     ):
         yield settings
@@ -156,12 +159,11 @@ class TestT3bEnableCLIChildExits1:
         register_directory(conn, parent, "project")
         conn.close()
 
+        mock_loaded = MagicMock()
+        mock_loaded.resolve_db_paths.return_value = settings
+
         with (
-            patch(
-                "quarry.config.resolve_db_paths",
-                return_value=settings,
-            ),
-            patch("quarry.config.load_settings", return_value=MagicMock()),
+            patch.object(Settings, "load", return_value=mock_loaded),
             patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
         ):
             result = runner.invoke(app, ["enable", str(child)])
