@@ -10,7 +10,6 @@ import pytest
 
 from quarry.models import Chunk
 from quarry.sync import (
-    _DEFAULT_IGNORE_PATTERNS,
     SyncConfig,
     _content_hash,
     _load_ignore_spec,
@@ -18,6 +17,9 @@ from quarry.sync import (
     discover_files,
     sync_all,
     sync_collection,
+)
+from quarry.sync_discovery import (
+    _DEFAULT_IGNORE_PATTERNS,
 )
 from quarry.sync_registry import (
     FileRecord,
