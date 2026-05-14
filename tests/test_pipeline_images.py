@@ -67,7 +67,9 @@ def _mock_ocr_backend_single(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
             page_type=PageType.IMAGE,
         )
     )
-    monkeypatch.setattr("quarry.pipeline.get_ocr_backend", lambda _settings: backend)
+    monkeypatch.setattr(
+        "quarry.ingestion.pipeline.get_ocr_backend", lambda _settings: backend
+    )
     return backend
 
 
@@ -79,14 +81,14 @@ def _mock_single_page_pipeline(
 
     _mock_ocr_backend_single(monkeypatch)
     monkeypatch.setattr(
-        "quarry.pipeline.chunk_pages",
+        "quarry.ingestion.pipeline.chunk_pages",
         lambda _pages, max_chars, overlap_chars, **_kw: chunks,
     )
     embedding_backend = MagicMock()
     embedding_backend.embed_texts.return_value = vectors
     embedding_backend.model_name = "test-model"
     monkeypatch.setattr(
-        "quarry.pipeline.get_embedding_backend",
+        "quarry.ingestion.pipeline.get_embedding_backend",
         lambda _settings: embedding_backend,
     )
     monkeypatch.setattr(
@@ -103,7 +105,7 @@ class TestIngestImageSinglePage:
         chunks = _make_chunks("photo.png", str(png_file))
         _mock_single_page_pipeline(monkeypatch, chunks)
 
-        from quarry.pipeline import ingest_document
+        from quarry.ingestion.pipeline import ingest_document
 
         db = MagicMock()
         result = ingest_document(png_file, db, _settings())
@@ -124,7 +126,7 @@ class TestIngestImageSinglePage:
         chunks = _make_chunks("photo.jpg", str(jpg_file))
         _mock_single_page_pipeline(monkeypatch, chunks)
 
-        from quarry.pipeline import ingest_document
+        from quarry.ingestion.pipeline import ingest_document
 
         db = MagicMock()
         result = ingest_document(jpg_file, db, _settings())
@@ -156,14 +158,14 @@ class TestIngestImageSinglePage:
 
         backend.ocr_image_bytes.side_effect = _ocr_bytes
         monkeypatch.setattr(
-            "quarry.pipeline.get_ocr_backend", lambda _settings: backend
+            "quarry.ingestion.pipeline.get_ocr_backend", lambda _settings: backend
         )
         monkeypatch.setattr(
-            "quarry.pipeline.chunk_pages",
+            "quarry.ingestion.pipeline.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: [],
         )
 
-        from quarry.pipeline import ingest_document
+        from quarry.ingestion.pipeline import ingest_document
 
         db = MagicMock()
         result = ingest_document(bmp_file, db, _settings())
@@ -198,14 +200,14 @@ class TestIngestImageSinglePage:
 
         backend.ocr_image_bytes.side_effect = _ocr_bytes
         monkeypatch.setattr(
-            "quarry.pipeline.get_ocr_backend", lambda _settings: backend
+            "quarry.ingestion.pipeline.get_ocr_backend", lambda _settings: backend
         )
         monkeypatch.setattr(
-            "quarry.pipeline.chunk_pages",
+            "quarry.ingestion.pipeline.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: [],
         )
 
-        from quarry.pipeline import ingest_document
+        from quarry.ingestion.pipeline import ingest_document
 
         db = MagicMock()
         result = ingest_document(webp_file, db, _settings())
@@ -237,14 +239,14 @@ class TestIngestImageSinglePage:
 
         backend.ocr_image_bytes.side_effect = _ocr_bytes
         monkeypatch.setattr(
-            "quarry.pipeline.get_ocr_backend", lambda _settings: backend
+            "quarry.ingestion.pipeline.get_ocr_backend", lambda _settings: backend
         )
         monkeypatch.setattr(
-            "quarry.pipeline.chunk_pages",
+            "quarry.ingestion.pipeline.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: [],
         )
 
-        from quarry.pipeline import ingest_document
+        from quarry.ingestion.pipeline import ingest_document
 
         db = MagicMock()
         result = ingest_document(mpo_file, db, _settings())
@@ -274,7 +276,7 @@ class TestIngestImageSinglePage:
             "quarry.db.chunk_store.ChunkStore.delete_document", _mock_delete
         )
 
-        from quarry.pipeline import ingest_document
+        from quarry.ingestion.pipeline import ingest_document
 
         db = MagicMock()
         ingest_document(png_file, db, _settings(), overwrite=True)
@@ -319,17 +321,17 @@ class TestIngestImageMultiPage:
         ocr_backend = MagicMock()
         ocr_backend.ocr_document.return_value = ocr_pages
         monkeypatch.setattr(
-            "quarry.pipeline.get_ocr_backend", lambda _settings: ocr_backend
+            "quarry.ingestion.pipeline.get_ocr_backend", lambda _settings: ocr_backend
         )
         monkeypatch.setattr(
-            "quarry.pipeline.chunk_pages",
+            "quarry.ingestion.pipeline.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: chunks,
         )
         embedding_backend = MagicMock()
         embedding_backend.embed_texts.return_value = vectors
         embedding_backend.model_name = "test-model"
         monkeypatch.setattr(
-            "quarry.pipeline.get_embedding_backend",
+            "quarry.ingestion.pipeline.get_embedding_backend",
             lambda _settings: embedding_backend,
         )
         monkeypatch.setattr(
@@ -337,7 +339,7 @@ class TestIngestImageMultiPage:
             lambda _db, _chunks, _vectors: 1,
         )
 
-        from quarry.pipeline import ingest_document
+        from quarry.ingestion.pipeline import ingest_document
 
         db = MagicMock()
         result = ingest_document(tiff_file, db, _settings())
@@ -363,7 +365,7 @@ class TestPrepareImageBytes:
         _create_image(path, "PNG")
         raw = path.read_bytes()
 
-        from quarry.pipeline import _prepare_image_bytes
+        from quarry.ingestion.pipeline import _prepare_image_bytes
 
         result = _prepare_image_bytes(
             path, needs_conversion=False, max_bytes=10_000_000
@@ -376,7 +378,7 @@ class TestPrepareImageBytes:
         _create_image(path, "PNG")
         raw = path.read_bytes()
 
-        from quarry.pipeline import _prepare_image_bytes
+        from quarry.ingestion.pipeline import _prepare_image_bytes
 
         result = _prepare_image_bytes(path, needs_conversion=False, max_bytes=0)
         assert result == raw
@@ -391,7 +393,7 @@ class TestPrepareImageBytes:
         img.save(path, format="PNG")
         png_size = path.stat().st_size
 
-        from quarry.pipeline import _prepare_image_bytes
+        from quarry.ingestion.pipeline import _prepare_image_bytes
 
         # Set max_bytes between JPEG size and PNG size
         result = _prepare_image_bytes(
@@ -413,7 +415,7 @@ class TestPrepareImageBytes:
         img.save(path, format="JPEG", quality=99)
         jpeg_size = path.stat().st_size
 
-        from quarry.pipeline import _prepare_image_bytes
+        from quarry.ingestion.pipeline import _prepare_image_bytes
 
         # Set max_bytes to force downscaling
         result = _prepare_image_bytes(
@@ -427,7 +429,7 @@ class TestPrepareImageBytes:
         path = tmp_path / "scan.bmp"
         _create_image(path, "BMP")
 
-        from quarry.pipeline import _prepare_image_bytes
+        from quarry.ingestion.pipeline import _prepare_image_bytes
 
         result = _prepare_image_bytes(path, needs_conversion=True, max_bytes=10_000_000)
         assert result[:4] == b"\x89PNG"
@@ -441,7 +443,7 @@ class TestPrepareImageBytes:
         img.save(path, format="PNG")
         png_size = path.stat().st_size
 
-        from quarry.pipeline import _prepare_image_bytes
+        from quarry.ingestion.pipeline import _prepare_image_bytes
 
         result = _prepare_image_bytes(
             path, needs_conversion=False, max_bytes=png_size - 1
@@ -453,7 +455,7 @@ class TestPrepareImageBytes:
         path = tmp_path / "photo.jpg"
         _create_mpo_image(path)
 
-        from quarry.pipeline import _prepare_image_bytes
+        from quarry.ingestion.pipeline import _prepare_image_bytes
 
         result = _prepare_image_bytes(path, needs_conversion=True, max_bytes=10_000_000)
         assert result[:2] == b"\xff\xd8"
@@ -468,7 +470,7 @@ class TestIngestImageProgress:
             monkeypatch, _make_chunks("photo.png", str(png_file))
         )
 
-        from quarry.pipeline import ingest_document
+        from quarry.ingestion.pipeline import ingest_document
 
         messages: list[str] = []
         db = MagicMock()

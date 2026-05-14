@@ -40,11 +40,11 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route, WebSocketRoute
 
-from quarry.backends import get_embedding_backend
 from quarry.config import DEFAULT_PORT, Settings
 from quarry.db import ChunkCatalog, ChunkSearch, ChunkStore
 from quarry.db.storage import dir_size_bytes, format_size, get_db
-from quarry.provider import ProviderSelection
+from quarry.ingestion.backends import get_embedding_backend
+from quarry.ingestion.provider import ProviderSelection
 from quarry.sync_registry import (
     DirectoryRegistration,
     deregister_directory,
@@ -640,7 +640,7 @@ async def _run_remember_task(
     summary: str,
 ) -> None:
     """Execute ingest_content in a background thread and update task state."""
-    from quarry.pipeline import ingest_content  # noqa: PLC0415
+    from quarry.ingestion.pipeline import ingest_content  # noqa: PLC0415
 
     try:
         result = await run_in_threadpool(
@@ -753,7 +753,7 @@ async def _run_ingest_task(
     summary: str,
 ) -> None:
     """Execute ingest_auto in a background thread and update task state."""
-    from quarry.pipeline import ingest_auto  # noqa: PLC0415
+    from quarry.ingestion.pipeline import ingest_auto  # noqa: PLC0415
 
     try:
         result = await run_in_threadpool(

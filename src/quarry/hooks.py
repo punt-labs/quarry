@@ -437,7 +437,7 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
 
     # Heavy imports deferred past early-return guards.
     from quarry.db.storage import get_db  # noqa: PLC0415
-    from quarry.pipeline import ingest_content, ingest_url  # noqa: PLC0415
+    from quarry.ingestion.pipeline import ingest_content, ingest_url  # noqa: PLC0415
 
     base_collection = _collection_for_cwd(cwd)
     collection = (
@@ -458,9 +458,9 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     content = _extract_web_fetch_content(payload)
     result = None
     if content:
-        from quarry.html_processor import process_html_text  # noqa: PLC0415
+        from quarry.extractors.html_extractor import HtmlExtractor  # noqa: PLC0415
 
-        pages = process_html_text(content, url, url)
+        pages = HtmlExtractor().extract_from_html(content, url, url)
         if pages:
             clean_text = "\n\n".join(p.text for p in pages)
             result = ingest_content(

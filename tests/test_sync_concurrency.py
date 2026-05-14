@@ -568,7 +568,7 @@ class TestAsyncIngestEndpoint:
                 side_effect=_fake_public_addrinfo,
             ),
             patch(
-                "quarry.pipeline.ingest_auto",
+                "quarry.ingestion.pipeline.ingest_auto",
                 return_value={"document_name": "x", "chunks": 1},
             ),
         ):
@@ -646,7 +646,7 @@ class TestAsyncIngestEndpoint:
                 side_effect=_fake_public_addrinfo,
             ),
             patch(
-                "quarry.pipeline.ingest_auto",
+                "quarry.ingestion.pipeline.ingest_auto",
                 return_value={"document_name": "x", "chunks": 1},
             ),
         ):

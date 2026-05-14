@@ -4,15 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from quarry.html_processor import (
+from quarry.extractors.html_extractor import (
     SUPPORTED_HTML_EXTENSIONS,
-    _extract_title,
-    _has_markdown_headings,
-    _html_to_markdown,
-    _strip_boilerplate,
-    process_html_file,
+    HtmlExtractor,
 )
 from quarry.models import PageType
+
+_extractor = HtmlExtractor()
 
 
 class TestSupportedExtensions:
@@ -21,9 +19,11 @@ class TestSupportedExtensions:
         assert ".htm" in SUPPORTED_HTML_EXTENSIONS
 
     def test_no_overlap_with_other_extensions(self):
-        from quarry.code_processor import SUPPORTED_CODE_EXTENSIONS
-        from quarry.spreadsheet_processor import SUPPORTED_SPREADSHEET_EXTENSIONS
-        from quarry.text_processor import SUPPORTED_TEXT_EXTENSIONS
+        from quarry.extractors.code_extractor import SUPPORTED_CODE_EXTENSIONS
+        from quarry.extractors.spreadsheet_extractor import (
+            SUPPORTED_SPREADSHEET_EXTENSIONS,
+        )
+        from quarry.extractors.text_extractor import SUPPORTED_TEXT_EXTENSIONS
 
         overlap = SUPPORTED_HTML_EXTENSIONS & (
             SUPPORTED_CODE_EXTENSIONS
@@ -40,7 +40,7 @@ class TestStripBoilerplate:
         soup = BeautifulSoup(
             "<body><p>Keep</p><script>alert(1)</script></body>", "html.parser"
         )
-        _strip_boilerplate(soup)
+        HtmlExtractor._strip_boilerplate(soup)
         assert soup.find("script") is None
         assert "Keep" in soup.get_text()
 
@@ -60,7 +60,7 @@ class TestStripBoilerplate:
             "</body>"
         )
         soup = BeautifulSoup(html, "html.parser")
-        _strip_boilerplate(soup)
+        HtmlExtractor._strip_boilerplate(soup)
 
         text = soup.get_text()
         assert "Content" in text
@@ -76,7 +76,7 @@ class TestStripBoilerplate:
         soup = BeautifulSoup(
             "<article><h1>Title</h1><p>Body text.</p></article>", "html.parser"
         )
-        _strip_boilerplate(soup)
+        HtmlExtractor._strip_boilerplate(soup)
         assert "Title" in soup.get_text()
         assert "Body text." in soup.get_text()
 
@@ -88,39 +88,39 @@ class TestExtractTitle:
         soup = BeautifulSoup(
             "<html><head><title>My Page</title></head></html>", "html.parser"
         )
-        assert _extract_title(soup) == "My Page"
+        assert HtmlExtractor._extract_title(soup) == "My Page"
 
     def test_strips_whitespace(self):
         from bs4 import BeautifulSoup
 
         soup = BeautifulSoup("<title>  Spaced Title  </title>", "html.parser")
-        assert _extract_title(soup) == "Spaced Title"
+        assert HtmlExtractor._extract_title(soup) == "Spaced Title"
 
     def test_no_title_returns_empty(self):
         from bs4 import BeautifulSoup
 
         soup = BeautifulSoup("<html><body>No title</body></html>", "html.parser")
-        assert _extract_title(soup) == ""
+        assert HtmlExtractor._extract_title(soup) == ""
 
 
 class TestHtmlToMarkdown:
     def test_headings(self):
-        md = _html_to_markdown("<h1>Title</h1><h2>Subtitle</h2>")
+        md = HtmlExtractor._html_to_markdown("<h1>Title</h1><h2>Subtitle</h2>")
         assert "# Title" in md
         assert "## Subtitle" in md
 
     def test_paragraphs(self):
-        md = _html_to_markdown("<p>First</p><p>Second</p>")
+        md = HtmlExtractor._html_to_markdown("<p>First</p><p>Second</p>")
         assert "First" in md
         assert "Second" in md
 
     def test_lists(self):
-        md = _html_to_markdown("<ul><li>One</li><li>Two</li></ul>")
+        md = HtmlExtractor._html_to_markdown("<ul><li>One</li><li>Two</li></ul>")
         assert "- One" in md
         assert "- Two" in md
 
     def test_tables(self):
-        md = _html_to_markdown(
+        md = HtmlExtractor._html_to_markdown(
             "<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>"
         )
         assert "A" in md
@@ -131,16 +131,19 @@ class TestHtmlToMarkdown:
 
 class TestHasMarkdownHeadings:
     def test_detects_h1(self):
-        assert _has_markdown_headings("# Title\nBody") is True
+        assert HtmlExtractor._has_markdown_headings("# Title\nBody") is True
 
     def test_detects_h2(self):
-        assert _has_markdown_headings("## Subtitle\nBody") is True
+        assert HtmlExtractor._has_markdown_headings("## Subtitle\nBody") is True
 
     def test_no_headings(self):
-        assert _has_markdown_headings("Just plain text\nAnother line") is False
+        assert (
+            HtmlExtractor._has_markdown_headings("Just plain text\nAnother line")
+            is False
+        )
 
     def test_hash_in_middle_not_heading(self):
-        assert _has_markdown_headings("Issue #42 is open") is False
+        assert HtmlExtractor._has_markdown_headings("Issue #42 is open") is False
 
 
 class TestProcessHTMLFile:
@@ -153,7 +156,7 @@ class TestProcessHTMLFile:
             "</body></html>"
         )
 
-        pages = process_html_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert len(pages) >= 2
         texts = [p.text for p in pages]
@@ -165,7 +168,7 @@ class TestProcessHTMLFile:
         f = tmp_path / "article.html"
         f.write_text("<html><body><h1>Title</h1><p>Content.</p></body></html>")
 
-        pages = process_html_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert pages[0].document_name == "article.html"
         assert pages[0].document_path == str(f.resolve())
@@ -176,7 +179,7 @@ class TestProcessHTMLFile:
         f = tmp_path / "article.html"
         f.write_text("<html><body><h1>Title</h1><p>Content.</p></body></html>")
 
-        pages = process_html_file(f, document_name="subdir/article.html")
+        pages = _extractor.extract_pages(f, document_name="subdir/article.html")
 
         assert pages[0].document_name == "subdir/article.html"
 
@@ -190,7 +193,7 @@ class TestProcessHTMLFile:
             "</body></html>"
         )
 
-        pages = process_html_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert len(pages) >= 3
         for i, page in enumerate(pages):
@@ -208,7 +211,7 @@ class TestProcessHTMLFile:
             "</body></html>"
         )
 
-        pages = process_html_file(f)
+        pages = _extractor.extract_pages(f)
 
         full = " ".join(p.text for p in pages)
         assert "Real content" in full
@@ -223,7 +226,7 @@ class TestProcessHTMLFile:
             "<body><p>Body text only, no headings.</p></body></html>"
         )
 
-        pages = process_html_file(f)
+        pages = _extractor.extract_pages(f)
 
         full = " ".join(p.text for p in pages)
         assert "My Article" in full
@@ -238,7 +241,7 @@ class TestProcessHTMLFile:
             "</body></html>"
         )
 
-        pages = process_html_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert len(pages) >= 1
         full = " ".join(p.text for p in pages)
@@ -249,7 +252,7 @@ class TestProcessHTMLFile:
         f = tmp_path / "legacy.htm"
         f.write_text("<html><body><p>Works with .htm</p></body></html>")
 
-        pages = process_html_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert len(pages) >= 1
         assert "Works with .htm" in pages[0].text
@@ -258,7 +261,7 @@ class TestProcessHTMLFile:
         f = tmp_path / "entities.html"
         f.write_text("<html><body><p>Price: &lt;$100 &amp; worth it</p></body></html>")
 
-        pages = process_html_file(f)
+        pages = _extractor.extract_pages(f)
 
         full = " ".join(p.text for p in pages)
         assert "<$100" in full
@@ -273,7 +276,7 @@ class TestProcessHTMLFile:
             "</body></html>"
         )
 
-        pages = process_html_file(f)
+        pages = _extractor.extract_pages(f)
 
         full = " ".join(p.text for p in pages)
         assert "Alice" in full
@@ -286,7 +289,7 @@ class TestProcessHTMLFile:
             "<body><h1>Introduction</h1><p>Body text.</p></body></html>"
         )
 
-        pages = process_html_file(f)
+        pages = _extractor.extract_pages(f)
 
         full = " ".join(p.text for p in pages)
         # Title should NOT be prepended because the body already has headings.
@@ -297,7 +300,7 @@ class TestProcessHTMLFile:
         f = tmp_path / "special.html"
         f.write_text("<html><body><p>Revenue was $4.2M (12% growth)</p></body></html>")
 
-        pages = process_html_file(f)
+        pages = _extractor.extract_pages(f)
 
         full = " ".join(p.text for p in pages)
         assert "$4.2M" in full
@@ -309,7 +312,7 @@ class TestProcessHTMLFileEdgeCases:
         f = tmp_path / "empty.html"
         f.write_text("")
 
-        pages = process_html_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert pages == []
 
@@ -322,7 +325,7 @@ class TestProcessHTMLFileEdgeCases:
             "</body></html>"
         )
 
-        pages = process_html_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert pages == []
 
@@ -330,7 +333,7 @@ class TestProcessHTMLFileEdgeCases:
         f = tmp_path / "whitespace.html"
         f.write_text("<html><body>   \n\n   </body></html>")
 
-        pages = process_html_file(f)
+        pages = _extractor.extract_pages(f)
 
         assert pages == []
 
@@ -338,7 +341,7 @@ class TestProcessHTMLFileEdgeCases:
         f = tmp_path / "broken.html"
         f.write_text("<p>Unclosed paragraph<div>Mixed tags</p></div>Extra")
 
-        pages = process_html_file(f)
+        pages = _extractor.extract_pages(f)
 
         full = " ".join(p.text for p in pages)
         assert "Unclosed paragraph" in full
@@ -351,7 +354,7 @@ class TestProcessHTMLFileEdgeCases:
             "<html><body><p>XHTML content</p></body></html>"
         )
 
-        pages = process_html_file(f)
+        pages = _extractor.extract_pages(f)
 
         full = " ".join(p.text for p in pages)
         assert "XHTML content" in full
@@ -360,7 +363,7 @@ class TestProcessHTMLFileEdgeCases:
         f = tmp_path / "cp1252.html"
         f.write_bytes(b"<html><body><p>\x93Smart quotes\x94 here</p></body></html>")
 
-        pages = process_html_file(f)
+        pages = _extractor.extract_pages(f)
 
         full = " ".join(p.text for p in pages)
         assert "Smart quotes" in full
@@ -372,4 +375,4 @@ class TestProcessHTMLFileErrors:
         f.write_text("<root>data</root>")
 
         with pytest.raises(ValueError, match="Unsupported HTML format"):
-            process_html_file(f)
+            _extractor.extract_pages(f)

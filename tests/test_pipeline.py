@@ -37,7 +37,9 @@ def _mock_ocr_backend(
     backend = MagicMock()
     if ocr_document_return is not None:
         backend.ocr_document.return_value = ocr_document_return
-    monkeypatch.setattr("quarry.pipeline.get_ocr_backend", lambda _settings: backend)
+    monkeypatch.setattr(
+        "quarry.ingestion.pipeline.get_ocr_backend", lambda _settings: backend
+    )
     return backend
 
 
@@ -50,14 +52,14 @@ def _mock_embedding_backend(
     backend.embed_texts.return_value = vectors
     backend.model_name = "test-model"
     monkeypatch.setattr(
-        "quarry.pipeline.get_embedding_backend", lambda _settings: backend
+        "quarry.ingestion.pipeline.get_embedding_backend", lambda _settings: backend
     )
     return backend
 
 
 class TestIngestDocument:
     def test_file_not_found(self):
-        from quarry.pipeline import ingest_document
+        from quarry.ingestion.pipeline import ingest_document
 
         db = MagicMock()
         with pytest.raises(FileNotFoundError):
@@ -96,13 +98,16 @@ class TestIngestDocument:
         ]
         vectors = np.zeros((1, 768), dtype=np.float32)
 
-        monkeypatch.setattr("quarry.pipeline.analyze_pdf", lambda _path: analyses)
         monkeypatch.setattr(
-            "quarry.pipeline.extract_text_pages",
+            "quarry.extractors.pdf_extractor.PdfExtractor._classify_pages",
+            staticmethod(lambda _path: analyses),
+        )
+        monkeypatch.setattr(
+            "quarry.extractors.pdf_extractor.extract_text_pages",
             lambda _path, _pages, _total, **_kw: text_pages,
         )
         monkeypatch.setattr(
-            "quarry.pipeline.chunk_pages",
+            "quarry.ingestion.pipeline.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: chunks,
         )
         _mock_embedding_backend(monkeypatch, vectors)
@@ -111,7 +116,7 @@ class TestIngestDocument:
             lambda _db, _chunks, _vectors: 1,
         )
 
-        from quarry.pipeline import ingest_document
+        from quarry.ingestion.pipeline import ingest_document
 
         db = MagicMock()
         result = ingest_document(pdf_file, db, _settings())
@@ -153,10 +158,13 @@ class TestIngestDocument:
         ]
         vectors = np.zeros((1, 768), dtype=np.float32)
 
-        monkeypatch.setattr("quarry.pipeline.analyze_pdf", lambda _path: analyses)
+        monkeypatch.setattr(
+            "quarry.extractors.pdf_extractor.PdfExtractor._classify_pages",
+            staticmethod(lambda _path: analyses),
+        )
         _mock_ocr_backend(monkeypatch, ocr_document_return=ocr_pages)
         monkeypatch.setattr(
-            "quarry.pipeline.chunk_pages",
+            "quarry.ingestion.pipeline.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: chunks,
         )
         _mock_embedding_backend(monkeypatch, vectors)
@@ -165,7 +173,7 @@ class TestIngestDocument:
             lambda _db, _chunks, _vectors: 1,
         )
 
-        from quarry.pipeline import ingest_document
+        from quarry.ingestion.pipeline import ingest_document
 
         db = MagicMock()
         result = ingest_document(pdf_file, db, _settings())
@@ -186,14 +194,17 @@ class TestIngestDocument:
         ]
         ocr_pages = [_make_page_content(1, PageType.IMAGE, "")]
 
-        monkeypatch.setattr("quarry.pipeline.analyze_pdf", lambda _path: analyses)
+        monkeypatch.setattr(
+            "quarry.extractors.pdf_extractor.PdfExtractor._classify_pages",
+            staticmethod(lambda _path: analyses),
+        )
         _mock_ocr_backend(monkeypatch, ocr_document_return=ocr_pages)
         monkeypatch.setattr(
-            "quarry.pipeline.chunk_pages",
+            "quarry.ingestion.pipeline.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: [],
         )
 
-        from quarry.pipeline import ingest_document
+        from quarry.ingestion.pipeline import ingest_document
 
         db = MagicMock()
         result = ingest_document(pdf_file, db, _settings())
@@ -209,13 +220,16 @@ class TestIngestDocument:
         ]
         text_pages = [_make_page_content(1, PageType.TEXT)]
 
-        monkeypatch.setattr("quarry.pipeline.analyze_pdf", lambda _path: analyses)
         monkeypatch.setattr(
-            "quarry.pipeline.extract_text_pages",
+            "quarry.extractors.pdf_extractor.PdfExtractor._classify_pages",
+            staticmethod(lambda _path: analyses),
+        )
+        monkeypatch.setattr(
+            "quarry.extractors.pdf_extractor.extract_text_pages",
             lambda _path, _pages, _total, **_kw: text_pages,
         )
         monkeypatch.setattr(
-            "quarry.pipeline.chunk_pages",
+            "quarry.ingestion.pipeline.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: [],
         )
 
@@ -229,7 +243,7 @@ class TestIngestDocument:
             "quarry.db.chunk_store.ChunkStore.delete_document", _mock_delete
         )
 
-        from quarry.pipeline import ingest_document
+        from quarry.ingestion.pipeline import ingest_document
 
         db = MagicMock()
         ingest_document(pdf_file, db, _settings(), overwrite=True)
@@ -241,21 +255,25 @@ class TestIngestDocument:
         pdf_file.write_bytes(b"%PDF-fake")
 
         monkeypatch.setattr(
-            "quarry.pipeline.analyze_pdf",
-            lambda _path: [
-                PageAnalysis(page_number=1, page_type=PageType.TEXT, text_length=100)
-            ],
+            "quarry.extractors.pdf_extractor.PdfExtractor._classify_pages",
+            staticmethod(
+                lambda _path: [
+                    PageAnalysis(
+                        page_number=1, page_type=PageType.TEXT, text_length=100
+                    )
+                ]
+            ),
         )
         monkeypatch.setattr(
-            "quarry.pipeline.extract_text_pages",
+            "quarry.extractors.pdf_extractor.extract_text_pages",
             lambda _path, _pages, _total, **_kw: [_make_page_content(1, PageType.TEXT)],
         )
         monkeypatch.setattr(
-            "quarry.pipeline.chunk_pages",
+            "quarry.ingestion.pipeline.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: [],
         )
 
-        from quarry.pipeline import ingest_document
+        from quarry.ingestion.pipeline import ingest_document
 
         messages: list[str] = []
         db = MagicMock()
@@ -286,7 +304,7 @@ class TestIngestDocument:
         vectors = np.zeros((1, 768), dtype=np.float32)
 
         monkeypatch.setattr(
-            "quarry.pipeline.chunk_pages",
+            "quarry.ingestion.pipeline.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: chunks,
         )
         _mock_embedding_backend(monkeypatch, vectors)
@@ -295,7 +313,7 @@ class TestIngestDocument:
             lambda _db, _chunks, _vectors: 1,
         )
 
-        from quarry.pipeline import ingest_document
+        from quarry.ingestion.pipeline import ingest_document
 
         db = MagicMock()
         result = ingest_document(txt_file, db, _settings())
@@ -328,7 +346,7 @@ class TestIngestDocument:
         vectors = np.zeros((1, 768), dtype=np.float32)
 
         monkeypatch.setattr(
-            "quarry.pipeline.chunk_pages",
+            "quarry.ingestion.pipeline.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: chunks,
         )
         _mock_embedding_backend(monkeypatch, vectors)
@@ -337,16 +355,16 @@ class TestIngestDocument:
             lambda _db, _chunks, _vectors: 1,
         )
 
-        from quarry.pipeline import ingest_document
+        from quarry.ingestion.pipeline import ingest_document
 
         db = MagicMock()
         result = ingest_document(csv_file, db, _settings())
 
         assert result["document_name"] == "data.csv"
         assert result["chunks"] == 1
-        sheets = result.get("sheets")
-        assert sheets is not None
-        assert sheets == 1
+        sections = result.get("sections")
+        assert sections is not None
+        assert sections == 1
 
     def test_dispatches_html_file(self, monkeypatch, tmp_path: Path):
         html_file = tmp_path / "article.html"
@@ -370,7 +388,7 @@ class TestIngestDocument:
         vectors = np.zeros((1, 768), dtype=np.float32)
 
         monkeypatch.setattr(
-            "quarry.pipeline.chunk_pages",
+            "quarry.ingestion.pipeline.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: chunks,
         )
         _mock_embedding_backend(monkeypatch, vectors)
@@ -379,7 +397,7 @@ class TestIngestDocument:
             lambda _db, _chunks, _vectors: 1,
         )
 
-        from quarry.pipeline import ingest_document
+        from quarry.ingestion.pipeline import ingest_document
 
         db = MagicMock()
         result = ingest_document(html_file, db, _settings())
@@ -391,7 +409,7 @@ class TestIngestDocument:
         zip_file = tmp_path / "archive.zip"
         zip_file.write_bytes(b"PK\x03\x04")
 
-        from quarry.pipeline import ingest_document
+        from quarry.ingestion.pipeline import ingest_document
 
         db = MagicMock()
         with pytest.raises(ValueError, match="Unsupported file format"):
@@ -418,7 +436,7 @@ class TestIngestText:
         vectors = np.zeros((1, 768), dtype=np.float32)
 
         monkeypatch.setattr(
-            "quarry.pipeline.chunk_pages",
+            "quarry.ingestion.pipeline.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: chunks,
         )
         _mock_embedding_backend(monkeypatch, vectors)
@@ -427,7 +445,7 @@ class TestIngestText:
             lambda _db, _chunks, _vectors: 1,
         )
 
-        from quarry.pipeline import ingest_content
+        from quarry.ingestion.pipeline import ingest_content
 
         db = MagicMock()
         result = ingest_content("Hello world", "clip.txt", db, _settings())
@@ -440,7 +458,7 @@ class TestIngestText:
 
     def test_overwrite_deletes_existing(self, monkeypatch):
         monkeypatch.setattr(
-            "quarry.pipeline.chunk_pages",
+            "quarry.ingestion.pipeline.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: [],
         )
 
@@ -454,7 +472,7 @@ class TestIngestText:
             "quarry.db.chunk_store.ChunkStore.delete_document", _mock_delete
         )
 
-        from quarry.pipeline import ingest_content
+        from quarry.ingestion.pipeline import ingest_content
 
         db = MagicMock()
         ingest_content("text", "doc.txt", db, _settings(), overwrite=True)
@@ -463,11 +481,11 @@ class TestIngestText:
 
     def test_empty_text_returns_zero_chunks(self, monkeypatch):
         monkeypatch.setattr(
-            "quarry.pipeline.chunk_pages",
+            "quarry.ingestion.pipeline.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: [],
         )
 
-        from quarry.pipeline import ingest_content
+        from quarry.ingestion.pipeline import ingest_content
 
         db = MagicMock()
         result = ingest_content("", "empty.txt", db, _settings())

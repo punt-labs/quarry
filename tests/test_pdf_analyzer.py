@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+from quarry.extractors.pdf_extractor import MIN_TEXT_CHARS_FOR_TEXT_PAGE, PdfExtractor
 from quarry.models import PageType
-from quarry.pdf_analyzer import MIN_TEXT_CHARS_FOR_TEXT_PAGE, analyze_pdf
 
 
 def _mock_page(text: str) -> MagicMock:
@@ -19,7 +19,7 @@ def _mock_doc_cm(mock_doc: MagicMock) -> MagicMock:
     return mock_doc
 
 
-class TestAnalyzePdf:
+class TestClassifyPages:
     def test_text_page(self, tmp_path):
         pdf_path = tmp_path / "test.pdf"
         pdf_path.touch()
@@ -30,9 +30,10 @@ class TestAnalyzePdf:
         mock_doc.__getitem__ = lambda _, idx: _mock_page(text)
 
         with patch(
-            "quarry.pdf_analyzer.fitz.open", return_value=_mock_doc_cm(mock_doc)
+            "quarry.extractors.pdf_extractor.fitz.open",
+            return_value=_mock_doc_cm(mock_doc),
         ):
-            results = analyze_pdf(pdf_path)
+            results = PdfExtractor._classify_pages(pdf_path)
 
         assert len(results) == 1
         assert results[0].page_type == PageType.TEXT
@@ -48,9 +49,10 @@ class TestAnalyzePdf:
         mock_doc.__getitem__ = lambda _, idx: _mock_page("short")
 
         with patch(
-            "quarry.pdf_analyzer.fitz.open", return_value=_mock_doc_cm(mock_doc)
+            "quarry.extractors.pdf_extractor.fitz.open",
+            return_value=_mock_doc_cm(mock_doc),
         ):
-            results = analyze_pdf(pdf_path)
+            results = PdfExtractor._classify_pages(pdf_path)
 
         assert len(results) == 1
         assert results[0].page_type == PageType.IMAGE
@@ -69,9 +71,10 @@ class TestAnalyzePdf:
         mock_doc.__getitem__ = lambda _, idx: pages[idx]
 
         with patch(
-            "quarry.pdf_analyzer.fitz.open", return_value=_mock_doc_cm(mock_doc)
+            "quarry.extractors.pdf_extractor.fitz.open",
+            return_value=_mock_doc_cm(mock_doc),
         ):
-            results = analyze_pdf(pdf_path)
+            results = PdfExtractor._classify_pages(pdf_path)
 
         assert len(results) == 3
         assert results[0].page_type == PageType.TEXT
@@ -87,9 +90,10 @@ class TestAnalyzePdf:
         mock_doc.__getitem__ = lambda _, idx: _mock_page("short")
 
         with patch(
-            "quarry.pdf_analyzer.fitz.open", return_value=_mock_doc_cm(mock_doc)
+            "quarry.extractors.pdf_extractor.fitz.open",
+            return_value=_mock_doc_cm(mock_doc),
         ):
-            results = analyze_pdf(pdf_path)
+            results = PdfExtractor._classify_pages(pdf_path)
 
         assert results[0].page_number == 1
         assert results[1].page_number == 2

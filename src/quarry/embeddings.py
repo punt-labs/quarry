@@ -15,7 +15,7 @@ from quarry.config import (
     ONNX_QUERY_PREFIX,
     ONNX_TOKENIZER_FILE,
 )
-from quarry.provider import PROVIDER_MODEL_MAP, ProviderSelection
+from quarry.ingestion.provider import PROVIDER_MODEL_MAP, ProviderSelection
 
 if TYPE_CHECKING:
     import onnxruntime as ort

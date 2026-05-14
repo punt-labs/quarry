@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from quarry.config import Settings as Settings
     from quarry.db.chunk_search import ChunkSearch as ChunkSearch
     from quarry.db.storage import get_db as get_db
-    from quarry.pipeline import (
+    from quarry.ingestion.pipeline import (
         ingest_content as ingest_content,
         ingest_document as ingest_document,
         ingest_url as ingest_url,
@@ -46,9 +46,9 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "CollectionName": ("quarry.collections", "CollectionName"),
     "Settings": ("quarry.config", "Settings"),
     "get_db": ("quarry.db.storage", "get_db"),
-    "ingest_content": ("quarry.pipeline", "ingest_content"),
-    "ingest_document": ("quarry.pipeline", "ingest_document"),
-    "ingest_url": ("quarry.pipeline", "ingest_url"),
+    "ingest_content": ("quarry.ingestion.pipeline", "ingest_content"),
+    "ingest_document": ("quarry.ingestion.pipeline", "ingest_document"),
+    "ingest_url": ("quarry.ingestion.pipeline", "ingest_url"),
 }
 
 

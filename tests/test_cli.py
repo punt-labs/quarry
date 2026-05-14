@@ -3259,7 +3259,7 @@ class TestDatabasesCmdSizeFormatting:
 class TestAutoWorkers:
     def test_returns_1_when_cpu_provider(self) -> None:
         from quarry.__main__ import _auto_workers
-        from quarry.provider import ProviderSelection
+        from quarry.ingestion.provider import ProviderSelection
 
         with patch.object(
             ProviderSelection,
@@ -3270,7 +3270,7 @@ class TestAutoWorkers:
 
     def test_returns_4_when_cuda_provider(self) -> None:
         from quarry.__main__ import _auto_workers
-        from quarry.provider import ProviderSelection
+        from quarry.ingestion.provider import ProviderSelection
 
         with patch.object(
             ProviderSelection,
@@ -3281,7 +3281,7 @@ class TestAutoWorkers:
 
     def test_returns_1_when_from_environment_raises(self) -> None:
         from quarry.__main__ import _auto_workers
-        from quarry.provider import ProviderSelection
+        from quarry.ingestion.provider import ProviderSelection
 
         with patch.object(
             ProviderSelection,
@@ -3295,7 +3295,7 @@ class TestAutoWorkers:
 
         from quarry.__main__ import _auto_workers
 
-        with patch.dict(sys.modules, {"quarry.provider": None}):
+        with patch.dict(sys.modules, {"quarry.ingestion.provider": None}):
             assert _auto_workers(_mock_settings()) == 1
 
 

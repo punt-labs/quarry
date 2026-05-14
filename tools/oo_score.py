@@ -660,7 +660,8 @@ class Ratchet:
             )
 
         if not rows:
-            _writeln("  (all metrics unchanged)")
+            _writeln("  (all metrics unchanged -- baseline is current)")
+            return 0
 
         if any_regression:
             _writeln("\nFAIL: regression detected")

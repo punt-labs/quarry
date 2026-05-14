@@ -20,7 +20,6 @@ import typer.core
 from rich.console import Console
 from rich.progress import Progress
 
-from quarry.backends import get_embedding_backend
 from quarry.collections import CollectionName
 from quarry.config import (
     DEFAULT_PORT,
@@ -38,9 +37,10 @@ from quarry.formatting import (
     format_documents,
     format_status,
 )
+from quarry.ingestion.backends import get_embedding_backend
+from quarry.ingestion.pipeline import ingest_auto, ingest_content, ingest_document
+from quarry.ingestion.provider import ProviderSelection
 from quarry.logging_config import LoggingConfig
-from quarry.pipeline import ingest_auto, ingest_content, ingest_document
-from quarry.provider import ProviderSelection
 from quarry.remote import (
     CA_CERT_PATH,
     MCP_PROXY_CONFIG_PATH,
@@ -1128,7 +1128,7 @@ def deregister(
 def _auto_workers(settings: Settings) -> int:  # noqa: ARG001
     """Return 4 for CUDA (GPU), 1 for CPU; falls back to 1 on error."""
     try:
-        from quarry.provider import ProviderSelection  # noqa: PLC0415
+        from quarry.ingestion.provider import ProviderSelection  # noqa: PLC0415
 
         prov = ProviderSelection.from_environment().provider
         return 4 if prov == "CUDAExecutionProvider" else 1

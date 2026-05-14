@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING
 
 from mcp.server.fastmcp import FastMCP
 
-from quarry.backends import get_embedding_backend
 from quarry.collections import CollectionName
 from quarry.config import Settings
 from quarry.db import ChunkCatalog, ChunkSearch, ChunkStore
@@ -25,13 +24,14 @@ from quarry.formatting import (
     format_status,
     format_switch_summary,
 )
-from quarry.logging_config import LoggingConfig
-from quarry.pipeline import (
+from quarry.ingestion.backends import get_embedding_backend
+from quarry.ingestion.pipeline import (
     ingest_auto as pipeline_ingest_auto,
     ingest_content as pipeline_ingest_content,
     ingest_document,
 )
-from quarry.provider import ProviderSelection
+from quarry.ingestion.provider import ProviderSelection
+from quarry.logging_config import LoggingConfig
 from quarry.sync import sync_all as engine_sync_all
 from quarry.sync_registry import (
     deregister_directory as registry_deregister,

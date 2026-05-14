@@ -15,37 +15,25 @@ if TYPE_CHECKING:
 
     from quarry.sitemap import SitemapEntry
 
-from quarry.backends import get_embedding_backend, get_ocr_backend
-from quarry.chunker import chunk_pages
-from quarry.code_processor import SUPPORTED_CODE_EXTENSIONS, process_code_file
 from quarry.config import Settings
 from quarry.db import ChunkCatalog, ChunkStore
-from quarry.html_processor import (
-    SUPPORTED_HTML_EXTENSIONS,
-    process_html_file,
-    process_html_text,
-)
-from quarry.image_analyzer import (
-    SUPPORTED_IMAGE_EXTENSIONS,
-    analyze_image,
-)
-from quarry.models import Chunk, PageContent, PageType
-from quarry.pdf_analyzer import analyze_pdf
-from quarry.presentation_processor import (
+from quarry.extractors.code_extractor import SUPPORTED_CODE_EXTENSIONS, CodeExtractor
+from quarry.extractors.html_extractor import SUPPORTED_HTML_EXTENSIONS, HtmlExtractor
+from quarry.extractors.image_extractor import SUPPORTED_IMAGE_EXTENSIONS, ImageExtractor
+from quarry.extractors.pdf_extractor import PdfExtractor
+from quarry.extractors.presentation_extractor import (
     SUPPORTED_PRESENTATION_EXTENSIONS,
-    process_presentation_file,
+    PresentationExtractor,
 )
-from quarry.results import IngestResult, SitemapResult
-from quarry.spreadsheet_processor import (
+from quarry.extractors.spreadsheet_extractor import (
     SUPPORTED_SPREADSHEET_EXTENSIONS,
-    process_spreadsheet_file,
+    SpreadsheetExtractor,
 )
-from quarry.text_extractor import extract_text_pages
-from quarry.text_processor import (
-    SUPPORTED_TEXT_EXTENSIONS,
-    process_raw_text,
-    process_text_file,
-)
+from quarry.extractors.text_extractor import SUPPORTED_TEXT_EXTENSIONS, TextExtractor
+from quarry.ingestion.backends import get_embedding_backend, get_ocr_backend
+from quarry.ingestion.chunker import chunk_pages
+from quarry.models import Chunk, PageContent, PageType
+from quarry.results import IngestResult, SitemapResult
 from quarry.types import LanceDB
 
 logger = logging.getLogger(__name__)
@@ -237,37 +225,19 @@ def ingest_pdf(
             document_name, collection=collection, count=False
         )
 
-    analyses = analyze_pdf(file_path)
-    total_pages = len(analyses)
-
-    text_pages = [a.page_number for a in analyses if a.page_type == PageType.TEXT]
-    image_pages = [a.page_number for a in analyses if a.page_type == PageType.IMAGE]
+    ocr = get_ocr_backend(settings)
+    extractor = PdfExtractor(settings, ocr)
+    all_pages = extractor.extract_pages(file_path, document_name=document_name)
+    total_pages = len(all_pages)
+    text_pages = sum(1 for p in all_pages if p.page_type == PageType.TEXT)
+    image_pages = sum(1 for p in all_pages if p.page_type == PageType.IMAGE)
 
     progress(
         "Pages: %d total, %d text, %d image",
         total_pages,
-        len(text_pages),
-        len(image_pages),
+        text_pages,
+        image_pages,
     )
-
-    all_pages: list[PageContent] = []
-
-    if text_pages:
-        progress("Extracting text from %d pages", len(text_pages))
-        extracted = extract_text_pages(
-            file_path, text_pages, total_pages, document_name=document_name
-        )
-        all_pages.extend(extracted)
-
-    if image_pages:
-        progress("Running OCR on %d pages", len(image_pages))
-        ocr = get_ocr_backend(settings)
-        ocr_results = ocr.ocr_document(
-            file_path, image_pages, total_pages, document_name=document_name
-        )
-        all_pages.extend(ocr_results)
-
-    all_pages.sort(key=lambda p: p.page_number)
 
     return _chunk_embed_store(
         all_pages,
@@ -278,8 +248,8 @@ def ingest_pdf(
         collection=collection,
         source_format=".pdf",
         total_pages=total_pages,
-        text_pages=len(text_pages),
-        image_pages=len(image_pages),
+        text_pages=text_pages,
+        image_pages=image_pages,
         agent_handle=agent_handle,
         memory_type=memory_type,
         summary=summary,
@@ -325,7 +295,7 @@ def ingest_text_file(
             document_name, collection=collection, count=False
         )
 
-    pages = process_text_file(file_path, document_name=document_name)
+    pages = TextExtractor().extract_pages(file_path, document_name=document_name)
     progress("Sections: %d", len(pages))
 
     return _chunk_embed_store(
@@ -382,7 +352,7 @@ def ingest_code_file(
             document_name, collection=collection, count=False
         )
 
-    pages = process_code_file(file_path, document_name=document_name)
+    pages = CodeExtractor().extract_pages(file_path, document_name=document_name)
     progress("Definitions: %d", len(pages))
 
     return _chunk_embed_store(
@@ -439,12 +409,9 @@ def ingest_spreadsheet(
             document_name, collection=collection, count=False
         )
 
-    pages, sheet_count = process_spreadsheet_file(
-        file_path,
-        max_chars=settings.chunk_max_chars,
-        document_name=document_name,
-    )
-    progress("Sheets: %d, sections: %d", sheet_count, len(pages))
+    extractor = SpreadsheetExtractor(max_chars=settings.chunk_max_chars)
+    pages = extractor.extract_pages(file_path, document_name=document_name)
+    progress("Sections: %d", len(pages))
 
     return _chunk_embed_store(
         pages,
@@ -454,7 +421,7 @@ def ingest_spreadsheet(
         progress,
         collection=collection,
         source_format=file_path.suffix.lower(),
-        sheets=sheet_count,
+        sections=len(pages),
         agent_handle=agent_handle,
         memory_type=memory_type,
         summary=summary,
@@ -500,7 +467,7 @@ def ingest_html_file(
             document_name, collection=collection, count=False
         )
 
-    pages = process_html_file(file_path, document_name=document_name)
+    pages = HtmlExtractor().extract_pages(file_path, document_name=document_name)
     progress("Sections: %d", len(pages))
 
     return _chunk_embed_store(
@@ -557,7 +524,9 @@ def ingest_presentation(
             document_name, collection=collection, count=False
         )
 
-    pages = process_presentation_file(file_path, document_name=document_name)
+    pages = PresentationExtractor().extract_pages(
+        file_path, document_name=document_name
+    )
     progress("Slides: %d", len(pages))
 
     return _chunk_embed_store(
@@ -618,7 +587,7 @@ def ingest_image(
             document_name, collection=collection, count=False
         )
 
-    analysis = analyze_image(file_path)
+    analysis = ImageExtractor.analyze(file_path)
     progress(
         "Image: %s, %d pages, conversion=%s",
         analysis.format,
@@ -852,7 +821,7 @@ def ingest_content(
             document_name, collection=collection, count=False
         )
 
-    pages = process_raw_text(content, document_name, format_hint=format_hint)
+    pages = TextExtractor().extract_raw(content, document_name, format_hint=format_hint)
     progress("Sections: %d", len(pages))
 
     return _chunk_embed_store(
@@ -955,7 +924,7 @@ def ingest_url(
             document_name, collection=collection, count=False
         )
 
-    pages = process_html_text(html, document_name, url)
+    pages = HtmlExtractor().extract_from_html(html, document_name, url)
     progress("Sections: %d", len(pages))
 
     return _chunk_embed_store(
@@ -1522,44 +1491,13 @@ def prepare_document(
     return chunks, vectors
 
 
-def _extract_pdf_pages(
-    file_path: Path,
-    document_name: str,
-    settings: Settings,
-) -> list[PageContent]:
-    """Extract pages from a PDF file."""
-    analyses = analyze_pdf(file_path)
-    total_pages = len(analyses)
-    text_page_nums = [a.page_number for a in analyses if a.page_type == PageType.TEXT]
-    image_page_nums = [a.page_number for a in analyses if a.page_type == PageType.IMAGE]
-    all_pages: list[PageContent] = []
-    if text_page_nums:
-        all_pages.extend(
-            extract_text_pages(
-                file_path, text_page_nums, total_pages, document_name=document_name
-            )
-        )
-    if image_page_nums:
-        ocr = get_ocr_backend(settings)
-        all_pages.extend(
-            ocr.ocr_document(
-                file_path,
-                image_page_nums,
-                total_pages,
-                document_name=document_name,
-            )
-        )
-    all_pages.sort(key=lambda p: p.page_number)
-    return all_pages
-
-
 def _extract_image_pages(
     file_path: Path,
     document_name: str,
     settings: Settings,
 ) -> list[PageContent]:
     """Extract pages from an image file."""
-    analysis = analyze_image(file_path)
+    analysis = ImageExtractor.analyze(file_path)
     if analysis.page_count > 1:
         ocr = get_ocr_backend(settings)
         return ocr.ocr_document(
@@ -1589,24 +1527,26 @@ def _extract_pages(
 ) -> list[PageContent]:
     """Extract pages from a file based on its suffix."""
     if suffix == ".pdf":
-        return _extract_pdf_pages(file_path, document_name, settings)
+        ocr = get_ocr_backend(settings)
+        return PdfExtractor(settings, ocr).extract_pages(
+            file_path, document_name=document_name
+        )
     if suffix in SUPPORTED_CODE_EXTENSIONS:
-        return process_code_file(file_path, document_name=document_name)
+        return CodeExtractor().extract_pages(file_path, document_name=document_name)
     if suffix in SUPPORTED_TEXT_EXTENSIONS:
-        return process_text_file(file_path, document_name=document_name)
+        return TextExtractor().extract_pages(file_path, document_name=document_name)
     if suffix in SUPPORTED_IMAGE_EXTENSIONS:
         return _extract_image_pages(file_path, document_name, settings)
     if suffix in SUPPORTED_SPREADSHEET_EXTENSIONS:
-        pages, _ = process_spreadsheet_file(
-            file_path,
-            max_chars=settings.chunk_max_chars,
-            document_name=document_name,
+        return SpreadsheetExtractor(max_chars=settings.chunk_max_chars).extract_pages(
+            file_path, document_name=document_name
         )
-        return pages
     if suffix in SUPPORTED_HTML_EXTENSIONS:
-        return process_html_file(file_path, document_name=document_name)
+        return HtmlExtractor().extract_pages(file_path, document_name=document_name)
     if suffix in SUPPORTED_PRESENTATION_EXTENSIONS:
-        return process_presentation_file(file_path, document_name=document_name)
+        return PresentationExtractor().extract_pages(
+            file_path, document_name=document_name
+        )
 
     msg = f"Unsupported file format: {suffix}"
     raise ValueError(msg)
