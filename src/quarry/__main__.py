@@ -25,10 +25,6 @@ from quarry.collections import derive_collection
 from quarry.config import (
     DEFAULT_PORT,
     Settings,
-    load_settings,
-    read_default_db,
-    resolve_db_paths,
-    write_default_db,
 )
 from quarry.database import (
     count_chunks,
@@ -243,8 +239,8 @@ def _resolved_settings(db: str = "") -> Settings:
 
     Priority: per-command ``db`` > global ``--db`` flag > persistent default.
     """
-    effective = db or _global_db or read_default_db()
-    return resolve_db_paths(load_settings(), effective or None)
+    effective = db or _global_db or Settings.read_default_db()
+    return Settings.load().resolve_db_paths(effective or None)
 
 
 def _cli_errors(fn: Callable[..., None]) -> Callable[..., None]:
@@ -950,8 +946,8 @@ def use_cmd(
     remote server is fixed to the database it was started with.
     """
     # Validate the name before persisting.
-    resolve_db_paths(load_settings(), name if name != "default" else None)
-    write_default_db(name)
+    Settings.load().resolve_db_paths(name if name != "default" else None)
+    Settings.write_default_db(name)
 
     proxy_config = _safe_proxy_config().get("quarry", {})
     remote_note = (
@@ -1946,7 +1942,7 @@ def mcp() -> None:
     """Start the MCP server (stdio transport)."""
     from quarry.mcp_server import main as mcp_main  # noqa: PLC0415
 
-    mcp_main(db_name=_global_db or read_default_db())
+    mcp_main(db_name=_global_db or Settings.read_default_db())
 
 
 @app.command()

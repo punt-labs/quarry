@@ -115,10 +115,7 @@ def _ingest_background() -> None:
         return
 
     try:
-        from quarry.config import (  # noqa: PLC0415
-            load_settings,
-            resolve_db_paths,
-        )
+        from quarry.config import Settings  # noqa: PLC0415
         from quarry.database import (  # noqa: PLC0415
             delete_document,
             get_db,
@@ -128,7 +125,7 @@ def _ingest_background() -> None:
 
         # Re-resolve settings for embedding model config.  The db path is
         # taken from argv (parent already resolved it) to ensure consistency.
-        settings = resolve_db_paths(load_settings(), None)
+        settings = Settings.load().resolve_db_paths(None)
         db = get_db(Path(lancedb_path))
 
         # Deduplicate: remove prior captures for this session.

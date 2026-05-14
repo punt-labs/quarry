@@ -77,9 +77,9 @@ def _unique_collection_name(
 
 def _resolve_settings() -> Settings:
     """Load settings resolved for the default database."""
-    from quarry.config import load_settings, resolve_db_paths  # noqa: PLC0415
+    from quarry.config import Settings  # noqa: PLC0415
 
-    return resolve_db_paths(load_settings(), None)
+    return Settings.load().resolve_db_paths(None)
 
 
 def _sync_lockfile() -> Path:

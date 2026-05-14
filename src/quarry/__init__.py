@@ -2,7 +2,7 @@
 
 Library API — import core types for programmatic use::
 
-    from quarry import Settings, load_settings, get_db, search
+    from quarry import Settings, get_db, search
     from quarry import ingest_content, ingest_document, ingest_url
 
 All public symbols are lazy-loaded via PEP 562 to avoid pulling in
@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from quarry.collections import derive_collection as derive_collection
-    from quarry.config import Settings as Settings, load_settings as load_settings
+    from quarry.config import Settings as Settings
     from quarry.database import get_db as get_db, search as search
     from quarry.pipeline import (
         ingest_content as ingest_content,
@@ -36,7 +36,6 @@ __all__ = [
     "ingest_content",
     "ingest_document",
     "ingest_url",
-    "load_settings",
     "search",
 ]
 
@@ -44,7 +43,6 @@ __all__ = [
 _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "derive_collection": ("quarry.collections", "derive_collection"),
     "Settings": ("quarry.config", "Settings"),
-    "load_settings": ("quarry.config", "load_settings"),
     "get_db": ("quarry.database", "get_db"),
     "search": ("quarry.database", "search"),
     "ingest_content": ("quarry.pipeline", "ingest_content"),

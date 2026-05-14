@@ -1640,11 +1640,7 @@ class TestIngestBackground:
                 ],
             ),
             patch(
-                "quarry.config.resolve_db_paths",
-                return_value=MagicMock(),
-            ),
-            patch(
-                "quarry.config.load_settings",
+                "quarry.config.Settings.load",
                 return_value=MagicMock(),
             ),
             patch(
@@ -1695,11 +1691,7 @@ class TestIngestBackground:
                 ],
             ),
             patch(
-                "quarry.config.resolve_db_paths",
-                return_value=MagicMock(),
-            ),
-            patch(
-                "quarry.config.load_settings",
+                "quarry.config.Settings.load",
                 return_value=MagicMock(),
             ),
             patch(

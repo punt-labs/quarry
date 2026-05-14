@@ -647,19 +647,20 @@ class TestListRegistrations:
 
 class TestDbNamePropagation:
     def test_settings_uses_db_name(self, tmp_path: Path) -> None:
-        """Verify _settings() calls resolve_db_paths with the module _db_name."""
+        """Verify _settings() forwards the module _db_name."""
         import quarry.mcp_server as mcp_mod
 
         original = mcp_mod._db_name.get()
         try:
             mcp_mod._db_name.set("work")
+            mock_loaded = MagicMock()
+            mock_loaded.resolve_db_paths.return_value = _settings(tmp_path)
             with patch(
-                "quarry.mcp_server.resolve_db_paths",
-            ) as mock_resolve:
-                mock_resolve.return_value = _settings(tmp_path)
+                "quarry.mcp_server.Settings.load",
+                return_value=mock_loaded,
+            ):
                 mcp_mod._settings()
-            mock_resolve.assert_called_once()
-            assert mock_resolve.call_args[0][1] == "work"
+            mock_loaded.resolve_db_paths.assert_called_once_with("work")
         finally:
             mcp_mod._db_name.set(original)
 
@@ -670,12 +671,14 @@ class TestDbNamePropagation:
         original = mcp_mod._db_name.get()
         try:
             mcp_mod._db_name.set(None)
+            mock_loaded = MagicMock()
+            mock_loaded.resolve_db_paths.return_value = _settings(tmp_path)
             with patch(
-                "quarry.mcp_server.resolve_db_paths",
-            ) as mock_resolve:
-                mock_resolve.return_value = _settings(tmp_path)
+                "quarry.mcp_server.Settings.load",
+                return_value=mock_loaded,
+            ):
                 mcp_mod._settings()
-            assert mock_resolve.call_args[0][1] is None
+            mock_loaded.resolve_db_paths.assert_called_once_with(None)
         finally:
             mcp_mod._db_name.set(original)
 
