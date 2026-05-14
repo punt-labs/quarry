@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from quarry.sitemap import SitemapEntry
     from quarry.types import LanceDB
 
-from quarry.db import ChunkCatalog, ChunkStore
+from quarry.db import Database
 from quarry.extractors.html_extractor import HtmlExtractor
 from quarry.models import PageContent
 from quarry.results import IngestResult, SitemapResult
@@ -63,7 +63,7 @@ class UrlIngester:
         progress("Fetched %d characters", len(html))
 
         if overwrite:
-            ChunkStore(self._db).delete_document(
+            Database(self._db).store.delete_document(
                 document_name, collection=collection, count=False
             )
 
@@ -148,7 +148,7 @@ class UrlIngester:
         after_filter = len(filtered)
         progress("After filtering: %d URLs", after_filter)
 
-        existing_docs = ChunkCatalog(self._db).list_documents(
+        existing_docs = Database(self._db).catalog.list_documents(
             collection_filter=collection
         )
         existing_timestamps: dict[str, str] = {
@@ -449,7 +449,7 @@ def _chunk_embed_store(
 
         progress("Storing in LanceDB")
         t0 = time.perf_counter()
-        inserted = ChunkStore(db).insert(chunks, vectors)
+        inserted = Database(db).store.insert(chunks, vectors)
         t_store = time.perf_counter() - t0
         logger.info("url_ingester: stored %d chunks in %.2fs", inserted, t_store)
         progress("Done: %d chunks indexed from %s", inserted, document_name)

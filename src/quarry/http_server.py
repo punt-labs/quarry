@@ -41,8 +41,8 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route, WebSocketRoute
 
 from quarry.config import DEFAULT_PORT, Settings
-from quarry.db import ChunkCatalog, ChunkSearch, ChunkStore
-from quarry.db.storage import dir_size_bytes, format_size, get_db
+from quarry.db import Database
+from quarry.db.storage import dir_size_bytes, format_size
 from quarry.ingestion.backends import get_embedding_backend
 from quarry.ingestion.provider import ProviderSelection
 from quarry.sync_registry import (
@@ -60,7 +60,7 @@ if TYPE_CHECKING:
     from starlette.requests import Request
     from starlette.websockets import WebSocket
 
-    from quarry.types import EmbeddingBackend, LanceDB
+    from quarry.types import EmbeddingBackend
 
 logger = logging.getLogger(__name__)
 
@@ -262,8 +262,8 @@ class _QuarryContext:
         self.task_refs: dict[str, asyncio.Task[None]] = {}
 
     @cached_property
-    def db(self) -> LanceDB:
-        return get_db(self._settings.lancedb_path)
+    def database(self) -> Database:
+        return Database.connect(self._settings.lancedb_path)
 
     @cached_property
     def embedder(self) -> EmbeddingBackend:
@@ -361,7 +361,7 @@ def _search_route(request: Request) -> JSONResponse:
 
     ctx = _ctx(request)
     query_vector = ctx.embedder.embed_query(query)
-    results = ChunkSearch(ctx.db).hybrid_search(
+    results = ctx.database.search.hybrid_search(
         query,
         query_vector,
         limit=limit,
@@ -403,7 +403,7 @@ def _documents_route(request: Request) -> JSONResponse:
 
     collection = request.query_params.get("collection") or None
     ctx = _ctx(request)
-    docs = ChunkCatalog(ctx.db).list_documents(collection_filter=collection)
+    docs = ctx.database.catalog.list_documents(collection_filter=collection)
     return JSONResponse({"total_documents": len(docs), "documents": docs})
 
 
@@ -441,7 +441,7 @@ async def _run_delete_document_task(
     """Execute document deletion in background and update task state."""
     try:
         count = await run_in_threadpool(
-            ChunkStore(ctx.db).delete_document, name, collection=collection
+            ctx.database.store.delete_document, name, collection=collection
         )
         state.status = "completed"
         state.results = {"deleted": count, "name": name, "type": "document"}
@@ -465,7 +465,7 @@ def _collections_route(request: Request) -> JSONResponse:
         return auth_resp
 
     ctx = _ctx(request)
-    cols = ChunkCatalog(ctx.db).list_collections()
+    cols = ctx.database.catalog.list_collections()
     return JSONResponse({"total_collections": len(cols), "collections": cols})
 
 
@@ -500,7 +500,7 @@ async def _run_delete_collection_task(
 ) -> None:
     """Execute collection deletion in background and update task state."""
     try:
-        count = await run_in_threadpool(ChunkStore(ctx.db).delete_collection, name)
+        count = await run_in_threadpool(ctx.database.store.delete_collection, name)
         state.status = "completed"
         state.results = {"deleted": count, "name": name, "type": "collection"}
     except asyncio.CancelledError:
@@ -548,7 +548,7 @@ def _show_route(request: Request) -> JSONResponse:
     ctx = _ctx(request)
 
     if page > 0:
-        text = ChunkCatalog(ctx.db).get_page_text(document, page, collection=collection)
+        text = ctx.database.catalog.get_page_text(document, page, collection=collection)
         if text is None:
             return JSONResponse({"error": "Not found"}, status_code=404)
         return JSONResponse(
@@ -556,7 +556,7 @@ def _show_route(request: Request) -> JSONResponse:
         )
 
     # No page or page == 0: return document metadata.
-    docs = ChunkCatalog(ctx.db).list_documents(collection_filter=collection)
+    docs = ctx.database.catalog.list_documents(collection_filter=collection)
     match = [d for d in docs if d["document_name"] == document]
     if not match:
         return JSONResponse({"error": "Not found"}, status_code=404)
@@ -647,7 +647,7 @@ async def _run_remember_task(
             ingest_content,
             content,
             name,
-            ctx.db,
+            ctx.database.db,
             ctx.settings,
             overwrite=overwrite,
             collection=collection,
@@ -759,7 +759,7 @@ async def _run_ingest_task(
         result = await run_in_threadpool(
             ingest_auto,
             source,
-            ctx.db,
+            ctx.database.db,
             ctx.settings,
             overwrite=overwrite,
             collection=collection,
@@ -790,7 +790,7 @@ async def _run_sync_task(ctx: _QuarryContext, state: TaskState) -> None:
     from quarry.sync import sync_all  # noqa: PLC0415
 
     try:
-        results = await run_in_threadpool(sync_all, ctx.db, ctx.settings)
+        results = await run_in_threadpool(sync_all, ctx.database.db, ctx.settings)
         state.status = "completed"
         state.results = {
             collection: {
@@ -923,7 +923,7 @@ def _databases_route(request: Request) -> JSONResponse:
     # remote /databases endpoint keeps the contract of ``discover_databases``.
     if lance_dir.exists():
         try:
-            docs = ChunkCatalog(ctx.db).list_documents()
+            docs = ctx.database.catalog.list_documents()
         except Exception:  # noqa: BLE001 — table may not exist yet
             logger.debug("list_documents failed on fresh database", exc_info=True)
             docs = []
@@ -1203,7 +1203,7 @@ async def _run_deregister_task(
         if not keep_data and removed_docs:
 
             def _purge() -> int:
-                store = ChunkStore(ctx.db)
+                store = ctx.database.store
                 total = 0
                 for doc_name in removed_docs:
                     total += store.delete_document(doc_name, collection=collection)
@@ -1239,8 +1239,8 @@ def _status_route(request: Request) -> JSONResponse:
 
     ctx = _ctx(request)
     settings = ctx.settings
-    chunks = ChunkStore(ctx.db).count()
-    cols = ChunkCatalog(ctx.db).list_collections()
+    chunks = ctx.database.store.count()
+    cols = ctx.database.catalog.list_collections()
     doc_count = sum(c["document_count"] for c in cols)
 
     if settings.registry_path.exists():
@@ -1471,7 +1471,7 @@ def serve(
     # is not thread-safe, so all shared state must be resolved single-threaded.
     logger.info("Loading embedding model...")
     _ = ctx.embedder
-    _ = ctx.db
+    _ = ctx.database
     logger.info("Embedding model ready")
 
     @asynccontextmanager

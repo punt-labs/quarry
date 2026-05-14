@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from quarry.sitemap import SitemapEntry
 
 from quarry.config import Settings
-from quarry.db import ChunkCatalog, ChunkStore
+from quarry.db import Database
 from quarry.extractors.code_extractor import SUPPORTED_CODE_EXTENSIONS, CodeExtractor
 from quarry.extractors.html_extractor import SUPPORTED_HTML_EXTENSIONS, HtmlExtractor
 from quarry.extractors.image_extractor import SUPPORTED_IMAGE_EXTENSIONS, ImageExtractor
@@ -221,7 +221,7 @@ def ingest_pdf(
     progress("Analyzing: %s", document_name)
 
     if overwrite:
-        ChunkStore(db).delete_document(
+        Database(db).store.delete_document(
             document_name, collection=collection, count=False
         )
 
@@ -291,7 +291,7 @@ def ingest_text_file(
     progress("Reading: %s", document_name)
 
     if overwrite:
-        ChunkStore(db).delete_document(
+        Database(db).store.delete_document(
             document_name, collection=collection, count=False
         )
 
@@ -348,7 +348,7 @@ def ingest_code_file(
     progress("Parsing: %s", document_name)
 
     if overwrite:
-        ChunkStore(db).delete_document(
+        Database(db).store.delete_document(
             document_name, collection=collection, count=False
         )
 
@@ -405,7 +405,7 @@ def ingest_spreadsheet(
     progress("Reading: %s", document_name)
 
     if overwrite:
-        ChunkStore(db).delete_document(
+        Database(db).store.delete_document(
             document_name, collection=collection, count=False
         )
 
@@ -463,7 +463,7 @@ def ingest_html_file(
     progress("Reading: %s", document_name)
 
     if overwrite:
-        ChunkStore(db).delete_document(
+        Database(db).store.delete_document(
             document_name, collection=collection, count=False
         )
 
@@ -520,7 +520,7 @@ def ingest_presentation(
     progress("Reading: %s", document_name)
 
     if overwrite:
-        ChunkStore(db).delete_document(
+        Database(db).store.delete_document(
             document_name, collection=collection, count=False
         )
 
@@ -583,7 +583,7 @@ def ingest_image(
     progress("Analyzing image: %s", document_name)
 
     if overwrite:
-        ChunkStore(db).delete_document(
+        Database(db).store.delete_document(
             document_name, collection=collection, count=False
         )
 
@@ -817,7 +817,7 @@ def ingest_content(
     progress("Processing: %s", document_name)
 
     if overwrite:
-        ChunkStore(db).delete_document(
+        Database(db).store.delete_document(
             document_name, collection=collection, count=False
         )
 
@@ -920,7 +920,7 @@ def ingest_url(
     progress("Fetched %d characters", len(html))
 
     if overwrite:
-        ChunkStore(db).delete_document(
+        Database(db).store.delete_document(
             document_name, collection=collection, count=False
         )
 
@@ -1022,7 +1022,7 @@ def _bulk_ingest_entries(
     progress("After filtering: %d URLs", after_filter)
 
     # Build lookup of existing documents for lastmod dedup
-    existing_docs = ChunkCatalog(db).list_documents(collection_filter=collection)
+    existing_docs = Database(db).catalog.list_documents(collection_filter=collection)
     existing_timestamps: dict[str, str] = {
         doc["document_name"]: doc["ingestion_timestamp"] for doc in existing_docs
     }
@@ -1407,7 +1407,7 @@ def _chunk_embed_store(
 
         progress("Storing in LanceDB")
         t0 = time.perf_counter()
-        inserted = ChunkStore(db).insert(chunks, vectors)
+        inserted = Database(db).store.insert(chunks, vectors)
         t_store = time.perf_counter() - t0
         logger.info("pipeline: stored %d chunks in %.2fs", inserted, t_store)
         progress("Done: %d chunks indexed from %s", inserted, document_name)

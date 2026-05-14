@@ -407,9 +407,9 @@ def _extract_web_fetch_content(payload: dict[str, object]) -> str | None:
 
 def _is_already_ingested(url: str, db: LanceDB, collection: str) -> bool:
     """Check if *url* is already in the given collection."""
-    from quarry.db.chunk_catalog import ChunkCatalog  # noqa: PLC0415
+    from quarry.db.facade import Database  # noqa: PLC0415
 
-    docs = ChunkCatalog(db).list_documents(collection_filter=collection)
+    docs = Database(db).catalog.list_documents(collection_filter=collection)
     return any(d["document_name"] == url for d in docs)
 
 
@@ -436,7 +436,7 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
         return {}
 
     # Heavy imports deferred past early-return guards.
-    from quarry.db.storage import get_db  # noqa: PLC0415
+    from quarry.db.facade import Database  # noqa: PLC0415
     from quarry.ingestion.pipeline import ingest_content, ingest_url  # noqa: PLC0415
 
     base_collection = _collection_for_cwd(cwd)
@@ -445,7 +445,8 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     )
 
     settings = _resolve_settings()
-    db = get_db(settings.lancedb_path)
+    database = Database.connect(settings.lancedb_path)
+    db = database.db
 
     if _is_already_ingested(url, db, collection):
         logger.debug("post-web-fetch: already ingested %s, skipping", url)

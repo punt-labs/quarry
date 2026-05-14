@@ -17,8 +17,9 @@ from quarry.types import LanceDB
 class Database:
     """Single entry point to the LanceDB storage subsystem."""
 
-    __slots__ = ("_catalog", "_optimizer", "_schema", "_search", "_store")
+    __slots__ = ("_catalog", "_db", "_optimizer", "_schema", "_search", "_store")
 
+    _db: LanceDB
     _store: ChunkStore
     _search: ChunkSearch
     _catalog: ChunkCatalog
@@ -27,12 +28,18 @@ class Database:
 
     def __new__(cls, db: LanceDB) -> Self:
         self = super().__new__(cls)
+        self._db = db
         self._store = ChunkStore(db)
         self._search = ChunkSearch(db)
         self._catalog = ChunkCatalog(db)
         self._schema = SchemaManager(db)
         self._optimizer = TableOptimizer(db)
         return self
+
+    @property
+    def db(self) -> LanceDB:
+        """Underlying LanceDB connection for pipeline interop."""
+        return self._db
 
     @property
     def store(self) -> ChunkStore:

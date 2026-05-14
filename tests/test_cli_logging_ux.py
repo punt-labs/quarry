@@ -51,7 +51,7 @@ def _status_context() -> Generator[None]:
     s = _mock_status_settings()
     with (
         patch("quarry.__main__._resolved_settings", return_value=s),
-        patch("quarry.__main__.get_db"),
+        patch("quarry.db.storage.get_db"),
         patch("quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
         patch("quarry.db.chunk_store.ChunkStore.count", return_value=0),
         patch("quarry.db.chunk_catalog.ChunkCatalog.list_collections", return_value=[]),
@@ -79,7 +79,7 @@ def _find_context() -> Generator[None]:
     ]
     with (
         patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-        patch("quarry.__main__.get_db"),
+        patch("quarry.db.storage.get_db"),
         patch("quarry.__main__.get_embedding_backend", return_value=mock_backend),
         patch(
             "quarry.db.chunk_search.ChunkSearch.hybrid_search",
@@ -124,7 +124,7 @@ class TestFlagCombinationMatrix:
         _reset_globals()
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.get_db"),
+            patch("quarry.db.storage.get_db"),
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
             ),
@@ -150,7 +150,7 @@ class TestFlagCombinationMatrix:
         s = _mock_status_settings()
         with (
             patch("quarry.__main__._resolved_settings", return_value=s),
-            patch("quarry.__main__.get_db"),
+            patch("quarry.db.storage.get_db"),
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
             ),
@@ -188,7 +188,7 @@ class TestFlagCombinationMatrix:
         s = _mock_status_settings()
         with (
             patch("quarry.__main__._resolved_settings", return_value=s),
-            patch("quarry.__main__.get_db"),
+            patch("quarry.db.storage.get_db"),
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
             ),
@@ -229,7 +229,7 @@ class TestFlagCombinationMatrix:
         s = _mock_status_settings()
         with (
             patch("quarry.__main__._resolved_settings", return_value=s),
-            patch("quarry.__main__.get_db"),
+            patch("quarry.db.storage.get_db"),
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
             ),
@@ -261,7 +261,7 @@ class TestFlagCombinationMatrix:
         s = _mock_status_settings()
         with (
             patch("quarry.__main__._resolved_settings", return_value=s),
-            patch("quarry.__main__.get_db"),
+            patch("quarry.db.storage.get_db"),
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
             ),
@@ -293,7 +293,7 @@ class TestFlagCombinationMatrix:
         s = _mock_status_settings()
         with (
             patch("quarry.__main__._resolved_settings", return_value=s),
-            patch("quarry.__main__.get_db"),
+            patch("quarry.db.storage.get_db"),
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
             ),
@@ -422,7 +422,7 @@ class TestPipeSafety:
         ]
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.get_db"),
+            patch("quarry.db.storage.get_db"),
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
                 return_value=mock_docs,
@@ -468,7 +468,7 @@ class TestProgressStderr:
         }
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.get_db"),
+            patch("quarry.db.storage.get_db"),
             patch("quarry.__main__.CollectionName.from_path", return_value="default"),
             patch(
                 "quarry.__main__.ingest_document",
@@ -494,7 +494,7 @@ class TestProgressStderr:
         }
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.get_db"),
+            patch("quarry.db.storage.get_db"),
             patch("quarry.__main__.CollectionName.from_path", return_value="default"),
             patch(
                 "quarry.__main__.ingest_document",
@@ -515,7 +515,7 @@ class TestProgressStderr:
         }
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.get_db"),
+            patch("quarry.db.storage.get_db"),
             patch("quarry.__main__.CollectionName.from_path", return_value="default"),
             patch(
                 "quarry.__main__.ingest_document",
@@ -539,7 +539,7 @@ class TestProgressStderr:
         mock_sync_result.errors = []
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.get_db"),
+            patch("quarry.db.storage.get_db"),
             patch(
                 "quarry.__main__.sync_all",
                 return_value={"default": mock_sync_result},
@@ -565,7 +565,7 @@ class TestProgressStderr:
         mock_sync_result.errors = []
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.get_db"),
+            patch("quarry.db.storage.get_db"),
             patch(
                 "quarry.__main__.sync_all",
                 return_value={"default": mock_sync_result},
@@ -605,7 +605,7 @@ class TestQuarryLogLevelOverride:
         s = _mock_status_settings()
         with (
             patch("quarry.__main__._resolved_settings", return_value=s),
-            patch("quarry.__main__.get_db"),
+            patch("quarry.db.storage.get_db"),
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
             ),
@@ -629,7 +629,7 @@ class TestQuarryLogLevelOverride:
         s = _mock_status_settings()
         with (
             patch("quarry.__main__._resolved_settings", return_value=s),
-            patch("quarry.__main__.get_db"),
+            patch("quarry.db.storage.get_db"),
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
             ),
@@ -691,7 +691,7 @@ class TestFatalErrorsUnderQuiet:
         _reset_globals()
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.get_db"),
+            patch("quarry.db.storage.get_db"),
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
                 side_effect=RuntimeError("database corrupt"),
@@ -706,7 +706,7 @@ class TestFatalErrorsUnderQuiet:
         _reset_globals()
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.get_db"),
+            patch("quarry.db.storage.get_db"),
             patch(
                 "quarry.db.chunk_store.ChunkStore.count",
                 side_effect=RuntimeError("lance failure"),
@@ -720,7 +720,7 @@ class TestFatalErrorsUnderQuiet:
         _reset_globals()
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.get_db"),
+            patch("quarry.db.storage.get_db"),
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
                 side_effect=RuntimeError("broken table"),
@@ -735,7 +735,7 @@ class TestFatalErrorsUnderQuiet:
         _reset_globals()
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.get_db"),
+            patch("quarry.db.storage.get_db"),
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
                 side_effect=RuntimeError("fatal error"),
@@ -750,7 +750,7 @@ class TestFatalErrorsUnderQuiet:
         _reset_globals()
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.get_db"),
+            patch("quarry.db.storage.get_db"),
             patch("quarry.__main__.CollectionName.from_path", return_value="default"),
             patch(
                 "quarry.__main__.ingest_document",
@@ -768,7 +768,7 @@ class TestFatalErrorsUnderQuiet:
         mock_backend.embed_query.return_value = np.zeros(768, dtype=np.float32)
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.get_db"),
+            patch("quarry.db.storage.get_db"),
             patch(
                 "quarry.__main__.get_embedding_backend",
                 return_value=mock_backend,
@@ -787,7 +787,7 @@ class TestFatalErrorsUnderQuiet:
         _reset_globals()
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.get_db"),
+            patch("quarry.db.storage.get_db"),
             patch(
                 "quarry.db.optimizer.TableOptimizer.count_fragments", return_value=20000
             ),
@@ -814,7 +814,7 @@ class TestRememberProgress:
         cli_mod._quiet = False
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.get_db"),
+            patch("quarry.db.storage.get_db"),
             patch(
                 "quarry.__main__.ingest_content",
                 return_value={"document_name": "notes.md", "chunks": 1},
@@ -840,7 +840,7 @@ class TestRememberProgress:
         cli_mod._quiet = False
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.get_db"),
+            patch("quarry.db.storage.get_db"),
             patch(
                 "quarry.__main__.ingest_content",
                 return_value={"document_name": "notes.md", "chunks": 1},
@@ -864,7 +864,7 @@ class TestRememberProgress:
         _reset_globals()
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.get_db"),
+            patch("quarry.db.storage.get_db"),
             patch(
                 "quarry.__main__.ingest_content",
                 return_value={"document_name": "notes.md", "chunks": 1},
@@ -884,7 +884,7 @@ class TestRememberProgress:
         _reset_globals()
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.get_db"),
+            patch("quarry.db.storage.get_db"),
             patch(
                 "quarry.__main__.ingest_content",
                 return_value={"document_name": "notes.md", "chunks": 1},
@@ -904,7 +904,7 @@ class TestRememberProgress:
         _reset_globals()
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.get_db"),
+            patch("quarry.db.storage.get_db"),
             patch(
                 "quarry.__main__.ingest_content",
                 return_value={"document_name": "notes.md", "chunks": 1},
@@ -924,7 +924,7 @@ class TestRememberProgress:
         _reset_globals()
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.get_db"),
+            patch("quarry.db.storage.get_db"),
             patch(
                 "quarry.__main__.ingest_content",
                 return_value={"document_name": "notes.md", "chunks": 3},
@@ -957,7 +957,7 @@ class TestOptimizeQuietGuard:
         _reset_globals()
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.get_db"),
+            patch("quarry.db.storage.get_db"),
             patch(
                 "quarry.db.optimizer.TableOptimizer.count_fragments", return_value=10
             ),
@@ -972,7 +972,7 @@ class TestOptimizeQuietGuard:
         _reset_globals()
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.get_db"),
+            patch("quarry.db.storage.get_db"),
             patch(
                 "quarry.db.optimizer.TableOptimizer.count_fragments", return_value=42
             ),
