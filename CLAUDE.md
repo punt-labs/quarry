@@ -81,6 +81,12 @@ Workflow:
 
 Bootstrap (first time only): run `make update-oo` to create the initial baseline. After that, the ratchet is active.
 
+**Do not negotiate with the ratchet.** Do not edit `.oo-baseline.json` by hand. Do not suppress `check-oo`. Do not argue a regression is "acceptable." If the ratchet fails, improve the code until it passes. The ratchet is the quality standard's enforcement — working around it defeats the purpose.
+
+**Org standards override review tools.** Copilot, Bugbot, and Cursor are advisory. When a review suggestion conflicts with rules in `../.claude/rules/python-*.md`, the rules win. Read the rules before accepting a reviewer's suggestion. PY-CC-1 (`__new__` as constructor) is the most common conflict.
+
+**Verify outputs, not just metrics.** After writing a file, open it and read the content. After backfilling transcripts, search them and confirm the results make sense. `make check` passing does not mean the feature works — it means the code compiles and tests pass. Those are necessary but not sufficient.
+
 **Metrics tools:**
 
 - `make check-oo` — OO ratchet against baseline (11 metrics: method_ratio, encapsulation, params, complexity, module size, class ratios, init violations, public attribute violations, future_annotations).
