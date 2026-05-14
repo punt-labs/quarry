@@ -190,7 +190,10 @@ class TestJsonEquivalenceStatus:
                     {"collection": "b", "document_count": 2, "chunk_count": 40},
                 ],
             ),
-            patch("quarry.__main__.provider_display", return_value="cpu"),
+            patch(
+                "quarry.__main__.ProviderSelection.display_cached",
+                return_value="cpu",
+            ),
         ):
             local_res = runner.invoke(app, ["--json", "status"])
         _reset_globals()

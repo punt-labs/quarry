@@ -117,13 +117,13 @@ class TestFlagCombinationMatrix:
         assert "Documents" in result.stdout
 
     def test_default_configures_warning_level(self) -> None:
-        """Default (no flags) calls configure_logging with WARNING."""
+        """Default (no flags) calls LoggingConfig.configure with WARNING."""
         _reset_globals()
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.list_documents", return_value=[]),
-            patch("quarry.__main__.configure_logging") as mock_cfg,
+            patch("quarry.__main__.LoggingConfig.configure") as mock_cfg,
         ):
             result = runner.invoke(app, ["list", "documents"])
         assert result.exit_code == 0
@@ -140,7 +140,7 @@ class TestFlagCombinationMatrix:
         assert "report.pdf" in result.stdout
 
     def test_verbose_configures_info_level(self) -> None:
-        """--verbose calls configure_logging with INFO."""
+        """--verbose calls LoggingConfig.configure with INFO."""
         _reset_globals()
         s = _mock_status_settings()
         with (
@@ -149,7 +149,7 @@ class TestFlagCombinationMatrix:
             patch("quarry.__main__.list_documents", return_value=[]),
             patch("quarry.__main__.count_chunks", return_value=0),
             patch("quarry.__main__.db_list_collections", return_value=[]),
-            patch("quarry.__main__.configure_logging") as mock_cfg,
+            patch("quarry.__main__.LoggingConfig.configure") as mock_cfg,
         ):
             result = runner.invoke(app, ["--verbose", "status"])
         assert result.exit_code == 0
@@ -174,7 +174,7 @@ class TestFlagCombinationMatrix:
         assert "Documents" in result.stdout
 
     def test_quiet_configures_critical_level(self) -> None:
-        """--quiet calls configure_logging with CRITICAL."""
+        """--quiet calls LoggingConfig.configure with CRITICAL."""
         _reset_globals()
         s = _mock_status_settings()
         with (
@@ -183,7 +183,7 @@ class TestFlagCombinationMatrix:
             patch("quarry.__main__.list_documents", return_value=[]),
             patch("quarry.__main__.count_chunks", return_value=0),
             patch("quarry.__main__.db_list_collections", return_value=[]),
-            patch("quarry.__main__.configure_logging") as mock_cfg,
+            patch("quarry.__main__.LoggingConfig.configure") as mock_cfg,
         ):
             result = runner.invoke(app, ["--quiet", "status"])
         assert result.exit_code == 0
@@ -220,7 +220,7 @@ class TestFlagCombinationMatrix:
             patch("quarry.__main__.list_documents", return_value=[]),
             patch("quarry.__main__.count_chunks", return_value=0),
             patch("quarry.__main__.db_list_collections", return_value=[]),
-            patch("quarry.__main__.configure_logging") as mock_cfg,
+            patch("quarry.__main__.LoggingConfig.configure") as mock_cfg,
         ):
             result = runner.invoke(app, ["--json", "status"])
         assert result.exit_code == 0
@@ -239,7 +239,7 @@ class TestFlagCombinationMatrix:
         assert data[0]["document_name"] == "report.pdf"
 
     def test_json_verbose_configures_info_level(self) -> None:
-        """--json --verbose calls configure_logging with INFO."""
+        """--json --verbose calls LoggingConfig.configure with INFO."""
         _reset_globals()
         s = _mock_status_settings()
         with (
@@ -248,7 +248,7 @@ class TestFlagCombinationMatrix:
             patch("quarry.__main__.list_documents", return_value=[]),
             patch("quarry.__main__.count_chunks", return_value=0),
             patch("quarry.__main__.db_list_collections", return_value=[]),
-            patch("quarry.__main__.configure_logging") as mock_cfg,
+            patch("quarry.__main__.LoggingConfig.configure") as mock_cfg,
         ):
             result = runner.invoke(app, ["--json", "--verbose", "status"])
         assert result.exit_code == 0
@@ -267,7 +267,7 @@ class TestFlagCombinationMatrix:
         assert data[0]["document_name"] == "report.pdf"
 
     def test_json_quiet_configures_critical_level(self) -> None:
-        """--json --quiet calls configure_logging with CRITICAL."""
+        """--json --quiet calls LoggingConfig.configure with CRITICAL."""
         _reset_globals()
         s = _mock_status_settings()
         with (
@@ -276,7 +276,7 @@ class TestFlagCombinationMatrix:
             patch("quarry.__main__.list_documents", return_value=[]),
             patch("quarry.__main__.count_chunks", return_value=0),
             patch("quarry.__main__.db_list_collections", return_value=[]),
-            patch("quarry.__main__.configure_logging") as mock_cfg,
+            patch("quarry.__main__.LoggingConfig.configure") as mock_cfg,
         ):
             result = runner.invoke(app, ["--json", "--quiet", "status"])
         assert result.exit_code == 0
@@ -562,9 +562,9 @@ class TestQuarryLogLevelOverride:
         """QUARRY_LOG_LEVEL=DEBUG produces DEBUG-level stderr handler."""
         monkeypatch.setenv("QUARRY_LOG_LEVEL", "DEBUG")
         with patch("quarry.logging_config.logging.config.dictConfig") as mock_dc:
-            from quarry.logging_config import configure_logging
+            from quarry.logging_config import LoggingConfig
 
-            configure_logging(stderr_level="WARNING")
+            LoggingConfig.configure(stderr_level="WARNING")
         config = mock_dc.call_args[0][0]
         assert config["handlers"]["stderr"]["level"] == "DEBUG"
 
@@ -612,9 +612,9 @@ class TestQuarryLogLevelOverride:
         """Empty QUARRY_LOG_LEVEL falls back to flag-derived level."""
         monkeypatch.setenv("QUARRY_LOG_LEVEL", "")
         with patch("quarry.logging_config.logging.config.dictConfig") as mock_dc:
-            from quarry.logging_config import configure_logging
+            from quarry.logging_config import LoggingConfig
 
-            configure_logging(stderr_level="INFO")
+            LoggingConfig.configure(stderr_level="INFO")
         config = mock_dc.call_args[0][0]
         assert config["handlers"]["stderr"]["level"] == "INFO"
 
@@ -622,9 +622,9 @@ class TestQuarryLogLevelOverride:
         """QUARRY_LOG_LEVEL is case-insensitive (e.g., 'debug' works)."""
         monkeypatch.setenv("QUARRY_LOG_LEVEL", "debug")
         with patch("quarry.logging_config.logging.config.dictConfig") as mock_dc:
-            from quarry.logging_config import configure_logging
+            from quarry.logging_config import LoggingConfig
 
-            configure_logging(stderr_level="WARNING")
+            LoggingConfig.configure(stderr_level="WARNING")
         config = mock_dc.call_args[0][0]
         assert config["handlers"]["stderr"]["level"] == "DEBUG"
 
@@ -634,9 +634,9 @@ class TestQuarryLogLevelOverride:
         """Third-party loggers stay at WARNING even with QUARRY_LOG_LEVEL=DEBUG."""
         monkeypatch.setenv("QUARRY_LOG_LEVEL", "DEBUG")
         with patch("quarry.logging_config.logging.config.dictConfig") as mock_dc:
-            from quarry.logging_config import configure_logging
+            from quarry.logging_config import LoggingConfig
 
-            configure_logging(stderr_level="WARNING")
+            LoggingConfig.configure(stderr_level="WARNING")
         config = mock_dc.call_args[0][0]
         for name in ("lancedb", "onnxruntime", "httpx"):
             assert config["loggers"][name]["level"] == "WARNING"

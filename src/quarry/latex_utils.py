@@ -2,56 +2,65 @@
 
 from __future__ import annotations
 
-# Characters that must be escaped in LaTeX tabular cells.
-_LATEX_SPECIAL = str.maketrans(
-    {
-        "&": r"\&",
-        "%": r"\%",
-        "$": r"\$",
-        "#": r"\#",
-        "_": r"\_",
-        "{": r"\{",
-        "}": r"\}",
-        "~": r"\textasciitilde{}",
-        "^": r"\textasciicircum{}",
-        "\\": r"\textbackslash{}",
-    }
-)
+from typing import final
 
 
-def escape_latex(text: str) -> str:
-    """Escape LaTeX special characters in a cell value."""
-    return text.translate(_LATEX_SPECIAL)
+@final
+class LatexSerializer:
+    """Serialize data to LaTeX tabular format with proper escaping."""
 
+    # Characters that must be escaped in LaTeX tabular cells.
+    _SPECIAL = str.maketrans(
+        {
+            "&": r"\&",
+            "%": r"\%",
+            "$": r"\$",
+            "#": r"\#",
+            "_": r"\_",
+            "{": r"\{",
+            "}": r"\}",
+            "~": r"\textasciitilde{}",
+            "^": r"\textasciicircum{}",
+            "\\": r"\textbackslash{}",
+        }
+    )
 
-def rows_to_latex(
-    headers: list[str],
-    rows: list[list[str]],
-    sheet_name: str | None = None,
-) -> str:
-    """Render headers + data rows as a LaTeX tabular block.
+    @staticmethod
+    def escape(text: str) -> str:
+        """Escape LaTeX special characters in a cell value."""
+        return text.translate(LatexSerializer._SPECIAL)
 
-    Returns an empty string when *headers* is empty.
-    """
-    if not headers:
-        return ""
+    @staticmethod
+    def serialize_table(
+        headers: list[str],
+        rows: list[list[str]],
+        sheet_name: str | None = None,
+    ) -> str:
+        """Render headers + data rows as a LaTeX tabular block.
 
-    ncols = len(headers)
-    col_spec = "l" * ncols
+        Returns an empty string when *headers* is empty.
+        """
+        if not headers:
+            return ""
 
-    lines: list[str] = []
-    if sheet_name:
-        lines.append(f"% Sheet: {sheet_name}")
-    lines.append(f"\\begin{{tabular}}{{{col_spec}}}")
-    lines.append("\\hline")
-    lines.append(" & ".join(escape_latex(h) for h in headers) + " \\\\")
-    lines.append("\\hline")
+        ncols = len(headers)
+        col_spec = "l" * ncols
 
-    for row in rows:
-        padded = row[:ncols] + [""] * max(0, ncols - len(row))
-        lines.append(" & ".join(escape_latex(c) for c in padded) + " \\\\")
+        lines: list[str] = []
+        if sheet_name:
+            lines.append(f"% Sheet: {sheet_name}")
+        lines.append(f"\\begin{{tabular}}{{{col_spec}}}")
+        lines.append("\\hline")
+        lines.append(" & ".join(LatexSerializer.escape(h) for h in headers) + " \\\\")
+        lines.append("\\hline")
 
-    lines.append("\\hline")
-    lines.append("\\end{tabular}")
+        for row in rows:
+            padded = row[:ncols] + [""] * max(0, ncols - len(row))
+            lines.append(
+                " & ".join(LatexSerializer.escape(c) for c in padded) + " \\\\"
+            )
 
-    return "\n".join(lines)
+        lines.append("\\hline")
+        lines.append("\\end{tabular}")
+
+        return "\n".join(lines)

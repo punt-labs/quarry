@@ -24,102 +24,106 @@ class SitemapEntry:
     lastmod: datetime | None
 
 
-def _pages_to_entries(
-    pages: object,
-) -> list[SitemapEntry]:
-    """Convert USP SitemapPage objects to SitemapEntry, deduplicating by URL."""
-    from usp.objects.page import SitemapPage  # noqa: PLC0415
+class SitemapDiscovery:
+    """Sitemap crawling, parsing, and URL filtering."""
 
-    seen: set[str] = set()
-    entries: list[SitemapEntry] = []
-    for page in pages:  # type: ignore[attr-defined]
-        if not isinstance(page, SitemapPage):
-            continue
-        if page.url not in seen:
-            seen.add(page.url)
-            entries.append(SitemapEntry(loc=page.url, lastmod=page.last_modified))
-    return entries
+    @staticmethod
+    def _pages_to_entries(
+        pages: object,
+    ) -> list[SitemapEntry]:
+        """Convert USP SitemapPage objects to SitemapEntry, deduplicating by URL."""
+        from usp.objects.page import SitemapPage  # noqa: PLC0415
 
+        seen: set[str] = set()
+        entries: list[SitemapEntry] = []
+        for page in pages:  # type: ignore[attr-defined]
+            if not isinstance(page, SitemapPage):
+                continue
+            if page.url not in seen:
+                seen.add(page.url)
+                entries.append(SitemapEntry(loc=page.url, lastmod=page.last_modified))
+        return entries
 
-def discover_pages(url: str) -> list[SitemapEntry]:
-    """Discover all pages for a website via sitemap auto-discovery.
+    @staticmethod
+    def discover_pages(url: str) -> list[SitemapEntry]:
+        """Discover all pages for a website via sitemap auto-discovery.
 
-    Uses USP's ``sitemap_tree_for_homepage`` to probe robots.txt and
-    well-known sitemap locations, then parse all discovered sitemaps
-    (XML, RSS, Atom, plain text) with error tolerance.
+        Uses USP's ``sitemap_tree_for_homepage`` to probe robots.txt and
+        well-known sitemap locations, then parse all discovered sitemaps
+        (XML, RSS, Atom, plain text) with error tolerance.
 
-    Args:
-        url: Any HTTP(S) URL on the target site. The origin is extracted
-            and used as the homepage for discovery.
+        Args:
+            url: Any HTTP(S) URL on the target site. The origin is extracted
+                and used as the homepage for discovery.
 
-    Returns:
-        Deduplicated list of all discovered pages.
-    """
-    from usp.tree import sitemap_tree_for_homepage  # noqa: PLC0415
+        Returns:
+            Deduplicated list of all discovered pages.
+        """
+        from usp.tree import sitemap_tree_for_homepage  # noqa: PLC0415
 
-    parsed = urlparse(url)
-    homepage = f"{parsed.scheme}://{parsed.netloc}/"
+        parsed = urlparse(url)
+        homepage = f"{parsed.scheme}://{parsed.netloc}/"
 
-    logger.info("Discovering sitemaps for %s", homepage)
-    tree = sitemap_tree_for_homepage(homepage)
-    entries = _pages_to_entries(tree.all_pages())
-    logger.info("Discovered %d pages from %s", len(entries), homepage)
-    return entries
+        logger.info("Discovering sitemaps for %s", homepage)
+        tree = sitemap_tree_for_homepage(homepage)
+        entries = SitemapDiscovery._pages_to_entries(tree.all_pages())
+        logger.info("Discovered %d pages from %s", len(entries), homepage)
+        return entries
 
+    @staticmethod
+    def discover_urls(url: str) -> list[SitemapEntry]:
+        """Fetch and parse a specific sitemap URL, recursing into indexes.
 
-def discover_urls(url: str) -> list[SitemapEntry]:
-    """Fetch and parse a specific sitemap URL, recursing into indexes.
+        Uses USP's ``SitemapFetcher`` for robust parsing of XML, RSS, Atom,
+        and plain text sitemaps with error tolerance.
 
-    Uses USP's ``SitemapFetcher`` for robust parsing of XML, RSS, Atom,
-    and plain text sitemaps with error tolerance.
+        Args:
+            url: Sitemap URL to fetch and parse.
 
-    Args:
-        url: Sitemap URL to fetch and parse.
+        Returns:
+            Deduplicated flat list of all SitemapEntry found.
+        """
+        from usp.fetch_parse import SitemapFetcher  # noqa: PLC0415
 
-    Returns:
-        Deduplicated flat list of all SitemapEntry found.
-    """
-    from usp.fetch_parse import SitemapFetcher  # noqa: PLC0415
+        logger.info("Fetching sitemap: %s", url)
+        fetcher = SitemapFetcher(url=url, recursion_level=0)
+        sitemap = fetcher.sitemap()
+        entries = SitemapDiscovery._pages_to_entries(sitemap.all_pages())
+        logger.info("Parsed %d pages from %s", len(entries), url)
+        return entries
 
-    logger.info("Fetching sitemap: %s", url)
-    fetcher = SitemapFetcher(url=url, recursion_level=0)
-    sitemap = fetcher.sitemap()
-    entries = _pages_to_entries(sitemap.all_pages())
-    logger.info("Parsed %d pages from %s", len(entries), url)
-    return entries
+    @staticmethod
+    def filter_entries(
+        entries: list[SitemapEntry],
+        *,
+        include: list[str] | None = None,
+        exclude: list[str] | None = None,
+        limit: int = 0,
+    ) -> list[SitemapEntry]:
+        """Filter sitemap entries by URL path glob patterns.
 
+        Args:
+            entries: Sitemap entries to filter.
+            include: If provided, only URLs whose path matches at least one pattern.
+            exclude: URLs whose path matches any pattern are removed.
+                Exclude takes precedence over include.
+            limit: Maximum entries to return (0 = no limit).
 
-def filter_entries(
-    entries: list[SitemapEntry],
-    *,
-    include: list[str] | None = None,
-    exclude: list[str] | None = None,
-    limit: int = 0,
-) -> list[SitemapEntry]:
-    """Filter sitemap entries by URL path glob patterns.
+        Returns:
+            Filtered list of entries.
+        """
+        result: list[SitemapEntry] = []
+        for entry in entries:
+            path = urlparse(entry.loc).path
 
-    Args:
-        entries: Sitemap entries to filter.
-        include: If provided, only URLs whose path matches at least one pattern.
-        exclude: URLs whose path matches any pattern are removed.
-            Exclude takes precedence over include.
-        limit: Maximum entries to return (0 = no limit).
+            if exclude and any(fnmatch(path, pat) for pat in exclude):
+                continue
+            if include and not any(fnmatch(path, pat) for pat in include):
+                continue
 
-    Returns:
-        Filtered list of entries.
-    """
-    result: list[SitemapEntry] = []
-    for entry in entries:
-        path = urlparse(entry.loc).path
+            result.append(entry)
 
-        if exclude and any(fnmatch(path, pat) for pat in exclude):
-            continue
-        if include and not any(fnmatch(path, pat) for pat in include):
-            continue
+            if limit > 0 and len(result) >= limit:
+                break
 
-        result.append(entry)
-
-        if limit > 0 and len(result) >= limit:
-            break
-
-    return result
+        return result

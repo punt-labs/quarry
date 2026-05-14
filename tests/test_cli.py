@@ -3168,8 +3168,9 @@ class TestAutoWorkers:
         from quarry.__main__ import _auto_workers
         from quarry.provider import ProviderSelection
 
-        with patch(
-            "quarry.provider.select_provider",
+        with patch.object(
+            ProviderSelection,
+            "from_environment",
             return_value=ProviderSelection("CPUExecutionProvider", "model-cpu.onnx"),
         ):
             assert _auto_workers(_mock_settings()) == 1
@@ -3178,17 +3179,20 @@ class TestAutoWorkers:
         from quarry.__main__ import _auto_workers
         from quarry.provider import ProviderSelection
 
-        with patch(
-            "quarry.provider.select_provider",
+        with patch.object(
+            ProviderSelection,
+            "from_environment",
             return_value=ProviderSelection("CUDAExecutionProvider", "model-cuda.onnx"),
         ):
             assert _auto_workers(_mock_settings()) == 4
 
-    def test_returns_1_when_select_provider_raises(self) -> None:
+    def test_returns_1_when_from_environment_raises(self) -> None:
         from quarry.__main__ import _auto_workers
+        from quarry.provider import ProviderSelection
 
-        with patch(
-            "quarry.provider.select_provider",
+        with patch.object(
+            ProviderSelection,
+            "from_environment",
             side_effect=RuntimeError("onnxruntime broken"),
         ):
             assert _auto_workers(_mock_settings()) == 1
@@ -4739,13 +4743,13 @@ class TestIngestExitCodes:
 
 
 def test_configure_logging_called_in_main_callback() -> None:
-    """configure_logging is called from main_callback, not at import time."""
+    """LoggingConfig.configure is called from main_callback, not at import time."""
     _reset_globals()
     with (
         patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
         patch("quarry.__main__.get_db"),
         patch("quarry.__main__.list_documents", return_value=[]),
-        patch("quarry.__main__.configure_logging") as mock_cfg,
+        patch("quarry.__main__.LoggingConfig.configure") as mock_cfg,
     ):
         result = runner.invoke(app, ["list", "documents"])
     assert result.exit_code == 0
@@ -4753,7 +4757,7 @@ def test_configure_logging_called_in_main_callback() -> None:
 
 
 def test_configure_logging_not_called_at_import() -> None:
-    """Module-level code does not call configure_logging."""
+    """Module-level code does not call LoggingConfig.configure."""
     import quarry.__main__ as cli_mod
 
     src = Path(cli_mod.__file__).read_text(encoding="utf-8")
@@ -4767,8 +4771,8 @@ def test_configure_logging_not_called_at_import() -> None:
                 name = func.id
             elif isinstance(func, ast.Attribute):
                 name = func.attr
-            assert name != "configure_logging", (
-                f"configure_logging called at module level (line {node.lineno})"
+            assert name != "configure", (
+                f"LoggingConfig.configure called at module level (line {node.lineno})"
             )
 
 
@@ -4818,13 +4822,13 @@ def test_progress_yields_callback_in_default_mode() -> None:
 
 
 def test_verbose_flag_sets_info_level() -> None:
-    """--verbose causes configure_logging to be called with INFO."""
+    """--verbose causes LoggingConfig.configure to be called with INFO."""
     _reset_globals()
     with (
         patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
         patch("quarry.__main__.get_db"),
         patch("quarry.__main__.list_documents", return_value=[]),
-        patch("quarry.__main__.configure_logging") as mock_cfg,
+        patch("quarry.__main__.LoggingConfig.configure") as mock_cfg,
     ):
         result = runner.invoke(app, ["--verbose", "list", "documents"])
     assert result.exit_code == 0
@@ -4832,13 +4836,13 @@ def test_verbose_flag_sets_info_level() -> None:
 
 
 def test_quiet_flag_sets_critical_level() -> None:
-    """--quiet causes configure_logging to be called with CRITICAL."""
+    """--quiet causes LoggingConfig.configure to be called with CRITICAL."""
     _reset_globals()
     with (
         patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
         patch("quarry.__main__.get_db"),
         patch("quarry.__main__.list_documents", return_value=[]),
-        patch("quarry.__main__.configure_logging") as mock_cfg,
+        patch("quarry.__main__.LoggingConfig.configure") as mock_cfg,
     ):
         result = runner.invoke(app, ["--quiet", "list", "documents"])
     assert result.exit_code == 0

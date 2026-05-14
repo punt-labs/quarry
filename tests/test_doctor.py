@@ -150,7 +150,9 @@ class TestCheckProvider:
             provider="CPUExecutionProvider",
             model_file="onnx/model_int8.onnx",
         )
-        with patch("quarry.provider.select_provider", return_value=selection):
+        with patch.object(
+            ProviderSelection, "from_environment", return_value=selection
+        ):
             result = _check_provider()
         assert result.passed is True
         assert result.required is False
@@ -165,14 +167,19 @@ class TestCheckProvider:
             provider="CUDAExecutionProvider",
             model_file="onnx/model_fp16.onnx",
         )
-        with patch("quarry.provider.select_provider", return_value=selection):
+        with patch.object(
+            ProviderSelection, "from_environment", return_value=selection
+        ):
             result = _check_provider()
         assert result.passed is True
         assert "CUDAExecutionProvider" in result.message
 
     def test_reports_failure_on_exception(self) -> None:
-        with patch(
-            "quarry.provider.select_provider",
+        from quarry.provider import ProviderSelection
+
+        with patch.object(
+            ProviderSelection,
+            "from_environment",
             side_effect=RuntimeError("CUDA not available"),
         ):
             result = _check_provider()
@@ -1152,10 +1159,12 @@ class TestConfigureClaudeDesktop:
 
 
 class TestRunInstall:
+    _DL = "quarry.embeddings.OnnxEmbeddingBackend.download_model_files"
+
     def test_creates_data_directory(self, tmp_path: Path, monkeypatch: MP):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         _mock_install_deps(monkeypatch)
-        with patch("quarry.embeddings.download_model_files") as mock_dl:
+        with patch(self._DL) as mock_dl:
             mock_dl.return_value = ("/fake/model.onnx", "/fake/tokenizer.json")
             result = run_install()
         assert result == 0
@@ -1165,7 +1174,7 @@ class TestRunInstall:
     def test_downloads_model(self, tmp_path: Path, monkeypatch: MP):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         _mock_install_deps(monkeypatch)
-        with patch("quarry.embeddings.download_model_files") as mock_dl:
+        with patch(self._DL) as mock_dl:
             mock_dl.return_value = ("/fake/model.onnx", "/fake/tokenizer.json")
             run_install()
         # Called once for INT8 model, and optionally again for FP16 if CUDA
@@ -1177,7 +1186,7 @@ class TestRunInstall:
         _mock_install_deps(monkeypatch)
         data_dir = tmp_path / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
         data_dir.mkdir(parents=True)
-        with patch("quarry.embeddings.download_model_files") as mock_dl:
+        with patch(self._DL) as mock_dl:
             mock_dl.return_value = ("/fake/model.onnx", "/fake/tokenizer.json")
             result = run_install()
         assert result == 0
@@ -1193,7 +1202,7 @@ class TestRunInstall:
                 "quarry.service.ensure_gpu_runtime",
                 return_value="onnxruntime-gpu install failed, CPU restored",
             ),
-            patch("quarry.embeddings.download_model_files") as mock_dl,
+            patch(self._DL) as mock_dl,
         ):
             mock_dl.return_value = ("/fake/model.onnx", "/fake/tokenizer.json")
             result = run_install()
@@ -1206,7 +1215,7 @@ class TestRunInstall:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         _mock_install_deps(monkeypatch)
         with patch(
-            "quarry.embeddings.download_model_files",
+            "quarry.embeddings.OnnxEmbeddingBackend.download_model_files",
             side_effect=RuntimeError("network error"),
         ):
             result = run_install()

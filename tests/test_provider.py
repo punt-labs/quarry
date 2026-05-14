@@ -7,17 +7,17 @@ from unittest.mock import patch
 
 import pytest
 
-from quarry.provider import ProviderSelection, select_provider
+from quarry.provider import ProviderSelection
 
 
-class TestSelectProvider:
+class TestFromEnvironment:
     def test_cpu_only_returns_cpu_int8(self) -> None:
         with patch(
             "onnxruntime.get_available_providers",
             create=True,
             return_value=["CPUExecutionProvider"],
         ):
-            result = select_provider()
+            result = ProviderSelection.from_environment()
 
         assert result == ProviderSelection(
             "CPUExecutionProvider", "onnx/model_int8.onnx"
@@ -29,7 +29,7 @@ class TestSelectProvider:
             create=True,
             return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
         ):
-            result = select_provider()
+            result = ProviderSelection.from_environment()
 
         assert result == ProviderSelection(
             "CUDAExecutionProvider", "onnx/model_fp16.onnx"
@@ -42,7 +42,7 @@ class TestSelectProvider:
             create=True,
             return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
         ):
-            result = select_provider()
+            result = ProviderSelection.from_environment()
 
         assert result == ProviderSelection(
             "CPUExecutionProvider", "onnx/model_int8.onnx"
@@ -57,7 +57,7 @@ class TestSelectProvider:
             create=True,
             return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
         ):
-            result = select_provider()
+            result = ProviderSelection.from_environment()
 
         assert result == ProviderSelection(
             "CUDAExecutionProvider", "onnx/model_fp16.onnx"
@@ -75,12 +75,12 @@ class TestSelectProvider:
             ),
             pytest.raises(RuntimeError, match="CUDAExecutionProvider not available"),
         ):
-            select_provider()
+            ProviderSelection.from_environment()
 
     def test_env_unknown_value_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("QUARRY_PROVIDER", "rocm")
         with pytest.raises(ValueError, match="Unknown QUARRY_PROVIDER"):
-            select_provider()
+            ProviderSelection.from_environment()
 
     def test_cpu_override_logs_info(
         self,
@@ -96,7 +96,7 @@ class TestSelectProvider:
             ),
             caplog.at_level(logging.INFO, logger="quarry.provider"),
         ):
-            select_provider()
+            ProviderSelection.from_environment()
 
         assert "Provider override: cpu (QUARRY_PROVIDER)" in caplog.text
 
@@ -106,8 +106,18 @@ class TestSelectProvider:
             create=True,
             return_value=[],
         ):
-            result = select_provider()
+            result = ProviderSelection.from_environment()
 
         assert result == ProviderSelection(
             "CPUExecutionProvider", "onnx/model_int8.onnx"
         )
+
+
+class TestDisplay:
+    def test_cpu_int8(self) -> None:
+        sel = ProviderSelection("CPUExecutionProvider", "onnx/model_int8.onnx")
+        assert sel.display() == "CPUExecutionProvider (int8)"
+
+    def test_cuda_fp16(self) -> None:
+        sel = ProviderSelection("CUDAExecutionProvider", "onnx/model_fp16.onnx")
+        assert sel.display() == "CUDAExecutionProvider (fp16)"

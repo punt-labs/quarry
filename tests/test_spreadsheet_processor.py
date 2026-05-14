@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from quarry.latex_utils import rows_to_latex
+from quarry.latex_utils import LatexSerializer
 from quarry.models import PageType
 from quarry.spreadsheet_processor import (
     SUPPORTED_SPREADSHEET_EXTENSIONS,
@@ -60,7 +60,7 @@ class TestSplitRowsToSections:
     def test_empty_rows_returns_empty(self):
         sections = _split_rows_to_sections(["A"], [], None, max_chars=100)
         # Empty rows still produce a valid (header-only) table
-        result = rows_to_latex(["A"], [])
+        result = LatexSerializer.serialize_table(["A"], [])
         if result.strip():
             assert len(sections) <= 1
 

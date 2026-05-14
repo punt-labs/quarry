@@ -768,6 +768,25 @@ class Ratchet:
         return 0
 
     # ------------------------------------------------------------------
+    # --rebaseline
+    # ------------------------------------------------------------------
+
+    def rebaseline(self, scorer: Scorer) -> int:
+        """Unconditionally reset the baseline to current scores."""
+        current_by_file = self._results_by_file(scorer.results)
+        self._save_baseline(current_by_file)
+        self._append_audit(
+            files_scored=len(current_by_file),
+            files_improved=0,
+            files_regressed=0,
+            verdict="rebaseline",
+            deltas={},
+        )
+        _writeln(f"\nBaseline reset: {self._baseline_path}")
+        _writeln(f"  files scored: {len(current_by_file)}")
+        return 0
+
+    # ------------------------------------------------------------------
     # Audit log
     # ------------------------------------------------------------------
 
@@ -827,7 +846,7 @@ def main() -> None:
     if len(sys.argv) < 2:
         _writeln(
             f"Usage: {sys.argv[0]} <file_or_directory> "
-            f"[--json] [--threshold] [--check] [--update] [--log]",
+            f"[--json] [--threshold] [--check] [--update] [--rebaseline] [--log]",
         )
         sys.exit(1)
 
@@ -841,6 +860,8 @@ def main() -> None:
 
     if "--check" in sys.argv:
         sys.exit(ratchet.check(scorer))
+    elif "--rebaseline" in sys.argv:
+        sys.exit(ratchet.rebaseline(scorer))
     elif "--update" in sys.argv:
         sys.exit(ratchet.update(scorer))
     elif "--log" in sys.argv:
