@@ -6,7 +6,21 @@ This is document 3 of 3 in the quarry OO redesign:
 
 1. [OO Design Report](oo-design-report.md) -- proposes ~44 classes across 3 sections
 2. [OO Design Review](oo-design-review.md) -- peer review with 7 revisions
-3. **This document** -- step-by-step execution plan. 72 steps, tests green at every step.
+3. **This document** -- step-by-step execution plan. 74 steps, tests green at every step.
+
+## Modules already at target (no refactoring steps needed)
+
+These 6 modules are small, already class-based or pure-utility, and meet OO
+thresholds. They are in scope but require no extraction steps:
+
+| Module | Lines | Why no action |
+|--------|-------|---------------|
+| `artifacts.py` | 153 | Refactored to OO this session (SessionArtifacts with methods) |
+| `latex_utils.py` | 57 | 2 pure functions (escape, serialize) — no domain state |
+| `logging_config.py` | 73 | 1 configuration function — no domain state |
+| `provider.py` | 99 | Already has ProviderSelection class |
+| `sitemap.py` | 125 | Already has SitemapEntry class + 4 pure functions |
+| `types.py` | 117 | 6 Protocol classes — already well-structured |
 
 Sources: oo-design-report.md (44 classes), oo-design-review.md (7 revisions),
 `_draft-core-data.md`, `_draft-ingestion.md`, `_draft-surfaces.md`
