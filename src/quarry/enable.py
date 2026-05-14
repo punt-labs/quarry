@@ -145,9 +145,9 @@ def disable_project(
 ) -> DisableResult:
     """Disable quarry knowledge capture for a project directory."""
     directory = directory.resolve()
-    from quarry.chunk_store import ChunkStore  # noqa: PLC0415
     from quarry.config import Settings  # noqa: PLC0415
-    from quarry.database import get_db  # noqa: PLC0415
+    from quarry.db.chunk_store import ChunkStore  # noqa: PLC0415
+    from quarry.db.storage import get_db  # noqa: PLC0415
     from quarry.hooks import (  # noqa: PLC0415
         _collection_for_cwd_conn,  # pyright: ignore[reportPrivateUsage]
     )

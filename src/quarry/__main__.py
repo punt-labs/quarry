@@ -21,15 +21,13 @@ from rich.console import Console
 from rich.progress import Progress
 
 from quarry.backends import get_embedding_backend
-from quarry.chunk_catalog import ChunkCatalog
-from quarry.chunk_search import ChunkSearch
-from quarry.chunk_store import ChunkStore
 from quarry.collections import CollectionName
 from quarry.config import (
     DEFAULT_PORT,
     Settings,
 )
-from quarry.database import (
+from quarry.db import ChunkCatalog, ChunkSearch, ChunkStore
+from quarry.db.storage import (
     dir_size_bytes,
     discover_databases,
     get_db,
@@ -1348,7 +1346,7 @@ def optimize_cmd(
     skipped by default to prevent a compaction death spiral. Use --force
     to bypass this safety guard for manual recovery.
     """
-    from quarry.optimizer import FRAGMENT_THRESHOLD, TableOptimizer  # noqa: PLC0415
+    from quarry.db.optimizer import FRAGMENT_THRESHOLD, TableOptimizer  # noqa: PLC0415
 
     settings = _resolved_settings()
     db = get_db(settings.lancedb_path)

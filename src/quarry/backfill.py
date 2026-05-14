@@ -12,9 +12,9 @@ from quarry.artifacts import (
     extract_artifacts,
     format_artifacts_header,
 )
-from quarry.chunk_catalog import ChunkCatalog
 from quarry.config import Settings
-from quarry.database import get_db
+from quarry.db.chunk_catalog import ChunkCatalog
+from quarry.db.storage import get_db
 from quarry.hooks import extract_transcript_text
 from quarry.pipeline import ingest_content
 from quarry.sync_registry import (

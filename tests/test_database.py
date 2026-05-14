@@ -10,12 +10,8 @@ import numpy as np
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
-from quarry.chunk_catalog import ChunkCatalog
-from quarry.chunk_search import ChunkSearch
-from quarry.chunk_store import ChunkStore
-from quarry.database import get_db
+from quarry.db import ChunkCatalog, ChunkSearch, ChunkStore, TableOptimizer, get_db
 from quarry.models import Chunk
-from quarry.optimizer import TableOptimizer
 
 
 def _make_chunk(
@@ -786,7 +782,7 @@ class TestDirSizeBytes:
     """Verify dir_size_bytes returns correct size using du or fallback."""
 
     def test_returns_correct_size(self, tmp_path: Path) -> None:
-        from quarry.database import dir_size_bytes
+        from quarry.db.storage import dir_size_bytes
 
         (tmp_path / "a.txt").write_bytes(b"x" * 100)
         (tmp_path / "b.txt").write_bytes(b"y" * 200)
@@ -797,7 +793,7 @@ class TestDirSizeBytes:
     def test_fallback_on_du_failure(self, tmp_path: Path) -> None:
         from unittest.mock import patch
 
-        from quarry.database import dir_size_bytes
+        from quarry.db.storage import dir_size_bytes
 
         (tmp_path / "a.txt").write_bytes(b"x" * 50)
         with patch("subprocess.run", side_effect=OSError("no du")):
@@ -805,7 +801,7 @@ class TestDirSizeBytes:
         assert result == 50
 
     def test_empty_directory(self, tmp_path: Path) -> None:
-        from quarry.database import dir_size_bytes
+        from quarry.db.storage import dir_size_bytes
 
         result = dir_size_bytes(tmp_path)
         assert result >= 0

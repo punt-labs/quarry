@@ -752,7 +752,7 @@ class TestHandlePostWebFetch:
                 "quarry.hooks._resolve_settings",
                 return_value=MagicMock(),
             ),
-            patch("quarry.database.get_db", return_value=MagicMock()),
+            patch("quarry.db.storage.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch("quarry.hooks._collection_for_cwd", return_value=None),
             patch(
@@ -792,7 +792,7 @@ class TestHandlePostWebFetch:
                 "quarry.hooks._resolve_settings",
                 return_value=MagicMock(),
             ),
-            patch("quarry.database.get_db", return_value=MagicMock()),
+            patch("quarry.db.storage.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch("quarry.hooks._collection_for_cwd", return_value=None),
             patch(
@@ -826,7 +826,7 @@ class TestHandlePostWebFetch:
                 "quarry.hooks._resolve_settings",
                 return_value=MagicMock(),
             ),
-            patch("quarry.database.get_db", return_value=MagicMock()),
+            patch("quarry.db.storage.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch("quarry.hooks._collection_for_cwd", return_value=None),
             patch("quarry.html_processor.process_html_text", return_value=[]),
@@ -848,7 +848,7 @@ class TestHandlePostWebFetch:
                 "quarry.hooks._resolve_settings",
                 return_value=MagicMock(),
             ),
-            patch("quarry.database.get_db", return_value=MagicMock()),
+            patch("quarry.db.storage.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=True),
             patch("quarry.hooks._collection_for_cwd", return_value=None),
             patch("quarry.pipeline.ingest_url") as mock_ingest,
@@ -873,7 +873,7 @@ class TestHandlePostWebFetch:
 
         with (
             patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
-            patch("quarry.database.get_db", return_value=MagicMock()),
+            patch("quarry.db.storage.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch("quarry.hooks._collection_for_cwd", return_value="myapp"),
             patch("quarry.html_processor.process_html_text", return_value=[]),
@@ -901,7 +901,7 @@ class TestHandlePostWebFetch:
 
         with (
             patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
-            patch("quarry.database.get_db", return_value=MagicMock()),
+            patch("quarry.db.storage.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch("quarry.hooks._collection_for_cwd", return_value=None),
             patch("quarry.html_processor.process_html_text", return_value=[]),
@@ -1644,15 +1644,15 @@ class TestIngestBackground:
                 return_value=MagicMock(),
             ),
             patch(
-                "quarry.database.get_db",
+                "quarry.db.storage.get_db",
                 return_value=MagicMock(),
             ),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_documents",
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
                 return_value=existing_docs,
             ),
             patch(
-                "quarry.chunk_store.ChunkStore.delete_document",
+                "quarry.db.chunk_store.ChunkStore.delete_document",
             ) as mock_delete,
             patch(
                 "quarry.pipeline.ingest_content",
@@ -1695,10 +1695,12 @@ class TestIngestBackground:
                 return_value=MagicMock(),
             ),
             patch(
-                "quarry.database.get_db",
+                "quarry.db.storage.get_db",
                 return_value=MagicMock(),
             ),
-            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+            ),
             patch(
                 "quarry.pipeline.ingest_content",
                 side_effect=RuntimeError("embedding failed"),
@@ -2048,7 +2050,7 @@ class TestT17WebFetchRoutesToCaptures:
 
         with (
             patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
-            patch("quarry.database.get_db", return_value=MagicMock()),
+            patch("quarry.db.storage.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch("quarry.hooks._collection_for_cwd", return_value="proj"),
             patch(
@@ -2109,7 +2111,7 @@ class TestT19WebFetchFallback:
 
         with (
             patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
-            patch("quarry.database.get_db", return_value=MagicMock()),
+            patch("quarry.db.storage.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch("quarry.hooks._collection_for_cwd", return_value=None),
             patch(

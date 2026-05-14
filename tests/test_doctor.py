@@ -728,7 +728,7 @@ class TestCheckFtsHealth:
         assert "no database yet" in result.message
 
     def test_no_table(self, tmp_path: Path) -> None:
-        from quarry.database import get_db
+        from quarry.db.storage import get_db
 
         db_path = tmp_path / "lancedb"
         get_db(db_path)  # creates empty db
@@ -754,7 +754,7 @@ class TestCheckFtsHealth:
         mock_db.list_tables.return_value = MagicMock(tables=["chunks"])
         mock_db.open_table.return_value = mock_table
 
-        with patch("quarry.database.get_db", return_value=mock_db):
+        with patch("quarry.db.storage.get_db", return_value=mock_db):
             result = _check_fts_health(db_path)
         assert result.passed is True
         assert result.message == "healthy"
@@ -778,7 +778,7 @@ class TestCheckFtsHealth:
         mock_db.list_tables.return_value = MagicMock(tables=["chunks"])
         mock_db.open_table.return_value = mock_table
 
-        with patch("quarry.database.get_db", return_value=mock_db):
+        with patch("quarry.db.storage.get_db", return_value=mock_db):
             result = _check_fts_health(db_path)
         assert result.passed is False
         assert "stale" in result.message
@@ -802,7 +802,7 @@ class TestCheckFtsHealth:
         mock_db.list_tables.return_value = MagicMock(tables=["chunks"])
         mock_db.open_table.return_value = mock_table
 
-        with patch("quarry.database.get_db", return_value=mock_db):
+        with patch("quarry.db.storage.get_db", return_value=mock_db):
             result = _check_fts_health(db_path)
         assert result.passed is False
         assert "missing" in result.message

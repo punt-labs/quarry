@@ -89,7 +89,7 @@ class TestDeleteDocument:
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
             patch(
-                "quarry.chunk_store.ChunkStore.delete_document",
+                "quarry.db.chunk_store.ChunkStore.delete_document",
                 side_effect=lambda *a, **kw: done.set(),
             ),
         ):
@@ -109,7 +109,7 @@ class TestDeleteDocument:
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
             patch(
-                "quarry.chunk_store.ChunkStore.delete_document",
+                "quarry.db.chunk_store.ChunkStore.delete_document",
                 side_effect=lambda *a, **kw: done.set(),
             ) as mock_del,
         ):
@@ -134,12 +134,12 @@ class TestStatus:
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_documents",
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
                 return_value=mock_docs,
             ),
-            patch("quarry.chunk_store.ChunkStore.count", return_value=42),
+            patch("quarry.db.chunk_store.ChunkStore.count", return_value=42),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_collections",
+                "quarry.db.chunk_catalog.ChunkCatalog.list_collections",
                 return_value=mock_cols,
             ),
             patch("quarry.mcp_server.open_registry", return_value=mock_conn),
@@ -166,10 +166,12 @@ class TestStatus:
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
-            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
-            patch("quarry.chunk_store.ChunkStore.count", return_value=0),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+            ),
+            patch("quarry.db.chunk_store.ChunkStore.count", return_value=0),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
             ),
             patch("quarry.mcp_server.open_registry", return_value=mock_conn),
             patch("quarry.mcp_server.registry_list", return_value=[]),
@@ -187,10 +189,12 @@ class TestStatus:
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
-            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
-            patch("quarry.chunk_store.ChunkStore.count", return_value=0),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+            ),
+            patch("quarry.db.chunk_store.ChunkStore.count", return_value=0),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
             ),
         ):
             result = status()
@@ -228,7 +232,7 @@ class TestFind:
                 return_value=_mock_embedding_backend(mock_vector),
             ),
             patch(
-                "quarry.chunk_search.ChunkSearch.hybrid_search",
+                "quarry.db.chunk_search.ChunkSearch.hybrid_search",
                 return_value=mock_results,
             ),
         ):
@@ -252,7 +256,7 @@ class TestFind:
                 return_value=_mock_embedding_backend(mock_vector),
             ),
             patch(
-                "quarry.chunk_search.ChunkSearch.hybrid_search", return_value=[]
+                "quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]
             ) as mock_search,
         ):
             find("test", limit=100)
@@ -279,7 +283,7 @@ class TestFind:
                 return_value=_mock_embedding_backend(mock_vector),
             ),
             patch(
-                "quarry.chunk_search.ChunkSearch.hybrid_search", return_value=[]
+                "quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]
             ) as mock_search,
         ):
             find("test", **{tool_kwarg: tool_value})
@@ -372,7 +376,7 @@ class TestFind:
                 return_value=_mock_embedding_backend(mock_vector),
             ),
             patch(
-                "quarry.chunk_search.ChunkSearch.hybrid_search",
+                "quarry.db.chunk_search.ChunkSearch.hybrid_search",
                 return_value=mock_results,
             ),
         ):
@@ -403,7 +407,7 @@ class TestListDocuments:
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_documents",
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
                 return_value=mock_docs,
             ),
         ):
@@ -418,7 +422,9 @@ class TestListDocuments:
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
-            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+            ),
         ):
             result = mcp_list("documents")
 
@@ -430,7 +436,7 @@ class TestListDocuments:
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
             ) as mock_list,
         ):
             mcp_list("documents", collection="math")
@@ -446,7 +452,7 @@ class TestShow:
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.get_page_text",
+                "quarry.db.chunk_catalog.ChunkCatalog.get_page_text",
                 return_value="The quick brown fox",
             ),
         ):
@@ -461,7 +467,9 @@ class TestShow:
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
-            patch("quarry.chunk_catalog.ChunkCatalog.get_page_text", return_value=None),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.get_page_text", return_value=None
+            ),
         ):
             result = show("missing.pdf", page_number=99)
 
@@ -483,7 +491,7 @@ class TestShow:
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_documents",
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
                 return_value=[mock_doc],
             ),
         ):
@@ -498,7 +506,9 @@ class TestShow:
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
-            patch("quarry.chunk_catalog.ChunkCatalog.list_documents", return_value=[]),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+            ),
         ):
             result = show("missing.pdf")
 
@@ -516,7 +526,7 @@ class TestListCollections:
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
             patch(
-                "quarry.chunk_catalog.ChunkCatalog.list_collections",
+                "quarry.db.chunk_catalog.ChunkCatalog.list_collections",
                 return_value=mock_cols,
             ),
         ):
@@ -535,7 +545,7 @@ class TestDeleteCollection:
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
             patch(
-                "quarry.chunk_store.ChunkStore.delete_collection",
+                "quarry.db.chunk_store.ChunkStore.delete_collection",
                 side_effect=lambda *a, **kw: done.set(),
             ) as mock_del,
         ):

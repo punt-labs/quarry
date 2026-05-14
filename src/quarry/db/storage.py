@@ -1,4 +1,4 @@
-"""LanceDB connection factory and database discovery utilities."""
+"""Storage utilities: LanceDB connection, size formatting, database discovery."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import logging
 from pathlib import Path
 from typing import cast
 
-from quarry.chunk_catalog import ChunkCatalog
 from quarry.results import DatabaseSummary
 from quarry.types import LanceDB
 
@@ -18,7 +17,7 @@ def get_db(db_path: Path) -> LanceDB:
     import lancedb  # noqa: PLC0415
 
     db_path.mkdir(parents=True, exist_ok=True)
-    return cast("LanceDB", lancedb.connect(str(db_path)))  # type: ignore[attr-defined]
+    return cast("LanceDB", lancedb.connect(str(db_path)))
 
 
 def format_size(size_bytes: int) -> str:
@@ -70,6 +69,8 @@ def dir_size_bytes(path: Path) -> int:
 
 def discover_databases(root: Path) -> list[DatabaseSummary]:
     """Scan *root* for named databases and return structured summaries."""
+    from quarry.db.chunk_catalog import ChunkCatalog  # noqa: PLC0415
+
     results: list[DatabaseSummary] = []
     if not root.exists():
         return results

@@ -16,11 +16,10 @@ if TYPE_CHECKING:
     from quarry.sitemap import SitemapEntry
 
 from quarry.backends import get_embedding_backend, get_ocr_backend
-from quarry.chunk_catalog import ChunkCatalog
-from quarry.chunk_store import ChunkStore
 from quarry.chunker import chunk_pages
 from quarry.code_processor import SUPPORTED_CODE_EXTENSIONS, process_code_file
 from quarry.config import Settings
+from quarry.db import ChunkCatalog, ChunkStore
 from quarry.html_processor import (
     SUPPORTED_HTML_EXTENSIONS,
     process_html_file,

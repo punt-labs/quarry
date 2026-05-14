@@ -90,7 +90,7 @@ def _mock_single_page_pipeline(
         lambda _settings: embedding_backend,
     )
     monkeypatch.setattr(
-        "quarry.chunk_store.ChunkStore.insert",
+        "quarry.db.chunk_store.ChunkStore.insert",
         lambda _db, _chunks, _vectors: len(chunks),
     )
 
@@ -271,7 +271,7 @@ class TestIngestImageSinglePage:
             return 0
 
         monkeypatch.setattr(
-            "quarry.chunk_store.ChunkStore.delete_document", _mock_delete
+            "quarry.db.chunk_store.ChunkStore.delete_document", _mock_delete
         )
 
         from quarry.pipeline import ingest_document
@@ -333,7 +333,7 @@ class TestIngestImageMultiPage:
             lambda _settings: embedding_backend,
         )
         monkeypatch.setattr(
-            "quarry.chunk_store.ChunkStore.insert",
+            "quarry.db.chunk_store.ChunkStore.insert",
             lambda _db, _chunks, _vectors: 1,
         )
 

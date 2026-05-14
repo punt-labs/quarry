@@ -428,7 +428,7 @@ class TestT12DisableKeepData:
             patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
             patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
             patch(
-                "quarry.chunk_store.ChunkStore.delete_collection",
+                "quarry.db.chunk_store.ChunkStore.delete_collection",
             ) as mock_delete,
         ):
             enable_project(project)
@@ -460,7 +460,7 @@ class TestT13DisablePreservesAgentMemory:
             patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
             patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
             patch(
-                "quarry.chunk_store.ChunkStore.delete_collection",
+                "quarry.db.chunk_store.ChunkStore.delete_collection",
             ) as mock_delete,
         ):
             enable_project(project)

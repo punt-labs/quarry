@@ -17,10 +17,10 @@ from importlib.metadata import version
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from quarry.chunk_search import ChunkSearch as ChunkSearch
     from quarry.collections import CollectionName as CollectionName
     from quarry.config import Settings as Settings
-    from quarry.database import get_db as get_db
+    from quarry.db.chunk_search import ChunkSearch as ChunkSearch
+    from quarry.db.storage import get_db as get_db
     from quarry.pipeline import (
         ingest_content as ingest_content,
         ingest_document as ingest_document,
@@ -42,10 +42,10 @@ __all__ = [
 
 # Map each public name to (module_path, attribute_name).
 _LAZY_ATTRS: dict[str, tuple[str, str]] = {
-    "ChunkSearch": ("quarry.chunk_search", "ChunkSearch"),
+    "ChunkSearch": ("quarry.db.chunk_search", "ChunkSearch"),
     "CollectionName": ("quarry.collections", "CollectionName"),
     "Settings": ("quarry.config", "Settings"),
-    "get_db": ("quarry.database", "get_db"),
+    "get_db": ("quarry.db.storage", "get_db"),
     "ingest_content": ("quarry.pipeline", "ingest_content"),
     "ingest_document": ("quarry.pipeline", "ingest_document"),
     "ingest_url": ("quarry.pipeline", "ingest_url"),
