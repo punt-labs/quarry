@@ -7,6 +7,7 @@ import pytest
 
 from quarry.sync_registry import (
     FileRecord,
+    SyncRegistry,
     delete_file,
     deregister_directory,
     get_file,
@@ -174,9 +175,7 @@ class TestListAndGetRegistrations:
 
 
 class TestFileRecordOperations:
-    def _register(
-        self, conn: sqlite3.Connection, tmp_path: Path, collection: str
-    ) -> None:
+    def _register(self, conn: SyncRegistry, tmp_path: Path, collection: str) -> None:
         """Register a directory for *collection* so FK constraints pass."""
         d = tmp_path / f"dir-{collection}"
         d.mkdir(exist_ok=True)
@@ -310,7 +309,7 @@ class TestContentHashColumn:
         assert rec.content_hash is None
         conn.close()
 
-    def _register(self, conn: sqlite3.Connection, tmp_path: Path) -> None:
+    def _register(self, conn: SyncRegistry, tmp_path: Path) -> None:
         d = tmp_path / "dir"
         d.mkdir(exist_ok=True)
         register_directory(conn, d, "c")

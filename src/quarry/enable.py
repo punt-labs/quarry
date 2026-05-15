@@ -5,9 +5,12 @@ from __future__ import annotations
 import logging
 import os
 import re
-import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from quarry.sync_registry import SyncRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -212,7 +215,7 @@ def disable_project(
 
 
 def _resolve_or_register(
-    conn: sqlite3.Connection,
+    conn: SyncRegistry,
     directory: Path,
     collection_override: str,
 ) -> tuple[str, bool]:

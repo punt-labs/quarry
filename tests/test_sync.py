@@ -10,33 +10,24 @@ import pytest
 
 from quarry.models import Chunk
 from quarry.sync import (
+    _DEFAULT_IGNORE_PATTERNS,
     SyncConfig,
+    _content_hash,
+    _load_ignore_spec,
     compute_sync_plan,
     discover_files,
     sync_all,
     sync_collection,
 )
-from quarry.sync_discovery import (
-    _DEFAULT_IGNORE_PATTERNS,
-    FileDiscovery,
-)
 from quarry.sync_registry import (
     FileRecord,
+    SyncRegistry,
     get_file,
     list_files,
     open_registry,
     register_directory,
     upsert_file,
 )
-
-
-def _content_hash(path: Path) -> str:
-    return FileDiscovery.content_hash(path)
-
-
-def _load_ignore_spec(directory: Path):
-    return FileDiscovery(directory).load_ignore_spec()
-
 
 # ---------------------------------------------------------------------------
 # SyncConfig
@@ -350,7 +341,7 @@ class TestLoadIgnoreSpec:
 class TestComputeSyncPlan:
     EXTS = frozenset({".pdf", ".txt"})
 
-    def _setup(self, tmp_path: Path) -> tuple[sqlite3.Connection, Path]:
+    def _setup(self, tmp_path: Path) -> tuple[SyncRegistry, Path]:
         """Create registry, docs directory, and register collection 'col'."""
         conn = open_registry(tmp_path / "r.db")
         d = tmp_path / "docs"
@@ -472,7 +463,7 @@ class TestComputeSyncPlan:
 
     def _seed_with_hash(
         self,
-        conn: sqlite3.Connection,
+        conn: SyncRegistry,
         f: Path,
         *,
         content_hash: str | None,
@@ -575,7 +566,7 @@ class TestComputeSyncPlan:
         def _boom(_path: Path) -> str:
             raise OSError("permission denied")
 
-        monkeypatch.setattr("quarry.sync_discovery.FileDiscovery.content_hash", _boom)
+        monkeypatch.setattr("quarry.sync._content_hash", _boom)
 
         plan = compute_sync_plan(d, "col", conn, self.EXTS)
         assert len(plan.to_ingest) == 1
@@ -595,7 +586,7 @@ def _mock_settings(tmp_path: Path) -> MagicMock:
 
 
 class TestSyncCollection:
-    def _setup(self, tmp_path: Path) -> tuple[sqlite3.Connection, Path]:
+    def _setup(self, tmp_path: Path) -> tuple[SyncRegistry, Path]:
         """Create registry, docs directory, and register collection 'col'."""
         conn = open_registry(tmp_path / "r.db")
         d = tmp_path / "docs"
@@ -750,7 +741,7 @@ class TestSyncCollection:
 class TestSyncCollectionDurabilityAndRefresh:
     """Tests for quarry-272m: content-hash refresh path and durable ingest."""
 
-    def _setup(self, tmp_path: Path) -> tuple[sqlite3.Connection, Path, Path]:
+    def _setup(self, tmp_path: Path) -> tuple[SyncRegistry, Path, Path]:
         registry_path = tmp_path / "r.db"
         conn = open_registry(registry_path)
         d = tmp_path / "docs"
@@ -904,7 +895,7 @@ class TestSyncCollectionDurabilityAndRefresh:
         _real_upsert = upsert_file
 
         def _failing_upsert(
-            conn_arg: sqlite3.Connection,
+            conn_arg: SyncRegistry,
             record: FileRecord,
             *,
             commit: bool = True,

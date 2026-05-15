@@ -20,7 +20,6 @@ from __future__ import annotations
 import contextlib
 import logging
 import shutil
-import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -31,7 +30,7 @@ from quarry._stdlib import load_hook_config
 if TYPE_CHECKING:
     from quarry.artifacts import SessionArtifacts
     from quarry.config import Settings
-    from quarry.sync_registry import DirectoryRegistration
+    from quarry.sync_registry import DirectoryRegistration, SyncRegistry
     from quarry.types import LanceDB
 
 logger = logging.getLogger(__name__)
@@ -49,7 +48,7 @@ def _find_registration(  # pyright: ignore[reportUnusedFunction]
 
 
 def _unique_collection_name(
-    conn: sqlite3.Connection,
+    conn: SyncRegistry,
     directory: Path,
 ) -> str:
     """Derive a collection name that doesn't collide with existing ones.
@@ -323,7 +322,7 @@ _SESSION_NOTES_FALLBACK = "session-notes"
 
 
 def _collection_for_cwd_conn(
-    conn: sqlite3.Connection,
+    conn: SyncRegistry,
     cwd: str,
 ) -> str | None:
     """Resolve the registered collection for cwd using an open connection.
@@ -407,9 +406,9 @@ def _extract_web_fetch_content(payload: dict[str, object]) -> str | None:
 
 def _is_already_ingested(url: str, db: LanceDB, collection: str) -> bool:
     """Check if *url* is already in the given collection."""
-    from quarry.db.facade import Database  # noqa: PLC0415
+    from quarry.db.chunk_catalog import ChunkCatalog  # noqa: PLC0415
 
-    docs = Database(db).catalog.list_documents(collection_filter=collection)
+    docs = ChunkCatalog(db).list_documents(collection_filter=collection)
     return any(d["document_name"] == url for d in docs)
 
 
@@ -436,7 +435,7 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
         return {}
 
     # Heavy imports deferred past early-return guards.
-    from quarry.db.facade import Database  # noqa: PLC0415
+    from quarry.db.storage import get_db  # noqa: PLC0415
     from quarry.ingestion.pipeline import ingest_content, ingest_url  # noqa: PLC0415
 
     base_collection = _collection_for_cwd(cwd)
@@ -445,8 +444,7 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     )
 
     settings = _resolve_settings()
-    database = Database.connect(settings.lancedb_path)
-    db = database.db
+    db = get_db(settings.lancedb_path)
 
     if _is_already_ingested(url, db, collection):
         logger.debug("post-web-fetch: already ingested %s, skipping", url)
