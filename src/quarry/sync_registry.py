@@ -47,10 +47,14 @@ class SyncRegistry:
         # prevents spurious ProgrammingError if Python's thread-affinity check
         # triggers on the same-thread access pattern.
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA foreign_keys=ON")
-        self._init_schema()
-        self._migrate_schema()
+        try:
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA foreign_keys=ON")
+            self._init_schema()
+            self._migrate_schema()
+        except Exception:
+            self._conn.close()
+            raise
         return self
 
     # ------------------------------------------------------------------
@@ -157,6 +161,9 @@ class SyncRegistry:
             else:
                 msg = f"Collection name already in use: '{collection}'"
             raise ValueError(msg) from None
+        except sqlite3.Error:
+            self._conn.rollback()
+            raise
         self._conn.commit()
         return DirectoryRegistration(
             directory=str(resolved),

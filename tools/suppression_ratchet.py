@@ -5,8 +5,10 @@ from __future__ import annotations
 import ast
 import datetime
 import json
+import os
 import re
 import sys
+import tempfile
 import tomllib
 from pathlib import Path
 from typing import ClassVar, Self
@@ -308,9 +310,15 @@ class Baseline:
     def _load_baseline(self) -> dict[str, object]:
         if not self._baseline_path.exists():
             return {}
-        raw = json.loads(self._baseline_path.read_text())
-        result: dict[str, object] = dict(raw)
-        return result
+        try:
+            raw = json.loads(self._baseline_path.read_text())
+        except json.JSONDecodeError as exc:
+            _writeln(f"ERROR: baseline file is corrupt ({exc}). Run --update to reset.")
+            sys.exit(2)
+        except OSError as exc:
+            _writeln(f"ERROR: cannot read baseline file: {exc}")
+            sys.exit(2)
+        return dict(raw)
 
     def _save_baseline(self, report: SuppressionReport) -> None:
         data = {
@@ -321,13 +329,32 @@ class Baseline:
                 "%Y-%m-%dT%H:%M:%SZ"
             ),
         }
-        self._baseline_path.write_text(json.dumps(data, indent=2) + "\n")
+        content = json.dumps(data, indent=2) + "\n"
+        dir_ = self._baseline_path.parent
+        dir_.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=dir_)
+        tmp_path = Path(tmp)
+        try:
+            os.write(fd, content.encode())
+            os.close(fd)
+            tmp_path.replace(self._baseline_path)
+        except OSError:
+            import contextlib  # noqa: PLC0415
+
+            with contextlib.suppress(OSError):
+                os.close(fd)
+            with contextlib.suppress(OSError):
+                tmp_path.unlink()
+            raise
 
     def check(self, report: SuppressionReport) -> int:
         """Compare current counts against baseline. Return exit code."""
         if not self.has_baseline:
-            _writeln("No baseline -- run --update to create one")
-            return 0
+            print(
+                "No baseline -- run `make update-suppressions` to create one",
+                file=sys.stderr,
+            )
+            return 1
         baseline_data = self._load_baseline()
         raw_total = baseline_data.get("total", 0)
         baseline_total = int(raw_total) if isinstance(raw_total, (int, float)) else 0
@@ -384,8 +411,11 @@ class Baseline:
             "total": report.total,
             "by_category": report.by_category,
         }
-        with self._audit_path.open("a") as f:
-            f.write(json.dumps(entry, separators=(",", ":")) + "\n")
+        try:
+            with self._audit_path.open("a") as f:
+                f.write(json.dumps(entry, separators=(",", ":")) + "\n")
+        except OSError as exc:
+            _writeln(f"WARNING: could not append to audit log: {exc}")
 
 
 def main() -> None:

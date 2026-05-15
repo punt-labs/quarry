@@ -31,6 +31,12 @@ check-coupling: ## Coupling/cohesion analysis (informational, not in check chain
 update-coupling: ## Update coupling baseline after improvements
 	uv run python tools/oo_coupling.py src/quarry/ --update
 
+check-suppressions: ## Suppression ratchet — count must not increase
+	uv run python tools/suppression_ratchet.py src/quarry/ --check
+
+update-suppressions: ## Update suppression baseline after justified additions
+	uv run python tools/suppression_ratchet.py src/quarry/ --update
+
 report: ## Full diagnostics (OO score + all checks, no fail-fast)
 	-uv run python tools/oo_score.py src/quarry/ --threshold
 	-uv run mypy src/ tests/
