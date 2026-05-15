@@ -68,7 +68,7 @@ class FileDiscovery:
         if self._root_resolved is None:
             return []
 
-        root_spec = self._load_ignore_spec()
+        root_spec = self.load_ignore_spec()
         result: list[Path] = []
 
         for dirpath_str, dirnames, filenames in os.walk(self._directory):
@@ -116,7 +116,7 @@ class FileDiscovery:
                 h.update(chunk)
         return h.hexdigest()
 
-    def _load_ignore_spec(self) -> pathspec.PathSpec:
+    def load_ignore_spec(self) -> pathspec.PathSpec:
         """Build a PathSpec from ``.gitignore``, ``.quarryignore``, and defaults."""
         lines: list[str] = list(_DEFAULT_IGNORE_PATTERNS)
         for name in (".gitignore", ".quarryignore"):

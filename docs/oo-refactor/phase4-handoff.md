@@ -21,12 +21,14 @@ All agent work lost due to working tree conflicts. Backups in
 `.tmp/phase4-extractions/` for Steps 4.4-4.7 (doctor decomposition).
 
 Steps completed by agents but lost:
+
 - 4.1-4.3a: CollectionSyncer, FileDiscovery, SyncRegistry, sync/ pkg
 - 4.4-4.7: HealthChecker, InstallWizard, EthosConfigurator, claudemd
 - 4.13-4.16: ProjectManager, SessionBackfiller, TextScrubber, TableRenderer
 - 4.8-4.12: NOT completed (ServiceManager, backends, TLS, proxy)
 
 Steps not attempted:
+
 - 4.17: Move modules into services/ package
 
 ## Dead code to wire (from prior phases)

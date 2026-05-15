@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, Final, Self
 
 if TYPE_CHECKING:
     import numpy as np
-    import pathspec
     from numpy.typing import NDArray
 
     from quarry.models import Chunk
@@ -24,10 +23,7 @@ if TYPE_CHECKING:
 from quarry.config import Settings
 from quarry.db import ChunkStore, TableOptimizer
 from quarry.ingestion.pipeline import SUPPORTED_EXTENSIONS, prepare_document
-from quarry.sync_discovery import (
-    _DEFAULT_IGNORE_PATTERNS as _DEFAULT_IGNORE_PATTERNS,
-    FileDiscovery,
-)
+from quarry.sync_discovery import FileDiscovery
 from quarry.sync_registry import (
     FileRecord,
     delete_file,
@@ -77,16 +73,6 @@ class SyncResult:
 def discover_files(directory: Path, extensions: frozenset[str]) -> list[Path]:
     """Recursively find files matching *extensions* under *directory*."""
     return FileDiscovery(directory).discover(extensions)
-
-
-def _content_hash(path: Path) -> str:
-    """Return a fast content hash of *path* for change detection."""
-    return FileDiscovery.content_hash(path)
-
-
-def _load_ignore_spec(directory: Path) -> pathspec.PathSpec:
-    """Build a PathSpec from .gitignore, .quarryignore, and defaults."""
-    return FileDiscovery(directory)._load_ignore_spec()
 
 
 def compute_sync_plan(

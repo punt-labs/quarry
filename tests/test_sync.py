@@ -11,8 +11,6 @@ import pytest
 from quarry.models import Chunk
 from quarry.sync import (
     SyncConfig,
-    _content_hash,
-    _load_ignore_spec,
     compute_sync_plan,
     discover_files,
     sync_all,
@@ -20,6 +18,7 @@ from quarry.sync import (
 )
 from quarry.sync_discovery import (
     _DEFAULT_IGNORE_PATTERNS,
+    FileDiscovery,
 )
 from quarry.sync_registry import (
     FileRecord,
@@ -29,6 +28,15 @@ from quarry.sync_registry import (
     register_directory,
     upsert_file,
 )
+
+
+def _content_hash(path: Path) -> str:
+    return FileDiscovery.content_hash(path)
+
+
+def _load_ignore_spec(directory: Path):
+    return FileDiscovery(directory).load_ignore_spec()
+
 
 # ---------------------------------------------------------------------------
 # SyncConfig
@@ -567,7 +575,7 @@ class TestComputeSyncPlan:
         def _boom(_path: Path) -> str:
             raise OSError("permission denied")
 
-        monkeypatch.setattr("quarry.sync._content_hash", _boom)
+        monkeypatch.setattr("quarry.sync_discovery.FileDiscovery.content_hash", _boom)
 
         plan = compute_sync_plan(d, "col", conn, self.EXTS)
         assert len(plan.to_ingest) == 1
