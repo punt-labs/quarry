@@ -1,4 +1,4 @@
-.PHONY: help test lint lint-docs type check check-full check-oo update-oo check-coupling update-coupling report format build test-wheel clean depot bench-cuda docs docs-clean metrics coverage
+.PHONY: help test lint lint-docs type check check-full check-oo update-oo check-coupling update-coupling check-suppressions update-suppressions report format install build test-wheel clean depot bench-cuda docs docs-clean metrics coverage
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -45,6 +45,9 @@ check-full: check test-wheel ## Full quality gate including wheel test
 format: ## Auto-format code
 	uv run ruff format .
 	uv run ruff check --fix .
+
+install: build ## Build and install wheel locally for manual testing
+	uv tool install --force dist/*.whl
 
 build: ## Build wheel and sdist
 	rm -rf dist/

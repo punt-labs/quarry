@@ -181,6 +181,41 @@ Quarry spans four technical domains that require distinct expertise: (1) **ML/nu
 
 Use `standard` pipeline (design → implement → test → review) for any change touching `/search`, the embedding pipeline, TLS, or work that crosses the local/remote boundary. Use `quick` (implement → review) only for documented bugfixes inside a single module that don't cross boundaries. Apply the five bug classes from the Testing section as evaluator checklists on every review. Review-cycle fix rounds (Copilot/Bugbot findings) use bare `Agent()`, not missions.
 
+## Development Loop
+
+Two nested loops govern all code changes. See `punt-kit/standards/pr-review.md` for the authoritative reference.
+
+### Inner loop — one mission
+
+Execute after every agent delegation that produces sizeable code changes.
+
+1. **Delegate** to the right ethos specialist (see pairing table above). Do not use bare `Agent()` for implementation work.
+2. **`make check`** — must pass before proceeding. Zero exceptions.
+3. **`make install`** — builds wheel and installs it locally. `make check` passing is not installation.
+4. **`make test`** against the installed artifact — not from source.
+5. **`/feature-dev:code-reviewer`** on the mission diff.
+6. **`/pr-review-toolkit:silent-failure-hunter`** on the mission diff.
+7. **Fix every finding.** To dismiss one: document (a) the exact finding, (b) the specific reason it does not apply, (c) the code reference. "Pre-existing" and "by design" are not reasons.
+8. **Re-run both agents.** Exit the fix loop only when both return zero findings.
+9. **Exercise manually** — write expected output first, then compare actual. Cover one failure mode, one boundary condition.
+10. **Commit.**
+
+### Outer loop — one PR (one rollback-coherent unit)
+
+After all missions for the feature complete and each has passed its inner loop:
+
+1. **`make check`** on the full accumulated diff.
+2. **Both local review agents** on the complete diff — cross-mission issues only appear at this level.
+3. **Fix all findings** using the same documentation standard.
+4. **Human IDE review** of the full diff.
+5. **`make install`** then exercise the complete user-facing workflow end-to-end, paste actual output.
+6. **Re-run agents** until clean.
+7. **Open PR.** A PR opened before step 6 is clean is a procedural violation.
+
+### PR boundaries
+
+Split by **rollback granularity**, not size. Ask: if this broke production, what reverts together? That is one PR. "The diff is large" and "separate concern" are prohibited split reasons. Independent rollback capability and sequential dependency are valid.
+
 ## Release
 
 Use `/punt:auto release [version=X.Y.Z]`. Quarry is a CLI + Plugin Hybrid — releases publish to both PyPI (`punt-quarry`) and the Claude Code plugin marketplace. Dev plugin testing: `claude --plugin-dir .` loads `quarry-dev` alongside the installed prod plugin.
