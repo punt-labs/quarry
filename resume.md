@@ -4,118 +4,97 @@ Read this file before starting any refactoring work.
 
 ## Current state (2026-05-14)
 
-44 of 89 steps shipped to main. Phases 0–3 complete. Phase 4 in
-progress (branch `oo/phase-4-services` with tooling commits only —
-all extraction work was lost to a working-tree conflict).
+### Branch
 
-### What is on main
+`oo/phase-4-services` — has Phase 4 partial work. DO NOT start from
+main. Check out this branch and verify before continuing.
+
+```bash
+git checkout oo/phase-4-services
+git pull
+make check
+```
+
+`make check` must pass: lint, mypy, pyright, 1683 tests, OO ratchet,
+suppression ratchet.
+
+## What is on main (Phases 0–3)
 
 | Phase | PRs | Steps | What shipped |
 |-------|-----|-------|-------------|
 | 0 | #280–#283 | 0.1–0.10 | Baselines, `__init__`→`__new__`, slots, function absorptions |
-| 1 | #284 | 1.1–1.10 | `_sql.py`, SearchFilter, ChunkConfig, CollectionName Flyweight, 4 config dataclasses, FormatExtractor + ServiceBackend protocols |
-| 2 | #285–#286 | 2.1–2.8 | `database.py` decomposed into `db/` package (7 modules, Database facade) |
-| 3 | #288 | 3.1–3.16 | 7 extractors in `extractors/`, 10 modules in `ingestion/` package |
-| docs | #279, #287 | — | OO design docs, package structure proposal (reviewed, GO) |
+| 1 | #284 | 1.1–1.10 | `_sql.py`, SearchFilter, ChunkConfig, CollectionName, dataclasses, protocols |
+| 2 | #285–#286 | 2.1–2.8 | `database.py` → `db/` package (7 modules, Database facade) |
+| 3 | #288 | 3.1–3.16 | 7 extractors in `extractors/`, 10 modules in `ingestion/` |
 
-### What is on branch `oo/phase-4-services`
+## What is on branch `oo/phase-4-services`
 
-- `tools/suppression_ratchet.py` — committed (b640f3f)
-- `.suppression-baseline.json` — committed (267 suppressions)
-- Makefile targets: `check-suppressions`, `update-suppressions`
-- `docs/oo-refactor/phase4-handoff.md` — this handoff
-- NO extraction code — all agent work was lost (see below)
+Beyond main, this branch has (all committed, pushed):
 
-### Packages that exist
+- **Steps 4.1–4.2**: CollectionSyncer + FileDiscovery in `sync.py` and `sync_discovery.py`
+- **Database facade wired**: `Database.connect()` replaces `get_db()` everywhere
+- **Suppression ratchet**: `tools/suppression_ratchet.py` (267 ceiling), Makefile targets
+- **Fixes**: pyright errors resolved, `load_ignore_spec` made public
 
-```text
-src/quarry/
-    db/              # 7 modules — SchemaManager, ChunkStore, ChunkSearch,
-                     #   ChunkCatalog, TableOptimizer, storage utils, Database facade
-    extractors/      # 8 modules — FormatExtractor protocol + 7 extractor classes
-    ingestion/       # 10 modules — pipeline, url_ingester, url_fetcher,
-                     #   image_preparer, text_splitter, chunker, backends, etc.
-```
+## What is left in Phase 4
 
-### Dead code that must be wired
+### Priority 1: Step 4.3 — SyncRegistry
 
-These classes exist but no callers use them. This is the highest
-priority — creating classes without wiring callers is not refactoring.
+Extract `SyncRegistry` class in `src/quarry/sync_registry.py`. Wrap
+all 12 module-level functions. Wire every caller (12 callers across 7 files).
+Run `grep -rn "from quarry.sync_registry import" src/ tests/`.
 
-| Class | Location | What it replaces |
-|-------|----------|-----------------|
-| `Database` facade | `db/facade.py` | `get_db()` + manual ChunkStore/ChunkSearch/ChunkCatalog construction |
-| `UrlIngester` | `ingestion/url_ingester.py` | `ingest_url()`, `ingest_sitemap()`, `ingest_auto()` in pipeline.py |
-| `UrlFetcher` | `ingestion/url_fetcher.py` | `_fetch_url()` in pipeline.py |
-| `ImagePreparer` | `ingestion/image_preparer.py` | `_prepare_image_bytes()` in pipeline.py |
+### Priority 2: Steps 4.4–4.7 — Doctor decomposition
 
-Wire these BEFORE continuing with new extractions. Every caller of
-the old functions must be updated to use the new classes.
+Backups in `.tmp/phase4-extractions/`. Verify against current `doctor.py` first.
 
-## What to do next
+- 4.4: `HealthChecker` → `src/quarry/health_checker.py`
+- 4.5: `InstallWizard` → `src/quarry/install.py`
+- 4.6: `EthosConfigurator` → `src/quarry/ethos_config.py`
+  (enable.py must import from ethos_config, not doctor)
+- 4.7: `claudemd.py` — `inject_claude_md` function + constants
 
-### Step 1: Wire dead code (priority)
+### Priority 3: Steps 4.8–4.16 — Remaining service classes
 
-Wire the 4 dead classes listed above. Every call to `get_db()` becomes
-`Database.connect()`. Every call to `ingest_url()` goes through
-`UrlIngester`. Run `make check`. Ship as a PR.
+- 4.8: ServiceManager + LaunchdBackend (service.py)
+- 4.9: SystemdBackend (service.py)
+- 4.10: ProxyConfig (remote.py)
+- 4.10a: ConnectionValidator (remote.py)
+- 4.11: CertificateAuthority (tls.py)
+- 4.12: ProxyInstaller (proxy.py)
+- 4.13: ProjectManager (enable.py)
+- 4.14: SessionBackfiller (backfill.py)
+- 4.15: TextScrubber (scrub.py)
+- 4.16: TableRenderer (formatting.py)
 
-### Step 2: Phase 4 — Services (Steps 4.1–4.17)
+### Priority 4: Package moves (4.3a + 4.17)
 
-All extraction work was lost because parallel agents on the same
-working tree deleted each other's untracked files. The PostToolUse
-`make check` hook then reverted everything.
+- 4.3a: Create `sync/` package
+- 4.17: Create `services/` package
 
-Backups exist in `.tmp/phase4-extractions/` for Steps 4.4–4.7
-(HealthChecker, InstallWizard, EthosConfigurator, claudemd). These
-were tested and passing before the wipe. They may be usable as a
-starting point — verify against current main before applying.
+## Dead code (Phase 3 leftovers)
 
-Steps 4.1–4.3a (CollectionSyncer, FileDiscovery, SyncRegistry,
-`sync/` package) and Steps 4.13–4.16 (ProjectManager,
-SessionBackfiller, TextScrubber, TableRenderer) were completed by
-agents but all changes were lost. No backups.
+`UrlIngester`, `UrlFetcher`, `ImagePreparer` exist but have no callers.
+`pipeline.py` still uses module-level functions. Wire when extracting
+`IngestionPipeline` class (step 3.13, not yet done).
 
-Steps 4.8–4.12 (ServiceManager, LaunchdBackend, SystemdBackend,
-ProxyConfig, ConnectionValidator, CertificateAuthority, ProxyInstaller)
-were never completed.
-
-Step 4.17 (move modules into `sync/` and `services/` packages) was
-never attempted.
-
-### Step 3: Phases 5–7
+## Remaining phases (5–7)
 
 | Phase | Steps | What |
 |-------|-------|------|
-| 5 | 5.1–5.7 | hooks/ package — SessionStartHandler, WebFetchHandler, PreCompactHandler, BackgroundIngester, transcript.py to top level |
-| 6 | 6.1–6.9 | routes/ package — TaskManager, QuarryContext, 9 route modules, McpContext, McpSession |
-| 7 | 7.1–7.20 | commands/ package — CliContext, RemoteClient, 16 command modules, PluginSetup, surfaces/ package |
+| 5 | 5.1–5.7 | `hooks/` package |
+| 6 | 6.1–6.9 | `routes/` package |
+| 7 | 7.1–7.20 | `commands/` + `surfaces/` packages |
 
 ## Critical rules
 
-1. **Wire callers in the same PR as the extraction.** Do not create
-   classes that nobody calls. That is code duplication, not refactoring.
-
-2. **Use `isolation: "worktree"` on Agent calls** when running agents
-   in parallel. Without it, agents delete each other's untracked files.
-
-3. **Do not confirm "done" until `git log` proves the file is in a
-   commit.** Files on disk get deleted by concurrent agents. Only
-   committed files are durable.
-
-4. **Do not `rm` files you did not create.** Move to `.tmp/` first.
-   Verify the system works without the file. Then delete in a later
-   commit.
-
-5. **Reply to every biff message** that requests action or acknowledgment.
-
-6. **Run local review** (code-reviewer + silent-failure-hunter) on every
-   PR diff before pushing. This is Phase 5 of the workflow and is
-   mandatory.
-
-7. **`make check` must pass** before every commit. This now includes
-   `check-suppressions` (suppression ratchet) in addition to lint, types,
-   tests, and check-oo.
+1. **Wire callers in the same PR** — no dead code.
+2. **Use `isolation: "worktree"`** on parallel Agent calls.
+3. **Commit immediately** after agent finishes — untracked files disappear.
+4. **Confirm "done" only after `git log` shows the commit.**
+5. **`mv` to `.tmp/` instead of `rm`** for unknown files.
+6. **Reply to every biff message** that requests action.
+7. **Local review** (code-reviewer + silent-failure-hunter) before every PR.
 
 ## Tools
 
@@ -123,33 +102,13 @@ never attempted.
 |------|---------|---------------|
 | OO ratchet | `make check-oo` | yes |
 | OO rebaseline | `uv run python tools/oo_score.py src/quarry/ --rebaseline` | — |
-| Coupling/cohesion | `make check-coupling` | no (informational) |
-| Suppression ratchet | `make check-suppressions` | yes |
-| ABC complexity | `make metrics` | no |
-| Coverage | `make coverage` | no |
+| Coupling | `make check-coupling` | no |
+| Suppressions | `make check-suppressions` | yes (267 ceiling) |
 
 ## Key documents
 
-| File | What |
-|------|------|
-| `docs/oo-refactor/oo-refactoring-plan.md` | The 84-step plan (original) |
-| `docs/oo-refactor/package-structure.md` | 10-package architecture (reviewed, GO) |
-| `docs/oo-refactor/package-structure-review.md` | Peer review — GO WITH MODIFICATIONS |
-| `docs/oo-refactor/oo-design-report.md` | Class proposals (reference) |
-| `.oo-baseline.json` | Current OO scores baseline |
-| `.suppression-baseline.json` | Current suppression count baseline (267) |
-| `CLAUDE.md` | Project standards |
-
-## How to start
-
-```bash
-# 1. Check out the phase 4 branch (has tooling commits)
-git checkout oo/phase-4-services
-git pull
-
-# 2. Verify current state
-make check
-
-# 3. Wire dead code first (Database facade, UrlIngester, etc.)
-# Then resume Phase 4 extractions from Step 4.1
-```
+- `docs/oo-refactor/oo-refactoring-plan.md` — the 84-step plan
+- `docs/oo-refactor/package-structure.md` — 10-package architecture
+- `.oo-baseline.json` — OO scores baseline
+- `.suppression-baseline.json` — suppression count baseline (267)
+- `CLAUDE.md` — project standards
