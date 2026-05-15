@@ -1,13 +1,6 @@
-# Quarry OO Refactoring — Session Resume
+# Quarry OO Refactoring — Resume
 
-Read this file before starting any refactoring work.
-
-## Current state (2026-05-14)
-
-### Branch
-
-`oo/phase-4-services` — has Phase 4 partial work. DO NOT start from
-main. Check out this branch and verify before continuing.
+## Start here
 
 ```bash
 git checkout oo/phase-4-services
@@ -15,100 +8,141 @@ git pull
 make check
 ```
 
-`make check` must pass: lint, mypy, pyright, 1683 tests, OO ratchet,
-suppression ratchet.
+`make check` must pass before any work begins. Current status: **clean**.
 
-## What is on main (Phases 0–3)
+---
 
-| Phase | PRs | Steps | What shipped |
-|-------|-----|-------|-------------|
-| 0 | #280–#283 | 0.1–0.10 | Baselines, `__init__`→`__new__`, slots, function absorptions |
-| 1 | #284 | 1.1–1.10 | `_sql.py`, SearchFilter, ChunkConfig, CollectionName, dataclasses, protocols |
-| 2 | #285–#286 | 2.1–2.8 | `database.py` → `db/` package (7 modules, Database facade) |
-| 3 | #288 | 3.1–3.16 | 7 extractors in `extractors/`, 10 modules in `ingestion/` |
+## What is done (on main, PRs #280–#288)
 
-## What is on branch `oo/phase-4-services`
+| Phase | Steps | What shipped |
+|-------|-------|-------------|
+| 0 | 0.1–0.10 | Baselines, `__init__`→`__new__`, frozen slots, function absorptions |
+| 1 | 1.1–1.10 | `_sql.py`, SearchFilter, ChunkConfig, CollectionName Flyweight, 4 config dataclasses, FormatExtractor + ServiceBackend protocols |
+| 2 | 2.1–2.8 | `database.py` eliminated → `db/` package (SchemaManager, ChunkStore, ChunkSearch, ChunkCatalog, TableOptimizer, storage utils, Database facade) |
+| 3 | 3.1–3.16 | 7 extractor classes in `extractors/`, 10 modules in `ingestion/` package |
 
-Beyond main, this branch has (all committed, pushed):
+### What is on branch `oo/phase-4-services` (committed, not yet PR'd)
 
-- **Steps 4.1–4.2**: CollectionSyncer + FileDiscovery in `sync.py` and `sync_discovery.py`
-- **Database facade wired**: `Database.connect()` replaces `get_db()` everywhere
-- **Suppression ratchet**: `tools/suppression_ratchet.py` (267 ceiling), Makefile targets
-- **Fixes**: pyright errors resolved, `load_ignore_spec` made public
+- **Step 4.1–4.2**: `CollectionSyncer` in `sync.py`, `FileDiscovery` in `sync_discovery.py`
+- **Step 4.3a**: `SyncRegistry` class in `sync_registry.py` (with backward-compat shims — module-level functions still exist and delegate to the class)
+- **Database facade wired**: `Database.connect()` replaces `get_db()` + manual class construction across most callers
+- **Tooling**: `tools/suppression_ratchet.py` (267 suppression ceiling), `tools/oo_coupling.py`
+- **Makefile targets**: `make install`, `make check-suppressions`, `make update-suppressions`, `make check-coupling`, `make update-coupling`
+- **CLAUDE.md**: development loop documented (inner loop per mission, outer loop per PR)
 
-## What is left in Phase 4
+---
 
-### Priority 1: Step 4.3 — SyncRegistry
+## What is left
 
-Extract `SyncRegistry` class in `src/quarry/sync_registry.py`. Wrap
-all 12 module-level functions. Wire every caller (12 callers across 7 files).
-Run `grep -rn "from quarry.sync_registry import" src/ tests/`.
+### Immediate next (Phase 4 continuation)
 
-### Priority 2: Steps 4.4–4.7 — Doctor decomposition
+**Step 4.3b–4.3c: Wire callers away from SyncRegistry shims**
+The shims exist to keep `make check` passing. Migration is file-by-file:
+- 4.3b: Migrate `sync.py` callers to `SyncRegistry` directly, delete shims for those functions
+- 4.3c: Migrate remaining callers (`hooks.py`, `enable.py`, `doctor.py`, `__main__.py`, `mcp_server.py`, `http_server.py`), delete all shims
 
-Backups in `.tmp/phase4-extractions/`. Verify against current `doctor.py` first.
+After all shims removed, `sync_registry.py` contains only `SyncRegistry` + the two dataclasses. One PR for 4.3a–4.3c together.
 
+**Steps 4.4–4.7: Doctor decomposition**
+Extract from `doctor.py` (currently 1,141 lines):
 - 4.4: `HealthChecker` → `src/quarry/health_checker.py`
 - 4.5: `InstallWizard` → `src/quarry/install.py`
-- 4.6: `EthosConfigurator` → `src/quarry/ethos_config.py`
-  (enable.py must import from ethos_config, not doctor)
-- 4.7: `claudemd.py` — `inject_claude_md` function + constants
+- 4.6: `EthosConfigurator` → `src/quarry/ethos_config.py` (enable.py imports from here, NOT from doctor.py)
+- 4.7: `claudemd.py` — `inject_claude_md` function
 
-### Priority 3: Steps 4.8–4.16 — Remaining service classes
+**Steps 4.8–4.12: Service infrastructure**
+- 4.8: `ServiceManager` + `LaunchdBackend` in `service.py`
+- 4.9: `SystemdBackend` in `service.py`
+- 4.10: `ProxyConfig` in `remote.py`
+- 4.10a: `ConnectionValidator` in `remote.py`
+- 4.11: `CertificateAuthority` in `tls.py`
+- 4.12: `ProxyInstaller` in `proxy.py`
 
-- 4.8: ServiceManager + LaunchdBackend (service.py)
-- 4.9: SystemdBackend (service.py)
-- 4.10: ProxyConfig (remote.py)
-- 4.10a: ConnectionValidator (remote.py)
-- 4.11: CertificateAuthority (tls.py)
-- 4.12: ProxyInstaller (proxy.py)
-- 4.13: ProjectManager (enable.py)
-- 4.14: SessionBackfiller (backfill.py)
-- 4.15: TextScrubber (scrub.py)
-- 4.16: TableRenderer (formatting.py)
+**Steps 4.13–4.16: Remaining service classes**
+- 4.13: `ProjectManager` in `enable.py`
+- 4.14: `SessionBackfiller` in `backfill.py`
+- 4.15: `TextScrubber` in `scrub.py`
+- 4.16: `TableRenderer` in `formatting.py`
 
-### Priority 4: Package moves (4.3a + 4.17)
+**Steps 4.3a + 4.17: Package moves**
 
-- 4.3a: Create `sync/` package
-- 4.17: Create `services/` package
+- 4.3a (done): `sync/` package — move `sync.py`, `sync_discovery.py`, `sync_registry.py`
+- 4.17: `services/` package — move all remaining service modules
 
-## Dead code (Phase 3 leftovers)
+### Dead code to wire (from Phase 3, planned future missions)
 
-`UrlIngester`, `UrlFetcher`, `ImagePreparer` exist but have no callers.
-`pipeline.py` still uses module-level functions. Wire when extracting
-`IngestionPipeline` class (step 3.13, not yet done).
+| Class | Location | Replaces |
+|-------|----------|---------|
+| `FileDiscovery` | `sync_discovery.py` | `discover_files()`, `_content_hash()`, etc. in `sync.py` |
+| `UrlIngester` | `ingestion/url_ingester.py` | `ingest_url()`, `ingest_sitemap()`, `ingest_auto()` in pipeline.py |
+| `UrlFetcher` | `ingestion/url_fetcher.py` | `_fetch_url()` in pipeline.py |
+| `ImagePreparer` | `ingestion/image_preparer.py` | `_prepare_image_bytes()` in pipeline.py |
 
-## Remaining phases (5–7)
+These are wired when their callers are refactored (step 3.13 IngestionPipeline class, step 3.12 UrlIngester — both still in the plan).
+
+### Remaining phases (5–7)
 
 | Phase | Steps | What |
 |-------|-------|------|
-| 5 | 5.1–5.7 | `hooks/` package |
-| 6 | 6.1–6.9 | `routes/` package |
-| 7 | 7.1–7.20 | `commands/` + `surfaces/` packages |
+| 5 | 5.1–5.7 | `hooks/` package — SessionStartHandler, WebFetchHandler, PreCompactHandler, BackgroundIngester, transcript.py to top level |
+| 6 | 6.1–6.9 | `routes/` package — TaskManager, QuarryContext, 9 route modules, McpContext, McpSession |
+| 7 | 7.1–7.20 | `commands/` package — CliContext, RemoteClient, 16 command modules, PluginSetup, `surfaces/` package |
 
-## Critical rules
+---
 
-1. **Wire callers in the same PR** — no dead code.
-2. **Use `isolation: "worktree"`** on parallel Agent calls.
-3. **Commit immediately** after agent finishes — untracked files disappear.
-4. **Confirm "done" only after `git log` shows the commit.**
-5. **`mv` to `.tmp/` instead of `rm`** for unknown files.
-6. **Reply to every biff message** that requests action.
-7. **Local review** (code-reviewer + silent-failure-hunter) before every PR.
+## Development workflow (mandatory)
 
-## Tools
+Read `CLAUDE.md` → `## Development Loop` section for the authoritative loop.
 
-| Tool | Command | In check chain |
-|------|---------|---------------|
-| OO ratchet | `make check-oo` | yes |
-| OO rebaseline | `uv run python tools/oo_score.py src/quarry/ --rebaseline` | — |
-| Coupling | `make check-coupling` | no |
-| Suppressions | `make check-suppressions` | yes (267 ceiling) |
+**Inner loop (every mission):**
+
+1. Delegate to the right ethos specialist — see pairing table in `CLAUDE.md`
+2. `make check`
+3. `make install` (builds wheel, installs locally)
+4. Both review agents: `/feature-dev:code-reviewer` + `/pr-review-toolkit:silent-failure-hunter`
+5. Fix every finding, re-run until clean
+6. Exercise manually
+7. Commit
+
+**Outer loop (per PR):**
+
+1. `make check` on full branch diff
+2. Both review agents on full diff
+3. Human IDE review
+4. `make install` + end-to-end exercise
+5. Open PR only when all the above are clean
+
+**PR boundary**: one rollback-coherent unit — not one step, not one file. Phases 4.1–4.3 + tooling is one PR.
+
+---
 
 ## Key documents
 
-- `docs/oo-refactor/oo-refactoring-plan.md` — the 84-step plan
-- `docs/oo-refactor/package-structure.md` — 10-package architecture
-- `.oo-baseline.json` — OO scores baseline
-- `.suppression-baseline.json` — suppression count baseline (267)
-- `CLAUDE.md` — project standards
+| Document | Location | What it contains |
+|----------|----------|-----------------|
+| 84-step refactoring plan | `docs/oo-refactor/oo-refactoring-plan.md` | All steps, dependencies, invariants |
+| Package structure proposal | `docs/oo-refactor/package-structure.md` | 10-package architecture, coupling/cohesion analysis, reviewed GO |
+| Package structure peer review | `docs/oo-refactor/package-structure-review.md` | GO WITH MODIFICATIONS — 3 required changes (all incorporated) |
+| OO design report | `docs/oo-refactor/oo-design-report.md` | Target class structure for all 42 modules |
+| OO baseline | `.oo-baseline.json` | Current OO scores per file |
+| Suppression baseline | `.suppression-baseline.json` | 267 suppression ceiling |
+
+## Tools
+
+| Tool | Command | Purpose |
+|------|---------|---------|
+| `make check` | — | All gates: lint, type, test, OO ratchet, suppression ratchet |
+| `make install` | — | Build wheel + install locally |
+| `make check-oo` | — | OO metric ratchet |
+| `uv run python tools/oo_score.py src/quarry/ --rebaseline` | — | Reset OO baseline (use after structural conversions) |
+| `make check-suppressions` | — | Suppression count ratchet (267 ceiling) |
+| `make check-coupling` | — | Coupling/cohesion (informational) |
+
+## Lessons learned (session-specific, do not repeat)
+
+1. `isolation: "worktree"` is required for parallel Agent calls — without it agents delete each other's untracked files
+2. Confirm "done" only after `git log` shows the commit — files on disk disappear between Bash calls
+3. `mv` to `.tmp/` before removing any file you didn't create — never `rm` on unfamiliar files
+4. Reply to every biff message that requests action
+5. Running agents without the right ethos specialist produces generic code — use `rmh`, `djb`, `mdm`, `adb` per domain
+6. The inner loop (review agents after every mission) is mandatory — not optional before-PR step
