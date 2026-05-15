@@ -124,7 +124,7 @@ Read `CLAUDE.md` → `## Development Loop` section for the authoritative loop.
 
 | Document | Location | What it contains |
 |----------|----------|-----------------|
-| 84-step refactoring plan | `docs/oo-refactor/oo-refactoring-plan.md` | All steps, dependencies, invariants |
+| Refactoring plan (84 steps + 5 from package-structure.md = 89 total) | `docs/oo-refactor/oo-refactoring-plan.md` | All steps, dependencies, invariants |
 | Package structure proposal | `docs/oo-refactor/package-structure.md` | 10-package architecture, coupling/cohesion analysis, reviewed GO |
 | Package structure peer review | `docs/oo-refactor/package-structure-review.md` | GO WITH MODIFICATIONS — 3 required changes (all incorporated) |
 | OO design report | `docs/oo-refactor/oo-design-report.md` | Target class structure for all 42 modules |
