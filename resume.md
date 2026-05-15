@@ -51,6 +51,7 @@ Extract from `doctor.py` (currently 1,141 lines):
 - 4.7: `claudemd.py` — `inject_claude_md` function
 
 **Steps 4.8–4.12: Service infrastructure**
+
 - 4.8: `ServiceManager` + `LaunchdBackend` in `service.py`
 - 4.9: `SystemdBackend` in `service.py`
 - 4.10: `ProxyConfig` in `remote.py`
@@ -59,6 +60,7 @@ Extract from `doctor.py` (currently 1,141 lines):
 - 4.12: `ProxyInstaller` in `proxy.py`
 
 **Steps 4.13–4.16: Remaining service classes**
+
 - 4.13: `ProjectManager` in `enable.py`
 - 4.14: `SessionBackfiller` in `backfill.py`
 - 4.15: `TextScrubber` in `scrub.py`
