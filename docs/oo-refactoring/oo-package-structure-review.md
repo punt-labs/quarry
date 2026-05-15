@@ -1,7 +1,9 @@
 # Package Structure Review
 
+> **Quarry OO Refactoring Initiative** — all documents: [design report](oo-design-report.md) · [design review](oo-design-review.md) · [pattern review](oo-design-pattern-review.md) · [execution plan](oo-refactoring-plan.md) · [package structure](oo-package-structure.md) · [package structure review](oo-package-structure-review.md)
+
 Reviewer: rej (Ralph Johnson)
-Date: 2026-05-14. **All required modifications incorporated into `package-structure.md` on 2026-05-14.**
+Date: 2026-05-14. **All required modifications incorporated into `oo-package-structure.md` on 2026-05-14.**
 
 **Verdict: GO WITH MODIFICATIONS**
 

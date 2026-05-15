@@ -1,5 +1,7 @@
 # OO Design Pattern Review
 
+> **Quarry OO Refactoring Initiative** — all documents: [design report](oo-design-report.md) · [design review](oo-design-review.md) · [pattern review](oo-design-pattern-review.md) · [execution plan](oo-refactoring-plan.md) · [package structure](oo-package-structure.md) · [package structure review](oo-package-structure-review.md)
+
 Reviewer: Ralph Johnson (rej)
 Date: 2026-05-13
 Documents reviewed: `oo-design-report.md`, `oo-design-review.md`,

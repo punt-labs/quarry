@@ -107,8 +107,8 @@ Backups in `.tmp/phase4-extractions/`. Verify against current `doctor.py` first.
 
 ## Key documents
 
-- `docs/oo-refactor/oo-refactoring-plan.md` — the 84-step plan
-- `docs/oo-refactor/package-structure.md` — 10-package architecture
+- `docs/oo-refactoring/oo-refactoring-plan.md` — the 84-step plan
+- `docs/oo-refactoring/oo-package-structure.md` — 10-package architecture
 - `.oo-baseline.json` — OO scores baseline
 - `.suppression-baseline.json` — suppression count baseline (267)
 - `CLAUDE.md` — project standards

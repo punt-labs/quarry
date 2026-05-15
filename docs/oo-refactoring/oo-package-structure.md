@@ -1,5 +1,7 @@
 # Package Structure Proposal
 
+> **Quarry OO Refactoring Initiative** — all documents: [design report](oo-design-report.md) · [design review](oo-design-review.md) · [pattern review](oo-design-pattern-review.md) · [execution plan](oo-refactoring-plan.md) · [package structure](oo-package-structure.md) · [package structure review](oo-package-structure-review.md)
+
 Target layout for quarry after the 84-step OO refactoring completes.
 Grounded in current import analysis (96 intra-package import statements
 across 42 modules) and the planned class extractions.
