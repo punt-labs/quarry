@@ -38,6 +38,7 @@ make check
 
 **Step 4.3b–4.3c: Wire callers away from SyncRegistry shims**
 The shims exist to keep `make check` passing. Migration is file-by-file:
+
 - 4.3b: Migrate `sync.py` callers to `SyncRegistry` directly, delete shims for those functions
 - 4.3c: Migrate remaining callers (`hooks.py`, `enable.py`, `doctor.py`, `__main__.py`, `mcp_server.py`, `http_server.py`), delete all shims
 
@@ -45,6 +46,7 @@ After all shims removed, `sync_registry.py` contains only `SyncRegistry` + the t
 
 **Steps 4.4–4.7: Doctor decomposition**
 Extract from `doctor.py` (currently 1,141 lines):
+
 - 4.4: `HealthChecker` → `src/quarry/health_checker.py`
 - 4.5: `InstallWizard` → `src/quarry/install.py`
 - 4.6: `EthosConfigurator` → `src/quarry/ethos_config.py` (enable.py imports from here, NOT from doctor.py)
