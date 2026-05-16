@@ -21,11 +21,7 @@ from quarry.db.optimizer import FRAGMENT_THRESHOLD
 from quarry.db.schema import TABLE_NAME
 from quarry.http_server import TaskState, _QuarryContext, build_app
 from quarry.models import Chunk
-from quarry.sync_registry import (
-    list_registrations,
-    open_registry,
-    register_directory,
-)
+from quarry.sync_registry import SyncRegistry
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -160,63 +156,63 @@ class TestRegistrationSubsumption:
     """Fix 2: parent subsumes children, child rejected by parent."""
 
     def test_parent_deregisters_children(self, tmp_path: Path) -> None:
-        conn = open_registry(tmp_path / "r.db")
+        conn = SyncRegistry(tmp_path / "r.db")
         child = tmp_path / "parent" / "child"
         child.mkdir(parents=True)
         parent = tmp_path / "parent"
 
-        register_directory(conn, child, "child-col")
-        assert len(list_registrations(conn)) == 1
+        conn.register_directory(child, "child-col")
+        assert len(conn.list_registrations()) == 1
 
         # Registering the parent should deregister the child.
-        register_directory(conn, parent, "parent-col")
-        regs = list_registrations(conn)
+        conn.register_directory(parent, "parent-col")
+        regs = conn.list_registrations()
         assert len(regs) == 1
         assert regs[0].collection == "parent-col"
         assert regs[0].directory == str(parent.resolve())
         conn.close()
 
     def test_child_rejected_when_parent_exists(self, tmp_path: Path) -> None:
-        conn = open_registry(tmp_path / "r.db")
+        conn = SyncRegistry(tmp_path / "r.db")
         parent = tmp_path / "parent"
         parent.mkdir()
         child = parent / "child"
         child.mkdir()
 
-        register_directory(conn, parent, "parent-col")
+        conn.register_directory(parent, "parent-col")
 
         with pytest.raises(ValueError, match="already covered by parent"):
-            register_directory(conn, child, "child-col")
+            conn.register_directory(child, "child-col")
         conn.close()
 
     def test_non_overlapping_registrations_unaffected(self, tmp_path: Path) -> None:
-        conn = open_registry(tmp_path / "r.db")
+        conn = SyncRegistry(tmp_path / "r.db")
         a = tmp_path / "a"
         a.mkdir()
         b = tmp_path / "b"
         b.mkdir()
 
-        register_directory(conn, a, "alpha")
-        register_directory(conn, b, "beta")
+        conn.register_directory(a, "alpha")
+        conn.register_directory(b, "beta")
 
-        regs = list_registrations(conn)
+        regs = conn.list_registrations()
         assert len(regs) == 2
         conn.close()
 
     def test_same_directory_still_rejected(self, tmp_path: Path) -> None:
         """Re-registering the same dir is not subsumption, it's a duplicate."""
-        conn = open_registry(tmp_path / "r.db")
+        conn = SyncRegistry(tmp_path / "r.db")
         d = tmp_path / "docs"
         d.mkdir()
 
-        register_directory(conn, d, "first")
+        conn.register_directory(d, "first")
 
         with pytest.raises(ValueError, match="already registered"):
-            register_directory(conn, d, "second")
+            conn.register_directory(d, "second")
         conn.close()
 
     def test_parent_subsumes_multiple_children(self, tmp_path: Path) -> None:
-        conn = open_registry(tmp_path / "r.db")
+        conn = SyncRegistry(tmp_path / "r.db")
         parent = tmp_path / "root"
         parent.mkdir()
         c1 = parent / "a"
@@ -224,43 +220,43 @@ class TestRegistrationSubsumption:
         c2 = parent / "b"
         c2.mkdir()
 
-        register_directory(conn, c1, "c1")
-        register_directory(conn, c2, "c2")
-        assert len(list_registrations(conn)) == 2
+        conn.register_directory(c1, "c1")
+        conn.register_directory(c2, "c2")
+        assert len(conn.list_registrations()) == 2
 
-        register_directory(conn, parent, "root")
-        regs = list_registrations(conn)
+        conn.register_directory(parent, "root")
+        regs = conn.list_registrations()
         assert len(regs) == 1
         assert regs[0].collection == "root"
         conn.close()
 
     def test_deeply_nested_child_rejected(self, tmp_path: Path) -> None:
         """Grandchild /a/b/c/d is rejected when /a is registered."""
-        conn = open_registry(tmp_path / "r.db")
+        conn = SyncRegistry(tmp_path / "r.db")
         ancestor = tmp_path / "a"
         ancestor.mkdir()
         deep = ancestor / "b" / "c" / "d"
         deep.mkdir(parents=True)
 
-        register_directory(conn, ancestor, "ancestor")
+        conn.register_directory(ancestor, "ancestor")
 
         with pytest.raises(ValueError, match="already covered by parent"):
-            register_directory(conn, deep, "deep")
+            conn.register_directory(deep, "deep")
         conn.close()
 
     def test_grandparent_subsumes_grandchild(self, tmp_path: Path) -> None:
         """Register /a/b/c, then /a — grandchild is removed."""
-        conn = open_registry(tmp_path / "r.db")
+        conn = SyncRegistry(tmp_path / "r.db")
         grandparent = tmp_path / "a"
         grandparent.mkdir()
         grandchild = grandparent / "b" / "c"
         grandchild.mkdir(parents=True)
 
-        register_directory(conn, grandchild, "gc")
-        assert len(list_registrations(conn)) == 1
+        conn.register_directory(grandchild, "gc")
+        assert len(conn.list_registrations()) == 1
 
-        register_directory(conn, grandparent, "gp")
-        regs = list_registrations(conn)
+        conn.register_directory(grandparent, "gp")
+        regs = conn.list_registrations()
         assert len(regs) == 1
         assert regs[0].collection == "gp"
         conn.close()
@@ -269,25 +265,25 @@ class TestRegistrationSubsumption:
         self, tmp_path: Path
     ) -> None:
         """If parent INSERT fails, children are NOT deregistered."""
-        conn = open_registry(tmp_path / "r.db")
+        conn = SyncRegistry(tmp_path / "r.db")
         parent = tmp_path / "parent"
         parent.mkdir()
         child = parent / "child"
         child.mkdir()
 
-        register_directory(conn, child, "child-col")
+        conn.register_directory(child, "child-col")
 
         # Register a different directory with the collection name we'll
         # try to use for the parent — forces a uniqueness violation.
         other = tmp_path / "other"
         other.mkdir()
-        register_directory(conn, other, "taken-name")
+        conn.register_directory(other, "taken-name")
 
         with pytest.raises(ValueError, match="already in use"):
-            register_directory(conn, parent, "taken-name")
+            conn.register_directory(parent, "taken-name")
 
         # Child must still be registered — rollback preserved it.
-        regs = list_registrations(conn)
+        regs = conn.list_registrations()
         collections = {r.collection for r in regs}
         assert "child-col" in collections
         conn.close()

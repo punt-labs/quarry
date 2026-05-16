@@ -33,12 +33,7 @@ from quarry.ingestion.pipeline import (
 from quarry.ingestion.provider import ProviderSelection
 from quarry.logging_config import LoggingConfig
 from quarry.sync import sync_all as engine_sync_all
-from quarry.sync_registry import (
-    deregister_directory as registry_deregister,
-    list_registrations as registry_list,
-    open_registry,
-    register_directory as registry_register,
-)
+from quarry.sync_registry import SyncRegistry
 
 if TYPE_CHECKING:
     from anyio.streams.memory import (
@@ -319,9 +314,9 @@ def list_resources(
         return format_databases(databases, current=_db_name.get() or "default")
     if kind == "registrations":
         settings = _settings()
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         try:
-            regs = registry_list(conn)
+            regs = conn.list_registrations()
         finally:
             conn.close()
         return format_registrations(
@@ -410,9 +405,9 @@ def _do_register(directory: str, collection: str, settings: Settings) -> None:
     """Blocking register — runs in background thread."""
     path = Path(directory).resolve()
     col = collection or path.name
-    conn = open_registry(settings.registry_path)
+    conn = SyncRegistry(settings.registry_path)
     try:
-        registry_register(conn, path, col)
+        conn.register_directory(path, col)
     finally:
         conn.close()
 
@@ -439,9 +434,9 @@ def _do_deregister(
     collection: str, keep_data: bool, settings: Settings, database: Database
 ) -> None:
     """Blocking deregister — runs in background thread."""
-    conn = open_registry(settings.registry_path)
+    conn = SyncRegistry(settings.registry_path)
     try:
-        doc_names = registry_deregister(conn, collection)
+        doc_names = conn.deregister_directory(collection)
     finally:
         conn.close()
 
@@ -501,9 +496,9 @@ def status() -> str:
     cols = database.catalog.list_collections()
 
     if settings.registry_path.exists():
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         try:
-            regs = registry_list(conn)
+            regs = conn.list_registrations()
         finally:
             conn.close()
     else:

@@ -820,10 +820,10 @@ class TestCheckSyncHealth:
         assert "no registrations" in result.message
 
     def test_no_registrations(self, tmp_path: Path) -> None:
-        from quarry.sync_registry import open_registry
+        from quarry.sync_registry import SyncRegistry
 
         registry_path = tmp_path / "registry.db"
-        conn = open_registry(registry_path)
+        conn = SyncRegistry(registry_path)
         conn.close()
         result = _check_sync_health(registry_path)
         assert result.passed is True
@@ -833,10 +833,10 @@ class TestCheckSyncHealth:
         """Collections with recent ingested_at report healthy."""
         from datetime import UTC, datetime
 
-        from quarry.sync_registry import open_registry
+        from quarry.sync_registry import SyncRegistry
 
         registry_path = tmp_path / "registry.db"
-        conn = open_registry(registry_path)
+        conn = SyncRegistry(registry_path)
         # Insert a registration
         now = datetime.now(UTC).isoformat()
         sync_dir = tmp_path / "docs"
@@ -863,10 +863,10 @@ class TestCheckSyncHealth:
         """Collection with ingested_at > 24h ago triggers warning."""
         from datetime import UTC, datetime, timedelta
 
-        from quarry.sync_registry import open_registry
+        from quarry.sync_registry import SyncRegistry
 
         registry_path = tmp_path / "registry.db"
-        conn = open_registry(registry_path)
+        conn = SyncRegistry(registry_path)
         sync_dir = tmp_path / "docs"
         sync_dir.mkdir()
         now = datetime.now(UTC)
@@ -891,10 +891,10 @@ class TestCheckSyncHealth:
         """Registration with no files reports never synced."""
         from datetime import UTC, datetime
 
-        from quarry.sync_registry import open_registry
+        from quarry.sync_registry import SyncRegistry
 
         registry_path = tmp_path / "registry.db"
-        conn = open_registry(registry_path)
+        conn = SyncRegistry(registry_path)
         sync_dir = tmp_path / "docs"
         sync_dir.mkdir()
         now = datetime.now(UTC).isoformat()
@@ -925,10 +925,10 @@ class TestCheckSyncDirectories:
     def test_all_directories_exist(self, tmp_path: Path) -> None:
         from datetime import UTC, datetime
 
-        from quarry.sync_registry import open_registry
+        from quarry.sync_registry import SyncRegistry
 
         registry_path = tmp_path / "registry.db"
-        conn = open_registry(registry_path)
+        conn = SyncRegistry(registry_path)
         sync_dir = tmp_path / "docs"
         sync_dir.mkdir()
         now = datetime.now(UTC).isoformat()
@@ -948,10 +948,10 @@ class TestCheckSyncDirectories:
         """A regular file at the registered path is not a valid sync directory."""
         from datetime import UTC, datetime
 
-        from quarry.sync_registry import open_registry
+        from quarry.sync_registry import SyncRegistry
 
         registry_path = tmp_path / "registry.db"
-        conn = open_registry(registry_path)
+        conn = SyncRegistry(registry_path)
         fake_file = tmp_path / "not-a-dir"
         fake_file.write_text("I am a file")
         now = datetime.now(UTC).isoformat()
@@ -971,10 +971,10 @@ class TestCheckSyncDirectories:
     def test_missing_directory(self, tmp_path: Path) -> None:
         from datetime import UTC, datetime
 
-        from quarry.sync_registry import open_registry
+        from quarry.sync_registry import SyncRegistry
 
         registry_path = tmp_path / "registry.db"
-        conn = open_registry(registry_path)
+        conn = SyncRegistry(registry_path)
         now = datetime.now(UTC).isoformat()
         # Register a directory that doesn't exist
         conn.execute(
@@ -991,10 +991,10 @@ class TestCheckSyncDirectories:
         assert result.required is False
 
     def test_no_registrations(self, tmp_path: Path) -> None:
-        from quarry.sync_registry import open_registry
+        from quarry.sync_registry import SyncRegistry
 
         registry_path = tmp_path / "registry.db"
-        conn = open_registry(registry_path)
+        conn = SyncRegistry(registry_path)
         conn.close()
 
         result = _check_sync_directories(registry_path)

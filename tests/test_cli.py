@@ -550,12 +550,13 @@ class TestStatusCmd:
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
             ),
-            patch("quarry.__main__.open_registry") as mock_open,
-            patch(
-                "quarry.__main__.list_registrations", return_value=[mock_reg, mock_reg]
-            ),
+            patch("quarry.__main__.SyncRegistry") as mock_registry,
         ):
-            mock_open.return_value.close = MagicMock()
+            mock_registry.return_value.list_registrations.return_value = [
+                mock_reg,
+                mock_reg,
+            ]
+            mock_registry.return_value.close = MagicMock()
             result = runner.invoke(app, ["status"])
 
         assert result.exit_code == 0
@@ -1548,12 +1549,11 @@ class TestRegisterCmd:
     def test_register_nonexistent_dir(self):
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.open_registry"),
-            patch(
-                "quarry.__main__.register_directory",
-                side_effect=FileNotFoundError("dir not found"),
-            ),
+            patch("quarry.__main__.SyncRegistry") as mock_registry,
         ):
+            mock_registry.return_value.register_directory.side_effect = (
+                FileNotFoundError("dir not found")
+            )
             result = runner.invoke(app, ["register", "/no/such/dir"])
         assert result.exit_code == 1
 
@@ -1566,12 +1566,11 @@ class TestRegisterCmd:
         settings.registry_path = tmp_path / "registry.db"
         with (
             patch("quarry.__main__._resolved_settings", return_value=settings),
-            patch("quarry.__main__.open_registry"),
-            patch(
-                "quarry.__main__.register_directory",
-                side_effect=IntegrityError("UNIQUE constraint"),
-            ),
+            patch("quarry.__main__.SyncRegistry") as mock_registry,
         ):
+            mock_registry.return_value.register_directory.side_effect = IntegrityError(
+                "UNIQUE constraint"
+            )
             result = runner.invoke(app, ["register", str(d)])
         assert result.exit_code == 1
 
@@ -1591,14 +1590,14 @@ class TestDeregisterCmd:
         settings.registry_path = tmp_path / "registry.db"
         with (
             patch("quarry.__main__._resolved_settings", return_value=settings),
-            patch(
-                "quarry.__main__.get_registration",
-                return_value=_mock_registration("math"),
-            ),
-            patch("quarry.__main__.deregister_directory", return_value=["a.pdf"]),
+            patch("quarry.__main__.SyncRegistry") as mock_registry,
             patch("quarry.db.storage.get_db"),
             patch("quarry.db.chunk_store.ChunkStore.delete_document", return_value=3),
         ):
+            mock_registry.return_value.get_registration.return_value = (
+                _mock_registration("math")
+            )
+            mock_registry.return_value.deregister_directory.return_value = ["a.pdf"]
             result = runner.invoke(app, ["deregister", "math"])
         assert result.exit_code == 0
         assert "Deregistered" in result.output
@@ -1610,14 +1609,14 @@ class TestDeregisterCmd:
         settings.registry_path = tmp_path / "registry.db"
         with (
             patch("quarry.__main__._resolved_settings", return_value=settings),
-            patch(
-                "quarry.__main__.get_registration",
-                return_value=_mock_registration("math"),
-            ),
-            patch("quarry.__main__.deregister_directory", return_value=["a.pdf"]),
+            patch("quarry.__main__.SyncRegistry") as mock_registry,
             patch("quarry.db.storage.get_db") as mock_get_db,
             patch("quarry.db.chunk_store.ChunkStore.delete_document") as mock_del,
         ):
+            mock_registry.return_value.get_registration.return_value = (
+                _mock_registration("math")
+            )
+            mock_registry.return_value.deregister_directory.return_value = ["a.pdf"]
             result = runner.invoke(app, ["deregister", "math", "--keep-data"])
         assert result.exit_code == 0
         mock_get_db.assert_not_called()
@@ -1629,9 +1628,10 @@ class TestDeregisterCmd:
         settings.registry_path = tmp_path / "registry.db"
         with (
             patch("quarry.__main__._resolved_settings", return_value=settings),
-            patch("quarry.__main__.get_registration", return_value=None),
-            patch("quarry.__main__.deregister_directory", return_value=[]),
+            patch("quarry.__main__.SyncRegistry") as mock_registry,
         ):
+            mock_registry.return_value.get_registration.return_value = None
+            mock_registry.return_value.deregister_directory.return_value = []
             result = runner.invoke(app, ["deregister", "empty"])
         assert result.exit_code == 1
         assert "No registration" in result.output
@@ -1641,17 +1641,17 @@ class TestDeregisterCmd:
         settings.registry_path = tmp_path / "registry.db"
         with (
             patch("quarry.__main__._resolved_settings", return_value=settings),
-            patch(
-                "quarry.__main__.get_registration",
-                return_value=_mock_registration("math"),
-            ),
-            patch("quarry.__main__.deregister_directory", return_value=["a.pdf"]),
+            patch("quarry.__main__.SyncRegistry") as mock_registry,
             patch("quarry.db.storage.get_db"),
             patch(
                 "quarry.db.chunk_store.ChunkStore.delete_document",
                 side_effect=RuntimeError("db locked"),
             ),
         ):
+            mock_registry.return_value.get_registration.return_value = (
+                _mock_registration("math")
+            )
+            mock_registry.return_value.deregister_directory.return_value = ["a.pdf"]
             result = runner.invoke(app, ["deregister", "math"])
         assert result.exit_code == 1
 
@@ -3018,12 +3018,12 @@ class TestDeregisterCmdRemote:
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
             patch("quarry.__main__._remote_https_request", return_value=remote_resp),
-            patch("quarry.__main__.deregister_directory") as mock_local,
+            patch("quarry.__main__.SyncRegistry") as mock_registry,
         ):
             result = runner.invoke(app, ["deregister", "c"])
 
         assert result.exit_code == 0
-        mock_local.assert_not_called()
+        mock_registry.return_value.deregister_directory.assert_not_called()
 
     def test_local_fallback_when_no_proxy(self, tmp_path: Path):
         settings = _mock_settings()
@@ -3031,12 +3031,12 @@ class TestDeregisterCmdRemote:
         with (
             patch("quarry.__main__.read_proxy_config", return_value={}),
             patch("quarry.__main__._resolved_settings", return_value=settings),
-            patch(
-                "quarry.__main__.get_registration",
-                return_value=_mock_registration("math"),
-            ),
-            patch("quarry.__main__.deregister_directory", return_value=[]),
+            patch("quarry.__main__.SyncRegistry") as mock_registry,
         ):
+            mock_registry.return_value.get_registration.return_value = (
+                _mock_registration("math")
+            )
+            mock_registry.return_value.deregister_directory.return_value = []
             result = runner.invoke(app, ["deregister", "math"])
 
         assert result.exit_code == 0
@@ -3063,14 +3063,18 @@ class TestDeregisterCmdRemote:
         with (
             patch("quarry.__main__.read_proxy_config", return_value={}),
             patch("quarry.__main__._resolved_settings", return_value=settings),
-            patch(
-                "quarry.__main__.get_registration",
-                return_value=_mock_registration("math"),
-            ),
-            patch("quarry.__main__.deregister_directory", return_value=["a", "b", "c"]),
+            patch("quarry.__main__.SyncRegistry") as mock_registry,
             patch("quarry.db.storage.get_db"),
             patch("quarry.db.chunk_store.ChunkStore.delete_document", return_value=4),
         ):
+            mock_registry.return_value.get_registration.return_value = (
+                _mock_registration("math")
+            )
+            mock_registry.return_value.deregister_directory.return_value = [
+                "a",
+                "b",
+                "c",
+            ]
             local_res = runner.invoke(app, ["--json", "deregister", "math"])
         _reset_globals()
         assert local_res.exit_code == 0
@@ -3179,9 +3183,9 @@ class TestListRegistrationsCmdRemote:
         with (
             patch("quarry.__main__.read_proxy_config", return_value={}),
             patch("quarry.__main__._resolved_settings", return_value=settings),
-            patch("quarry.__main__.open_registry"),
-            patch("quarry.__main__.list_registrations", return_value=local_regs),
+            patch("quarry.__main__.SyncRegistry") as mock_registry,
         ):
+            mock_registry.return_value.list_registrations.return_value = local_regs
             local_res = runner.invoke(app, ["--json", "list", "registrations"])
         _reset_globals()
         assert local_res.exit_code == 0
@@ -3668,14 +3672,14 @@ class TestJsonOutput:
         settings.registry_path = tmp_path / "registry.db"
         with (
             patch("quarry.__main__._resolved_settings", return_value=settings),
-            patch(
-                "quarry.__main__.get_registration",
-                return_value=_mock_registration("math"),
-            ),
-            patch("quarry.__main__.deregister_directory", return_value=["a.pdf"]),
+            patch("quarry.__main__.SyncRegistry") as mock_registry,
             patch("quarry.db.storage.get_db"),
             patch("quarry.db.chunk_store.ChunkStore.delete_document", return_value=4),
         ):
+            mock_registry.return_value.get_registration.return_value = (
+                _mock_registration("math")
+            )
+            mock_registry.return_value.deregister_directory.return_value = ["a.pdf"]
             result = runner.invoke(app, ["--json", "deregister", "math"])
 
         assert result.exit_code == 0

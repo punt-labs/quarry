@@ -112,32 +112,7 @@ class SyncRegistry:
             msg = f"Directory not found: {resolved}"
             raise FileNotFoundError(msg)
 
-        # --- Subsumption check ---
-        existing_regs = self.list_registrations()
-        for reg in existing_regs:
-            reg_path = Path(reg.directory).resolve()
-            if _is_ancestor_of(reg_path, resolved):
-                msg = (
-                    f"directory already covered by parent registration "
-                    f"'{reg.collection}' ({reg.directory})"
-                )
-                raise ValueError(msg)
-        # Deregister children that the new parent subsumes.  Inline the
-        # DELETE SQL instead of calling deregister_directory() so the child
-        # removals and parent INSERT are in a single transaction — if the
-        # INSERT fails, the children are preserved.
-        subsumed: list[str] = []
-        for reg in existing_regs:
-            reg_path = Path(reg.directory).resolve()
-            if _is_ancestor_of(resolved, reg_path):
-                subsumed.append(reg.collection)
-        for child_collection in subsumed:
-            self._conn.execute(
-                "DELETE FROM files WHERE collection = ?", (child_collection,)
-            )
-            self._conn.execute(
-                "DELETE FROM directories WHERE collection = ?", (child_collection,)
-            )
+        self._enforce_subsumption(resolved)
 
         now = datetime.now(UTC).isoformat()
         try:
@@ -147,20 +122,7 @@ class SyncRegistry:
                 (str(resolved), collection, now),
             )
         except sqlite3.IntegrityError:
-            self._conn.rollback()
-            existing = self._conn.execute(
-                "SELECT directory, collection FROM directories "
-                "WHERE directory = ? OR collection = ?",
-                (str(resolved), collection),
-            ).fetchone()
-            if existing and existing[0] == str(resolved):
-                msg = (
-                    f"Directory already registered: {resolved} "
-                    f"(collection '{existing[1]}')"
-                )
-            else:
-                msg = f"Collection name already in use: '{collection}'"
-            raise ValueError(msg) from None
+            self._raise_for_integrity(resolved, collection)
         except sqlite3.Error:
             self._conn.rollback()
             raise
@@ -170,6 +132,49 @@ class SyncRegistry:
             collection=collection,
             registered_at=now,
         )
+
+    def _enforce_subsumption(self, resolved: Path) -> None:
+        """Reject child-of-parent, evict children of new parent."""
+        existing_regs = self.list_registrations()
+        for reg in existing_regs:
+            reg_path = Path(reg.directory).resolve()
+            if _is_ancestor_of(reg_path, resolved):
+                msg = (
+                    f"directory already covered by parent registration "
+                    f"'{reg.collection}' ({reg.directory})"
+                )
+                raise ValueError(msg)
+        # Inline the DELETE SQL instead of calling deregister_directory() so the
+        # child removals and parent INSERT share one transaction — if the INSERT
+        # fails, the children are preserved.
+        subsumed = [
+            reg.collection
+            for reg in existing_regs
+            if _is_ancestor_of(resolved, Path(reg.directory).resolve())
+        ]
+        for child_collection in subsumed:
+            self._conn.execute(
+                "DELETE FROM files WHERE collection = ?", (child_collection,)
+            )
+            self._conn.execute(
+                "DELETE FROM directories WHERE collection = ?", (child_collection,)
+            )
+
+    def _raise_for_integrity(self, resolved: Path, collection: str) -> None:
+        """Translate an INSERT IntegrityError into a precise ValueError."""
+        self._conn.rollback()
+        existing = self._conn.execute(
+            "SELECT directory, collection FROM directories "
+            "WHERE directory = ? OR collection = ?",
+            (str(resolved), collection),
+        ).fetchone()
+        if existing and existing[0] == str(resolved):
+            msg = (
+                f"Directory already registered: {resolved} (collection '{existing[1]}')"
+            )
+        else:
+            msg = f"Collection name already in use: '{collection}'"
+        raise ValueError(msg) from None
 
     def deregister_directory(self, collection: str) -> list[str]:
         """Remove a directory registration and its file records.
@@ -319,77 +324,6 @@ class SyncRegistry:
         if "content_hash" not in file_columns:
             self._conn.execute("ALTER TABLE files ADD COLUMN content_hash TEXT")
             self._conn.commit()
-
-
-# ---------------------------------------------------------------------------
-# Module-level shims — thin delegates to SyncRegistry instance methods.
-# All callers are unchanged; the SyncRegistry is the implementation.
-# ---------------------------------------------------------------------------
-
-
-def open_registry(path: Path) -> SyncRegistry:
-    """Open (or create) the registry database at *path*.
-
-    Creates parent directories, enables WAL mode, and initializes
-    the schema if the tables do not yet exist.  Runs idempotent
-    migrations for columns added after the original schema shipped.
-    """
-    return SyncRegistry(path)
-
-
-def register_directory(
-    conn: SyncRegistry,
-    directory: Path,
-    collection: str,
-) -> DirectoryRegistration:
-    """Register a directory for incremental sync."""
-    return conn.register_directory(directory, collection)
-
-
-def deregister_directory(
-    conn: SyncRegistry,
-    collection: str,
-) -> list[str]:
-    """Remove a directory registration and its file records."""
-    return conn.deregister_directory(collection)
-
-
-def list_registrations(
-    conn: SyncRegistry,
-) -> list[DirectoryRegistration]:
-    """Return all registered directories."""
-    return conn.list_registrations()
-
-
-def get_registration(
-    conn: SyncRegistry,
-    collection: str,
-) -> DirectoryRegistration | None:
-    """Look up a single registration by collection name."""
-    return conn.get_registration(collection)
-
-
-def get_file(conn: SyncRegistry, path: str) -> FileRecord | None:
-    """Look up a file record by absolute path."""
-    return conn.get_file(path)
-
-
-def upsert_file(conn: SyncRegistry, record: FileRecord, *, commit: bool = True) -> None:
-    """Insert or replace a file record."""
-    conn.upsert_file(record, commit=commit)
-
-
-def list_files(
-    conn: SyncRegistry,
-    collection: str,
-) -> list[FileRecord]:
-    """Return all file records for a collection."""
-    return conn.list_files(collection)
-
-
-def delete_file(conn: SyncRegistry, path: str, *, commit: bool = True) -> None:
-    """Delete a single file record by path."""
-    conn.delete_file(path, commit=commit)
 
 
 def _is_ancestor_of(ancestor: Path, descendant: Path) -> bool:

@@ -17,11 +17,7 @@ from quarry.db.chunk_catalog import ChunkCatalog
 from quarry.db.storage import get_db
 from quarry.hooks import extract_transcript_text
 from quarry.ingestion.pipeline import ingest_content
-from quarry.sync_registry import (
-    DirectoryRegistration,
-    list_registrations,
-    open_registry,
-)
+from quarry.sync_registry import DirectoryRegistration, SyncRegistry
 from quarry.types import LanceDB
 
 logger = logging.getLogger(__name__)
@@ -284,9 +280,9 @@ def backfill_sessions(
     limit: int = 0,
 ) -> BackfillStats:
     """Scan Claude Code project transcripts and ingest into quarry."""
-    conn = open_registry(settings.registry_path)
+    conn = SyncRegistry(settings.registry_path)
     try:
-        registrations = list_registrations(conn)
+        registrations = conn.list_registrations()
     finally:
         conn.close()
 

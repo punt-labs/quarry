@@ -243,15 +243,12 @@ def _setup_registry(
     collection: str,
 ) -> None:
     """Create a registry and register a project directory."""
-    from quarry.sync_registry import (
-        open_registry,
-        register_directory,
-    )
+    from quarry.sync_registry import SyncRegistry
 
     Path(project_path).mkdir(parents=True, exist_ok=True)
-    conn = open_registry(registry_path)
+    conn = SyncRegistry(registry_path)
     try:
-        register_directory(conn, Path(project_path), collection)
+        conn.register_directory(Path(project_path), collection)
     finally:
         conn.close()
 
@@ -329,13 +326,13 @@ class TestBackfillSessions:
 
     def test_skip_unregistered_projects(self, tmp_path: Path) -> None:
         from quarry.backfill import backfill_sessions
-        from quarry.sync_registry import open_registry
+        from quarry.sync_registry import SyncRegistry
 
         env = _make_env(tmp_path)
         settings = _make_settings(env["db_path"], env["registry_path"])
 
         # Initialize empty registry (no registrations)
-        conn = open_registry(env["registry_path"])
+        conn = SyncRegistry(env["registry_path"])
         conn.close()
 
         with patch(

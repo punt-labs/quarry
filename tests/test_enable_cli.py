@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 
 from quarry.__main__ import app
 from quarry.config import Settings
-from quarry.sync_registry import open_registry, register_directory
+from quarry.sync_registry import SyncRegistry
 
 runner = CliRunner()
 
@@ -25,7 +25,7 @@ def _patch_for_cli(tmp_path: Path) -> Generator[MagicMock]:
     settings.lancedb_path = tmp_path / "lancedb"
 
     # Ensure registry DB exists.
-    conn = open_registry(settings.registry_path)
+    conn = SyncRegistry(settings.registry_path)
     conn.close()
 
     mock_loaded = MagicMock()
@@ -155,8 +155,8 @@ class TestT3bEnableCLIChildExits1:
         settings.lancedb_path = tmp_path / "lancedb"
 
         # Register parent.
-        conn = open_registry(settings.registry_path)
-        register_directory(conn, parent, "project")
+        conn = SyncRegistry(settings.registry_path)
+        conn.register_directory(parent, "project")
         conn.close()
 
         mock_loaded = MagicMock()

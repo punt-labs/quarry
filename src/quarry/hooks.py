@@ -57,15 +57,13 @@ def _unique_collection_name(
     same leaf name), appends the parent directory name to disambiguate:
     ``leaf-parent``.
     """
-    from quarry.sync_registry import get_registration  # noqa: PLC0415
-
     candidate = directory.name
-    if get_registration(conn, candidate) is None:
+    if conn.get_registration(candidate) is None:
         return candidate
     # Disambiguate with parent directory name.
     parent = directory.parent.name or "root"
     candidate = f"{directory.name}-{parent}"
-    if get_registration(conn, candidate) is None:
+    if conn.get_registration(candidate) is None:
         return candidate
     # Last resort: use the full resolved path hash suffix.
     import hashlib  # noqa: PLC0415
@@ -219,10 +217,8 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
     child registrations, auto-register is skipped to prevent subsumption.
     """
     from quarry.sync_registry import (  # noqa: PLC0415
+        SyncRegistry,
         _is_ancestor_of,  # pyright: ignore[reportPrivateUsage]
-        list_registrations,
-        open_registry,
-        register_directory,
     )
 
     cwd_obj = payload.get("cwd")
@@ -242,7 +238,7 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
         return {}
 
     settings = _resolve_settings()
-    conn = open_registry(settings.registry_path)
+    conn = SyncRegistry(settings.registry_path)
     try:
         # Step 1: Walk up from cwd to find covering registration.
         collection = _collection_for_cwd_conn(conn, str(directory))
@@ -251,7 +247,7 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
             # Step 2: No coverage -- check for descendant registrations
             # before auto-registering.  A parent registration would
             # subsume existing child registrations, causing data loss.
-            registrations = list_registrations(conn)
+            registrations = conn.list_registrations()
             has_children = any(
                 _is_ancestor_of(directory, Path(r.directory))  # pyright: ignore[reportPrivateUsage]
                 for r in registrations
@@ -277,7 +273,7 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
                 }
 
             collection = _unique_collection_name(conn, directory)
-            register_directory(conn, directory, collection)
+            conn.register_directory(directory, collection)
             logger.info(
                 "session-start: auto-registered %s as '%s'",
                 directory,
@@ -329,9 +325,7 @@ def _collection_for_cwd_conn(
 
     Walk up from cwd to find a registered parent or exact match.
     """
-    from quarry.sync_registry import list_registrations  # noqa: PLC0415
-
-    registrations = list_registrations(conn)
+    registrations = conn.list_registrations()
     if not registrations:
         return None
 
@@ -358,10 +352,10 @@ def _collection_for_cwd(cwd: str) -> str | None:
     if not cwd:
         return None
 
-    from quarry.sync_registry import open_registry  # noqa: PLC0415
+    from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
 
     settings = _resolve_settings()
-    conn = open_registry(settings.registry_path)
+    conn = SyncRegistry(settings.registry_path)
     try:
         return _collection_for_cwd_conn(conn, cwd)
     finally:

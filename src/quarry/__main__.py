@@ -55,13 +55,7 @@ from quarry.remote import (
     ws_to_http,
 )
 from quarry.sync import sync_all
-from quarry.sync_registry import (
-    deregister_directory,
-    get_registration,
-    list_registrations,
-    open_registry,
-    register_directory,
-)
+from quarry.sync_registry import SyncRegistry
 from quarry.tls import TLS_DIR, cert_fingerprint
 
 logger = logging.getLogger(__name__)
@@ -899,9 +893,9 @@ def status_cmd() -> None:
     doc_count = sum(c["document_count"] for c in cols)
 
     if settings.registry_path.exists():
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         try:
-            regs = list_registrations(conn)
+            regs = conn.list_registrations()
         finally:
             conn.close()
     else:
@@ -1054,9 +1048,9 @@ def register(
     settings = _resolved_settings()
     resolved = directory.resolve()
     col = collection or resolved.name
-    conn = open_registry(settings.registry_path)
+    conn = SyncRegistry(settings.registry_path)
     try:
-        reg = register_directory(conn, resolved, col)
+        reg = conn.register_directory(resolved, col)
         _emit(
             {"directory": str(reg.directory), "collection": reg.collection},
             f"Registered {reg.directory} as collection {reg.collection!r}",
@@ -1094,10 +1088,10 @@ def deregister(
         return
 
     settings = _resolved_settings()
-    conn = open_registry(settings.registry_path)
+    conn = SyncRegistry(settings.registry_path)
     try:
-        existing = get_registration(conn, collection)
-        doc_names = deregister_directory(conn, collection)
+        existing = conn.get_registration(collection)
+        doc_names = conn.deregister_directory(collection)
     finally:
         conn.close()
 
@@ -1765,9 +1759,9 @@ def list_registrations_cmd() -> None:
         return
 
     settings = _resolved_settings()
-    conn = open_registry(settings.registry_path)
+    conn = SyncRegistry(settings.registry_path)
     try:
-        regs = list_registrations(conn)
+        regs = conn.list_registrations()
     finally:
         conn.close()
 

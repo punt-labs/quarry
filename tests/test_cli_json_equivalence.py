@@ -448,17 +448,14 @@ class TestJsonShapeDeregister:
                 "quarry.__main__._resolved_settings",
                 return_value=settings,
             ),
-            patch(
-                "quarry.__main__.get_registration",
-                return_value=_mock_registration("math"),
-            ),
-            patch(
-                "quarry.__main__.deregister_directory",
-                return_value=["a", "b"],
-            ),
+            patch("quarry.__main__.SyncRegistry") as mock_registry,
             patch("quarry.db.storage.get_db"),
             patch("quarry.db.chunk_store.ChunkStore.delete_document", return_value=3),
         ):
+            mock_registry.return_value.get_registration.return_value = (
+                _mock_registration("math")
+            )
+            mock_registry.return_value.deregister_directory.return_value = ["a", "b"]
             result = runner.invoke(app, ["--json", "deregister", "math"])
         _reset_globals()
         assert result.exit_code == 0

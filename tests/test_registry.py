@@ -5,25 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from quarry.sync_registry import (
-    FileRecord,
-    SyncRegistry,
-    delete_file,
-    deregister_directory,
-    get_file,
-    get_registration,
-    list_files,
-    list_registrations,
-    open_registry,
-    register_directory,
-    upsert_file,
-)
+from quarry.sync_registry import FileRecord, SyncRegistry
 
 
 class TestOpenRegistry:
     def test_creates_tables(self, tmp_path: Path):
         db_path = tmp_path / "registry.db"
-        conn = open_registry(db_path)
+        conn = SyncRegistry(db_path)
         tables = {
             row[0]
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -34,9 +22,9 @@ class TestOpenRegistry:
 
     def test_idempotent(self, tmp_path: Path):
         db_path = tmp_path / "registry.db"
-        conn1 = open_registry(db_path)
+        conn1 = SyncRegistry(db_path)
         conn1.close()
-        conn2 = open_registry(db_path)
+        conn2 = SyncRegistry(db_path)
         tables = {
             row[0]
             for row in conn2.execute(
@@ -49,14 +37,14 @@ class TestOpenRegistry:
 
     def test_wal_mode(self, tmp_path: Path):
         db_path = tmp_path / "registry.db"
-        conn = open_registry(db_path)
+        conn = SyncRegistry(db_path)
         mode = conn.execute("PRAGMA journal_mode").fetchone()
         assert mode is not None
         assert mode[0] == "wal"
         conn.close()
 
     def test_foreign_keys_enforced(self, tmp_path: Path):
-        conn = open_registry(tmp_path / "r.db")
+        conn = SyncRegistry(tmp_path / "r.db")
         with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
             conn.execute(
                 "INSERT INTO files (path, collection, document_name, mtime, size, "
@@ -67,55 +55,55 @@ class TestOpenRegistry:
 
     def test_creates_parent_directories(self, tmp_path: Path):
         db_path = tmp_path / "nested" / "dir" / "registry.db"
-        conn = open_registry(db_path)
+        conn = SyncRegistry(db_path)
         assert db_path.exists()
         conn.close()
 
 
 class TestRegisterDirectory:
     def test_register_adds_row(self, tmp_path: Path):
-        conn = open_registry(tmp_path / "r.db")
+        conn = SyncRegistry(tmp_path / "r.db")
         course_dir = tmp_path / "ml-101"
         course_dir.mkdir()
-        reg = register_directory(conn, course_dir, "ml-101")
+        reg = conn.register_directory(course_dir, "ml-101")
         assert reg.collection == "ml-101"
         assert reg.directory == str(course_dir.resolve())
         assert reg.registered_at != ""
         conn.close()
 
     def test_register_nonexistent_directory(self, tmp_path: Path):
-        conn = open_registry(tmp_path / "r.db")
+        conn = SyncRegistry(tmp_path / "r.db")
         with pytest.raises(FileNotFoundError, match="Directory not found"):
-            register_directory(conn, tmp_path / "nope", "nope")
+            conn.register_directory(tmp_path / "nope", "nope")
         conn.close()
 
     def test_register_duplicate_collection(self, tmp_path: Path):
-        conn = open_registry(tmp_path / "r.db")
+        conn = SyncRegistry(tmp_path / "r.db")
         d1 = tmp_path / "a"
         d1.mkdir()
         d2 = tmp_path / "b"
         d2.mkdir()
-        register_directory(conn, d1, "shared")
+        conn.register_directory(d1, "shared")
         with pytest.raises(ValueError, match="Collection name already in use"):
-            register_directory(conn, d2, "shared")
+            conn.register_directory(d2, "shared")
         conn.close()
 
     def test_register_duplicate_directory(self, tmp_path: Path):
-        conn = open_registry(tmp_path / "r.db")
+        conn = SyncRegistry(tmp_path / "r.db")
         d = tmp_path / "course"
         d.mkdir()
-        register_directory(conn, d, "first")
+        conn.register_directory(d, "first")
         with pytest.raises(ValueError, match="Directory already registered"):
-            register_directory(conn, d, "second")
+            conn.register_directory(d, "second")
         conn.close()
 
 
 class TestDeregisterDirectory:
     def test_deregister_removes_rows(self, tmp_path: Path):
-        conn = open_registry(tmp_path / "r.db")
+        conn = SyncRegistry(tmp_path / "r.db")
         d = tmp_path / "course"
         d.mkdir()
-        register_directory(conn, d, "course")
+        conn.register_directory(d, "course")
         # Insert a fake file record
         conn.execute(
             "INSERT INTO files (path, collection, document_name, mtime, size, "
@@ -131,46 +119,46 @@ class TestDeregisterDirectory:
             ),
         )
         conn.commit()
-        names = deregister_directory(conn, "course")
+        names = conn.deregister_directory("course")
         assert names == ["path.pdf"]
-        assert get_registration(conn, "course") is None
+        assert conn.get_registration("course") is None
         conn.close()
 
     def test_deregister_returns_empty_for_unknown(self, tmp_path: Path):
-        conn = open_registry(tmp_path / "r.db")
-        names = deregister_directory(conn, "unknown")
+        conn = SyncRegistry(tmp_path / "r.db")
+        names = conn.deregister_directory("unknown")
         assert names == []
         conn.close()
 
 
 class TestListAndGetRegistrations:
     def test_list_registrations(self, tmp_path: Path):
-        conn = open_registry(tmp_path / "r.db")
+        conn = SyncRegistry(tmp_path / "r.db")
         d1 = tmp_path / "a"
         d1.mkdir()
         d2 = tmp_path / "b"
         d2.mkdir()
-        register_directory(conn, d1, "alpha")
-        register_directory(conn, d2, "beta")
-        regs = list_registrations(conn)
+        conn.register_directory(d1, "alpha")
+        conn.register_directory(d2, "beta")
+        regs = conn.list_registrations()
         assert len(regs) == 2
         assert regs[0].collection == "alpha"
         assert regs[1].collection == "beta"
         conn.close()
 
     def test_get_registration_found(self, tmp_path: Path):
-        conn = open_registry(tmp_path / "r.db")
+        conn = SyncRegistry(tmp_path / "r.db")
         d = tmp_path / "x"
         d.mkdir()
-        register_directory(conn, d, "x")
-        reg = get_registration(conn, "x")
+        conn.register_directory(d, "x")
+        reg = conn.get_registration("x")
         assert reg is not None
         assert reg.collection == "x"
         conn.close()
 
     def test_get_registration_not_found(self, tmp_path: Path):
-        conn = open_registry(tmp_path / "r.db")
-        assert get_registration(conn, "missing") is None
+        conn = SyncRegistry(tmp_path / "r.db")
+        assert conn.get_registration("missing") is None
         conn.close()
 
 
@@ -179,7 +167,7 @@ class TestFileRecordOperations:
         """Register a directory for *collection* so FK constraints pass."""
         d = tmp_path / f"dir-{collection}"
         d.mkdir(exist_ok=True)
-        register_directory(conn, d, collection)
+        conn.register_directory(d, collection)
 
     def _make_record(
         self,
@@ -196,21 +184,21 @@ class TestFileRecordOperations:
         )
 
     def test_upsert_inserts_new(self, tmp_path: Path):
-        conn = open_registry(tmp_path / "r.db")
+        conn = SyncRegistry(tmp_path / "r.db")
         self._register(conn, tmp_path, "c")
         rec = self._make_record()
-        upsert_file(conn, rec)
-        got = get_file(conn, rec.path)
+        conn.upsert_file(rec)
+        got = conn.get_file(rec.path)
         assert got is not None
         assert got.mtime == 1000.0
         assert got.size == 2048
         conn.close()
 
     def test_upsert_updates_existing(self, tmp_path: Path):
-        conn = open_registry(tmp_path / "r.db")
+        conn = SyncRegistry(tmp_path / "r.db")
         self._register(conn, tmp_path, "c")
         rec = self._make_record()
-        upsert_file(conn, rec)
+        conn.upsert_file(rec)
         updated = FileRecord(
             path=rec.path,
             collection=rec.collection,
@@ -219,38 +207,38 @@ class TestFileRecordOperations:
             size=4096,
             ingested_at="2025-06-02T00:00:00",
         )
-        upsert_file(conn, updated)
-        got = get_file(conn, rec.path)
+        conn.upsert_file(updated)
+        got = conn.get_file(rec.path)
         assert got is not None
         assert got.mtime == 2000.0
         assert got.size == 4096
         conn.close()
 
     def test_get_file_not_found(self, tmp_path: Path):
-        conn = open_registry(tmp_path / "r.db")
-        assert get_file(conn, "/nonexistent") is None
+        conn = SyncRegistry(tmp_path / "r.db")
+        assert conn.get_file("/nonexistent") is None
         conn.close()
 
     def test_list_files_filters_by_collection(self, tmp_path: Path):
-        conn = open_registry(tmp_path / "r.db")
+        conn = SyncRegistry(tmp_path / "r.db")
         self._register(conn, tmp_path, "alpha")
         self._register(conn, tmp_path, "beta")
-        upsert_file(conn, self._make_record("/a/1.pdf", "alpha"))
-        upsert_file(conn, self._make_record("/a/2.pdf", "alpha"))
-        upsert_file(conn, self._make_record("/b/3.pdf", "beta"))
-        alpha_files = list_files(conn, "alpha")
+        conn.upsert_file(self._make_record("/a/1.pdf", "alpha"))
+        conn.upsert_file(self._make_record("/a/2.pdf", "alpha"))
+        conn.upsert_file(self._make_record("/b/3.pdf", "beta"))
+        alpha_files = conn.list_files("alpha")
         assert len(alpha_files) == 2
-        beta_files = list_files(conn, "beta")
+        beta_files = conn.list_files("beta")
         assert len(beta_files) == 1
         conn.close()
 
     def test_delete_file_removes_record(self, tmp_path: Path):
-        conn = open_registry(tmp_path / "r.db")
+        conn = SyncRegistry(tmp_path / "r.db")
         self._register(conn, tmp_path, "c")
         rec = self._make_record()
-        upsert_file(conn, rec)
-        delete_file(conn, rec.path)
-        assert get_file(conn, rec.path) is None
+        conn.upsert_file(rec)
+        conn.delete_file(rec.path)
+        assert conn.get_file(rec.path) is None
         conn.close()
 
 
@@ -258,7 +246,7 @@ class TestContentHashColumn:
     """Coverage for the ``content_hash`` column added in quarry-272m."""
 
     def test_files_table_schema_has_content_hash_column(self, tmp_path: Path):
-        conn = open_registry(tmp_path / "r.db")
+        conn = SyncRegistry(tmp_path / "r.db")
         columns = {row[1] for row in conn.execute("PRAGMA table_info(files)")}
         assert "content_hash" in columns
         conn.close()
@@ -269,7 +257,7 @@ class TestContentHashColumn:
         """Open a v1 registry (no content_hash column) and verify migration.
 
         Builds the original 6-column schema by hand, inserts a real row,
-        then calls ``open_registry`` which must add the column without
+        then constructs ``SyncRegistry`` which must add the column without
         dropping the existing row.
         """
         db_path = tmp_path / "legacy.db"
@@ -299,11 +287,11 @@ class TestContentHashColumn:
         raw.commit()
         raw.close()
 
-        conn = open_registry(db_path)
+        conn = SyncRegistry(db_path)
         columns = {row[1] for row in conn.execute("PRAGMA table_info(files)")}
         assert "content_hash" in columns
 
-        rec = get_file(conn, "/legacy/a.pdf")
+        rec = conn.get_file("/legacy/a.pdf")
         assert rec is not None
         assert rec.path == "/legacy/a.pdf"
         assert rec.content_hash is None
@@ -312,10 +300,10 @@ class TestContentHashColumn:
     def _register(self, conn: SyncRegistry, tmp_path: Path) -> None:
         d = tmp_path / "dir"
         d.mkdir(exist_ok=True)
-        register_directory(conn, d, "c")
+        conn.register_directory(d, "c")
 
     def test_upsert_file_round_trips_content_hash(self, tmp_path: Path):
-        conn = open_registry(tmp_path / "r.db")
+        conn = SyncRegistry(tmp_path / "r.db")
         self._register(conn, tmp_path)
         rec = FileRecord(
             path="/p/a.pdf",
@@ -326,19 +314,19 @@ class TestContentHashColumn:
             ingested_at="2025-01-01",
             content_hash="deadbeef",
         )
-        upsert_file(conn, rec)
+        conn.upsert_file(rec)
 
-        got = get_file(conn, "/p/a.pdf")
+        got = conn.get_file("/p/a.pdf")
         assert got is not None
         assert got.content_hash == "deadbeef"
 
-        listed = list_files(conn, "c")
+        listed = conn.list_files("c")
         assert len(listed) == 1
         assert listed[0].content_hash == "deadbeef"
         conn.close()
 
     def test_upsert_file_allows_none_content_hash(self, tmp_path: Path):
-        conn = open_registry(tmp_path / "r.db")
+        conn = SyncRegistry(tmp_path / "r.db")
         self._register(conn, tmp_path)
         rec = FileRecord(
             path="/p/a.pdf",
@@ -348,9 +336,9 @@ class TestContentHashColumn:
             size=10,
             ingested_at="2025-01-01",
         )
-        upsert_file(conn, rec)
+        conn.upsert_file(rec)
 
-        got = get_file(conn, "/p/a.pdf")
+        got = conn.get_file("/p/a.pdf")
         assert got is not None
         assert got.content_hash is None
         conn.close()

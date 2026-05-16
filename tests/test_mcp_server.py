@@ -142,9 +142,9 @@ class TestStatus:
                 "quarry.db.chunk_catalog.ChunkCatalog.list_collections",
                 return_value=mock_cols,
             ),
-            patch("quarry.mcp_server.open_registry", return_value=mock_conn),
-            patch("quarry.mcp_server.registry_list", return_value=["fake"]),
+            patch("quarry.mcp_server.SyncRegistry", return_value=mock_conn),
         ):
+            mock_conn.list_registrations.return_value = ["fake"]
             result = status()
 
         assert "Documents:" in result
@@ -173,9 +173,9 @@ class TestStatus:
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
             ),
-            patch("quarry.mcp_server.open_registry", return_value=mock_conn),
-            patch("quarry.mcp_server.registry_list", return_value=[]),
+            patch("quarry.mcp_server.SyncRegistry", return_value=mock_conn),
         ):
+            mock_conn.list_registrations.return_value = []
             result = status()
 
         assert "Documents:      0" in result
@@ -185,7 +185,7 @@ class TestStatus:
 
     def test_nonexistent_db_path(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
-        # registry_path doesn't exist → status() skips open_registry
+        # registry_path doesn't exist → status() skips SyncRegistry
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.db.storage.get_db"),
@@ -663,15 +663,15 @@ class TestSyncAllRegistrations:
 
 class TestListRegistrations:
     def test_returns_registrations(self, tmp_path: Path) -> None:
-        from quarry.sync_registry import open_registry, register_directory as reg_dir
+        from quarry.sync_registry import SyncRegistry
 
         settings = _settings(tmp_path)
         d = tmp_path / "course"
         d.mkdir()
         # Register directly (not via fire-and-forget MCP tool)
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         try:
-            reg_dir(conn, d, "course")
+            conn.register_directory(d, "course")
         finally:
             conn.close()
         with patch("quarry.mcp_server._settings", return_value=settings):

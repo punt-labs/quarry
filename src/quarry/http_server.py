@@ -45,14 +45,7 @@ from quarry.db import Database
 from quarry.db.storage import dir_size_bytes, format_size
 from quarry.ingestion.backends import get_embedding_backend
 from quarry.ingestion.provider import ProviderSelection
-from quarry.sync_registry import (
-    DirectoryRegistration,
-    deregister_directory,
-    get_registration,
-    list_registrations,
-    open_registry,
-    register_directory,
-)
+from quarry.sync_registry import DirectoryRegistration, SyncRegistry
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
@@ -972,9 +965,9 @@ async def _registrations_route(request: Request) -> JSONResponse:
 
 def _list_registrations_sync(registry_path: Path) -> list[DirectoryRegistration]:
     """Open registry, list, close — all in one thread."""
-    conn = open_registry(registry_path)
+    conn = SyncRegistry(registry_path)
     try:
-        return list_registrations(conn)
+        return conn.list_registrations()
     finally:
         conn.close()
 
@@ -1048,9 +1041,9 @@ def _register_sync(
     open/use/close lifecycle must stay inside the worker thread handling
     the request.
     """
-    conn = open_registry(registry_path)
+    conn = SyncRegistry(registry_path)
     try:
-        return register_directory(conn, resolved, collection)
+        return conn.register_directory(resolved, collection)
     finally:
         conn.close()
 
@@ -1138,12 +1131,12 @@ async def _run_register_task(
 
 def _deregister_sync(registry_path: Path, collection: str) -> tuple[bool, list[str]]:
     """Open registry, deregister, close — all in one thread."""
-    conn = open_registry(registry_path)
+    conn = SyncRegistry(registry_path)
     try:
-        existing = get_registration(conn, collection)
+        existing = conn.get_registration(collection)
         if existing is None:
             return False, []
-        removed_docs = deregister_directory(conn, collection)
+        removed_docs = conn.deregister_directory(collection)
         return True, removed_docs
     finally:
         conn.close()
@@ -1244,9 +1237,9 @@ def _status_route(request: Request) -> JSONResponse:
     doc_count = sum(c["document_count"] for c in cols)
 
     if settings.registry_path.exists():
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         try:
-            regs = list_registrations(conn)
+            regs = conn.list_registrations()
         finally:
             conn.close()
     else:

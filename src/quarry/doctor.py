@@ -296,7 +296,7 @@ def _sync_age_result(count: int, oldest_age: float) -> CheckResult:
 
 def _check_sync_health(registry_path: Path) -> CheckResult:
     """Check sync recency across all registered collections."""
-    from quarry.sync_registry import list_registrations, open_registry  # noqa: PLC0415
+    from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
 
     if not registry_path.exists():
         return CheckResult(
@@ -307,8 +307,8 @@ def _check_sync_health(registry_path: Path) -> CheckResult:
         )
     conn = None
     try:
-        conn = open_registry(registry_path)
-        regs = list_registrations(conn)
+        conn = SyncRegistry(registry_path)
+        regs = conn.list_registrations()
         if not regs:
             return CheckResult(
                 name="Sync",
@@ -361,7 +361,7 @@ def _check_sync_health(registry_path: Path) -> CheckResult:
 
 def _check_sync_directories(registry_path: Path) -> CheckResult:
     """Verify registered sync directories exist on disk."""
-    from quarry.sync_registry import list_registrations, open_registry  # noqa: PLC0415
+    from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
 
     if not registry_path.exists():
         return CheckResult(
@@ -372,8 +372,8 @@ def _check_sync_directories(registry_path: Path) -> CheckResult:
         )
     conn = None
     try:
-        conn = open_registry(registry_path)
-        regs = list_registrations(conn)
+        conn = SyncRegistry(registry_path)
+        regs = conn.list_registrations()
         if not regs:
             return CheckResult(
                 name="Sync directories",
@@ -443,7 +443,7 @@ def _check_orphaned_captures(
     """Report captures collections whose base has no registration."""
     from quarry.db.chunk_catalog import ChunkCatalog  # noqa: PLC0415
     from quarry.db.storage import get_db  # noqa: PLC0415
-    from quarry.sync_registry import list_registrations, open_registry  # noqa: PLC0415
+    from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
 
     if not db_path.exists() or not registry_path.exists():
         return CheckResult(
@@ -457,9 +457,9 @@ def _check_orphaned_captures(
     cols = ChunkCatalog(db).list_collections()
     col_names = {c["collection"] for c in cols}
 
-    conn = open_registry(registry_path)
+    conn = SyncRegistry(registry_path)
     try:
-        regs = list_registrations(conn)
+        regs = conn.list_registrations()
     finally:
         conn.close()
 
