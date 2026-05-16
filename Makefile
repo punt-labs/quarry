@@ -11,7 +11,7 @@ lint: lint-docs ## Lint and format check
 	uv run ruff format --check .
 
 lint-docs: ## Lint markdown files (matches CI docs job)
-	npx markdownlint-cli2 CLAUDE.md "docs/**/*.md"
+	npx markdownlint-cli2 "**/*.md"
 
 type: ## Type check with mypy and pyright
 	uv run mypy src/ tests/

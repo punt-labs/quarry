@@ -875,7 +875,7 @@ DES-021 added "no split horizon" for the remote case (logged-in users route ever
 
 **One engine, many interfaces.**
 
-```
+```text
                               ┌─────────────────────────┐
    CLI ──────────────────────►│                         │
    MCP (stdio via mcp-proxy)  │  quarry serve (daemon)  │

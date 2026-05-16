@@ -1,5 +1,12 @@
 {
-  "ignores": [".beads/", ".claude/", ".punt-labs/ethos/agents/", ".venv/"],
+  "ignores": [
+    ".beads/",
+    ".claude/",
+    ".punt-labs/ethos/agents/",
+    ".punt-labs/quarry/captures/",
+    ".venv/",
+    ".tmp/"
+  ],
   "overrides": [
     {
       "files": ["tests/fixtures/*.md"],
