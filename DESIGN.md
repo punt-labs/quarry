@@ -838,3 +838,129 @@ The encoded project dir replaces `/` with `-` and preserves the leading dash (e.
 1. Users who want full history should set `cleanupPeriodDays` to a high value (e.g., 365) in `~/.claude/settings.json` before sessions are lost.
 2. `quarry enable` should advise users about the cleanup window.
 3. Subagent transcripts (`subagents/agent-<id>.jsonl`) are not currently ingested by either mechanism — they are a future opportunity but not the primary knowledge source.
+
+---
+
+## DES-031: Engine-First Architecture with Thin Interfaces
+
+**Date:** 2026-05-16
+**Status:** PROPOSED
+**Topic:** Separation of compute/storage engine from access interfaces (CLI, MCP, Library)
+**Qualifies:** DES-021 (Remote CLI Routing — No Split Horizon), Principle P1 (Library-first) in `docs/architecture.tex`
+
+### Context
+
+Quarry has two independent axes that have been conflated in the as-built code:
+
+1. **Interface** — how a caller talks to quarry: CLI commands, MCP tool calls, Python library imports.
+2. **Engine** — what does the work: ONNX embedding model, LanceDB I/O, hybrid search, ingestion pipeline, sync registry.
+
+The current architecture duplicates the engine into every interface. A single host can hold five engine instances simultaneously:
+
+| Interface | Loads ONNX? | Opens LanceDB? | Runs pipeline? |
+|-----------|------------|----------------|----------------|
+| CLI (local mode) | yes | yes | yes |
+| CLI (remote mode) | no | no | thin HTTPS client |
+| MCP stdio (`mcp_server.py`) | yes | yes | yes |
+| MCP WebSocket (via daemon) | no | no | thin client |
+| HTTP server (`http_server.py`) | yes | yes | yes |
+| Library import (`from quarry import …`) | yes | yes | yes |
+| Daemon (`quarry serve`) | yes (once) | yes | yes |
+
+P1 ("Library-first") in `docs/architecture.tex` describes this as-built reality, not the target. It was correct for the original CLI-only design from 2024. With a supervised daemon now installed on every host (`launchd` on macOS, `systemd` on Linux), the principle is stale: "the library does the work" is true only because the library is the engine.
+
+DES-021 added "no split horizon" for the remote case (logged-in users route every data command to the remote daemon). DES-031 completes that pattern: the daemon is always the engine, on every host, for every interface.
+
+### Design
+
+**One engine, many interfaces.**
+
+```
+                              ┌─────────────────────────┐
+   CLI ──────────────────────►│                         │
+   MCP (stdio via mcp-proxy)  │  quarry serve (daemon)  │
+   MCP (WebSocket)            │      THE ENGINE         │
+   Library (QuarryClient)     │                         │
+                              └─────────────────────────┘
+```
+
+The daemon (`quarry serve`) owns the ONNX model, LanceDB, pipeline, sync registry. Every data operation runs there. Interfaces are thin clients.
+
+**Interface responsibilities:**
+
+- **CLI** — Typer command parser → HTTPS request → response renderer. No `lancedb`, `onnxruntime`, `pyarrow`, or pipeline imports.
+- **MCP** — `mcp-proxy` (Go binary) bridges stdio ↔ daemon WebSocket. The Python `mcp_server.py` stdio path is dropped; the WebSocket `/mcp` endpoint on the daemon stays.
+- **Library** — `QuarryClient` Python class makes HTTPS calls to the daemon. No engine imports. Used by embedded callers (QuarryMenuBar, scripts, tests-via-fixture).
+
+**Local-only commands (genuinely host-local, no engine dependency):**
+
+| Command | Purpose |
+|---------|---------|
+| `serve` | Is the engine |
+| `install` | Bootstrap: set up engine, daemon, TLS, plugin |
+| `login` / `logout` | Configure which daemon to talk to |
+| `doctor` | Diagnose host environment (model file, daemon health, MCP config) |
+| `uninstall` | Tear down install |
+| `version` | Static metadata |
+
+**Everything else is a thin client:** `find`, `ingest`, `remember`, `delete`, `show`, `status`, `list`, `sync`, `register`, `deregister`, `use`, `optimize`, `backfill-sessions`.
+
+**Shared request/response schemas.** Pydantic models for every endpoint, imported by both the CLI client and the HTTP server handler. Param drift becomes a type error at the import site, not a silent omission.
+
+### Why This Design
+
+1. **Eliminates Bug Class 3 by construction.** CLAUDE.md documents remote/local divergence as the recurring failure mode through 10 TLS review rounds: HTTP server forgetting params the CLI sends, response JSON dropping fields the CLI renders. With one path, the class disappears.
+
+2. **The daemon already exists, is supervised, and is the universal access point on every install.** Five engine copies on one host is not a feature; it is unmanaged duplication that DES-021 already started removing.
+
+3. **Matches the standard pattern for systems with shared state.** Docker has `dockerd` + thin `docker` CLI. Postgres has the server + `psql` client. Redis has `redis-server` + `redis-cli`. The "library" in all three is a client API, not the engine. Quarry's shared state (the LanceDB corpus, the loaded model) makes it the same shape.
+
+4. **Reduces `__main__.py` substantially.** Every data command currently has a 30–60 line `if proxy_config: ... else: ...` dispatch. Thin-client form is ~5 lines per command. The Phase 4–7 OO refactoring on `oo/phase-4-services` becomes easier, not harder, because most of the file goes away.
+
+5. **Aligns with adopted principles.** P3 ("One daemon, many clients") and DES-021 ("No split horizon") both point in this direction. DES-031 names the target and finishes the transition.
+
+### Alternatives Considered
+
+1. **Keep dual paths, fix divergence with stricter testing.** Rejected. The testing rules in CLAUDE.md (CLI/HTTP equivalence tests for every param) are valuable but reactive — they catch drift after it happens. The drift keeps happening because the structure permits it. Eliminating the structure eliminates the class.
+
+2. **Drop the daemon, use direct library access everywhere (CLI-only).** Rejected. P3 (shared ONNX model across MCP sessions) requires a daemon. Five Claude Code tabs cannot each load 200 MB of model into RAM.
+
+3. **Hybrid: data ops daemon-mediated, admin ops local.** This is the design (see "Local-only commands" above). The split is principled — anything that touches documents goes through the engine; anything that configures the host stays local. The rejected version is per-command discretion ("`status` is cheap, run it locally") which is exactly the split horizon DES-021 forbade.
+
+4. **Make the library API the canonical surface and add a thin daemon for MCP.** Rejected. This is the current architecture inverted; it preserves "library = engine" and leaves every CLI invocation responsible for model loading and DB locking. The daemon already supervises both; making it canonical removes the duplicate engine code, not the daemon.
+
+### Scope and Sequencing
+
+Six PR-sized slices, each independently revertable. Implementation order matters because the HTTP API must be complete before any client can drop its local engine path.
+
+| PR | Scope |
+|----|-------|
+| 1  | DES-031 ADR + `docs/architecture.tex` revisions (P1, §Daemon Model, §CLI Independence, §Deployment, concurrency matrix) + README diagram |
+| 2  | HTTP API completeness: every CLI param has an endpoint; shared Pydantic schemas for requests and responses |
+| 3  | CLI refactor: every data command becomes a thin client; `__main__.py` dispatch removed |
+| 4  | `mcp_server.py` stdio path: collapse to thin proxy or drop in favor of `mcp-proxy` |
+| 5  | Library API: introduce `QuarryClient` (HTTPS client class); embedded callers migrate |
+| 6  | Install/test fixtures: install verifies daemon is up before exiting 0; pytest fixture starts an in-process daemon per session |
+
+PR 1 is doc-only and sets the contract. PRs 2–5 are implementation slices that can land in dependency order. PR 6 closes the loop on bootstrap and tests.
+
+### Risks and Mitigations
+
+| Risk | Mitigation |
+|------|-----------|
+| Test suite slows down from per-test daemon startup | Session-scoped pytest fixture: one daemon per test run, not per test |
+| Install bootstrap fails if daemon doesn't start | Install script verifies `quarry serve` is listening via `/health` before exiting 0 (already in scope for Phase 4.8–4.12 OO refactor) |
+| First-install commands need an engine before daemon exists | Only `install`, `serve`, `doctor`, `login`, `version` run pre-daemon; they don't need engine access |
+| Embedded callers (QuarryMenuBar) break | `QuarryClient` shipped in PR 5 before old library API is removed; deprecation cycle of one release |
+| Fly.io container ops that run without a daemon | Container entrypoint always starts the daemon; ops invoke the CLI which talks to the local daemon — same pattern as developer machines |
+
+### Documents Made Misleading by This Change
+
+- `docs/architecture.tex` §Overview P1 ("Library-first")
+- `docs/architecture.tex` §Daemon Model → §CLI Independence ("The CLI does not use the daemon")
+- `docs/architecture.tex` §Deployment Topology diagrams
+- `docs/architecture.tex` §Operation Concurrency Model (the "CLI (local)" column collapses)
+- `README.md` "How it works" section
+- `prfaq.tex` risk register (Bug Class 3 reduction)
+
+All revisions ship in PR 1.
