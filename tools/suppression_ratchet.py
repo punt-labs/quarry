@@ -159,12 +159,20 @@ class PerFileIgnoresCounter:
         return dict(self._breakdown)
 
     def _parse(self, pyproject_path: Path) -> None:
-        """Parse pyproject.toml and count per-file-ignores rule codes."""
+        """Parse pyproject.toml and count per-file-ignores rule codes.
+
+        A missing pyproject.toml is treated as zero ignores.  A malformed
+        TOML file raises ``ValueError`` — silent miscounts would let
+        suppressions slip past the ratchet.
+        """
         if not pyproject_path.exists():
             return
         try:
             data = tomllib.loads(pyproject_path.read_text())
-        except (tomllib.TOMLDecodeError, OSError):
+        except tomllib.TOMLDecodeError as exc:
+            msg = f"cannot parse {pyproject_path}: {exc}"
+            raise ValueError(msg) from exc
+        except OSError:
             return
         ignores = (
             data.get("tool", {})
