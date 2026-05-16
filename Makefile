@@ -17,7 +17,7 @@ type: ## Type check with mypy and pyright
 	uv run mypy src/ tests/
 	uv run pyright src/ tests/
 
-check: lint type test check-oo ## Run all quality gates
+check: lint type test check-oo check-suppressions ## Run all quality gates
 
 check-oo: ## OO ratchet — must improve over baseline, never regress
 	uv run python tools/oo_score.py src/quarry/ --check

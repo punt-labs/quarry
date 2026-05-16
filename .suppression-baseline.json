@@ -1,7 +1,7 @@
 {
-  "total": 267,
+  "total": 263,
   "by_category": {
-    "noqa": 223,
+    "noqa": 219,
     "type_ignore": 10,
     "pylint_disable": 0,
     "pyright_ignore": 12,
@@ -13,7 +13,7 @@
       "type_ignore": 2
     },
     "src/quarry/_hook_entry.py": {
-      "noqa": 11
+      "noqa": 10
     },
     "src/quarry/backfill.py": {
       "noqa": 2
@@ -40,7 +40,7 @@
       "noqa": 4
     },
     "src/quarry/enable.py": {
-      "noqa": 11,
+      "noqa": 10,
       "pyright_ignore": 7
     },
     "src/quarry/extractors/image_extractor.py": {
@@ -57,7 +57,7 @@
       "noqa": 1
     },
     "src/quarry/hooks.py": {
-      "noqa": 23,
+      "noqa": 21,
       "pyright_ignore": 3
     },
     "src/quarry/http_server.py": {
@@ -96,5 +96,5 @@
       "type_ignore": 1
     }
   },
-  "updated_at": "2026-05-14T22:08:10Z"
+  "updated_at": "2026-05-16T22:36:11Z"
 }
