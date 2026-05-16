@@ -25,15 +25,7 @@ import pathspec
 from quarry.config import Settings
 from quarry.db import ChunkStore, TableOptimizer
 from quarry.ingestion.pipeline import SUPPORTED_EXTENSIONS, prepare_document
-from quarry.sync_registry import (
-    FileRecord,
-    SyncRegistry,
-    delete_file,
-    list_files,
-    list_registrations,
-    open_registry,
-    upsert_file,
-)
+from quarry.sync_registry import FileRecord, SyncRegistry
 from quarry.types import LanceDB
 
 logger = logging.getLogger(__name__)
@@ -225,7 +217,7 @@ def compute_sync_plan(
     disk_paths = {str(p) for p in disk_files}
 
     # Single query: load all known files for this collection into a dict
-    known_files = {r.path: r for r in list_files(conn, collection)}
+    known_files = {r.path: r for r in conn.list_files(collection)}
 
     to_ingest: list[Path] = []
     to_refresh: list[tuple[Path, str]] = []
@@ -355,8 +347,7 @@ def _ingest_files(
             document_name = str(fp.relative_to(resolved))
             try:
                 elapsed, stat, content_hash, prepared = future.result()
-                upsert_file(
-                    conn,
+                conn.upsert_file(
                     FileRecord(
                         path=str(fp),
                         collection=collection,
@@ -418,8 +409,7 @@ def _refresh_files(
                 logger.info("File changed since plan, skipping refresh: %s", fp)
                 continue
             document_name = str(fp.relative_to(resolved))
-            upsert_file(
-                conn,
+            conn.upsert_file(
                 FileRecord(
                     path=str(fp),
                     collection=collection,
@@ -455,7 +445,7 @@ def _delete_documents(
     t_delete_start = time.perf_counter()
     # Pre-build lookup for O(1) path resolution during deletes
     files_by_document_name: dict[str, list[FileRecord]] = {}
-    for rec in list_files(conn, collection):
+    for rec in conn.list_files(collection):
         files_by_document_name.setdefault(rec.document_name, []).append(rec)
 
     deleted = 0
@@ -467,7 +457,7 @@ def _delete_documents(
                 document_name, collection=collection, count=False
             )
             for rec in files_by_document_name.get(document_name, []):
-                delete_file(conn, rec.path, commit=False)
+                conn.delete_file(rec.path, commit=False)
             deleted += 1
             progress(f"[{collection}] Deleted {document_name}")
         except _RECOVERABLE as exc:
@@ -624,9 +614,9 @@ def sync_all(
     then optimizes the LanceDB table.
     """
     t_all_start = time.perf_counter()
-    conn = open_registry(settings.registry_path)
+    conn = SyncRegistry(settings.registry_path)
     try:
-        registrations = list_registrations(conn)
+        registrations = conn.list_registrations()
         results: dict[str, SyncResult] = {}
         for reg in registrations:
             results[reg.collection] = sync_collection(

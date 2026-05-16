@@ -19,15 +19,7 @@ from quarry.sync import (
     sync_all,
     sync_collection,
 )
-from quarry.sync_registry import (
-    FileRecord,
-    SyncRegistry,
-    get_file,
-    list_files,
-    open_registry,
-    register_directory,
-    upsert_file,
-)
+from quarry.sync_registry import FileRecord, SyncRegistry
 
 # ---------------------------------------------------------------------------
 # SyncConfig
@@ -343,10 +335,10 @@ class TestComputeSyncPlan:
 
     def _setup(self, tmp_path: Path) -> tuple[SyncRegistry, Path]:
         """Create registry, docs directory, and register collection 'col'."""
-        conn = open_registry(tmp_path / "r.db")
+        conn = SyncRegistry(tmp_path / "r.db")
         d = tmp_path / "docs"
         d.mkdir()
-        register_directory(conn, d, "col")
+        conn.register_directory(d, "col")
         return conn, d
 
     def test_new_file_detected(self, tmp_path: Path):
@@ -364,8 +356,7 @@ class TestComputeSyncPlan:
         f = d / "existing.pdf"
         f.write_bytes(b"data")
         stat = f.stat()
-        upsert_file(
-            conn,
+        conn.upsert_file(
             FileRecord(
                 path=str(f.resolve()),
                 collection="col",
@@ -384,8 +375,7 @@ class TestComputeSyncPlan:
         conn, d = self._setup(tmp_path)
         f = d / "changed.pdf"
         f.write_bytes(b"old")
-        upsert_file(
-            conn,
+        conn.upsert_file(
             FileRecord(
                 path=str(f.resolve()),
                 collection="col",
@@ -405,8 +395,7 @@ class TestComputeSyncPlan:
 
     def test_deleted_file_detected(self, tmp_path: Path):
         conn, d = self._setup(tmp_path)
-        upsert_file(
-            conn,
+        conn.upsert_file(
             FileRecord(
                 path=str((d / "gone.pdf").resolve()),
                 collection="col",
@@ -426,8 +415,7 @@ class TestComputeSyncPlan:
         # Unchanged file
         unch = d / "unchanged.pdf"
         unch.write_bytes(b"same")
-        upsert_file(
-            conn,
+        conn.upsert_file(
             FileRecord(
                 path=str(unch.resolve()),
                 collection="col",
@@ -442,8 +430,7 @@ class TestComputeSyncPlan:
         (d / "brand-new.txt").write_bytes(b"hello")
 
         # Deleted file (in registry but not on disk)
-        upsert_file(
-            conn,
+        conn.upsert_file(
             FileRecord(
                 path=str((d / "removed.pdf").resolve()),
                 collection="col",
@@ -470,8 +457,7 @@ class TestComputeSyncPlan:
     ) -> None:
         """Insert a FileRecord for *f* matching disk state, with *content_hash*."""
         stat = f.stat()
-        upsert_file(
-            conn,
+        conn.upsert_file(
             FileRecord(
                 path=str(f.resolve()),
                 collection="col",
@@ -588,10 +574,10 @@ def _mock_settings(tmp_path: Path) -> MagicMock:
 class TestSyncCollection:
     def _setup(self, tmp_path: Path) -> tuple[SyncRegistry, Path]:
         """Create registry, docs directory, and register collection 'col'."""
-        conn = open_registry(tmp_path / "r.db")
+        conn = SyncRegistry(tmp_path / "r.db")
         d = tmp_path / "docs"
         d.mkdir()
-        register_directory(conn, d, "col")
+        conn.register_directory(d, "col")
         return conn, d
 
     def test_ingests_new_files(self, tmp_path: Path):
@@ -615,7 +601,7 @@ class TestSyncCollection:
         assert result.skipped == 0
         mock_batch.assert_called_once()
         # Verify file record was created
-        rec = get_file(conn, str((d / "a.txt").resolve()))
+        rec = conn.get_file(str((d / "a.txt").resolve()))
         assert rec is not None
         assert rec.collection == "col"
         conn.close()
@@ -652,8 +638,7 @@ class TestSyncCollection:
     def test_deletes_removed_files(self, tmp_path: Path):
         conn, d = self._setup(tmp_path)
         # Register a file that no longer exists on disk
-        upsert_file(
-            conn,
+        conn.upsert_file(
             FileRecord(
                 path=str((d / "gone.txt").resolve()),
                 collection="col",
@@ -696,7 +681,7 @@ class TestSyncCollection:
         ):
             sync_collection(d, "col", db, settings, conn, max_workers=1)
 
-        files = list_files(conn, "col")
+        files = conn.list_files("col")
         assert len(files) == 1
         assert files[0].document_name == "new.txt"
         conn.close()
@@ -732,7 +717,7 @@ class TestSyncCollection:
         assert kwargs["document_name"] == "pkg/mod.py"
 
         # The registry must store the same relative path
-        files = list_files(conn, "col")
+        files = conn.list_files("col")
         assert len(files) == 1
         assert files[0].document_name == "pkg/mod.py"
         conn.close()
@@ -743,10 +728,10 @@ class TestSyncCollectionDurabilityAndRefresh:
 
     def _setup(self, tmp_path: Path) -> tuple[SyncRegistry, Path, Path]:
         registry_path = tmp_path / "r.db"
-        conn = open_registry(registry_path)
+        conn = SyncRegistry(registry_path)
         d = tmp_path / "docs"
         d.mkdir()
-        register_directory(conn, d, "col")
+        conn.register_directory(d, "col")
         return conn, d, registry_path
 
     def test_sync_collection_crash_before_batch_insert_leaves_no_registry_rows(
@@ -833,7 +818,7 @@ class TestSyncCollectionDurabilityAndRefresh:
         assert mock_prepare.call_count == 3
 
         # Capture post-ingest mtimes from the registry.
-        pre_refresh = {r.path: r.mtime for r in list_files(conn, "col")}
+        pre_refresh = {r.path: r.mtime for r in conn.list_files("col")}
 
         # Bump every file's mtime without touching content.
         for name in ("a.txt", "b.txt", "c.txt"):
@@ -854,7 +839,7 @@ class TestSyncCollectionDurabilityAndRefresh:
         assert second.skipped == 0
         assert mock_prepare.call_count == 0
 
-        post_refresh = {r.path: r.mtime for r in list_files(conn, "col")}
+        post_refresh = {r.path: r.mtime for r in conn.list_files("col")}
         assert set(pre_refresh) == set(post_refresh)
         for path, old_mtime in pre_refresh.items():
             assert post_refresh[path] > old_mtime, (
@@ -882,7 +867,7 @@ class TestSyncCollectionDurabilityAndRefresh:
             first = sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert first.ingested == 2
 
-        pre_mtimes = {r.path: r.mtime for r in list_files(conn, "col")}
+        pre_mtimes = {r.path: r.mtime for r in conn.list_files("col")}
 
         # Bump mtimes without changing content — triggers refresh path.
         for name in ("a.txt", "b.txt"):
@@ -890,12 +875,12 @@ class TestSyncCollectionDurabilityAndRefresh:
             stat = f.stat()
             os.utime(f, (stat.st_atime, stat.st_mtime + 200))
 
-        # Make upsert_file raise OSError on the second call only.
+        # Make SyncRegistry.upsert_file raise OSError on the second call only.
         call_count = 0
-        _real_upsert = upsert_file
+        _real_upsert = SyncRegistry.upsert_file
 
         def _failing_upsert(
-            conn_arg: SyncRegistry,
+            self: SyncRegistry,
             record: FileRecord,
             *,
             commit: bool = True,
@@ -904,9 +889,9 @@ class TestSyncCollectionDurabilityAndRefresh:
             call_count += 1
             if call_count == 2:
                 raise OSError("disk full")
-            _real_upsert(conn_arg, record, commit=commit)
+            _real_upsert(self, record, commit=commit)
 
-        monkeypatch.setattr("quarry.sync.upsert_file", _failing_upsert)
+        monkeypatch.setattr(SyncRegistry, "upsert_file", _failing_upsert)
 
         with (
             patch("quarry.sync.prepare_document", side_effect=_fake_prepare),
@@ -920,8 +905,8 @@ class TestSyncCollectionDurabilityAndRefresh:
         assert "disk full" in second.errors[0]
 
         # Verify via a fresh connection: only the first file's mtime advanced.
-        verify = open_registry(registry_path)
-        post_mtimes = {r.path: r.mtime for r in list_files(verify, "col")}
+        verify = SyncRegistry(registry_path)
+        post_mtimes = {r.path: r.mtime for r in verify.list_files("col")}
         verify.close()
 
         updated = [p for p, m in post_mtimes.items() if m != pre_mtimes[p]]
@@ -934,15 +919,15 @@ class TestSyncCollectionDurabilityAndRefresh:
 class TestSyncAll:
     def test_syncs_all_registered(self, tmp_path: Path):
         settings = _mock_settings(tmp_path)
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         d1 = tmp_path / "a"
         d1.mkdir()
         (d1 / "one.txt").write_text("hello")
         d2 = tmp_path / "b"
         d2.mkdir()
         (d2 / "two.txt").write_text("world")
-        register_directory(conn, d1, "alpha")
-        register_directory(conn, d2, "beta")
+        conn.register_directory(d1, "alpha")
+        conn.register_directory(d2, "beta")
         conn.close()
 
         db = MagicMock()
