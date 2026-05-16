@@ -1623,7 +1623,13 @@ class TestDeregisterCmd:
         mock_del.assert_not_called()
 
     def test_deregister_unregistered_collection_exits_1(self, tmp_path: Path):
-        """Missing collection must fail with exit 1, matching remote 404 path."""
+        """Missing collection must fail with exit 1, matching remote 404 path.
+
+        The guard must run BEFORE deregister_directory is called — the
+        check-then-act order matters even though deregister_directory is a
+        no-op on missing collections (no data is lost, but the order signals
+        intent to other readers of this code).
+        """
         settings = _mock_settings()
         settings.registry_path = tmp_path / "registry.db"
         with (
@@ -1635,6 +1641,7 @@ class TestDeregisterCmd:
             result = runner.invoke(app, ["deregister", "empty"])
         assert result.exit_code == 1
         assert "No registration" in result.output
+        mock_registry.return_value.deregister_directory.assert_not_called()
 
     def test_deregister_delete_error(self, tmp_path: Path):
         settings = _mock_settings()

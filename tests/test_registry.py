@@ -97,6 +97,9 @@ class TestRegisterDirectory:
             conn.register_directory(d, "second")
         conn.close()
 
+    # Subsumption (parent/child) and atomicity coverage lives in
+    # tests/test_sync_concurrency.py::TestRegistrationSubsumption.
+
 
 class TestDeregisterDirectory:
     def test_deregister_removes_rows(self, tmp_path: Path):

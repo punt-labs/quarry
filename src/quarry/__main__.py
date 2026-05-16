@@ -1091,13 +1091,12 @@ def deregister(
     conn = SyncRegistry(settings.registry_path)
     try:
         existing = conn.get_registration(collection)
+        if existing is None:
+            err_console.print(f"No registration found for {collection!r}", style="red")
+            raise typer.Exit(code=1)
         doc_names = conn.deregister_directory(collection)
     finally:
         conn.close()
-
-    if existing is None:
-        err_console.print(f"No registration found for {collection!r}", style="red")
-        raise typer.Exit(code=1)
 
     deleted_chunks = 0
     if not keep_data and doc_names:
