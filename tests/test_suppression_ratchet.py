@@ -110,6 +110,21 @@ class TestPerFileIgnoresCounter:
         with pytest.raises(ValueError, match="cannot parse"):
             ratchet.PerFileIgnoresCounter(pyproject)
 
+    def test_unreadable_existing_pyproject_raises(self, tmp_path: Path) -> None:
+        """A present-but-unreadable pyproject must surface the failure.
+
+        Otherwise a permission-denied or transient I/O error would
+        silently zero the count — the same silent-miscount the
+        malformed-TOML guard was added to prevent.
+        """
+        pyproject = tmp_path / "pyproject.toml"
+        pyproject.write_text('[project]\nname = "x"\n')
+        with (
+            patch.object(Path, "read_text", side_effect=OSError("permission denied")),
+            pytest.raises(ValueError, match="cannot read"),
+        ):
+            ratchet.PerFileIgnoresCounter(pyproject)
+
     def test_pyproject_without_per_file_ignores_is_zero(self, tmp_path: Path) -> None:
         pyproject = tmp_path / "pyproject.toml"
         pyproject.write_text('[project]\nname = "x"\n')

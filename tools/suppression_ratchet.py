@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import contextlib
 import datetime
 import json
 import os
@@ -161,9 +162,9 @@ class PerFileIgnoresCounter:
     def _parse(self, pyproject_path: Path) -> None:
         """Parse pyproject.toml and count per-file-ignores rule codes.
 
-        A missing pyproject.toml is treated as zero ignores.  A malformed
-        TOML file raises ``ValueError`` — silent miscounts would let
-        suppressions slip past the ratchet.
+        A missing pyproject.toml is treated as zero ignores.  A present
+        but unreadable or malformed file raises ``ValueError`` — silent
+        miscounts would let suppressions slip past the ratchet.
         """
         if not pyproject_path.exists():
             return
@@ -172,8 +173,9 @@ class PerFileIgnoresCounter:
         except tomllib.TOMLDecodeError as exc:
             msg = f"cannot parse {pyproject_path}: {exc}"
             raise ValueError(msg) from exc
-        except OSError:
-            return
+        except OSError as exc:
+            msg = f"cannot read {pyproject_path}: {exc}"
+            raise ValueError(msg) from exc
         ignores = (
             data.get("tool", {})
             .get("ruff", {})
@@ -342,15 +344,16 @@ class Baseline:
         dir_.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=dir_)
         tmp_path = Path(tmp)
+        fd_closed = False
         try:
             os.write(fd, content.encode())
             os.close(fd)
+            fd_closed = True
             tmp_path.replace(self._baseline_path)
         except OSError:
-            import contextlib  # noqa: PLC0415
-
-            with contextlib.suppress(OSError):
-                os.close(fd)
+            if not fd_closed:
+                with contextlib.suppress(OSError):
+                    os.close(fd)
             with contextlib.suppress(OSError):
                 tmp_path.unlink()
             raise
