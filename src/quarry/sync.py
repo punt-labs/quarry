@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import gc
-import hashlib
 import logging
 import os
 import time
@@ -12,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import numpy as np
@@ -20,32 +19,14 @@ if TYPE_CHECKING:
 
     from quarry.models import Chunk
 
-import pathspec
-
 from quarry.config import Settings
 from quarry.db import ChunkStore, TableOptimizer
 from quarry.ingestion.pipeline import SUPPORTED_EXTENSIONS, prepare_document
+from quarry.sync_discovery import FileDiscovery
 from quarry.sync_registry import FileRecord, SyncRegistry
 from quarry.types import LanceDB
 
 logger = logging.getLogger(__name__)
-
-_DEFAULT_IGNORE_PATTERNS: Final[list[str]] = [
-    "__pycache__/",
-    "*.pyc",
-    "node_modules/",
-    ".venv/",
-    "venv/",
-    ".tox/",
-    ".nox/",
-    ".eggs/",
-    "*.egg-info/",
-    "dist/",
-    "build/",
-    ".DS_Store",
-]
-
-_HASH_CHUNK_SIZE: Final[int] = 1 << 20  # 1 MiB
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,130 +36,6 @@ class SyncConfig:
     directory: Path
     collection: str
     max_workers: int = 4
-
-
-def _content_hash(path: Path) -> str:
-    """Return a fast content hash of *path* for change detection.
-
-    Uses ``blake2b`` with a 16-byte digest (128 bits) — several GB/s on
-    modern CPUs, collision-resistant enough for incremental sync, and
-    in stdlib (no new deps).
-    """
-    h = hashlib.blake2b(digest_size=16)
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(_HASH_CHUNK_SIZE), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def _load_ignore_spec(directory: Path) -> pathspec.PathSpec:
-    """Build a PathSpec from ``.gitignore``, ``.quarryignore``, and defaults.
-
-    Reads ignore files from the root of *directory* only.  Patterns use
-    standard ``.gitignore`` syntax (``gitignore``).
-    """
-    lines: list[str] = list(_DEFAULT_IGNORE_PATTERNS)
-    for name in (".gitignore", ".quarryignore"):
-        ignore_path = directory / name
-        if ignore_path.is_file():
-            lines.extend(ignore_path.read_text(encoding="utf-8").splitlines())
-    return pathspec.PathSpec.from_lines("gitignore", lines)
-
-
-def _read_local_ignore(dirpath: Path) -> pathspec.PathSpec | None:
-    """Read ``.gitignore`` from *dirpath*, returning a PathSpec or None."""
-    gitignore = dirpath / ".gitignore"
-    if not gitignore.is_file():
-        return None
-    lines = gitignore.read_text(encoding="utf-8").splitlines()
-    return pathspec.PathSpec.from_lines("gitignore", lines)
-
-
-def discover_files(
-    directory: Path,
-    extensions: frozenset[str],
-) -> list[Path]:
-    """Recursively find files matching *extensions* under *directory*.
-
-    Respects ``.gitignore`` (at every level), ``.quarryignore``, and
-    hardcoded ignore patterns (``venv/``, ``node_modules/``, etc.).
-    Skips dotfiles, macOS resource forks (``._*``), and files inside
-    hidden directories (``.Trash``, ``.git``, etc.).
-
-    Symlinks whose target resolves outside *directory* are dropped and
-    logged as a warning.  A registered ``~/docs`` containing
-    ``shadow -> /etc/shadow`` would otherwise let the sync walker
-    ingest arbitrary files on the server.
-
-    Returns absolute paths, sorted for deterministic order.  Uses
-    ``absolute()`` rather than ``resolve()`` so that symlinks within
-    the tree keep their in-tree path (``relative_to`` stays valid).
-    """
-    root_spec = _load_ignore_spec(directory)
-    result: list[Path] = []
-    try:
-        root_resolved = directory.resolve(strict=True)
-    except (OSError, RuntimeError):
-        logger.warning("Cannot resolve registered root: %s", directory)
-        return result
-
-    for dirpath_str, dirnames, filenames in os.walk(directory):
-        dirpath = Path(dirpath_str)
-        rel_dir = dirpath.relative_to(directory)
-        local_spec = _read_local_ignore(dirpath) if dirpath != directory else None
-
-        # Prune hidden and ignored directories (in-place for os.walk)
-        dirnames[:] = sorted(
-            d
-            for d in dirnames
-            if not d.startswith(".")
-            and not root_spec.match_file(str(rel_dir / d) + "/")
-            and (local_spec is None or not local_spec.match_file(d + "/"))
-        )
-
-        for filename in sorted(filenames):
-            if filename.startswith((".", "._")):
-                continue
-            filepath = dirpath / filename
-            if filepath.suffix.lower() not in extensions:
-                continue
-            rel_path = str(filepath.relative_to(directory))
-            if root_spec.match_file(rel_path):
-                continue
-            if local_spec is not None and local_spec.match_file(filename):
-                continue
-            if filepath.is_symlink() and not _symlink_inside_root(
-                filepath, root_resolved
-            ):
-                continue
-            result.append(filepath.absolute())
-
-    return result
-
-
-def _symlink_inside_root(link: Path, root_resolved: Path) -> bool:
-    """Return True iff *link*'s target resolves inside *root_resolved*.
-
-    Skips unresolvable symlinks and targets outside the registered root so
-    a remote client cannot ingest ``/etc/shadow`` via a symlink trap.  All
-    rejections are logged at WARNING so operators can spot exfiltration
-    attempts in the server log.
-    """
-    try:
-        target = link.resolve(strict=True)
-    except (OSError, RuntimeError):
-        logger.warning("Skipping unresolvable symlink: %s", link)
-        return False
-    try:
-        target.relative_to(root_resolved)
-    except ValueError:
-        logger.warning(
-            "Skipping symlink %s that escapes registered root: %s",
-            link,
-            target,
-        )
-        return False
-    return True
 
 
 @dataclass(frozen=True)
@@ -213,7 +70,8 @@ def compute_sync_plan(
     errors all fall through to ``to_ingest``.  We never put a file in
     ``to_refresh`` unless we are certain its content matches.
     """
-    disk_files = discover_files(directory, extensions)
+    discovery = FileDiscovery(directory)
+    disk_files = discovery.discover(extensions)
     disk_paths = {str(p) for p in disk_files}
 
     # Single query: load all known files for this collection into a dict
@@ -235,7 +93,7 @@ def compute_sync_plan(
         # mtime or size changed — consult content hash if we have one.
         if record.content_hash is not None and record.size == stat.st_size:
             try:
-                disk_hash = _content_hash(file_path)
+                disk_hash = FileDiscovery.content_hash(file_path)
             except OSError:
                 to_ingest.append(file_path)
                 continue
@@ -328,7 +186,7 @@ def _ingest_files(
         elapsed = time.perf_counter() - t
         stat = fp.stat()
         try:
-            content_hash: str | None = _content_hash(fp)
+            content_hash: str | None = FileDiscovery.content_hash(fp)
         except OSError:
             content_hash = None
         return elapsed, stat, content_hash, prepared
@@ -404,7 +262,7 @@ def _refresh_files(
     for fp, plan_hash in plan_to_refresh:
         try:
             stat = fp.stat()
-            current_hash = _content_hash(fp)
+            current_hash = FileDiscovery.content_hash(fp)
             if current_hash != plan_hash:
                 logger.info("File changed since plan, skipping refresh: %s", fp)
                 continue

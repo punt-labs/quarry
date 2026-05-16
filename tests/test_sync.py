@@ -10,15 +10,12 @@ import pytest
 
 from quarry.models import Chunk
 from quarry.sync import (
-    _DEFAULT_IGNORE_PATTERNS,
     SyncConfig,
-    _content_hash,
-    _load_ignore_spec,
     compute_sync_plan,
-    discover_files,
     sync_all,
     sync_collection,
 )
+from quarry.sync_discovery import _DEFAULT_IGNORE_PATTERNS, FileDiscovery
 from quarry.sync_registry import FileRecord, SyncRegistry
 
 # ---------------------------------------------------------------------------
@@ -76,7 +73,7 @@ class TestDiscoverFiles:
         (tmp_path / "b.txt").touch()
         (tmp_path / "c.xyz").touch()
         exts = frozenset({".pdf", ".txt"})
-        result = discover_files(tmp_path, exts)
+        result = FileDiscovery(tmp_path).discover(exts)
         names = [p.name for p in result]
         assert "a.pdf" in names
         assert "b.txt" in names
@@ -87,24 +84,24 @@ class TestDiscoverFiles:
         sub.mkdir()
         (sub / "deep.pdf").touch()
         exts = frozenset({".pdf"})
-        result = discover_files(tmp_path, exts)
+        result = FileDiscovery(tmp_path).discover(exts)
         assert len(result) == 1
         assert result[0].name == "deep.pdf"
 
     def test_ignores_unsupported(self, tmp_path: Path):
         (tmp_path / "notes.log").touch()
         (tmp_path / "data.csv").touch()
-        result = discover_files(tmp_path, frozenset({".pdf"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".pdf"}))
         assert result == []
 
     def test_empty_directory(self, tmp_path: Path):
-        result = discover_files(tmp_path, frozenset({".pdf", ".txt"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".pdf", ".txt"}))
         assert result == []
 
     def test_returns_sorted_absolute_paths(self, tmp_path: Path):
         (tmp_path / "z.pdf").touch()
         (tmp_path / "a.pdf").touch()
-        result = discover_files(tmp_path, frozenset({".pdf"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".pdf"}))
         assert len(result) == 2
         assert result[0].name == "a.pdf"
         assert result[1].name == "z.pdf"
@@ -113,7 +110,7 @@ class TestDiscoverFiles:
     def test_skips_resource_fork_files(self, tmp_path: Path):
         (tmp_path / "report.pdf").touch()
         (tmp_path / "._report.pdf").touch()
-        result = discover_files(tmp_path, frozenset({".pdf"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".pdf"}))
         assert len(result) == 1
         assert result[0].name == "report.pdf"
 
@@ -122,7 +119,7 @@ class TestDiscoverFiles:
         trash.mkdir()
         (trash / "deleted.pdf").touch()
         (tmp_path / "keep.pdf").touch()
-        result = discover_files(tmp_path, frozenset({".pdf"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".pdf"}))
         assert len(result) == 1
         assert result[0].name == "keep.pdf"
 
@@ -131,7 +128,7 @@ class TestDiscoverFiles:
         sub.mkdir()
         (sub / "._hidden.pdf").touch()
         (sub / "visible.pdf").touch()
-        result = discover_files(tmp_path, frozenset({".pdf"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".pdf"}))
         assert len(result) == 1
         assert result[0].name == "visible.pdf"
 
@@ -140,7 +137,7 @@ class TestDiscoverFiles:
         hidden.mkdir()
         (hidden / "config.txt").touch()
         (tmp_path / "notes.txt").touch()
-        result = discover_files(tmp_path, frozenset({".txt"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".txt"}))
         assert len(result) == 1
         assert result[0].name == "notes.txt"
 
@@ -149,7 +146,7 @@ class TestDiscoverFiles:
         venv.mkdir(parents=True)
         (venv / "module.py").touch()
         (tmp_path / "app.py").touch()
-        result = discover_files(tmp_path, frozenset({".py"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".py"}))
         assert len(result) == 1
         assert result[0].name == "app.py"
 
@@ -161,7 +158,7 @@ class TestDiscoverFiles:
         # .js not in default SUPPORTED_EXTENSIONS, use .txt for simplicity
         (tmp_path / "node_modules" / "readme.txt").touch()
         (tmp_path / "readme.txt").touch()
-        result = discover_files(tmp_path, frozenset({".txt"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".txt"}))
         assert len(result) == 1
         assert result[0].name == "readme.txt"
 
@@ -170,7 +167,7 @@ class TestDiscoverFiles:
         cache.mkdir()
         (cache / "module.cpython-313.pyc").touch()
         (tmp_path / "module.py").touch()
-        result = discover_files(tmp_path, frozenset({".py", ".pyc"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".py", ".pyc"}))
         assert len(result) == 1
         assert result[0].name == "module.py"
 
@@ -181,7 +178,7 @@ class TestDiscoverFiles:
         (data / "big.csv").touch()
         (tmp_path / "debug.log").touch()
         (tmp_path / "app.txt").touch()
-        result = discover_files(tmp_path, frozenset({".csv", ".log", ".txt"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".csv", ".log", ".txt"}))
         assert len(result) == 1
         assert result[0].name == "app.txt"
 
@@ -191,7 +188,7 @@ class TestDiscoverFiles:
         archive.mkdir()
         (archive / "old.pdf").touch()
         (tmp_path / "new.pdf").touch()
-        result = discover_files(tmp_path, frozenset({".pdf"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".pdf"}))
         assert len(result) == 1
         assert result[0].name == "new.pdf"
 
@@ -203,7 +200,7 @@ class TestDiscoverFiles:
         (scratch / "notes.txt").touch()
         (tmp_path / "debug.log").touch()
         (tmp_path / "app.txt").touch()
-        result = discover_files(tmp_path, frozenset({".txt", ".log"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".txt", ".log"}))
         assert len(result) == 1
         assert result[0].name == "app.txt"
 
@@ -211,7 +208,7 @@ class TestDiscoverFiles:
         (tmp_path / ".gitignore").write_text("*.txt\n!important.txt\n")
         (tmp_path / "notes.txt").touch()
         (tmp_path / "important.txt").touch()
-        result = discover_files(tmp_path, frozenset({".txt"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".txt"}))
         assert len(result) == 1
         assert result[0].name == "important.txt"
 
@@ -220,7 +217,7 @@ class TestDiscoverFiles:
         deep.mkdir(parents=True)
         (deep / "core.py").touch()
         (tmp_path / "main.py").touch()
-        result = discover_files(tmp_path, frozenset({".py"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".py"}))
         assert len(result) == 1
         assert result[0].name == "main.py"
 
@@ -241,7 +238,7 @@ class TestDiscoverFiles:
         (root / "legit.txt").write_text("hello")
         (root / "escape.txt").symlink_to(secret)
 
-        result = discover_files(root, frozenset({".txt"}))
+        result = FileDiscovery(root).discover(frozenset({".txt"}))
         names = {p.name for p in result}
         assert names == {"legit.txt"}
 
@@ -252,7 +249,7 @@ class TestDiscoverFiles:
         (root / "real.txt").write_text("content")
         (root / "link.txt").symlink_to(root / "real.txt")
 
-        result = discover_files(root, frozenset({".txt"}))
+        result = FileDiscovery(root).discover(frozenset({".txt"}))
         names = {p.name for p in result}
         assert names == {"real.txt", "link.txt"}
 
@@ -263,7 +260,7 @@ class TestDiscoverFiles:
         (root / "real.txt").write_text("content")
         (root / "broken.txt").symlink_to(tmp_path / "does-not-exist")
 
-        result = discover_files(root, frozenset({".txt"}))
+        result = FileDiscovery(root).discover(frozenset({".txt"}))
         names = {p.name for p in result}
         assert names == {"real.txt"}
 
@@ -278,7 +275,7 @@ class TestDiscoverFiles:
         (project / "debug.log").touch()
         (project / "app.py").touch()
         (tmp_path / "root.py").touch()
-        result = discover_files(tmp_path, frozenset({".py", ".csv", ".log"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".py", ".csv", ".log"}))
         names = sorted(p.name for p in result)
         assert names == ["app.py", "root.py"]
 
@@ -293,7 +290,7 @@ class TestDiscoverFiles:
         (b / "debug.log").touch()
         (a / "app.py").touch()
         (b / "app.py").touch()
-        result = discover_files(tmp_path, frozenset({".py", ".log"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".py", ".log"}))
         names = sorted(p.name for p in result)
         # project-a/debug.log ignored, project-b/debug.log kept
         assert names == ["app.py", "app.py", "debug.log"]
@@ -307,25 +304,25 @@ class TestLoadIgnoreSpec:
 
     def test_loads_gitignore(self, tmp_path: Path):
         (tmp_path / ".gitignore").write_text("*.log\noutput/\n")
-        spec = _load_ignore_spec(tmp_path)
+        spec = FileDiscovery(tmp_path).load_ignore_spec()
         assert spec.match_file("debug.log")
         assert spec.match_file("output/")
         assert not spec.match_file("app.py")
 
     def test_loads_quarryignore(self, tmp_path: Path):
         (tmp_path / ".quarryignore").write_text("scratch/\n")
-        spec = _load_ignore_spec(tmp_path)
+        spec = FileDiscovery(tmp_path).load_ignore_spec()
         assert spec.match_file("scratch/")
 
     def test_no_ignore_files_uses_defaults(self, tmp_path: Path):
-        spec = _load_ignore_spec(tmp_path)
+        spec = FileDiscovery(tmp_path).load_ignore_spec()
         assert spec.match_file("venv/")
         assert spec.match_file("node_modules/")
         assert not spec.match_file("src/app.py")
 
     def test_comments_and_blanks_ignored(self, tmp_path: Path):
         (tmp_path / ".gitignore").write_text("# comment\n\n*.log\n")
-        spec = _load_ignore_spec(tmp_path)
+        spec = FileDiscovery(tmp_path).load_ignore_spec()
         assert spec.match_file("debug.log")
         assert not spec.match_file("# comment")
 
@@ -475,7 +472,7 @@ class TestComputeSyncPlan:
         conn, d = self._setup(tmp_path)
         f = d / "same.txt"
         f.write_bytes(b"stable content")
-        self._seed_with_hash(conn, f, content_hash=_content_hash(f))
+        self._seed_with_hash(conn, f, content_hash=FileDiscovery.content_hash(f))
 
         # Bump mtime via os.utime; content byte-identical.
         stat = f.stat()
@@ -485,7 +482,7 @@ class TestComputeSyncPlan:
         assert plan.to_ingest == []
         assert len(plan.to_refresh) == 1
         assert plan.to_refresh[0][0].name == "same.txt"
-        assert plan.to_refresh[0][1] == _content_hash(f)
+        assert plan.to_refresh[0][1] == FileDiscovery.content_hash(f)
         assert plan.unchanged == 0
         conn.close()
 
@@ -495,7 +492,7 @@ class TestComputeSyncPlan:
         conn, d = self._setup(tmp_path)
         f = d / "edit.txt"
         f.write_bytes(b"aaaaa")
-        self._seed_with_hash(conn, f, content_hash=_content_hash(f))
+        self._seed_with_hash(conn, f, content_hash=FileDiscovery.content_hash(f))
 
         # Replace content with the same length so only the hash differs.
         f.write_bytes(b"bbbbb")
@@ -512,7 +509,7 @@ class TestComputeSyncPlan:
         conn, d = self._setup(tmp_path)
         f = d / "grow.txt"
         f.write_bytes(b"short")
-        self._seed_with_hash(conn, f, content_hash=_content_hash(f))
+        self._seed_with_hash(conn, f, content_hash=FileDiscovery.content_hash(f))
 
         with f.open("ab") as fh:
             fh.write(b"-longer-now")
@@ -552,7 +549,9 @@ class TestComputeSyncPlan:
         def _boom(_path: Path) -> str:
             raise OSError("permission denied")
 
-        monkeypatch.setattr("quarry.sync._content_hash", _boom)
+        monkeypatch.setattr(
+            "quarry.sync.FileDiscovery.content_hash", staticmethod(_boom)
+        )
 
         plan = compute_sync_plan(d, "col", conn, self.EXTS)
         assert len(plan.to_ingest) == 1
