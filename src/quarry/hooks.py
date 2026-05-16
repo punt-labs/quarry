@@ -30,8 +30,8 @@ from quarry._stdlib import load_hook_config
 if TYPE_CHECKING:
     from quarry.artifacts import SessionArtifacts
     from quarry.config import Settings
+    from quarry.db.facade import Database
     from quarry.sync_registry import DirectoryRegistration, SyncRegistry
-    from quarry.types import LanceDB
 
 logger = logging.getLogger(__name__)
 
@@ -398,11 +398,9 @@ def _extract_web_fetch_content(payload: dict[str, object]) -> str | None:
     return None
 
 
-def _is_already_ingested(url: str, db: LanceDB, collection: str) -> bool:
+def _is_already_ingested(url: str, database: Database, collection: str) -> bool:
     """Check if *url* is already in the given collection."""
-    from quarry.db.chunk_catalog import ChunkCatalog  # noqa: PLC0415
-
-    docs = ChunkCatalog(db).list_documents(collection_filter=collection)
+    docs = database.catalog.list_documents(collection_filter=collection)
     return any(d["document_name"] == url for d in docs)
 
 
@@ -429,7 +427,7 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
         return {}
 
     # Heavy imports deferred past early-return guards.
-    from quarry.db.storage import get_db  # noqa: PLC0415
+    from quarry.db.facade import Database  # noqa: PLC0415
     from quarry.ingestion.pipeline import ingest_content, ingest_url  # noqa: PLC0415
 
     base_collection = _collection_for_cwd(cwd)
@@ -438,9 +436,9 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     )
 
     settings = _resolve_settings()
-    db = get_db(settings.lancedb_path)
+    database = Database.connect(settings.lancedb_path)
 
-    if _is_already_ingested(url, db, collection):
+    if _is_already_ingested(url, database, collection):
         logger.debug("post-web-fetch: already ingested %s, skipping", url)
         return {}
 
@@ -459,7 +457,7 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
             result = ingest_content(
                 clean_text,
                 url,
-                db,
+                database.db,
                 settings,
                 collection=collection,
                 format_hint="markdown",
@@ -472,7 +470,7 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
         # No agent memory fields for auto-ingested web fetches.
         result = ingest_url(
             url,
-            db,
+            database.db,
             settings,
             collection=collection,
         )

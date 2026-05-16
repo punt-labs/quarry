@@ -13,12 +13,10 @@ from quarry.artifacts import (
     format_artifacts_header,
 )
 from quarry.config import Settings
-from quarry.db.chunk_catalog import ChunkCatalog
-from quarry.db.storage import get_db
+from quarry.db.facade import Database
 from quarry.hooks import extract_transcript_text
 from quarry.ingestion.pipeline import ingest_content
 from quarry.sync_registry import DirectoryRegistration, SyncRegistry
-from quarry.types import LanceDB
 
 logger = logging.getLogger(__name__)
 
@@ -136,9 +134,9 @@ def is_already_ingested(
     return any(name.startswith(prefix) for name in existing_doc_names)
 
 
-def _get_existing_doc_names(db: LanceDB, collection: str) -> set[str]:
+def _get_existing_doc_names(database: Database, collection: str) -> set[str]:
     """Return the set of document names in a collection."""
-    docs = ChunkCatalog(db).list_documents(collection_filter=collection)
+    docs = database.catalog.list_documents(collection_filter=collection)
     return {d["document_name"] for d in docs}
 
 
@@ -185,7 +183,7 @@ def _write_backfill_capture_file(
 
 def _process_project(
     mapping: ProjectMapping,
-    db: LanceDB,
+    database: Database,
     settings: Settings,
     acc: _Accumulator,
     *,
@@ -199,7 +197,7 @@ def _process_project(
     if not transcripts:
         return
 
-    existing_names = _get_existing_doc_names(db, target_collection)
+    existing_names = _get_existing_doc_names(database, target_collection)
     project_ingested = 0
     project_skipped = 0
 
@@ -246,7 +244,7 @@ def _process_project(
             ingest_content(
                 text,
                 doc_name,
-                db,
+                database.db,
                 settings,
                 overwrite=True,
                 collection=target_collection,
@@ -292,7 +290,7 @@ def backfill_sessions(
     else:
         mappings = all_mappings
 
-    db = get_db(settings.lancedb_path)
+    database = Database.connect(settings.lancedb_path)
     acc = _Accumulator()
     skipped_unregistered = _count_unregistered_dirs(
         {m.encoded_dir for m in all_mappings}
@@ -301,7 +299,7 @@ def backfill_sessions(
     for mapping in mappings:
         _process_project(
             mapping,
-            db,
+            database,
             settings,
             acc,
             dry_run=dry_run,

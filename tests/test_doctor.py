@@ -740,6 +740,8 @@ class TestCheckFtsHealth:
         """FTS query succeeds — check reports healthy."""
         from unittest.mock import MagicMock
 
+        from quarry.db.facade import Database
+
         db_path = tmp_path / "lancedb"
         db_path.mkdir(parents=True)
 
@@ -754,7 +756,7 @@ class TestCheckFtsHealth:
         mock_db.list_tables.return_value = MagicMock(tables=["chunks"])
         mock_db.open_table.return_value = mock_table
 
-        with patch("quarry.db.storage.get_db", return_value=mock_db):
+        with patch.object(Database, "connect", return_value=Database(mock_db)):
             result = _check_fts_health(db_path)
         assert result.passed is True
         assert result.message == "healthy"
@@ -763,6 +765,8 @@ class TestCheckFtsHealth:
     def test_stale_fts_runtime_error(self, tmp_path: Path) -> None:
         """RuntimeError from FTS query means stale index."""
         from unittest.mock import MagicMock
+
+        from quarry.db.facade import Database
 
         db_path = tmp_path / "lancedb"
         db_path.mkdir(parents=True)
@@ -778,7 +782,7 @@ class TestCheckFtsHealth:
         mock_db.list_tables.return_value = MagicMock(tables=["chunks"])
         mock_db.open_table.return_value = mock_table
 
-        with patch("quarry.db.storage.get_db", return_value=mock_db):
+        with patch.object(Database, "connect", return_value=Database(mock_db)):
             result = _check_fts_health(db_path)
         assert result.passed is False
         assert "stale" in result.message
@@ -787,6 +791,8 @@ class TestCheckFtsHealth:
     def test_missing_fts_os_error(self, tmp_path: Path) -> None:
         """OSError from FTS query means missing index."""
         from unittest.mock import MagicMock
+
+        from quarry.db.facade import Database
 
         db_path = tmp_path / "lancedb"
         db_path.mkdir(parents=True)
@@ -802,7 +808,7 @@ class TestCheckFtsHealth:
         mock_db.list_tables.return_value = MagicMock(tables=["chunks"])
         mock_db.open_table.return_value = mock_table
 
-        with patch("quarry.db.storage.get_db", return_value=mock_db):
+        with patch.object(Database, "connect", return_value=Database(mock_db)):
             result = _check_fts_health(db_path)
         assert result.passed is False
         assert "missing" in result.message

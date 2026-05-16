@@ -747,7 +747,7 @@ class TestHandlePostWebFetch:
                 "quarry.hooks._resolve_settings",
                 return_value=MagicMock(),
             ),
-            patch("quarry.db.storage.get_db", return_value=MagicMock()),
+            patch("quarry.db.facade.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch("quarry.hooks._collection_for_cwd", return_value=None),
             patch(
@@ -787,7 +787,7 @@ class TestHandlePostWebFetch:
                 "quarry.hooks._resolve_settings",
                 return_value=MagicMock(),
             ),
-            patch("quarry.db.storage.get_db", return_value=MagicMock()),
+            patch("quarry.db.facade.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch("quarry.hooks._collection_for_cwd", return_value=None),
             patch(
@@ -821,7 +821,7 @@ class TestHandlePostWebFetch:
                 "quarry.hooks._resolve_settings",
                 return_value=MagicMock(),
             ),
-            patch("quarry.db.storage.get_db", return_value=MagicMock()),
+            patch("quarry.db.facade.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch("quarry.hooks._collection_for_cwd", return_value=None),
             patch(
@@ -846,7 +846,7 @@ class TestHandlePostWebFetch:
                 "quarry.hooks._resolve_settings",
                 return_value=MagicMock(),
             ),
-            patch("quarry.db.storage.get_db", return_value=MagicMock()),
+            patch("quarry.db.facade.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=True),
             patch("quarry.hooks._collection_for_cwd", return_value=None),
             patch("quarry.ingestion.pipeline.ingest_url") as mock_ingest,
@@ -871,7 +871,7 @@ class TestHandlePostWebFetch:
 
         with (
             patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
-            patch("quarry.db.storage.get_db", return_value=MagicMock()),
+            patch("quarry.db.facade.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch("quarry.hooks._collection_for_cwd", return_value="myapp"),
             patch(
@@ -902,7 +902,7 @@ class TestHandlePostWebFetch:
 
         with (
             patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
-            patch("quarry.db.storage.get_db", return_value=MagicMock()),
+            patch("quarry.db.facade.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch("quarry.hooks._collection_for_cwd", return_value=None),
             patch(
@@ -1648,7 +1648,7 @@ class TestIngestBackground:
                 return_value=MagicMock(),
             ),
             patch(
-                "quarry.db.storage.get_db",
+                "quarry.db.facade.get_db",
                 return_value=MagicMock(),
             ),
             patch(
@@ -1699,7 +1699,7 @@ class TestIngestBackground:
                 return_value=MagicMock(),
             ),
             patch(
-                "quarry.db.storage.get_db",
+                "quarry.db.facade.get_db",
                 return_value=MagicMock(),
             ),
             patch(
@@ -2054,7 +2054,7 @@ class TestT17WebFetchRoutesToCaptures:
 
         with (
             patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
-            patch("quarry.db.storage.get_db", return_value=MagicMock()),
+            patch("quarry.db.facade.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch("quarry.hooks._collection_for_cwd", return_value="proj"),
             patch(
@@ -2115,7 +2115,7 @@ class TestT19WebFetchFallback:
 
         with (
             patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
-            patch("quarry.db.storage.get_db", return_value=MagicMock()),
+            patch("quarry.db.facade.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch("quarry.hooks._collection_for_cwd", return_value=None),
             patch(
