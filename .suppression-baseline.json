@@ -1,7 +1,7 @@
 {
-  "total": 263,
+  "total": 261,
   "by_category": {
-    "noqa": 219,
+    "noqa": 217,
     "type_ignore": 10,
     "pylint_disable": 0,
     "pyright_ignore": 12,
@@ -32,7 +32,7 @@
       "type_ignore": 1
     },
     "src/quarry/doctor.py": {
-      "noqa": 76,
+      "noqa": 75,
       "type_ignore": 1,
       "pyright_ignore": 2
     },
@@ -57,7 +57,7 @@
       "noqa": 1
     },
     "src/quarry/hooks.py": {
-      "noqa": 21,
+      "noqa": 20,
       "pyright_ignore": 3
     },
     "src/quarry/http_server.py": {
@@ -96,5 +96,5 @@
       "type_ignore": 1
     }
   },
-  "updated_at": "2026-05-16T22:36:11Z"
+  "updated_at": "2026-05-16T23:10:35Z"
 }
