@@ -457,7 +457,7 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
             result = ingest_content(
                 clean_text,
                 url,
-                database.db,
+                database,
                 settings,
                 collection=collection,
                 format_hint="markdown",
@@ -470,7 +470,7 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
         # No agent memory fields for auto-ingested web fetches.
         result = ingest_url(
             url,
-            database.db,
+            database,
             settings,
             collection=collection,
         )

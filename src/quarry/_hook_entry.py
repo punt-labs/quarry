@@ -162,7 +162,7 @@ def _ingest_background() -> None:
             result = ingest_content(
                 text,
                 document_name,
-                database.db,
+                database,
                 settings,
                 collection=collection,
                 format_hint="markdown",

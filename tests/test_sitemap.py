@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
+from quarry.db import Database
 from quarry.sitemap import (
     SitemapDiscovery,
     SitemapEntry,
@@ -234,7 +235,7 @@ class TestIngestSitemapDedup:
 
         result = ingest_sitemap(
             "https://example.com/sitemap.xml",
-            MagicMock(),
+            Database(MagicMock()),
             MagicMock(),
             collection="test",
         )
@@ -270,7 +271,7 @@ class TestIngestSitemapDedup:
 
         result = ingest_sitemap(
             "https://example.com/sitemap.xml",
-            MagicMock(),
+            Database(MagicMock()),
             MagicMock(),
             collection="test",
         )
@@ -300,7 +301,7 @@ class TestIngestSitemapDedup:
 
         result = ingest_sitemap(
             "https://example.com/sitemap.xml",
-            MagicMock(),
+            Database(MagicMock()),
             MagicMock(),
             collection="test",
         )
@@ -335,7 +336,7 @@ class TestIngestSitemapDedup:
 
         result = ingest_sitemap(
             "https://example.com/sitemap.xml",
-            MagicMock(),
+            Database(MagicMock()),
             MagicMock(),
             collection="test",
             overwrite=True,
@@ -368,7 +369,7 @@ class TestIngestSitemapDedup:
 
         result = ingest_sitemap(
             "https://example.com/sitemap.xml",
-            MagicMock(),
+            Database(MagicMock()),
             MagicMock(),
             collection="test",
         )
@@ -409,9 +410,10 @@ class TestIngestSitemapIntegration:
         settings.chunk_max_chars = 1800
         settings.chunk_overlap_chars = 200
 
-        db = MagicMock()
-        db.open_table.return_value = MagicMock()
-        db.list_tables.return_value = MagicMock(tables=[])
+        mock_lance = MagicMock()
+        mock_lance.open_table.return_value = MagicMock()
+        mock_lance.list_tables.return_value = MagicMock(tables=[])
+        db = Database(mock_lance)
 
         with (
             patch(
@@ -463,9 +465,10 @@ class TestIngestSitemapIntegration:
         settings.chunk_max_chars = 1800
         settings.chunk_overlap_chars = 200
 
-        db = MagicMock()
-        db.open_table.return_value = MagicMock()
-        db.list_tables.return_value = MagicMock(tables=[])
+        mock_lance = MagicMock()
+        mock_lance.open_table.return_value = MagicMock()
+        mock_lance.list_tables.return_value = MagicMock(tables=[])
+        db = Database(mock_lance)
 
         with (
             patch(
@@ -511,7 +514,7 @@ class TestIngestSitemapIntegration:
 
         result = ingest_sitemap(
             "https://docs.python.org/sitemap.xml",
-            MagicMock(),
+            Database(MagicMock()),
             MagicMock(),
         )
 
@@ -550,7 +553,7 @@ class TestIngestSitemapIntegration:
 
         result = ingest_sitemap(
             "https://example.com/sitemap.xml",
-            MagicMock(),
+            Database(MagicMock()),
             MagicMock(),
             collection="test",
         )
@@ -595,7 +598,7 @@ class TestIngestAuto:
 
         result = ingest_auto(
             "https://example.com/docs",
-            MagicMock(),
+            Database(MagicMock()),
             MagicMock(),
         )
 
@@ -626,7 +629,7 @@ class TestIngestAuto:
 
         result = ingest_auto(
             "https://example.com/page",
-            MagicMock(),
+            Database(MagicMock()),
             MagicMock(),
         )
 
@@ -657,7 +660,7 @@ class TestIngestAuto:
             "errors": [],
         }
 
-        ingest_auto("https://example.com/", MagicMock(), MagicMock())
+        ingest_auto("https://example.com/", Database(MagicMock()), MagicMock())
 
         call_kwargs = mock_bulk.call_args
         # Root URL has no path filter; include is not passed (defaults to None)
@@ -686,7 +689,9 @@ class TestIngestAuto:
             "errors": [],
         }
 
-        ingest_auto("https://docs.python.org/3/library/", MagicMock(), MagicMock())
+        ingest_auto(
+            "https://docs.python.org/3/library/", Database(MagicMock()), MagicMock()
+        )
 
         call_kwargs = mock_bulk.call_args
         assert call_kwargs.kwargs["collection"] == "docs.python.org"
@@ -716,7 +721,7 @@ class TestIngestAuto:
 
         ingest_auto(
             "https://example.com/docs",
-            MagicMock(),
+            Database(MagicMock()),
             MagicMock(),
             collection="my-docs",
         )
@@ -744,7 +749,7 @@ class TestIngestAuto:
 
         result = ingest_auto(
             "https://example.com/sitemap.xml",
-            MagicMock(),
+            Database(MagicMock()),
             MagicMock(),
         )
 
@@ -769,7 +774,7 @@ class TestIngestAuto:
 
         result = ingest_auto(
             "https://example.com/page",
-            MagicMock(),
+            Database(MagicMock()),
             MagicMock(),
         )
 
@@ -795,7 +800,7 @@ class TestIngestAuto:
 
         ingest_auto(
             "https://example.com/page",
-            MagicMock(),
+            Database(MagicMock()),
             MagicMock(),
             collection="my-custom-collection",
         )
@@ -825,7 +830,7 @@ class TestIngestAuto:
 
         ingest_auto(
             "https://docs.example.com/ai/sandboxes/",
-            MagicMock(),
+            Database(MagicMock()),
             MagicMock(),
             collection="docker-sandboxes",
         )
@@ -854,7 +859,7 @@ class TestIngestAuto:
 
         ingest_auto(
             "https://example.com/sitemap.xml",
-            MagicMock(),
+            Database(MagicMock()),
             MagicMock(),
             collection="my-docs",
         )
@@ -880,7 +885,7 @@ class TestIngestAuto:
             }
             result = ingest_auto(
                 "https://example.com/docs/sitemap-guide",
-                MagicMock(),
+                Database(MagicMock()),
                 MagicMock(),
             )
 
@@ -910,7 +915,7 @@ class TestIngestAuto:
 
         result = ingest_auto(
             "https://docs.example.com/ai/sandboxes/get-started/",
-            MagicMock(),
+            Database(MagicMock()),
             MagicMock(),
         )
 

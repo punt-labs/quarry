@@ -11,7 +11,6 @@ if TYPE_CHECKING:
     from quarry.config import Settings
     from quarry.ingestion.url_fetcher import UrlFetcher
     from quarry.sitemap import SitemapEntry
-    from quarry.types import LanceDB
 
 from quarry.db import Database
 from quarry.extractors.html_extractor import HtmlExtractor
@@ -25,18 +24,18 @@ logger = logging.getLogger(__name__)
 class UrlIngester:
     """Ingest web content: single URLs, sitemaps, and auto-discovery."""
 
-    _db: LanceDB
+    _database: Database
     _settings: Settings
     _fetcher: UrlFetcher
 
     def __new__(
         cls,
-        db: LanceDB,
+        database: Database,
         settings: Settings,
         fetcher: UrlFetcher,
     ) -> Self:
         self = super().__new__(cls)
-        self._db = db
+        self._database = database
         self._settings = settings
         self._fetcher = fetcher
         return self
@@ -63,7 +62,7 @@ class UrlIngester:
         progress("Fetched %d characters", len(html))
 
         if overwrite:
-            Database(self._db).store.delete_document(
+            self._database.store.delete_document(
                 document_name, collection=collection, count=False
             )
 
@@ -73,7 +72,7 @@ class UrlIngester:
         return _chunk_embed_store(
             pages,
             document_name,
-            self._db,
+            self._database,
             self._settings,
             progress,
             collection=collection,
@@ -148,7 +147,7 @@ class UrlIngester:
         after_filter = len(filtered)
         progress("After filtering: %d URLs", after_filter)
 
-        existing_docs = Database(self._db).catalog.list_documents(
+        existing_docs = self._database.catalog.list_documents(
             collection_filter=collection
         )
         existing_timestamps: dict[str, str] = {
@@ -394,7 +393,7 @@ def _make_progress(
 def _chunk_embed_store(
     pages: list[PageContent],
     document_name: str,
-    db: LanceDB,
+    database: Database,
     settings: Settings,
     progress: Callable[..., None],
     *,
@@ -449,7 +448,7 @@ def _chunk_embed_store(
 
         progress("Storing in LanceDB")
         t0 = time.perf_counter()
-        inserted = Database(db).store.insert(chunks, vectors)
+        inserted = database.store.insert(chunks, vectors)
         t_store = time.perf_counter() - t0
         logger.info("url_ingester: stored %d chunks in %.2fs", inserted, t_store)
         progress("Done: %d chunks indexed from %s", inserted, document_name)

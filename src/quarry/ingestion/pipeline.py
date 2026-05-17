@@ -34,7 +34,6 @@ from quarry.ingestion.backends import get_embedding_backend, get_ocr_backend
 from quarry.ingestion.chunker import chunk_pages
 from quarry.models import Chunk, PageContent, PageType
 from quarry.results import IngestResult, SitemapResult
-from quarry.types import LanceDB
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +50,7 @@ SUPPORTED_EXTENSIONS = (
 
 def ingest_document(
     file_path: Path,
-    db: LanceDB,
+    database: Database,
     settings: Settings,
     *,
     overwrite: bool = False,
@@ -69,7 +68,7 @@ def ingest_document(
 
     Args:
         file_path: Path to the document.
-        db: LanceDB connection.
+        database: Quarry database facade.
         settings: Application settings.
         overwrite: If True, delete existing data for this document first.
         collection: Collection name for organizing documents.
@@ -103,7 +102,7 @@ def ingest_document(
     if suffix == ".pdf":
         return ingest_pdf(
             file_path,
-            db,
+            database,
             settings,
             overwrite=overwrite,
             collection=collection,
@@ -115,7 +114,7 @@ def ingest_document(
     if suffix in SUPPORTED_CODE_EXTENSIONS:
         return ingest_code_file(
             file_path,
-            db,
+            database,
             settings,
             overwrite=overwrite,
             collection=collection,
@@ -127,7 +126,7 @@ def ingest_document(
     if suffix in SUPPORTED_TEXT_EXTENSIONS:
         return ingest_text_file(
             file_path,
-            db,
+            database,
             settings,
             overwrite=overwrite,
             collection=collection,
@@ -139,7 +138,7 @@ def ingest_document(
     if suffix in SUPPORTED_IMAGE_EXTENSIONS:
         return ingest_image(
             file_path,
-            db,
+            database,
             settings,
             overwrite=overwrite,
             collection=collection,
@@ -151,7 +150,7 @@ def ingest_document(
     if suffix in SUPPORTED_SPREADSHEET_EXTENSIONS:
         return ingest_spreadsheet(
             file_path,
-            db,
+            database,
             settings,
             overwrite=overwrite,
             collection=collection,
@@ -163,7 +162,7 @@ def ingest_document(
     if suffix in SUPPORTED_HTML_EXTENSIONS:
         return ingest_html_file(
             file_path,
-            db,
+            database,
             settings,
             overwrite=overwrite,
             collection=collection,
@@ -175,7 +174,7 @@ def ingest_document(
     if suffix in SUPPORTED_PRESENTATION_EXTENSIONS:
         return ingest_presentation(
             file_path,
-            db,
+            database,
             settings,
             overwrite=overwrite,
             collection=collection,
@@ -190,7 +189,7 @@ def ingest_document(
 
 def ingest_pdf(
     file_path: Path,
-    db: LanceDB,
+    database: Database,
     settings: Settings,
     *,
     overwrite: bool = False,
@@ -205,7 +204,7 @@ def ingest_pdf(
 
     Args:
         file_path: Path to the PDF file.
-        db: LanceDB connection.
+        database: Quarry database facade.
         settings: Application settings.
         overwrite: If True, delete existing data for this document first.
         collection: Collection name for organizing documents.
@@ -221,7 +220,7 @@ def ingest_pdf(
     progress("Analyzing: %s", document_name)
 
     if overwrite:
-        Database(db).store.delete_document(
+        database.store.delete_document(
             document_name, collection=collection, count=False
         )
 
@@ -242,7 +241,7 @@ def ingest_pdf(
     return _chunk_embed_store(
         all_pages,
         document_name,
-        db,
+        database,
         settings,
         progress,
         collection=collection,
@@ -258,7 +257,7 @@ def ingest_pdf(
 
 def ingest_text_file(
     file_path: Path,
-    db: LanceDB,
+    database: Database,
     settings: Settings,
     *,
     overwrite: bool = False,
@@ -275,7 +274,7 @@ def ingest_text_file(
 
     Args:
         file_path: Path to the text file.
-        db: LanceDB connection.
+        database: Quarry database facade.
         settings: Application settings.
         overwrite: If True, delete existing data for this document first.
         collection: Collection name for organizing documents.
@@ -291,7 +290,7 @@ def ingest_text_file(
     progress("Reading: %s", document_name)
 
     if overwrite:
-        Database(db).store.delete_document(
+        database.store.delete_document(
             document_name, collection=collection, count=False
         )
 
@@ -301,7 +300,7 @@ def ingest_text_file(
     return _chunk_embed_store(
         pages,
         document_name,
-        db,
+        database,
         settings,
         progress,
         collection=collection,
@@ -315,7 +314,7 @@ def ingest_text_file(
 
 def ingest_code_file(
     file_path: Path,
-    db: LanceDB,
+    database: Database,
     settings: Settings,
     *,
     overwrite: bool = False,
@@ -332,7 +331,7 @@ def ingest_code_file(
 
     Args:
         file_path: Path to the source code file.
-        db: LanceDB connection.
+        database: Quarry database facade.
         settings: Application settings.
         overwrite: If True, delete existing data for this document first.
         collection: Collection name for organizing documents.
@@ -348,7 +347,7 @@ def ingest_code_file(
     progress("Parsing: %s", document_name)
 
     if overwrite:
-        Database(db).store.delete_document(
+        database.store.delete_document(
             document_name, collection=collection, count=False
         )
 
@@ -358,7 +357,7 @@ def ingest_code_file(
     return _chunk_embed_store(
         pages,
         document_name,
-        db,
+        database,
         settings,
         progress,
         collection=collection,
@@ -372,7 +371,7 @@ def ingest_code_file(
 
 def ingest_spreadsheet(
     file_path: Path,
-    db: LanceDB,
+    database: Database,
     settings: Settings,
     *,
     overwrite: bool = False,
@@ -389,7 +388,7 @@ def ingest_spreadsheet(
 
     Args:
         file_path: Path to the spreadsheet file.
-        db: LanceDB connection.
+        database: Quarry database facade.
         settings: Application settings.
         overwrite: If True, delete existing data for this document first.
         collection: Collection name for organizing documents.
@@ -405,7 +404,7 @@ def ingest_spreadsheet(
     progress("Reading: %s", document_name)
 
     if overwrite:
-        Database(db).store.delete_document(
+        database.store.delete_document(
             document_name, collection=collection, count=False
         )
 
@@ -416,7 +415,7 @@ def ingest_spreadsheet(
     return _chunk_embed_store(
         pages,
         document_name,
-        db,
+        database,
         settings,
         progress,
         collection=collection,
@@ -430,7 +429,7 @@ def ingest_spreadsheet(
 
 def ingest_html_file(
     file_path: Path,
-    db: LanceDB,
+    database: Database,
     settings: Settings,
     *,
     overwrite: bool = False,
@@ -447,7 +446,7 @@ def ingest_html_file(
 
     Args:
         file_path: Path to the HTML file.
-        db: LanceDB connection.
+        database: Quarry database facade.
         settings: Application settings.
         overwrite: If True, delete existing data for this document first.
         collection: Collection name for organizing documents.
@@ -463,7 +462,7 @@ def ingest_html_file(
     progress("Reading: %s", document_name)
 
     if overwrite:
-        Database(db).store.delete_document(
+        database.store.delete_document(
             document_name, collection=collection, count=False
         )
 
@@ -473,7 +472,7 @@ def ingest_html_file(
     return _chunk_embed_store(
         pages,
         document_name,
-        db,
+        database,
         settings,
         progress,
         collection=collection,
@@ -487,7 +486,7 @@ def ingest_html_file(
 
 def ingest_presentation(
     file_path: Path,
-    db: LanceDB,
+    database: Database,
     settings: Settings,
     *,
     overwrite: bool = False,
@@ -504,7 +503,7 @@ def ingest_presentation(
 
     Args:
         file_path: Path to the presentation file.
-        db: LanceDB connection.
+        database: Quarry database facade.
         settings: Application settings.
         overwrite: If True, delete existing data for this document first.
         collection: Collection name for organizing documents.
@@ -520,7 +519,7 @@ def ingest_presentation(
     progress("Reading: %s", document_name)
 
     if overwrite:
-        Database(db).store.delete_document(
+        database.store.delete_document(
             document_name, collection=collection, count=False
         )
 
@@ -532,7 +531,7 @@ def ingest_presentation(
     return _chunk_embed_store(
         pages,
         document_name,
-        db,
+        database,
         settings,
         progress,
         collection=collection,
@@ -546,7 +545,7 @@ def ingest_presentation(
 
 def ingest_image(
     file_path: Path,
-    db: LanceDB,
+    database: Database,
     settings: Settings,
     *,
     overwrite: bool = False,
@@ -567,7 +566,7 @@ def ingest_image(
 
     Args:
         file_path: Path to image file.
-        db: LanceDB connection.
+        database: Quarry database facade.
         settings: Application settings.
         overwrite: If True, delete existing data for this document first.
         collection: Collection name for organizing documents.
@@ -583,7 +582,7 @@ def ingest_image(
     progress("Analyzing image: %s", document_name)
 
     if overwrite:
-        Database(db).store.delete_document(
+        database.store.delete_document(
             document_name, collection=collection, count=False
         )
 
@@ -599,7 +598,7 @@ def ingest_image(
         return _ingest_multipage_image(
             file_path,
             analysis.page_count,
-            db,
+            database,
             settings,
             progress,
             document_name=document_name,
@@ -623,7 +622,7 @@ def ingest_image(
     return _chunk_embed_store(
         [page],
         document_name,
-        db,
+        database,
         settings,
         progress,
         collection=collection,
@@ -745,7 +744,7 @@ def _encode_image_to_fit(
 def _ingest_multipage_image(
     file_path: Path,
     page_count: int,
-    db: LanceDB,
+    database: Database,
     settings: Settings,
     progress: Callable[..., None],
     *,
@@ -767,7 +766,7 @@ def _ingest_multipage_image(
     return _chunk_embed_store(
         pages,
         document_name,
-        db,
+        database,
         settings,
         progress,
         collection=collection,
@@ -783,7 +782,7 @@ def _ingest_multipage_image(
 def ingest_content(
     content: str,
     document_name: str,
-    db: LanceDB,
+    database: Database,
     settings: Settings,
     *,
     overwrite: bool = False,
@@ -799,7 +798,7 @@ def ingest_content(
     Args:
         content: The text content to ingest.
         document_name: Name for the document.
-        db: LanceDB connection.
+        database: Quarry database facade.
         settings: Application settings.
         overwrite: If True, delete existing data for this document first.
         collection: Collection name for organizing documents.
@@ -817,7 +816,7 @@ def ingest_content(
     progress("Processing: %s", document_name)
 
     if overwrite:
-        Database(db).store.delete_document(
+        database.store.delete_document(
             document_name, collection=collection, count=False
         )
 
@@ -827,7 +826,7 @@ def ingest_content(
     return _chunk_embed_store(
         pages,
         document_name,
-        db,
+        database,
         settings,
         progress,
         collection=collection,
@@ -882,7 +881,7 @@ def _fetch_url(url: str, *, timeout: int = 30) -> str:
 
 def ingest_url(
     url: str,
-    db: LanceDB,
+    database: Database,
     settings: Settings,
     *,
     overwrite: bool = False,
@@ -898,7 +897,7 @@ def ingest_url(
 
     Args:
         url: HTTP(S) URL to fetch.
-        db: LanceDB connection.
+        database: Quarry database facade.
         settings: Application settings.
         overwrite: If True, delete existing data for this URL first.
         collection: Collection name for organizing documents.
@@ -920,7 +919,7 @@ def ingest_url(
     progress("Fetched %d characters", len(html))
 
     if overwrite:
-        Database(db).store.delete_document(
+        database.store.delete_document(
             document_name, collection=collection, count=False
         )
 
@@ -930,7 +929,7 @@ def ingest_url(
     return _chunk_embed_store(
         pages,
         document_name,
-        db,
+        database,
         settings,
         progress,
         collection=collection,
@@ -944,7 +943,7 @@ def ingest_url(
 
 def _ingest_url_with_delay(
     page_url: str,
-    db: LanceDB,
+    database: Database,
     settings: Settings,
     *,
     overwrite: bool,
@@ -969,7 +968,7 @@ def _ingest_url_with_delay(
 
     return ingest_url(
         page_url,
-        db,
+        database,
         settings,
         overwrite=overwrite,
         collection=collection,
@@ -983,7 +982,7 @@ def _ingest_url_with_delay(
 
 def _bulk_ingest_entries(
     entries: list[SitemapEntry],
-    db: LanceDB,
+    database: Database,
     settings: Settings,
     *,
     source_url: str,
@@ -1022,7 +1021,7 @@ def _bulk_ingest_entries(
     progress("After filtering: %d URLs", after_filter)
 
     # Build lookup of existing documents for lastmod dedup
-    existing_docs = Database(db).catalog.list_documents(collection_filter=collection)
+    existing_docs = database.catalog.list_documents(collection_filter=collection)
     existing_timestamps: dict[str, str] = {
         doc["document_name"]: doc["ingestion_timestamp"] for doc in existing_docs
     }
@@ -1061,7 +1060,7 @@ def _bulk_ingest_entries(
                 executor.submit(
                     _ingest_url_with_delay,
                     page_url,
-                    db,
+                    database,
                     settings,
                     # Always replace existing chunks for URLs that passed dedup.
                     # The dedup logic above already skipped unchanged URLs.
@@ -1114,7 +1113,7 @@ def _bulk_ingest_entries(
 
 def ingest_sitemap(
     url: str,
-    db: LanceDB,
+    database: Database,
     settings: Settings,
     *,
     collection: str = "",
@@ -1138,7 +1137,7 @@ def ingest_sitemap(
 
     Args:
         url: Sitemap URL.
-        db: LanceDB connection.
+        database: Quarry database facade.
         settings: Application settings.
         collection: Collection name. Defaults to sitemap URL domain.
         include: URL path glob patterns to include (repeatable).
@@ -1169,7 +1168,7 @@ def ingest_sitemap(
 
     return _bulk_ingest_entries(
         entries,
-        db,
+        database,
         settings,
         source_url=url,
         collection=collection,
@@ -1189,7 +1188,7 @@ def ingest_sitemap(
 
 def ingest_auto(
     url: str,
-    db: LanceDB,
+    database: Database,
     settings: Settings,
     *,
     overwrite: bool = False,
@@ -1215,7 +1214,7 @@ def ingest_auto(
 
     Args:
         url: Any HTTP(S) URL on the target site.
-        db: LanceDB connection.
+        database: Quarry database facade.
         settings: Application settings.
         overwrite: Force re-ingest regardless of existing data.
         collection: Collection name. Defaults to the URL hostname.
@@ -1249,7 +1248,7 @@ def ingest_auto(
         progress("URL is a sitemap, crawling directly")
         return ingest_sitemap(
             url,
-            db,
+            database,
             settings,
             collection=collection,
             overwrite=overwrite,
@@ -1273,7 +1272,7 @@ def ingest_auto(
         progress("No sitemap found, ingesting single page")
         return ingest_url(
             url,
-            db,
+            database,
             settings,
             overwrite=overwrite,
             collection=collection,
@@ -1306,7 +1305,7 @@ def ingest_auto(
         progress("Sitemap has no pages matching %s, ingesting single page", path)
         return ingest_url(
             url,
-            db,
+            database,
             settings,
             overwrite=overwrite,
             collection=collection,
@@ -1319,7 +1318,7 @@ def ingest_auto(
 
     return _bulk_ingest_entries(
         entries,
-        db,
+        database,
         settings,
         source_url=url,
         collection=collection,
@@ -1350,7 +1349,7 @@ def _make_progress(
 def _chunk_embed_store(
     pages: list[PageContent],
     document_name: str,
-    db: LanceDB,
+    database: Database,
     settings: Settings,
     progress: Callable[..., None],
     *,
@@ -1407,7 +1406,7 @@ def _chunk_embed_store(
 
         progress("Storing in LanceDB")
         t0 = time.perf_counter()
-        inserted = Database(db).store.insert(chunks, vectors)
+        inserted = database.store.insert(chunks, vectors)
         t_store = time.perf_counter() - t0
         logger.info("pipeline: stored %d chunks in %.2fs", inserted, t_store)
         progress("Done: %d chunks indexed from %s", inserted, document_name)

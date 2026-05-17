@@ -244,7 +244,7 @@ def _process_project(
             ingest_content(
                 text,
                 doc_name,
-                database.db,
+                database,
                 settings,
                 overwrite=True,
                 collection=target_collection,

@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from quarry.config import Settings
-from quarry.db import ChunkCatalog, ChunkSearch, ChunkStore
+from quarry.db import ChunkCatalog, ChunkSearch, ChunkStore, Database
 from quarry.ingestion.backends import get_embedding_backend
 from quarry.ingestion.pipeline import ingest_content, ingest_document
 from quarry.results import SearchResult
@@ -45,10 +45,11 @@ class TestTextFileIngestAndSearch:
     def test_ingest_txt_and_search(
         self,
         lance_db: LanceDB,
+        database: Database,
         integration_settings: Settings,
     ) -> None:
         path = FIXTURES_DIR / "photosynthesis.txt"
-        ingest_document(path, lance_db, integration_settings)
+        ingest_document(path, database, integration_settings)
 
         results = _search(lance_db, "how plants convert sunlight", integration_settings)
         assert len(results) > 0
@@ -58,6 +59,7 @@ class TestTextFileIngestAndSearch:
     def test_search_ranks_relevant_higher(
         self,
         lance_db: LanceDB,
+        database: Database,
         integration_settings: Settings,
     ) -> None:
         for name in (
@@ -65,7 +67,7 @@ class TestTextFileIngestAndSearch:
             "french-revolution.txt",
             "quantum-computing.txt",
         ):
-            ingest_document(FIXTURES_DIR / name, lance_db, integration_settings)
+            ingest_document(FIXTURES_DIR / name, database, integration_settings)
 
         results = _search(
             lance_db, "quantum superposition qubits", integration_settings
@@ -76,10 +78,11 @@ class TestTextFileIngestAndSearch:
     def test_ingest_reports_correct_metadata(
         self,
         lance_db: LanceDB,
+        database: Database,
         integration_settings: Settings,
     ) -> None:
         path = FIXTURES_DIR / "photosynthesis.txt"
-        result = ingest_document(path, lance_db, integration_settings)
+        result = ingest_document(path, database, integration_settings)
 
         assert result["document_name"] == "photosynthesis.txt"
         sections = result.get("sections")
@@ -95,10 +98,11 @@ class TestMarkdownIngestAndSearch:
     def test_markdown_splits_on_headings(
         self,
         lance_db: LanceDB,
+        database: Database,
         integration_settings: Settings,
     ) -> None:
         result = ingest_document(
-            FIXTURES_DIR / "guide.md", lance_db, integration_settings
+            FIXTURES_DIR / "guide.md", database, integration_settings
         )
         sections = result.get("sections")
         assert sections is not None
@@ -112,9 +116,10 @@ class TestMarkdownIngestAndSearch:
     def test_markdown_search_across_sections(
         self,
         lance_db: LanceDB,
+        database: Database,
         integration_settings: Settings,
     ) -> None:
-        ingest_document(FIXTURES_DIR / "guide.md", lance_db, integration_settings)
+        ingest_document(FIXTURES_DIR / "guide.md", database, integration_settings)
 
         results = _search(
             lance_db, "neural networks machine learning", integration_settings
@@ -131,10 +136,11 @@ class TestLatexIngestion:
     def test_latex_splits_on_sections(
         self,
         lance_db: LanceDB,
+        database: Database,
         integration_settings: Settings,
     ) -> None:
         result = ingest_document(
-            FIXTURES_DIR / "calculus.tex", lance_db, integration_settings
+            FIXTURES_DIR / "calculus.tex", database, integration_settings
         )
         sections = result.get("sections")
         assert sections is not None
@@ -148,10 +154,11 @@ class TestPdfIngestion:
     def test_pdf_text_extraction(
         self,
         lance_db: LanceDB,
+        database: Database,
         integration_settings: Settings,
         pdf_fixture: Path,
     ) -> None:
-        result = ingest_document(pdf_fixture, lance_db, integration_settings)
+        result = ingest_document(pdf_fixture, database, integration_settings)
         total_pages = result.get("total_pages")
         assert total_pages is not None
         assert total_pages == 2
@@ -169,10 +176,11 @@ class TestPdfIngestion:
     def test_pdf_page_retrieval(
         self,
         lance_db: LanceDB,
+        database: Database,
         integration_settings: Settings,
         pdf_fixture: Path,
     ) -> None:
-        ingest_document(pdf_fixture, lance_db, integration_settings)
+        ingest_document(pdf_fixture, database, integration_settings)
 
         raw = ChunkCatalog(lance_db).get_page_text(pdf_fixture.name, 1)
         assert raw is not None
@@ -186,10 +194,11 @@ class TestDocxIngestion:
     def test_docx_splits_on_heading_styles(
         self,
         lance_db: LanceDB,
+        database: Database,
         integration_settings: Settings,
         docx_fixture: Path,
     ) -> None:
-        result = ingest_document(docx_fixture, lance_db, integration_settings)
+        result = ingest_document(docx_fixture, database, integration_settings)
         sections = result.get("sections")
         assert sections is not None
         assert sections == 2
@@ -209,10 +218,11 @@ class TestImageOcr:
     def test_png_ocr_and_search(
         self,
         lance_db: LanceDB,
+        database: Database,
         aws_settings: Settings,
         png_fixture: Path,
     ) -> None:
-        result = ingest_document(png_fixture, lance_db, aws_settings)
+        result = ingest_document(png_fixture, database, aws_settings)
         assert int(str(result["chunks"])) >= 1
 
         results = _search(lance_db, "Hello OCR", aws_settings)
@@ -226,17 +236,18 @@ class TestCollectionIsolation:
     def test_search_within_collection(
         self,
         lance_db: LanceDB,
+        database: Database,
         integration_settings: Settings,
     ) -> None:
         ingest_document(
             FIXTURES_DIR / "photosynthesis.txt",
-            lance_db,
+            database,
             integration_settings,
             collection="biology",
         )
         ingest_document(
             FIXTURES_DIR / "french-revolution.txt",
-            lance_db,
+            database,
             integration_settings,
             collection="history",
         )
@@ -254,17 +265,18 @@ class TestCollectionIsolation:
     def test_list_documents_by_collection(
         self,
         lance_db: LanceDB,
+        database: Database,
         integration_settings: Settings,
     ) -> None:
         ingest_document(
             FIXTURES_DIR / "photosynthesis.txt",
-            lance_db,
+            database,
             integration_settings,
             collection="biology",
         )
         ingest_document(
             FIXTURES_DIR / "french-revolution.txt",
-            lance_db,
+            database,
             integration_settings,
             collection="history",
         )
@@ -276,17 +288,18 @@ class TestCollectionIsolation:
     def test_list_collections(
         self,
         lance_db: LanceDB,
+        database: Database,
         integration_settings: Settings,
     ) -> None:
         ingest_document(
             FIXTURES_DIR / "photosynthesis.txt",
-            lance_db,
+            database,
             integration_settings,
             collection="biology",
         )
         ingest_document(
             FIXTURES_DIR / "french-revolution.txt",
-            lance_db,
+            database,
             integration_settings,
             collection="history",
         )
@@ -304,18 +317,19 @@ class TestOverwriteBehavior:
     def test_overwrite_replaces_content(
         self,
         lance_db: LanceDB,
+        database: Database,
         integration_settings: Settings,
     ) -> None:
         ingest_content(
             "The mitochondria is the powerhouse of the cell.",
             "bio.txt",
-            lance_db,
+            database,
             integration_settings,
         )
         ingest_content(
             "Tectonic plates shift and cause earthquakes along fault lines.",
             "bio.txt",
-            lance_db,
+            database,
             integration_settings,
             overwrite=True,
         )
@@ -337,12 +351,13 @@ class TestOverwriteBehavior:
     def test_no_overwrite_duplicates(
         self,
         lance_db: LanceDB,
+        database: Database,
         integration_settings: Settings,
     ) -> None:
         ingest_content(
             "Helium is a noble gas with atomic number two.",
             "chem.txt",
-            lance_db,
+            database,
             integration_settings,
         )
         count_before = ChunkStore(lance_db).count()
@@ -350,7 +365,7 @@ class TestOverwriteBehavior:
         ingest_content(
             "Helium is a noble gas with atomic number two.",
             "chem.txt",
-            lance_db,
+            database,
             integration_settings,
             overwrite=False,
         )
@@ -366,6 +381,7 @@ class TestMultiDocumentSearch:
     def test_search_returns_correct_document(
         self,
         lance_db: LanceDB,
+        database: Database,
         integration_settings: Settings,
     ) -> None:
         for name in (
@@ -373,7 +389,7 @@ class TestMultiDocumentSearch:
             "french-revolution.txt",
             "quantum-computing.txt",
         ):
-            ingest_document(FIXTURES_DIR / name, lance_db, integration_settings)
+            ingest_document(FIXTURES_DIR / name, database, integration_settings)
 
         queries = {
             "chloroplast Calvin cycle": "photosynthesis.txt",
@@ -391,6 +407,7 @@ class TestMultiDocumentSearch:
     def test_document_filter(
         self,
         lance_db: LanceDB,
+        database: Database,
         integration_settings: Settings,
     ) -> None:
         for name in (
@@ -398,7 +415,7 @@ class TestMultiDocumentSearch:
             "french-revolution.txt",
             "quantum-computing.txt",
         ):
-            ingest_document(FIXTURES_DIR / name, lance_db, integration_settings)
+            ingest_document(FIXTURES_DIR / name, database, integration_settings)
 
         results = _search(
             lance_db,
@@ -417,6 +434,7 @@ class TestRawTextIngestion:
     def test_ingest_text_and_search(
         self,
         lance_db: LanceDB,
+        database: Database,
         integration_settings: Settings,
     ) -> None:
         content = (
@@ -424,7 +442,7 @@ class TestRawTextIngestion:
             "lithosphere. The lithosphere is divided into several tectonic "
             "plates that float on the semi-fluid asthenosphere beneath them."
         )
-        result = ingest_content(content, "geology.txt", lance_db, integration_settings)
+        result = ingest_content(content, "geology.txt", database, integration_settings)
         assert int(str(result["chunks"])) >= 1
 
         results = _search(lance_db, "tectonic plates lithosphere", integration_settings)
@@ -434,12 +452,13 @@ class TestRawTextIngestion:
     def test_ingest_text_with_collection(
         self,
         lance_db: LanceDB,
+        database: Database,
         integration_settings: Settings,
     ) -> None:
         ingest_content(
             "RNA polymerase transcribes DNA into messenger RNA.",
             "bio-notes.txt",
-            lance_db,
+            database,
             integration_settings,
             collection="notes",
         )
@@ -456,6 +475,7 @@ class TestCollectionDerivation:
     def test_auto_derive_from_parent_dir(
         self,
         lance_db: LanceDB,
+        database: Database,
         integration_settings: Settings,
         tmp_path: Path,
     ) -> None:
@@ -470,7 +490,7 @@ class TestCollectionDerivation:
         from quarry.collections import CollectionName
 
         col = CollectionName.from_path(notes)
-        ingest_document(notes, lance_db, integration_settings, collection=str(col))
+        ingest_document(notes, database, integration_settings, collection=str(col))
 
         docs = ChunkCatalog(lance_db).list_documents()
         assert len(docs) == 1
@@ -479,6 +499,7 @@ class TestCollectionDerivation:
     def test_explicit_override(
         self,
         lance_db: LanceDB,
+        database: Database,
         integration_settings: Settings,
         tmp_path: Path,
     ) -> None:
@@ -493,7 +514,7 @@ class TestCollectionDerivation:
         from quarry.collections import CollectionName
 
         col = CollectionName.from_path(notes, explicit="physics")
-        ingest_document(notes, lance_db, integration_settings, collection=str(col))
+        ingest_document(notes, database, integration_settings, collection=str(col))
 
         docs = ChunkCatalog(lance_db).list_documents()
         assert len(docs) == 1

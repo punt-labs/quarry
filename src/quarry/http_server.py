@@ -640,7 +640,7 @@ async def _run_remember_task(
             ingest_content,
             content,
             name,
-            ctx.database.db,
+            ctx.database,
             ctx.settings,
             overwrite=overwrite,
             collection=collection,
@@ -752,7 +752,7 @@ async def _run_ingest_task(
         result = await run_in_threadpool(
             ingest_auto,
             source,
-            ctx.database.db,
+            ctx.database,
             ctx.settings,
             overwrite=overwrite,
             collection=collection,

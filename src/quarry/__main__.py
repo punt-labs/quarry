@@ -648,7 +648,7 @@ def ingest_cmd(
         with _progress(f"Fetching {source}") as cb:
             result = ingest_auto(
                 source,
-                database.db,
+                database,
                 settings,
                 overwrite=overwrite,
                 collection=collection,
@@ -677,7 +677,7 @@ def ingest_cmd(
         with _progress(f"Processing {file_path.name}") as cb:
             result = ingest_document(
                 file_path,
-                database.db,
+                database,
                 settings,
                 overwrite=overwrite,
                 collection=str(col),
@@ -852,7 +852,7 @@ def remember(
         result = ingest_content(
             content,
             name,
-            database.db,
+            database,
             settings,
             overwrite=overwrite,
             collection=collection,

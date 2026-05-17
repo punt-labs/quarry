@@ -170,7 +170,7 @@ def _do_ingest(
     if source.startswith(("http://", "https://")):
         pipeline_ingest_auto(
             source,
-            database.db,
+            database,
             settings,
             overwrite=overwrite,
             collection=collection or "",
@@ -179,9 +179,7 @@ def _do_ingest(
 
     path = Path(source)
     col = CollectionName.from_path(path, explicit=collection or None)
-    ingest_document(
-        path, database.db, settings, overwrite=overwrite, collection=str(col)
-    )
+    ingest_document(path, database, settings, overwrite=overwrite, collection=str(col))
 
 
 @mcp.tool()
@@ -229,7 +227,7 @@ def _do_remember(
     pipeline_ingest_content(
         content,
         document_name,
-        database.db,
+        database,
         settings,
         overwrite=overwrite,
         collection=collection,
