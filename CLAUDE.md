@@ -97,6 +97,16 @@ Bootstrap (first time only): run `make update-oo` to create the initial baseline
 - `make check-coupling` — coupling/cohesion analysis (efferent coupling between modules, public API surface, circular import detection, LCOM class cohesion). Informational — not in the `check` chain yet.
 - `make update-coupling` — update coupling baseline after improvements.
 
+### Database facade convention
+
+Functions in `src/quarry/ingestion/pipeline.py` and `src/quarry/ingestion/url_ingester.py` accept `database: Database`, NOT `db: LanceDB`. Callers pass their existing `Database` instance — don't extract `.db` to pass the raw LanceDB connection. Re-wrapping via `Database(db)` re-instantiates the full facade (ChunkStore, ChunkSearch, ChunkCatalog, SchemaManager, TableOptimizer) per call. (Cursor Bugbot flagged this on PR #289; the fix landed in the same PR.)
+
+**When mocking `get_db` in tests, patch `quarry.db.facade.get_db`, not `quarry.db.storage.get_db`.** `Database.connect()` imports `get_db` at module scope into `quarry.db.facade`'s namespace. Patching the storage definition site leaves the facade's bound reference untouched and the mock becomes a silent no-op — tests still pass because they hit the real LanceDB.
+
+### Suppression ratchet uses `tokenize`, not regex/AST heuristic
+
+`tools/suppression_ratchet.py` counts suppressions by walking `tokenize` tokens. A line is "code" iff it carries any non-trivial token; a `COMMENT` token is the only real suppression source. Don't revert to the older AST + `_CODE_START_RE` heuristic — it had documented blind spots (`async def`, attribute assignments, tuple targets, triple-quoted single-line docstrings containing `# noqa` text). The tokenize version is the principled implementation that handles all of those correctly.
+
 ## Testing
 
 ### Pyramid
