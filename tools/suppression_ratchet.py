@@ -250,7 +250,7 @@ class SuppressionReport:
         for category, count in sorted(self._by_category.items()):
             _writeln(f"{category:<20} {count:>6}")
 
-    def print_threshold(self) -> None:
+    def print_per_file_breakdown(self) -> None:
         """Print per-file breakdown."""
         _writeln("\n--- Per-file breakdown ---")
         if not self._by_file:
@@ -459,7 +459,7 @@ def main() -> None:
     else:
         report.print_report()
         if "--threshold" in sys.argv:
-            report.print_threshold()
+            report.print_per_file_breakdown()
 
 
 if __name__ == "__main__":
