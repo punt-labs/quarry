@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-import ast
 import contextlib
 import datetime
+import io
 import json
 import os
 import re
 import sys
 import tempfile
+import token
+import tokenize
 import tomllib
 from pathlib import Path
 from typing import ClassVar, Self
@@ -25,17 +27,27 @@ _TYPE_IGNORE_RE = re.compile(r"#\s*type:\s*ignore\b")
 _PYLINT_DISABLE_RE = re.compile(r"#\s*pylint:\s*disable\b")
 _PYRIGHT_IGNORE_RE = re.compile(r"#\s*pyright:\s*ignore\b")
 
-_CODE_START_RE = re.compile(
-    r"^(?:[a-zA-Z_]\w*\s*[=:([]|"
-    r"(?:def|class|return|yield|raise|import|from|if|elif|else|for|while|"
-    r"try|except|finally|with|assert|del|pass|break|continue|global|nonlocal)\b|@)",
-)
-
 _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("noqa", _NOQA_RE),
     ("type_ignore", _TYPE_IGNORE_RE),
     ("pylint_disable", _PYLINT_DISABLE_RE),
     ("pyright_ignore", _PYRIGHT_IGNORE_RE),
+)
+
+# Token types that do not, on their own, make a line "code" for the
+# purposes of counting suppressions.  A line carrying only these tokens
+# (e.g. just a comment, or just blank/indent/newline) cannot host a
+# real suppression — it is annotation, not the code being annotated.
+_NON_CODE_TOKEN_TYPES = frozenset(
+    {
+        token.NEWLINE,
+        token.NL,
+        token.INDENT,
+        token.DEDENT,
+        token.COMMENT,
+        token.ENCODING,
+        token.ENDMARKER,
+    }
 )
 
 _CATEGORIES: tuple[str, ...] = (
@@ -85,53 +97,45 @@ class FileSuppressions:
         return sum(self._counts.values())
 
     def _scan(self, source: str) -> None:
-        """Scan source for suppression comments on code lines."""
-        for line in self._code_lines(source):
-            for name, pattern in _PATTERNS:
-                if pattern.search(line):
-                    self._counts[name] += 1
+        """Scan source for suppression comments on code lines.
 
-    def _code_lines(self, source: str) -> list[str]:
-        """Return lines carrying code, excluding comments and string interiors."""
-        lines = source.splitlines()
-        if not lines:
-            return []
-        string_lines = self._string_line_numbers(source)
-        return [
-            line
-            for i, line in enumerate(lines, start=1)
-            if self._is_code_line(line, i, string_lines)
-        ]
-
-    @staticmethod
-    def _string_line_numbers(source: str) -> set[int]:
-        """Return 1-based line numbers that fall inside string literals."""
-        result: set[int] = set()
+        Uses the ``tokenize`` module so that ``# noqa`` text inside a
+        string literal is not confused with a real comment token, and
+        any line that holds a true ``COMMENT`` token alongside any
+        non-trivial code token is counted regardless of whether the
+        line also overlaps a multi-line string.  This is the principled
+        version of the older AST-plus-regex heuristic, which had
+        documented blind spots (`async def`, `obj.attr =`, tuple
+        targets, single-line docstrings containing the word ``noqa``).
+        """
         try:
-            tree = ast.parse(source)
-        except SyntaxError:
-            return result
-        for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.Constant)
-                and isinstance(node.value, str)
-                and node.end_lineno is not None
-            ):
-                result.update(range(node.lineno, node.end_lineno + 1))
-        return result
+            tokens = list(tokenize.tokenize(io.BytesIO(source.encode()).readline))
+        except (tokenize.TokenError, SyntaxError, IndentationError):
+            # Unparseable source — degrade to zero rather than crash.
+            return
 
-    @staticmethod
-    def _is_code_line(line: str, lineno: int, string_lines: set[int]) -> bool:
-        """Determine whether a source line carries actual code."""
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            return False
-        if lineno not in string_lines:
-            return True
-        # Line overlaps a string literal — check if it has code structure
-        if stripped.startswith(('"""', "'''")):
-            return True
-        return bool(_CODE_START_RE.match(stripped))
+        code_lines: set[int] = set()
+        comments_by_line: dict[int, str] = {}
+        for tok in tokens:
+            if tok.type == token.COMMENT:
+                comments_by_line[tok.start[0]] = tok.string
+                continue
+            if tok.type in _NON_CODE_TOKEN_TYPES:
+                continue
+            # STRING and every "real" code token (NAME, OP, NUMBER, etc.)
+            # mark every line of the token's span as code.  Module/function
+            # docstrings are statement-position STRINGs and do carry code
+            # meaning — a noqa marker outside the closing quote on the
+            # same line is a real suppression for that statement.
+            for line in range(tok.start[0], tok.end[0] + 1):
+                code_lines.add(line)
+
+        for lineno, comment_text in comments_by_line.items():
+            if lineno not in code_lines:
+                continue
+            for name, pattern in _PATTERNS:
+                if pattern.search(comment_text):
+                    self._counts[name] += 1
 
     def to_dict(self) -> dict[str, int]:
         """Return non-zero category counts."""

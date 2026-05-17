@@ -76,14 +76,49 @@ x = 1
         fs = ratchet.FileSuppressions("f.py", source)
         assert fs.pylint_disable == 1
 
-    def test_syntax_error_returns_zero(self) -> None:
-        """Unparseable source must not crash — returns zero counts."""
-        source = "def broken(  # noqa: E501\n"
+    def test_tokenize_error_returns_zero(self) -> None:
+        """Untokenizable source must not crash — returns zero counts."""
+        # Unterminated triple-quoted string raises tokenize.TokenizeError
+        # at the EOF.  Counting nothing is safer than counting incorrectly
+        # on broken input.
+        source = '"""open string never closes\nx = 1  # noqa: E501\n'
         fs = ratchet.FileSuppressions("f.py", source)
-        # Without AST analysis, _string_line_numbers returns empty,
-        # so the noqa is counted as a real comment.  Acceptable degraded
-        # behavior — caller still gets a number, no crash.
-        assert isinstance(fs.noqa, int)
+        assert fs.noqa == 0
+
+    def test_noqa_inside_single_line_docstring_not_counted(self) -> None:
+        """A triple-quoted string containing # noqa is string content,
+
+        not a real suppression — must not be counted (the older AST+regex
+        path treated lines starting with triple-quote as code and would
+        incorrectly count this).
+        """
+        source = '"""docs # noqa: E501"""\nx = 1\n'
+        fs = ratchet.FileSuppressions("f.py", source)
+        assert fs.noqa == 0
+
+    def test_noqa_outside_closing_quotes_on_docstring_line_counted(self) -> None:
+        """A real comment after the closing quote on the same line IS a suppression."""
+        source = '"""docs"""  # noqa: E501\nx = 1\n'
+        fs = ratchet.FileSuppressions("f.py", source)
+        assert fs.noqa == 1
+
+    def test_async_def_with_noqa_counted(self) -> None:
+        """`async def` was missing from the older regex keyword list."""
+        source = "async def f():  # noqa: D103\n    return 1\n"
+        fs = ratchet.FileSuppressions("f.py", source)
+        assert fs.noqa == 1
+
+    def test_attribute_assignment_with_noqa_counted(self) -> None:
+        """`obj.attr = 1` starts with identifier+dot which the regex missed."""
+        source = "class C: pass\nc = C()\nc.x = 1  # noqa: D101\n"
+        fs = ratchet.FileSuppressions("f.py", source)
+        assert fs.noqa == 1
+
+    def test_tuple_assignment_with_noqa_counted(self) -> None:
+        """`a, b = ...` starts with identifier+comma which the regex missed."""
+        source = "a, b = 1, 2  # noqa: E501\n"
+        fs = ratchet.FileSuppressions("f.py", source)
+        assert fs.noqa == 1
 
 
 class TestPerFileIgnoresCounter:

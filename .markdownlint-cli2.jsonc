@@ -5,7 +5,9 @@
     ".punt-labs/ethos/agents/",
     ".punt-labs/quarry/captures/",
     ".venv/",
-    ".tmp/"
+    ".tmp/",
+    "dist/",
+    "node_modules/"
   ],
   "overrides": [
     {

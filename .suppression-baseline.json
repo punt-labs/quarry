@@ -1,7 +1,7 @@
 {
-  "total": 261,
+  "total": 263,
   "by_category": {
-    "noqa": 217,
+    "noqa": 219,
     "type_ignore": 10,
     "pylint_disable": 0,
     "pyright_ignore": 12,
@@ -28,7 +28,7 @@
       "noqa": 3
     },
     "src/quarry/db/storage.py": {
-      "noqa": 5,
+      "noqa": 7,
       "type_ignore": 1
     },
     "src/quarry/doctor.py": {
@@ -96,5 +96,5 @@
       "type_ignore": 1
     }
   },
-  "updated_at": "2026-05-16T23:10:35Z"
+  "updated_at": "2026-05-17T00:01:17Z"
 }
