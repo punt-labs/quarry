@@ -115,7 +115,7 @@ class TestJsonEquivalenceFind:
                 "quarry.__main__._resolved_settings",
                 return_value=_mock_settings(),
             ),
-            patch("quarry.db.storage.get_db"),
+            patch("quarry.db.facade.get_db"),
             patch(
                 "quarry.__main__.get_embedding_backend",
                 return_value=mock_backend,
@@ -181,7 +181,7 @@ class TestJsonEquivalenceStatus:
                 "quarry.__main__._resolved_settings",
                 return_value=mock_settings,
             ),
-            patch("quarry.db.storage.get_db"),
+            patch("quarry.db.facade.get_db"),
             patch("quarry.db.chunk_store.ChunkStore.count", return_value=100),
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_collections",
@@ -248,7 +248,7 @@ class TestJsonShapeIngest:
                 "quarry.__main__._resolved_settings",
                 return_value=_mock_settings(),
             ),
-            patch("quarry.db.storage.get_db"),
+            patch("quarry.db.facade.get_db"),
             patch(
                 "quarry.__main__.ingest_auto",
                 return_value=local_result,
@@ -303,7 +303,7 @@ class TestJsonShapeRemember:
                 "quarry.__main__._resolved_settings",
                 return_value=_mock_settings(),
             ),
-            patch("quarry.db.storage.get_db"),
+            patch("quarry.db.facade.get_db"),
             patch(
                 "quarry.__main__.ingest_content",
                 return_value=local_result,
@@ -352,7 +352,7 @@ class TestJsonShapeDelete:
                 "quarry.__main__._resolved_settings",
                 return_value=_mock_settings(),
             ),
-            patch("quarry.db.storage.get_db"),
+            patch("quarry.db.facade.get_db"),
             patch("quarry.db.chunk_store.ChunkStore.delete_document", return_value=10),
         ):
             result = runner.invoke(app, ["--json", "delete", "report.pdf"])
@@ -449,7 +449,7 @@ class TestJsonShapeDeregister:
                 return_value=settings,
             ),
             patch("quarry.__main__.SyncRegistry") as mock_registry,
-            patch("quarry.db.storage.get_db"),
+            patch("quarry.db.facade.get_db"),
             patch("quarry.db.chunk_store.ChunkStore.delete_document", return_value=3),
         ):
             mock_registry.return_value.get_registration.return_value = (
@@ -507,7 +507,7 @@ class TestJsonShapeSync:
                 "quarry.__main__._resolved_settings",
                 return_value=_mock_settings(),
             ),
-            patch("quarry.db.storage.get_db"),
+            patch("quarry.db.facade.get_db"),
             patch(
                 "quarry.__main__.sync_all",
                 return_value=mock_results,
