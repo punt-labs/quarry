@@ -25,11 +25,10 @@ from quarry.config import (
     DEFAULT_PORT,
     Settings,
 )
-from quarry.db import ChunkCatalog, ChunkSearch, ChunkStore
+from quarry.db import Database
 from quarry.db.storage import (
     dir_size_bytes,
     discover_databases,
-    get_db,
 )
 from quarry.formatting import (
     format_collections,
@@ -56,13 +55,7 @@ from quarry.remote import (
     ws_to_http,
 )
 from quarry.sync import sync_all
-from quarry.sync_registry import (
-    deregister_directory,
-    get_registration,
-    list_registrations,
-    open_registry,
-    register_directory,
-)
+from quarry.sync_registry import SyncRegistry
 from quarry.tls import TLS_DIR, cert_fingerprint
 
 logger = logging.getLogger(__name__)
@@ -530,10 +523,10 @@ def find_cmd(
         return
 
     settings = _resolved_settings()
-    db = get_db(settings.lancedb_path)
+    database = Database.connect(settings.lancedb_path)
 
     query_vector = get_embedding_backend(settings).embed_query(query)
-    results = ChunkSearch(db).hybrid_search(
+    results = database.search.hybrid_search(
         query,
         query_vector,
         limit=limit,
@@ -649,13 +642,13 @@ def ingest_cmd(
         return
 
     settings = _resolved_settings()
-    db = get_db(settings.lancedb_path)
+    database = Database.connect(settings.lancedb_path)
 
     if is_url:
         with _progress(f"Fetching {source}") as cb:
             result = ingest_auto(
                 source,
-                db,
+                database,
                 settings,
                 overwrite=overwrite,
                 collection=collection,
@@ -684,7 +677,7 @@ def ingest_cmd(
         with _progress(f"Processing {file_path.name}") as cb:
             result = ingest_document(
                 file_path,
-                db,
+                database,
                 settings,
                 overwrite=overwrite,
                 collection=str(col),
@@ -745,10 +738,10 @@ def show_cmd(
         return
 
     settings = _resolved_settings()
-    db = get_db(settings.lancedb_path)
+    database = Database.connect(settings.lancedb_path)
 
     if page is not None:
-        text = ChunkCatalog(db).get_page_text(
+        text = database.catalog.get_page_text(
             document_name, page, collection=collection or None
         )
         if text is None:
@@ -763,7 +756,7 @@ def show_cmd(
         )
         return
 
-    docs = ChunkCatalog(db).list_documents(collection_filter=collection or None)
+    docs = database.catalog.list_documents(collection_filter=collection or None)
     match = [d for d in docs if d["document_name"] == document_name]
     if not match:
         err_console.print(f"Document {document_name!r} not found", style="red")
@@ -853,13 +846,13 @@ def remember(
         return
 
     settings = _resolved_settings()
-    db = get_db(settings.lancedb_path)
+    database = Database.connect(settings.lancedb_path)
 
     with _progress("Remembering") as cb:
         result = ingest_content(
             content,
             name,
-            db,
+            database,
             settings,
             overwrite=overwrite,
             collection=collection,
@@ -893,16 +886,16 @@ def status_cmd() -> None:
         return
 
     settings = _resolved_settings()
-    db = get_db(settings.lancedb_path)
+    database = Database.connect(settings.lancedb_path)
 
-    chunks = ChunkStore(db).count()
-    cols = ChunkCatalog(db).list_collections()
+    chunks = database.store.count()
+    cols = database.catalog.list_collections()
     doc_count = sum(c["document_count"] for c in cols)
 
     if settings.registry_path.exists():
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         try:
-            regs = list_registrations(conn)
+            regs = conn.list_registrations()
         finally:
             conn.close()
     else:
@@ -998,13 +991,13 @@ def delete_cmd(
         return
 
     settings = _resolved_settings()
-    db = get_db(settings.lancedb_path)
+    database = Database.connect(settings.lancedb_path)
 
     if kind == "collection":
-        deleted = ChunkStore(db).delete_collection(name)
+        deleted = database.store.delete_collection(name)
         label = f"collection {name!r}"
     elif kind == "document":
-        deleted = ChunkStore(db).delete_document(name, collection=collection or None)
+        deleted = database.store.delete_document(name, collection=collection or None)
         label = f"{name!r}"
     else:
         err_console.print(
@@ -1055,9 +1048,9 @@ def register(
     settings = _resolved_settings()
     resolved = directory.resolve()
     col = collection or resolved.name
-    conn = open_registry(settings.registry_path)
+    conn = SyncRegistry(settings.registry_path)
     try:
-        reg = register_directory(conn, resolved, col)
+        reg = conn.register_directory(resolved, col)
         _emit(
             {"directory": str(reg.directory), "collection": reg.collection},
             f"Registered {reg.directory} as collection {reg.collection!r}",
@@ -1095,22 +1088,21 @@ def deregister(
         return
 
     settings = _resolved_settings()
-    conn = open_registry(settings.registry_path)
+    conn = SyncRegistry(settings.registry_path)
     try:
-        existing = get_registration(conn, collection)
-        doc_names = deregister_directory(conn, collection)
+        existing = conn.get_registration(collection)
+        if existing is None:
+            err_console.print(f"No registration found for {collection!r}", style="red")
+            raise typer.Exit(code=1)
+        doc_names = conn.deregister_directory(collection)
     finally:
         conn.close()
 
-    if existing is None:
-        err_console.print(f"No registration found for {collection!r}", style="red")
-        raise typer.Exit(code=1)
-
     deleted_chunks = 0
     if not keep_data and doc_names:
-        db = get_db(settings.lancedb_path)
+        database = Database.connect(settings.lancedb_path)
         for name in doc_names:
-            deleted_chunks += ChunkStore(db).delete_document(
+            deleted_chunks += database.store.delete_document(
                 name, collection=collection
             )
     removed = len(doc_names)
@@ -1220,11 +1212,11 @@ def sync_cmd(
     settings = _resolved_settings()
     effective_workers = workers if workers is not None else _auto_workers(settings)
     logger.info("Using %d sync workers", effective_workers)
-    db = get_db(settings.lancedb_path)
+    database = Database.connect(settings.lancedb_path)
 
     with _progress("Syncing") as cb:
         results = sync_all(
-            db,
+            database.db,
             settings,
             max_workers=effective_workers,
             progress_callback=cb,
@@ -1346,11 +1338,11 @@ def optimize_cmd(
     skipped by default to prevent a compaction death spiral. Use --force
     to bypass this safety guard for manual recovery.
     """
-    from quarry.db.optimizer import FRAGMENT_THRESHOLD, TableOptimizer  # noqa: PLC0415
+    from quarry.db.optimizer import FRAGMENT_THRESHOLD  # noqa: PLC0415
 
     settings = _resolved_settings()
-    db = get_db(settings.lancedb_path)
-    opt = TableOptimizer(db)
+    database = Database.connect(settings.lancedb_path)
+    opt = database.optimizer
 
     fragments = opt.count_fragments()
     if not _quiet:
@@ -1696,8 +1688,8 @@ def list_documents_cmd(
         return
 
     settings = _resolved_settings()
-    db = get_db(settings.lancedb_path)
-    local_docs = ChunkCatalog(db).list_documents(collection_filter=collection or None)
+    database = Database.connect(settings.lancedb_path)
+    local_docs = database.catalog.list_documents(collection_filter=collection or None)
     _emit(local_docs, format_documents(local_docs))
 
 
@@ -1723,8 +1715,8 @@ def list_collections_cmd() -> None:
         return
 
     settings = _resolved_settings()
-    db = get_db(settings.lancedb_path)
-    local_cols = ChunkCatalog(db).list_collections()
+    database = Database.connect(settings.lancedb_path)
+    local_cols = database.catalog.list_collections()
     _emit(local_cols, format_collections(local_cols))
 
 
@@ -1766,9 +1758,9 @@ def list_registrations_cmd() -> None:
         return
 
     settings = _resolved_settings()
-    conn = open_registry(settings.registry_path)
+    conn = SyncRegistry(settings.registry_path)
     try:
-        regs = list_registrations(conn)
+        regs = conn.list_registrations()
     finally:
         conn.close()
 

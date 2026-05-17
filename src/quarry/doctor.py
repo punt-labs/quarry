@@ -224,8 +224,8 @@ def _human_size(nbytes: int) -> str:
 
 def _check_fts_health(db_path: Path) -> CheckResult:
     """Verify the Tantivy FTS index is queryable."""
+    from quarry.db.facade import Database  # noqa: PLC0415
     from quarry.db.schema import TABLE_NAME  # noqa: PLC0415
-    from quarry.db.storage import get_db  # noqa: PLC0415
 
     if not db_path.exists():
         return CheckResult(
@@ -235,15 +235,15 @@ def _check_fts_health(db_path: Path) -> CheckResult:
             required=False,
         )
     try:
-        db = get_db(db_path)
-        if TABLE_NAME not in db.list_tables().tables:
+        database = Database.connect(db_path)
+        if TABLE_NAME not in database.db.list_tables().tables:
             return CheckResult(
                 name="FTS index",
                 passed=True,
                 message="no table yet",
                 required=False,
             )
-        table = db.open_table(TABLE_NAME)
+        table = database.db.open_table(TABLE_NAME)
         table.search("health", query_type="fts").limit(1).to_list()
         return CheckResult(
             name="FTS index",
@@ -296,7 +296,7 @@ def _sync_age_result(count: int, oldest_age: float) -> CheckResult:
 
 def _check_sync_health(registry_path: Path) -> CheckResult:
     """Check sync recency across all registered collections."""
-    from quarry.sync_registry import list_registrations, open_registry  # noqa: PLC0415
+    from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
 
     if not registry_path.exists():
         return CheckResult(
@@ -307,8 +307,8 @@ def _check_sync_health(registry_path: Path) -> CheckResult:
         )
     conn = None
     try:
-        conn = open_registry(registry_path)
-        regs = list_registrations(conn)
+        conn = SyncRegistry(registry_path)
+        regs = conn.list_registrations()
         if not regs:
             return CheckResult(
                 name="Sync",
@@ -361,7 +361,7 @@ def _check_sync_health(registry_path: Path) -> CheckResult:
 
 def _check_sync_directories(registry_path: Path) -> CheckResult:
     """Verify registered sync directories exist on disk."""
-    from quarry.sync_registry import list_registrations, open_registry  # noqa: PLC0415
+    from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
 
     if not registry_path.exists():
         return CheckResult(
@@ -372,8 +372,8 @@ def _check_sync_directories(registry_path: Path) -> CheckResult:
         )
     conn = None
     try:
-        conn = open_registry(registry_path)
-        regs = list_registrations(conn)
+        conn = SyncRegistry(registry_path)
+        regs = conn.list_registrations()
         if not regs:
             return CheckResult(
                 name="Sync directories",
@@ -441,9 +441,8 @@ def _check_orphaned_captures(
     db_path: Path,
 ) -> CheckResult:
     """Report captures collections whose base has no registration."""
-    from quarry.db.chunk_catalog import ChunkCatalog  # noqa: PLC0415
-    from quarry.db.storage import get_db  # noqa: PLC0415
-    from quarry.sync_registry import list_registrations, open_registry  # noqa: PLC0415
+    from quarry.db.facade import Database  # noqa: PLC0415
+    from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
 
     if not db_path.exists() or not registry_path.exists():
         return CheckResult(
@@ -453,13 +452,13 @@ def _check_orphaned_captures(
             required=False,
         )
 
-    db = get_db(db_path)
-    cols = ChunkCatalog(db).list_collections()
+    database = Database.connect(db_path)
+    cols = database.catalog.list_collections()
     col_names = {c["collection"] for c in cols}
 
-    conn = open_registry(registry_path)
+    conn = SyncRegistry(registry_path)
     try:
-        regs = list_registrations(conn)
+        regs = conn.list_registrations()
     finally:
         conn.close()
 

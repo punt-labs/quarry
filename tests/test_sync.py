@@ -10,23 +10,13 @@ import pytest
 
 from quarry.models import Chunk
 from quarry.sync import (
-    _DEFAULT_IGNORE_PATTERNS,
     SyncConfig,
-    _content_hash,
-    _load_ignore_spec,
     compute_sync_plan,
-    discover_files,
     sync_all,
     sync_collection,
 )
-from quarry.sync_registry import (
-    FileRecord,
-    get_file,
-    list_files,
-    open_registry,
-    register_directory,
-    upsert_file,
-)
+from quarry.sync_discovery import _DEFAULT_IGNORE_PATTERNS, FileDiscovery
+from quarry.sync_registry import FileRecord, SyncRegistry
 
 # ---------------------------------------------------------------------------
 # SyncConfig
@@ -83,7 +73,7 @@ class TestDiscoverFiles:
         (tmp_path / "b.txt").touch()
         (tmp_path / "c.xyz").touch()
         exts = frozenset({".pdf", ".txt"})
-        result = discover_files(tmp_path, exts)
+        result = FileDiscovery(tmp_path).discover(exts)
         names = [p.name for p in result]
         assert "a.pdf" in names
         assert "b.txt" in names
@@ -94,24 +84,24 @@ class TestDiscoverFiles:
         sub.mkdir()
         (sub / "deep.pdf").touch()
         exts = frozenset({".pdf"})
-        result = discover_files(tmp_path, exts)
+        result = FileDiscovery(tmp_path).discover(exts)
         assert len(result) == 1
         assert result[0].name == "deep.pdf"
 
     def test_ignores_unsupported(self, tmp_path: Path):
         (tmp_path / "notes.log").touch()
         (tmp_path / "data.csv").touch()
-        result = discover_files(tmp_path, frozenset({".pdf"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".pdf"}))
         assert result == []
 
     def test_empty_directory(self, tmp_path: Path):
-        result = discover_files(tmp_path, frozenset({".pdf", ".txt"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".pdf", ".txt"}))
         assert result == []
 
     def test_returns_sorted_absolute_paths(self, tmp_path: Path):
         (tmp_path / "z.pdf").touch()
         (tmp_path / "a.pdf").touch()
-        result = discover_files(tmp_path, frozenset({".pdf"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".pdf"}))
         assert len(result) == 2
         assert result[0].name == "a.pdf"
         assert result[1].name == "z.pdf"
@@ -120,7 +110,7 @@ class TestDiscoverFiles:
     def test_skips_resource_fork_files(self, tmp_path: Path):
         (tmp_path / "report.pdf").touch()
         (tmp_path / "._report.pdf").touch()
-        result = discover_files(tmp_path, frozenset({".pdf"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".pdf"}))
         assert len(result) == 1
         assert result[0].name == "report.pdf"
 
@@ -129,7 +119,7 @@ class TestDiscoverFiles:
         trash.mkdir()
         (trash / "deleted.pdf").touch()
         (tmp_path / "keep.pdf").touch()
-        result = discover_files(tmp_path, frozenset({".pdf"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".pdf"}))
         assert len(result) == 1
         assert result[0].name == "keep.pdf"
 
@@ -138,7 +128,7 @@ class TestDiscoverFiles:
         sub.mkdir()
         (sub / "._hidden.pdf").touch()
         (sub / "visible.pdf").touch()
-        result = discover_files(tmp_path, frozenset({".pdf"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".pdf"}))
         assert len(result) == 1
         assert result[0].name == "visible.pdf"
 
@@ -147,7 +137,7 @@ class TestDiscoverFiles:
         hidden.mkdir()
         (hidden / "config.txt").touch()
         (tmp_path / "notes.txt").touch()
-        result = discover_files(tmp_path, frozenset({".txt"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".txt"}))
         assert len(result) == 1
         assert result[0].name == "notes.txt"
 
@@ -156,7 +146,7 @@ class TestDiscoverFiles:
         venv.mkdir(parents=True)
         (venv / "module.py").touch()
         (tmp_path / "app.py").touch()
-        result = discover_files(tmp_path, frozenset({".py"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".py"}))
         assert len(result) == 1
         assert result[0].name == "app.py"
 
@@ -168,7 +158,7 @@ class TestDiscoverFiles:
         # .js not in default SUPPORTED_EXTENSIONS, use .txt for simplicity
         (tmp_path / "node_modules" / "readme.txt").touch()
         (tmp_path / "readme.txt").touch()
-        result = discover_files(tmp_path, frozenset({".txt"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".txt"}))
         assert len(result) == 1
         assert result[0].name == "readme.txt"
 
@@ -177,7 +167,7 @@ class TestDiscoverFiles:
         cache.mkdir()
         (cache / "module.cpython-313.pyc").touch()
         (tmp_path / "module.py").touch()
-        result = discover_files(tmp_path, frozenset({".py", ".pyc"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".py", ".pyc"}))
         assert len(result) == 1
         assert result[0].name == "module.py"
 
@@ -188,7 +178,7 @@ class TestDiscoverFiles:
         (data / "big.csv").touch()
         (tmp_path / "debug.log").touch()
         (tmp_path / "app.txt").touch()
-        result = discover_files(tmp_path, frozenset({".csv", ".log", ".txt"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".csv", ".log", ".txt"}))
         assert len(result) == 1
         assert result[0].name == "app.txt"
 
@@ -198,7 +188,7 @@ class TestDiscoverFiles:
         archive.mkdir()
         (archive / "old.pdf").touch()
         (tmp_path / "new.pdf").touch()
-        result = discover_files(tmp_path, frozenset({".pdf"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".pdf"}))
         assert len(result) == 1
         assert result[0].name == "new.pdf"
 
@@ -210,7 +200,7 @@ class TestDiscoverFiles:
         (scratch / "notes.txt").touch()
         (tmp_path / "debug.log").touch()
         (tmp_path / "app.txt").touch()
-        result = discover_files(tmp_path, frozenset({".txt", ".log"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".txt", ".log"}))
         assert len(result) == 1
         assert result[0].name == "app.txt"
 
@@ -218,7 +208,7 @@ class TestDiscoverFiles:
         (tmp_path / ".gitignore").write_text("*.txt\n!important.txt\n")
         (tmp_path / "notes.txt").touch()
         (tmp_path / "important.txt").touch()
-        result = discover_files(tmp_path, frozenset({".txt"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".txt"}))
         assert len(result) == 1
         assert result[0].name == "important.txt"
 
@@ -227,7 +217,7 @@ class TestDiscoverFiles:
         deep.mkdir(parents=True)
         (deep / "core.py").touch()
         (tmp_path / "main.py").touch()
-        result = discover_files(tmp_path, frozenset({".py"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".py"}))
         assert len(result) == 1
         assert result[0].name == "main.py"
 
@@ -248,7 +238,7 @@ class TestDiscoverFiles:
         (root / "legit.txt").write_text("hello")
         (root / "escape.txt").symlink_to(secret)
 
-        result = discover_files(root, frozenset({".txt"}))
+        result = FileDiscovery(root).discover(frozenset({".txt"}))
         names = {p.name for p in result}
         assert names == {"legit.txt"}
 
@@ -259,7 +249,7 @@ class TestDiscoverFiles:
         (root / "real.txt").write_text("content")
         (root / "link.txt").symlink_to(root / "real.txt")
 
-        result = discover_files(root, frozenset({".txt"}))
+        result = FileDiscovery(root).discover(frozenset({".txt"}))
         names = {p.name for p in result}
         assert names == {"real.txt", "link.txt"}
 
@@ -270,7 +260,7 @@ class TestDiscoverFiles:
         (root / "real.txt").write_text("content")
         (root / "broken.txt").symlink_to(tmp_path / "does-not-exist")
 
-        result = discover_files(root, frozenset({".txt"}))
+        result = FileDiscovery(root).discover(frozenset({".txt"}))
         names = {p.name for p in result}
         assert names == {"real.txt"}
 
@@ -285,7 +275,7 @@ class TestDiscoverFiles:
         (project / "debug.log").touch()
         (project / "app.py").touch()
         (tmp_path / "root.py").touch()
-        result = discover_files(tmp_path, frozenset({".py", ".csv", ".log"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".py", ".csv", ".log"}))
         names = sorted(p.name for p in result)
         assert names == ["app.py", "root.py"]
 
@@ -300,7 +290,7 @@ class TestDiscoverFiles:
         (b / "debug.log").touch()
         (a / "app.py").touch()
         (b / "app.py").touch()
-        result = discover_files(tmp_path, frozenset({".py", ".log"}))
+        result = FileDiscovery(tmp_path).discover(frozenset({".py", ".log"}))
         names = sorted(p.name for p in result)
         # project-a/debug.log ignored, project-b/debug.log kept
         assert names == ["app.py", "app.py", "debug.log"]
@@ -314,25 +304,25 @@ class TestLoadIgnoreSpec:
 
     def test_loads_gitignore(self, tmp_path: Path):
         (tmp_path / ".gitignore").write_text("*.log\noutput/\n")
-        spec = _load_ignore_spec(tmp_path)
+        spec = FileDiscovery(tmp_path).load_ignore_spec()
         assert spec.match_file("debug.log")
         assert spec.match_file("output/")
         assert not spec.match_file("app.py")
 
     def test_loads_quarryignore(self, tmp_path: Path):
         (tmp_path / ".quarryignore").write_text("scratch/\n")
-        spec = _load_ignore_spec(tmp_path)
+        spec = FileDiscovery(tmp_path).load_ignore_spec()
         assert spec.match_file("scratch/")
 
     def test_no_ignore_files_uses_defaults(self, tmp_path: Path):
-        spec = _load_ignore_spec(tmp_path)
+        spec = FileDiscovery(tmp_path).load_ignore_spec()
         assert spec.match_file("venv/")
         assert spec.match_file("node_modules/")
         assert not spec.match_file("src/app.py")
 
     def test_comments_and_blanks_ignored(self, tmp_path: Path):
         (tmp_path / ".gitignore").write_text("# comment\n\n*.log\n")
-        spec = _load_ignore_spec(tmp_path)
+        spec = FileDiscovery(tmp_path).load_ignore_spec()
         assert spec.match_file("debug.log")
         assert not spec.match_file("# comment")
 
@@ -340,12 +330,12 @@ class TestLoadIgnoreSpec:
 class TestComputeSyncPlan:
     EXTS = frozenset({".pdf", ".txt"})
 
-    def _setup(self, tmp_path: Path) -> tuple[sqlite3.Connection, Path]:
+    def _setup(self, tmp_path: Path) -> tuple[SyncRegistry, Path]:
         """Create registry, docs directory, and register collection 'col'."""
-        conn = open_registry(tmp_path / "r.db")
+        conn = SyncRegistry(tmp_path / "r.db")
         d = tmp_path / "docs"
         d.mkdir()
-        register_directory(conn, d, "col")
+        conn.register_directory(d, "col")
         return conn, d
 
     def test_new_file_detected(self, tmp_path: Path):
@@ -363,8 +353,7 @@ class TestComputeSyncPlan:
         f = d / "existing.pdf"
         f.write_bytes(b"data")
         stat = f.stat()
-        upsert_file(
-            conn,
+        conn.upsert_file(
             FileRecord(
                 path=str(f.resolve()),
                 collection="col",
@@ -383,8 +372,7 @@ class TestComputeSyncPlan:
         conn, d = self._setup(tmp_path)
         f = d / "changed.pdf"
         f.write_bytes(b"old")
-        upsert_file(
-            conn,
+        conn.upsert_file(
             FileRecord(
                 path=str(f.resolve()),
                 collection="col",
@@ -404,8 +392,7 @@ class TestComputeSyncPlan:
 
     def test_deleted_file_detected(self, tmp_path: Path):
         conn, d = self._setup(tmp_path)
-        upsert_file(
-            conn,
+        conn.upsert_file(
             FileRecord(
                 path=str((d / "gone.pdf").resolve()),
                 collection="col",
@@ -425,8 +412,7 @@ class TestComputeSyncPlan:
         # Unchanged file
         unch = d / "unchanged.pdf"
         unch.write_bytes(b"same")
-        upsert_file(
-            conn,
+        conn.upsert_file(
             FileRecord(
                 path=str(unch.resolve()),
                 collection="col",
@@ -441,8 +427,7 @@ class TestComputeSyncPlan:
         (d / "brand-new.txt").write_bytes(b"hello")
 
         # Deleted file (in registry but not on disk)
-        upsert_file(
-            conn,
+        conn.upsert_file(
             FileRecord(
                 path=str((d / "removed.pdf").resolve()),
                 collection="col",
@@ -462,15 +447,14 @@ class TestComputeSyncPlan:
 
     def _seed_with_hash(
         self,
-        conn: sqlite3.Connection,
+        conn: SyncRegistry,
         f: Path,
         *,
         content_hash: str | None,
     ) -> None:
         """Insert a FileRecord for *f* matching disk state, with *content_hash*."""
         stat = f.stat()
-        upsert_file(
-            conn,
+        conn.upsert_file(
             FileRecord(
                 path=str(f.resolve()),
                 collection="col",
@@ -488,7 +472,7 @@ class TestComputeSyncPlan:
         conn, d = self._setup(tmp_path)
         f = d / "same.txt"
         f.write_bytes(b"stable content")
-        self._seed_with_hash(conn, f, content_hash=_content_hash(f))
+        self._seed_with_hash(conn, f, content_hash=FileDiscovery.content_hash(f))
 
         # Bump mtime via os.utime; content byte-identical.
         stat = f.stat()
@@ -498,7 +482,7 @@ class TestComputeSyncPlan:
         assert plan.to_ingest == []
         assert len(plan.to_refresh) == 1
         assert plan.to_refresh[0][0].name == "same.txt"
-        assert plan.to_refresh[0][1] == _content_hash(f)
+        assert plan.to_refresh[0][1] == FileDiscovery.content_hash(f)
         assert plan.unchanged == 0
         conn.close()
 
@@ -508,7 +492,7 @@ class TestComputeSyncPlan:
         conn, d = self._setup(tmp_path)
         f = d / "edit.txt"
         f.write_bytes(b"aaaaa")
-        self._seed_with_hash(conn, f, content_hash=_content_hash(f))
+        self._seed_with_hash(conn, f, content_hash=FileDiscovery.content_hash(f))
 
         # Replace content with the same length so only the hash differs.
         f.write_bytes(b"bbbbb")
@@ -525,7 +509,7 @@ class TestComputeSyncPlan:
         conn, d = self._setup(tmp_path)
         f = d / "grow.txt"
         f.write_bytes(b"short")
-        self._seed_with_hash(conn, f, content_hash=_content_hash(f))
+        self._seed_with_hash(conn, f, content_hash=FileDiscovery.content_hash(f))
 
         with f.open("ab") as fh:
             fh.write(b"-longer-now")
@@ -565,7 +549,9 @@ class TestComputeSyncPlan:
         def _boom(_path: Path) -> str:
             raise OSError("permission denied")
 
-        monkeypatch.setattr("quarry.sync._content_hash", _boom)
+        monkeypatch.setattr(
+            "quarry.sync.FileDiscovery.content_hash", staticmethod(_boom)
+        )
 
         plan = compute_sync_plan(d, "col", conn, self.EXTS)
         assert len(plan.to_ingest) == 1
@@ -585,12 +571,12 @@ def _mock_settings(tmp_path: Path) -> MagicMock:
 
 
 class TestSyncCollection:
-    def _setup(self, tmp_path: Path) -> tuple[sqlite3.Connection, Path]:
+    def _setup(self, tmp_path: Path) -> tuple[SyncRegistry, Path]:
         """Create registry, docs directory, and register collection 'col'."""
-        conn = open_registry(tmp_path / "r.db")
+        conn = SyncRegistry(tmp_path / "r.db")
         d = tmp_path / "docs"
         d.mkdir()
-        register_directory(conn, d, "col")
+        conn.register_directory(d, "col")
         return conn, d
 
     def test_ingests_new_files(self, tmp_path: Path):
@@ -614,7 +600,7 @@ class TestSyncCollection:
         assert result.skipped == 0
         mock_batch.assert_called_once()
         # Verify file record was created
-        rec = get_file(conn, str((d / "a.txt").resolve()))
+        rec = conn.get_file(str((d / "a.txt").resolve()))
         assert rec is not None
         assert rec.collection == "col"
         conn.close()
@@ -651,8 +637,7 @@ class TestSyncCollection:
     def test_deletes_removed_files(self, tmp_path: Path):
         conn, d = self._setup(tmp_path)
         # Register a file that no longer exists on disk
-        upsert_file(
-            conn,
+        conn.upsert_file(
             FileRecord(
                 path=str((d / "gone.txt").resolve()),
                 collection="col",
@@ -695,7 +680,7 @@ class TestSyncCollection:
         ):
             sync_collection(d, "col", db, settings, conn, max_workers=1)
 
-        files = list_files(conn, "col")
+        files = conn.list_files("col")
         assert len(files) == 1
         assert files[0].document_name == "new.txt"
         conn.close()
@@ -731,7 +716,7 @@ class TestSyncCollection:
         assert kwargs["document_name"] == "pkg/mod.py"
 
         # The registry must store the same relative path
-        files = list_files(conn, "col")
+        files = conn.list_files("col")
         assert len(files) == 1
         assert files[0].document_name == "pkg/mod.py"
         conn.close()
@@ -740,12 +725,12 @@ class TestSyncCollection:
 class TestSyncCollectionDurabilityAndRefresh:
     """Tests for quarry-272m: content-hash refresh path and durable ingest."""
 
-    def _setup(self, tmp_path: Path) -> tuple[sqlite3.Connection, Path, Path]:
+    def _setup(self, tmp_path: Path) -> tuple[SyncRegistry, Path, Path]:
         registry_path = tmp_path / "r.db"
-        conn = open_registry(registry_path)
+        conn = SyncRegistry(registry_path)
         d = tmp_path / "docs"
         d.mkdir()
-        register_directory(conn, d, "col")
+        conn.register_directory(d, "col")
         return conn, d, registry_path
 
     def test_sync_collection_crash_before_batch_insert_leaves_no_registry_rows(
@@ -832,7 +817,7 @@ class TestSyncCollectionDurabilityAndRefresh:
         assert mock_prepare.call_count == 3
 
         # Capture post-ingest mtimes from the registry.
-        pre_refresh = {r.path: r.mtime for r in list_files(conn, "col")}
+        pre_refresh = {r.path: r.mtime for r in conn.list_files("col")}
 
         # Bump every file's mtime without touching content.
         for name in ("a.txt", "b.txt", "c.txt"):
@@ -853,7 +838,7 @@ class TestSyncCollectionDurabilityAndRefresh:
         assert second.skipped == 0
         assert mock_prepare.call_count == 0
 
-        post_refresh = {r.path: r.mtime for r in list_files(conn, "col")}
+        post_refresh = {r.path: r.mtime for r in conn.list_files("col")}
         assert set(pre_refresh) == set(post_refresh)
         for path, old_mtime in pre_refresh.items():
             assert post_refresh[path] > old_mtime, (
@@ -881,7 +866,7 @@ class TestSyncCollectionDurabilityAndRefresh:
             first = sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert first.ingested == 2
 
-        pre_mtimes = {r.path: r.mtime for r in list_files(conn, "col")}
+        pre_mtimes = {r.path: r.mtime for r in conn.list_files("col")}
 
         # Bump mtimes without changing content — triggers refresh path.
         for name in ("a.txt", "b.txt"):
@@ -889,12 +874,12 @@ class TestSyncCollectionDurabilityAndRefresh:
             stat = f.stat()
             os.utime(f, (stat.st_atime, stat.st_mtime + 200))
 
-        # Make upsert_file raise OSError on the second call only.
+        # Make SyncRegistry.upsert_file raise OSError on the second call only.
         call_count = 0
-        _real_upsert = upsert_file
+        _real_upsert = SyncRegistry.upsert_file
 
         def _failing_upsert(
-            conn_arg: sqlite3.Connection,
+            self: SyncRegistry,
             record: FileRecord,
             *,
             commit: bool = True,
@@ -903,9 +888,9 @@ class TestSyncCollectionDurabilityAndRefresh:
             call_count += 1
             if call_count == 2:
                 raise OSError("disk full")
-            _real_upsert(conn_arg, record, commit=commit)
+            _real_upsert(self, record, commit=commit)
 
-        monkeypatch.setattr("quarry.sync.upsert_file", _failing_upsert)
+        monkeypatch.setattr(SyncRegistry, "upsert_file", _failing_upsert)
 
         with (
             patch("quarry.sync.prepare_document", side_effect=_fake_prepare),
@@ -919,8 +904,8 @@ class TestSyncCollectionDurabilityAndRefresh:
         assert "disk full" in second.errors[0]
 
         # Verify via a fresh connection: only the first file's mtime advanced.
-        verify = open_registry(registry_path)
-        post_mtimes = {r.path: r.mtime for r in list_files(verify, "col")}
+        verify = SyncRegistry(registry_path)
+        post_mtimes = {r.path: r.mtime for r in verify.list_files("col")}
         verify.close()
 
         updated = [p for p, m in post_mtimes.items() if m != pre_mtimes[p]]
@@ -933,15 +918,15 @@ class TestSyncCollectionDurabilityAndRefresh:
 class TestSyncAll:
     def test_syncs_all_registered(self, tmp_path: Path):
         settings = _mock_settings(tmp_path)
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         d1 = tmp_path / "a"
         d1.mkdir()
         (d1 / "one.txt").write_text("hello")
         d2 = tmp_path / "b"
         d2.mkdir()
         (d2 / "two.txt").write_text("world")
-        register_directory(conn, d1, "alpha")
-        register_directory(conn, d2, "beta")
+        conn.register_directory(d1, "alpha")
+        conn.register_directory(d2, "beta")
         conn.close()
 
         db = MagicMock()

@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from quarry.collections import CollectionName as CollectionName
     from quarry.config import Settings as Settings
     from quarry.db.chunk_search import ChunkSearch as ChunkSearch
+    from quarry.db.facade import Database as Database
     from quarry.db.storage import get_db as get_db
     from quarry.ingestion.pipeline import (
         ingest_content as ingest_content,
@@ -32,6 +33,7 @@ __version__ = version("punt-quarry")
 __all__ = [
     "ChunkSearch",
     "CollectionName",
+    "Database",
     "Settings",
     "__version__",
     "get_db",
@@ -43,6 +45,7 @@ __all__ = [
 # Map each public name to (module_path, attribute_name).
 _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "ChunkSearch": ("quarry.db.chunk_search", "ChunkSearch"),
+    "Database": ("quarry.db.facade", "Database"),
     "CollectionName": ("quarry.collections", "CollectionName"),
     "Settings": ("quarry.config", "Settings"),
     "get_db": ("quarry.db.storage", "get_db"),

@@ -1,12 +1,20 @@
 # Quarry OO Design Report
 
-Generated: 2026-05-13
+> **Quarry OO Refactoring Initiative** — all documents: [design report](oo-design-report.md) · [design review](oo-design-review.md) · [pattern review](oo-design-pattern-review.md) · [execution plan](oo-refactoring-plan.md) · [package structure](oo-package-structure.md) · [package structure review](oo-package-structure-review.md)
+
+Generated: 2026-05-13. **Historical reference — do not edit.**
+
+This document describes the proposed target class structure as of 2026-05-13.
+It is the input to the execution plan (`oo-refactoring-plan.md`), not a live
+status tracker. Classes described here may have been implemented, modified,
+or superseded during execution. For current status, see `oo-refactoring-plan.md`
+and `resume.md`.
 
 This is document 1 of 3 in the quarry OO redesign:
 
 1. **This document** — proposes the target class structure for every module
-2. `oo-design-review.md` — peer review with revisions (pending)
-3. `oo-refactoring-plan.md` — step-by-step execution plan (pending)
+2. `oo-design-review.md` — peer review with revisions
+3. `oo-refactoring-plan.md` — step-by-step execution plan
 
 ## Calibration
 

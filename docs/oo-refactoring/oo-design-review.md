@@ -1,8 +1,10 @@
 # OO Design Review
 
+> **Quarry OO Refactoring Initiative** — all documents: [design report](oo-design-report.md) · [design review](oo-design-review.md) · [pattern review](oo-design-pattern-review.md) · [execution plan](oo-refactoring-plan.md) · [package structure](oo-package-structure.md) · [package structure review](oo-package-structure-review.md)
+
 Reviewer: Guido van Rossum (gvr)
 Date: 2026-05-13
-Document reviewed: `docs/oo-refactor/oo-design-report.md` (3,121 lines)
+Document reviewed: `docs/oo-refactoring/oo-design-report.md` (3,121 lines)
 Draft sections reviewed: `_draft-core-data.md`, `_draft-ingestion.md`, `_draft-surfaces.md`
 OO rules checked: PY-OO-1 through PY-OO-6, PY-CC-1 through PY-CC-6, PY-EN-1 through PY-EN-5, PY-IC-1 through PY-IC-9, PL-PA-1 through PL-PA-6
 Reference implementations: vox `oo-design-review.md` (Ralph Johnson), lux `oo-class-design-review.md` (Ralph Johnson)

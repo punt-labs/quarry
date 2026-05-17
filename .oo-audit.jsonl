@@ -11,3 +11,7 @@
 {"ts":"2026-05-14T15:53:35Z","commit":"1f81845","files_scored":50,"files_improved":0,"files_regressed":0,"verdict":"rebaseline","deltas":{}}
 {"ts":"2026-05-14T17:06:09Z","commit":"a1152c9","files_scored":52,"files_improved":0,"files_regressed":0,"verdict":"rebaseline","deltas":{}}
 {"ts":"2026-05-14T20:36:35Z","commit":"05afcbc","files_scored":57,"files_improved":0,"files_regressed":0,"verdict":"rebaseline","deltas":{}}
+{"ts":"2026-05-15T05:05:54Z","commit":"4d1009f","files_scored":58,"files_improved":0,"files_regressed":0,"verdict":"rebaseline","deltas":{}}
+{"ts":"2026-05-16T22:09:38Z","commit":"10c0b8e","files_scored":58,"files_improved":6,"files_regressed":2,"verdict":"fail","deltas":{"src/quarry/__main__.py":{"module_size":[1767.0,1761.0]},"src/quarry/backfill.py":{"module_size":[263.0,259.0]},"src/quarry/enable.py":{"module_size":[303.0,297.0]},"src/quarry/hooks.py":{"module_size":[724.0,718.0]},"src/quarry/http_server.py":{"module_size":[1281.0,1274.0]},"src/quarry/mcp_server.py":{"module_size":[486.0,481.0]}}}
+{"ts":"2026-05-16T22:10:58Z","commit":"10c0b8e","files_scored":58,"files_improved":0,"files_regressed":0,"verdict":"rebaseline","deltas":{}}
+{"ts":"2026-05-16T23:02:15Z","commit":"78e2a1a","files_scored":58,"files_improved":3,"files_regressed":1,"verdict":"fail","deltas":{"src/quarry/backfill.py":{"module_size":[259.0,257.0]},"src/quarry/doctor.py":{"module_size":[985.0,984.0]},"src/quarry/hooks.py":{"module_size":[718.0,717.0]}}}

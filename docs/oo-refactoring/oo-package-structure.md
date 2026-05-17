@@ -1,5 +1,7 @@
 # Package Structure Proposal
 
+> **Quarry OO Refactoring Initiative** — all documents: [design report](oo-design-report.md) · [design review](oo-design-review.md) · [pattern review](oo-design-pattern-review.md) · [execution plan](oo-refactoring-plan.md) · [package structure](oo-package-structure.md) · [package structure review](oo-package-structure-review.md)
+
 Target layout for quarry after the 84-step OO refactoring completes.
 Grounded in current import analysis (96 intra-package import statements
 across 42 modules) and the planned class extractions.
@@ -598,11 +600,19 @@ implementation details. Mock patches must use the internal path
 (`quarry.db.chunk_store.ChunkStore`) because that is where the object
 lives at runtime.
 
-### Phase 2 status
+### Package creation status (2026-05-15)
 
-The `db/` package already exists on main (PR #286). `database.py` is
-deleted. The refactoring plan's steps 2.1-2.8 are complete. The
-remaining phases (3-7) build on this foundation.
+| Package | Status | How created |
+|---------|--------|-------------|
+| `db/` | **EXISTS on main** | PRs #285–#286, `database.py` deleted |
+| `extractors/` | **EXISTS on main** | PR #288, 7 extractor classes |
+| `ingestion/` | **EXISTS on main** | PR #288, 10 modules |
+| `sync/` | **PARTIAL — branch only** | Steps 4.1–4.3a on `oo/phase-4-services` |
+| `services/` | **NOT CREATED** | Awaiting steps 4.4–4.17 |
+| `hooks/` | **NOT CREATED** | Awaiting Phase 5 |
+| `routes/` | **NOT CREATED** | Awaiting Phase 6 |
+| `commands/` | **NOT CREATED** | Awaiting Phase 7 |
+| `surfaces/` | **NOT CREATED** | Awaiting Phase 7 |
 
 ---
 
@@ -610,11 +620,11 @@ remaining phases (3-7) build on this foundation.
 
 | Phase | Steps | Package moves |
 |-------|-------|--------------|
-| 0 (pre-flight) | 0.1-0.10 | none |
-| 1 (types) | 1.1-1.10 | none |
-| 2 (done) | 2.1-2.8 | db/ created |
-| 3 (ingestion) | 3.1-3.16 | extractors/ populated, ingestion/ created |
-| 4 (services) | 4.1-4.17 | sync/ created (4.3a), services/ created (4.17) |
+| 0 (DONE) | 0.1-0.10 | none |
+| 1 (DONE) | 1.1-1.10 | none |
+| 2 (DONE) | 2.1-2.8 | db/ created |
+| 3 (DONE) | 3.1-3.16 | extractors/ populated, ingestion/ created |
+| 4 (IN PROGRESS) | 4.1-4.17 | sync/ partial (4.1–4.3a done); services/ pending (4.17) |
 | 5 (hooks) | 5.1-5.7 | hooks/ created, transcript.py to top level |
 | 6 (HTTP/MCP) | 6.1-6.9 | routes/ created |
 | 7 (CLI) | 7.1-7.20 | commands/ populated, surfaces/ created |

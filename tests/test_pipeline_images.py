@@ -9,6 +9,7 @@ import numpy as np
 from PIL import Image
 
 from quarry.config import Settings
+from quarry.db import Database
 from quarry.models import Chunk, PageContent, PageType
 
 if TYPE_CHECKING:
@@ -107,7 +108,7 @@ class TestIngestImageSinglePage:
 
         from quarry.ingestion.pipeline import ingest_document
 
-        db = MagicMock()
+        db = Database(MagicMock())
         result = ingest_document(png_file, db, _settings())
 
         assert result["document_name"] == "photo.png"
@@ -128,7 +129,7 @@ class TestIngestImageSinglePage:
 
         from quarry.ingestion.pipeline import ingest_document
 
-        db = MagicMock()
+        db = Database(MagicMock())
         result = ingest_document(jpg_file, db, _settings())
 
         assert result["document_name"] == "photo.jpg"
@@ -167,7 +168,7 @@ class TestIngestImageSinglePage:
 
         from quarry.ingestion.pipeline import ingest_document
 
-        db = MagicMock()
+        db = Database(MagicMock())
         result = ingest_document(bmp_file, db, _settings())
 
         assert result["document_name"] == "scan.bmp"
@@ -209,7 +210,7 @@ class TestIngestImageSinglePage:
 
         from quarry.ingestion.pipeline import ingest_document
 
-        db = MagicMock()
+        db = Database(MagicMock())
         result = ingest_document(webp_file, db, _settings())
 
         fmt = result.get("format")
@@ -248,7 +249,7 @@ class TestIngestImageSinglePage:
 
         from quarry.ingestion.pipeline import ingest_document
 
-        db = MagicMock()
+        db = Database(MagicMock())
         result = ingest_document(mpo_file, db, _settings())
 
         fmt = result.get("format")
@@ -278,7 +279,7 @@ class TestIngestImageSinglePage:
 
         from quarry.ingestion.pipeline import ingest_document
 
-        db = MagicMock()
+        db = Database(MagicMock())
         ingest_document(png_file, db, _settings(), overwrite=True)
 
         assert delete_calls == ["photo.png"]
@@ -341,7 +342,7 @@ class TestIngestImageMultiPage:
 
         from quarry.ingestion.pipeline import ingest_document
 
-        db = MagicMock()
+        db = Database(MagicMock())
         result = ingest_document(tiff_file, db, _settings())
 
         assert result["document_name"] == "scan.tiff"
@@ -473,7 +474,7 @@ class TestIngestImageProgress:
         from quarry.ingestion.pipeline import ingest_document
 
         messages: list[str] = []
-        db = MagicMock()
+        db = Database(MagicMock())
         ingest_document(png_file, db, _settings(), progress_callback=messages.append)
 
         assert any("Analyzing image" in m for m in messages)

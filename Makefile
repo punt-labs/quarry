@@ -1,4 +1,4 @@
-.PHONY: help test lint lint-docs type check check-full check-oo update-oo check-coupling update-coupling report format build test-wheel clean depot bench-cuda docs docs-clean metrics coverage
+.PHONY: help test lint lint-docs type check check-full check-oo update-oo check-coupling update-coupling check-suppressions update-suppressions report format install build test-wheel clean depot bench-cuda docs docs-clean metrics coverage
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -11,13 +11,13 @@ lint: lint-docs ## Lint and format check
 	uv run ruff format --check .
 
 lint-docs: ## Lint markdown files (matches CI docs job)
-	npx markdownlint-cli2 CLAUDE.md "docs/**/*.md"
+	npx markdownlint-cli2 "**/*.md"
 
 type: ## Type check with mypy and pyright
 	uv run mypy src/ tests/
 	uv run pyright src/ tests/
 
-check: lint type test check-oo ## Run all quality gates
+check: lint type test check-oo check-suppressions ## Run all quality gates
 
 check-oo: ## OO ratchet — must improve over baseline, never regress
 	uv run python tools/oo_score.py src/quarry/ --check
@@ -30,6 +30,12 @@ check-coupling: ## Coupling/cohesion analysis (informational, not in check chain
 
 update-coupling: ## Update coupling baseline after improvements
 	uv run python tools/oo_coupling.py src/quarry/ --update
+
+check-suppressions: ## Suppression ratchet — count must not increase
+	uv run python tools/suppression_ratchet.py src/quarry/ --check
+
+update-suppressions: ## Update suppression baseline after justified additions
+	uv run python tools/suppression_ratchet.py src/quarry/ --update
 
 report: ## Full diagnostics (OO score + all checks, no fail-fast)
 	-uv run python tools/oo_score.py src/quarry/ --threshold
@@ -45,6 +51,9 @@ check-full: check test-wheel ## Full quality gate including wheel test
 format: ## Auto-format code
 	uv run ruff format .
 	uv run ruff check --fix .
+
+install: build ## Build and install wheel locally for manual testing
+	uv tool install --force dist/*.whl
 
 build: ## Build wheel and sdist
 	rm -rf dist/

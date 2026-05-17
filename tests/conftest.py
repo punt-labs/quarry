@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from quarry.config import Settings
+from quarry.db import Database
 from quarry.db.storage import get_db
 from quarry.types import LanceDB
 
@@ -74,6 +75,12 @@ def integration_settings(
 @pytest.fixture()
 def lance_db(tmp_path: Path) -> LanceDB:
     return get_db(tmp_path / "db")
+
+
+@pytest.fixture()
+def database(lance_db: LanceDB) -> Database:
+    """Database facade wrapping the test ``lance_db`` connection."""
+    return Database(lance_db)
 
 
 @pytest.fixture(scope="session")

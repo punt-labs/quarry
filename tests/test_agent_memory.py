@@ -13,7 +13,7 @@ import numpy as np
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
-from quarry.db import ChunkSearch, ChunkStore, SchemaManager, get_db
+from quarry.db import ChunkSearch, ChunkStore, Database, SchemaManager, get_db
 from quarry.db.chunk_search import _RRF_K, _row_key, _temporal_weight
 from quarry.db.schema import TABLE_NAME
 from quarry.models import Chunk
@@ -791,7 +791,7 @@ class TestIngestUrlThreadsAgentHandle:
             mock_ces.return_value = result
             ingest_url(
                 "https://example.com",
-                MagicMock(),
+                Database(MagicMock()),
                 MagicMock(),
                 agent_handle="rmh",
                 memory_type="fact",

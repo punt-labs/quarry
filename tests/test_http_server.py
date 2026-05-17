@@ -425,9 +425,9 @@ class TestStatus:
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
             ),
-            patch("quarry.http_server.open_registry", return_value=MagicMock()),
-            patch("quarry.http_server.list_registrations", return_value=fake_regs),
+            patch("quarry.http_server.SyncRegistry") as mock_registry,
         ):
+            mock_registry.return_value.list_registrations.return_value = fake_regs
             data = reg_client.get("/status").json()
 
         assert "registered_directories" in data
@@ -1586,16 +1586,13 @@ class TestRegistrations:
             )
         ]
         with (
-            patch(
-                "quarry.http_server.open_registry",
-                return_value=MagicMock(close=MagicMock()),
-            ),
-            patch("quarry.http_server.list_registrations", return_value=regs),
+            patch("quarry.http_server.SyncRegistry") as mock_registry,
             patch(
                 "pathlib.Path.exists",
                 return_value=True,
             ),
         ):
+            mock_registry.return_value.list_registrations.return_value = regs
             data = client.get("/registrations").json()
 
         assert data["total_registrations"] == 1

@@ -30,12 +30,7 @@ from quarry.hooks import (
     handle_pre_compact,
     handle_session_start,
 )
-from quarry.sync_registry import (
-    DirectoryRegistration,
-    list_registrations,
-    open_registry,
-    register_directory,
-)
+from quarry.sync_registry import DirectoryRegistration, SyncRegistry
 
 runner = CliRunner()
 
@@ -63,18 +58,18 @@ class TestFindRegistration:
 
 class TestUniqueCollectionName:
     def test_uses_leaf_name_when_available(self, tmp_path: Path) -> None:
-        conn = open_registry(tmp_path / "r.db")
+        conn = SyncRegistry(tmp_path / "r.db")
         project = tmp_path / "myproject"
         project.mkdir()
         assert _unique_collection_name(conn, project) == "myproject"
         conn.close()
 
     def test_disambiguates_with_parent(self, tmp_path: Path) -> None:
-        conn = open_registry(tmp_path / "r.db")
+        conn = SyncRegistry(tmp_path / "r.db")
         # Register a different directory with the same leaf name.
         other = tmp_path / "other" / "myproject"
         other.mkdir(parents=True)
-        register_directory(conn, other, "myproject")
+        conn.register_directory(other, "myproject")
 
         project = tmp_path / "mine" / "myproject"
         project.mkdir(parents=True)
@@ -83,15 +78,15 @@ class TestUniqueCollectionName:
         conn.close()
 
     def test_falls_back_to_hash_on_double_collision(self, tmp_path: Path) -> None:
-        conn = open_registry(tmp_path / "r.db")
+        conn = SyncRegistry(tmp_path / "r.db")
         # Occupy both "myproject" and "myproject-mine".
         d1 = tmp_path / "a" / "myproject"
         d1.mkdir(parents=True)
-        register_directory(conn, d1, "myproject")
+        conn.register_directory(d1, "myproject")
 
         d2 = tmp_path / "b" / "myproject"
         d2.mkdir(parents=True)
-        register_directory(conn, d2, "myproject-mine")
+        conn.register_directory(d2, "myproject-mine")
 
         project = tmp_path / "mine" / "myproject"
         project.mkdir(parents=True)
@@ -108,8 +103,8 @@ class TestCollectionForCwd:
         settings = MagicMock()
         settings.registry_path = tmp_path / "registry.db"
 
-        conn = open_registry(settings.registry_path)
-        register_directory(conn, project, "myproject")
+        conn = SyncRegistry(settings.registry_path)
+        conn.register_directory(project, "myproject")
         conn.close()
 
         with patch("quarry.hooks._resolve_settings", return_value=settings):
@@ -124,8 +119,8 @@ class TestCollectionForCwd:
         settings = MagicMock()
         settings.registry_path = tmp_path / "registry.db"
 
-        conn = open_registry(settings.registry_path)
-        register_directory(conn, project, "myproject")
+        conn = SyncRegistry(settings.registry_path)
+        conn.register_directory(project, "myproject")
         conn.close()
 
         with patch("quarry.hooks._resolve_settings", return_value=settings):
@@ -136,7 +131,7 @@ class TestCollectionForCwd:
         settings = MagicMock()
         settings.registry_path = tmp_path / "registry.db"
 
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         conn.close()
 
         with patch("quarry.hooks._resolve_settings", return_value=settings):
@@ -488,8 +483,8 @@ class TestHandleSessionStart:
         assert "Background sync in progress." in ctx
 
         # Verify it was registered in the registry.
-        conn = open_registry(settings.registry_path)
-        regs = list_registrations(conn)
+        conn = SyncRegistry(settings.registry_path)
+        regs = conn.list_registrations()
         conn.close()
         assert len(regs) == 1
         assert regs[0].collection == "myproject"
@@ -541,8 +536,8 @@ class TestHandleSessionStart:
         settings.lancedb_path = tmp_path / "lancedb"
 
         # Pre-register the directory.
-        conn = open_registry(settings.registry_path)
-        register_directory(conn, project, "custom-name")
+        conn = SyncRegistry(settings.registry_path)
+        conn.register_directory(project, "custom-name")
         conn.close()
 
         with (
@@ -597,8 +592,8 @@ class TestHandleSessionStart:
         # Pre-register a different directory under "myproject".
         other = tmp_path / "other" / "myproject"
         other.mkdir(parents=True)
-        conn = open_registry(settings.registry_path)
-        register_directory(conn, other, "myproject")
+        conn = SyncRegistry(settings.registry_path)
+        conn.register_directory(other, "myproject")
         conn.close()
 
         # Now the hook registers a new directory also named "myproject".
@@ -618,8 +613,8 @@ class TestHandleSessionStart:
         assert "myproject-mine" in ctx
 
         # Verify both registrations exist.
-        conn = open_registry(settings.registry_path)
-        regs = list_registrations(conn)
+        conn = SyncRegistry(settings.registry_path)
+        regs = conn.list_registrations()
         conn.close()
         assert len(regs) == 2
         collections = {r.collection for r in regs}
@@ -752,7 +747,7 @@ class TestHandlePostWebFetch:
                 "quarry.hooks._resolve_settings",
                 return_value=MagicMock(),
             ),
-            patch("quarry.db.storage.get_db", return_value=MagicMock()),
+            patch("quarry.db.facade.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch("quarry.hooks._collection_for_cwd", return_value=None),
             patch(
@@ -792,7 +787,7 @@ class TestHandlePostWebFetch:
                 "quarry.hooks._resolve_settings",
                 return_value=MagicMock(),
             ),
-            patch("quarry.db.storage.get_db", return_value=MagicMock()),
+            patch("quarry.db.facade.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch("quarry.hooks._collection_for_cwd", return_value=None),
             patch(
@@ -826,7 +821,7 @@ class TestHandlePostWebFetch:
                 "quarry.hooks._resolve_settings",
                 return_value=MagicMock(),
             ),
-            patch("quarry.db.storage.get_db", return_value=MagicMock()),
+            patch("quarry.db.facade.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch("quarry.hooks._collection_for_cwd", return_value=None),
             patch(
@@ -851,7 +846,7 @@ class TestHandlePostWebFetch:
                 "quarry.hooks._resolve_settings",
                 return_value=MagicMock(),
             ),
-            patch("quarry.db.storage.get_db", return_value=MagicMock()),
+            patch("quarry.db.facade.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=True),
             patch("quarry.hooks._collection_for_cwd", return_value=None),
             patch("quarry.ingestion.pipeline.ingest_url") as mock_ingest,
@@ -876,7 +871,7 @@ class TestHandlePostWebFetch:
 
         with (
             patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
-            patch("quarry.db.storage.get_db", return_value=MagicMock()),
+            patch("quarry.db.facade.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch("quarry.hooks._collection_for_cwd", return_value="myapp"),
             patch(
@@ -907,7 +902,7 @@ class TestHandlePostWebFetch:
 
         with (
             patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
-            patch("quarry.db.storage.get_db", return_value=MagicMock()),
+            patch("quarry.db.facade.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch("quarry.hooks._collection_for_cwd", return_value=None),
             patch(
@@ -1653,7 +1648,7 @@ class TestIngestBackground:
                 return_value=MagicMock(),
             ),
             patch(
-                "quarry.db.storage.get_db",
+                "quarry.db.facade.get_db",
                 return_value=MagicMock(),
             ),
             patch(
@@ -1704,7 +1699,7 @@ class TestIngestBackground:
                 return_value=MagicMock(),
             ),
             patch(
-                "quarry.db.storage.get_db",
+                "quarry.db.facade.get_db",
                 return_value=MagicMock(),
             ),
             patch(
@@ -1912,8 +1907,8 @@ class TestT15SessionStartChildUsesParentCollection:
         settings.lancedb_path = tmp_path / "lancedb"
 
         # Register the parent directory.
-        conn = open_registry(settings.registry_path)
-        register_directory(conn, parent, "proj")
+        conn = SyncRegistry(settings.registry_path)
+        conn.register_directory(parent, "proj")
         conn.close()
 
         with (
@@ -1930,8 +1925,8 @@ class TestT15SessionStartChildUsesParentCollection:
         assert "proj" in ctx
 
         # Verify no new registration was created.
-        conn = open_registry(settings.registry_path)
-        regs = list_registrations(conn)
+        conn = SyncRegistry(settings.registry_path)
+        regs = conn.list_registrations()
         conn.close()
         assert len(regs) == 1
         assert regs[0].collection == "proj"
@@ -1949,7 +1944,7 @@ class TestT16SessionStartAutoRegisters:
         settings.lancedb_path = tmp_path / "lancedb"
 
         # Create empty registry.
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         conn.close()
 
         with (
@@ -1963,8 +1958,8 @@ class TestT16SessionStartAutoRegisters:
         assert isinstance(output, dict)
 
         # Verify registration was created.
-        conn = open_registry(settings.registry_path)
-        regs = list_registrations(conn)
+        conn = SyncRegistry(settings.registry_path)
+        regs = conn.list_registrations()
         conn.close()
         assert len(regs) == 1
         assert regs[0].directory == str(project)
@@ -1990,9 +1985,9 @@ class TestT16bSessionStartParentOfChildrenSkipsAutoRegister:
         settings.lancedb_path = tmp_path / "lancedb"
 
         # Register children only.
-        conn = open_registry(settings.registry_path)
-        register_directory(conn, child_a, "child-a")
-        register_directory(conn, child_b, "child-b")
+        conn = SyncRegistry(settings.registry_path)
+        conn.register_directory(child_a, "child-a")
+        conn.register_directory(child_b, "child-b")
         conn.close()
 
         with (
@@ -2003,8 +1998,8 @@ class TestT16bSessionStartParentOfChildrenSkipsAutoRegister:
             result = handle_session_start({"cwd": str(parent)})
 
         # No new registration for /parent.
-        conn = open_registry(settings.registry_path)
-        regs = list_registrations(conn)
+        conn = SyncRegistry(settings.registry_path)
+        regs = conn.list_registrations()
         conn.close()
         assert len(regs) == 2
         collections = {r.collection for r in regs}
@@ -2059,7 +2054,7 @@ class TestT17WebFetchRoutesToCaptures:
 
         with (
             patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
-            patch("quarry.db.storage.get_db", return_value=MagicMock()),
+            patch("quarry.db.facade.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch("quarry.hooks._collection_for_cwd", return_value="proj"),
             patch(
@@ -2120,7 +2115,7 @@ class TestT19WebFetchFallback:
 
         with (
             patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
-            patch("quarry.db.storage.get_db", return_value=MagicMock()),
+            patch("quarry.db.facade.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch("quarry.hooks._collection_for_cwd", return_value=None),
             patch(

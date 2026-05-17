@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from quarry.config import Settings
+from quarry.db import Database
 from quarry.models import Chunk, PageAnalysis, PageContent, PageType
 
 
@@ -61,7 +62,7 @@ class TestIngestDocument:
     def test_file_not_found(self):
         from quarry.ingestion.pipeline import ingest_document
 
-        db = MagicMock()
+        db = Database(MagicMock())
         with pytest.raises(FileNotFoundError):
             ingest_document(
                 Path("/nonexistent/file.pdf"),
@@ -118,7 +119,7 @@ class TestIngestDocument:
 
         from quarry.ingestion.pipeline import ingest_document
 
-        db = MagicMock()
+        db = Database(MagicMock())
         result = ingest_document(pdf_file, db, _settings())
 
         assert result["document_name"] == "test.pdf"
@@ -175,7 +176,7 @@ class TestIngestDocument:
 
         from quarry.ingestion.pipeline import ingest_document
 
-        db = MagicMock()
+        db = Database(MagicMock())
         result = ingest_document(pdf_file, db, _settings())
 
         image_pages = result.get("image_pages")
@@ -206,7 +207,7 @@ class TestIngestDocument:
 
         from quarry.ingestion.pipeline import ingest_document
 
-        db = MagicMock()
+        db = Database(MagicMock())
         result = ingest_document(pdf_file, db, _settings())
 
         assert result["chunks"] == 0
@@ -245,7 +246,7 @@ class TestIngestDocument:
 
         from quarry.ingestion.pipeline import ingest_document
 
-        db = MagicMock()
+        db = Database(MagicMock())
         ingest_document(pdf_file, db, _settings(), overwrite=True)
 
         assert delete_called_with == ["test.pdf"]
@@ -276,7 +277,7 @@ class TestIngestDocument:
         from quarry.ingestion.pipeline import ingest_document
 
         messages: list[str] = []
-        db = MagicMock()
+        db = Database(MagicMock())
         ingest_document(pdf_file, db, _settings(), progress_callback=messages.append)
 
         assert len(messages) > 0
@@ -315,7 +316,7 @@ class TestIngestDocument:
 
         from quarry.ingestion.pipeline import ingest_document
 
-        db = MagicMock()
+        db = Database(MagicMock())
         result = ingest_document(txt_file, db, _settings())
 
         assert result["document_name"] == "notes.txt"
@@ -357,7 +358,7 @@ class TestIngestDocument:
 
         from quarry.ingestion.pipeline import ingest_document
 
-        db = MagicMock()
+        db = Database(MagicMock())
         result = ingest_document(csv_file, db, _settings())
 
         assert result["document_name"] == "data.csv"
@@ -399,7 +400,7 @@ class TestIngestDocument:
 
         from quarry.ingestion.pipeline import ingest_document
 
-        db = MagicMock()
+        db = Database(MagicMock())
         result = ingest_document(html_file, db, _settings())
 
         assert result["document_name"] == "article.html"
@@ -411,7 +412,7 @@ class TestIngestDocument:
 
         from quarry.ingestion.pipeline import ingest_document
 
-        db = MagicMock()
+        db = Database(MagicMock())
         with pytest.raises(ValueError, match="Unsupported file format"):
             ingest_document(zip_file, db, _settings())
 
@@ -447,7 +448,7 @@ class TestIngestText:
 
         from quarry.ingestion.pipeline import ingest_content
 
-        db = MagicMock()
+        db = Database(MagicMock())
         result = ingest_content("Hello world", "clip.txt", db, _settings())
 
         assert result["document_name"] == "clip.txt"
@@ -474,7 +475,7 @@ class TestIngestText:
 
         from quarry.ingestion.pipeline import ingest_content
 
-        db = MagicMock()
+        db = Database(MagicMock())
         ingest_content("text", "doc.txt", db, _settings(), overwrite=True)
 
         assert delete_called == ["doc.txt"]
@@ -487,7 +488,7 @@ class TestIngestText:
 
         from quarry.ingestion.pipeline import ingest_content
 
-        db = MagicMock()
+        db = Database(MagicMock())
         result = ingest_content("", "empty.txt", db, _settings())
 
         assert result["chunks"] == 0

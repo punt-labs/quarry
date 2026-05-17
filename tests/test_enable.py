@@ -22,11 +22,7 @@ from quarry.enable import (
     disable_project,
     enable_project,
 )
-from quarry.sync_registry import (
-    list_registrations,
-    open_registry,
-    register_directory,
-)
+from quarry.sync_registry import SyncRegistry
 
 
 def _mock_settings_load(settings: MagicMock) -> MagicMock:
@@ -51,7 +47,7 @@ class TestT1EnableNewDirectory:
         settings.lancedb_path = tmp_path / "lancedb"
 
         # Ensure registry exists.
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         conn.close()
 
         with (
@@ -66,8 +62,8 @@ class TestT1EnableNewDirectory:
         assert result.directory == str(project)
 
         # Verify registration in the registry.
-        conn = open_registry(settings.registry_path)
-        regs = list_registrations(conn)
+        conn = SyncRegistry(settings.registry_path)
+        regs = conn.list_registrations()
         conn.close()
         assert len(regs) == 1
         assert regs[0].collection == "myproject"
@@ -88,8 +84,8 @@ class TestT2EnableIdempotent:
         settings.lancedb_path = tmp_path / "lancedb"
 
         # Pre-register.
-        conn = open_registry(settings.registry_path)
-        register_directory(conn, project, "foo")
+        conn = SyncRegistry(settings.registry_path)
+        conn.register_directory(project, "foo")
         conn.close()
 
         with (
@@ -118,8 +114,8 @@ class TestT3EnableChildRaisesValueError:
         settings.registry_path = tmp_path / "registry.db"
         settings.lancedb_path = tmp_path / "lancedb"
 
-        conn = open_registry(settings.registry_path)
-        register_directory(conn, parent, "project")
+        conn = SyncRegistry(settings.registry_path)
+        conn.register_directory(parent, "project")
         conn.close()
 
         with (
@@ -144,7 +140,7 @@ class TestT4EnableCollectionOverride:
         settings.registry_path = tmp_path / "registry.db"
         settings.lancedb_path = tmp_path / "lancedb"
 
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         conn.close()
 
         with (
@@ -171,7 +167,7 @@ class TestT5EnableCreatesConfig:
         settings.registry_path = tmp_path / "registry.db"
         settings.lancedb_path = tmp_path / "lancedb"
 
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         conn.close()
 
         with (
@@ -208,7 +204,7 @@ class TestT6EnablePreservesExistingConfig:
         settings.registry_path = tmp_path / "registry.db"
         settings.lancedb_path = tmp_path / "lancedb"
 
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         conn.close()
 
         with (
@@ -300,7 +296,7 @@ class TestT8EnableSkipsEthosWhenMissing:
         settings.registry_path = tmp_path / "registry.db"
         settings.lancedb_path = tmp_path / "lancedb"
 
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         conn.close()
 
         with (
@@ -329,7 +325,7 @@ class TestT9EnableCapturesCollectionName:
         settings.registry_path = tmp_path / "registry.db"
         settings.lancedb_path = tmp_path / "lancedb"
 
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         conn.close()
 
         with (
@@ -356,7 +352,7 @@ class TestT10DisableRemovesRegistration:
         settings.lancedb_path = tmp_path / "lancedb"
 
         # Enable first.
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         conn.close()
 
         with (
@@ -370,8 +366,8 @@ class TestT10DisableRemovesRegistration:
         assert disable_result.collection == enable_result.collection
 
         # Verify registration is gone.
-        conn = open_registry(settings.registry_path)
-        regs = list_registrations(conn)
+        conn = SyncRegistry(settings.registry_path)
+        regs = conn.list_registrations()
         conn.close()
         assert len(regs) == 0
 
@@ -390,7 +386,7 @@ class TestT11DisableRemovesConfig:
         settings.registry_path = tmp_path / "registry.db"
         settings.lancedb_path = tmp_path / "lancedb"
 
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         conn.close()
 
         with (
@@ -421,7 +417,7 @@ class TestT12DisableKeepData:
         settings.registry_path = tmp_path / "registry.db"
         settings.lancedb_path = tmp_path / "lancedb"
 
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         conn.close()
 
         with (
@@ -453,7 +449,7 @@ class TestT13DisablePreservesAgentMemory:
         settings.registry_path = tmp_path / "registry.db"
         settings.lancedb_path = tmp_path / "lancedb"
 
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         conn.close()
 
         with (
@@ -491,7 +487,7 @@ class TestT14DisableUnregisteredRaises:
         settings.lancedb_path = tmp_path / "lancedb"
 
         # Ensure empty registry.
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         conn.close()
 
         with (
@@ -573,8 +569,8 @@ class TestT15DisableOnChildOfRegisteredParentRaises:
         settings.registry_path = tmp_path / "registry.db"
         settings.lancedb_path = tmp_path / "lancedb"
 
-        conn = open_registry(settings.registry_path)
-        register_directory(conn, parent, "project")
+        conn = SyncRegistry(settings.registry_path)
+        conn.register_directory(parent, "project")
         conn.close()
 
         with (
@@ -584,8 +580,8 @@ class TestT15DisableOnChildOfRegisteredParentRaises:
             disable_project(child)
 
         # Verify parent registration was NOT deleted.
-        conn = open_registry(settings.registry_path)
-        regs = list_registrations(conn)
+        conn = SyncRegistry(settings.registry_path)
+        regs = conn.list_registrations()
         conn.close()
         assert len(regs) == 1
         assert regs[0].collection == "project"
@@ -669,8 +665,8 @@ class TestT17EnableWithOverrideOnChildRaises:
         settings.registry_path = tmp_path / "registry.db"
         settings.lancedb_path = tmp_path / "lancedb"
 
-        conn = open_registry(settings.registry_path)
-        register_directory(conn, parent, "project")
+        conn = SyncRegistry(settings.registry_path)
+        conn.register_directory(parent, "project")
         conn.close()
 
         with (
@@ -698,7 +694,7 @@ class TestT18EnableResolvesRelativePath:
         settings.registry_path = tmp_path / "registry.db"
         settings.lancedb_path = tmp_path / "lancedb"
 
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         conn.close()
 
         with (
@@ -729,7 +725,7 @@ class TestT19DisableResolvesRelativePath:
         settings.registry_path = tmp_path / "registry.db"
         settings.lancedb_path = tmp_path / "lancedb"
 
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         conn.close()
 
         with (
@@ -761,8 +757,8 @@ class TestT20CheckEnableStatusConfigMissing:
         settings.registry_path = tmp_path / "registry.db"
         settings.lancedb_path = tmp_path / "lancedb"
 
-        conn = open_registry(settings.registry_path)
-        register_directory(conn, project, "myproject")
+        conn = SyncRegistry(settings.registry_path)
+        conn.register_directory(project, "myproject")
         conn.close()
 
         # No config.md on disk — only the registration exists.
@@ -786,8 +782,8 @@ class TestT20CheckEnableStatusConfigMissing:
         settings.registry_path = tmp_path / "registry.db"
         settings.lancedb_path = tmp_path / "lancedb"
 
-        conn = open_registry(settings.registry_path)
-        register_directory(conn, project, "myproject")
+        conn = SyncRegistry(settings.registry_path)
+        conn.register_directory(project, "myproject")
         conn.close()
 
         # Create config.md so it's present.
@@ -818,7 +814,7 @@ class TestEnableAppendsClaudemdBlock:
         settings.registry_path = tmp_path / "registry.db"
         settings.lancedb_path = tmp_path / "lancedb"
 
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         conn.close()
 
         with (
@@ -845,7 +841,7 @@ class TestEnableClaudemdIdempotent:
         settings.registry_path = tmp_path / "registry.db"
         settings.lancedb_path = tmp_path / "lancedb"
 
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         conn.close()
 
         with (
@@ -872,7 +868,7 @@ class TestEnableAppendsToExistingClaudemd:
         settings.registry_path = tmp_path / "registry.db"
         settings.lancedb_path = tmp_path / "lancedb"
 
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         conn.close()
 
         with (
@@ -897,7 +893,7 @@ class TestDisableRemovesClaudemdBlock:
         settings.registry_path = tmp_path / "registry.db"
         settings.lancedb_path = tmp_path / "lancedb"
 
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         conn.close()
 
         with (
@@ -926,7 +922,7 @@ class TestDisablePreservesOtherClaudemdContent:
         settings.registry_path = tmp_path / "registry.db"
         settings.lancedb_path = tmp_path / "lancedb"
 
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         conn.close()
 
         with (

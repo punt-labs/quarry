@@ -1,13 +1,15 @@
 # Package Structure Review
 
-Reviewer: rej (Ralph Johnson)
-Date: 2026-05-14
+> **Quarry OO Refactoring Initiative** — all documents: [design report](oo-design-report.md) · [design review](oo-design-review.md) · [pattern review](oo-design-pattern-review.md) · [execution plan](oo-refactoring-plan.md) · [package structure](oo-package-structure.md) · [package structure review](oo-package-structure-review.md)
 
-__Verdict: GO WITH MODIFICATIONS__
+Reviewer: rej (Ralph Johnson)
+Date: 2026-05-14. **All required modifications incorporated into `oo-package-structure.md` on 2026-05-14.**
+
+**Verdict: GO WITH MODIFICATIONS**
 
 The proposal is sound. The layering is correct, the coupling analysis is honest,
-and the dependency direction is acyclic. The modifications below are required
-before this blueprint guides 88 refactoring steps.
+and the dependency direction is acyclic. The modifications below were required
+before this blueprint guides execution — all have been incorporated.
 
 ---
 
@@ -27,7 +29,7 @@ weighs overhead against nothing -- the cost of the grab bag is invisible
 until someone asks "where does deployment logic live?" and the answer is
 "services/, along with text scrubbing and health checks."
 
-__Required change:__ Split into at least two packages. The natural seam is
+**Required change:** Split into at least two packages. The natural seam is
 `sync/` (sync.py, sync_discovery.py, sync_registry.py -- 3 modules, tightly
 coupled, change together) and `services/` (the remaining 12). The 6-module
 trigger the proposal sets for splitting is already met if you count sync_*
@@ -43,7 +45,7 @@ enable.py), while `HealthChecker` (from doctor.py) consumes `ServiceManager`
 and `ProxyInstaller`. This is an intra-package dependency diamond that the
 proposal does not mention.
 
-__Required change:__ Document the `enable -> doctor` dependency. The resolution
+**Required change:** Document the `enable -> doctor` dependency. The resolution
 is the same as the `backfill -> hooks` cycle: extract
 `_write_ethos_ext_session_context` to the types layer (or to `ethos_config.py`
 directly, since that is where it belongs post-extraction -- step 4.6 already
@@ -59,7 +61,7 @@ endpoint). After extraction, `routes/mcp_ws.py` will depend on
 imports from surfaces/ (2 imports), but does not call out this specific MCP
 dependency.
 
-__Required change:__ Document this explicitly. The import is legitimate
+**Required change:** Document this explicitly. The import is legitimate
 (the HTTP server hosts the MCP WebSocket endpoint), but it means
 `routes/mcp_ws.py` depends on `surfaces/mcp_server.py` specifically.
 If `surfaces/` is ever split, this dependency constrains the split.
@@ -79,7 +81,7 @@ between services/ and the entry points. But hooks/ consumers are just
 15K-line system it adds a layer boundary that no one will ever accidentally
 violate.
 
-__Recommendation:__ Collapse hooks/ to layer 4 alongside routes/, commands/,
+**Recommendation:** Collapse hooks/ to layer 4 alongside routes/, commands/,
 and surfaces/. This gives 6 layers, which is plenty for a codebase this size.
 The acyclicity is preserved because hooks/ does not import from its siblings.
 
@@ -92,7 +94,7 @@ maintain a registry of all 7 extractors, and `hooks/web_fetch.py` imports
 dependencies mean the packages are not as decoupled as the layer diagram
 suggests.
 
-__Recommendation:__ Add a sentence to the coupling analysis acknowledging
+**Recommendation:** Add a sentence to the coupling analysis acknowledging
 that `ingestion/ -> extractors/` coupling is 7 concrete imports plus the
 protocol, not just "7 extractors via the protocol." The protocol enables
 dispatch; the concrete imports are for registration. Both are legitimate,
@@ -106,7 +108,7 @@ groupings: data commands (find, show, remember, delete), admin commands
 (install, doctor, serve, version, uninstall), registration commands (register,
 sync, enable, optimize), and remote commands (login, logout, remote_list).
 
-__Recommendation:__ Not blocking, but set the same 6-module splitting trigger
+**Recommendation:** Not blocking, but set the same 6-module splitting trigger
 that the proposal sets for services/. If commands/ grows past 20 modules,
 split into sub-packages.
 
@@ -141,14 +143,14 @@ is the right call.
 
 ### S3.4: Missing from the proposal
 
-- __Test file reorganization.__ The proposal describes production code layout
+- **Test file reorganization.** The proposal describes production code layout
   but says nothing about whether `tests/` mirrors the new package structure.
   88 steps will move mock targets. The test directory layout should be stated.
-- __`__init__.py` re-export policy.__ The proposal says each package has
+- **`__init__.py` re-export policy.** The proposal says each package has
   `__init__.py` with re-exports, but does not state whether consumers should
   import from `quarry.db` (the package) or `quarry.db.chunk_store` (the
   module). Pick one convention and document it.
-- __`database.py` is already deleted.__ The proposal references it as if it
+- **`database.py` is already deleted.** The proposal references it as if it
   exists (section 2, "Step 2.7: Delete database.py"). The db/ package already
   contains 8 modules. Phase 2 of the refactoring plan may need rebasing.
 

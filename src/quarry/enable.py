@@ -5,9 +5,12 @@ from __future__ import annotations
 import logging
 import os
 import re
-import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from quarry.sync_registry import SyncRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -101,10 +104,10 @@ def enable_project(
         raise ValueError(msg)
 
     from quarry.config import Settings  # noqa: PLC0415
-    from quarry.sync_registry import open_registry  # noqa: PLC0415
+    from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
 
     settings = Settings.load().resolve_db_paths(None)
-    conn = open_registry(settings.registry_path)
+    conn = SyncRegistry(settings.registry_path)
     try:
         collection, created = _resolve_or_register(conn, directory, collection_override)
     finally:
@@ -151,14 +154,10 @@ def disable_project(
     from quarry.hooks import (  # noqa: PLC0415
         _collection_for_cwd_conn,  # pyright: ignore[reportPrivateUsage]
     )
-    from quarry.sync_registry import (  # noqa: PLC0415
-        deregister_directory,
-        list_registrations,
-        open_registry,
-    )
+    from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
 
     settings = Settings.load().resolve_db_paths(None)
-    conn = open_registry(settings.registry_path)
+    conn = SyncRegistry(settings.registry_path)
     try:
         collection = _collection_for_cwd_conn(conn, str(directory))  # pyright: ignore[reportPrivateUsage]
         if collection is None:
@@ -166,7 +165,7 @@ def disable_project(
             raise ValueError(msg)
 
         # Guard against walk-up match deleting a parent registration.
-        registrations = list_registrations(conn)
+        registrations = conn.list_registrations()
         match = next((r for r in registrations if r.collection == collection), None)
         if match is not None and match.directory != str(directory):
             msg = (
@@ -176,7 +175,7 @@ def disable_project(
             raise ValueError(msg)
 
         captures_collection = f"{collection}-captures"
-        deregister_directory(conn, collection)
+        conn.deregister_directory(collection)
 
         deleted_chunks = 0
         if not keep_data:
@@ -212,7 +211,7 @@ def disable_project(
 
 
 def _resolve_or_register(
-    conn: sqlite3.Connection,
+    conn: SyncRegistry,
     directory: Path,
     collection_override: str,
 ) -> tuple[str, bool]:
@@ -225,16 +224,12 @@ def _resolve_or_register(
         _collection_for_cwd_conn,  # pyright: ignore[reportPrivateUsage]
         _unique_collection_name,  # pyright: ignore[reportPrivateUsage]
     )
-    from quarry.sync_registry import (  # noqa: PLC0415
-        list_registrations,
-        register_directory,
-    )
 
     collection = _collection_for_cwd_conn(conn, str(directory))  # pyright: ignore[reportPrivateUsage]
 
     if collection is not None:
         # Determine whether this is an exact match or a parent match.
-        registrations = list_registrations(conn)
+        registrations = conn.list_registrations()
         for reg in registrations:
             if reg.collection == collection and reg.directory == str(directory):
                 # Exact match -- reuse.
@@ -250,7 +245,7 @@ def _resolve_or_register(
 
     # No coverage -- create a new registration.
     name = collection_override or _unique_collection_name(conn, directory)  # pyright: ignore[reportPrivateUsage]
-    register_directory(conn, directory, name)
+    conn.register_directory(directory, name)
     return name, True
 
 

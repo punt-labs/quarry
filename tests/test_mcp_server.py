@@ -37,7 +37,7 @@ class TestRemember:
         started = threading.Event()
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.mcp_server._db"),
+            patch("quarry.db.facade.get_db"),
             patch(
                 "quarry.mcp_server.pipeline_ingest_content",
                 side_effect=lambda *a, **kw: started.set(),
@@ -53,7 +53,7 @@ class TestRemember:
         done = threading.Event()
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.mcp_server._db"),
+            patch("quarry.db.facade.get_db"),
             patch(
                 "quarry.mcp_server.pipeline_ingest_content",
                 side_effect=lambda *a, **kw: done.set(),
@@ -69,7 +69,7 @@ class TestRemember:
         done = threading.Event()
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.mcp_server._db"),
+            patch("quarry.db.facade.get_db"),
             patch(
                 "quarry.mcp_server.pipeline_ingest_content",
                 side_effect=lambda *a, **kw: done.set(),
@@ -87,7 +87,7 @@ class TestDeleteDocument:
         done = threading.Event()
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.mcp_server._db"),
+            patch("quarry.db.facade.get_db"),
             patch(
                 "quarry.db.chunk_store.ChunkStore.delete_document",
                 side_effect=lambda *a, **kw: done.set(),
@@ -107,7 +107,7 @@ class TestDeleteDocument:
         done = threading.Event()
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.mcp_server._db"),
+            patch("quarry.db.facade.get_db"),
             patch(
                 "quarry.db.chunk_store.ChunkStore.delete_document",
                 side_effect=lambda *a, **kw: done.set(),
@@ -132,7 +132,7 @@ class TestStatus:
         mock_conn = MagicMock()
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.mcp_server._db"),
+            patch("quarry.db.facade.get_db"),
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
                 return_value=mock_docs,
@@ -142,9 +142,9 @@ class TestStatus:
                 "quarry.db.chunk_catalog.ChunkCatalog.list_collections",
                 return_value=mock_cols,
             ),
-            patch("quarry.mcp_server.open_registry", return_value=mock_conn),
-            patch("quarry.mcp_server.registry_list", return_value=["fake"]),
+            patch("quarry.mcp_server.SyncRegistry", return_value=mock_conn),
         ):
+            mock_conn.list_registrations.return_value = ["fake"]
             result = status()
 
         assert "Documents:" in result
@@ -165,7 +165,7 @@ class TestStatus:
         mock_conn = MagicMock()
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.mcp_server._db"),
+            patch("quarry.db.facade.get_db"),
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
             ),
@@ -173,9 +173,9 @@ class TestStatus:
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
             ),
-            patch("quarry.mcp_server.open_registry", return_value=mock_conn),
-            patch("quarry.mcp_server.registry_list", return_value=[]),
+            patch("quarry.mcp_server.SyncRegistry", return_value=mock_conn),
         ):
+            mock_conn.list_registrations.return_value = []
             result = status()
 
         assert "Documents:      0" in result
@@ -185,10 +185,10 @@ class TestStatus:
 
     def test_nonexistent_db_path(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
-        # registry_path doesn't exist → status() skips open_registry
+        # registry_path doesn't exist → status() skips SyncRegistry
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.mcp_server._db"),
+            patch("quarry.db.facade.get_db"),
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
             ),
@@ -226,7 +226,7 @@ class TestFind:
         ]
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.mcp_server._db"),
+            patch("quarry.db.facade.get_db"),
             patch(
                 "quarry.mcp_server.get_embedding_backend",
                 return_value=_mock_embedding_backend(mock_vector),
@@ -250,7 +250,7 @@ class TestFind:
         mock_vector = np.zeros(768, dtype=np.float32)
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.mcp_server._db"),
+            patch("quarry.db.facade.get_db"),
             patch(
                 "quarry.mcp_server.get_embedding_backend",
                 return_value=_mock_embedding_backend(mock_vector),
@@ -277,7 +277,7 @@ class TestFind:
         mock_vector = np.zeros(768, dtype=np.float32)
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.mcp_server._db"),
+            patch("quarry.db.facade.get_db"),
             patch(
                 "quarry.mcp_server.get_embedding_backend",
                 return_value=_mock_embedding_backend(mock_vector),
@@ -370,7 +370,7 @@ class TestFind:
         ]
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.mcp_server._db"),
+            patch("quarry.db.facade.get_db"),
             patch(
                 "quarry.mcp_server.get_embedding_backend",
                 return_value=_mock_embedding_backend(mock_vector),
@@ -405,7 +405,7 @@ class TestListDocuments:
         ]
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.mcp_server._db"),
+            patch("quarry.db.facade.get_db"),
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
                 return_value=mock_docs,
@@ -421,7 +421,7 @@ class TestListDocuments:
         settings = _settings(tmp_path)
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.mcp_server._db"),
+            patch("quarry.db.facade.get_db"),
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
             ),
@@ -434,7 +434,7 @@ class TestListDocuments:
         settings = _settings(tmp_path)
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.mcp_server._db"),
+            patch("quarry.db.facade.get_db"),
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
             ) as mock_list,
@@ -450,7 +450,7 @@ class TestShow:
         settings = _settings(tmp_path)
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.mcp_server._db"),
+            patch("quarry.db.facade.get_db"),
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.get_page_text",
                 return_value="The quick brown fox",
@@ -466,7 +466,7 @@ class TestShow:
         settings = _settings(tmp_path)
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.mcp_server._db"),
+            patch("quarry.db.facade.get_db"),
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.get_page_text", return_value=None
             ),
@@ -489,7 +489,7 @@ class TestShow:
         }
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.mcp_server._db"),
+            patch("quarry.db.facade.get_db"),
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
                 return_value=[mock_doc],
@@ -505,7 +505,7 @@ class TestShow:
         settings = _settings(tmp_path)
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.mcp_server._db"),
+            patch("quarry.db.facade.get_db"),
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
             ),
@@ -524,7 +524,7 @@ class TestListCollections:
         ]
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.mcp_server._db"),
+            patch("quarry.db.facade.get_db"),
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_collections",
                 return_value=mock_cols,
@@ -543,7 +543,7 @@ class TestDeleteCollection:
         done = threading.Event()
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.mcp_server._db"),
+            patch("quarry.db.facade.get_db"),
             patch(
                 "quarry.db.chunk_store.ChunkStore.delete_collection",
                 side_effect=lambda *a, **kw: done.set(),
@@ -562,7 +562,7 @@ class TestHandleErrors:
         settings = _settings(tmp_path)
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.mcp_server._db"),
+            patch("quarry.db.facade.get_db"),
             patch(
                 "quarry.mcp_server._background",
                 side_effect=RuntimeError("thread pool exhausted"),
@@ -585,7 +585,7 @@ class TestHandleErrors:
 
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.mcp_server._db"),
+            patch("quarry.db.facade.get_db"),
             patch(
                 "quarry.mcp_server.pipeline_ingest_content",
                 side_effect=_failing_ingest,
@@ -638,7 +638,7 @@ class TestDeregisterDirectory:
         settings = _settings(tmp_path)
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.mcp_server._db"),
+            patch("quarry.db.facade.get_db"),
             patch("quarry.mcp_server._background") as mock_bg,
         ):
             result = deregister_directory("math")
@@ -652,7 +652,7 @@ class TestSyncAllRegistrations:
         settings = _settings(tmp_path)
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.mcp_server._db"),
+            patch("quarry.db.facade.get_db"),
             patch("quarry.mcp_server._background") as mock_bg,
         ):
             result = sync_all_registrations()
@@ -663,15 +663,15 @@ class TestSyncAllRegistrations:
 
 class TestListRegistrations:
     def test_returns_registrations(self, tmp_path: Path) -> None:
-        from quarry.sync_registry import open_registry, register_directory as reg_dir
+        from quarry.sync_registry import SyncRegistry
 
         settings = _settings(tmp_path)
         d = tmp_path / "course"
         d.mkdir()
         # Register directly (not via fire-and-forget MCP tool)
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         try:
-            reg_dir(conn, d, "course")
+            conn.register_directory(d, "course")
         finally:
             conn.close()
         with patch("quarry.mcp_server._settings", return_value=settings):

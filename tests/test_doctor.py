@@ -740,6 +740,8 @@ class TestCheckFtsHealth:
         """FTS query succeeds — check reports healthy."""
         from unittest.mock import MagicMock
 
+        from quarry.db.facade import Database
+
         db_path = tmp_path / "lancedb"
         db_path.mkdir(parents=True)
 
@@ -754,7 +756,7 @@ class TestCheckFtsHealth:
         mock_db.list_tables.return_value = MagicMock(tables=["chunks"])
         mock_db.open_table.return_value = mock_table
 
-        with patch("quarry.db.storage.get_db", return_value=mock_db):
+        with patch.object(Database, "connect", return_value=Database(mock_db)):
             result = _check_fts_health(db_path)
         assert result.passed is True
         assert result.message == "healthy"
@@ -763,6 +765,8 @@ class TestCheckFtsHealth:
     def test_stale_fts_runtime_error(self, tmp_path: Path) -> None:
         """RuntimeError from FTS query means stale index."""
         from unittest.mock import MagicMock
+
+        from quarry.db.facade import Database
 
         db_path = tmp_path / "lancedb"
         db_path.mkdir(parents=True)
@@ -778,7 +782,7 @@ class TestCheckFtsHealth:
         mock_db.list_tables.return_value = MagicMock(tables=["chunks"])
         mock_db.open_table.return_value = mock_table
 
-        with patch("quarry.db.storage.get_db", return_value=mock_db):
+        with patch.object(Database, "connect", return_value=Database(mock_db)):
             result = _check_fts_health(db_path)
         assert result.passed is False
         assert "stale" in result.message
@@ -787,6 +791,8 @@ class TestCheckFtsHealth:
     def test_missing_fts_os_error(self, tmp_path: Path) -> None:
         """OSError from FTS query means missing index."""
         from unittest.mock import MagicMock
+
+        from quarry.db.facade import Database
 
         db_path = tmp_path / "lancedb"
         db_path.mkdir(parents=True)
@@ -802,7 +808,7 @@ class TestCheckFtsHealth:
         mock_db.list_tables.return_value = MagicMock(tables=["chunks"])
         mock_db.open_table.return_value = mock_table
 
-        with patch("quarry.db.storage.get_db", return_value=mock_db):
+        with patch.object(Database, "connect", return_value=Database(mock_db)):
             result = _check_fts_health(db_path)
         assert result.passed is False
         assert "missing" in result.message
@@ -820,10 +826,10 @@ class TestCheckSyncHealth:
         assert "no registrations" in result.message
 
     def test_no_registrations(self, tmp_path: Path) -> None:
-        from quarry.sync_registry import open_registry
+        from quarry.sync_registry import SyncRegistry
 
         registry_path = tmp_path / "registry.db"
-        conn = open_registry(registry_path)
+        conn = SyncRegistry(registry_path)
         conn.close()
         result = _check_sync_health(registry_path)
         assert result.passed is True
@@ -833,10 +839,10 @@ class TestCheckSyncHealth:
         """Collections with recent ingested_at report healthy."""
         from datetime import UTC, datetime
 
-        from quarry.sync_registry import open_registry
+        from quarry.sync_registry import SyncRegistry
 
         registry_path = tmp_path / "registry.db"
-        conn = open_registry(registry_path)
+        conn = SyncRegistry(registry_path)
         # Insert a registration
         now = datetime.now(UTC).isoformat()
         sync_dir = tmp_path / "docs"
@@ -863,10 +869,10 @@ class TestCheckSyncHealth:
         """Collection with ingested_at > 24h ago triggers warning."""
         from datetime import UTC, datetime, timedelta
 
-        from quarry.sync_registry import open_registry
+        from quarry.sync_registry import SyncRegistry
 
         registry_path = tmp_path / "registry.db"
-        conn = open_registry(registry_path)
+        conn = SyncRegistry(registry_path)
         sync_dir = tmp_path / "docs"
         sync_dir.mkdir()
         now = datetime.now(UTC)
@@ -891,10 +897,10 @@ class TestCheckSyncHealth:
         """Registration with no files reports never synced."""
         from datetime import UTC, datetime
 
-        from quarry.sync_registry import open_registry
+        from quarry.sync_registry import SyncRegistry
 
         registry_path = tmp_path / "registry.db"
-        conn = open_registry(registry_path)
+        conn = SyncRegistry(registry_path)
         sync_dir = tmp_path / "docs"
         sync_dir.mkdir()
         now = datetime.now(UTC).isoformat()
@@ -925,10 +931,10 @@ class TestCheckSyncDirectories:
     def test_all_directories_exist(self, tmp_path: Path) -> None:
         from datetime import UTC, datetime
 
-        from quarry.sync_registry import open_registry
+        from quarry.sync_registry import SyncRegistry
 
         registry_path = tmp_path / "registry.db"
-        conn = open_registry(registry_path)
+        conn = SyncRegistry(registry_path)
         sync_dir = tmp_path / "docs"
         sync_dir.mkdir()
         now = datetime.now(UTC).isoformat()
@@ -948,10 +954,10 @@ class TestCheckSyncDirectories:
         """A regular file at the registered path is not a valid sync directory."""
         from datetime import UTC, datetime
 
-        from quarry.sync_registry import open_registry
+        from quarry.sync_registry import SyncRegistry
 
         registry_path = tmp_path / "registry.db"
-        conn = open_registry(registry_path)
+        conn = SyncRegistry(registry_path)
         fake_file = tmp_path / "not-a-dir"
         fake_file.write_text("I am a file")
         now = datetime.now(UTC).isoformat()
@@ -971,10 +977,10 @@ class TestCheckSyncDirectories:
     def test_missing_directory(self, tmp_path: Path) -> None:
         from datetime import UTC, datetime
 
-        from quarry.sync_registry import open_registry
+        from quarry.sync_registry import SyncRegistry
 
         registry_path = tmp_path / "registry.db"
-        conn = open_registry(registry_path)
+        conn = SyncRegistry(registry_path)
         now = datetime.now(UTC).isoformat()
         # Register a directory that doesn't exist
         conn.execute(
@@ -991,10 +997,10 @@ class TestCheckSyncDirectories:
         assert result.required is False
 
     def test_no_registrations(self, tmp_path: Path) -> None:
-        from quarry.sync_registry import open_registry
+        from quarry.sync_registry import SyncRegistry
 
         registry_path = tmp_path / "registry.db"
-        conn = open_registry(registry_path)
+        conn = SyncRegistry(registry_path)
         conn.close()
 
         result = _check_sync_directories(registry_path)

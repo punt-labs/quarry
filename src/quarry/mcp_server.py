@@ -12,8 +12,8 @@ from mcp.server.fastmcp import FastMCP
 
 from quarry.collections import CollectionName
 from quarry.config import Settings
-from quarry.db import ChunkCatalog, ChunkSearch, ChunkStore
-from quarry.db.storage import dir_size_bytes, discover_databases, get_db
+from quarry.db import Database
+from quarry.db.storage import dir_size_bytes, discover_databases
 from quarry.formatting import (
     format_collections,
     format_databases,
@@ -33,13 +33,7 @@ from quarry.ingestion.pipeline import (
 from quarry.ingestion.provider import ProviderSelection
 from quarry.logging_config import LoggingConfig
 from quarry.sync import sync_all as engine_sync_all
-from quarry.sync_registry import (
-    deregister_directory as registry_deregister,
-    list_registrations as registry_list,
-    open_registry,
-    register_directory as registry_register,
-)
-from quarry.types import LanceDB
+from quarry.sync_registry import SyncRegistry
 
 if TYPE_CHECKING:
     from anyio.streams.memory import (
@@ -84,8 +78,8 @@ def _settings() -> Settings:
     return Settings.load().resolve_db_paths(_db_name.get())
 
 
-def _db() -> LanceDB:
-    return get_db(_settings().lancedb_path)
+def _database() -> Database:
+    return Database.connect(_settings().lancedb_path)
 
 
 _executor = ThreadPoolExecutor(max_workers=4)
@@ -132,11 +126,11 @@ def find(
     """
     limit = min(limit, 50)
     settings = _settings()
-    db = _db()
+    database = _database()
 
     query_vector = get_embedding_backend(settings).embed_query(query)
 
-    results = ChunkSearch(db).hybrid_search(
+    results = database.search.hybrid_search(
         query,
         query_vector,
         limit=limit,
@@ -166,18 +160,26 @@ def find(
 
 
 def _do_ingest(
-    source: str, overwrite: bool, collection: str, settings: Settings, db: LanceDB
+    source: str,
+    overwrite: bool,
+    collection: str,
+    settings: Settings,
+    database: Database,
 ) -> None:
     """Blocking ingest — runs in background thread."""
     if source.startswith(("http://", "https://")):
         pipeline_ingest_auto(
-            source, db, settings, overwrite=overwrite, collection=collection or ""
+            source,
+            database,
+            settings,
+            overwrite=overwrite,
+            collection=collection or "",
         )
         return
 
     path = Path(source)
     col = CollectionName.from_path(path, explicit=collection or None)
-    ingest_document(path, db, settings, overwrite=overwrite, collection=str(col))
+    ingest_document(path, database, settings, overwrite=overwrite, collection=str(col))
 
 
 @mcp.tool()
@@ -204,8 +206,8 @@ def ingest(
         collection: Collection name. Auto-derived if empty.
     """
     settings = _settings()
-    db = _db()
-    _background(_do_ingest, source, overwrite, collection, settings, db)
+    database = _database()
+    _background(_do_ingest, source, overwrite, collection, settings, database)
     return f"\u25b6  Ingesting {source} (background)"
 
 
@@ -219,13 +221,13 @@ def _do_remember(
     memory_type: str,
     summary: str,
     settings: Settings,
-    db: LanceDB,
+    database: Database,
 ) -> None:
     """Blocking remember — runs in background thread."""
     pipeline_ingest_content(
         content,
         document_name,
-        db,
+        database,
         settings,
         overwrite=overwrite,
         collection=collection,
@@ -266,7 +268,7 @@ def remember(
         summary: One-line summary of the content.
     """
     settings = _settings()
-    db = _db()
+    database = _database()
     _background(
         _do_remember,
         content,
@@ -278,7 +280,7 @@ def remember(
         memory_type,
         summary,
         settings,
-        db,
+        database,
     )
     return f"\u25b6  Remembering {document_name} (background)"
 
@@ -297,12 +299,12 @@ def list_resources(
         collection: Optional collection filter (only for kind="documents").
     """
     if kind == "documents":
-        db = _db()
-        docs = ChunkCatalog(db).list_documents(collection_filter=collection or None)
+        database = _database()
+        docs = database.catalog.list_documents(collection_filter=collection or None)
         return format_documents(docs)
     if kind == "collections":
-        db = _db()
-        cols = ChunkCatalog(db).list_collections()
+        database = _database()
+        cols = database.catalog.list_collections()
         return format_collections(cols)
     if kind == "databases":
         settings = _settings()
@@ -310,9 +312,9 @@ def list_resources(
         return format_databases(databases, current=_db_name.get() or "default")
     if kind == "registrations":
         settings = _settings()
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         try:
-            regs = registry_list(conn)
+            regs = conn.list_registrations()
         finally:
             conn.close()
         return format_registrations(
@@ -348,26 +350,26 @@ def show(
         page_number: Page number (1-indexed). 0 means show metadata only.
         collection: Optional collection scope.
     """
-    db = _db()
+    database = _database()
 
     if page_number > 0:
-        text = ChunkCatalog(db).get_page_text(
+        text = database.catalog.get_page_text(
             document_name, page_number, collection=collection or None
         )
         if text is None:
             return f"No data found for {document_name} page {page_number}"
         return f"Document: {document_name}\nPage: {page_number}\n---\n{text}"
 
-    docs = ChunkCatalog(db).list_documents(collection_filter=collection or None)
+    docs = database.catalog.list_documents(collection_filter=collection or None)
     match = [d for d in docs if d["document_name"] == document_name]
     if not match:
         return f"Document {document_name!r} not found"
     return format_document_detail(match[0])
 
 
-def _do_delete(name: str, kind: str, collection: str, db: LanceDB) -> None:
+def _do_delete(name: str, kind: str, collection: str, database: Database) -> None:
     """Blocking delete — runs in background thread."""
-    store = ChunkStore(db)
+    store = database.store
     if kind == "collection":
         store.delete_collection(name)
     else:
@@ -392,8 +394,8 @@ def delete(
     """
     if kind not in ("document", "collection"):
         return f"Invalid kind {kind!r}. Must be 'document' or 'collection'."
-    db = _db()
-    _background(_do_delete, name, kind, collection, db)
+    database = _database()
+    _background(_do_delete, name, kind, collection, database)
     return f"\u25b6  Deleting {kind} {name!r} (background)"
 
 
@@ -401,9 +403,9 @@ def _do_register(directory: str, collection: str, settings: Settings) -> None:
     """Blocking register — runs in background thread."""
     path = Path(directory).resolve()
     col = collection or path.name
-    conn = open_registry(settings.registry_path)
+    conn = SyncRegistry(settings.registry_path)
     try:
-        registry_register(conn, path, col)
+        conn.register_directory(path, col)
     finally:
         conn.close()
 
@@ -427,17 +429,17 @@ def register_directory(directory: str, collection: str = "") -> str:
 
 
 def _do_deregister(
-    collection: str, keep_data: bool, settings: Settings, db: LanceDB
+    collection: str, keep_data: bool, settings: Settings, database: Database
 ) -> None:
     """Blocking deregister — runs in background thread."""
-    conn = open_registry(settings.registry_path)
+    conn = SyncRegistry(settings.registry_path)
     try:
-        doc_names = registry_deregister(conn, collection)
+        doc_names = conn.deregister_directory(collection)
     finally:
         conn.close()
 
     if not keep_data and doc_names:
-        store = ChunkStore(db)
+        store = database.store
         for name in doc_names:
             store.delete_document(name, collection=collection, count=False)
 
@@ -457,14 +459,14 @@ def deregister_directory(
         keep_data: If true, keep indexed data in LanceDB.
     """
     settings = _settings()
-    db = _db()
-    _background(_do_deregister, collection, keep_data, settings, db)
+    database = _database()
+    _background(_do_deregister, collection, keep_data, settings, database)
     return f"\u25b6  Deregistering {collection!r} (background)"
 
 
-def _do_sync(settings: Settings, db: LanceDB) -> None:
+def _do_sync(settings: Settings, database: Database) -> None:
     """Blocking sync — runs in background thread."""
-    engine_sync_all(db, settings)
+    engine_sync_all(database.db, settings)
 
 
 @mcp.tool()
@@ -475,8 +477,8 @@ def sync_all_registrations() -> str:
     Returns immediately — sync runs in the background.
     """
     settings = _settings()
-    db = _db()
-    _background(_do_sync, settings, db)
+    database = _database()
+    _background(_do_sync, settings, database)
     return "\u25b6  Syncing all registrations (background)"
 
 
@@ -485,17 +487,16 @@ def sync_all_registrations() -> str:
 def status() -> str:
     """Get database status: document/chunk counts, storage size, and model info."""
     settings = _settings()
-    db = _db()
+    database = _database()
 
-    catalog = ChunkCatalog(db)
-    docs = catalog.list_documents()
-    chunks = ChunkStore(db).count()
-    cols = catalog.list_collections()
+    docs = database.catalog.list_documents()
+    chunks = database.store.count()
+    cols = database.catalog.list_collections()
 
     if settings.registry_path.exists():
-        conn = open_registry(settings.registry_path)
+        conn = SyncRegistry(settings.registry_path)
         try:
-            regs = registry_list(conn)
+            regs = conn.list_registrations()
         finally:
             conn.close()
     else:

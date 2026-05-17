@@ -1,6 +1,24 @@
 # Quarry OO Refactoring Plan
 
-Generated: 2026-05-13
+> **Quarry OO Refactoring Initiative** — all documents: [design report](oo-design-report.md) · [design review](oo-design-review.md) · [pattern review](oo-design-pattern-review.md) · [execution plan](oo-refactoring-plan.md) · [package structure](oo-package-structure.md) · [package structure review](oo-package-structure-review.md)
+
+Generated: 2026-05-13. **Last status update: 2026-05-15.**
+
+## Execution status
+
+| Phase | Steps | Status | Branch/PR |
+|-------|-------|--------|-----------|
+| 0 | 0.1–0.10 | **DONE** | main (PRs #280–#283) |
+| 1 | 1.1–1.10 | **DONE** | main (PR #284) |
+| 2 | 2.1–2.8 | **DONE** | main (PRs #285–#286) |
+| 3 | 3.1–3.16 | **DONE** | main (PR #288) |
+| 4 | 4.1–4.2 done, 4.3a done | **IN PROGRESS** | branch `oo/phase-4-services` |
+| 5–7 | all | **NOT STARTED** | — |
+
+**Note**: 5 additional package-move steps (3.16a, 4.3a, 4.17, 5.1 mod, 7.20) were added
+by `oo-package-structure.md` after this plan was written. Revised total: **89 steps**.
+
+---
 
 This is document 3 of 3 in the quarry OO redesign:
 

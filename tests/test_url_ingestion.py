@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
+from quarry.db import Database
 from quarry.extractors.html_extractor import HtmlExtractor
 from quarry.models import PageType
 
@@ -181,8 +182,9 @@ class TestIngestUrl:
         settings.chunk_max_chars = 1800
         settings.chunk_overlap_chars = 200
 
-        db = MagicMock()
-        db.open_table.return_value = MagicMock()
+        mock_lance = MagicMock()
+        mock_lance.open_table.return_value = MagicMock()
+        db = Database(mock_lance)
 
         with patch(
             "quarry.ingestion.pipeline.get_embedding_backend",
@@ -217,8 +219,9 @@ class TestIngestUrl:
         settings.chunk_max_chars = 1800
         settings.chunk_overlap_chars = 200
 
-        db = MagicMock()
-        db.open_table.return_value = MagicMock()
+        mock_lance = MagicMock()
+        mock_lance.open_table.return_value = MagicMock()
+        db = Database(mock_lance)
 
         with (
             patch(

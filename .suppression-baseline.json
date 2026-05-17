@@ -1,0 +1,100 @@
+{
+  "total": 263,
+  "by_category": {
+    "noqa": 219,
+    "type_ignore": 10,
+    "pylint_disable": 0,
+    "pyright_ignore": 12,
+    "per_file_ignores": 22
+  },
+  "by_file": {
+    "src/quarry/__main__.py": {
+      "noqa": 25,
+      "type_ignore": 2
+    },
+    "src/quarry/_hook_entry.py": {
+      "noqa": 10
+    },
+    "src/quarry/backfill.py": {
+      "noqa": 2
+    },
+    "src/quarry/collections.py": {
+      "type_ignore": 1
+    },
+    "src/quarry/db/chunk_search.py": {
+      "noqa": 2
+    },
+    "src/quarry/db/chunk_store.py": {
+      "noqa": 3
+    },
+    "src/quarry/db/storage.py": {
+      "noqa": 7,
+      "type_ignore": 1
+    },
+    "src/quarry/doctor.py": {
+      "noqa": 75,
+      "type_ignore": 1,
+      "pyright_ignore": 2
+    },
+    "src/quarry/embeddings.py": {
+      "noqa": 4
+    },
+    "src/quarry/enable.py": {
+      "noqa": 10,
+      "pyright_ignore": 7
+    },
+    "src/quarry/extractors/image_extractor.py": {
+      "noqa": 1
+    },
+    "src/quarry/extractors/presentation_extractor.py": {
+      "noqa": 1,
+      "type_ignore": 2
+    },
+    "src/quarry/extractors/spreadsheet_extractor.py": {
+      "noqa": 1
+    },
+    "src/quarry/extractors/text_extractor.py": {
+      "noqa": 1
+    },
+    "src/quarry/hooks.py": {
+      "noqa": 20,
+      "pyright_ignore": 3
+    },
+    "src/quarry/http_server.py": {
+      "noqa": 11,
+      "type_ignore": 2
+    },
+    "src/quarry/ingestion/backends.py": {
+      "noqa": 3
+    },
+    "src/quarry/ingestion/image_preparer.py": {
+      "noqa": 3
+    },
+    "src/quarry/ingestion/ocr_local.py": {
+      "noqa": 1
+    },
+    "src/quarry/ingestion/pipeline.py": {
+      "noqa": 18
+    },
+    "src/quarry/ingestion/provider.py": {
+      "noqa": 2
+    },
+    "src/quarry/ingestion/url_fetcher.py": {
+      "noqa": 4
+    },
+    "src/quarry/ingestion/url_ingester.py": {
+      "noqa": 8
+    },
+    "src/quarry/proxy.py": {
+      "noqa": 2
+    },
+    "src/quarry/remote.py": {
+      "noqa": 2
+    },
+    "src/quarry/sitemap.py": {
+      "noqa": 3,
+      "type_ignore": 1
+    }
+  },
+  "updated_at": "2026-05-17T00:01:17Z"
+}
