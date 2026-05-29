@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import contextlib
 import logging
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 
 from quarry.embeddings import _EMBED_BATCH_SIZE, OnnxEmbeddingBackend
+
+if TYPE_CHECKING:
+    import pytest
 
 
 def _mock_session() -> MagicMock:

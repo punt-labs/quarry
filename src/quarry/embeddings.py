@@ -92,8 +92,8 @@ class OnnxEmbeddingBackend:
         # Cap tokenizer (rayon) and OMP thread pools before any library
         # creates them.  Without this, each quarry process spins up ncpu
         # rayon threads + ncpu ONNX threads.  Three concurrent quarry
-        # processes (serve + ingest-background + CLI) on 8 cores →
-        # 3×(8+8) = 48 runnable threads → load ~148.  See DES-032.
+        # processes (serve + ingest-background + CLI) on 8 cores:
+        # 3x(8+8) = 48 runnable threads, load ~148.  See DES-032.
         os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
         selection = ProviderSelection.from_environment()
@@ -147,7 +147,7 @@ class OnnxEmbeddingBackend:
         )
         # Limit ONNX intra-op parallelism based on provider and hardware.
         # DES-027 sets narenas:1 to control LanceDB RSS growth; more
-        # threads × single arena = worse contention.  See DES-032.
+        # threads x single arena = worse contention.  See DES-032.
         sess_options.intra_op_num_threads = intra_threads
         sess_options.inter_op_num_threads = 1
 
