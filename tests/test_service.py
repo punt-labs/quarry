@@ -1285,6 +1285,71 @@ class TestEnsureGpuRuntime:
         assert result == "onnxruntime-gpu installed"
 
 
+class TestPlistProcessType:
+    """_launchd_plist_content() must include ProcessType=Interactive."""
+
+    def test_plist_contains_process_type_interactive(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ProcessType=Interactive prevents macOS App Nap from throttling the daemon."""
+        monkeypatch.delenv("QUARRY_API_KEY", raising=False)
+        _make_local_bin_quarry(tmp_path)
+        with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
+            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+        ):
+            content = _launchd_plist_content()
+        assert "<key>ProcessType</key>" in content
+        assert "<string>Interactive</string>" in content
+
+    def test_process_type_appears_before_run_at_load(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ProcessType must appear before RunAtLoad in the plist."""
+        monkeypatch.delenv("QUARRY_API_KEY", raising=False)
+        _make_local_bin_quarry(tmp_path)
+        with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
+            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+        ):
+            content = _launchd_plist_content()
+        pt_idx = content.index("ProcessType")
+        ral_idx = content.index("RunAtLoad")
+        assert pt_idx < ral_idx
+
+
+class TestSystemdNice:
+    """_systemd_unit_content() must include Nice=-5."""
+
+    def test_systemd_unit_contains_nice(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Nice=-5 prevents systemd from deprioritizing the daemon."""
+        _make_local_bin_quarry(tmp_path)
+        with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
+            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+            patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
+        ):
+            content = _systemd_unit_content()
+        assert "Nice=-5" in content
+
+    def test_nice_appears_after_restart_sec(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Nice=-5 must appear after RestartSec=5 in the [Service] section."""
+        _make_local_bin_quarry(tmp_path)
+        with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
+            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+            patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
+        ):
+            content = _systemd_unit_content()
+        rs_idx = content.index("RestartSec=5")
+        nice_idx = content.index("Nice=-5")
+        assert nice_idx > rs_idx
+
+
 class TestServiceBackendProtocol:
     """Conformance tests for the ServiceBackend protocol."""
 
