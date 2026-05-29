@@ -203,7 +203,9 @@ def _launchd_plist_content() -> str:
             <array>
         {program_args}
             </array>
-            {env_vars_block}<key>RunAtLoad</key>
+            {env_vars_block}<key>ProcessType</key>
+            <string>Interactive</string>
+            <key>RunAtLoad</key>
             <true/>
             <key>KeepAlive</key>
             <true/>
@@ -319,6 +321,7 @@ def _systemd_unit_content() -> str:
         EnvironmentFile=-{env_file_path}
         Restart=on-failure
         RestartSec=5
+        Nice=-5
 
         [Install]
         WantedBy=default.target
