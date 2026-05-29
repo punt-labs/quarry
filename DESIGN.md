@@ -965,17 +965,20 @@ PR 1 is doc-only and sets the contract. PRs 2–5 are implementation slices that
 
 All revisions ship in PR 1.
 
-## DES-032: ONNX Thread Limits to Prevent jemalloc Arena Contention
+## DES-032: Daemon Resource Management — Thread Limits and OS Scheduling
 
-**Date:** 2026-05-27
+**Date:** 2026-05-27 (revised 2026-05-29)
 **Status:** SETTLED
-**Topic:** Interaction between DES-027 MALLOC_CONF and ONNX Runtime default thread count
+**Topic:** Auto-detecting thread counts and OS scheduling hints for the quarry daemon
+**Supersedes:** Original DES-032 (ONNX Thread Limits only)
 
 ### Problem
 
-DES-027 sets `MALLOC_CONF=dirty_decay_ms:1000,muzzy_decay_ms:0,narenas:1,tcache:false` in the daemon's environment to prevent LanceDB's jemalloc from growing RSS to 5+ GB. This configuration uses a single allocation arena (`narenas:1`) and disables thread-local caching (`tcache:false`).
+Three concurrent quarry processes (serve + ingest-background + CLI) each spin up ncpu ONNX threads + ncpu rayon threads + ncpu OMP threads. On 8 cores: 3×(8+8+8) ≈ 48-72 runnable threads → system load 148. Stack samples show rayon thread-pool workers and ONNX `RunInParallel` as hot frames.
 
-ONNX Runtime defaults to one intra-op thread per CPU core (typically 8). All 8 threads perform concurrent GEMM allocations (`MlasGemmQuantPackedOperation`) through jemalloc's single arena. Under sustained load — a sync cycle ingesting many documents — the arena lock becomes the bottleneck. Throughput degrades from 44 texts/s to 0.1 texts/s (440x slower). The `sample` tool shows all 8 ONNX threads blocked on the arena lock with only 7.5% total CPU utilization.
+Additionally, macOS App Nap throttles the windowless quarry daemon 5-10x without `ProcessType=Interactive`, because launchd classifies it as a background process eligible for power-saving throttling.
+
+DES-027 sets `MALLOC_CONF=narenas:1,tcache:false` in the daemon environment. More threads × single arena = worse contention. Under sustained load the arena lock serialises all ONNX threads and throughput drops from 44 texts/s to 0.1 texts/s (440x slower).
 
 ### Evidence
 
@@ -987,13 +990,30 @@ ONNX Runtime defaults to one intra-op thread per CPU core (typically 8). All 8 t
 
 ### Design
 
-Two changes:
+Auto-detect and cap all thread pools at construction time. Zero user configuration required.
 
-**1. Thread limits** — set `intra_op_num_threads=2` and `inter_op_num_threads=1` on `SessionOptions` in `OnnxEmbeddingBackend.__new__`. Reduces jemalloc arena contention from 8 concurrent GEMM threads to 2.
+| Parameter | CPU provider | GPU provider | Set where |
+|---|---|---|---|
+| `intra_op_num_threads` | `min(2, ncpu)` | `1` | `OnnxEmbeddingBackend.__new__` |
+| `inter_op_num_threads` | `1` | `1` | `OnnxEmbeddingBackend.__new__` |
+| `TOKENIZERS_PARALLELISM` | `false` | `false` | `os.environ.setdefault` |
+| `OMP_NUM_THREADS` | `min(2, ncpu)` | `min(2, ncpu)` | `os.environ.setdefault` |
+| `MALLOC_CONF` | DES-027 value | DES-027 value | plist/systemd env |
+| macOS QoS | `ProcessType=Interactive` | `ProcessType=Interactive` | plist |
+| Linux QoS | `Nice=-5` | `Nice=-5` | systemd unit |
 
-**2. Session isolation** — the HTTP server's `_QuarryContext.embedder` creates a dedicated `OnnxEmbeddingBackend()` instance instead of sharing the `get_embedding_backend()` singleton with the sync pipeline. ONNX `session.run()` serialises callers via an internal mutex. With a shared session, a search query must wait for the sync's current embedding batch to complete — up to 70 seconds under `narenas:1,tcache:false`. Separate sessions eliminate this blocking.
+Why each parameter has exactly one right answer:
 
-The sync pipeline continues using `get_embedding_backend()` (shared singleton). The HTTP search route gets its own session. Both sessions respect `intra_op_num_threads=2`. Memory cost: one extra ONNX model (~120 MB). The tradeoff is acceptable — 120 MB buys sub-second query response during sync.
+- **`intra_op_num_threads`**: GPU offloads GEMM to CUDA so one CPU feeder thread suffices; CPU needs parallelism but more than 2 threads causes arena lock serialisation under `narenas:1`.
+- **`inter_op_num_threads`**: Quarry runs a single model with sequential ops — no inter-op parallelism to exploit.
+- **`TOKENIZERS_PARALLELISM`**: Disables rayon thread pool inside HuggingFace tokenizers — redundant when texts are already batched by `embed_texts`.
+- **`OMP_NUM_THREADS`**: Caps OpenMP threads to match ONNX intra-op limit — without this, OpenMP spawns ncpu threads independently.
+- **`ProcessType=Interactive`**: Prevents macOS App Nap from throttling the windowless daemon 5-10x.
+- **`Nice=-5`**: Prevents systemd from deprioritizing the daemon under load — search latency is user-facing.
+
+Note that DES-027's `MALLOC_CONF` interacts with thread count: more threads × `narenas:1` = worse contention. The thread limits here are specifically tuned for `narenas:1`.
+
+**Session isolation** — the HTTP server's `_QuarryContext.embedder` creates a dedicated `OnnxEmbeddingBackend()` instance instead of sharing the `get_embedding_backend()` singleton with the sync pipeline. ONNX `session.run()` serialises callers via an internal mutex. With a shared session, a search query must wait for the sync's current embedding batch to complete — up to 70 seconds under `narenas:1,tcache:false`. Separate sessions eliminate this blocking. Memory cost: one extra ONNX model (~120 MB).
 
 ### Dependency
 
@@ -1005,3 +1025,4 @@ This decision depends on DES-027's `narenas:1,tcache:false`. If `MALLOC_CONF` ch
 2. **Remove `tcache:false`** — Tested with decay-only MALLOC_CONF. RSS was 785 MB after 1 hour (DES-027 showed 2.5 GB/day without narenas+tcache). Unacceptable memory growth for a daemon that runs indefinitely.
 3. **Async search route** — Making `_search_route` async and using explicit `run_in_threadpool` for blocking calls. Did not help: the bottleneck is the ONNX session mutex, not Starlette's thread dispatch.
 4. **Process isolation** — Separate ONNX worker process. Eliminates all contention but adds IPC complexity. Disproportionate when session isolation achieves the same result in-process.
+5. **User-configurable thread count** — Adding an `embedding_threads` field to `Settings`. Rejected for this PR because auto-detection covers all known hardware configurations correctly. Future work (DES-033) if edge cases emerge.
