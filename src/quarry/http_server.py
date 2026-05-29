@@ -259,8 +259,22 @@ class _QuarryContext:
         return Database.connect(self._settings.lancedb_path)
 
     @cached_property
+    def query_database(self) -> Database:
+        # Dedicated LanceDB connection for search queries.  Sync holds
+        # write locks on the shared connection that block readers.
+        # See DES-032.
+        return Database.connect(self._settings.lancedb_path)
+
+    @cached_property
     def embedder(self) -> EmbeddingBackend:
-        return get_embedding_backend(self._settings)
+        # Dedicated ONNX session for queries — not the shared singleton.
+        # Sync uses get_embedding_backend() which shares a session with
+        # the sync worker.  ONNX session.run() serialises callers via an
+        # internal mutex, so a shared session blocks queries for the
+        # duration of each sync embedding batch.  See DES-032.
+        from quarry.embeddings import OnnxEmbeddingBackend  # noqa: PLC0415
+
+        return OnnxEmbeddingBackend()
 
     @property
     def settings(self) -> Settings:
@@ -354,7 +368,7 @@ def _search_route(request: Request) -> JSONResponse:
 
     ctx = _ctx(request)
     query_vector = ctx.embedder.embed_query(query)
-    results = ctx.database.search.hybrid_search(
+    results = ctx.query_database.search.hybrid_search(
         query,
         query_vector,
         limit=limit,

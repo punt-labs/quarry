@@ -126,6 +126,15 @@ class OnnxEmbeddingBackend:
         sess_options.graph_optimization_level = (
             ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         )
+        # Limit ONNX intra-op parallelism to reduce jemalloc arena contention.
+        # DES-027 sets narenas:1 to control LanceDB RSS growth, but ONNX
+        # defaults to 8 intra-op threads doing concurrent GEMM allocations
+        # through that single arena.  Under sustained load the arena lock
+        # serialises all 8 threads and throughput drops from 44 texts/s to
+        # 0.1 texts/s.  Two compute threads keep contention manageable while
+        # retaining useful parallelism.  See DES-032.
+        sess_options.intra_op_num_threads = 2
+        sess_options.inter_op_num_threads = 1
 
         try:
             self._session = ort.InferenceSession(

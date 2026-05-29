@@ -964,3 +964,44 @@ PR 1 is doc-only and sets the contract. PRs 2–5 are implementation slices that
 - `prfaq.tex` risk register (Bug Class 3 reduction)
 
 All revisions ship in PR 1.
+
+## DES-032: ONNX Thread Limits to Prevent jemalloc Arena Contention
+
+**Date:** 2026-05-27
+**Status:** SETTLED
+**Topic:** Interaction between DES-027 MALLOC_CONF and ONNX Runtime default thread count
+
+### Problem
+
+DES-027 sets `MALLOC_CONF=dirty_decay_ms:1000,muzzy_decay_ms:0,narenas:1,tcache:false` in the daemon's environment to prevent LanceDB's jemalloc from growing RSS to 5+ GB. This configuration uses a single allocation arena (`narenas:1`) and disables thread-local caching (`tcache:false`).
+
+ONNX Runtime defaults to one intra-op thread per CPU core (typically 8). All 8 threads perform concurrent GEMM allocations (`MlasGemmQuantPackedOperation`) through jemalloc's single arena. Under sustained load — a sync cycle ingesting many documents — the arena lock becomes the bottleneck. Throughput degrades from 44 texts/s to 0.1 texts/s (440x slower). The `sample` tool shows all 8 ONNX threads blocked on the arena lock with only 7.5% total CPU utilization.
+
+### Evidence
+
+| Scenario | Throughput |
+|----------|-----------|
+| Clean process, no MALLOC_CONF | 67.4 texts/s |
+| Clean process, with MALLOC_CONF | 23.5 texts/s |
+| Daemon after 20 min sync | 0.1 texts/s |
+
+### Design
+
+Two changes:
+
+**1. Thread limits** — set `intra_op_num_threads=2` and `inter_op_num_threads=1` on `SessionOptions` in `OnnxEmbeddingBackend.__new__`. Reduces jemalloc arena contention from 8 concurrent GEMM threads to 2.
+
+**2. Session isolation** — the HTTP server's `_QuarryContext.embedder` creates a dedicated `OnnxEmbeddingBackend()` instance instead of sharing the `get_embedding_backend()` singleton with the sync pipeline. ONNX `session.run()` serialises callers via an internal mutex. With a shared session, a search query must wait for the sync's current embedding batch to complete — up to 70 seconds under `narenas:1,tcache:false`. Separate sessions eliminate this blocking.
+
+The sync pipeline continues using `get_embedding_backend()` (shared singleton). The HTTP search route gets its own session. Both sessions respect `intra_op_num_threads=2`. Memory cost: one extra ONNX model (~120 MB). The tradeoff is acceptable — 120 MB buys sub-second query response during sync.
+
+### Dependency
+
+This decision depends on DES-027's `narenas:1,tcache:false`. If `MALLOC_CONF` changes to use multiple arenas or re-enables tcache, the thread limits should be revisited.
+
+### Rejected Alternatives
+
+1. **Increase `narenas` in MALLOC_CONF** — Tested with `narenas:4`. Reduced ONNX contention but increased jemalloc memory retention. With 4 arenas, RSS grows faster than DES-027's target. Also insufficient: queries still took 10+ seconds because session mutex contention is the primary bottleneck, not arena contention.
+2. **Remove `tcache:false`** — Tested with decay-only MALLOC_CONF. RSS was 785 MB after 1 hour (DES-027 showed 2.5 GB/day without narenas+tcache). Unacceptable memory growth for a daemon that runs indefinitely.
+3. **Async search route** — Making `_search_route` async and using explicit `run_in_threadpool` for blocking calls. Did not help: the bottleneck is the ONNX session mutex, not Starlette's thread dispatch.
+4. **Process isolation** — Separate ONNX worker process. Eliminates all contention but adds IPC complexity. Disproportionate when session isolation achieves the same result in-process.
