@@ -89,6 +89,14 @@ class OnnxEmbeddingBackend:
         self = super().__new__(cls)
         self._dimension = 768
 
+        # Cap tokenizer (rayon) and OMP thread pools before any library
+        # creates them.  Without this, each quarry process spins up ncpu
+        # rayon threads + ncpu ONNX threads.  Three concurrent quarry
+        # processes (serve + ingest-background + CLI) on 8 cores →
+        # 3×(8+8) = 48 runnable threads → load ~148.  See DES-032.
+        os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+        os.environ.setdefault("OMP_NUM_THREADS", "2")
+
         selection = ProviderSelection.from_environment()
 
         force_cuda = os.environ.get("QUARRY_PROVIDER", "").strip().lower() == "cuda"
