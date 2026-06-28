@@ -16,6 +16,8 @@ from quarry.config import (
     ONNX_TOKENIZER_FILE,
 )
 from quarry.ingestion.provider import PROVIDER_MODEL_MAP, ProviderSelection
+from quarry.onnx_session import OnnxSessionBuilder
+from quarry.thread_config import ThreadConfig
 
 if TYPE_CHECKING:
     import onnxruntime as ort
@@ -85,34 +87,12 @@ class OnnxEmbeddingBackend:
         )
         return model_path, tokenizer_path
 
-    @staticmethod
-    def _configure_thread_limits(*, is_gpu: bool) -> int:
-        """Cap rayon/OMP pools and return the ONNX intra-op thread count (DES-032).
-
-        Prevents CPU oversubscription when several quarry processes run at once;
-        GPU needs only one intra-op thread, CPU benefits from up to two.
-        """
-        ncpu = os.cpu_count() or 4
-        omp_threads = str(min(2, ncpu))
-        os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-        os.environ.setdefault("OMP_NUM_THREADS", omp_threads)
-        intra_threads = 1 if is_gpu else min(2, ncpu)
-        logger.info(
-            "Thread config: intra_op=%d, inter_op=1, OMP=%s (gpu=%s, ncpu=%d)",
-            intra_threads,
-            omp_threads,
-            is_gpu,
-            ncpu,
-        )
-        return intra_threads
-
     def __new__(cls) -> Self:
         self = super().__new__(cls)
         self._dimension = 768
 
         selection = ProviderSelection.from_environment()
-        is_gpu = selection.provider == "CUDAExecutionProvider"
-        intra_threads = cls._configure_thread_limits(is_gpu=is_gpu)
+        threads = ThreadConfig.for_provider(selection.provider).apply_env_limits()
 
         force_cuda = os.environ.get("QUARRY_PROVIDER", "").strip().lower() == "cuda"
 
@@ -143,69 +123,13 @@ class OnnxEmbeddingBackend:
         self._tokenizer.enable_padding()
         self._tokenizer.enable_truncation(max_length=512)
 
-        import onnxruntime as ort  # noqa: PLC0415
-
-        sess_options = ort.SessionOptions()
-        sess_options.graph_optimization_level = (
-            ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        builder = OnnxSessionBuilder(
+            selection,
+            threads,
+            force_cuda=force_cuda,
+            load_cpu_model=lambda model_file: cls._load_model_files(model_file)[0],
         )
-        # Intra-op count is hardware/provider-derived (see _configure_thread_limits);
-        # DES-027's narenas:1 makes extra threads contend, so inter-op stays 1.
-        sess_options.intra_op_num_threads = intra_threads
-        sess_options.inter_op_num_threads = 1
-
-        try:
-            self._session = ort.InferenceSession(
-                model_path,
-                sess_options=sess_options,
-                providers=[selection.provider],
-            )
-            logger.info(
-                "ONNX model loaded: provider=%s, model=%s",
-                selection.provider,
-                selection.model_file,
-            )
-        except Exception as cuda_exc:
-            exc_text = str(cuda_exc).lower()
-            cuda_markers = (
-                "cuda",
-                "cublas",
-                "cudnn",
-                "gpu",
-                "cudaexecutionprovider",
-                "failed to create cuda",
-            )
-            is_cuda_related = any(m in exc_text for m in cuda_markers)
-            is_fallback_eligible = (
-                selection.provider == "CUDAExecutionProvider"
-                and not force_cuda
-                and is_cuda_related
-            )
-            if is_fallback_eligible:
-                logger.warning(
-                    "CUDA session failed, falling back to CPU + int8",
-                    exc_info=True,
-                )
-                cpu_model_file = PROVIDER_MODEL_MAP["CPUExecutionProvider"]
-                model_path, _ = cls._load_model_files(cpu_model_file)
-                try:
-                    self._session = ort.InferenceSession(
-                        model_path,
-                        sess_options=sess_options,
-                        providers=["CPUExecutionProvider"],
-                    )
-                except Exception as cpu_exc:
-                    msg = (
-                        f"CPU fallback also failed after CUDA session error. "
-                        f"CUDA error: {cuda_exc}"
-                    )
-                    raise RuntimeError(msg) from cpu_exc
-                logger.info(
-                    "ONNX model loaded: provider=CPUExecutionProvider, model=%s",
-                    cpu_model_file,
-                )
-            else:
-                raise
+        self._session = builder.build(model_path)
         return self
 
     @property
