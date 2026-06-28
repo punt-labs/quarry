@@ -1900,15 +1900,15 @@ wheels = [
 
 [[package]]
 name = "ultimate-sitemap-parser"
-version = "1.8.0"
+version = "1.8.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "python-dateutil" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8e/87/b4767b5181b0a6b7aafa5021b6b37b3eea104ba8ad80d3b527e8f423c85c/ultimate_sitemap_parser-1.8.0.tar.gz", hash = "sha256:b89e173a7a30ae8d3fbf5c51e8b72985f2f1240e338064a315f35652c89442bc", size = 39440, upload-time = "2026-01-25T12:35:48.862Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c3/95/4b4bfd9bc572fdfd5c0ff70c85cd1b220181aaa6eb7cc70a0d2255444c10/ultimate_sitemap_parser-1.8.1.tar.gz", hash = "sha256:6cf5ae0cfd83a2af5650402fc0ec462c83ac7558ef781fba9c012d1db123344f", size = 39859, upload-time = "2026-06-16T10:36:52.117Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/43/96/6d3eee0013dfebd45b2e3650d4db96c27471f30115dbfcb9e0a002406c1a/ultimate_sitemap_parser-1.8.0-py3-none-any.whl", hash = "sha256:438dcfe8aa8efc4e587b567a4abc8b1d2486c52b5ca52d5c81520f08e0434449", size = 44219, upload-time = "2026-01-25T12:35:47.699Z" },
+    { url = "https://files.pythonhosted.org/packages/c7/bc/a34d6033f30bef4cdefe8597106ea375479a2006631042ce28e4f2133522/ultimate_sitemap_parser-1.8.1-py3-none-any.whl", hash = "sha256:7fe9347983ca9ca1f8960e7d5bf08cb49679b20d32532a9c7843e20fe31c0840", size = 44610, upload-time = "2026-06-16T10:36:50.783Z" },
 ]
 
 [[package]]
