@@ -14,6 +14,15 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Changed
+
+- **infra**: Add `.github/dependabot.yml` (uv + github-actions, weekly) that
+  ignores Starlette major versions (`>=1.0.0`). Starlette v1 breaks HTTP route
+  handling in `src/quarry/http_server.py` (`build_app`); the project pins
+  `starlette<1.0.0`. Closed PR #297 and Cursor Bugbot's HIGH "Starlette 1.x
+  route regression" finding prompted this guard so Dependabot stops reopening
+  the unsafe bump. 0.x patch/minor updates remain allowed.
+
 ## [1.16.0] - 2026-05-11
 
 ### Added
