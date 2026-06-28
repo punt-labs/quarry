@@ -43,7 +43,7 @@ from starlette.routing import Route, WebSocketRoute
 from quarry.config import DEFAULT_PORT, Settings
 from quarry.db import Database
 from quarry.db.storage import dir_size_bytes, format_size
-from quarry.ingestion.backends import get_embedding_backend
+from quarry.ingestion.backends import new_embedding_backend
 from quarry.ingestion.provider import ProviderSelection
 from quarry.sync_registry import DirectoryRegistration, SyncRegistry
 
@@ -260,21 +260,13 @@ class _QuarryContext:
 
     @cached_property
     def query_database(self) -> Database:
-        # Dedicated LanceDB connection for search queries.  Sync holds
-        # write locks on the shared connection that block readers.
-        # See DES-032.
+        # Dedicated read connection, isolated from sync write locks (DES-032).
         return Database.connect(self._settings.lancedb_path)
 
     @cached_property
     def embedder(self) -> EmbeddingBackend:
-        # Dedicated ONNX session for queries — not the shared singleton.
-        # Sync uses get_embedding_backend() which shares a session with
-        # the sync worker.  ONNX session.run() serialises callers via an
-        # internal mutex, so a shared session blocks queries for the
-        # duration of each sync embedding batch.  See DES-032.
-        from quarry.embeddings import OnnxEmbeddingBackend  # noqa: PLC0415
-
-        return OnnxEmbeddingBackend()
+        # Dedicated ONNX session, isolated from the sync worker (DES-032).
+        return new_embedding_backend()
 
     @property
     def settings(self) -> Settings:

@@ -12,6 +12,7 @@ from quarry.ingestion.backends import (
     clear_caches,
     get_embedding_backend,
     get_ocr_backend,
+    new_embedding_backend,
 )
 from quarry.ingestion.ocr_local import LocalOcrBackend
 
@@ -91,6 +92,34 @@ class TestGetEmbeddingBackend:
             first = get_embedding_backend(settings)
             second = get_embedding_backend(settings)
         assert first is second
+
+
+class TestNewEmbeddingBackend:
+    def setup_method(self) -> None:
+        clear_caches()
+
+    def test_returns_onnx_backend(self) -> None:
+        p1, p2, p3 = _embedding_backend_patches()
+        with p1, p2, p3:
+            backend = new_embedding_backend()
+        assert isinstance(backend, OnnxEmbeddingBackend)
+
+    def test_returns_fresh_instance_each_call(self) -> None:
+        # Unlike get_embedding_backend, this must NOT cache — each query
+        # path needs an isolated ONNX session (DES-032).
+        p1, p2, p3 = _embedding_backend_patches()
+        with p1, p2, p3:
+            first = new_embedding_backend()
+            second = new_embedding_backend()
+        assert first is not second
+
+    def test_not_cached_alongside_get_embedding_backend(self) -> None:
+        # A fresh backend must be distinct from the shared cached one.
+        p1, p2, p3 = _embedding_backend_patches()
+        with p1, p2, p3:
+            shared = get_embedding_backend(_settings())
+            fresh = new_embedding_backend()
+        assert fresh is not shared
 
 
 class TestClearCaches:

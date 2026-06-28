@@ -348,9 +348,7 @@ class TestThreadAutoDetection:
         assert mock_opts.intra_op_num_threads == 2
         assert mock_opts.inter_op_num_threads == 1
 
-    def test_gpu_provider_intra_op_is_1(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_gpu_provider_intra_op_is_1(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """GPU provider sets intra_op_num_threads = 1."""
         monkeypatch.setattr("os.cpu_count", lambda: 8)
         monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
@@ -421,9 +419,7 @@ class TestThreadAutoDetection:
 
         assert _os.environ.get("OMP_NUM_THREADS") == "2"
 
-    def test_omp_num_threads_single_core(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_omp_num_threads_single_core(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """On a single-core machine, OMP_NUM_THREADS = '1'."""
         monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
         monkeypatch.delenv("TOKENIZERS_PARALLELISM", raising=False)
