@@ -1,0 +1,27 @@
+version: 2
+updates:
+  # Python (uv) — quarry pins starlette<1.0.0; Starlette v1 breaks HTTP route
+  # handling in src/quarry/http_server.py (build_app). Ignore the major bump so
+  # Dependabot stops reopening it (closed PR #297; Cursor Bugbot HIGH "Starlette
+  # 1.x route regression"). 0.x patch/minor updates remain allowed.
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "python"
+    ignore:
+      - dependency-name: "starlette"
+        versions: [">=1.0.0"]
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "ci"
