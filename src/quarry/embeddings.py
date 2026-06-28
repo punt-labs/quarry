@@ -85,30 +85,34 @@ class OnnxEmbeddingBackend:
         )
         return model_path, tokenizer_path
 
+    @staticmethod
+    def _configure_thread_limits(*, is_gpu: bool) -> int:
+        """Cap rayon/OMP pools and return the ONNX intra-op thread count (DES-032).
+
+        Prevents CPU oversubscription when several quarry processes run at once;
+        GPU needs only one intra-op thread, CPU benefits from up to two.
+        """
+        ncpu = os.cpu_count() or 4
+        omp_threads = str(min(2, ncpu))
+        os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+        os.environ.setdefault("OMP_NUM_THREADS", omp_threads)
+        intra_threads = 1 if is_gpu else min(2, ncpu)
+        logger.info(
+            "Thread config: intra_op=%d, inter_op=1, OMP=%s (gpu=%s, ncpu=%d)",
+            intra_threads,
+            omp_threads,
+            is_gpu,
+            ncpu,
+        )
+        return intra_threads
+
     def __new__(cls) -> Self:
         self = super().__new__(cls)
         self._dimension = 768
 
-        # Cap tokenizer (rayon) and OMP thread pools before any library
-        # creates them.  Without this, each quarry process spins up ncpu
-        # rayon threads + ncpu ONNX threads.  Three concurrent quarry
-        # processes (serve + ingest-background + CLI) on 8 cores:
-        # 3x(8+8) = 48 runnable threads, load ~148.  See DES-032.
-        os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-
         selection = ProviderSelection.from_environment()
-
-        # Auto-detect thread counts based on hardware and provider.
-        # GPU provider offloads GEMM to CUDA — one CPU thread suffices
-        # for feeding the pipeline.  CPU provider benefits from up to 2
-        # intra-op threads but more causes jemalloc arena contention
-        # under DES-027's narenas:1.  See DES-032.
-        ncpu = os.cpu_count() or 4
         is_gpu = selection.provider == "CUDAExecutionProvider"
-        intra_threads = 1 if is_gpu else min(2, ncpu)
-        omp_threads = str(min(2, ncpu))
-
-        os.environ.setdefault("OMP_NUM_THREADS", omp_threads)
+        intra_threads = cls._configure_thread_limits(is_gpu=is_gpu)
 
         force_cuda = os.environ.get("QUARRY_PROVIDER", "").strip().lower() == "cuda"
 
@@ -145,20 +149,10 @@ class OnnxEmbeddingBackend:
         sess_options.graph_optimization_level = (
             ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         )
-        # Limit ONNX intra-op parallelism based on provider and hardware.
-        # DES-027 sets narenas:1 to control LanceDB RSS growth; more
-        # threads x single arena = worse contention.  See DES-032.
+        # Intra-op count is hardware/provider-derived (see _configure_thread_limits);
+        # DES-027's narenas:1 makes extra threads contend, so inter-op stays 1.
         sess_options.intra_op_num_threads = intra_threads
         sess_options.inter_op_num_threads = 1
-
-        logger.info(
-            "Thread config: intra_op=%d, inter_op=1, OMP=%s, "
-            "TOKENIZERS_PARALLELISM=false (provider=%s, ncpu=%d)",
-            intra_threads,
-            omp_threads,
-            selection.provider,
-            ncpu,
-        )
 
         try:
             self._session = ort.InferenceSession(

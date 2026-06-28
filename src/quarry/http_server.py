@@ -26,7 +26,7 @@ import uuid
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from functools import cached_property, partial
+from functools import partial
 from pathlib import Path
 from socket import socket
 from typing import TYPE_CHECKING
@@ -43,7 +43,7 @@ from starlette.routing import Route, WebSocketRoute
 from quarry.config import DEFAULT_PORT, Settings
 from quarry.db import Database
 from quarry.db.storage import dir_size_bytes, format_size
-from quarry.ingestion.backends import new_embedding_backend
+from quarry.http_resources import QuarryResources
 from quarry.ingestion.provider import ProviderSelection
 from quarry.sync_registry import DirectoryRegistration, SyncRegistry
 
@@ -108,7 +108,6 @@ def _validate_ingest_url(url: str) -> str | None:
     rebinding attack requires a compromised API key.
     """
     parsed = urlsplit(url)
-    # urlsplit lowercases the scheme, but be defensive.
     scheme = parsed.scheme.lower()
     if scheme not in {"http", "https"}:
         return f"unsupported scheme {parsed.scheme!r}"
@@ -246,31 +245,31 @@ class _QuarryContext:
         api_key: str | None = None,
         cors_origins: frozenset[str] | None = None,
     ) -> None:
-        self._settings = settings
+        self._resources = QuarryResources(settings)
         self.api_key = api_key
         self.cors_origins = cors_origins or _DEFAULT_CORS_ORIGINS
         self.start_time = time.monotonic()
-        # Unified task store — all async operations tracked here.
         self.tasks: dict[str, TaskState] = {}
         self.task_refs: dict[str, asyncio.Task[None]] = {}
 
-    @cached_property
+    @property
     def database(self) -> Database:
-        return Database.connect(self._settings.lancedb_path)
+        return self._resources.database
 
-    @cached_property
+    @property
     def query_database(self) -> Database:
-        # Dedicated read connection, isolated from sync write locks (DES-032).
-        return Database.connect(self._settings.lancedb_path)
+        return self._resources.query_database
 
-    @cached_property
+    @property
     def embedder(self) -> EmbeddingBackend:
-        # Dedicated ONNX session, isolated from the sync worker (DES-032).
-        return new_embedding_backend()
+        return self._resources.embedder
 
     @property
     def settings(self) -> Settings:
-        return self._settings
+        return self._resources.settings
+
+    def warm(self) -> None:
+        self._resources.warm()
 
 
 # ---------------------------------------------------------------------------
@@ -1466,11 +1465,8 @@ def serve(
     port_path = settings.lancedb_path.parent / "serve.port"
 
     ctx = _QuarryContext(settings, api_key=api_key, cors_origins=cors_origins)
-    # Eagerly initialize cached properties before serving — cached_property
-    # is not thread-safe, so all shared state must be resolved single-threaded.
     logger.info("Loading embedding model...")
-    _ = ctx.embedder
-    _ = ctx.database
+    ctx.warm()  # Build cached resources single-threaded before serving (DES-032).
     logger.info("Embedding model ready")
 
     @asynccontextmanager
