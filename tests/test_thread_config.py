@@ -46,8 +46,7 @@ class TestIntraOpThreads:
         with caplog.at_level(logging.WARNING, logger="quarry.thread_config"):
             ThreadConfig(is_gpu=False)
         assert any(
-            "os.cpu_count() returned None" in rec.getMessage()
-            for rec in caplog.records
+            "os.cpu_count() returned None" in rec.getMessage() for rec in caplog.records
         )
 
     def test_known_cpu_count_does_not_warn(
@@ -111,9 +110,7 @@ class TestApplyEnvLimits:
         monkeypatch.setenv("OMP_NUM_THREADS", "7")
         with caplog.at_level(logging.INFO, logger="quarry.thread_config"):
             ThreadConfig(is_gpu=False).apply_env_limits()
-        rendered = [
-            r.getMessage() for r in caplog.records if r.levelno == logging.INFO
-        ]
+        rendered = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
         assert any("OMP=7" in line for line in rendered)
         assert not any("OMP=2" in line for line in rendered)
 
