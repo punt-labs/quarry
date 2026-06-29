@@ -22,6 +22,13 @@ across `transform`, `index`, and `connector`).
   ran single-threaded instead of the designed `min(2, ncpu)` CPU parallelism.
   `OnnxSessionBuilder._build_cpu_fallback` now builds a fresh
   `ThreadConfig(is_gpu=False)` and fresh options (DES-032).
+- **embedding**: `ThreadConfig.apply_env_limits` now logs the EFFECTIVE
+  `OMP_NUM_THREADS` read back from the environment, not the intended cap. When a
+  preset value (systemd/Docker) diverges from the computed cap it emits a
+  `logger.warning` that the DES-032 oversubscription mitigation may be defeated —
+  previously the logs falsely claimed the fix was active. `ThreadConfig` also
+  warns when `os.cpu_count()` returns `None` and the 4-CPU fallback triggers,
+  rather than silently guessing the budget.
 
 ### Changed
 
