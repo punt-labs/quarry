@@ -20,12 +20,17 @@ def get_ocr_backend(settings: Settings) -> OcrBackend:
     if key not in _ocr_cache:
         with _lock:
             if key not in _ocr_cache:
-                from quarry.ingestion.ocr_local import (  # noqa: PLC0415
-                    LocalOcrBackend,
-                )
+                from quarry.ingestion.ocr_local import LocalOcrBackend  # noqa: PLC0415
 
                 _ocr_cache[key] = LocalOcrBackend(settings)
     return _ocr_cache[key]
+
+
+def new_embedding_backend() -> EmbeddingBackend:
+    """Return a fresh, uncached ONNX backend with its own session (DES-032)."""
+    from quarry.embeddings import OnnxEmbeddingBackend  # noqa: PLC0415
+
+    return OnnxEmbeddingBackend()
 
 
 def get_embedding_backend(settings: Settings) -> EmbeddingBackend:  # noqa: ARG001
@@ -34,11 +39,7 @@ def get_embedding_backend(settings: Settings) -> EmbeddingBackend:  # noqa: ARG0
     if key not in _embedding_cache:
         with _lock:
             if key not in _embedding_cache:
-                from quarry.embeddings import (  # noqa: PLC0415
-                    OnnxEmbeddingBackend,
-                )
-
-                _embedding_cache[key] = OnnxEmbeddingBackend()
+                _embedding_cache[key] = new_embedding_backend()
     return _embedding_cache[key]
 
 

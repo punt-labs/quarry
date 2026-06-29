@@ -16,6 +16,8 @@ from quarry.config import (
     ONNX_TOKENIZER_FILE,
 )
 from quarry.ingestion.provider import PROVIDER_MODEL_MAP, ProviderSelection
+from quarry.onnx_session import OnnxSessionBuilder
+from quarry.thread_config import ThreadConfig
 
 if TYPE_CHECKING:
     import onnxruntime as ort
@@ -90,6 +92,7 @@ class OnnxEmbeddingBackend:
         self._dimension = 768
 
         selection = ProviderSelection.from_environment()
+        threads = ThreadConfig.for_provider(selection.provider).apply_env_limits()
 
         force_cuda = os.environ.get("QUARRY_PROVIDER", "").strip().lower() == "cuda"
 
@@ -120,65 +123,13 @@ class OnnxEmbeddingBackend:
         self._tokenizer.enable_padding()
         self._tokenizer.enable_truncation(max_length=512)
 
-        import onnxruntime as ort  # noqa: PLC0415
-
-        sess_options = ort.SessionOptions()
-        sess_options.graph_optimization_level = (
-            ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        builder = OnnxSessionBuilder(
+            selection,
+            threads,
+            force_cuda=force_cuda,
+            load_cpu_model=lambda model_file: cls._load_model_files(model_file)[0],
         )
-
-        try:
-            self._session = ort.InferenceSession(
-                model_path,
-                sess_options=sess_options,
-                providers=[selection.provider],
-            )
-            logger.info(
-                "ONNX model loaded: provider=%s, model=%s",
-                selection.provider,
-                selection.model_file,
-            )
-        except Exception as cuda_exc:
-            exc_text = str(cuda_exc).lower()
-            cuda_markers = (
-                "cuda",
-                "cublas",
-                "cudnn",
-                "gpu",
-                "cudaexecutionprovider",
-                "failed to create cuda",
-            )
-            is_cuda_related = any(m in exc_text for m in cuda_markers)
-            is_fallback_eligible = (
-                selection.provider == "CUDAExecutionProvider"
-                and not force_cuda
-                and is_cuda_related
-            )
-            if is_fallback_eligible:
-                logger.warning(
-                    "CUDA session failed, falling back to CPU + int8",
-                    exc_info=True,
-                )
-                cpu_model_file = PROVIDER_MODEL_MAP["CPUExecutionProvider"]
-                model_path, _ = cls._load_model_files(cpu_model_file)
-                try:
-                    self._session = ort.InferenceSession(
-                        model_path,
-                        sess_options=sess_options,
-                        providers=["CPUExecutionProvider"],
-                    )
-                except Exception as cpu_exc:
-                    msg = (
-                        f"CPU fallback also failed after CUDA session error. "
-                        f"CUDA error: {cuda_exc}"
-                    )
-                    raise RuntimeError(msg) from cpu_exc
-                logger.info(
-                    "ONNX model loaded: provider=CPUExecutionProvider, model=%s",
-                    cpu_model_file,
-                )
-            else:
-                raise
+        self._session = builder.build(model_path)
         return self
 
     @property

@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import contextlib
 import logging
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 
 from quarry.embeddings import _EMBED_BATCH_SIZE, OnnxEmbeddingBackend
+
+if TYPE_CHECKING:
+    import pytest
 
 
 def _mock_session() -> MagicMock:
@@ -288,3 +292,164 @@ class TestModelName:
             backend = OnnxEmbeddingBackend()
 
         assert backend.model_name == "Snowflake/snowflake-arctic-embed-m-v1.5"
+
+
+@contextlib.contextmanager
+def _patch_onnx_backend_with_provider(
+    session: MagicMock,
+    tokenizer: MagicMock,
+    provider: str,
+    model_file: str,
+):
+    """Patch ONNX backend with a specific provider for thread-config tests."""
+    from quarry.ingestion.provider import ProviderSelection
+
+    mock_opts = MagicMock()
+    with (
+        patch(
+            "quarry.embeddings.OnnxEmbeddingBackend._load_model_files",
+            return_value=("/fake/model.onnx", "/fake/tokenizer.json"),
+        ),
+        patch("tokenizers.Tokenizer.from_file", return_value=tokenizer),
+        patch("onnxruntime.InferenceSession", return_value=session, create=True),
+        patch("onnxruntime.SessionOptions", return_value=mock_opts, create=True),
+        patch("onnxruntime.GraphOptimizationLevel", create=True),
+        patch.object(
+            ProviderSelection,
+            "from_environment",
+            return_value=ProviderSelection(
+                provider=provider,
+                model_file=model_file,
+            ),
+        ),
+    ):
+        yield mock_opts
+
+
+class TestThreadAutoDetection:
+    """Verify auto-detection of thread counts based on hardware and provider."""
+
+    def test_cpu_provider_intra_op_is_min_2_ncpu(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """CPU provider sets intra_op_num_threads = min(2, ncpu)."""
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        # Clear env vars so setdefault takes effect
+        monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
+        monkeypatch.delenv("TOKENIZERS_PARALLELISM", raising=False)
+        session = _mock_session()
+        tokenizer = _mock_tokenizer()
+
+        with _patch_onnx_backend_with_provider(
+            session, tokenizer, "CPUExecutionProvider", "onnx/model_int8.onnx"
+        ) as mock_opts:
+            OnnxEmbeddingBackend()
+
+        assert mock_opts.intra_op_num_threads == 2
+        assert mock_opts.inter_op_num_threads == 1
+
+    def test_gpu_provider_intra_op_is_1(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """GPU provider sets intra_op_num_threads = 1."""
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
+        monkeypatch.delenv("TOKENIZERS_PARALLELISM", raising=False)
+        session = _mock_session()
+        tokenizer = _mock_tokenizer()
+
+        with _patch_onnx_backend_with_provider(
+            session, tokenizer, "CUDAExecutionProvider", "onnx/model_fp16.onnx"
+        ) as mock_opts:
+            OnnxEmbeddingBackend()
+
+        assert mock_opts.intra_op_num_threads == 1
+        assert mock_opts.inter_op_num_threads == 1
+
+    def test_single_core_cpu_intra_op_is_1(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """On a single-core machine, min(2, 1) = 1."""
+        monkeypatch.setattr("os.cpu_count", lambda: 1)
+        monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
+        monkeypatch.delenv("TOKENIZERS_PARALLELISM", raising=False)
+        session = _mock_session()
+        tokenizer = _mock_tokenizer()
+
+        with _patch_onnx_backend_with_provider(
+            session, tokenizer, "CPUExecutionProvider", "onnx/model_int8.onnx"
+        ) as mock_opts:
+            OnnxEmbeddingBackend()
+
+        assert mock_opts.intra_op_num_threads == 1
+
+    def test_sets_tokenizers_parallelism_false(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Constructor sets TOKENIZERS_PARALLELISM=false in os.environ."""
+        monkeypatch.delenv("TOKENIZERS_PARALLELISM", raising=False)
+        monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
+        monkeypatch.setattr("os.cpu_count", lambda: 4)
+        session = _mock_session()
+        tokenizer = _mock_tokenizer()
+
+        with _patch_onnx_backend_with_provider(
+            session, tokenizer, "CPUExecutionProvider", "onnx/model_int8.onnx"
+        ):
+            OnnxEmbeddingBackend()
+
+        import os as _os
+
+        assert _os.environ.get("TOKENIZERS_PARALLELISM") == "false"
+
+    def test_sets_omp_num_threads_to_min_2_ncpu(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Constructor sets OMP_NUM_THREADS = str(min(2, ncpu))."""
+        monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
+        monkeypatch.delenv("TOKENIZERS_PARALLELISM", raising=False)
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        session = _mock_session()
+        tokenizer = _mock_tokenizer()
+
+        with _patch_onnx_backend_with_provider(
+            session, tokenizer, "CPUExecutionProvider", "onnx/model_int8.onnx"
+        ):
+            OnnxEmbeddingBackend()
+
+        import os as _os
+
+        assert _os.environ.get("OMP_NUM_THREADS") == "2"
+
+    def test_omp_num_threads_single_core(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """On a single-core machine, OMP_NUM_THREADS = '1'."""
+        monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
+        monkeypatch.delenv("TOKENIZERS_PARALLELISM", raising=False)
+        monkeypatch.setattr("os.cpu_count", lambda: 1)
+        session = _mock_session()
+        tokenizer = _mock_tokenizer()
+
+        with _patch_onnx_backend_with_provider(
+            session, tokenizer, "CPUExecutionProvider", "onnx/model_int8.onnx"
+        ):
+            OnnxEmbeddingBackend()
+
+        import os as _os
+
+        assert _os.environ.get("OMP_NUM_THREADS") == "1"
+
+    def test_cpu_count_none_defaults_to_4(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When os.cpu_count() returns None, default to 4 cores."""
+        monkeypatch.setattr("os.cpu_count", lambda: None)
+        monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
+        monkeypatch.delenv("TOKENIZERS_PARALLELISM", raising=False)
+        session = _mock_session()
+        tokenizer = _mock_tokenizer()
+
+        with _patch_onnx_backend_with_provider(
+            session, tokenizer, "CPUExecutionProvider", "onnx/model_int8.onnx"
+        ) as mock_opts:
+            OnnxEmbeddingBackend()
+
+        # min(2, 4) = 2
+        assert mock_opts.intra_op_num_threads == 2

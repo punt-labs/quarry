@@ -964,3 +964,67 @@ PR 1 is doc-only and sets the contract. PRs 2–5 are implementation slices that
 - `prfaq.tex` risk register (Bug Class 3 reduction)
 
 All revisions ship in PR 1.
+
+## DES-032: Daemon Resource Management — Thread Limits and OS Scheduling
+
+**Date:** 2026-05-27 (revised 2026-05-29)
+**Status:** SETTLED
+**Topic:** Auto-detecting thread counts and OS scheduling hints for the quarry daemon
+**Supersedes:** Original DES-032 (ONNX Thread Limits only)
+
+### Problem
+
+Three concurrent quarry processes (serve + ingest-background + CLI) each spin up ncpu ONNX threads + ncpu rayon threads + ncpu OMP threads. On 8 cores: 3×(8+8+8) ≈ 48-72 runnable threads → system load 148. Stack samples show rayon thread-pool workers and ONNX `RunInParallel` as hot frames.
+
+Additionally, macOS App Nap throttles the windowless quarry daemon 5-10x without `ProcessType=Interactive`, because launchd classifies it as a background process eligible for power-saving throttling.
+
+DES-027 sets `MALLOC_CONF=narenas:1,tcache:false` in the daemon environment. More threads × single arena = worse contention. Under sustained load the arena lock serialises all ONNX threads and throughput drops from 44 texts/s to 0.1 texts/s (440x slower).
+
+### Evidence
+
+| Scenario | Throughput |
+|----------|-----------|
+| Clean process, no MALLOC_CONF | 67.4 texts/s |
+| Clean process, with MALLOC_CONF | 23.5 texts/s |
+| Daemon after 20 min sync | 0.1 texts/s |
+
+### Design
+
+Auto-detect and cap all thread pools at construction time. Zero user configuration required.
+
+| Parameter | CPU provider | GPU provider | Set where |
+|---|---|---|---|
+| `intra_op_num_threads` | `min(2, ncpu)` | `1` | `OnnxEmbeddingBackend.__new__` |
+| `inter_op_num_threads` | `1` | `1` | `OnnxEmbeddingBackend.__new__` |
+| `TOKENIZERS_PARALLELISM` | `false` | `false` | `os.environ.setdefault` |
+| `OMP_NUM_THREADS` | `min(2, ncpu)` | `min(2, ncpu)` | `os.environ.setdefault` |
+| `MALLOC_CONF` | DES-027 value | DES-027 value | plist/systemd env |
+| macOS QoS | `ProcessType=Interactive` | `ProcessType=Interactive` | plist |
+| Linux QoS | `Nice=-5` | `Nice=-5` | systemd unit |
+
+Why each parameter has exactly one right answer:
+
+- **`intra_op_num_threads`**: GPU offloads GEMM to CUDA so one CPU feeder thread suffices; CPU needs parallelism but more than 2 threads causes arena lock serialisation under `narenas:1`.
+- **`inter_op_num_threads`**: Quarry runs a single model with sequential ops — no inter-op parallelism to exploit.
+- **`TOKENIZERS_PARALLELISM`**: Disables rayon thread pool inside HuggingFace tokenizers — redundant when texts are already batched by `embed_texts`.
+- **`OMP_NUM_THREADS`**: Caps OpenMP threads to match ONNX intra-op limit — without this, OpenMP spawns ncpu threads independently.
+- **`ProcessType=Interactive`**: Asks macOS to exempt the windowless daemon from App Nap throttling (5-10x).
+- **`Nice=-5`**: Asks systemd to keep the daemon's CPU priority high under load — search latency is user-facing.
+
+**The OS scheduling hints are best-effort, not guarantees.** A negative `Nice` value requires privilege (`CAP_SYS_NICE` / `RLIMIT_NICE`). Under `systemctl --user`, the per-user manager generally cannot grant a negative nice, so systemd silently clamps the request to `0` — the daemon then runs at default priority and DES-032's latency guarantee does not strictly hold. `ProcessType=Interactive` is likewise an advisory QoS hint that the kernel may or may not honour. These hints improve latency where the platform permits and are harmless where it does not; the correctness of the daemon never depends on them. The thread-pool caps above are the load-bearing mitigation and are unconditional.
+
+Note that DES-027's `MALLOC_CONF` interacts with thread count: more threads × `narenas:1` = worse contention. The thread limits here are specifically tuned for `narenas:1`.
+
+**Session isolation** — the HTTP server's `_QuarryContext.embedder` creates a dedicated `OnnxEmbeddingBackend()` instance instead of sharing the `get_embedding_backend()` singleton with the sync pipeline. ONNX `session.run()` serialises callers via an internal mutex. With a shared session, a search query must wait for the sync's current embedding batch to complete — up to 70 seconds under `narenas:1,tcache:false`. Separate sessions eliminate this blocking. Memory cost: one extra ONNX model (~120 MB).
+
+### Dependency
+
+This decision depends on DES-027's `narenas:1,tcache:false`. If `MALLOC_CONF` changes to use multiple arenas or re-enables tcache, the thread limits should be revisited.
+
+### Rejected Alternatives
+
+1. **Increase `narenas` in MALLOC_CONF** — Tested with `narenas:4`. Reduced ONNX contention but increased jemalloc memory retention. With 4 arenas, RSS grows faster than DES-027's target. Also insufficient: queries still took 10+ seconds because session mutex contention is the primary bottleneck, not arena contention.
+2. **Remove `tcache:false`** — Tested with decay-only MALLOC_CONF. RSS was 785 MB after 1 hour (DES-027 showed 2.5 GB/day without narenas+tcache). Unacceptable memory growth for a daemon that runs indefinitely.
+3. **Async search route** — Making `_search_route` async and using explicit `run_in_threadpool` for blocking calls. Did not help: the bottleneck is the ONNX session mutex, not Starlette's thread dispatch.
+4. **Process isolation** — Separate ONNX worker process. Eliminates all contention but adds IPC complexity. Disproportionate when session isolation achieves the same result in-process.
+5. **User-configurable thread count** — Adding an `embedding_threads` field to `Settings`. Rejected for this PR because auto-detection covers all known hardware configurations correctly. Future work (DES-033) if edge cases emerge.

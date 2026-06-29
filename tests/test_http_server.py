@@ -6,6 +6,7 @@ Each test class gets its own app instance via fixtures.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -55,12 +56,19 @@ def _mock_embedder() -> MagicMock:
     return embedder
 
 
-def _mock_db() -> MagicMock:
-    return MagicMock()
-
-
-_SHARED_DB = _mock_db()
 _SHARED_EMBEDDER = _mock_embedder()
+
+
+def _inject_mocks(ctx: _QuarryContext) -> None:
+    """Replace the daemon's ONNX embedding session with a mock.
+
+    ``embedder`` is a ``cached_property`` slot on ``ctx._resources``; writing
+    into that instance ``__dict__`` short-circuits construction so tests never
+    load the real ONNX model.  The DB connections (``database`` /
+    ``query_database``) are left to build against the real per-test tmp_path
+    LanceDB so route logic exercises a real (empty) database.
+    """
+    ctx._resources.__dict__["embedder"] = _SHARED_EMBEDDER
 
 
 @pytest.fixture()
@@ -68,8 +76,7 @@ def client(tmp_path: Path) -> TestClient:
     """Build a test app and return a TestClient."""
     settings = _mock_settings(tmp_path)
     ctx = _QuarryContext(settings)
-    ctx.__dict__["db"] = _SHARED_DB
-    ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+    _inject_mocks(ctx)
 
     app = build_app(ctx)
     return TestClient(app, raise_server_exceptions=False)
@@ -113,8 +120,7 @@ class TestCaCertRoute:
         """The /ca.crt route bypasses auth even when an API key is set."""
         settings = _mock_settings(tmp_path)
         ctx = _QuarryContext(settings, api_key="secret-key")
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
         auth_client = TestClient(build_app(ctx), raise_server_exceptions=False)
 
         tls_dir = tmp_path / "tls"
@@ -131,35 +137,62 @@ class TestCaCertRoute:
 class TestConcurrency:
     """Verify the server handles concurrent requests without serializing."""
 
-    def test_concurrent_requests_overlap(self, client: TestClient) -> None:
-        """Two slow requests should complete in less than 2x a single request."""
-        import concurrent.futures
+    async def test_concurrent_requests_overlap(self, tmp_path: Path) -> None:
+        """Two slow /search requests must overlap, not serialize (DES-032).
+
+        Each request blocks in a patched ``hybrid_search`` for ``delay``
+        seconds.  ``_search_route`` is a sync route, so Starlette dispatches
+        it to the threadpool and the event loop stays free to start the
+        second request while the first sleeps.  Overlapping requests finish
+        in roughly ``1x delay``; serialized requests take ``2x``.  The
+        ``1.6x`` bound fails on serialization yet tolerates threadpool
+        scheduling jitter.
+
+        Driven via ``httpx.ASGITransport`` rather than Starlette's
+        ``TestClient``: ``TestClient`` funnels every call through a single
+        anyio portal thread, which serializes concurrent requests at the
+        client and makes this test measure the client, not the server.
+        """
         import time
 
-        delay = 0.3
+        import httpx
+
+        settings = _mock_settings(tmp_path)
+        ctx = _QuarryContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+
+        # Warm the cached connections single-threaded, exactly as serve()
+        # does before accepting traffic.  Otherwise the first request pays
+        # the one-time Database.connect cost inside the timed window and the
+        # test measures cold-start, not steady-state route concurrency.
+        ctx.warm()
+
+        delay = 0.5
 
         def slow_search(*_args: object, **_kwargs: object) -> list[object]:
             time.sleep(delay)
             return []
 
-        with (
-            patch(
-                "quarry.db.chunk_search.ChunkSearch.hybrid_search",
-                side_effect=slow_search,
-            ),
-            concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool,
+        transport = httpx.ASGITransport(app=app)
+        with patch(
+            "quarry.db.chunk_search.ChunkSearch.hybrid_search",
+            side_effect=slow_search,
         ):
-            start = time.monotonic()
-            futures = [
-                pool.submit(lambda: client.get("/search?q=a").json()),
-                pool.submit(lambda: client.get("/search?q=b").json()),
-            ]
-            for f in concurrent.futures.as_completed(futures):
-                f.result()
-            elapsed = time.monotonic() - start
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://test"
+            ) as ac:
+                start = time.monotonic()
+                first, second = await asyncio.gather(
+                    ac.get("/search?q=a"),
+                    ac.get("/search?q=b"),
+                )
+                elapsed = time.monotonic() - start
 
-        assert elapsed < 1.5 * delay, (
-            f"Requests appear serialized: {elapsed:.2f}s >= {1.5 * delay:.2f}s"
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert elapsed < 1.6 * delay, (
+            f"Requests appear serialized: {elapsed:.2f}s >= {1.6 * delay:.2f}s"
         )
 
 
@@ -415,8 +448,7 @@ class TestStatus:
         # Create the registry file so registry_path.exists() returns True.
         settings.registry_path.touch()
         ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
         reg_client = TestClient(build_app(ctx), raise_server_exceptions=False)
 
         fake_regs = [MagicMock(), MagicMock()]
@@ -440,8 +472,7 @@ class TestStatus:
         # registry_path points to a non-existent file
         settings.registry_path = tmp_path / "no-registry.db"
         ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
         no_reg_client = TestClient(build_app(ctx), raise_server_exceptions=False)
 
         with (
@@ -552,8 +583,7 @@ class TestCorsOrigins:
                 }
             ),
         )
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
 
         app = build_app(ctx)
         return TestClient(app, raise_server_exceptions=False)
@@ -601,8 +631,7 @@ def auth_client(tmp_path: Path) -> TestClient:
     """Build a test app with API key auth enabled."""
     settings = _mock_settings(tmp_path)
     ctx = _QuarryContext(settings, api_key=_TEST_API_KEY)
-    ctx.__dict__["db"] = _SHARED_DB
-    ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+    _inject_mocks(ctx)
 
     app = build_app(ctx)
     return TestClient(app, raise_server_exceptions=False)
@@ -674,8 +703,7 @@ class TestEmptyApiKey:
     def empty_key_client(self, tmp_path: Path) -> TestClient:
         settings = _mock_settings(tmp_path)
         ctx = _QuarryContext(settings, api_key="")
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
 
         app = build_app(ctx)
         return TestClient(app, raise_server_exceptions=False)
@@ -788,8 +816,7 @@ class TestDeleteDocuments:
     def test_delete_document_returns_202(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
         ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
         app = build_app(ctx)
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
@@ -809,8 +836,7 @@ class TestDeleteDocuments:
     def test_delete_document_with_collection(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
         ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
         app = build_app(ctx)
         with (
             patch(
@@ -834,8 +860,7 @@ class TestDeleteCollections:
     def test_delete_collection_returns_202(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
         ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
         app = build_app(ctx)
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
@@ -866,8 +891,7 @@ class TestRemember:
         }
         settings = _mock_settings(tmp_path)
         ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
         app = build_app(ctx)
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
@@ -921,8 +945,7 @@ class TestRemember:
         """ingest_content raising ValueError marks the task as failed."""
         settings = _mock_settings(tmp_path)
         ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
         app = build_app(ctx)
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
@@ -945,8 +968,7 @@ class TestRemember:
         """ingest_content raising OSError marks the task as failed."""
         settings = _mock_settings(tmp_path)
         ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
         app = build_app(ctx)
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
@@ -984,8 +1006,7 @@ class TestRemember:
     def test_passes_all_params(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
         ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
         app = build_app(ctx)
         with (
             patch(
@@ -1024,8 +1045,7 @@ class TestRemember:
     def test_overwrite_defaults_true(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
         ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
         app = build_app(ctx)
         with (
             patch(
@@ -1081,8 +1101,7 @@ class TestIngest:
         }
         settings = _mock_settings(tmp_path)
         ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
         app = build_app(ctx)
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
@@ -1124,8 +1143,7 @@ class TestIngest:
     def test_passes_all_params(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
         ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
         app = build_app(ctx)
         with (
             patch(
@@ -1240,8 +1258,7 @@ class TestIngest:
         """ingest_auto raising ValueError marks the task as failed."""
         settings = _mock_settings(tmp_path)
         ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
         app = build_app(ctx)
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
@@ -1265,8 +1282,7 @@ class TestIngest:
         """ingest_auto raising OSError marks the task as failed."""
         settings = _mock_settings(tmp_path)
         ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
         app = build_app(ctx)
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
@@ -1321,8 +1337,7 @@ class TestIngest:
         }
         settings = _mock_settings(tmp_path)
         ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
         app = build_app(ctx)
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
@@ -1363,8 +1378,7 @@ class TestSync:
         """POST /sync returns 202 Accepted with a task_id."""
         settings = _mock_settings(tmp_path)
         ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
         app = build_app(ctx)
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
@@ -1380,8 +1394,7 @@ class TestSync:
     def test_empty_body_accepted(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
         ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
         app = build_app(ctx)
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
@@ -1438,8 +1451,7 @@ class TestSync:
         """Second POST while sync is running returns 409 with task_id."""
         settings = _mock_settings(tmp_path)
         ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
         app = build_app(ctx)
         sync_client = TestClient(app, raise_server_exceptions=False)
 
@@ -1461,8 +1473,7 @@ class TestSync:
         """GET /sync/<task_id> returns completed state."""
         settings = _mock_settings(tmp_path)
         ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
 
         # Simulate a completed sync task.
         ctx.tasks["sync-test-123"] = TaskState(
@@ -1514,8 +1525,7 @@ class TestDatabases:
         work_dir.mkdir(parents=True)
         settings.lancedb_path = work_dir
         ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
         app = build_app(ctx)
         client = TestClient(app, raise_server_exceptions=False)
 
@@ -1558,8 +1568,7 @@ class TestRegistrations:
         settings = _mock_settings(tmp_path)
         settings.registry_path = home / "registry.db"
         ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
         app = build_app(ctx)
         resolved = tmp_path.resolve()
         monkeypatch.setattr(
@@ -1614,8 +1623,7 @@ class TestRegistrations:
         settings = _mock_settings(tmp_path)
         settings.registry_path = home / "registry.db"
         ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
         app = build_app(ctx)
         resolved = tmp_path.resolve()
         monkeypatch.setattr(
@@ -1699,8 +1707,7 @@ class TestRegistrations:
         # Create registry so it exists.
         settings.registry_path.touch()
         ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
         app = build_app(ctx)
         resolved = tmp_path.resolve()
         monkeypatch.setattr(
@@ -1833,8 +1840,7 @@ class TestServerHomeResolution:
         settings = _mock_settings(tmp_path)
         settings.registry_path = home / "registry.db"
         ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
         test_client = TestClient(build_app(ctx), raise_server_exceptions=False)
 
         # Even if an attacker could unset HOME, the server consults pwd.
@@ -1866,8 +1872,7 @@ class TestServerHomeResolution:
         settings = _mock_settings(tmp_path)
         settings.registry_path = real_home / "registry.db"
         ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
         test_client = TestClient(build_app(ctx), raise_server_exceptions=False)
 
         monkeypatch.setenv("HOME", str(fake_home))
@@ -1921,8 +1926,7 @@ class TestSyncGenericFailure:
         """GET /sync/<task_id> returns failed state with error message."""
         settings = _mock_settings(tmp_path)
         ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
 
         # Simulate a failed sync task.
         ctx.tasks["sync-fail-456"] = TaskState(
@@ -1944,8 +1948,7 @@ class TestSyncGenericFailure:
     def test_remember_runtime_error_marks_task_failed(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
         ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
         app = build_app(ctx)
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
@@ -1967,8 +1970,7 @@ class TestSyncGenericFailure:
     def test_ingest_runtime_error_marks_task_failed(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
         ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
         app = build_app(ctx)
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
@@ -1999,8 +2001,7 @@ class TestUnifiedTaskPolling:
     def test_tasks_sync_ingest_aliases_identical(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
         ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
 
         ctx.tasks["sync-abc"] = TaskState(
             task_id="sync-abc",
@@ -2048,8 +2049,7 @@ class TestTaskGC:
 
         settings = _mock_settings(tmp_path)
         ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject_mocks(ctx)
 
         # Add an old completed task and an old running task.
         old_time = time.monotonic() - TASK_TTL_SECONDS - 100

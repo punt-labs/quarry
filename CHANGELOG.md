@@ -14,6 +14,27 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- **embedding**: GPU→CPU ONNX fallback now runs at the CPU thread budget. The
+  CPU fallback session reused the CUDA `SessionOptions` (which pinned
+  `intra_op_num_threads=1` because the GPU does the GEMMs), so a degraded daemon
+  ran single-threaded instead of the designed `min(2, ncpu)` CPU parallelism.
+  `OnnxSessionBuilder._build_cpu_fallback` now builds a fresh
+  `ThreadConfig(is_gpu=False)` and fresh options (DES-032).
+- **embedding**: `ThreadConfig.apply_env_limits` now logs the EFFECTIVE
+  `OMP_NUM_THREADS` read back from the environment, not the intended cap. When a
+  preset value (systemd/Docker) diverges from the computed cap it emits a
+  `logger.warning` that the DES-032 oversubscription mitigation may be defeated —
+  previously the logs falsely claimed the fix was active. `ThreadConfig` also
+  warns when `os.cpu_count()` returns `None` and the 4-CPU fallback triggers,
+  rather than silently guessing the budget.
+- **serve**: Daemon warm-up now logs each resource phase distinctly (write db,
+  isolated query db, query ONNX session, ready). Previously the serve path
+  logged only "Loading embedding model...", so a `query_database` failure was
+  mis-attributed to the embedding model. The misleading "Loading embedding
+  model" / "Embedding model ready" pair in `http_server.serve` is removed.
+
 ### Changed
 
 - **infra**: Add `.github/dependabot.yml` (uv + github-actions, weekly) that
