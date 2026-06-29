@@ -1008,8 +1008,10 @@ Why each parameter has exactly one right answer:
 - **`inter_op_num_threads`**: Quarry runs a single model with sequential ops — no inter-op parallelism to exploit.
 - **`TOKENIZERS_PARALLELISM`**: Disables rayon thread pool inside HuggingFace tokenizers — redundant when texts are already batched by `embed_texts`.
 - **`OMP_NUM_THREADS`**: Caps OpenMP threads to match ONNX intra-op limit — without this, OpenMP spawns ncpu threads independently.
-- **`ProcessType=Interactive`**: Prevents macOS App Nap from throttling the windowless daemon 5-10x.
-- **`Nice=-5`**: Prevents systemd from deprioritizing the daemon under load — search latency is user-facing.
+- **`ProcessType=Interactive`**: Asks macOS to exempt the windowless daemon from App Nap throttling (5-10x).
+- **`Nice=-5`**: Asks systemd to keep the daemon's CPU priority high under load — search latency is user-facing.
+
+**The OS scheduling hints are best-effort, not guarantees.** A negative `Nice` value requires privilege (`CAP_SYS_NICE` / `RLIMIT_NICE`). Under `systemctl --user`, the per-user manager generally cannot grant a negative nice, so systemd silently clamps the request to `0` — the daemon then runs at default priority and DES-032's latency guarantee does not strictly hold. `ProcessType=Interactive` is likewise an advisory QoS hint that the kernel may or may not honour. These hints improve latency where the platform permits and are harmless where it does not; the correctness of the daemon never depends on them. The thread-pool caps above are the load-bearing mitigation and are unconditional.
 
 Note that DES-027's `MALLOC_CONF` interacts with thread count: more threads × `narenas:1` = worse contention. The thread limits here are specifically tuned for `narenas:1`.
 
