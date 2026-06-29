@@ -14,6 +14,15 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- **embedding**: GPU→CPU ONNX fallback now runs at the CPU thread budget. The
+  CPU fallback session reused the CUDA `SessionOptions` (which pinned
+  `intra_op_num_threads=1` because the GPU does the GEMMs), so a degraded daemon
+  ran single-threaded instead of the designed `min(2, ncpu)` CPU parallelism.
+  `OnnxSessionBuilder._build_cpu_fallback` now builds a fresh
+  `ThreadConfig(is_gpu=False)` and fresh options (DES-032).
+
 ### Changed
 
 - **infra**: Add `.github/dependabot.yml` (uv + github-actions, weekly) that

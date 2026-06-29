@@ -8,6 +8,7 @@ fallback, forced-CUDA re-raise, non-CUDA-error re-raise, and double failure.
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Self
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -18,6 +19,27 @@ from quarry.thread_config import ThreadConfig
 
 _CUDA = ProviderSelection(provider="CUDAExecutionProvider", model_file="fp16.onnx")
 _CPU = ProviderSelection(provider="CPUExecutionProvider", model_file="int8.onnx")
+
+
+class _RecordingOptions:
+    """A SessionOptions stand-in that records the thread/graph knobs set on it.
+
+    ``ThreadConfig.apply_to_session`` assigns ``intra_op_num_threads`` and
+    ``inter_op_num_threads``; the builder sets ``graph_optimization_level``.
+    Capturing them lets a test assert the CPU fallback used the CPU thread
+    budget rather than reusing the GPU session's ``intra_op=1``.
+    """
+
+    intra_op_num_threads: int
+    inter_op_num_threads: int
+    graph_optimization_level: int
+
+    def __new__(cls) -> Self:
+        self = super().__new__(cls)
+        self.intra_op_num_threads = 0
+        self.inter_op_num_threads = 0
+        self.graph_optimization_level = 0
+        return self
 
 
 def _load_cpu(_model_file: str) -> str:
@@ -69,6 +91,37 @@ class TestBuild:
             result = _builder(_CUDA).build("/m.onnx")
         assert result is cpu_session
         assert calls == 2
+
+    def test_cpu_fallback_uses_cpu_thread_budget(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # After a GPU->CPU fallback the CPU session must run at the CPU intra-op
+        # budget (min(2, ncpu)), NOT the GPU session's intra_op=1 (DES-032).
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        cpu_session = MagicMock(name="cpu_session")
+        captured: dict[str, _RecordingOptions] = {}
+        calls = 0
+
+        def side_effect(
+            _model_path: str, *, sess_options: _RecordingOptions, providers: list[str]
+        ) -> MagicMock:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("cuDNN not found")
+            captured["cpu"] = sess_options
+            return cpu_session
+
+        fake = SimpleNamespace(
+            SessionOptions=_RecordingOptions,
+            GraphOptimizationLevel=SimpleNamespace(ORT_ENABLE_ALL=99),
+            InferenceSession=MagicMock(side_effect=side_effect),
+        )
+        with patch.dict("sys.modules", {"onnxruntime": fake}):
+            result = _builder(_CUDA).build("/m.onnx")
+        assert result is cpu_session
+        assert captured["cpu"].intra_op_num_threads == min(2, 8)
+        assert captured["cpu"].intra_op_num_threads != 1
 
     def test_forced_cuda_reraises(self) -> None:
         # When the operator pins CUDA, a CUDA failure must propagate, not fall back.
