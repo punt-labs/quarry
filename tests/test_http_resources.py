@@ -8,6 +8,7 @@ no real LanceDB connection or ONNX model is needed.
 
 from __future__ import annotations
 
+import logging
 from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
@@ -16,6 +17,8 @@ from quarry.http_resources import QuarryResources
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    import pytest
 
 
 def _mock_settings(tmp_path: Path) -> MagicMock:
@@ -126,3 +129,21 @@ class TestQuarryResources:
             _ = resources.embedder
             assert connect.call_count == 2
             assert factory.call_count == 1
+
+    def test_warm_logs_each_phase_distinctly(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # A query_database failure must not be mis-attributed to the model:
+        # warm() logs the write db, query db, and ONNX session as separate phases.
+        settings = _mock_settings(tmp_path)
+        with (
+            _patch_connect(),
+            _patch_new_embedding_backend(),
+            caplog.at_level(logging.INFO, logger="quarry.http_resources"),
+        ):
+            QuarryResources(settings).warm()
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("write database" in m for m in messages)
+        assert any("query database" in m for m in messages)
+        assert any("ONNX embedding session" in m for m in messages)
+        assert any("ready" in m for m in messages)

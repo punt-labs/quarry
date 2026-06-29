@@ -1465,9 +1465,7 @@ def serve(
     port_path = settings.lancedb_path.parent / "serve.port"
 
     ctx = _QuarryContext(settings, api_key=api_key, cors_origins=cors_origins)
-    logger.info("Loading embedding model...")
     ctx.warm()  # Build cached resources single-threaded before serving (DES-032).
-    logger.info("Embedding model ready")
 
     @asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncGenerator[None]:

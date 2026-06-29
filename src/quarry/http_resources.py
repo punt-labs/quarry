@@ -1,21 +1,16 @@
 """Daemon connection and embedding-session lifecycle for the HTTP server.
 
-The long-running ``quarry serve`` daemon runs queries concurrently with a
-background sync worker.  Two shared resources cause head-of-line blocking
-when sync and queries contend for them:
-
-1. A single LanceDB connection — sync holds write locks that block readers.
-2. A single ONNX session — ``session.run()`` serialises callers through an
-   internal mutex, so a query stalls for the duration of each sync embedding
-   batch.
-
-This module isolates the query path with its own read connection and ONNX
-session, distinct from the write connection and the cached sync session.
-See DES-032.
+The ``quarry serve`` daemon runs queries concurrently with a background sync
+worker.  A shared LanceDB connection (sync write locks block readers) and a
+shared ONNX session (``session.run()`` serialises callers via an internal mutex)
+both cause head-of-line blocking.  This module isolates the query path with its
+own read connection and ONNX session, distinct from the write connection and the
+cached sync session.  See DES-032.
 """
 
 from __future__ import annotations
 
+import logging
 from functools import cached_property
 from typing import TYPE_CHECKING, Self
 
@@ -26,15 +21,15 @@ if TYPE_CHECKING:
     from quarry.config import Settings
     from quarry.types import EmbeddingBackend
 
+logger = logging.getLogger(__name__)
+
 
 class QuarryResources:
     """Lazily-constructed DB connections and ONNX session for one daemon.
 
-    Each resource is built once on first access and cached for the daemon's
-    lifetime.  The write connection (``database``), the query read connection
-    (``query_database``), and the query ONNX session (``embedder``) are
-    deliberately separate instances so sync work cannot block queries.
-    See DES-032.
+    Each resource is built once and cached.  The write connection (``database``),
+    query read connection (``query_database``), and query ONNX session
+    (``embedder``) are separate instances so sync cannot block queries (DES-032).
     """
 
     _settings: Settings
@@ -67,11 +62,14 @@ class QuarryResources:
     def warm(self) -> None:
         """Resolve every cached resource single-threaded before serving.
 
-        ``cached_property`` is not thread-safe, so all shared state must be
-        built once on the main thread.  Without this, concurrent search
-        requests would race to construct ``query_database`` and ``embedder``
-        on first use (DES-032).
+        ``cached_property`` is not thread-safe, so all shared state is built on
+        the main thread to avoid request-time races (DES-032).  Each phase logs
+        distinctly so a failure is attributed to the resource that failed.
         """
+        logger.info("Warming write database connection...")
         _ = self.database
+        logger.info("Warming isolated query database connection...")
         _ = self.query_database
+        logger.info("Loading query ONNX embedding session...")
         _ = self.embedder
+        logger.info("Daemon resources ready")

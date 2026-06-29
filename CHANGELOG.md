@@ -29,6 +29,11 @@ across `transform`, `index`, and `connector`).
   previously the logs falsely claimed the fix was active. `ThreadConfig` also
   warns when `os.cpu_count()` returns `None` and the 4-CPU fallback triggers,
   rather than silently guessing the budget.
+- **serve**: Daemon warm-up now logs each resource phase distinctly (write db,
+  isolated query db, query ONNX session, ready). Previously the serve path
+  logged only "Loading embedding model...", so a `query_database` failure was
+  mis-attributed to the embedding model. The misleading "Loading embedding
+  model" / "Embedding model ready" pair in `http_server.serve` is removed.
 
 ### Changed
 
