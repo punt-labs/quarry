@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from quarry.hooks import WEB_CAPTURES_FALLBACK
+
 
 @dataclass(frozen=True)
 class CheckResult:
@@ -453,16 +455,14 @@ def _check_orphaned_captures(
         )
 
     database = Database.connect(db_path)
-    cols = database.catalog.list_collections()
-    col_names = {c["collection"] for c in cols}
+    collections = {c["collection"] for c in database.catalog.list_collections()}
+    # web-captures is the base-less web-fetch fallback bucket; its base "web"
+    # is never registered by design, so drop it before the orphan test.
+    col_names = collections - {WEB_CAPTURES_FALLBACK}
 
-    conn = SyncRegistry(registry_path)
-    try:
-        regs = conn.list_registrations()
-    finally:
-        conn.close()
+    with contextlib.closing(SyncRegistry(registry_path)) as conn:
+        registered = {r.collection for r in conn.list_registrations()}
 
-    registered = {r.collection for r in regs}
     orphans: list[str] = []
     for name in sorted(col_names):
         if name.endswith("-captures"):

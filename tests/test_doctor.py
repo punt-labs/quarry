@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     MP = pytest.MonkeyPatch
 
 from quarry.doctor import (
+    CheckResult,
     _check_claude_code_mcp,
     _check_claude_desktop_mcp,
     _check_data_directory,
@@ -18,6 +19,7 @@ from quarry.doctor import (
     _check_fts_health,
     _check_imports,
     _check_local_ocr,
+    _check_orphaned_captures,
     _check_provider,
     _check_python_version,
     _check_storage,
@@ -1226,3 +1228,75 @@ class TestRunInstall:
         ):
             result = run_install()
         assert result == 1
+
+
+class TestCheckOrphanedCaptures:
+    """Tests for the orphaned captures collection check."""
+
+    @staticmethod
+    def _run(
+        tmp_path: Path,
+        collections: list[str],
+        registered: list[str],
+    ) -> CheckResult:
+        """Run the check with mocked collections and a real registry."""
+        from datetime import UTC, datetime
+        from unittest.mock import MagicMock
+
+        from quarry.db.facade import Database
+        from quarry.sync_registry import SyncRegistry
+
+        db_path = tmp_path / "lancedb"
+        db_path.mkdir()
+
+        registry_path = tmp_path / "registry.db"
+        conn = SyncRegistry(registry_path)
+        now = datetime.now(UTC).isoformat()
+        for index, name in enumerate(registered):
+            sync_dir = tmp_path / f"dir{index}"
+            sync_dir.mkdir()
+            conn.execute(_INSERT_DIR, (str(sync_dir), name, now))
+        conn.commit()
+        conn.close()
+
+        facade = MagicMock()
+        facade.catalog.list_collections.return_value = [
+            {"collection": name} for name in collections
+        ]
+        with patch.object(Database, "connect", return_value=facade):
+            return _check_orphaned_captures(registry_path, db_path)
+
+    def test_web_captures_fallback_not_flagged(self, tmp_path: Path) -> None:
+        """web-captures is the base-less fallback bucket -- never orphaned."""
+        result = self._run(tmp_path, collections=["web-captures"], registered=[])
+        assert result.passed is True
+        assert "no orphaned" in result.message
+
+    def test_unregistered_project_captures_is_orphaned(self, tmp_path: Path) -> None:
+        """A <project>-captures with no <project> registration is orphaned."""
+        result = self._run(tmp_path, collections=["myproj-captures"], registered=[])
+        assert result.passed is False
+        assert "myproj-captures" in result.message
+
+    def test_web_fallback_excluded_but_real_orphan_flagged(
+        self, tmp_path: Path
+    ) -> None:
+        """The exclusion is precise: web-captures spared, real orphan flagged."""
+        result = self._run(
+            tmp_path,
+            collections=["web-captures", "myproj-captures"],
+            registered=[],
+        )
+        assert result.passed is False
+        assert "myproj-captures" in result.message
+        assert "web-captures" not in result.message
+
+    def test_registered_project_captures_not_flagged(self, tmp_path: Path) -> None:
+        """A <project>-captures whose <project> is registered is not orphaned."""
+        result = self._run(
+            tmp_path,
+            collections=["myproj-captures"],
+            registered=["myproj"],
+        )
+        assert result.passed is True
+        assert "no orphaned" in result.message

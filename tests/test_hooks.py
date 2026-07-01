@@ -2125,9 +2125,9 @@ class TestT19WebFetchFallback:
         ):
             handle_post_web_fetch(payload)
 
-        from quarry.hooks import _WEB_CAPTURES_FALLBACK
+        from quarry.hooks import WEB_CAPTURES_FALLBACK
 
-        assert mock_url.call_args[1]["collection"] == _WEB_CAPTURES_FALLBACK
+        assert mock_url.call_args[1]["collection"] == WEB_CAPTURES_FALLBACK
 
 
 class TestT20PreCompactFallback:
