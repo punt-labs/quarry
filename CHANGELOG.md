@@ -16,6 +16,17 @@ across `transform`, `index`, and `connector`).
 
 ### Fixed
 
+- **doctor**: the "Orphaned captures" check no longer false-positives on the
+  `web-captures` fallback bucket. The check flagged any `<x>-captures`
+  collection whose base `<x>` wasn't a registration; `web-captures` is the
+  intentional base-less fallback for web fetches with no covering registration,
+  so it was reported orphaned on every run once it held any captured content.
+  The fallback sentinel is now excluded (derived from
+  `hooks.WEB_CAPTURES_FALLBACK`, not a duplicated literal), while a genuine
+  `<project>-captures` orphaned by deregistration is still flagged. The check's
+  DB/registry I/O is also now guarded, so a corrupt LanceDB table or locked
+  registry returns a failed check instead of crashing the whole `quarry doctor`
+  run (quarry-ty14).
 - **deregister**: the remote/daemon path now matches the local path across all
   three surfaces (CLI, HTTP, MCP). `quarry deregister <nonexistent>` returns
   exit 1 with `No registration found for '<collection>'` instead of the old

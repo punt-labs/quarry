@@ -313,7 +313,7 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
         conn.close()
 
 
-_WEB_CAPTURES_FALLBACK = "web-captures"
+WEB_CAPTURES_FALLBACK = "web-captures"
 _SESSION_NOTES_FALLBACK = "session-notes"
 
 
@@ -432,7 +432,7 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
 
     base_collection = _collection_for_cwd(cwd)
     collection = (
-        f"{base_collection}-captures" if base_collection else _WEB_CAPTURES_FALLBACK
+        f"{base_collection}-captures" if base_collection else WEB_CAPTURES_FALLBACK
     )
 
     settings = _resolve_settings()
