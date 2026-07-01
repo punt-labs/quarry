@@ -3246,7 +3246,7 @@ class TestDeregisterCmdRemote:
                         "results": {
                             "collection": "math",
                             "removed": 3,
-                            "deleted_chunks": 4,
+                            "deleted_chunks": 12,
                         },
                     },
                 ],
@@ -3278,8 +3278,10 @@ class TestDeregisterCmdRemote:
         _reset_globals()
         assert local_res.exit_code == 0
         local_data = json.loads(local_res.output)
-        # Class-3 parity: remote and local emit exactly the same field names.
-        assert set(remote_data) == set(local_data)
+        # Class-3 parity: remote and local emit identical field names AND values.
+        # Comparing values guards against a level-unwrapping regression that
+        # zeroed the remote counts while keeping the field-name set intact.
+        assert remote_data == local_data
         assert set(local_data) == {"collection", "removed", "deleted_chunks"}
 
 
