@@ -24,7 +24,10 @@ class DeregisterResult:
         """Build from a completed remote purge-task status payload.
 
         ``task`` is a wire boundary — JSON deserialisation yields ``object``
-        values that are coerced to ``int`` here.
+        values. The ``removed`` and ``deleted_chunks`` counts are read from the
+        payload, defaulting to 0 when a key is absent or holds a non-``int``
+        value. They are informational counts from an already-completed purge,
+        not converted from strings or floats.
         """
         return cls(
             collection,
@@ -46,5 +49,9 @@ class DeregisterResult:
 
     @staticmethod
     def _as_int(value: object) -> int:
-        """Coerce a JSON scalar to ``int``; absent or non-numeric maps to 0."""
+        """Return ``value`` when it is an ``int`` (excluding ``bool``), else 0.
+
+        Wire values that are absent or of the wrong type default to 0 — the
+        counts come from a completed purge task and are informational.
+        """
         return value if isinstance(value, int) and not isinstance(value, bool) else 0
