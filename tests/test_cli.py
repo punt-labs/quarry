@@ -1589,6 +1589,16 @@ def _mock_registration(collection: str = "math") -> MagicMock:
     return reg
 
 
+def _no_registration_msg(collection: str) -> str:
+    """The exact 'not found' message both deregister paths must emit.
+
+    Pins local/remote parity: a divergence in either path's literal fails the
+    tests that assert this string, mirroring what test_json_equivalence does for
+    the success payload.
+    """
+    return f"No registration found for {collection!r}"
+
+
 class TestDeregisterCmd:
     def test_deregisters_collection(self, tmp_path: Path):
         settings = _mock_settings()
@@ -1645,7 +1655,7 @@ class TestDeregisterCmd:
             mock_registry.return_value.deregister_directory.return_value = []
             result = runner.invoke(app, ["deregister", "empty"])
         assert result.exit_code == 1
-        assert "No registration" in result.output
+        assert _no_registration_msg("empty") in result.output
         mock_registry.return_value.deregister_directory.assert_not_called()
 
     def test_deregister_delete_error(self, tmp_path: Path):
@@ -1666,6 +1676,37 @@ class TestDeregisterCmd:
             mock_registry.return_value.deregister_directory.return_value = ["a.pdf"]
             result = runner.invoke(app, ["deregister", "math"])
         assert result.exit_code == 1
+        # The failure must be surfaced to the user, not swallowed.
+        assert "Error:" in result.output
+        assert "db locked" in result.output
+
+    def test_deregister_purge_failure_still_removes_registration(self, tmp_path: Path):
+        """Partial-failure contract: the registry row is deleted, then the purge
+        fails. The registration is gone (deregister_directory ran) AND the
+        failure is surfaced (exit 1 + error message) — never a silent success.
+        """
+        settings = _mock_settings()
+        settings.registry_path = tmp_path / "registry.db"
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=settings),
+            patch("quarry.__main__.SyncRegistry") as mock_registry,
+            patch("quarry.db.facade.get_db"),
+            patch(
+                "quarry.db.chunk_store.ChunkStore.delete_document",
+                side_effect=RuntimeError("purge exploded"),
+            ),
+        ):
+            mock_registry.return_value.get_registration.return_value = (
+                _mock_registration("math")
+            )
+            mock_registry.return_value.deregister_directory.return_value = ["a.pdf"]
+            result = runner.invoke(app, ["deregister", "math"])
+        assert result.exit_code == 1
+        # Row removed before the purge was attempted.
+        mock_registry.return_value.deregister_directory.assert_called_once_with("math")
+        # Failure surfaced, not reported as "Deregistered".
+        assert "purge exploded" in result.output
+        assert "Deregistered" not in result.output
 
 
 class TestListRegistrationsCmd:
@@ -3059,7 +3100,31 @@ class TestDeregisterCmdRemote:
             result = runner.invoke(app, ["deregister", "missing"])
 
         assert result.exit_code == 1
-        assert "No registration found for 'missing'" in result.output
+        assert _no_registration_msg("missing") in result.output
+
+    def test_remote_delete_non_404_error_surfaces(self):
+        """A non-404 error on the initial DELETE exits 1 with 'Error:' text.
+
+        Covers the else branch in _Deregistration.remote (status != 404).
+        """
+        from quarry.remote_client import RemoteError
+
+        with (
+            patch(
+                "quarry.__main__.read_proxy_config",
+                return_value=_REMOTE_PROXY_CONFIG,
+            ),
+            patch(
+                "quarry.remote_client.RemoteClient.request",
+                side_effect=RemoteError(500, "internal server error"),
+            ),
+        ):
+            result = runner.invoke(app, ["deregister", "docs"])
+
+        assert result.exit_code == 1
+        assert "Error:" in result.output
+        assert "internal server error" in result.output
+        assert _no_registration_msg("docs") not in result.output
 
     def test_remote_poll_failed_exits_1(self):
         """A task that reaches 'failed' -> exit 1 with the server error."""

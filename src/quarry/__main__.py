@@ -29,6 +29,7 @@ from quarry.db.storage import (
     dir_size_bytes,
     discover_databases,
 )
+from quarry.deregister_result import DeregisterResult
 from quarry.formatting import (
     format_collections,
     format_document_detail,
@@ -879,14 +880,14 @@ def deregister(
     proxy_config = _safe_proxy_config().get("quarry", {})
     request = _Deregistration(collection, keep_data)
     if isinstance(proxy_config, dict) and "url" in proxy_config:
-        results = request.remote(proxy_config)
+        result = request.remote(proxy_config)
     else:
-        results = request.local()
+        result = request.local()
     _emit(
-        results,
+        result.as_dict(),
         f"Deregistered collection {collection!r} "
-        f"({results.get('removed', 0)} files, "
-        f"{results.get('deleted_chunks', 0)} chunks deleted)",
+        f"({result.removed} files, "
+        f"{result.deleted_chunks} chunks deleted)",
     )
 
 
@@ -898,7 +899,7 @@ class _Deregistration:
     _collection: str
     _keep_data: bool
 
-    def remote(self, config: dict[str, object]) -> dict[str, object]:
+    def remote(self, config: dict[str, object]) -> DeregisterResult:
         """Deregister via the remote server: DELETE then poll the purge task.
 
         A 404 maps to exit 1 with the same message as the local path; a purge
@@ -921,13 +922,9 @@ class _Deregistration:
             err_console.print(msg, style="red")
             raise typer.Exit(code=1) from exc
         polled = client.await_task(str(accepted.get("task_id", "")))
-        return {
-            "collection": self._collection,
-            "removed": polled.get("removed", 0),
-            "deleted_chunks": polled.get("deleted_chunks", 0),
-        }
+        return DeregisterResult.from_task(self._collection, polled)
 
-    def local(self) -> dict[str, object]:
+    def local(self) -> DeregisterResult:
         """Deregister against the local registry and purge chunks synchronously."""
         settings = _resolved_settings()
         conn = SyncRegistry(settings.registry_path)
@@ -946,11 +943,7 @@ class _Deregistration:
             deleted_chunks = sum(
                 store.delete_document(n, collection=self._collection) for n in doc_names
             )
-        return {
-            "collection": self._collection,
-            "removed": len(doc_names),
-            "deleted_chunks": deleted_chunks,
-        }
+        return DeregisterResult(self._collection, len(doc_names), deleted_chunks)
 
 
 def _auto_workers(settings: Settings) -> int:  # noqa: ARG001

@@ -454,7 +454,7 @@ def _do_deregister(
 def deregister_directory(collection: str, keep_data: bool = False) -> str:
     """Remove a directory registration synchronously.
 
-    Unknown collection returns 'No registration found'; a failure is reported.
+    Unknown collection returns 'No registration found' - not a removal confirmation.
 
     Args:
         collection: Collection name to deregister.
