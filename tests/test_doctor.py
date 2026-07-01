@@ -1300,3 +1300,20 @@ class TestCheckOrphanedCaptures:
         )
         assert result.passed is True
         assert "no orphaned" in result.message
+
+    def test_io_failure_returns_failed_result_not_raise(self, tmp_path: Path) -> None:
+        """A broken DB must yield a failed CheckResult, not crash doctor."""
+        from quarry.db.facade import Database
+
+        db_path = tmp_path / "lancedb"
+        db_path.mkdir()
+        registry_path = tmp_path / "registry.db"
+        registry_path.touch()
+
+        boom = RuntimeError("corrupt lance table")
+        with patch.object(Database, "connect", side_effect=boom):
+            result = _check_orphaned_captures(registry_path, db_path)
+
+        assert result.passed is False
+        assert "corrupt lance table" in result.message
+        assert result.message.startswith("check failed:")

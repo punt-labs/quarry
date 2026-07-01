@@ -12,6 +12,7 @@ import sys
 from collections.abc import Generator
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 
 from quarry.hooks import WEB_CAPTURES_FALLBACK
@@ -446,42 +447,31 @@ def _check_orphaned_captures(
     from quarry.db.facade import Database  # noqa: PLC0415
     from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
 
+    result = partial(CheckResult, name="Orphaned captures", required=False)
     if not db_path.exists() or not registry_path.exists():
-        return CheckResult(
-            name="Orphaned captures",
-            passed=True,
-            message="no data yet",
-            required=False,
-        )
+        return result(passed=True, message="no data yet")
 
-    database = Database.connect(db_path)
-    collections = {c["collection"] for c in database.catalog.list_collections()}
-    # web-captures is the base-less web-fetch fallback bucket; its base "web"
-    # is never registered by design, so drop it before the orphan test.
-    col_names = collections - {WEB_CAPTURES_FALLBACK}
+    try:
+        database = Database.connect(db_path)
+        collections = {c["collection"] for c in database.catalog.list_collections()}
+        # web-captures is the base-less web-fetch fallback bucket; its base "web"
+        # is never registered by design, so drop it before the orphan test.
+        col_names = collections - {WEB_CAPTURES_FALLBACK}
+        with contextlib.closing(SyncRegistry(registry_path)) as conn:
+            registered = {r.collection for r in conn.list_registrations()}
+    except Exception as exc:  # noqa: BLE001
+        return result(passed=False, message=f"check failed: {exc}")
 
-    with contextlib.closing(SyncRegistry(registry_path)) as conn:
-        registered = {r.collection for r in conn.list_registrations()}
-
-    orphans: list[str] = []
-    for name in sorted(col_names):
-        if name.endswith("-captures"):
-            base = name.removesuffix("-captures")
-            if base not in registered:
-                orphans.append(name)
-
-    if orphans:
-        return CheckResult(
-            name="Orphaned captures",
-            passed=False,
-            message=f"orphaned: {', '.join(orphans)}",
-            required=False,
-        )
-    return CheckResult(
-        name="Orphaned captures",
-        passed=True,
-        message="no orphaned captures collections",
-        required=False,
+    orphans = sorted(
+        name
+        for name in col_names
+        if name.endswith("-captures")
+        and name.removesuffix("-captures") not in registered
+    )
+    return (
+        result(passed=False, message=f"orphaned: {', '.join(orphans)}")
+        if orphans
+        else result(passed=True, message="no orphaned captures collections")
     )
 
 
