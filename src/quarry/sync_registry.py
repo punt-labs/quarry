@@ -41,14 +41,14 @@ class SyncRegistry:
     def __new__(cls, path: Path) -> Self:
         self = super().__new__(cls)
         path.parent.mkdir(parents=True, exist_ok=True)
-        # check_same_thread=False: the connection is only ever written from the
-        # calling thread (never from ThreadPoolExecutor workers), but it is passed
-        # across function boundaries that include threaded code paths.  This flag
-        # prevents spurious ProgrammingError if Python's thread-affinity check
-        # triggers on the same-thread access pattern.
+        # check_same_thread=False: the connection is written only from the calling
+        # thread (never from ThreadPoolExecutor workers) but is passed across
+        # boundaries that include threaded code paths, so disable the affinity check.
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
         try:
             self._conn.execute("PRAGMA journal_mode=WAL")
+            # Wait up to 5 s for a contended write lock, not instant lock error.
+            self._conn.execute("PRAGMA busy_timeout=5000")
             self._conn.execute("PRAGMA foreign_keys=ON")
             self._init_schema()
             self._migrate_schema()

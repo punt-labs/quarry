@@ -81,7 +81,7 @@ class TestJsonEquivalenceFind:
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
             patch(
-                "quarry.__main__._remote_https_get",
+                "quarry.remote_client.RemoteClient.get",
                 return_value=remote_response,
             ),
         ):
@@ -161,7 +161,7 @@ class TestJsonEquivalenceStatus:
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
             patch(
-                "quarry.__main__._remote_https_get",
+                "quarry.remote_client.RemoteClient.get",
                 return_value=status_fields,
             ),
         ):
@@ -223,7 +223,7 @@ class TestJsonShapeIngest:
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
             patch(
-                "quarry.__main__._remote_https_request",
+                "quarry.remote_client.RemoteClient.request",
                 return_value=remote_resp,
             ),
         ):
@@ -274,7 +274,7 @@ class TestJsonShapeRemember:
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
             patch(
-                "quarry.__main__._remote_https_request",
+                "quarry.remote_client.RemoteClient.request",
                 return_value=remote_resp,
             ),
         ):
@@ -333,7 +333,7 @@ class TestJsonShapeDelete:
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
             patch(
-                "quarry.__main__._remote_https_request",
+                "quarry.remote_client.RemoteClient.request",
                 return_value=remote_resp,
             ),
         ):
@@ -378,7 +378,7 @@ class TestJsonShapeRegister:
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
             patch(
-                "quarry.__main__._remote_https_request",
+                "quarry.remote_client.RemoteClient.request",
                 return_value=remote_resp,
             ),
         ):
@@ -419,25 +419,34 @@ class TestJsonShapeRegister:
 class TestJsonShapeDeregister:
     """``quarry deregister`` remote and local JSON shapes."""
 
-    def test_json_remote_returns_task_shape_deregister(self) -> None:
-        remote_resp = {"task_id": "deregister-t55", "status": "accepted"}
+    def test_json_remote_returns_result_shape_deregister(self) -> None:
         with (
             patch(
                 "quarry.__main__.read_proxy_config",
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
             patch(
-                "quarry.__main__._remote_https_request",
-                return_value=remote_resp,
+                "quarry.remote_client.RemoteClient.request",
+                side_effect=[
+                    {"task_id": "deregister-t55", "status": "accepted", "removed": 2},
+                    {
+                        "task_id": "deregister-t55",
+                        "status": "completed",
+                        "results": {
+                            "collection": "math",
+                            "removed": 2,
+                            "deleted_chunks": 3,
+                        },
+                    },
+                ],
             ),
         ):
             result = runner.invoke(app, ["--json", "deregister", "math"])
         _reset_globals()
         assert result.exit_code == 0
         data = json.loads(result.stdout)
-        assert set(data.keys()) == {"task_id", "status"}
-        assert isinstance(data["task_id"], str)
-        assert data["status"] == "accepted"
+        # Remote polls the purge task and emits the same shape as local.
+        assert set(data.keys()) == {"collection", "removed", "deleted_chunks"}
 
     def test_json_local_returns_result_shape_deregister(self, tmp_path: Path) -> None:
         settings = _mock_settings()
@@ -476,7 +485,7 @@ class TestJsonShapeSync:
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
             patch(
-                "quarry.__main__._remote_https_request",
+                "quarry.remote_client.RemoteClient.request",
                 return_value=remote_resp,
             ),
         ):

@@ -7,6 +7,7 @@ Each test class gets its own app instance via fixtures.
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -1728,6 +1729,64 @@ class TestRegistrations:
         data = resp.json()
         assert data["status"] == "accepted"
         assert data["task_id"].startswith("deregister-")
+        assert data["removed"] == 1
+
+    def test_delete_nonexistent_returns_404_no_task(self, tmp_path: Path) -> None:
+        """Unknown collection -> 404 parity message, no task registered."""
+        settings = _mock_settings(tmp_path)
+        settings.registry_path = tmp_path / "registry.db"
+        settings.registry_path.touch()
+        ctx = _QuarryContext(settings)
+        _inject_mocks(ctx)
+        with (
+            TestClient(build_app(ctx), raise_server_exceptions=False) as tc,
+            patch("quarry.http_server._deregister_sync", return_value=(False, [])),
+        ):
+            resp = tc.delete("/registrations?collection=docs")
+        assert resp.status_code == 404
+        assert resp.json()["error"] == "No registration found for 'docs'"
+        assert ctx.tasks == {}
+
+    def test_delete_registry_failure_returns_500_no_task(self, tmp_path: Path) -> None:
+        """A synchronous registry failure -> 500, never 202; no task to poll."""
+        settings = _mock_settings(tmp_path)
+        settings.registry_path = tmp_path / "registry.db"
+        settings.registry_path.touch()
+        ctx = _QuarryContext(settings)
+        _inject_mocks(ctx)
+        with (
+            TestClient(build_app(ctx), raise_server_exceptions=False) as tc,
+            patch(
+                "quarry.http_server._deregister_sync",
+                side_effect=sqlite3.OperationalError("database is locked"),
+            ),
+        ):
+            resp = tc.delete("/registrations?collection=docs")
+        assert resp.status_code == 500
+        assert resp.json()["error"]
+        assert resp.json().get("status") != "accepted"
+        assert ctx.tasks == {}
+
+    def test_delete_keep_data_precompletes_task(self, tmp_path: Path) -> None:
+        """keep_data=true -> 202 with a task already completed, zero chunks."""
+        settings = _mock_settings(tmp_path)
+        settings.registry_path = tmp_path / "registry.db"
+        settings.registry_path.touch()
+        ctx = _QuarryContext(settings)
+        _inject_mocks(ctx)
+        with (
+            TestClient(build_app(ctx), raise_server_exceptions=False) as tc,
+            patch(
+                "quarry.http_server._deregister_sync",
+                return_value=(True, ["a.pdf"]),
+            ),
+        ):
+            resp = tc.delete("/registrations?collection=docs&keep_data=true")
+            assert resp.status_code == 202
+            final = _poll_task_done(tc, resp.json()["task_id"])
+        assert final["status"] == "completed"
+        assert final["results"]["deleted_chunks"] == 0
+        assert final["results"]["removed"] == 1
 
     def test_delete_rejects_invalid_keep_data(
         self,
@@ -1900,6 +1959,38 @@ class TestServerHomeResolution:
             )
         assert resp.status_code == 400
         assert "outside" in resp.json()["error"].lower()
+
+
+class TestRunPurgeTask:
+    """Direct coroutine tests for the async chunk-purge task."""
+
+    def test_purge_success_sets_completed_with_count(self, tmp_path: Path) -> None:
+        from quarry.http_server import _run_purge_task
+
+        ctx = _QuarryContext(_mock_settings(tmp_path))
+        _inject_mocks(ctx)
+        state = TaskState(task_id="deregister-x", kind="deregister")
+        state.results = {"collection": "docs", "removed": 1, "deleted_chunks": 0}
+        with patch("quarry.db.chunk_store.ChunkStore.delete_document", return_value=3):
+            asyncio.run(_run_purge_task(ctx, state, "docs", ["a.pdf"]))
+        assert state.status == "completed"
+        assert state.results["deleted_chunks"] == 3
+        assert state.results["removed"] == 1
+
+    def test_purge_failure_sets_failed(self, tmp_path: Path) -> None:
+        from quarry.http_server import _run_purge_task
+
+        ctx = _QuarryContext(_mock_settings(tmp_path))
+        _inject_mocks(ctx)
+        state = TaskState(task_id="deregister-y", kind="deregister")
+        state.results = {"collection": "docs", "removed": 1, "deleted_chunks": 0}
+        with patch(
+            "quarry.db.chunk_store.ChunkStore.delete_document",
+            side_effect=RuntimeError("purge boom"),
+        ):
+            asyncio.run(_run_purge_task(ctx, state, "docs", ["a.pdf"]))
+        assert state.status == "failed"
+        assert "purge boom" in state.error
 
 
 class TestDatabasesMissingTable:

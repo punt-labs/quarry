@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 import quarry.__main__ as cli_mod
 from quarry.__main__ import app
 from quarry.config import Settings
+from quarry.remote_client import RemoteError
 
 runner = CliRunner()
 
@@ -110,13 +111,13 @@ class TestListDocumentsCmd:
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
             patch(
-                "quarry.__main__._remote_https_get", return_value=remote_docs
+                "quarry.remote_client.RemoteClient.get", return_value=remote_docs
             ) as mock_get,
         ):
             result = runner.invoke(app, ["list", "documents"])
 
         assert result.exit_code == 0
-        mock_get.assert_called_once_with("/documents", inner_config)
+        mock_get.assert_called_once_with("/documents")
         assert "remote-report.pdf" in result.output
         assert "remote-col" in result.output
 
@@ -129,7 +130,7 @@ class TestListDocumentsCmd:
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
             patch(
-                "quarry.__main__._remote_https_get",
+                "quarry.remote_client.RemoteClient.get",
                 return_value={"documents": []},
             ) as mock_get,
         ):
@@ -177,7 +178,7 @@ class TestListDocumentsCmd:
         proxy_config = {"quarry": inner_config}
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
-            patch("quarry.__main__._remote_https_get", return_value=remote_resp),
+            patch("quarry.remote_client.RemoteClient.get", return_value=remote_resp),
         ):
             remote_result = runner.invoke(app, ["--json", "list", "documents"])
         _reset_globals()
@@ -327,7 +328,7 @@ class TestShowCmd:
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
             patch(
-                "quarry.__main__._remote_https_get", return_value=remote_resp
+                "quarry.remote_client.RemoteClient.get", return_value=remote_resp
             ) as mock_get,
         ):
             result = runner.invoke(app, ["show", "report.pdf", "--page", "3"])
@@ -358,7 +359,7 @@ class TestShowCmd:
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
             patch(
-                "quarry.__main__._remote_https_get", return_value=remote_resp
+                "quarry.remote_client.RemoteClient.get", return_value=remote_resp
             ) as mock_get,
         ):
             result = runner.invoke(app, ["show", "report.pdf"])
@@ -381,7 +382,7 @@ class TestShowCmd:
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
             patch(
-                "quarry.__main__._remote_https_get",
+                "quarry.remote_client.RemoteClient.get",
                 return_value={
                     "document_name": "doc.pdf",
                     "page_number": 1,
@@ -426,7 +427,7 @@ class TestShowCmd:
         proxy_config = {"quarry": inner_config}
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
-            patch("quarry.__main__._remote_https_get", return_value=remote_resp),
+            patch("quarry.remote_client.RemoteClient.get", return_value=remote_resp),
         ):
             remote_result = runner.invoke(
                 app, ["--json", "show", "report.pdf", "--page", "3"]
@@ -481,7 +482,7 @@ class TestShowCmd:
         proxy_config = {"quarry": inner_config}
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
-            patch("quarry.__main__._remote_https_get", return_value=doc_fields),
+            patch("quarry.remote_client.RemoteClient.get", return_value=doc_fields),
         ):
             remote_result = runner.invoke(app, ["--json", "show", "report.pdf"])
         _reset_globals()
@@ -602,13 +603,13 @@ class TestStatusCmd:
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
             patch(
-                "quarry.__main__._remote_https_get", return_value=remote_status
+                "quarry.remote_client.RemoteClient.get", return_value=remote_status
             ) as mock_get,
         ):
             result = runner.invoke(app, ["status"])
 
         assert result.exit_code == 0
-        mock_get.assert_called_once_with("/status", inner_config)
+        mock_get.assert_called_once_with("/status")
         assert "42" in result.output
         assert "1,200" in result.output
 
@@ -661,7 +662,7 @@ class TestStatusCmd:
 
     def test_remote_connection_refused_exits_1(self) -> None:
         """RemoteError from _remote_https_get exits 1 and prints the error."""
-        from quarry.__main__ import RemoteError
+        from quarry.remote_client import RemoteError
 
         proxy_config = {
             "quarry": {
@@ -672,7 +673,7 @@ class TestStatusCmd:
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
             patch(
-                "quarry.__main__._remote_https_get",
+                "quarry.remote_client.RemoteClient.get",
                 side_effect=RemoteError(0, "Cannot connect to remote quarry server"),
             ),
         ):
@@ -800,7 +801,7 @@ class TestDeleteCmd:
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
             patch(
-                "quarry.__main__._remote_https_request", return_value=remote_resp
+                "quarry.remote_client.RemoteClient.request", return_value=remote_resp
             ) as mock_req,
         ):
             result = runner.invoke(app, ["delete", "report.pdf"])
@@ -824,7 +825,7 @@ class TestDeleteCmd:
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
             patch(
-                "quarry.__main__._remote_https_request", return_value=remote_resp
+                "quarry.remote_client.RemoteClient.request", return_value=remote_resp
             ) as mock_req,
         ):
             runner.invoke(app, ["delete", "doc.pdf", "--collection", "math"])
@@ -843,7 +844,7 @@ class TestDeleteCmd:
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
             patch(
-                "quarry.__main__._remote_https_request", return_value=remote_resp
+                "quarry.remote_client.RemoteClient.request", return_value=remote_resp
             ) as mock_req,
         ):
             result = runner.invoke(app, ["delete", "math", "--type", "collection"])
@@ -890,7 +891,9 @@ class TestDeleteCmd:
         proxy_config = {"quarry": inner_config}
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
-            patch("quarry.__main__._remote_https_request", return_value=remote_resp),
+            patch(
+                "quarry.remote_client.RemoteClient.request", return_value=remote_resp
+            ),
         ):
             remote_result = runner.invoke(app, ["--json", "delete", "report.pdf"])
         _reset_globals()
@@ -1140,7 +1143,7 @@ class TestFindCmd:
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
             patch(
-                "quarry.__main__._remote_https_get", return_value=remote_response
+                "quarry.remote_client.RemoteClient.get", return_value=remote_response
             ) as mock_get,
         ):
             result = runner.invoke(app, ["find", "some query", "--limit", "5"])
@@ -1163,7 +1166,7 @@ class TestFindCmd:
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
             patch(
-                "quarry.__main__._remote_https_get", return_value={"results": []}
+                "quarry.remote_client.RemoteClient.get", return_value={"results": []}
             ) as mock_get,
         ):
             runner.invoke(
@@ -1177,7 +1180,7 @@ class TestFindCmd:
 
     def test_remote_connection_refused_exits_1(self) -> None:
         """RemoteError from _remote_https_get exits 1 and prints the error message."""
-        from quarry.__main__ import RemoteError
+        from quarry.remote_client import RemoteError
 
         inner_config = {
             "url": "wss://quarry.example.com:8420/mcp",
@@ -1187,7 +1190,7 @@ class TestFindCmd:
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
             patch(
-                "quarry.__main__._remote_https_get",
+                "quarry.remote_client.RemoteClient.get",
                 side_effect=RemoteError(
                     0,
                     "Cannot connect to remote quarry server at "
@@ -1262,7 +1265,9 @@ class TestFindCmd:
         proxy_config = {"quarry": inner_config}
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
-            patch("quarry.__main__._remote_https_get", return_value=remote_response),
+            patch(
+                "quarry.remote_client.RemoteClient.get", return_value=remote_response
+            ),
         ):
             result = runner.invoke(app, ["--json", "find", "query"])
 
@@ -1425,13 +1430,13 @@ class TestListCollectionsCmd:
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
             patch(
-                "quarry.__main__._remote_https_get", return_value=remote_cols
+                "quarry.remote_client.RemoteClient.get", return_value=remote_cols
             ) as mock_get,
         ):
             result = runner.invoke(app, ["list", "collections"])
 
         assert result.exit_code == 0
-        mock_get.assert_called_once_with("/collections", inner_config)
+        mock_get.assert_called_once_with("/collections")
         assert "math" in result.output
         assert "5" in result.output
         assert "science" in result.output
@@ -1467,7 +1472,7 @@ class TestListCollectionsCmd:
         proxy_config = {"quarry": inner_config}
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
-            patch("quarry.__main__._remote_https_get", return_value=remote_resp),
+            patch("quarry.remote_client.RemoteClient.get", return_value=remote_resp),
         ):
             remote_result = runner.invoke(app, ["--json", "list", "collections"])
         _reset_globals()
@@ -1502,7 +1507,7 @@ class TestListCollectionsCmd:
 
     def test_remote_connection_refused_exits_1(self) -> None:
         """RemoteError from _remote_https_get exits 1 and prints the error."""
-        from quarry.__main__ import RemoteError
+        from quarry.remote_client import RemoteError
 
         proxy_config = {
             "quarry": {
@@ -1513,7 +1518,7 @@ class TestListCollectionsCmd:
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
             patch(
-                "quarry.__main__._remote_https_get",
+                "quarry.remote_client.RemoteClient.get",
                 side_effect=RemoteError(0, "Cannot connect to remote quarry server"),
             ),
         ):
@@ -2239,7 +2244,7 @@ class TestRememberCmd:
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
             patch(
-                "quarry.__main__._remote_https_request", return_value=remote_resp
+                "quarry.remote_client.RemoteClient.request", return_value=remote_resp
             ) as mock_req,
         ):
             result = runner.invoke(
@@ -2288,7 +2293,9 @@ class TestRememberCmd:
         }
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
-            patch("quarry.__main__._remote_https_request", return_value=remote_resp),
+            patch(
+                "quarry.remote_client.RemoteClient.request", return_value=remote_resp
+            ),
             patch("quarry.__main__.ingest_content") as mock_local,
         ):
             result = runner.invoke(app, ["remember", "--name", "a.md"], input="hi")
@@ -2297,7 +2304,7 @@ class TestRememberCmd:
         mock_local.assert_not_called()
 
     def test_remote_routing_http_error_exits_1(self):
-        from quarry.__main__ import RemoteError
+        from quarry.remote_client import RemoteError
 
         proxy_config = {
             "quarry": {
@@ -2308,7 +2315,7 @@ class TestRememberCmd:
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
             patch(
-                "quarry.__main__._remote_https_request",
+                "quarry.remote_client.RemoteClient.request",
                 side_effect=RemoteError(500, "boom"),
             ),
         ):
@@ -2343,7 +2350,9 @@ class TestRememberCmd:
         }
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
-            patch("quarry.__main__._remote_https_request", return_value=remote_resp),
+            patch(
+                "quarry.remote_client.RemoteClient.request", return_value=remote_resp
+            ),
         ):
             remote_res = runner.invoke(
                 app,
@@ -2375,7 +2384,7 @@ class TestIngestCmdRemote:
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
             patch(
-                "quarry.__main__._remote_https_request", return_value=remote_resp
+                "quarry.remote_client.RemoteClient.request", return_value=remote_resp
             ) as mock_req,
         ):
             result = runner.invoke(
@@ -2420,7 +2429,9 @@ class TestIngestCmdRemote:
         }
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
-            patch("quarry.__main__._remote_https_request", return_value=remote_resp),
+            patch(
+                "quarry.remote_client.RemoteClient.request", return_value=remote_resp
+            ),
             patch("quarry.__main__.ingest_auto") as mock_local,
         ):
             result = runner.invoke(app, ["ingest", "https://example.com/"])
@@ -2439,7 +2450,7 @@ class TestIngestCmdRemote:
         }
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
-            patch("quarry.__main__._remote_https_request") as mock_req,
+            patch("quarry.remote_client.RemoteClient.request") as mock_req,
         ):
             result = runner.invoke(app, ["ingest", str(f)])
 
@@ -2448,7 +2459,7 @@ class TestIngestCmdRemote:
         mock_req.assert_not_called()
 
     def test_remote_routing_http_error_exits_1(self):
-        from quarry.__main__ import RemoteError
+        from quarry.remote_client import RemoteError
 
         proxy_config = {
             "quarry": {
@@ -2459,7 +2470,7 @@ class TestIngestCmdRemote:
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
             patch(
-                "quarry.__main__._remote_https_request",
+                "quarry.remote_client.RemoteClient.request",
                 side_effect=RemoteError(500, "boom"),
             ),
         ):
@@ -2481,7 +2492,9 @@ class TestIngestCmdRemote:
         }
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
-            patch("quarry.__main__._remote_https_request", return_value=remote_resp),
+            patch(
+                "quarry.remote_client.RemoteClient.request", return_value=remote_resp
+            ),
         ):
             result = runner.invoke(app, ["ingest", "https://example.com/"])
 
@@ -2517,7 +2530,9 @@ class TestIngestCmdRemote:
         }
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
-            patch("quarry.__main__._remote_https_request", return_value=remote_resp),
+            patch(
+                "quarry.remote_client.RemoteClient.request", return_value=remote_resp
+            ),
         ):
             result = runner.invoke(app, ["--json", "ingest", "https://example.com/"])
         _reset_globals()
@@ -2549,7 +2564,7 @@ class TestSyncCmdRemote:
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
             patch(
-                "quarry.__main__._remote_https_request", return_value=remote_resp
+                "quarry.remote_client.RemoteClient.request", return_value=remote_resp
             ) as mock_req,
         ):
             result = runner.invoke(app, ["sync"])
@@ -2569,7 +2584,9 @@ class TestSyncCmdRemote:
                 "quarry.__main__.read_proxy_config",
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
-            patch("quarry.__main__._remote_https_request", return_value=remote_resp),
+            patch(
+                "quarry.remote_client.RemoteClient.request", return_value=remote_resp
+            ),
         ):
             result = runner.invoke(app, ["sync", "--workers", "4"])
 
@@ -2582,7 +2599,7 @@ class TestSyncCmdRemote:
                 "quarry.__main__.read_proxy_config",
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
-            patch("quarry.__main__._remote_https_request", return_value={}),
+            patch("quarry.remote_client.RemoteClient.request", return_value={}),
             patch("quarry.__main__.sync_all") as mock_sync_all,
         ):
             result = runner.invoke(app, ["sync"])
@@ -2591,7 +2608,7 @@ class TestSyncCmdRemote:
         mock_sync_all.assert_not_called()
 
     def test_remote_routing_http_error_exits_1(self):
-        from quarry.__main__ import RemoteError
+        from quarry.remote_client import RemoteError
 
         with (
             patch(
@@ -2599,7 +2616,7 @@ class TestSyncCmdRemote:
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
             patch(
-                "quarry.__main__._remote_https_request",
+                "quarry.remote_client.RemoteClient.request",
                 side_effect=RemoteError(502, "pipeline failed"),
             ),
         ):
@@ -2619,7 +2636,9 @@ class TestSyncCmdRemote:
                 "quarry.__main__.read_proxy_config",
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
-            patch("quarry.__main__._remote_https_request", return_value=remote_resp),
+            patch(
+                "quarry.remote_client.RemoteClient.request", return_value=remote_resp
+            ),
         ):
             result = runner.invoke(app, ["sync"])
 
@@ -2669,7 +2688,9 @@ class TestSyncCmdRemote:
                 "quarry.__main__.read_proxy_config",
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
-            patch("quarry.__main__._remote_https_request", return_value=remote_resp),
+            patch(
+                "quarry.remote_client.RemoteClient.request", return_value=remote_resp
+            ),
         ):
             remote_res = runner.invoke(app, ["--json", "sync"])
         _reset_globals()
@@ -2725,13 +2746,13 @@ class TestListDatabasesCmdRemote:
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
             patch(
-                "quarry.__main__._remote_https_get", return_value=remote_resp
+                "quarry.remote_client.RemoteClient.get", return_value=remote_resp
             ) as mock_get,
         ):
             result = runner.invoke(app, ["list", "databases"])
 
         assert result.exit_code == 0
-        mock_get.assert_called_once_with("/databases", _REMOTE_INNER_CONFIG)
+        mock_get.assert_called_once_with("/databases")
         assert "server-db" in result.output
         assert "42 documents" in result.output
 
@@ -2769,7 +2790,7 @@ class TestListDatabasesCmdRemote:
                 "quarry.__main__.read_proxy_config",
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
-            patch("quarry.__main__._remote_https_get", return_value=remote_resp),
+            patch("quarry.remote_client.RemoteClient.get", return_value=remote_resp),
         ):
             remote_res = runner.invoke(app, ["--json", "list", "databases"])
         _reset_globals()
@@ -2811,7 +2832,7 @@ class TestUseCmdRemote:
             ),
             patch("quarry.config.Settings.load", return_value=mock_loaded),
             patch.object(Settings, "write_default_db") as mock_write,
-            patch("quarry.__main__._remote_https_request") as mock_req,
+            patch("quarry.remote_client.RemoteClient.request") as mock_req,
         ):
             result = runner.invoke(app, ["use", "work"])
 
@@ -2834,7 +2855,7 @@ class TestRegisterCmdRemote:
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
             patch(
-                "quarry.__main__._remote_https_request", return_value=remote_resp
+                "quarry.remote_client.RemoteClient.request", return_value=remote_resp
             ) as mock_req,
         ):
             result = runner.invoke(app, ["register", str(d), "--collection", "docs"])
@@ -2858,7 +2879,7 @@ class TestRegisterCmdRemote:
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
             patch(
-                "quarry.__main__._remote_https_request", return_value=remote_resp
+                "quarry.remote_client.RemoteClient.request", return_value=remote_resp
             ) as mock_req,
         ):
             runner.invoke(app, ["register", str(d)])
@@ -2867,7 +2888,7 @@ class TestRegisterCmdRemote:
         assert body["collection"] == "ml-101"
 
     def test_remote_routing_http_error_exits_1(self, tmp_path: Path):
-        from quarry.__main__ import RemoteError
+        from quarry.remote_client import RemoteError
 
         d = tmp_path / "bad"
         d.mkdir()
@@ -2877,7 +2898,7 @@ class TestRegisterCmdRemote:
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
             patch(
-                "quarry.__main__._remote_https_request",
+                "quarry.remote_client.RemoteClient.request",
                 side_effect=RemoteError(400, "directory outside $HOME"),
             ),
         ):
@@ -2910,7 +2931,9 @@ class TestRegisterCmdRemote:
                 "quarry.__main__.read_proxy_config",
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
-            patch("quarry.__main__._remote_https_request", return_value=remote_resp),
+            patch(
+                "quarry.remote_client.RemoteClient.request", return_value=remote_resp
+            ),
         ):
             remote_res = runner.invoke(
                 app, ["--json", "register", str(d), "--collection", "course"]
@@ -2942,65 +2965,86 @@ class TestRegisterCmdRemote:
 class TestDeregisterCmdRemote:
     """Remote-routing tests for ``quarry deregister``."""
 
-    def test_remote_routing_sends_delete(self):
-        remote_resp = {"task_id": "deregister-abc", "status": "accepted"}
+    @staticmethod
+    def _accept_then_complete(
+        task_id: str, *, removed: int = 1, deleted_chunks: int = 2
+    ) -> list[dict[str, object]]:
+        """DELETE 202 then a completed task-status poll response."""
+        return [
+            {"task_id": task_id, "status": "accepted", "removed": removed},
+            {
+                "task_id": task_id,
+                "status": "completed",
+                "results": {
+                    "collection": "docs",
+                    "removed": removed,
+                    "deleted_chunks": deleted_chunks,
+                },
+            },
+        ]
+
+    def test_remote_routing_sends_delete_then_polls(self):
         with (
             patch(
                 "quarry.__main__.read_proxy_config",
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
             patch(
-                "quarry.__main__._remote_https_request", return_value=remote_resp
+                "quarry.remote_client.RemoteClient.request",
+                side_effect=self._accept_then_complete("deregister-abc"),
             ) as mock_req,
         ):
             result = runner.invoke(app, ["deregister", "docs"])
 
         assert result.exit_code == 0
-        assert mock_req.call_args[0][0] == "DELETE"
-        sent_path = mock_req.call_args[0][1]
+        assert mock_req.call_args_list[0][0][0] == "DELETE"
+        sent_path = mock_req.call_args_list[0][0][1]
         assert "/registrations?" in sent_path
         assert "collection=docs" in sent_path
         assert "keep_data=false" in sent_path
-        assert "task_id=deregister-abc" in result.output
+        # Second request polls the task by id.
+        assert mock_req.call_args_list[1][0][1] == "/tasks/deregister-abc"
+        assert "Deregistered collection 'docs'" in result.output
+        assert "2 chunks" in result.output
 
     def test_remote_deregister_cleans_data(self):
         """Default deregister must tell the server to delete chunks too."""
-        remote_resp = {"task_id": "deregister-xyz", "status": "accepted"}
         with (
             patch(
                 "quarry.__main__.read_proxy_config",
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
             patch(
-                "quarry.__main__._remote_https_request", return_value=remote_resp
+                "quarry.remote_client.RemoteClient.request",
+                side_effect=self._accept_then_complete("deregister-xyz"),
             ) as mock_req,
         ):
             result = runner.invoke(app, ["deregister", "math"])
 
         assert result.exit_code == 0
-        sent_path = mock_req.call_args[0][1]
-        assert "keep_data=false" in sent_path
+        assert "keep_data=false" in mock_req.call_args_list[0][0][1]
 
     def test_remote_deregister_keep_data_flag(self):
         """--keep-data must pass keep_data=true in the URL."""
-        remote_resp = {"task_id": "deregister-kd", "status": "accepted"}
         with (
             patch(
                 "quarry.__main__.read_proxy_config",
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
             patch(
-                "quarry.__main__._remote_https_request", return_value=remote_resp
+                "quarry.remote_client.RemoteClient.request",
+                side_effect=self._accept_then_complete(
+                    "deregister-kd", deleted_chunks=0
+                ),
             ) as mock_req,
         ):
             result = runner.invoke(app, ["deregister", "math", "--keep-data"])
 
         assert result.exit_code == 0
-        sent_path = mock_req.call_args[0][1]
-        assert "keep_data=true" in sent_path
+        assert "keep_data=true" in mock_req.call_args_list[0][0][1]
 
     def test_remote_routing_not_found_exits_1(self):
-        from quarry.__main__ import RemoteError
+        from quarry.remote_client import RemoteError
 
         with (
             patch(
@@ -3008,23 +3052,96 @@ class TestDeregisterCmdRemote:
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
             patch(
-                "quarry.__main__._remote_https_request",
-                side_effect=RemoteError(404, "Not found"),
+                "quarry.remote_client.RemoteClient.request",
+                side_effect=RemoteError(404, "HTTP 404: not found"),
             ),
         ):
             result = runner.invoke(app, ["deregister", "missing"])
 
         assert result.exit_code == 1
-        assert "Not found" in result.output
+        assert "No registration found for 'missing'" in result.output
 
-    def test_remote_routing_does_not_call_local(self):
-        remote_resp = {"task_id": "deregister-x", "status": "accepted"}
+    def test_remote_poll_failed_exits_1(self):
+        """A task that reaches 'failed' -> exit 1 with the server error."""
         with (
             patch(
                 "quarry.__main__.read_proxy_config",
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
-            patch("quarry.__main__._remote_https_request", return_value=remote_resp),
+            patch(
+                "quarry.remote_client.RemoteClient.request",
+                side_effect=[
+                    {"task_id": "deregister-f", "status": "accepted", "removed": 1},
+                    {"task_id": "deregister-f", "status": "failed", "error": "boom"},
+                ],
+            ),
+        ):
+            result = runner.invoke(app, ["deregister", "docs"])
+
+        assert result.exit_code == 1
+        assert "boom" in result.output
+        assert "Deregistered" not in result.output
+
+    def test_remote_poll_timeout_exits_1(self):
+        """A poll that never completes before the deadline -> exit 1."""
+        with (
+            patch(
+                "quarry.__main__.read_proxy_config",
+                return_value=_REMOTE_PROXY_CONFIG,
+            ),
+            patch("quarry.remote_client._POLL_TIMEOUT_S", 0.0),
+            patch(
+                "quarry.remote_client.RemoteClient.request",
+                return_value={"task_id": "deregister-t", "status": "accepted"},
+            ),
+        ):
+            result = runner.invoke(app, ["deregister", "docs"])
+
+        assert result.exit_code == 1
+        assert "did not complete" in result.output
+
+    def test_remote_poll_retries_transient_blip(self):
+        """A transient connection blip mid-poll retries, then succeeds."""
+        from quarry.remote_client import RemoteError
+
+        with (
+            patch(
+                "quarry.__main__.read_proxy_config",
+                return_value=_REMOTE_PROXY_CONFIG,
+            ),
+            patch("quarry.remote_client.time.sleep"),
+            patch(
+                "quarry.remote_client.RemoteClient.request",
+                side_effect=[
+                    {"task_id": "deregister-b", "status": "accepted", "removed": 1},
+                    RemoteError(0, "connection reset"),
+                    {
+                        "task_id": "deregister-b",
+                        "status": "completed",
+                        "results": {
+                            "collection": "docs",
+                            "removed": 1,
+                            "deleted_chunks": 3,
+                        },
+                    },
+                ],
+            ),
+        ):
+            result = runner.invoke(app, ["deregister", "docs"])
+
+        assert result.exit_code == 0
+        assert "Deregistered collection 'docs'" in result.output
+
+    def test_remote_routing_does_not_call_local(self):
+        with (
+            patch(
+                "quarry.__main__.read_proxy_config",
+                return_value=_REMOTE_PROXY_CONFIG,
+            ),
+            patch(
+                "quarry.remote_client.RemoteClient.request",
+                side_effect=self._accept_then_complete("deregister-x"),
+            ),
             patch("quarry.__main__.SyncRegistry") as mock_registry,
         ):
             result = runner.invoke(app, ["deregister", "c"])
@@ -3049,21 +3166,31 @@ class TestDeregisterCmdRemote:
         assert result.exit_code == 0
 
     def test_json_equivalence_remote_local(self, tmp_path: Path):
-        remote_resp = {"task_id": "deregister-abc", "status": "accepted"}
         with (
             patch(
                 "quarry.__main__.read_proxy_config",
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
-            patch("quarry.__main__._remote_https_request", return_value=remote_resp),
+            patch(
+                "quarry.remote_client.RemoteClient.request",
+                side_effect=[
+                    {"task_id": "deregister-abc", "status": "accepted", "removed": 3},
+                    {
+                        "task_id": "deregister-abc",
+                        "status": "completed",
+                        "results": {
+                            "collection": "math",
+                            "removed": 3,
+                            "deleted_chunks": 4,
+                        },
+                    },
+                ],
+            ),
         ):
             remote_res = runner.invoke(app, ["--json", "deregister", "math"])
         _reset_globals()
         assert remote_res.exit_code == 0
         remote_data = json.loads(remote_res.output)
-        # Fire-and-forget: remote emits task_id + status
-        assert "task_id" in remote_data
-        assert remote_data["status"] == "accepted"
 
         settings = _mock_settings()
         settings.registry_path = tmp_path / "registry.db"
@@ -3086,9 +3213,9 @@ class TestDeregisterCmdRemote:
         _reset_globals()
         assert local_res.exit_code == 0
         local_data = json.loads(local_res.output)
-        # Local path still returns full result; remote is fire-and-forget.
-        assert "collection" in local_data
-        assert "removed" in local_data
+        # Class-3 parity: remote and local emit exactly the same field names.
+        assert set(remote_data) == set(local_data)
+        assert set(local_data) == {"collection", "removed", "deleted_chunks"}
 
 
 class TestListRegistrationsCmdRemote:
@@ -3116,13 +3243,13 @@ class TestListRegistrationsCmdRemote:
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
             patch(
-                "quarry.__main__._remote_https_get", return_value=remote_resp
+                "quarry.remote_client.RemoteClient.get", return_value=remote_resp
             ) as mock_get,
         ):
             result = runner.invoke(app, ["list", "registrations"])
 
         assert result.exit_code == 0
-        mock_get.assert_called_once_with("/registrations", _REMOTE_INNER_CONFIG)
+        mock_get.assert_called_once_with("/registrations")
         assert "docs" in result.output
         assert "code" in result.output
 
@@ -3133,7 +3260,7 @@ class TestListRegistrationsCmdRemote:
                 "quarry.__main__.read_proxy_config",
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
-            patch("quarry.__main__._remote_https_get", return_value=remote_resp),
+            patch("quarry.remote_client.RemoteClient.get", return_value=remote_resp),
         ):
             result = runner.invoke(app, ["list", "registrations"])
 
@@ -3169,7 +3296,7 @@ class TestListRegistrationsCmdRemote:
                 "quarry.__main__.read_proxy_config",
                 return_value=_REMOTE_PROXY_CONFIG,
             ),
-            patch("quarry.__main__._remote_https_get", return_value=remote_resp),
+            patch("quarry.remote_client.RemoteClient.get", return_value=remote_resp),
         ):
             remote_res = runner.invoke(app, ["--json", "list", "registrations"])
         _reset_globals()
@@ -4506,266 +4633,6 @@ class TestRemoteListCmd:
         assert "healthy" in result.output
 
 
-class TestRemoteHttpsGet:
-    """Unit tests for _remote_https_get() error handling."""
-
-    def test_empty_ca_cert_raises_system_exit(self) -> None:
-        """Empty string ca_cert must raise SystemExit with 'CA cert' in message.
-
-        Fix 3: the guard was `ca_cert is None` — an empty string passed through,
-        then ssl_ctx.load_verify_locations("") raised an unhelpful OSError.
-        The fix changes the guard to `not ca_cert` so "" is treated as absent.
-        """
-        import pytest
-
-        from quarry.__main__ import _remote_https_get
-
-        config: dict[str, object] = {
-            "url": "wss://host:8420/mcp",
-            "ca_cert": "",  # empty string — was previously passing the None guard
-            "headers": {},
-        }
-        with pytest.raises(SystemExit, match="CA cert"):
-            _remote_https_get("/health", config)
-
-    def test_none_ca_cert_raises_system_exit(self) -> None:
-        """None ca_cert raises SystemExit (existing behavior, regression guard)."""
-        import pytest
-
-        from quarry.__main__ import _remote_https_get
-
-        config: dict[str, object] = {
-            "url": "wss://host:8420/mcp",
-            "ca_cert": None,
-            "headers": {},
-        }
-        with pytest.raises(SystemExit, match="CA cert"):
-            _remote_https_get("/health", config)
-
-    def test_unreadable_ca_cert_path_raises_system_exit_with_ca_message(
-        self, tmp_path: Path
-    ) -> None:
-        """load_verify_locations failing on a non-existent file raises SystemExit.
-
-        Fix 3: wrap load_verify_locations in try/except to produce a clear message
-        rather than propagating the raw OSError or SSLError.
-        """
-        import pytest
-
-        from quarry.__main__ import _remote_https_get
-
-        missing_cert = str(tmp_path / "nonexistent-ca.crt")
-        config: dict[str, object] = {
-            "url": "wss://host:8420/mcp",
-            "ca_cert": missing_cert,
-            "headers": {},
-        }
-        with pytest.raises(SystemExit, match="CA certificate"):
-            _remote_https_get("/health", config)
-
-
-class TestRemoteHttpsRequest:
-    """Unit tests for _remote_https_request() — generalised HTTP helper."""
-
-    def test_delegates_get_to_request(self) -> None:
-        """_remote_https_get delegates to _remote_https_request with method=GET."""
-        from quarry.__main__ import _remote_https_get
-
-        with patch("quarry.__main__._remote_https_request") as mock_req:
-            mock_req.return_value = {"ok": True}
-            config: dict[str, object] = {"url": "ws://localhost:8420/mcp"}
-            result = _remote_https_get("/status", config)
-
-        mock_req.assert_called_once_with("GET", "/status", config)
-        assert result == {"ok": True}
-
-    def test_post_sends_json_body(self) -> None:
-        """POST with a body dict sends JSON-encoded content."""
-        from quarry.__main__ import _remote_https_request
-
-        config: dict[str, object] = {
-            "url": "ws://localhost:8420/mcp",
-            "headers": {},
-        }
-        mock_conn = MagicMock()
-        mock_resp = MagicMock()
-        mock_resp.status = 200
-        mock_resp.read.return_value = b'{"ok": true}'
-        mock_conn.getresponse.return_value = mock_resp
-
-        with patch("http.client.HTTPConnection", return_value=mock_conn):
-            result = _remote_https_request(
-                "POST", "/remember", config, body={"text": "hello"}
-            )
-
-        assert result == {"ok": True}
-        call_kwargs = mock_conn.request.call_args
-        assert call_kwargs[0][0] == "POST"
-        assert call_kwargs[0][1] == "/remember"
-        sent_body = call_kwargs[1].get("body") or call_kwargs[0][2]
-        assert json.loads(sent_body) == {"text": "hello"}
-        sent_headers = call_kwargs[1].get("headers") or call_kwargs[0][3]
-        assert sent_headers["Content-Type"] == "application/json"
-
-    def test_delete_no_body(self) -> None:
-        """DELETE without a body sends no Content-Type header."""
-        from quarry.__main__ import _remote_https_request
-
-        config: dict[str, object] = {
-            "url": "ws://localhost:8420/mcp",
-            "headers": {},
-        }
-        mock_conn = MagicMock()
-        mock_resp = MagicMock()
-        mock_resp.status = 200
-        mock_resp.read.return_value = b'{"deleted": 5}'
-        mock_conn.getresponse.return_value = mock_resp
-
-        with patch("http.client.HTTPConnection", return_value=mock_conn):
-            result = _remote_https_request("DELETE", "/documents?name=foo", config)
-
-        assert result == {"deleted": 5}
-        call_args = mock_conn.request.call_args
-        assert call_args[0][0] == "DELETE"
-        sent_headers = call_args[1].get("headers", {})
-        assert "Content-Type" not in sent_headers
-
-    def test_non_2xx_raises_remote_error(self) -> None:
-        """Status codes >= 300 raise RemoteError with correct status."""
-        import pytest
-
-        from quarry.__main__ import RemoteError, _remote_https_request
-
-        config: dict[str, object] = {
-            "url": "ws://localhost:8420/mcp",
-            "headers": {},
-        }
-        mock_conn = MagicMock()
-        mock_resp = MagicMock()
-        mock_resp.status = 404
-        mock_resp.read.return_value = b'{"error": "Not found"}'
-        mock_conn.getresponse.return_value = mock_resp
-
-        with (
-            patch("http.client.HTTPConnection", return_value=mock_conn),
-            pytest.raises(RemoteError, match="HTTP 404") as exc_info,
-        ):
-            _remote_https_request("DELETE", "/documents?name=foo", config)
-
-        assert exc_info.value.status == 404
-
-    def test_non_dict_response_raises_remote_error(self) -> None:
-        """A JSON array (not object) must raise RemoteError, not crash."""
-        import pytest
-
-        from quarry.__main__ import RemoteError, _remote_https_request
-
-        config: dict[str, object] = {
-            "url": "ws://localhost:8420/mcp",
-            "headers": {},
-        }
-        mock_conn = MagicMock()
-        mock_resp = MagicMock()
-        mock_resp.status = 200
-        mock_resp.read.return_value = b'["not", "a", "dict"]'
-        mock_conn.getresponse.return_value = mock_resp
-
-        with (
-            patch("http.client.HTTPConnection", return_value=mock_conn),
-            pytest.raises(RemoteError, match="expected JSON object"),
-        ):
-            _remote_https_request("GET", "/status", config)
-
-    def test_non_dict_scalar_response_raises_remote_error(self) -> None:
-        """A JSON scalar must raise RemoteError rather than crash downstream."""
-        import pytest
-
-        from quarry.__main__ import RemoteError, _remote_https_request
-
-        config: dict[str, object] = {
-            "url": "ws://localhost:8420/mcp",
-            "headers": {},
-        }
-        mock_conn = MagicMock()
-        mock_resp = MagicMock()
-        mock_resp.status = 200
-        mock_resp.read.return_value = b"42"
-        mock_conn.getresponse.return_value = mock_resp
-
-        with (
-            patch("http.client.HTTPConnection", return_value=mock_conn),
-            pytest.raises(RemoteError, match="expected JSON object"),
-        ):
-            _remote_https_request("GET", "/status", config)
-
-    def test_non_json_response_raises_remote_error(self) -> None:
-        """HTML from a reverse proxy must not leak a JSONDecodeError."""
-        import pytest
-
-        from quarry.__main__ import RemoteError, _remote_https_request
-
-        config: dict[str, object] = {
-            "url": "ws://localhost:8420/mcp",
-            "headers": {},
-        }
-        mock_conn = MagicMock()
-        mock_resp = MagicMock()
-        mock_resp.status = 200
-        mock_resp.read.return_value = b"<html><body>502 Bad Gateway</body></html>"
-        mock_conn.getresponse.return_value = mock_resp
-
-        with (
-            patch("http.client.HTTPConnection", return_value=mock_conn),
-            pytest.raises(RemoteError, match="non-JSON response"),
-        ):
-            _remote_https_request("GET", "/status", config)
-
-    def test_timeout_parameter_reaches_connection(self) -> None:
-        """Fix 5: the timeout kwarg must be passed to HTTPConnection."""
-        from quarry.__main__ import _remote_https_request
-
-        config: dict[str, object] = {
-            "url": "ws://localhost:8420/mcp",
-            "headers": {},
-        }
-        mock_conn = MagicMock()
-        mock_resp = MagicMock()
-        mock_resp.status = 200
-        mock_resp.read.return_value = b"{}"
-        mock_conn.getresponse.return_value = mock_resp
-
-        with patch("http.client.HTTPConnection", return_value=mock_conn) as mock_cls:
-            _remote_https_request("POST", "/sync", config, body={}, timeout=600.0)
-
-        _, kwargs = mock_cls.call_args
-        assert kwargs["timeout"] == 600.0
-
-    def test_connection_refused_raises_remote_error(self) -> None:
-        """OSError from conn.request is wrapped as RemoteError with status 0."""
-        import pytest
-
-        from quarry.__main__ import RemoteError, _remote_https_request
-
-        config: dict[str, object] = {
-            "url": "ws://localhost:8420/mcp",
-            "headers": {},
-        }
-        mock_conn = MagicMock()
-        mock_conn.request.side_effect = ConnectionRefusedError(
-            111, "Connection refused"
-        )
-
-        with (
-            patch("http.client.HTTPConnection", return_value=mock_conn),
-            pytest.raises(RemoteError) as exc_info,
-        ):
-            _remote_https_request("GET", "/search?q=test", config)
-
-        assert exc_info.value.status == 0
-        assert "localhost" in str(exc_info.value)
-        assert "8420" in str(exc_info.value)
-
-
 class TestIngestExitCodes:
     """Fix 7: exit 1 when errors reported and zero chunks ingested."""
 
@@ -4825,7 +4692,9 @@ class TestIngestExitCodes:
         }
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
-            patch("quarry.__main__._remote_https_request", return_value=remote_resp),
+            patch(
+                "quarry.remote_client.RemoteClient.request", return_value=remote_resp
+            ),
         ):
             result = runner.invoke(app, ["ingest", "https://example.com/"])
         assert result.exit_code == 0
@@ -4859,7 +4728,9 @@ class TestIngestExitCodes:
         }
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
-            patch("quarry.__main__._remote_https_request", return_value=remote_resp),
+            patch(
+                "quarry.remote_client.RemoteClient.request", return_value=remote_resp
+            ),
         ):
             result = runner.invoke(
                 app, ["remember", "--name", "notes.md"], input="body"
@@ -5039,13 +4910,13 @@ def test_sync_409_quiet_suppresses_warning() -> None:
         "headers": {"Authorization": "Bearer tok"},
     }
     proxy_config = {"quarry": inner_config}
-    exc = cli_mod.RemoteError(
+    exc = RemoteError(
         409,
         'Remote quarry server returned HTTP 409: {"task_id":"abc","detail":"busy"}',
     )
     with (
         patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
-        patch("quarry.__main__._remote_https_request", side_effect=exc),
+        patch("quarry.remote_client.RemoteClient.request", side_effect=exc),
     ):
         result = runner.invoke(app, ["--quiet", "sync"])
     _reset_globals()
@@ -5062,13 +4933,13 @@ def test_sync_409_default_shows_warning() -> None:
         "headers": {"Authorization": "Bearer tok"},
     }
     proxy_config = {"quarry": inner_config}
-    exc = cli_mod.RemoteError(
+    exc = RemoteError(
         409,
         'Remote quarry server returned HTTP 409: {"task_id":"abc","detail":"busy"}',
     )
     with (
         patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
-        patch("quarry.__main__._remote_https_request", side_effect=exc),
+        patch("quarry.remote_client.RemoteClient.request", side_effect=exc),
     ):
         result = runner.invoke(app, ["sync"])
     assert result.exit_code == 0
@@ -5107,7 +4978,7 @@ def test_sync_workers_warning_quiet_suppressed() -> None:
     remote_resp = {"task_id": "xyz", "status": "accepted"}
     with (
         patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
-        patch("quarry.__main__._remote_https_request", return_value=remote_resp),
+        patch("quarry.remote_client.RemoteClient.request", return_value=remote_resp),
     ):
         result = runner.invoke(app, ["--quiet", "sync", "--workers", "4"])
     _reset_globals()

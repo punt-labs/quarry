@@ -430,38 +430,37 @@ def register_directory(directory: str, collection: str = "") -> str:
 
 def _do_deregister(
     collection: str, keep_data: bool, settings: Settings, database: Database
-) -> None:
-    """Blocking deregister — runs in background thread."""
+) -> str:
+    """Deregister synchronously: existence check, registry delete, chunk purge."""
     conn = SyncRegistry(settings.registry_path)
     try:
+        if conn.get_registration(collection) is None:
+            return f"No registration found for {collection!r}"
         doc_names = conn.deregister_directory(collection)
     finally:
         conn.close()
-
-    if not keep_data and doc_names:
-        store = database.store
-        for name in doc_names:
-            store.delete_document(name, collection=collection, count=False)
+    purge = [] if keep_data else doc_names
+    deleted_chunks = sum(
+        database.store.delete_document(name, collection=collection) for name in purge
+    )
+    return (
+        f"Deregistered collection {collection!r} "
+        f"({len(doc_names)} files, {deleted_chunks} chunks deleted)"
+    )
 
 
 @mcp.tool()
 @_handle_errors
-def deregister_directory(
-    collection: str,
-    keep_data: bool = False,
-) -> str:
-    """Remove a directory registration.
+def deregister_directory(collection: str, keep_data: bool = False) -> str:
+    """Remove a directory registration synchronously.
 
-    Returns immediately — deregistration runs in the background.
+    Unknown collection returns 'No registration found'; a failure is reported.
 
     Args:
         collection: Collection name to deregister.
         keep_data: If true, keep indexed data in LanceDB.
     """
-    settings = _settings()
-    database = _database()
-    _background(_do_deregister, collection, keep_data, settings, database)
-    return f"\u25b6  Deregistering {collection!r} (background)"
+    return _do_deregister(collection, keep_data, _settings(), _database())
 
 
 def _do_sync(settings: Settings, database: Database) -> None:

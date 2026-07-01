@@ -633,6 +633,51 @@ Five changes:
 4. **WebSocket streaming of sync progress** — Over-engineered for a
    background batch operation. Polling is sufficient.
 
+### Amendment 2026-07-01 — Deregister is not async (quarry-noiw, quarry-xsz3)
+
+Change #5 (async endpoint, 202 + task_id) targets `/sync`: long, multi-file
+embedding that would block the event loop. `DELETE /registrations` does not
+share that profile — its existence check and registry-row mutation are trivial
+metadata operations that must complete before the response so the caller gets
+correct feedback. Deregister is therefore split:
+
+- **Synchronous (before the HTTP response):** validate the collection exists
+  and delete its registry rows, executed via `run_in_threadpool` so the event
+  loop is never blocked. An unknown collection returns **404**
+  (`No registration found for '<collection>'`), which the CLI maps to exit 1 —
+  parity with the local path (`__main__.py`). A registry failure returns 500.
+- **Asynchronous (202 + task_id):** only the chunk purge (`delete_document`
+  over the removed documents), which has real latency. `GET /tasks/<id>`
+  reports its terminal status; the CLI polls after the 202 and maps a `failed`
+  status to a non-zero exit with the server's error text. The CLI never reports
+  success for an operation that then dies.
+
+`SyncRegistry` now sets `PRAGMA busy_timeout=5000` on every connection, so a
+concurrent sync writer causes a bounded wait instead of an instant
+`database is locked` (the quarry-xsz3 mechanism). The async model of change #5
+is otherwise retained for `/sync`.
+
+The **MCP** surface (`deregister_directory`) is now synchronous end-to-end as
+well — existence check, registry delete, and chunk purge run before the tool
+returns. MCP has no poll channel to expose to agents, so full synchronous
+execution is the correct shape there; an unknown collection returns
+`No registration found for '<collection>'` and a registry or purge failure
+surfaces as an error rather than a false success. All three surfaces (CLI,
+HTTP, MCP) report the same fields — `collection`, `removed`, `deleted_chunks`.
+
+Adding the CLI deregister poll grew `__main__.py` past its OO `module_size`
+baseline, so the remote HTTP client machinery moved out of the CLI entrypoint
+into a new module, `remote_client.py`. `RemoteClient` (a frozen dataclass bound
+to one `[quarry]` config) owns the transport — `request`, `get`, `find`, and
+the `await_task` poller — and `RemoteError` carries the HTTP status. This is a
+behavior-preserving extraction: the CLI constructs `RemoteClient(config)` at
+each remote branch and the local/remote routing (`_safe_proxy_config`) stays in
+`__main__.py` where it decides which path a command takes. `remote_client.py`
+is CLI-tier (it may raise `typer.Exit` and print to stderr for poll
+failures/timeouts); it deliberately does **not** live in `remote.py`, which owns
+a different concern — proxy config and TLS (`read/write_proxy_config`,
+`fetch_ca_cert`, `validate_connection`).
+
 ## DES-027: jemalloc Memory Tuning for LanceDB Arrow Buffers
 
 **Date:** 2026-04-18
