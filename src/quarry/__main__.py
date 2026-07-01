@@ -2,18 +2,17 @@ from __future__ import annotations
 
 import contextlib
 import functools
-import http.client
 import importlib.metadata
 import json
 import logging
 import os
-import ssl
 import sys
 import tempfile
 import urllib.parse
 from collections.abc import Callable, Generator
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, final
 
 import typer
 import typer.core
@@ -30,6 +29,7 @@ from quarry.db.storage import (
     dir_size_bytes,
     discover_databases,
 )
+from quarry.deregister_result import DeregisterResult
 from quarry.formatting import (
     format_collections,
     format_document_detail,
@@ -52,8 +52,8 @@ from quarry.remote import (
     validate_connection,
     validate_connection_from_ws_url,
     write_proxy_config,
-    ws_to_http,
 )
+from quarry.remote_client import RemoteClient, RemoteError
 from quarry.sync import sync_all
 from quarry.sync_registry import SyncRegistry
 from quarry.tls import TLS_DIR, cert_fingerprint
@@ -248,135 +248,6 @@ def _cli_errors(fn: Callable[..., None]) -> Callable[..., None]:
 
 
 # ---------------------------------------------------------------------------
-# Remote helpers
-# ---------------------------------------------------------------------------
-
-
-class RemoteError(RuntimeError):
-    """Error from the remote quarry server with HTTP status code."""
-
-    def __init__(self, status: int, message: str) -> None:
-        super().__init__(message)
-        self.status = status
-
-
-_DEFAULT_REMOTE_TIMEOUT = 15.0
-
-
-def _remote_https_request(
-    method: str,
-    path: str,
-    config: dict[str, object],
-    body: dict[str, object] | None = None,
-    *,
-    timeout: float = _DEFAULT_REMOTE_TIMEOUT,
-) -> dict[str, object]:
-    """Make an authenticated HTTP request to the remote quarry server.
-
-    Derives the HTTPS base URL from the wss:// URL in ``config``, builds a
-    pinned SSL context using the CA cert when provided, and returns the parsed
-    JSON response body.
-
-    Args:
-        method: HTTP method (GET, POST, DELETE).
-        path: Request path including query string, e.g. ``/search?q=foo&limit=10``.
-        config: Dict from ``read_proxy_config()`` with keys ``url``, optional
-            ``ca_cert``, and ``headers``.
-        body: Optional JSON-serialisable dict sent as the request body.
-        timeout: Socket timeout in seconds.  Defaults to 15; long-running
-            operations like ``/sync`` should pass a larger value.
-
-    Returns:
-        Parsed JSON response as a dict.
-
-    Raises:
-        RemoteError: If the server returns a non-2xx status code, a
-            non-JSON / non-dict response body, or if the connection cannot
-            be established (status 0 for connection failures).
-        SystemExit: If the remote URL uses HTTPS but no CA cert is pinned.
-    """
-    raw_url = str(config["url"])
-    http_base = ws_to_http(raw_url)
-    parsed = urllib.parse.urlparse(http_base)
-    host = parsed.hostname or "localhost"
-    port = parsed.port or 8420
-
-    ca_cert = config.get("ca_cert")
-    scheme = "https" if raw_url.startswith("wss://") else "http"
-    if scheme == "https" and not ca_cert:
-        raise SystemExit(
-            "Remote server uses HTTPS but no CA cert is pinned. "
-            "Run 'quarry login' to trust the server's certificate."
-        )
-
-    headers_raw = config.get("headers", {})
-    headers: dict[str, str] = (
-        {k: str(v) for k, v in headers_raw.items()}
-        if isinstance(headers_raw, dict)
-        else {}
-    )
-
-    encoded_body: bytes | None = None
-    if body is not None:
-        encoded_body = json.dumps(body).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-
-    conn: http.client.HTTPConnection | http.client.HTTPSConnection
-    if scheme == "https":
-        ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        try:
-            ssl_ctx.load_verify_locations(str(ca_cert))
-        except (OSError, ssl.SSLError) as exc:
-            raise SystemExit(
-                f"Cannot load CA certificate {ca_cert!r}. "
-                f"Run 'quarry login' to configure. ({exc})"
-            ) from exc
-        conn = http.client.HTTPSConnection(host, port, context=ssl_ctx, timeout=timeout)
-    else:
-        conn = http.client.HTTPConnection(host, port, timeout=timeout)
-    try:
-        conn.request(method, path, body=encoded_body, headers=headers)
-        resp = conn.getresponse()
-        resp_body = resp.read()
-        if resp.status >= 300:
-            body_text = resp_body.decode("utf-8", errors="replace")
-            raise RemoteError(
-                resp.status,
-                f"Remote quarry server returned HTTP {resp.status}: {body_text}",
-            )
-        if not resp_body:
-            return {}
-        try:
-            parsed_body = json.loads(resp_body)
-        except json.JSONDecodeError as exc:
-            preview = resp_body[:200].decode("utf-8", errors="replace")
-            raise RemoteError(
-                resp.status,
-                f"Remote quarry server returned non-JSON response: {preview!r}",
-            ) from exc
-        if not isinstance(parsed_body, dict):
-            raise RemoteError(
-                resp.status,
-                f"Malformed response from remote server: "
-                f"expected JSON object, got {type(parsed_body).__name__}",
-            )
-        response_data: dict[str, object] = parsed_body
-        return response_data
-    except OSError as exc:
-        raise RemoteError(
-            0,
-            f"Cannot connect to remote quarry server at {host}:{port}: {exc}",
-        ) from exc
-    finally:
-        conn.close()
-
-
-def _remote_https_get(path: str, config: dict[str, object]) -> dict[str, object]:
-    """Make an authenticated GET request to the remote quarry server."""
-    return _remote_https_request("GET", path, config)
-
-
-# ---------------------------------------------------------------------------
 # Product commands — ordered: find, ingest, show, remember, status, use,
 # delete, register, deregister, sync, list
 # ---------------------------------------------------------------------------
@@ -389,69 +260,6 @@ def _safe_proxy_config() -> dict[str, Any]:
     except ValueError as exc:
         err_console.print(f"Warning: {exc}", style="yellow")
         return {}
-
-
-def _find_remote(
-    proxy_config: dict[str, object],
-    query: str,
-    limit: int,
-    collection: str,
-    document: str,
-    page_type: str,
-    source_format: str,
-    agent_handle: str,
-    memory_type: str,
-) -> None:
-    """Execute a remote find and emit results, exiting 1 on remote request failure."""
-    params: dict[str, str | int] = {"q": query, "limit": limit}
-    if collection:
-        params["collection"] = collection
-    if document:
-        params["document"] = document
-    if page_type:
-        params["page_type"] = page_type
-    if source_format:
-        params["source_format"] = source_format
-    if agent_handle:
-        params["agent_handle"] = agent_handle
-    if memory_type:
-        params["memory_type"] = memory_type
-    qs = urllib.parse.urlencode(params)
-    try:
-        remote_resp = _remote_https_get(f"/search?{qs}", proxy_config)
-    except RemoteError as exc:
-        err_console.print(f"Error: {exc}", style="red")
-        raise typer.Exit(code=1) from exc
-    raw_results = remote_resp.get("results", [])
-    remote_results: list[dict[str, object]] = (
-        list(raw_results) if isinstance(raw_results, list) else []
-    )
-    json_results: list[dict[str, object]] = []
-    lines: list[str] = []
-    for r in remote_results:
-        similarity = round(float(str(r.get("similarity", 0))), 4)
-        meta = f"{r.get('page_type', '')}/{r.get('source_format', '')}"
-        doc = r.get("document_name", "")
-        pg = r.get("page_number", "")
-        lines.append(f"\n[{doc} p.{pg} | {meta}] (similarity: {similarity})")
-        text = str(r.get("text", ""))
-        lines.append(text[:300])
-        json_results.append(
-            {
-                "document_name": r.get("document_name", ""),
-                "collection": r.get("collection", ""),
-                "page_number": r.get("page_number", 0),
-                "chunk_index": r.get("chunk_index", 0),
-                "page_type": r.get("page_type", ""),
-                "source_format": r.get("source_format", ""),
-                "agent_handle": r.get("agent_handle", ""),
-                "memory_type": r.get("memory_type", ""),
-                "summary": r.get("summary", ""),
-                "similarity": similarity,
-                "text": text,
-            }
-        )
-    _emit(json_results, "\n".join(lines))
 
 
 def _exit_on_ingest_failure(result: dict[str, object] | object) -> None:
@@ -509,8 +317,7 @@ def find_cmd(
     """Search indexed documents."""
     proxy_config = _safe_proxy_config().get("quarry", {})
     if isinstance(proxy_config, dict) and "url" in proxy_config:
-        _find_remote(
-            proxy_config,
+        json_results, text = RemoteClient(proxy_config).find(
             query=query,
             limit=limit,
             collection=collection,
@@ -520,6 +327,7 @@ def find_cmd(
             agent_handle=agent_handle,
             memory_type=memory_type,
         )
+        _emit(json_results, text)
         return
 
     settings = _resolved_settings()
@@ -627,8 +435,8 @@ def ingest_cmd(
         # Fire-and-forget: POST /ingest returns 202 with task_id.
         # The CLI prints the task_id and exits immediately.
         try:
-            remote_resp = _remote_https_request(
-                "POST", "/ingest", proxy_config, body=body
+            remote_resp = RemoteClient(proxy_config).request(
+                "POST", "/ingest", body=body
             )
         except RemoteError as exc:
             err_console.print(f"Error: {exc}", style="red")
@@ -721,7 +529,7 @@ def show_cmd(
             params["collection"] = collection
         qs = urllib.parse.urlencode(params)
         try:
-            remote_resp = _remote_https_get(f"/show?{qs}", proxy_config)
+            remote_resp = RemoteClient(proxy_config).get(f"/show?{qs}")
         except RemoteError as exc:
             err_console.print(f"Error: {exc}", style="red")
             raise typer.Exit(code=1) from exc
@@ -834,8 +642,8 @@ def remember(
         }
         # Fire-and-forget: POST /remember returns 202 with task_id.
         try:
-            remote_resp = _remote_https_request(
-                "POST", "/remember", proxy_config, body=body
+            remote_resp = RemoteClient(proxy_config).request(
+                "POST", "/remember", body=body
             )
         except RemoteError as exc:
             err_console.print(f"Error: {exc}", style="red")
@@ -878,7 +686,7 @@ def status_cmd() -> None:
     proxy_config = _safe_proxy_config().get("quarry", {})
     if isinstance(proxy_config, dict) and "url" in proxy_config:
         try:
-            remote_data = _remote_https_get("/status", proxy_config)
+            remote_data = RemoteClient(proxy_config).get("/status")
         except RemoteError as exc:
             err_console.print(f"Error: {exc}", style="red")
             raise typer.Exit(code=1) from exc
@@ -981,7 +789,7 @@ def delete_cmd(
             raise typer.Exit(code=1)
         # Fire-and-forget: DELETE returns 202 with task_id.
         try:
-            remote_resp = _remote_https_request("DELETE", path, proxy_config)
+            remote_resp = RemoteClient(proxy_config).request("DELETE", path)
         except RemoteError as exc:
             err_console.print(f"Error: {exc}", style="red")
             raise typer.Exit(code=1) from exc
@@ -1034,8 +842,8 @@ def register(
         body: dict[str, object] = {"directory": resolved_str, "collection": col}
         # Fire-and-forget: POST /registrations returns 202 with task_id.
         try:
-            remote_resp = _remote_https_request(
-                "POST", "/registrations", proxy_config, body=body
+            remote_resp = RemoteClient(proxy_config).request(
+                "POST", "/registrations", body=body
             )
         except RemoteError as exc:
             err_console.print(f"Error: {exc}", style="red")
@@ -1070,51 +878,72 @@ def deregister(
 ) -> None:
     """Remove a directory registration. Optionally keep indexed data."""
     proxy_config = _safe_proxy_config().get("quarry", {})
+    request = _Deregistration(collection, keep_data)
     if isinstance(proxy_config, dict) and "url" in proxy_config:
+        result = request.remote(proxy_config)
+    else:
+        result = request.local()
+    _emit(
+        result.as_dict(),
+        f"Deregistered collection {collection!r} "
+        f"({result.removed} files, "
+        f"{result.deleted_chunks} chunks deleted)",
+    )
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class _Deregistration:
+    """A pending deregistration, resolvable against a remote server or locally."""
+
+    _collection: str
+    _keep_data: bool
+
+    def remote(self, config: dict[str, object]) -> DeregisterResult:
+        """Deregister via the remote server: DELETE then poll the purge task.
+
+        A 404 maps to exit 1 with the same message as the local path; a purge
+        that fails or times out also exits 1 (never a false success).
+        """
         params = {
-            "collection": collection,
-            "keep_data": "true" if keep_data else "false",
+            "collection": self._collection,
+            "keep_data": str(self._keep_data).lower(),
         }
         path = f"/registrations?{urllib.parse.urlencode(params)}"
-        # Fire-and-forget: DELETE /registrations returns 202 with task_id.
+        client = RemoteClient(config)
         try:
-            remote_resp = _remote_https_request("DELETE", path, proxy_config)
+            accepted = client.request("DELETE", path)
         except RemoteError as exc:
-            err_console.print(f"Error: {exc}", style="red")
-            raise typer.Exit(code=1) from exc
-        task_id = remote_resp.get("task_id", "")
-        status = remote_resp.get("status", "")
-        _emit(remote_resp, f"Deregister {status}: task_id={task_id}")
-        return
-
-    settings = _resolved_settings()
-    conn = SyncRegistry(settings.registry_path)
-    try:
-        existing = conn.get_registration(collection)
-        if existing is None:
-            err_console.print(f"No registration found for {collection!r}", style="red")
-            raise typer.Exit(code=1)
-        doc_names = conn.deregister_directory(collection)
-    finally:
-        conn.close()
-
-    deleted_chunks = 0
-    if not keep_data and doc_names:
-        database = Database.connect(settings.lancedb_path)
-        for name in doc_names:
-            deleted_chunks += database.store.delete_document(
-                name, collection=collection
+            msg = (
+                f"No registration found for {self._collection!r}"
+                if exc.status == 404
+                else f"Error: {exc}"
             )
-    removed = len(doc_names)
-    _emit(
-        {
-            "collection": collection,
-            "removed": removed,
-            "deleted_chunks": deleted_chunks,
-        },
-        f"Deregistered collection {collection!r} "
-        f"({removed} files, {deleted_chunks} chunks deleted)",
-    )
+            err_console.print(msg, style="red")
+            raise typer.Exit(code=1) from exc
+        polled = client.await_task(str(accepted.get("task_id", "")))
+        return DeregisterResult.from_task(self._collection, polled)
+
+    def local(self) -> DeregisterResult:
+        """Deregister against the local registry and purge chunks synchronously."""
+        settings = _resolved_settings()
+        conn = SyncRegistry(settings.registry_path)
+        try:
+            if conn.get_registration(self._collection) is None:
+                err_console.print(
+                    f"No registration found for {self._collection!r}", style="red"
+                )
+                raise typer.Exit(code=1)
+            doc_names = conn.deregister_directory(self._collection)
+        finally:
+            conn.close()
+        deleted_chunks = 0
+        if not self._keep_data and doc_names:
+            store = Database.connect(settings.lancedb_path).store
+            deleted_chunks = sum(
+                store.delete_document(n, collection=self._collection) for n in doc_names
+            )
+        return DeregisterResult(self._collection, len(doc_names), deleted_chunks)
 
 
 def _auto_workers(settings: Settings) -> int:  # noqa: ARG001
@@ -1172,12 +1001,10 @@ def sync_cmd(
         # Fire-and-forget: POST /sync returns 202 with task_id.
         # The CLI prints the task_id and exits immediately.
         try:
-            remote_resp = _remote_https_request(
+            remote_resp = RemoteClient(proxy_config).request(
                 "POST",
                 "/sync",
-                proxy_config,
                 body={},
-                timeout=_DEFAULT_REMOTE_TIMEOUT,
             )
         except RemoteError as exc:
             # 409 means sync already running — extract task_id from the
@@ -1673,7 +1500,7 @@ def list_documents_cmd(
             params["collection"] = collection
         qs = f"?{urllib.parse.urlencode(params)}" if params else ""
         try:
-            remote_resp = _remote_https_get(f"/documents{qs}", proxy_config)
+            remote_resp = RemoteClient(proxy_config).get(f"/documents{qs}")
         except RemoteError as exc:
             err_console.print(f"Error: {exc}", style="red")
             raise typer.Exit(code=1) from exc
@@ -1700,7 +1527,7 @@ def list_collections_cmd() -> None:
     proxy_config = _safe_proxy_config().get("quarry", {})
     if isinstance(proxy_config, dict) and "url" in proxy_config:
         try:
-            remote_resp = _remote_https_get("/collections", proxy_config)
+            remote_resp = RemoteClient(proxy_config).get("/collections")
         except RemoteError as exc:
             err_console.print(f"Error: {exc}", style="red")
             raise typer.Exit(code=1) from exc
@@ -1735,7 +1562,7 @@ def list_registrations_cmd() -> None:
     proxy_config = _safe_proxy_config().get("quarry", {})
     if isinstance(proxy_config, dict) and "url" in proxy_config:
         try:
-            remote_resp = _remote_https_get("/registrations", proxy_config)
+            remote_resp = RemoteClient(proxy_config).get("/registrations")
         except RemoteError as exc:
             err_console.print(f"Error: {exc}", style="red")
             raise typer.Exit(code=1) from exc
@@ -1797,7 +1624,7 @@ def list_databases_cmd() -> None:
     proxy_config = _safe_proxy_config().get("quarry", {})
     if isinstance(proxy_config, dict) and "url" in proxy_config:
         try:
-            remote_resp = _remote_https_get("/databases", proxy_config)
+            remote_resp = RemoteClient(proxy_config).get("/databases")
         except RemoteError as exc:
             err_console.print(f"Error: {exc}", style="red")
             raise typer.Exit(code=1) from exc

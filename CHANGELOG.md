@@ -16,6 +16,20 @@ across `transform`, `index`, and `connector`).
 
 ### Fixed
 
+- **deregister**: the remote/daemon path now matches the local path across all
+  three surfaces (CLI, HTTP, MCP). `quarry deregister <nonexistent>` returns
+  exit 1 with `No registration found for '<collection>'` instead of the old
+  fire-and-forget exit 0 "Deregister accepted" (quarry-noiw): the daemon
+  validates the registration synchronously and returns 404. The CLI now polls
+  the async chunk-purge task and surfaces a failed or timed-out purge as a
+  non-zero exit with the server's error, instead of printing success and dying
+  silently (quarry-xsz3). `SyncRegistry` connections set
+  `PRAGMA busy_timeout=5000`, so a deregister contending with a concurrent sync
+  waits for the write lock rather than failing instantly with "database is
+  locked". The MCP `deregister_directory` tool is likewise synchronous with the
+  same not-found and failure surfacing. Remote HTTP client helpers were
+  extracted from `__main__.py` into a new `remote_client.py` module. See the
+  DES-026 amendment (2026-07-01).
 - **embedding**: GPU→CPU ONNX fallback now runs at the CPU thread budget. The
   CPU fallback session reused the CUDA `SessionOptions` (which pinned
   `intra_op_num_threads=1` because the GPU does the GEMMs), so a degraded daemon

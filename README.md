@@ -147,7 +147,7 @@ No special flag needed --- the default install runs a local daemon on localhost.
 | `list` | Documents, collections, databases, registrations | Sync |
 | `status` | Database statistics | Sync |
 | `delete` | Remove document or collection | Background |
-| `deregister_directory` | Remove registration | Background |
+| `deregister_directory` | Remove registration (validates; errors if unknown) | Sync |
 | `use` | Switch active database | Sync |
 
 ### CLI

@@ -634,17 +634,81 @@ class TestRegisterDirectory:
 
 
 class TestDeregisterDirectory:
-    def test_returns_immediately_with_background(self, tmp_path: Path) -> None:
+    """MCP deregister runs synchronously: existence check, delete, purge."""
+
+    @staticmethod
+    def _register_with_file(
+        settings: MagicMock, collection: str, tmp_path: Path
+    ) -> None:
+        from quarry.sync_registry import SyncRegistry
+
+        directory = tmp_path / collection
+        directory.mkdir()
+        conn = SyncRegistry(settings.registry_path)
+        try:
+            conn.register_directory(directory, collection)
+            conn.execute(
+                "INSERT INTO files (path, collection, document_name, mtime, size, "
+                "ingested_at, content_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (str(directory / "a.pdf"), collection, "a.pdf", 1.0, 10, "2025", None),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def test_deregister_synchronous_reports_counts(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
+        self._register_with_file(settings, "math", tmp_path)
+        database = MagicMock()
+        database.store.delete_document.return_value = 5
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
-            patch("quarry.db.facade.get_db"),
-            patch("quarry.mcp_server._background") as mock_bg,
+            patch("quarry.mcp_server._database", return_value=database),
         ):
             result = deregister_directory("math")
-        assert "math" in result
-        assert "background" in result
-        mock_bg.assert_called_once()
+        assert "Deregistered collection 'math'" in result
+        assert "1 files" in result
+        assert "5 chunks" in result
+        database.store.delete_document.assert_called_once_with(
+            "a.pdf", collection="math"
+        )
+
+    def test_deregister_nonexistent_reports_not_found(self, tmp_path: Path) -> None:
+        settings = _settings(tmp_path)
+        database = MagicMock()
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._database", return_value=database),
+        ):
+            result = deregister_directory("ghost")
+        assert result == "No registration found for 'ghost'"
+        database.store.delete_document.assert_not_called()
+
+    def test_deregister_purge_failure_surfaces_error(self, tmp_path: Path) -> None:
+        settings = _settings(tmp_path)
+        self._register_with_file(settings, "math", tmp_path)
+        database = MagicMock()
+        database.store.delete_document.side_effect = RuntimeError("purge boom")
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._database", return_value=database),
+        ):
+            result = deregister_directory("math")
+        assert result.startswith("Error")
+        assert "Deregistered" not in result
+
+    def test_deregister_keep_data_skips_purge(self, tmp_path: Path) -> None:
+        settings = _settings(tmp_path)
+        self._register_with_file(settings, "math", tmp_path)
+        database = MagicMock()
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._database", return_value=database),
+        ):
+            result = deregister_directory("math", keep_data=True)
+        assert "Deregistered collection 'math'" in result
+        assert "0 chunks" in result
+        database.store.delete_document.assert_not_called()
 
 
 class TestSyncAllRegistrations:

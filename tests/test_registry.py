@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -41,6 +43,13 @@ class TestOpenRegistry:
         mode = conn.execute("PRAGMA journal_mode").fetchone()
         assert mode is not None
         assert mode[0] == "wal"
+        conn.close()
+
+    def test_busy_timeout_set(self, tmp_path: Path):
+        conn = SyncRegistry(tmp_path / "registry.db")
+        timeout = conn.execute("PRAGMA busy_timeout").fetchone()
+        assert timeout is not None
+        assert timeout[0] == 5000
         conn.close()
 
     def test_foreign_keys_enforced(self, tmp_path: Path):
@@ -132,6 +141,51 @@ class TestDeregisterDirectory:
         names = conn.deregister_directory("unknown")
         assert names == []
         conn.close()
+
+
+def _hold_write_lock(path: Path, barrier: threading.Barrier, hold_s: float) -> None:
+    """Acquire the registry write lock, wait on the barrier, hold, then release."""
+    conn = SyncRegistry(path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        barrier.wait(timeout=5)
+        time.sleep(hold_s)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+class TestDeregisterConcurrency:
+    """busy_timeout makes a contended deregister wait, not fail (quarry-xsz3)."""
+
+    def test_deregister_waits_for_contended_write_lock(self, tmp_path: Path):
+        path = tmp_path / "r.db"
+        setup = SyncRegistry(path)
+        directory = tmp_path / "docs"
+        directory.mkdir()
+        setup.register_directory(directory, "docs")
+        setup.close()
+
+        barrier = threading.Barrier(2)
+        holder = threading.Thread(target=_hold_write_lock, args=(path, barrier, 0.3))
+        holder.start()
+
+        conn = SyncRegistry(path)
+        try:
+            # Barrier releases only after the holder owns the write lock, so the
+            # deregister below is guaranteed to contend — no sleep-based timing.
+            barrier.wait(timeout=5)
+            names = conn.deregister_directory("docs")
+        finally:
+            conn.close()
+            holder.join(timeout=5)
+
+        assert names == []
+        verify = SyncRegistry(path)
+        try:
+            assert verify.get_registration("docs") is None
+        finally:
+            verify.close()
 
 
 class TestListAndGetRegistrations:

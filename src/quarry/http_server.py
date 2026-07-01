@@ -1148,80 +1148,80 @@ def _deregister_sync(registry_path: Path, collection: str) -> tuple[bool, list[s
 
 
 async def _handle_delete_registration(request: Request) -> JSONResponse:
-    """Deregister a directory as an async 202 background task."""
+    """Deregister synchronously (existence + registry row); purge chunks async."""
     collection = request.query_params.get("collection", "")
     if not collection:
         return JSONResponse(
             {"error": "Missing required parameter: collection"}, status_code=400
         )
-
     keep_data_raw = request.query_params.get("keep_data", "false").lower()
     if keep_data_raw not in {"true", "false"}:
         return JSONResponse(
-            {"error": "keep_data must be 'true' or 'false'"},
-            status_code=400,
+            {"error": "keep_data must be 'true' or 'false'"}, status_code=400
         )
     keep_data = keep_data_raw == "true"
 
     ctx = _ctx(request)
+    not_found = JSONResponse(
+        {"error": f"No registration found for {collection!r}"}, status_code=404
+    )
     if not ctx.settings.registry_path.exists():
-        return JSONResponse({"error": "Not found"}, status_code=404)
+        return not_found
+
+    try:  # existence + registry mutation off-thread; unknown -> 404, error -> 500
+        found, removed_docs = await run_in_threadpool(
+            _deregister_sync, ctx.settings.registry_path, collection
+        )
+    except Exception as exc:
+        logger.exception("Synchronous deregister failed")
+        return JSONResponse({"error": f"deregister failed: {exc}"}, status_code=500)
+    if not found:
+        return not_found
 
     state = _begin_task(ctx, "deregister")
-    task = asyncio.create_task(
-        _run_deregister_task(ctx, state, collection, keep_data=keep_data)
-    )
-    task.add_done_callback(partial(_on_task_done, ctx, state.task_id))
-    ctx.task_refs[state.task_id] = task
+    state.results = {
+        "collection": collection,
+        "removed": len(removed_docs),
+        "deleted_chunks": 0,
+        "type": "registration",
+    }
+    purge_docs = [] if keep_data else removed_docs
+    if purge_docs:
+        task = asyncio.create_task(_run_purge_task(ctx, state, collection, purge_docs))
+        task.add_done_callback(partial(_on_task_done, ctx, state.task_id))
+        ctx.task_refs[state.task_id] = task
+    else:
+        state.status = "completed"  # nothing to purge; complete immediately
 
     return JSONResponse(
-        {"task_id": state.task_id, "status": "accepted"},
+        {"task_id": state.task_id, "status": "accepted", "removed": len(removed_docs)},
         status_code=202,
     )
 
 
-async def _run_deregister_task(
+async def _run_purge_task(
     ctx: _QuarryContext,
     state: TaskState,
     collection: str,
-    *,
-    keep_data: bool,
+    removed_docs: list[str],
 ) -> None:
-    """Execute deregister_directory in background and update task state."""
+    """Purge chunks for an already-deregistered collection; update task state."""
     try:
-        found, removed_docs = await run_in_threadpool(
-            _deregister_sync, ctx.settings.registry_path, collection
-        )
-        if not found:
-            state.status = "failed"
-            state.error = "Not found"
-            return
 
-        deleted_chunks = 0
-        if not keep_data and removed_docs:
+        def _purge() -> int:
+            store = ctx.database.store
+            return sum(
+                store.delete_document(d, collection=collection) for d in removed_docs
+            )
 
-            def _purge() -> int:
-                store = ctx.database.store
-                total = 0
-                for doc_name in removed_docs:
-                    total += store.delete_document(doc_name, collection=collection)
-                return total
-
-            deleted_chunks = await run_in_threadpool(_purge)
-
+        state.results["deleted_chunks"] = await run_in_threadpool(_purge)
         state.status = "completed"
-        state.results = {
-            "collection": collection,
-            "removed": len(removed_docs),
-            "deleted_chunks": deleted_chunks,
-            "type": "registration",
-        }
     except asyncio.CancelledError:
         state.status = "failed"
         state.error = "task was cancelled"
         raise
     except Exception as exc:
-        logger.exception("Background deregister failed")
+        logger.exception("Background chunk purge failed")
         state.status = "failed"
         state.error = str(exc)
     finally:
