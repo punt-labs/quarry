@@ -27,7 +27,7 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
       - run: uv sync --frozen --extra dev
       - run: uv run pytest -m "not slow" --cov=quarry --cov-report=xml
-      - uses: codecov/codecov-action@671740ac38dd9b0130fbe1cec585b89eea48d3de # v5
+      - uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v5
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
           files: coverage.xml
