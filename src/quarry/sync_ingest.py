@@ -18,6 +18,7 @@ from quarry.ingestion.progressive import ProgressiveIndexer
 from quarry.ingestion.streaming import DocumentStreamer
 from quarry.sync_discovery import FileDiscovery
 from quarry.sync_registry import FileRecord
+from quarry.sync_resume import ResumePolicy
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -73,6 +74,7 @@ class CollectionIngestor:
         "_indexer",
         "_max_workers",
         "_meta",
+        "_policy",
         "_progress",
         "_queue",
         "_records",
@@ -94,6 +96,7 @@ class CollectionIngestor:
     _records: dict[str, FileRecord | None]
     _indexer: ProgressiveIndexer
     _aborted: bool
+    _policy: ResumePolicy
 
     def __new__(
         cls,
@@ -118,6 +121,7 @@ class CollectionIngestor:
         self._meta = {}
         self._records = {}
         self._aborted = False
+        self._policy = ResumePolicy()
         self._indexer = ProgressiveIndexer(
             self, flush_bytes=settings.sync_flush_mb * 1024 * 1024
         )
@@ -135,7 +139,7 @@ class CollectionIngestor:
         """Commit every touched file's watermark in one registry transaction (G4)."""
         for checkpoint in checkpoints:
             meta = self._meta[checkpoint.file_id]
-            partial = None if checkpoint.complete else meta.record.content_hash
+            partial = self._policy.partial_mark(checkpoint, meta.record.content_hash)
             row = replace(
                 meta.record,
                 chunks_committed=checkpoint.chunks_committed,
@@ -197,7 +201,7 @@ class CollectionIngestor:
             )
             content_hash = self._safe_hash(file_path)
             record = self._records.get(file_id)
-            watermark = self._resume_watermark(
+            watermark = self._policy.resume_watermark(
                 record, content_hash, len(chunks), deterministic=deterministic
             )
             self._meta[file_id] = _FileMeta(
@@ -295,26 +299,6 @@ class CollectionIngestor:
             file_id, resume_watermark=watermark, total_chunks=meta.total_chunks
         )
         begun.add(file_id)
-
-    def _resume_watermark(
-        self,
-        record: FileRecord | None,
-        content_hash: str | None,
-        total: int,
-        *,
-        deterministic: bool,
-    ) -> int:
-        """Return the within-file resume index, or 0 for a full (re-)embed (G3 gate)."""
-        if record is None or not record.is_partial:
-            return 0
-        watermark = record.chunks_committed
-        if watermark <= 0 or watermark >= total:
-            return 0
-        if record.partial_hash != content_hash:
-            return 0
-        if not deterministic:
-            return 0
-        return watermark
 
     def _build_record(
         self, file_path: Path, document_name: str, content_hash: str | None

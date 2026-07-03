@@ -19,12 +19,13 @@ from quarry.db.optimizer import TableOptimizer
 from quarry.db.schema import TABLE_NAME
 from quarry.db.storage import get_db
 from quarry.ingestion.pipeline import plan_file_chunks
-from quarry.ingestion.progressive import ProgressiveIndexer
+from quarry.ingestion.progressive import FlushCheckpoint, ProgressiveIndexer
 from quarry.models import PageContent, PageType
 from quarry.sync import compute_sync_plan, sync_all, sync_collection
 from quarry.sync_discovery import _DEFAULT_IGNORE_PATTERNS, FileDiscovery
-from quarry.sync_ingest import CollectionIngestor
+from quarry.sync_ingest import CollectionIngestor, _FileMeta
 from quarry.sync_registry import FileRecord, SyncRegistry
+from quarry.sync_resume import HASH_UNKNOWN, ResumePolicy
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -906,6 +907,115 @@ class TestWithinFileResume:
         # Non-deterministic extraction → watermark discarded → full re-embed from 0.
         assert embedder.embedded == [c.text for c in chunks]
         assert _chunk_indexes(db, "scan.png") == list(range(total))
+        conn.close()
+
+
+class TestPartialHashSentinel:
+    """Fix #327-1: a mid-file flush with an unknown content hash must stay partial."""
+
+    def test_partial_mark_uses_sentinel_when_hash_none(self):
+        """An incomplete checkpoint with no content hash marks the row partial."""
+        policy = ResumePolicy()
+        incomplete = FlushCheckpoint(file_id="f", chunks_committed=3, complete=False)
+        assert policy.partial_mark(incomplete, None) == HASH_UNKNOWN
+        assert policy.partial_mark(incomplete, "abc") == "abc"
+
+    def test_partial_mark_clears_on_complete(self):
+        """A complete checkpoint clears the mark regardless of the hash."""
+        policy = ResumePolicy()
+        complete = FlushCheckpoint(file_id="f", chunks_committed=9, complete=True)
+        assert policy.partial_mark(complete, None) is None
+        assert policy.partial_mark(complete, "abc") is None
+
+    def test_resume_gate_never_trusts_unknown_hash(self):
+        """A hash-unknown watermark always re-embeds from 0, even if in range."""
+        policy = ResumePolicy()
+        record = FileRecord(
+            path="/p",
+            collection="col",
+            document_name="d",
+            mtime=1.0,
+            size=1,
+            ingested_at="2025-01-01",
+            content_hash="real",
+            chunks_committed=5,
+            partial_hash=HASH_UNKNOWN,
+        )
+        watermark = policy.resume_watermark(
+            record, "real", total=10, deterministic=True
+        )
+        assert watermark == 0
+
+    def test_incomplete_flush_no_hash_persists_partial_row(self, tmp_path: Path):
+        """on_flush persists is_partial=True when content_hash is None (the bug)."""
+        settings = _settings(tmp_path)
+        db, conn, d = _make_collection(tmp_path, settings)
+        f = d / "big.txt"
+        f.write_text(_SENTENCE * 4)
+        file_id = str(f.resolve())
+        ingestor = CollectionIngestor(
+            ChunkStore(db),
+            conn,
+            settings,
+            collection="col",
+            resolved=d.resolve(),
+            max_workers=1,
+            progress=lambda _m: None,
+        )
+        record = FileRecord(
+            path=file_id,
+            collection="col",
+            document_name="big.txt",
+            mtime=f.stat().st_mtime,
+            size=f.stat().st_size,
+            ingested_at="2025-01-01",
+            content_hash=None,  # hashing failed
+        )
+        ingestor._meta[file_id] = _FileMeta(
+            record=record, resume_watermark=0, total_chunks=10
+        )
+        ingestor.on_flush(
+            [FlushCheckpoint(file_id=file_id, chunks_committed=3, complete=False)]
+        )
+        rec = conn.get_file(file_id)
+        assert rec is not None
+        assert rec.is_partial is True  # before the fix this was False (silent skip)
+        assert rec.chunks_committed == 3
+        conn.close()
+
+    def test_unknown_hash_watermark_reingests_full(self, tmp_path: Path):
+        """Next sync of a hash-unknown partial row re-embeds all chunks, no skip."""
+        settings = _settings(tmp_path, max_chars=45)
+        db, conn, d = _make_collection(tmp_path, settings)
+        f = d / "big.txt"
+        f.write_text(_SENTENCE * 12)
+        doc = "big.txt"
+        chunks, _ = plan_file_chunks(f, settings, collection="col", document_name=doc)
+        total = len(chunks)
+        assert total >= 4
+        w = total // 2
+        ChunkStore(db).insert(chunks[:w], np.zeros((w, 768), dtype=np.float32))
+        conn.upsert_file(
+            FileRecord(
+                path=str(f.resolve()),
+                collection="col",
+                document_name=doc,
+                mtime=f.stat().st_mtime,
+                size=f.stat().st_size,
+                ingested_at="2025-01-01",
+                content_hash=FileDiscovery.content_hash(f),
+                chunks_committed=w,
+                partial_hash=HASH_UNKNOWN,  # watermark whose hash is unknown
+            ),
+        )
+        embedder = _FakeEmbedder()
+        with _patched_embedder(embedder):
+            result = sync_collection(d, "col", db, settings, conn, max_workers=1)
+        assert result.ingested == 1
+        assert embedder.embedded == [c.text for c in chunks]  # full re-embed from 0
+        assert _chunk_indexes(db, doc) == list(range(total))
+        rec = conn.get_file(str(f.resolve()))
+        assert rec is not None and rec.partial_hash is None  # completed, mark cleared
         conn.close()
 
 
