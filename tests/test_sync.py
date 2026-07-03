@@ -14,7 +14,8 @@ import pytest
 
 from quarry.config import Settings
 from quarry.db.chunk_store import ChunkStore
-from quarry.db.optimizer import FRAGMENT_THRESHOLD, TableOptimizer
+from quarry.db.chunk_table import ChunkTable
+from quarry.db.optimizer import TableOptimizer
 from quarry.db.schema import TABLE_NAME
 from quarry.db.storage import get_db
 from quarry.ingestion.pipeline import plan_file_chunks
@@ -929,15 +930,45 @@ class TestFragmentBudgetAndExceptions:
         ):
             result = sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert result.ingested == 200
-        # 200 tiny files coalesce into a handful of flushes, not 200.
+        # 200 tiny files coalesce into O(vectors/N) flushes (a handful), not O(200).
+        # Fragment count therefore tracks flush count, not file count — the
+        # DES-026 death-spiral door stays shut. (The threshold skip/run branch is
+        # covered directly by test_sync_concurrency::TestOptimizeGuard; the
+        # optimize() compaction effect by test_optimize_strictly_reduces_fragments.)
         assert calls["n"] <= 3
-        # Fragment count stays far below the guard, so optimize() runs (not skipped)
-        # and compacts — the DES-026 death-spiral door stays shut.
-        opt = TableOptimizer(db)
-        assert opt.count_fragments() < FRAGMENT_THRESHOLD
-        opt.optimize()  # would early-return if fragments exceeded the threshold
-        assert opt.count_fragments() < FRAGMENT_THRESHOLD
+        assert TableOptimizer(db).count_fragments() == calls["n"]
         assert ChunkStore(db).count(collection_filter="col") == 200
+        conn.close()
+
+    def test_optimize_compacts_fragments_strictly_fewer(self, tmp_path: Path):
+        """Compaction strictly reduces fragments: 4 separate adds → 1 compacted.
+
+        ``count_fragments`` is a disk-file proxy and our ``optimize()`` retains
+        superseded versions for 1 h (rollback safety, DES-023), so the decrease is
+        observable only after those files are pruned. Forcing immediate cleanup
+        exposes the compaction our optimize() performs.
+        """
+        from datetime import timedelta
+
+        settings = _settings(tmp_path, max_chars=45)
+        db, conn, d = _make_collection(tmp_path, settings)
+        f = d / "a.txt"
+        f.write_text(_SENTENCE * 8)  # small chunks → several chunks to fragment
+        chunks, _ = plan_file_chunks(f, settings, document_name="a.txt")
+        assert len(chunks) >= 4
+        store = ChunkStore(db)
+        # Each insert_records is one table.add → one Lance fragment.
+        for chunk in chunks[:4]:
+            store.insert_records(
+                ChunkTable.build_records([chunk], np.zeros((1, 768), dtype=np.float32))
+            )
+        opt = TableOptimizer(db)
+        before = opt.count_fragments()
+        assert before > 1
+        db.open_table(TABLE_NAME).optimize(cleanup_older_than=timedelta(0))
+        after = opt.count_fragments()
+        assert after < before  # strictly fewer fragments after compaction
+        assert store.count() == 4  # compaction is lossless
         conn.close()
 
     def test_commit_failure_reconciles_next_sync(self, tmp_path: Path):
@@ -1076,6 +1107,20 @@ class TestConcurrencyLiveness:
         assert result is not None
         assert result.failed >= 1  # type: ignore[attr-defined]
         assert result.errors  # type: ignore[attr-defined]
+
+        # Post-abort consistency: the aborted sync left nothing half-written, so a
+        # clean re-sync (insert_records restored) yields contiguous, zero-dup chunks
+        # and complete registry rows for both files.
+        with _patched_embedder(_FakeEmbedder()):
+            _run_with_timeout(
+                lambda: sync_collection(d, "col", db, settings, conn, max_workers=2)
+            )
+        for name in ("big.txt", "small.txt"):
+            total = len(plan_file_chunks(d / name, settings, document_name=name)[0])
+            assert _chunk_indexes(db, name) == list(range(total))
+        rows = {r.document_name: r for r in conn.list_files("col")}
+        assert rows["big.txt"].partial_hash is None
+        assert rows["small.txt"].partial_hash is None
         conn.close()
 
     def test_parallel_sync_two_files_max_workers_2(self, tmp_path: Path):
@@ -1160,6 +1205,93 @@ class TestConcurrencyLiveness:
         assert _chunk_indexes(db, "b.txt") == list(range(b_total))
         conn.close()
 
+    def test_g4_crash_mid_commit_under_real_concurrency(self, tmp_path: Path):
+        """G4 crash-mid-commit under max_workers=2 — the interleave is the point.
+
+        Two large files stream concurrently; the first flush's commit raises. The
+        interleaving of A's and B's windows in the failing flush is nondeterministic
+        under real threads, so the assertion is the invariant: nothing commits at
+        the failed flush, and a clean re-sync reconciles both with zero duplicates.
+        """
+        settings = _settings(tmp_path, flush_mb=1, window=8, max_chars=45)
+        db, conn, d = _make_collection(tmp_path, settings)
+        (d / "a.txt").write_text(_SENTENCE * 500)
+        (d / "b.txt").write_text(_SENTENCE * 500)
+        resolved = d.resolve()
+        a_path, b_path = resolved / "a.txt", resolved / "b.txt"
+
+        real_commit = conn.commit
+        calls = {"n": 0}
+
+        def failing_commit() -> None:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("commit boom on the first concurrent flush")
+            real_commit()
+
+        conn.commit = failing_commit  # type: ignore[method-assign]
+        ingestor = CollectionIngestor(
+            ChunkStore(db),
+            conn,
+            settings,
+            collection="col",
+            resolved=resolved,
+            max_workers=2,  # real concurrency: A and B interleave into the flush
+            progress=lambda _m: None,
+        )
+        with _patched_embedder(_FakeEmbedder()):
+            result = _run_with_timeout(lambda: ingestor.run([a_path, b_path]))
+        conn.commit = real_commit  # type: ignore[method-assign]
+        assert result is not None
+        _ingested, failed, _errors = cast("tuple[int, int, list[str]]", result)
+        assert failed >= 1
+        assert conn.get_file(str(a_path)) is None  # neither committed (all-or-none)
+        assert conn.get_file(str(b_path)) is None
+
+        with _patched_embedder(_FakeEmbedder()):
+            CollectionIngestor(
+                ChunkStore(db),
+                conn,
+                settings,
+                collection="col",
+                resolved=resolved,
+                max_workers=2,
+                progress=lambda _m: None,
+            ).run([a_path, b_path])
+        for name in ("a.txt", "b.txt"):
+            total = len(plan_file_chunks(d / name, settings, document_name=name)[0])
+            assert _chunk_indexes(db, name) == list(range(total))
+        conn.close()
+
+    def test_raising_progress_callback_fails_cleanly_no_hang(self, tmp_path: Path):
+        """Gap A: a progress callback that raises aborts + drains, never dead-locks."""
+        settings = _settings(tmp_path, flush_mb=1, window=8, max_chars=45)
+        db, conn, d = _make_collection(tmp_path, settings)
+        (d / "a.txt").write_text(_SENTENCE * 60)
+        (d / "b.txt").write_text(_SENTENCE * 60)
+
+        def boom_progress(message: str) -> None:
+            # The user callback raises on a per-file "Ingested ..." completion,
+            # which runs on the consumer thread inside the drain loop.
+            if "Ingested" in message:
+                raise RuntimeError("progress callback boom")
+
+        with _patched_embedder(_FakeEmbedder()):
+            result = _run_with_timeout(
+                lambda: sync_collection(
+                    d,
+                    "col",
+                    db,
+                    settings,
+                    conn,
+                    max_workers=2,
+                    progress_callback=boom_progress,
+                )
+            )
+        assert result is not None  # did not hang — the watchdog would have failed
+        assert result.failed >= 1  # type: ignore[attr-defined]
+        conn.close()
+
     def test_bounded_queue_backpressure_caps_in_flight(self, tmp_path: Path):
         """A slow consumer makes producers block at the bounded queue's capacity."""
         settings = _settings(tmp_path, flush_mb=32, window=8, max_chars=45)
@@ -1210,8 +1342,10 @@ class TestConcurrencyLiveness:
             watcher.join()
 
         assert observed  # the watcher sampled the queue
-        assert max(observed) <= capacity  # never exceeds capacity (bounded)
-        assert max(observed) == capacity  # backpressure actually engaged (queue filled)
+        # Backpressure actually engaged: a slow consumer let producers fill the
+        # bounded queue to its capacity (the load-bearing assertion — that the
+        # queue never *exceeds* maxsize is a stdlib guarantee, not ours to test).
+        assert max(observed) == capacity
         conn.close()
 
 

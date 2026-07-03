@@ -33,7 +33,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Expected per-file failures (incl. sqlite3 "database is locked") → file error.
 _RECOVERABLE = (sqlite3.Error, OSError, ValueError, RuntimeError, TimeoutError)
 
 
@@ -62,11 +61,10 @@ class _WindowMsg:
 class CollectionIngestor:
     """Run a collection's to-ingest files through bounded progressive commit.
 
-    Doubles as the ProgressiveIndexer's FlushTarget (DES-034 §2.2 / G4). Producer
-    threads chunk, resume-reconcile, and embed in bounded windows; the single
-    consumer thread performs every LanceDB add and registry write, so both
-    serialize. Producers always emit one sentinel and the consumer catches every
-    flush error, so neither side can dead-lock the other.
+    Doubles as the ProgressiveIndexer's FlushTarget (DES-034 §2.2 / G4). Producers
+    plan + embed in bounded windows; the single consumer thread performs every
+    LanceDB write (delete and add) and registry write. Producers always emit one
+    sentinel and the consumer catches every error, so neither side can dead-lock.
     """
 
     __slots__ = (
@@ -77,6 +75,7 @@ class CollectionIngestor:
         "_meta",
         "_progress",
         "_queue",
+        "_records",
         "_registry",
         "_resolved",
         "_settings",
@@ -92,6 +91,7 @@ class CollectionIngestor:
     _progress: Callable[[str], None]
     _queue: Queue[_WindowMsg]
     _meta: dict[str, _FileMeta]
+    _records: dict[str, FileRecord | None]
     _indexer: ProgressiveIndexer
     _aborted: bool
 
@@ -116,6 +116,7 @@ class CollectionIngestor:
         self._progress = progress
         self._queue = Queue(maxsize=max(2, self._max_workers * 2))
         self._meta = {}
+        self._records = {}
         self._aborted = False
         self._indexer = ProgressiveIndexer(
             self, flush_bytes=settings.sync_flush_mb * 1024 * 1024
@@ -131,10 +132,7 @@ class CollectionIngestor:
         return self._store.insert_records(records)
 
     def on_flush(self, checkpoints: Sequence[FlushCheckpoint]) -> None:
-        """Commit every touched file's watermark in one registry transaction.
-
-        Completion clears the partial-hash mark; a mid-file watermark keeps it.
-        """
+        """Commit every touched file's watermark in one registry transaction (G4)."""
         for checkpoint in checkpoints:
             meta = self._meta[checkpoint.file_id]
             partial = None if checkpoint.complete else meta.record.content_hash
@@ -150,6 +148,9 @@ class CollectionIngestor:
         """Ingest *files* progressively; return ``(ingested, failed, errors)``."""
         if not files:
             return 0, 0, []
+        # Pre-read registry rows here so producers never race the consumer's
+        # writes on the shared sqlite connection (SQLITE_MISUSE).
+        self._records = {str(fp): self._registry.get_file(str(fp)) for fp in files}
         with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
             for file_path in files:
                 executor.submit(self._produce, file_path)
@@ -159,11 +160,10 @@ class CollectionIngestor:
         return ingested, failed, errors
 
     def _run_indexer(self, errors: list[str], op: Callable[[], object]) -> bool:
-        """Run one indexer op; on ANY failure abort and keep draining.
+        """Run one consumer op; on ANY failure abort and keep draining (liveness).
 
-        Liveness boundary: a consumer-side pyarrow/registry error must abort the
-        sync without escaping ``_consume`` and dead-locking the executor on
-        producers blocked at ``queue.put``. Next sync reconciles via delete-tail.
+        A consumer error (flush or a raising progress callback) must abort without
+        escaping ``_consume`` and dead-locking the executor on blocked producers.
         """
         try:
             op()
@@ -180,11 +180,10 @@ class CollectionIngestor:
         logger.exception("Flush failed for %s", self._collection)
 
     def _produce(self, file_path: Path) -> None:
-        """Plan, resume-reconcile, and stream one file's windows to the queue.
+        """Plan the file's resume watermark and stream its windows to the queue.
 
-        Enqueues exactly one final sentinel in ``finally`` so the consumer can
-        never block on a producer that died: any exception becomes the file's
-        error string and still releases the sentinel.
+        Enqueues exactly one final sentinel in ``finally`` so a producer that died
+        can never block the consumer — any exception becomes the file's error.
         """
         file_id = str(file_path)
         document_name = str(file_path.relative_to(self._resolved))
@@ -197,11 +196,10 @@ class CollectionIngestor:
                 document_name=document_name,
             )
             content_hash = self._safe_hash(file_path)
-            record = self._registry.get_file(file_id)
+            record = self._records.get(file_id)
             watermark = self._resume_watermark(
                 record, content_hash, len(chunks), deterministic=deterministic
             )
-            self._reconcile(document_name, watermark)
             self._meta[file_id] = _FileMeta(
                 record=self._build_record(file_path, document_name, content_hash),
                 resume_watermark=watermark,
@@ -244,40 +242,57 @@ class CollectionIngestor:
         self, msg: _WindowMsg, begun: set[str], errors: list[str]
     ) -> None:
         """Feed one window to the indexer, unless the sync already aborted."""
-        if self._aborted or msg.vectors is None:
+        vectors = msg.vectors
+        if self._aborted or vectors is None:
             return
+        self._run_indexer(errors, partial(self._feed, msg, vectors, begun))
+
+    def _feed(
+        self, msg: _WindowMsg, vectors: NDArray[np.float32], begun: set[str]
+    ) -> None:
         self._ensure_begun(msg.file_id, begun)
-        self._run_indexer(
-            errors,
-            partial(self._indexer.add_window, msg.file_id, msg.batch, msg.vectors),
-        )
+        self._indexer.add_window(msg.file_id, msg.batch, vectors)
 
     def _apply_final(self, msg: _WindowMsg, begun: set[str], errors: list[str]) -> str:
-        """Handle a file's final sentinel; return ``"ingested"`` or ``"failed"``."""
+        """Handle a file's final sentinel; return ``"ingested"`` or ``"failed"``.
+
+        Progress runs through _run_indexer so a raising callback aborts, not escapes.
+        """
         if msg.error is not None:
             errors.append(msg.error)
-            self._progress(f"[{self._collection}] Failed {msg.error}")
+            self._run_indexer(errors, partial(self._progress, f"Failed {msg.error}"))
             return "failed"
         if self._aborted:
             errors.append(f"[{self._collection}] aborted before {msg.file_id}")
             return "failed"
-        self._ensure_begun(msg.file_id, begun)
-        if not self._run_indexer(
-            errors, partial(self._indexer.complete_file, msg.file_id)
-        ):
+        if not self._run_indexer(errors, partial(self._finish, msg, begun)):
             return "failed"
-        self._progress(f"[{self._collection}] Ingested {msg.file_id}")
+        self._run_indexer(errors, partial(self._progress, f"Ingested {msg.file_id}"))
         return "ingested"
 
+    def _finish(self, msg: _WindowMsg, begun: set[str]) -> None:
+        self._ensure_begun(msg.file_id, begun)
+        self._indexer.complete_file(msg.file_id)
+
     def _ensure_begun(self, file_id: str, begun: set[str]) -> None:
-        """Register a file with the indexer on its first message."""
+        """Reconcile-delete (on the consumer → single-writer) then register the file.
+
+        watermark > 0 → delete-tail (G2, dedups a crash tail); else full overwrite.
+        """
         if file_id in begun:
             return
         meta = self._meta[file_id]
+        document_name, watermark = meta.record.document_name, meta.resume_watermark
+        if watermark > 0:
+            self._store.delete_document_tail(
+                DocumentRef(document_name, self._collection, watermark)
+            )
+        else:
+            self._store.delete_document(
+                document_name, collection=self._collection, count=False
+            )
         self._indexer.begin_file(
-            file_id,
-            resume_watermark=meta.resume_watermark,
-            total_chunks=meta.total_chunks,
+            file_id, resume_watermark=watermark, total_chunks=meta.total_chunks
         )
         begun.add(file_id)
 
@@ -300,17 +315,6 @@ class CollectionIngestor:
         if not deterministic:
             return 0
         return watermark
-
-    def _reconcile(self, document_name: str, watermark: int) -> None:
-        """Delete-tail on resume (G2, dedups a crash tail) or full overwrite-delete."""
-        if watermark > 0:
-            self._store.delete_document_tail(
-                DocumentRef(document_name, self._collection, watermark)
-            )
-        else:
-            self._store.delete_document(
-                document_name, collection=self._collection, count=False
-            )
 
     def _build_record(
         self, file_path: Path, document_name: str, content_hash: str | None
