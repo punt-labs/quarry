@@ -773,7 +773,7 @@ class Ratchet:
     # --verify
     # ------------------------------------------------------------------
 
-    def verify(self, scorer: Scorer) -> int:
+    def verify(self, scorer: Scorer, *, allow_missing: bool = False) -> int:
         """Fail if any baseline entry diverges from the committed code's score.
 
         Distinct from --check: --check gates *touched* files against the
@@ -783,10 +783,22 @@ class Ratchet:
         at PR time before it can sit dormant. In CI the working tree is the
         committed checkout, so scoring it and comparing against the committed
         baseline is exactly "does the baseline match the code?".
+
+        Fail-closed: a missing baseline is maximal divergence — with no
+        baseline the ratchet is disabled entirely, so deleting the file must
+        not green the gate. Pass --allow-missing (the ``allow_missing`` flag)
+        only for a genuine first-time bootstrap.
         """
         if not self.has_baseline:
-            _writeln("No baseline -- run --update to create one")
-            return 0
+            if allow_missing:
+                _writeln("No baseline -- bootstrap allowed via --allow-missing")
+                return 0
+            _writeln(
+                "FAIL: no baseline -- a missing .oo-baseline.json disables the "
+                "ratchet (maximal divergence). Run --update to create one, or "
+                "pass --allow-missing to bootstrap.",
+            )
+            return 1
 
         current_by_file = self._results_by_file(scorer.results)
         rows = self._integrity_rows(current_by_file)
@@ -1122,7 +1134,7 @@ def main() -> None:
     if "--check" in sys.argv:
         sys.exit(ratchet.check(scorer))
     elif "--verify" in sys.argv:
-        sys.exit(ratchet.verify(scorer))
+        sys.exit(ratchet.verify(scorer, allow_missing="--allow-missing" in sys.argv))
     elif "--rebaseline" in sys.argv:
         sys.exit(ratchet.rebaseline(scorer))
     elif "--update" in sys.argv:

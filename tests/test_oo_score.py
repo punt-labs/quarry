@@ -130,10 +130,26 @@ class TestVerifyPhantomGuard:
         out = capsys.readouterr().out
         assert "unrecorded" in out
 
-    def test_no_baseline_is_trivial_pass(self, tmp_path: Path) -> None:
+    def test_missing_baseline_fails_closed(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A missing baseline is maximal divergence — deleting it must NOT pass.
+
+        Otherwise removing .oo-baseline.json greens both --check and --verify
+        and silently disables the ratchet.
+        """
         scorer, _ = self._sample_repo(tmp_path)
         ratchet = oo.Ratchet(tmp_path)
-        assert ratchet.verify(scorer) == 0
+        assert ratchet.verify(scorer) == 1
+        assert "no baseline" in capsys.readouterr().out.lower()
+
+    def test_missing_baseline_allow_missing_bootstrap_passes(
+        self, tmp_path: Path
+    ) -> None:
+        """--allow-missing is the explicit escape hatch for first-time bootstrap."""
+        scorer, _ = self._sample_repo(tmp_path)
+        ratchet = oo.Ratchet(tmp_path)
+        assert ratchet.verify(scorer, allow_missing=True) == 0
 
 
 class TestScopedCorrection:
