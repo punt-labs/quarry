@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [1.17.0] - 2026-07-03
+
 ### Fixed
 
 - **doctor**: the "Orphaned captures" check no longer false-positives on the
