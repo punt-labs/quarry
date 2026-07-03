@@ -15,6 +15,18 @@ class TestMergePlainFragments:
     def test_numeric_range_joins_without_space(self) -> None:
         assert Dehyphenator.merge("range 10-", "20 units") == "range 10-20 units"
 
+    def test_word_hyphen_before_bracket_keeps_hyphen(self) -> None:
+        # Next line starts with "(" -> no letter to merge; keep the hyphen, do
+        # not glue a fabricated token ("inter(national)").
+        assert Dehyphenator.merge("the inter-", "(national) body") == (
+            "the inter-(national) body"
+        )
+
+    def test_word_hyphen_before_digit_keeps_hyphen(self) -> None:
+        assert Dehyphenator.merge("see page-", "3 for details") == (
+            "see page-3 for details"
+        )
+
 
 class TestMergeDehyphenation:
     def test_strips_wrap_hyphen_by_default(self) -> None:

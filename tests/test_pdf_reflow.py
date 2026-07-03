@@ -204,6 +204,20 @@ class TestWrapJoining:
         )
         assert "10-20 units." in PdfReflow.from_page_dict(page).text()
 
+    def test_many_line_block_joins_into_one_paragraph(self) -> None:
+        # Regression guard for the O(1)-per-pair join: a block with many
+        # full-width lines still reflows into a single joined paragraph.
+        lines = [
+            _line(f"word{n} runs on to the block right margin edge", 523.0)
+            for n in range(12)
+        ]
+        lines.append(_line("and a short final tail.", 200.0))
+        text = PdfReflow.from_page_dict(_page(_block(*lines))).text()
+        paragraphs = text.split("\n\n")
+        assert len(paragraphs) == 1
+        assert paragraphs[0].startswith("word0 runs on")
+        assert paragraphs[0].endswith("and a short final tail.")
+
 
 class TestDehyphenation:
     def _joined(self, first: str, first_x1: float, second: str) -> str:

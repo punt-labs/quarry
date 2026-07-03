@@ -30,17 +30,17 @@ class Dehyphenator:
     def merge(accumulated: str, addition: str) -> str:
         """Concatenate a wrapped line's running text with the next fragment.
 
-        A trailing word hyphen is de-hyphenated; a trailing non-word hyphen (a
-        numeric range like ``10-`` + ``20``) joins without a space; otherwise the
-        two fragments are separated by a single space.
+        A word hyphen is de-hyphenated only when the next line also starts with a
+        letter; otherwise (numeric range ``10-`` + ``20``, or a next line opening
+        with ``(`` or a digit) the hyphen is preserved, never a fabricated token.
         """
         if not accumulated:
             return addition
-        if accumulated.endswith("-") and len(accumulated) >= 2:
-            if accumulated[-2].isalpha():
-                return Dehyphenator._dehyphenate(accumulated, addition)
-            return f"{accumulated}{addition}"
-        return f"{accumulated} {addition}"
+        if not accumulated.endswith("-"):
+            return f"{accumulated} {addition}"
+        if accumulated[-2:-1].isalpha() and addition[:1].isalpha():
+            return Dehyphenator._dehyphenate(accumulated, addition)
+        return f"{accumulated}{addition}"
 
     @staticmethod
     def _dehyphenate(accumulated: str, addition: str) -> str:

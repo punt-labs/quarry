@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Self
 
 from quarry.ingestion.hyphenation import Dehyphenator
@@ -72,10 +72,7 @@ class ReflowLine:
         return self.gap_to(block_right) <= tolerance
 
     def ends_sentence(self) -> bool:
-        """Return whether the line ends with terminal punctuation.
-
-        Trailing quotes/brackets are stripped first, so .' and .") count.
-        """
+        """Whether the line ends in terminal punctuation (trailing quotes ok)."""
         trimmed = self.text.rstrip().rstrip(_CLOSING_CHARS)
         return bool(trimmed) and trimmed[-1] in _TERMINAL_PUNCT
 
@@ -89,11 +86,7 @@ class ReflowLine:
     def begins_paragraph_break(
         self, following: ReflowLine, block_right: float, block_width: float
     ) -> bool:
-        """Return whether this short line ends a paragraph before ``following``.
-
-        True when the line stops well short of the margin and opens a new
-        sentence — the ragged-right signal the bbox margin alone misses.
-        """
+        """Whether this short ragged line ends a paragraph before ``following``."""
         if self.gap_to(block_right) <= _SHORT_LINE_FRACTION * block_width:
             return False
         return self.precedes_new_sentence(following)
@@ -104,6 +97,13 @@ class ReflowBlock:
     """A text block: an ordered run of lines forming one or more paragraphs."""
 
     lines: tuple[ReflowLine, ...]
+    _right_margin: float = field(init=False)  # cached once; lines are non-empty
+    _width: float = field(init=False)
+
+    def __post_init__(self) -> None:
+        right = max(line.x1 for line in self.lines)
+        object.__setattr__(self, "_right_margin", right)
+        object.__setattr__(self, "_width", right - min(ln.x0 for ln in self.lines))
 
     @classmethod
     def from_block_dict(cls, block: Any) -> Self:  # fitz block dict; no stubs
@@ -117,13 +117,13 @@ class ReflowBlock:
 
     @property
     def right_margin(self) -> float:
-        """Rightmost edge across the block's lines (lines are non-empty)."""
-        return max(line.x1 for line in self.lines)
+        """Rightmost edge across the block's lines."""
+        return self._right_margin
 
     @property
     def width(self) -> float:
         """Span from the block's leftmost to rightmost edge."""
-        return self.right_margin - min(line.x0 for line in self.lines)
+        return self._width
 
     @property
     def y_top(self) -> float:
@@ -164,12 +164,13 @@ class ReflowBlock:
         return result
 
     def _joins(self, previous: ReflowLine, following: ReflowLine) -> bool:
-        right = self.right_margin
-        if previous.reaches_margin(right, _MARGIN_TOLERANCE):
-            # A full-width line usually wraps, but a sentence closing exactly at
-            # the margin before a new capitalized line is a paragraph boundary.
+        # Cached _right_margin/_width keep this O(1) per line pair. A full-width
+        # line closing a sentence before a capital is a break, not a wrap.
+        if previous.reaches_margin(self._right_margin, _MARGIN_TOLERANCE):
             return not previous.precedes_new_sentence(following)
-        return not previous.begins_paragraph_break(following, right, self.width)
+        return not previous.begins_paragraph_break(
+            following, self._right_margin, self._width
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,12 +197,10 @@ class PdfReflow:
     def page_text(cls, page: Any, *, dict_flags: int | None = None) -> str:
         """Return a page's reflowed text, falling back to flat text if empty.
 
-        An empty reflow — an all-numeric page, a missing "blocks" key, only
-        non-text blocks — must not silently drop a page that has extractable
-        text. When reflow is empty but flat ``get_text()`` is not, the flat text
-        is returned and a warning logged so the fallback is auditable.
-        ``dict_flags`` are forwarded to ``get_text("dict", flags=...)`` so the
-        caller can exclude image bytes at the PyMuPDF boundary.
+        An empty reflow (all-numeric page, missing "blocks", only non-text
+        blocks) must not silently drop an extractable page: it falls back to flat
+        ``get_text()`` with a warning. ``dict_flags`` are forwarded to
+        ``get_text("dict", flags=...)`` so the caller can exclude image bytes.
         """
         extra = {"flags": dict_flags} if dict_flags is not None else {}
         reflowed = cls.from_page_dict(page.get_text("dict", **extra)).text()
