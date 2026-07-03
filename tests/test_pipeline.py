@@ -53,7 +53,7 @@ def _mock_embedding_backend(
     backend.embed_texts.return_value = vectors
     backend.model_name = "test-model"
     monkeypatch.setattr(
-        "quarry.ingestion.pipeline.get_embedding_backend", lambda _settings: backend
+        "quarry.ingestion.streaming.get_embedding_backend", lambda _settings: backend
     )
     return backend
 
@@ -108,7 +108,7 @@ class TestIngestDocument:
             lambda _path, _pages, _total, **_kw: text_pages,
         )
         monkeypatch.setattr(
-            "quarry.ingestion.pipeline.chunk_pages",
+            "quarry.ingestion.streaming.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: chunks,
         )
         _mock_embedding_backend(monkeypatch, vectors)
@@ -165,7 +165,7 @@ class TestIngestDocument:
         )
         _mock_ocr_backend(monkeypatch, ocr_document_return=ocr_pages)
         monkeypatch.setattr(
-            "quarry.ingestion.pipeline.chunk_pages",
+            "quarry.ingestion.streaming.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: chunks,
         )
         _mock_embedding_backend(monkeypatch, vectors)
@@ -201,7 +201,7 @@ class TestIngestDocument:
         )
         _mock_ocr_backend(monkeypatch, ocr_document_return=ocr_pages)
         monkeypatch.setattr(
-            "quarry.ingestion.pipeline.chunk_pages",
+            "quarry.ingestion.streaming.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: [],
         )
 
@@ -230,7 +230,7 @@ class TestIngestDocument:
             lambda _path, _pages, _total, **_kw: text_pages,
         )
         monkeypatch.setattr(
-            "quarry.ingestion.pipeline.chunk_pages",
+            "quarry.ingestion.streaming.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: [],
         )
 
@@ -270,7 +270,7 @@ class TestIngestDocument:
             lambda _path, _pages, _total, **_kw: [_make_page_content(1, PageType.TEXT)],
         )
         monkeypatch.setattr(
-            "quarry.ingestion.pipeline.chunk_pages",
+            "quarry.ingestion.streaming.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: [],
         )
 
@@ -305,7 +305,7 @@ class TestIngestDocument:
         vectors = np.zeros((1, 768), dtype=np.float32)
 
         monkeypatch.setattr(
-            "quarry.ingestion.pipeline.chunk_pages",
+            "quarry.ingestion.streaming.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: chunks,
         )
         _mock_embedding_backend(monkeypatch, vectors)
@@ -347,7 +347,7 @@ class TestIngestDocument:
         vectors = np.zeros((1, 768), dtype=np.float32)
 
         monkeypatch.setattr(
-            "quarry.ingestion.pipeline.chunk_pages",
+            "quarry.ingestion.streaming.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: chunks,
         )
         _mock_embedding_backend(monkeypatch, vectors)
@@ -389,7 +389,7 @@ class TestIngestDocument:
         vectors = np.zeros((1, 768), dtype=np.float32)
 
         monkeypatch.setattr(
-            "quarry.ingestion.pipeline.chunk_pages",
+            "quarry.ingestion.streaming.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: chunks,
         )
         _mock_embedding_backend(monkeypatch, vectors)
@@ -437,7 +437,7 @@ class TestIngestText:
         vectors = np.zeros((1, 768), dtype=np.float32)
 
         monkeypatch.setattr(
-            "quarry.ingestion.pipeline.chunk_pages",
+            "quarry.ingestion.streaming.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: chunks,
         )
         _mock_embedding_backend(monkeypatch, vectors)
@@ -459,7 +459,7 @@ class TestIngestText:
 
     def test_overwrite_deletes_existing(self, monkeypatch):
         monkeypatch.setattr(
-            "quarry.ingestion.pipeline.chunk_pages",
+            "quarry.ingestion.streaming.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: [],
         )
 
@@ -482,7 +482,7 @@ class TestIngestText:
 
     def test_empty_text_returns_zero_chunks(self, monkeypatch):
         monkeypatch.setattr(
-            "quarry.ingestion.pipeline.chunk_pages",
+            "quarry.ingestion.streaming.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: [],
         )
 
@@ -492,3 +492,83 @@ class TestIngestText:
         result = ingest_content("", "empty.txt", db, _settings())
 
         assert result["chunks"] == 0
+
+
+class _FakeEmbedder:
+    @property
+    def dimension(self) -> int:
+        return 768
+
+    @property
+    def model_name(self) -> str:
+        return "fake"
+
+    def embed_texts(self, texts: list[str]) -> np.ndarray:
+        return np.zeros((len(texts), 768), dtype=np.float32)
+
+    def embed_query(self, query: str) -> np.ndarray:
+        return np.zeros(768, dtype=np.float32)
+
+
+class TestSingleDocProgressiveInsert:
+    """The refactored single-doc path is bounded + progressive (DES-034)."""
+
+    def test_huge_file_flushes_progressively_with_field_parity(
+        self, tmp_path: Path
+    ) -> None:
+        from unittest.mock import patch
+
+        from quarry.db.chunk_store import ChunkStore
+        from quarry.db.storage import get_db
+        from quarry.ingestion.pipeline import ingest_content
+
+        settings = Settings(
+            quarry_root=tmp_path / "data",
+            lancedb_path=tmp_path / "lancedb",
+            registry_path=tmp_path / "registry.db",
+            chunk_max_chars=40,
+            chunk_overlap_chars=0,
+            sync_flush_mb=1,  # ~341 chunks per flush
+        )
+        db = Database(get_db(settings.lancedb_path))
+        text = "The quick brown fox jumps over the lazy dog. " * 800
+
+        orig = ChunkStore.insert_records
+        flushes = {"n": 0}
+
+        def counting(self: ChunkStore, records: list[dict[str, object]]) -> int:
+            flushes["n"] += 1
+            return orig(self, records)
+
+        with (
+            patch(
+                "quarry.ingestion.streaming.get_embedding_backend",
+                return_value=_FakeEmbedder(),
+            ),
+            patch.object(ChunkStore, "insert_records", counting),
+        ):
+            result = ingest_content(text, "big", db, settings)
+
+        total = db.store.count()
+        assert result["chunks"] == total
+        # IngestResult field parity for the inline/content handler.
+        assert set(result) == {"document_name", "collection", "chunks", "sections"}
+        assert result["document_name"] == "big"
+        # Progressive: more than one flush fired for a doc exceeding the budget.
+        assert flushes["n"] >= 2
+        assert total > 341  # spans multiple flush windows
+
+
+class TestDeterminismFlag:
+    def test_text_and_pdf_are_deterministic(self) -> None:
+        from quarry.ingestion.pipeline import is_deterministic_loader
+
+        assert is_deterministic_loader(Path("notes.txt")) is True
+        assert is_deterministic_loader(Path("paper.pdf")) is True
+        assert is_deterministic_loader(Path("code.py")) is True
+
+    def test_images_are_non_deterministic(self) -> None:
+        from quarry.ingestion.pipeline import is_deterministic_loader
+
+        assert is_deterministic_loader(Path("scan.png")) is False
+        assert is_deterministic_loader(Path("photo.jpg")) is False

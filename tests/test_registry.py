@@ -399,3 +399,162 @@ class TestContentHashColumn:
         assert got is not None
         assert got.content_hash is None
         conn.close()
+
+
+class TestResumeWatermark:
+    """DES-034: chunks_committed / partial_hash columns and atomic watermarks."""
+
+    def _register(self, conn: SyncRegistry, tmp_path: Path) -> None:
+        d = tmp_path / "dir"
+        d.mkdir(exist_ok=True)
+        conn.register_directory(d, "c")
+
+    def _record(self, **overrides: object) -> FileRecord:
+        base: dict[str, object] = {
+            "path": "/p/a.txt",
+            "collection": "c",
+            "document_name": "a.txt",
+            "mtime": 1.0,
+            "size": 10,
+            "ingested_at": "2025-01-01",
+        }
+        base.update(overrides)
+        return FileRecord(**base)  # type: ignore[arg-type]
+
+    def test_defaults_are_complete(self, tmp_path: Path):
+        conn = SyncRegistry(tmp_path / "r.db")
+        self._register(conn, tmp_path)
+        conn.upsert_file(self._record())
+        got = conn.get_file("/p/a.txt")
+        assert got is not None
+        assert got.chunks_committed == 0
+        assert got.partial_hash is None
+        assert got.is_partial is False
+        conn.close()
+
+    def test_upsert_sets_partial_watermark(self, tmp_path: Path):
+        conn = SyncRegistry(tmp_path / "r.db")
+        self._register(conn, tmp_path)
+        conn.upsert_file(
+            self._record(content_hash="cafe", chunks_committed=7, partial_hash="cafe")
+        )
+        got = conn.get_file("/p/a.txt")
+        assert got is not None
+        assert got.chunks_committed == 7
+        assert got.partial_hash == "cafe"
+        assert got.is_partial is True
+        conn.close()
+
+    def test_completion_clears_partial(self, tmp_path: Path):
+        conn = SyncRegistry(tmp_path / "r.db")
+        self._register(conn, tmp_path)
+        conn.upsert_file(
+            self._record(content_hash="cafe", chunks_committed=7, partial_hash="cafe")
+        )
+        conn.upsert_file(self._record(content_hash="cafe", chunks_committed=12))
+        got = conn.get_file("/p/a.txt")
+        assert got is not None
+        assert got.chunks_committed == 12
+        assert got.partial_hash is None
+        assert got.is_partial is False
+        conn.close()
+
+    def test_atomic_multi_file_commit(self, tmp_path: Path):
+        """Two files' watermarks commit as one transaction (G4)."""
+        db_path = tmp_path / "r.db"
+        conn = SyncRegistry(db_path)
+        self._register(conn, tmp_path)
+        conn.upsert_file(
+            self._record(path="/p/a.txt", content_hash="h", chunks_committed=5),
+            commit=False,
+        )
+        conn.upsert_file(
+            self._record(
+                path="/p/b.txt",
+                document_name="b.txt",
+                content_hash="h",
+                chunks_committed=3,
+                partial_hash="h",
+            ),
+            commit=True,
+        )
+
+        verify = SyncRegistry(db_path)
+        a = verify.get_file("/p/a.txt")
+        b = verify.get_file("/p/b.txt")
+        assert a is not None and a.chunks_committed == 5 and a.partial_hash is None
+        assert b is not None and b.chunks_committed == 3 and b.partial_hash == "h"
+        verify.close()
+        conn.close()
+
+    def test_crash_before_commit_persists_nothing(self, tmp_path: Path):
+        """An uncommitted watermark is not visible from a fresh connection."""
+        db_path = tmp_path / "r.db"
+        conn = SyncRegistry(db_path)
+        self._register(conn, tmp_path)
+        conn.upsert_file(
+            self._record(content_hash="h", chunks_committed=5, partial_hash="h"),
+            commit=False,
+        )
+        # Simulate a crash: close without commit (rollback of the open txn).
+        conn.rollback()
+        conn.close()
+
+        verify = SyncRegistry(db_path)
+        assert verify.get_file("/p/a.txt") is None
+        verify.close()
+
+    def test_migrate_schema_is_idempotent(self, tmp_path: Path):
+        """Running the schema migration twice leaves columns and rows intact."""
+        from quarry.sync_schema import SyncSchema
+
+        db_path = tmp_path / "r.db"
+        conn = SyncRegistry(db_path)
+        self._register(conn, tmp_path)
+        conn.upsert_file(
+            self._record(content_hash="h", chunks_committed=4, partial_hash="h")
+        )
+
+        schema = SyncSchema(conn._conn)
+        schema.migrate()
+        schema.migrate()  # second run must be a no-op
+
+        got = conn.get_file("/p/a.txt")
+        assert got is not None
+        assert got.chunks_committed == 4
+        assert got.partial_hash == "h"
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(files)")}
+        assert {"content_hash", "chunks_committed", "partial_hash"} <= columns
+        conn.close()
+
+    def test_legacy_db_gains_columns(self, tmp_path: Path):
+        """A pre-DES-034 files table gains the watermark columns on open."""
+        db_path = tmp_path / "legacy.db"
+        raw = sqlite3.connect(str(db_path))
+        raw.executescript(
+            """
+            CREATE TABLE directories (
+                directory TEXT PRIMARY KEY, collection TEXT NOT NULL UNIQUE,
+                registered_at TEXT NOT NULL
+            );
+            CREATE TABLE files (
+                path TEXT PRIMARY KEY, collection TEXT NOT NULL,
+                document_name TEXT NOT NULL, mtime REAL NOT NULL,
+                size INTEGER NOT NULL, ingested_at TEXT NOT NULL
+            );
+            """
+        )
+        raw.execute("INSERT INTO directories VALUES ('/p', 'c', '2025-01-01')")
+        raw.execute(
+            "INSERT INTO files VALUES ('/p/a.txt','c','a.txt',1.0,10,'2025-01-01')"
+        )
+        raw.commit()
+        raw.close()
+
+        conn = SyncRegistry(db_path)  # migration runs in __new__
+        got = conn.get_file("/p/a.txt")
+        assert got is not None
+        assert got.content_hash is None
+        assert got.chunks_committed == 0
+        assert got.partial_hash is None
+        conn.close()

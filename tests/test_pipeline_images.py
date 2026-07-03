@@ -82,14 +82,14 @@ def _mock_single_page_pipeline(
 
     _mock_ocr_backend_single(monkeypatch)
     monkeypatch.setattr(
-        "quarry.ingestion.pipeline.chunk_pages",
+        "quarry.ingestion.streaming.chunk_pages",
         lambda _pages, max_chars, overlap_chars, **_kw: chunks,
     )
     embedding_backend = MagicMock()
     embedding_backend.embed_texts.return_value = vectors
     embedding_backend.model_name = "test-model"
     monkeypatch.setattr(
-        "quarry.ingestion.pipeline.get_embedding_backend",
+        "quarry.ingestion.streaming.get_embedding_backend",
         lambda _settings: embedding_backend,
     )
     monkeypatch.setattr(
@@ -162,7 +162,7 @@ class TestIngestImageSinglePage:
             "quarry.ingestion.pipeline.get_ocr_backend", lambda _settings: backend
         )
         monkeypatch.setattr(
-            "quarry.ingestion.pipeline.chunk_pages",
+            "quarry.ingestion.streaming.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: [],
         )
 
@@ -204,7 +204,7 @@ class TestIngestImageSinglePage:
             "quarry.ingestion.pipeline.get_ocr_backend", lambda _settings: backend
         )
         monkeypatch.setattr(
-            "quarry.ingestion.pipeline.chunk_pages",
+            "quarry.ingestion.streaming.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: [],
         )
 
@@ -243,7 +243,7 @@ class TestIngestImageSinglePage:
             "quarry.ingestion.pipeline.get_ocr_backend", lambda _settings: backend
         )
         monkeypatch.setattr(
-            "quarry.ingestion.pipeline.chunk_pages",
+            "quarry.ingestion.streaming.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: [],
         )
 
@@ -325,14 +325,14 @@ class TestIngestImageMultiPage:
             "quarry.ingestion.pipeline.get_ocr_backend", lambda _settings: ocr_backend
         )
         monkeypatch.setattr(
-            "quarry.ingestion.pipeline.chunk_pages",
+            "quarry.ingestion.streaming.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: chunks,
         )
         embedding_backend = MagicMock()
         embedding_backend.embed_texts.return_value = vectors
         embedding_backend.model_name = "test-model"
         monkeypatch.setattr(
-            "quarry.ingestion.pipeline.get_embedding_backend",
+            "quarry.ingestion.streaming.get_embedding_backend",
             lambda _settings: embedding_backend,
         )
         monkeypatch.setattr(

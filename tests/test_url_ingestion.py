@@ -181,22 +181,26 @@ class TestIngestUrl:
         settings = MagicMock()
         settings.chunk_max_chars = 1800
         settings.chunk_overlap_chars = 200
+        settings.sync_flush_mb = 32
+        settings.embed_window_chunks = 512
 
         mock_lance = MagicMock()
         mock_lance.open_table.return_value = MagicMock()
         db = Database(mock_lance)
 
         with patch(
-            "quarry.ingestion.pipeline.get_embedding_backend",
+            "quarry.ingestion.streaming.get_embedding_backend",
         ) as mock_embed_factory:
             mock_backend = MagicMock()
             mock_backend.model_name = "test-model"
-            mock_backend.embed_texts.return_value = np.zeros(
-                (10, 768), dtype=np.float32
+            mock_backend.embed_texts.side_effect = lambda texts: np.zeros(
+                (len(texts), 768), dtype=np.float32
             )
             mock_embed_factory.return_value = mock_backend
 
-            with patch("quarry.db.chunk_store.ChunkStore.insert", return_value=1):
+            with patch(
+                "quarry.db.chunk_store.ChunkStore.insert_records", return_value=1
+            ):
                 result = ingest_url(
                     "https://docs.example.com/api",
                     db,
@@ -218,6 +222,8 @@ class TestIngestUrl:
         settings = MagicMock()
         settings.chunk_max_chars = 1800
         settings.chunk_overlap_chars = 200
+        settings.sync_flush_mb = 32
+        settings.embed_window_chunks = 512
 
         mock_lance = MagicMock()
         mock_lance.open_table.return_value = MagicMock()
@@ -225,14 +231,14 @@ class TestIngestUrl:
 
         with (
             patch(
-                "quarry.ingestion.pipeline.get_embedding_backend",
+                "quarry.ingestion.streaming.get_embedding_backend",
             ) as mock_embed_factory,
-            patch("quarry.db.chunk_store.ChunkStore.insert", return_value=1),
+            patch("quarry.db.chunk_store.ChunkStore.insert_records", return_value=1),
         ):
             mock_backend = MagicMock()
             mock_backend.model_name = "test-model"
-            mock_backend.embed_texts.return_value = np.zeros(
-                (10, 768), dtype=np.float32
+            mock_backend.embed_texts.side_effect = lambda texts: np.zeros(
+                (len(texts), 768), dtype=np.float32
             )
             mock_embed_factory.return_value = mock_backend
 
