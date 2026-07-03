@@ -7,9 +7,12 @@ from pathlib import Path
 
 import fitz
 
+from quarry.ingestion.pdf_reflow import PdfReflow
 from quarry.models import PageContent, PageType
 
 logger = logging.getLogger(__name__)
+
+_DICT_FLAGS = fitz.TEXTFLAGS_DICT & ~fitz.TEXT_PRESERVE_IMAGES  # exclude image bytes
 
 
 def extract_text_pages(
@@ -34,7 +37,6 @@ def extract_text_pages(
     Raises:
         FileNotFoundError: If pdf_path does not exist.
     """
-    name = document_name or pdf_path.name
     results: list[PageContent] = []
 
     with fitz.open(pdf_path) as doc:
@@ -43,12 +45,11 @@ def extract_text_pages(
         )
         for page_num in page_numbers:
             page = doc[page_num - 1]
-            raw = page.get_text()
-            text = str(raw).strip()
+            text = PdfReflow.page_text(page, dict_flags=_DICT_FLAGS).strip()
             logger.debug("Page %d: %d chars", page_num, len(text))
             results.append(
                 PageContent(
-                    document_name=name,
+                    document_name=document_name or pdf_path.name,
                     document_path=str(pdf_path.resolve()),
                     page_number=page_num,
                     total_pages=total_pages,

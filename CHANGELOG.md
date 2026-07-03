@@ -36,6 +36,41 @@ across `transform`, `index`, and `connector`).
   path. New settings `sync_flush_mb` and `embed_window_chunks`. The
   `prepare_document`/`batch_insert` whole-file path is removed (quarry-4qk2).
 
+### Fixed
+
+- **transform (pdf)**: PDF text pages are now reflowed at extraction instead of
+  stored hard-wrapped. Previously `pdf_text_extractor` used PyMuPDF's flat
+  `page.get_text()`, which emits one newline per *visual* line, so a paragraph
+  that wrapped across several screen lines was stored with spurious mid-sentence
+  newlines — every consumer (`/show`, the menu-bar app, agents) had to re-guess
+  paragraph structure. Extraction now reconstructs paragraphs from
+  `page.get_text("dict")` block/line geometry (new `ingestion/pdf_reflow.py`,
+  a `PdfReflow` value tree): soft-wrapped lines that reach the block's right
+  margin are joined and de-hyphenated; a short line that closes a sentence
+  before a capitalised line is kept as a paragraph break (trailing quotes and
+  brackets are stripped first, so a line ending `."` or `.')` still reads as
+  terminal); block boundaries become blank-line paragraph breaks; short
+  schema/heading lines stay on their own line. A standalone page-number line
+  (1–3 digit runs and 4-digit non-years, exempting plausible years 1000–2999)
+  is stripped only when it sits in the top or bottom page margin — a numeric
+  table cell or statistic in the body is kept as content — and each strip is
+  logged at debug. De-hyphenation (in `ingestion/hyphenation.py`) strips the
+  line-break hyphen by default so `informa-` + `tion` becomes `information`, a
+  token BM25 and vector search can match; the hyphen is kept only for compound
+  prefixes (`self-`, `well-`, `co-`, …) or known full compounds. If reflow
+  yields empty text for a page that has extractable text (an all-numeric page,
+  a missing `blocks` key), extraction falls back to the flat `get_text()` and
+  logs a warning, so a whole page is never silently dropped; a line with a
+  malformed bounding box is skipped rather than aborting the document.
+  `page_raw_text` and the `/show` output shape are unchanged (still a plain
+  string) — only the content is cleaner, so there is no schema or API migration.
+  The OCR path (`ingestion/ocr_local.py`) has no per-line bounding boxes and is
+  a separate follow-on.
+
+  **Migration**: content-hash sync will not auto-re-extract already-indexed
+  documents, because the source files are unchanged. Existing PDF content stays
+  hard-wrapped until re-ingested — re-ingest affected documents to reflow them.
+
 ## [1.17.0] - 2026-07-03
 
 ### Fixed
