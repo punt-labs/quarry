@@ -1017,7 +1017,7 @@ def run_install() -> int:  # noqa: C901
         print("  \u2713 snowflake-arctic-embed-m-v1.5 (INT8 ONNX) cached")  # noqa: T201
         # Also download FP16 model if CUDA is available.
         # NOTE: This is an in-process import. If onnxruntime was already
-        # imported earlier in this process *before* ensure_gpu_runtime()
+        # imported earlier in this process *before* GpuRuntime.ensure()
         # swapped the package in step 2, the native shared libraries (.so)
         # from the old onnxruntime remain loaded and provider detection here
         # may be stale. In a typical `quarry install` run where onnxruntime
