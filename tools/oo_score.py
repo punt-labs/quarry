@@ -1022,18 +1022,28 @@ class Ratchet:
             _writeln(f"Cannot score {target_file}: {exc}")
             return 2
 
-        key = str(path)
-        true_metrics = scored.get(key)
+        true_metrics = next(iter(scored.values()), None)
         if true_metrics is None:
             _writeln(f"No metrics produced for {target_file}")
             return 2
 
-        old_entry = self._baseline.get(key)
+        # Match the existing entry by resolved filesystem identity, so an
+        # absolute path, a ./ prefix, or a trailing slash still hits the entry
+        # the scorer wrote instead of adding a divergent duplicate. --correct
+        # fixes a proven phantom; adding a brand-new file is --update's job.
+        key = self._match_baseline_key(path)
+        if key is None:
+            _writeln(
+                f"no baseline entry for {target_file} -- --correct fixes an "
+                f"existing entry; run --update to record a new file",
+            )
+            return 2
+
+        old_entry = self._baseline[key]
         file_deltas = {
             metric: [old_entry[metric], true_metrics[metric]]
             for metric in self.METRIC_KEYS
-            if old_entry is not None
-            and metric in old_entry
+            if metric in old_entry
             and metric in true_metrics
             and old_entry[metric] != true_metrics[metric]
         }
@@ -1060,8 +1070,23 @@ class Ratchet:
             for metric, (before, after) in sorted(file_deltas.items()):
                 _writeln(f"    {metric}: {before} -> {after}")
         else:
-            _writeln("  (entry added — no prior value)")
+            _writeln("  (entry already matched — no metric changed)")
         return 0
+
+    def _match_baseline_key(self, path: Path) -> str | None:
+        """Return the baseline key referring to ``path``, or None if absent.
+
+        Baseline keys are stored exactly as the scorer wrote them (relative to
+        the scan directory). Compare on the resolved absolute path so a
+        non-canonical ``--correct`` argument still identifies the existing
+        entry rather than inserting a near-duplicate that the next --verify
+        would flag.
+        """
+        target = path.resolve()
+        for existing in self._baseline:
+            if Path(existing).resolve() == target:
+                return existing
+        return None
 
     # ------------------------------------------------------------------
     # Audit log

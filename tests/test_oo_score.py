@@ -258,6 +258,35 @@ class TestScopedCorrection:
         scorer = oo.Scorer(tmp_path)
         assert oo.Ratchet(tmp_path).verify(scorer) == 0
 
+    def test_correct_matches_by_resolved_path(self, tmp_path: Path) -> None:
+        """A non-canonical FILE= (here a symlink) corrects the existing entry.
+
+        Without resolved-path matching, `str(Path(alias))` keys a NEW entry
+        that the next --verify flags as stale/phantom.
+        """
+        key, true_metrics = self._phantom_repo(tmp_path)
+        alias = tmp_path / "alias.py"
+        alias.symlink_to(tmp_path / "mod.py")
+        ratchet = oo.Ratchet(tmp_path)
+        assert ratchet.correct(str(alias), "phantom fix via alias") == 0
+        written = json.loads((tmp_path / oo.Ratchet.BASELINE_FILE).read_text())
+        # Corrected in place — no duplicate "alias.py" entry was added.
+        assert set(written) == {key, "src/other.py"}
+        assert written[key]["classes_per_module"] == true_metrics["classes_per_module"]
+
+    def test_correct_unknown_file_refuses(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """--correct on a file absent from the baseline fails, never silently adds."""
+        self._phantom_repo(tmp_path)
+        extra = tmp_path / "extra.py"
+        extra.write_text(_SAMPLE_SOURCE)
+        ratchet = oo.Ratchet(tmp_path)
+        assert ratchet.correct(str(extra), "should fail") == 2
+        assert "no baseline entry" in capsys.readouterr().out
+        written = json.loads((tmp_path / oo.Ratchet.BASELINE_FILE).read_text())
+        assert str(extra) not in written
+
 
 def _fake_scorer(fpath: str, metrics: dict[str, float]) -> object:
     """A stand-in exposing .results — check()/update() read only that."""
