@@ -1,93 +1,69 @@
 """Reflow PyMuPDF text blocks into clean, soft-wrap-joined paragraphs.
 
-PyMuPDF's flat ``page.get_text()`` emits one newline per *visual* line, so a
-paragraph that wraps across four screen lines arrives hard-wrapped with three
-spurious newlines.  This module reconstructs paragraphs from the richer
-``page.get_text("dict")`` block/line structure:
+Flat ``page.get_text()`` emits one newline per *visual* line, so a wrapped
+paragraph arrives hard-wrapped. This module rebuilds paragraphs from the richer
+``page.get_text("dict")`` block/line structure: lines reaching a block's right
+margin are soft wraps and join (de-hyphenating a line-break hyphen); a short
+sentence-closing line before a capital is a real break; block boundaries are
+paragraph breaks; a lone page-number line in the top/bottom margin is dropped
+(years exempt), while a numeric block in the body is kept. De-hyphenation of a
+line-break hyphen is delegated to :class:`~quarry.ingestion.hyphenation.Dehyphenator`.
 
-* Lines within a block whose right edge reaches the block's right margin are
-  soft wraps and are joined (de-hyphenating a trailing line-break hyphen).
-* A line that ends well short of the margin, closes a sentence, and precedes a
-  capitalised line is a real paragraph break and is kept.
-* Block boundaries are paragraph breaks (blank line).
-* Standalone page-number lines are dropped, except plausible years.
-
-The public entry point is :class:`PdfReflow`.  ``PdfReflow.from_page_dict`` builds
-the value tree from a fitz dict; ``text()`` returns the reflowed plain string.
-
-The de-hyphenation bias mirrors the menu-bar ``ExtractedTextFormatter``: a
-visible hyphen is a recoverable error, a merged fake word is not — so when
-unsure, keep the hyphen.
-
-The OCR path (``ocr_local.py``) is a separate follow-on; it has no per-line
-bounding boxes and needs a weaker y-gap heuristic, tracked separately.
+Entry points: :meth:`PdfReflow.page_text` (fitz page in, string out, with a
+flat-text fallback) and :meth:`PdfReflow.from_page_dict` / :meth:`PdfReflow.text`
+for the pure, dict-testable core. The OCR path (``ocr_local.py``) lacks per-line
+bounding boxes and is a separate follow-on.
 """
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any, Self
 
-# Hard compounds whose hyphen is semantic — keep it even across a line break.
-_KEEP_HYPHEN_COMPOUNDS: frozenset[str] = frozenset(
-    {
-        "well-known",
-        "well-being",
-        "self-aware",
-        "self-contained",
-        "long-term",
-        "short-term",
-        "read-only",
-        "state-of-the-art",
-    }
-)
+from quarry.ingestion.hyphenation import Dehyphenator
 
-# Single words commonly split at a line break — merge them (strip the hyphen).
-_STRIP_MERGE_WORDS: frozenset[str] = frozenset(
-    {
-        "inasmuch",
-        "notwithstanding",
-        "nevertheless",
-        "nonetheless",
-        "throughout",
-        "therefore",
-        "moreover",
-        "furthermore",
-        "otherwise",
-        "whatsoever",
-    }
-)
+logger = logging.getLogger(__name__)
 
 _PAGE_NUMBER_RE = re.compile(r"\d{1,4}")
 _TERMINAL_PUNCT = frozenset({".", "!", "?"})
+# Trailing quotes/brackets stripped before the terminal-punct test, so a
+# sentence ending .' or .") still reads as terminal. The u201d/u2019 escapes
+# are the curly close double and single quotes.
+_CLOSING_CHARS = "\"'\u201d\u2019)]}"
 
-# Plausible year range exempted from page-number stripping (RFC-free heuristic).
-_MIN_PLAUSIBLE_YEAR = 1000
+_MIN_PLAUSIBLE_YEAR = 1000  # years exempt from page-number strip
 _MAX_PLAUSIBLE_YEAR = 2999
-
-# A line ending more than this fraction of the block width short of the right
-# margin is "short" for paragraph-break disambiguation.
-_SHORT_LINE_FRACTION = 0.15
-
-# Points of slack when deciding a line reached the block's right margin.
-_MARGIN_TOLERANCE = 2.0
+_SHORT_LINE_FRACTION = 0.15  # a line this far short of the margin is "short"
+_MARGIN_TOLERANCE = 2.0  # points of slack for "reached the right margin"
+_MARGIN_BAND_FRACTION = 0.12  # top/bottom band counted as page margin
 
 
 @dataclass(frozen=True, slots=True)
 class ReflowLine:
-    """One visual line: its joined span text and horizontal extent."""
+    """One visual line: its joined span text and bounding box."""
 
     text: str
     x0: float
+    y0: float
     x1: float
+    y1: float
 
     @classmethod
-    def from_line_dict(cls, line: Any) -> Self:  # fitz line dict; no type stubs
+    def from_line_dict(cls, line: Any) -> Self | None:  # fitz line dict; no stubs
+        """Build a line from a fitz dict, or None if its bbox is malformed.
+
+        None (not a raise) means one broken line is skipped, not the document.
+        """
+        bbox = line.get("bbox")
+        if not (isinstance(bbox, (tuple, list)) and len(bbox) == 4):
+            logger.debug("Skipping line with malformed bbox: %r", bbox)
+            return None
         spans = line.get("spans", [])
         text = "".join(str(span.get("text", "")) for span in spans)
-        x0, _y0, x1, _y1 = line["bbox"]
-        return cls(text=text, x0=float(x0), x1=float(x1))
+        x0, y0, x1, y1 = bbox
+        return cls(text=text, x0=float(x0), y0=float(y0), x1=float(x1), y1=float(y1))
 
     def gap_to(self, block_right: float) -> float:
         """Horizontal distance from this line's right edge to the margin."""
@@ -98,8 +74,11 @@ class ReflowLine:
         return self.gap_to(block_right) <= tolerance
 
     def ends_sentence(self) -> bool:
-        """Return whether the trimmed line ends with terminal punctuation."""
-        trimmed = self.text.rstrip()
+        """Return whether the line ends with terminal punctuation.
+
+        Trailing quotes/brackets are stripped first, so .' and .") count.
+        """
+        trimmed = self.text.rstrip().rstrip(_CLOSING_CHARS)
         return bool(trimmed) and trimmed[-1] in _TERMINAL_PUNCT
 
     def begins_paragraph_break(
@@ -107,9 +86,8 @@ class ReflowLine:
     ) -> bool:
         """Return whether this short line ends a paragraph before ``following``.
 
-        A paragraph ends when the line stops well short of the margin, closes a
-        sentence, and the next line opens with a capital — the ragged-right and
-        short-final-line signal the bbox margin alone cannot see.
+        True when the line stops well short of the margin, closes a sentence, and
+        the next line opens with a capital — the signal the bbox margin misses.
         """
         if self.gap_to(block_right) <= _SHORT_LINE_FRACTION * block_width:
             return False
@@ -129,8 +107,9 @@ class ReflowBlock:
     def from_block_dict(cls, block: Any) -> Self:  # fitz block dict; no stubs
         lines = tuple(
             line
-            for raw in block["lines"]
-            if (line := ReflowLine.from_line_dict(raw)).text.strip()
+            for raw in block.get("lines", [])
+            if (line := ReflowLine.from_line_dict(raw)) is not None
+            and line.text.strip()
         )
         return cls(lines=lines)
 
@@ -142,14 +121,31 @@ class ReflowBlock:
     @property
     def width(self) -> float:
         """Span from the block's leftmost to rightmost edge."""
-        left = min(line.x0 for line in self.lines)
-        return self.right_margin - left
+        return self.right_margin - min(line.x0 for line in self.lines)
+
+    @property
+    def y_top(self) -> float:
+        """Topmost (smallest) y coordinate of the block."""
+        return min(line.y0 for line in self.lines)
+
+    @property
+    def y_bottom(self) -> float:
+        """Bottommost (largest) y coordinate of the block."""
+        return max(line.y1 for line in self.lines)
+
+    def in_margin(self, page_top: float, page_bottom: float) -> bool:
+        """Return whether the block sits in the top or bottom page margin band."""
+        height = page_bottom - page_top
+        if height <= 0:
+            return True
+        band = _MARGIN_BAND_FRACTION * height
+        return self.y_top <= page_top + band or self.y_bottom >= page_bottom - band
 
     def is_page_number(self) -> bool:
-        """Return whether this block is a standalone page number to drop.
+        """Return whether this lone block is a page-number token.
 
-        Strips 1-3 digit lines and 4-digit non-years; exempts plausible years
-        so 'Annual Report / 2024' keeps its 2024.
+        1-3 digit lines and 4-digit non-years match; plausible years are exempt.
+        Position is gated by :meth:`in_margin` so a body table cell survives.
         """
         if len(self.lines) != 1:
             return False
@@ -157,8 +153,7 @@ class ReflowBlock:
         if not _PAGE_NUMBER_RE.fullmatch(token):
             return False
         if len(token) == 4:
-            year = int(token)
-            return not (_MIN_PLAUSIBLE_YEAR <= year <= _MAX_PLAUSIBLE_YEAR)
+            return not (_MIN_PLAUSIBLE_YEAR <= int(token) <= _MAX_PLAUSIBLE_YEAR)
         return True
 
     def paragraphs(self) -> list[str]:
@@ -172,7 +167,7 @@ class ReflowBlock:
                 result.append(current)
                 current = piece
             else:
-                current = self._merge(current, piece)
+                current = Dehyphenator.merge(current, piece)
             previous = line
         if current:
             result.append(current)
@@ -183,40 +178,6 @@ class ReflowBlock:
         if previous.reaches_margin(right, _MARGIN_TOLERANCE):
             return True
         return not previous.begins_paragraph_break(following, right, self.width)
-
-    @staticmethod
-    def _merge(accumulated: str, addition: str) -> str:
-        if not accumulated:
-            return addition
-        ends_hyphen = (
-            len(accumulated) >= 2
-            and accumulated[-1] == "-"
-            and accumulated[-2].isalpha()
-        )
-        if ends_hyphen:
-            return ReflowBlock._dehyphenate(accumulated, addition)
-        return f"{accumulated} {addition}"
-
-    @staticmethod
-    def _dehyphenate(accumulated: str, addition: str) -> str:
-        prefix = accumulated[:-1]
-        split = len(prefix)
-        while split > 0 and prefix[split - 1].isalpha():
-            split -= 1
-        left, before = prefix[split:], prefix[:split]
-
-        cut = 0
-        while cut < len(addition) and addition[cut].isalpha():
-            cut += 1
-        right, after = addition[:cut], addition[cut:]
-
-        compound = f"{left}-{right}".lower()
-        merged = f"{left}{right}".lower()
-        if compound not in _KEEP_HYPHEN_COMPOUNDS and merged in _STRIP_MERGE_WORDS:
-            joined = f"{left}{right}"
-        else:
-            joined = f"{left}-{right}"
-        return f"{before}{joined}{after}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,11 +197,36 @@ class PdfReflow:
                 blocks.append(block)
         return cls(blocks=tuple(blocks))
 
+    @classmethod
+    def page_text(cls, page: Any) -> str:  # fitz page; no stubs
+        """Return a page's reflowed text, falling back to flat text if empty.
+
+        An empty reflow — an all-numeric page, a missing "blocks" key, only
+        non-text blocks — must not silently drop a page that has extractable
+        text. When reflow is empty but flat ``get_text()`` is not, the flat text
+        is returned and a warning logged so the fallback is auditable.
+        """
+        reflowed = cls.from_page_dict(page.get_text("dict")).text()
+        if reflowed.strip():
+            return reflowed
+        flat = str(page.get_text())
+        if flat.strip():
+            logger.warning("Reflow yielded empty text; falling back to flat get_text()")
+            return flat
+        return reflowed
+
     def text(self) -> str:
         """Return the page's reflowed text: paragraphs joined by blank lines."""
+        if not self.blocks:
+            return ""
+        page_top = min(block.y_top for block in self.blocks)
+        page_bottom = max(block.y_bottom for block in self.blocks)
         paragraphs: list[str] = []
         for block in self.blocks:
-            if block.is_page_number():
+            if block.is_page_number() and block.in_margin(page_top, page_bottom):
+                logger.debug(
+                    "Stripped page-number block %r", block.lines[0].text.strip()
+                )
                 continue
             paragraphs.extend(block.paragraphs())
         return "\n\n".join(paragraphs)

@@ -44,7 +44,7 @@ def extract_text_pages(
         )
         for page_num in page_numbers:
             page = doc[page_num - 1]
-            text = PdfReflow.from_page_dict(page.get_text("dict")).text().strip()
+            text = PdfReflow.page_text(page).strip()
             logger.debug("Page %d: %d chars", page_num, len(text))
             results.append(
                 PageContent(
