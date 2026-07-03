@@ -812,7 +812,13 @@ class Ratchet:
             return 1
 
         current_by_file = self._results_by_file(scorer.results)
-        rows = self._integrity_rows(current_by_file)
+        # A file that fails to parse is dropped from current_by_file by
+        # _results_by_file; surface it explicitly as a scan error rather than
+        # letting it masquerade as a "stale" baseline entry.
+        scan_errors = {
+            str(r["file"]): str(r["error"]) for r in scorer.results if "error" in r
+        }
+        rows = self._integrity_rows(current_by_file, scan_errors)
 
         if not rows:
             _writeln("\nPASS: baseline matches committed code")
@@ -826,6 +832,11 @@ class Ratchet:
         for fpath, metric, base_s, cur_s, issue in rows:
             _writeln(f"{fpath:<40} {metric:<24} {base_s:>10} {cur_s:>10} {issue:>10}")
 
+        if scan_errors:
+            _writeln("\nScan errors (file could not be parsed):")
+            for fpath, reason in sorted(scan_errors.items()):
+                _writeln(f"  {fpath}: {reason}")
+
         _writeln("\nFAIL: baseline diverges from committed code")
         _writeln(
             "  fix a proven phantom with: "
@@ -836,14 +847,21 @@ class Ratchet:
     def _integrity_rows(
         self,
         current_by_file: dict[str, dict[str, float]],
+        scan_errors: dict[str, str],
     ) -> list[tuple[str, str, str, str, str]]:
         """Return (file, metric, baseline, current, issue) rows for divergences."""
         baseline_files = set(self._baseline)
         scored_files = set(current_by_file)
+        error_files = set(scan_errors)
 
+        # An unparseable file surfaces as its own row, not as stale — exclude
+        # it from the stale set so the real cause (a scan error) is reported.
+        scanerr = [
+            (fpath, "(scan)", "-", "-", "scan error") for fpath in sorted(error_files)
+        ]
         stale = [
             (fpath, "(file)", "present", "absent", "stale")
-            for fpath in sorted(baseline_files - scored_files)
+            for fpath in sorted(baseline_files - scored_files - error_files)
         ]
         unrecorded = [
             (fpath, "(file)", "absent", "present", "unrecorded")
@@ -864,7 +882,7 @@ class Ratchet:
             and abs(self._baseline[fpath][metric] - current_by_file[fpath][metric])
             > self.VERIFY_EPSILON
         ]
-        return stale + unrecorded + phantom
+        return scanerr + stale + unrecorded + phantom
 
     # ------------------------------------------------------------------
     # --update

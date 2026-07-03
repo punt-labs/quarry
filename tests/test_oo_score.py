@@ -134,6 +134,26 @@ class TestVerifyPhantomGuard:
         out = capsys.readouterr().out
         assert "unrecorded" in out
 
+    def test_scan_error_reported_not_stale(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A file that no longer parses reports as a scan error, not as stale.
+
+        _results_by_file drops the errored entry, so without explicit handling
+        the baseline entry would masquerade as a 'stale' row and hide the real
+        cause.
+        """
+        src = tmp_path / "mod.py"
+        src.write_text(_SAMPLE_SOURCE)
+        key = str(src)
+        _write_baseline(tmp_path, {key: _true_metrics(oo.Scorer(tmp_path), key)})
+        src.write_text("def broken(:\n")  # unparseable
+        ratchet = oo.Ratchet(tmp_path)
+        assert ratchet.verify(oo.Scorer(tmp_path)) == 1
+        out = capsys.readouterr().out
+        assert "scan error" in out
+        assert "stale" not in out
+
     def test_missing_baseline_fails_closed(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
