@@ -6,17 +6,28 @@ from quarry.ingestion.pdf_text_extractor import extract_text_pages
 from quarry.models import PageType
 
 
-def _mock_page(text: str) -> MagicMock:
-    """Mock a page whose ``get_text("dict")`` yields one single-line block."""
-    page = MagicMock()
-    page.get_text.return_value = {
+def _mock_page(text: str, *, flat: str | None = None) -> MagicMock:
+    """Mock a page: ``get_text("dict")`` yields a block; ``get_text()`` a string.
+
+    The keyed ``side_effect`` is deliberate — a single ``return_value`` would make
+    the flat ``get_text()`` return the dict too, so the flat-fallback path would
+    never be exercised (see PR #326 review B).
+    """
+    dict_payload = {
+        "height": 842.0,
         "blocks": [
             {
                 "type": 0,
-                "lines": [{"bbox": (0.0, 0.0, 100.0, 0.0), "spans": [{"text": text}]}],
+                "lines": [{"bbox": (0.0, 0.0, 100.0, 12.0), "spans": [{"text": text}]}],
             }
-        ]
+        ],
     }
+
+    def get_text(kind: str = "text", **_kwargs: object) -> object:
+        return dict_payload if kind == "dict" else (text if flat is None else flat)
+
+    page = MagicMock()
+    page.get_text.side_effect = get_text
     return page
 
 
@@ -83,3 +94,37 @@ class TestExtractTextPages:
             results = extract_text_pages(pdf_path, [1], total_pages=1)
 
         assert results[0].text == "text with spaces"
+
+    def test_flat_fallback_returns_string_when_reflow_empty(self, tmp_path):
+        pdf_path = tmp_path / "test.pdf"
+        pdf_path.touch()
+
+        # Dict has only a lone footer page number -> reflow is empty. Flat text
+        # is a non-empty STRING, which the fallback must return verbatim.
+        empty_reflow = {
+            "height": 842.0,
+            "blocks": [
+                {
+                    "type": 0,
+                    "lines": [
+                        {"bbox": (280.0, 810.0, 300.0, 822.0), "spans": [{"text": "7"}]}
+                    ],
+                }
+            ],
+        }
+
+        def get_text(kind="text", **_kwargs):
+            return empty_reflow if kind == "dict" else "7\nflat body text\n"
+
+        page = MagicMock()
+        page.get_text.side_effect = get_text
+        mock_doc = MagicMock()
+        mock_doc.__getitem__ = lambda _, idx: page
+
+        with patch(
+            "quarry.ingestion.pdf_text_extractor.fitz.open",
+            return_value=_mock_doc_cm(mock_doc),
+        ):
+            results = extract_text_pages(pdf_path, [1], total_pages=1)
+
+        assert results[0].text == "7\nflat body text"

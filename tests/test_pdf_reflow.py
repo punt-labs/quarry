@@ -29,8 +29,11 @@ def _block(*lines: dict[str, object]) -> dict[str, object]:
     return {"type": 0, "lines": list(lines)}
 
 
-def _page(*blocks: dict[str, object]) -> dict[str, object]:
-    return {"width": 595.0, "blocks": list(blocks)}
+def _page(*blocks: dict[str, object], height: float = 0.0) -> dict[str, object]:
+    page: dict[str, object] = {"width": 595.0, "blocks": list(blocks)}
+    if height:
+        page["height"] = height
+    return page
 
 
 class TestDecoratedIdentifiersGoldenOracle:
@@ -150,6 +153,33 @@ class TestWrapJoining:
         assert len(paragraphs) == 2
         assert paragraphs[0].endswith("menu bar app.")
         assert paragraphs[1].startswith("The system follows")
+
+    def test_justified_paragraphs_split_on_sentence_boundary(self) -> None:
+        # Both lines run the full width, but the first closes a sentence and the
+        # next opens a new capitalised one — a paragraph boundary, not a wrap.
+        page = _page(
+            _block(
+                _line("The first paragraph fills the column to the margin.", 523.0),
+                _line("The second paragraph also runs the full column width.", 523.0),
+            )
+        )
+        paragraphs = PdfReflow.from_page_dict(page).text().split("\n\n")
+        assert len(paragraphs) == 2
+        assert paragraphs[0].endswith("to the margin.")
+        assert paragraphs[1].startswith("The second paragraph")
+
+    def test_justified_wrap_without_sentence_end_still_joins(self) -> None:
+        # A full-width line that does not close a sentence is a wrap, not a break.
+        page = _page(
+            _block(
+                _line("The first line runs to the margin and keeps going with", 523.0),
+                _line(
+                    "more of the same sentence flowing onto the next line here.", 523.0
+                ),
+            )
+        )
+        paragraphs = PdfReflow.from_page_dict(page).text().split("\n\n")
+        assert len(paragraphs) == 1
 
     def test_short_final_line_kept_as_break_between_blocks(self) -> None:
         page = _page(
@@ -318,6 +348,17 @@ class TestMalformedInput:
         assert "kept line with a bbox." in text
         assert "orphan" not in text
 
+    def test_line_with_non_numeric_bbox_is_skipped(self) -> None:
+        page = _page(
+            _block(
+                {"bbox": (72.0, "top", 300.0, 12.0), "spans": [{"text": "bad coord"}]},
+                _line("kept line with numeric bbox.", 300.0),
+            )
+        )
+        text = PdfReflow.from_page_dict(page).text()
+        assert "kept line with numeric bbox." in text
+        assert "bad coord" not in text
+
     def test_block_without_lines_key_is_skipped(self) -> None:
         page: dict[str, object] = {
             "width": 595.0,
@@ -325,3 +366,46 @@ class TestMalformedInput:
         }
         text = PdfReflow.from_page_dict(page).text()
         assert "real content." in text
+
+
+class TestPhysicalPageChrome:
+    """Page-number stripping keys on the physical page, not the text span."""
+
+    def test_body_value_on_tall_page_kept(self) -> None:
+        # "500" sits 76% down an 842pt page — body content, not a footer.
+        page = _page(
+            _block(_line("Results table header row here.", 523.0, y0=100.0, y1=120.0)),
+            _block(_line("500", 300.0, y0=640.0, y1=652.0)),
+            _block(
+                _line("Notes after the table continue here.", 523.0, y0=670.0, y1=690.0)
+            ),
+            height=842.0,
+        )
+        assert "500" in PdfReflow.from_page_dict(page).text().split("\n\n")
+
+    def test_numeric_adjacent_to_content_in_margin_kept(self) -> None:
+        # "500" is inside the bottom band but a content block sits right above it.
+        page = _page(
+            _block(
+                _line("Body text near the page bottom edge.", 523.0, y0=780.0, y1=792.0)
+            ),
+            _block(_line("500", 300.0, y0=795.0, y1=807.0)),
+            height=842.0,
+        )
+        assert "500" in PdfReflow.from_page_dict(page).text().split("\n\n")
+
+    def test_isolated_footer_number_stripped(self) -> None:
+        # A lone number far below the body is chrome and is dropped.
+        page = _page(
+            _block(
+                _line(
+                    "The body ends well above the footer here.",
+                    523.0,
+                    y0=100.0,
+                    y1=400.0,
+                )
+            ),
+            _block(_line("7", 300.0, y0=810.0, y1=822.0)),
+            height=842.0,
+        )
+        assert "7" not in PdfReflow.from_page_dict(page).text().split("\n\n")

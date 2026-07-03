@@ -519,12 +519,25 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/quarry/ingestion/page_geometry.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.8,
+    "max_complexity": 4.0,
+    "avg_complexity": 3.2,
+    "module_size": 62.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/quarry/ingestion/pdf_reflow.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
     "avg_params": 0.82,
-    "max_complexity": 7.0,
-    "avg_complexity": 3.12,
+    "max_complexity": 6.0,
+    "avg_complexity": 2.94,
     "module_size": 193.0,
     "classes_per_module": 3.0,
     "class_to_func_ratio": 1.0,

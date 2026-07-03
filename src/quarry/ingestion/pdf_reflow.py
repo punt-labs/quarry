@@ -1,18 +1,15 @@
 """Reflow PyMuPDF text blocks into clean, soft-wrap-joined paragraphs.
 
-Flat ``page.get_text()`` emits one newline per *visual* line, so a wrapped
-paragraph arrives hard-wrapped. This module rebuilds paragraphs from the richer
-``page.get_text("dict")`` block/line structure: lines reaching a block's right
-margin are soft wraps and join (de-hyphenating a line-break hyphen); a short
-sentence-closing line before a capital is a real break; block boundaries are
-paragraph breaks; a lone page-number line in the top/bottom margin is dropped
-(years exempt), while a numeric block in the body is kept. De-hyphenation of a
-line-break hyphen is delegated to :class:`~quarry.ingestion.hyphenation.Dehyphenator`.
+Flat ``page.get_text()`` hard-wraps at every visual line. This module rebuilds
+paragraphs from ``page.get_text("dict")`` geometry: lines reaching a block's
+right margin join (unless they close a sentence before a capital); block
+boundaries are paragraph breaks; a lone page-number line in a page margin is
+dropped. De-hyphenation is delegated to :class:`~quarry.ingestion.hyphenation`
+and page-number chrome detection to :class:`~quarry.ingestion.page_geometry`.
 
-Entry points: :meth:`PdfReflow.page_text` (fitz page in, string out, with a
-flat-text fallback) and :meth:`PdfReflow.from_page_dict` / :meth:`PdfReflow.text`
-for the pure, dict-testable core. The OCR path (``ocr_local.py``) lacks per-line
-bounding boxes and is a separate follow-on.
+Entry point :meth:`PdfReflow.page_text` (fitz page in, string out, with a
+flat-text fallback); :meth:`PdfReflow.from_page_dict` / :meth:`PdfReflow.text`
+are the pure, dict-testable core. The OCR path is a separate follow-on.
 """
 
 from __future__ import annotations
@@ -23,6 +20,7 @@ from dataclasses import dataclass
 from typing import Any, Self
 
 from quarry.ingestion.hyphenation import Dehyphenator
+from quarry.ingestion.page_geometry import PageChrome
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +35,6 @@ _MIN_PLAUSIBLE_YEAR = 1000  # years exempt from page-number strip
 _MAX_PLAUSIBLE_YEAR = 2999
 _SHORT_LINE_FRACTION = 0.15  # a line this far short of the margin is "short"
 _MARGIN_TOLERANCE = 2.0  # points of slack for "reached the right margin"
-_MARGIN_BAND_FRACTION = 0.12  # top/bottom band counted as page margin
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,12 +49,13 @@ class ReflowLine:
 
     @classmethod
     def from_line_dict(cls, line: Any) -> Self | None:  # fitz line dict; no stubs
-        """Build a line from a fitz dict, or None if its bbox is malformed.
-
-        None (not a raise) means one broken line is skipped, not the document.
-        """
+        """Build a line, or None if the bbox is malformed (skip, don't crash)."""
         bbox = line.get("bbox")
-        if not (isinstance(bbox, (tuple, list)) and len(bbox) == 4):
+        if not (
+            isinstance(bbox, (tuple, list))
+            and len(bbox) == 4
+            and all(isinstance(coord, (int, float)) for coord in bbox)
+        ):
             logger.debug("Skipping line with malformed bbox: %r", bbox)
             return None
         spans = line.get("spans", [])
@@ -81,20 +79,24 @@ class ReflowLine:
         trimmed = self.text.rstrip().rstrip(_CLOSING_CHARS)
         return bool(trimmed) and trimmed[-1] in _TERMINAL_PUNCT
 
+    def precedes_new_sentence(self, following: ReflowLine) -> bool:
+        """Return whether this line closes a sentence and the next opens capital."""
+        if not self.ends_sentence():
+            return False
+        head = following.text.strip()
+        return bool(head) and head[0].isupper()
+
     def begins_paragraph_break(
         self, following: ReflowLine, block_right: float, block_width: float
     ) -> bool:
         """Return whether this short line ends a paragraph before ``following``.
 
-        True when the line stops well short of the margin, closes a sentence, and
-        the next line opens with a capital — the signal the bbox margin misses.
+        True when the line stops well short of the margin and opens a new
+        sentence — the ragged-right signal the bbox margin alone misses.
         """
         if self.gap_to(block_right) <= _SHORT_LINE_FRACTION * block_width:
             return False
-        if not self.ends_sentence():
-            return False
-        head = following.text.strip()
-        return bool(head) and head[0].isupper()
+        return self.precedes_new_sentence(following)
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,20 +135,8 @@ class ReflowBlock:
         """Bottommost (largest) y coordinate of the block."""
         return max(line.y1 for line in self.lines)
 
-    def in_margin(self, page_top: float, page_bottom: float) -> bool:
-        """Return whether the block sits in the top or bottom page margin band."""
-        height = page_bottom - page_top
-        if height <= 0:
-            return True
-        band = _MARGIN_BAND_FRACTION * height
-        return self.y_top <= page_top + band or self.y_bottom >= page_bottom - band
-
     def is_page_number(self) -> bool:
-        """Return whether this lone block is a page-number token.
-
-        1-3 digit lines and 4-digit non-years match; plausible years are exempt.
-        Position is gated by :meth:`in_margin` so a body table cell survives.
-        """
+        """Whether this lone block is a page-number token (years exempt)."""
         if len(self.lines) != 1:
             return False
         token = self.lines[0].text.strip()
@@ -176,7 +166,9 @@ class ReflowBlock:
     def _joins(self, previous: ReflowLine, following: ReflowLine) -> bool:
         right = self.right_margin
         if previous.reaches_margin(right, _MARGIN_TOLERANCE):
-            return True
+            # A full-width line usually wraps, but a sentence closing exactly at
+            # the margin before a new capitalized line is a paragraph boundary.
+            return not previous.precedes_new_sentence(following)
         return not previous.begins_paragraph_break(following, right, self.width)
 
 
@@ -185,6 +177,7 @@ class PdfReflow:
     """Reflowed view of a single PDF page reconstructed from fitz dict blocks."""
 
     blocks: tuple[ReflowBlock, ...]
+    page_height: float = 0.0  # physical page height; 0 falls back to text span
 
     @classmethod
     def from_page_dict(cls, page: Any) -> Self:  # fitz get_text("dict"); no stubs
@@ -195,18 +188,23 @@ class PdfReflow:
             block = ReflowBlock.from_block_dict(raw)
             if block.lines:
                 blocks.append(block)
-        return cls(blocks=tuple(blocks))
+        height = page.get("height", 0.0)
+        page_height = float(height) if isinstance(height, (int, float)) else 0.0
+        return cls(blocks=tuple(blocks), page_height=page_height)
 
     @classmethod
-    def page_text(cls, page: Any) -> str:  # fitz page; no stubs
+    def page_text(cls, page: Any, *, dict_flags: int | None = None) -> str:
         """Return a page's reflowed text, falling back to flat text if empty.
 
         An empty reflow — an all-numeric page, a missing "blocks" key, only
         non-text blocks — must not silently drop a page that has extractable
         text. When reflow is empty but flat ``get_text()`` is not, the flat text
         is returned and a warning logged so the fallback is auditable.
+        ``dict_flags`` are forwarded to ``get_text("dict", flags=...)`` so the
+        caller can exclude image bytes at the PyMuPDF boundary.
         """
-        reflowed = cls.from_page_dict(page.get_text("dict")).text()
+        extra = {"flags": dict_flags} if dict_flags is not None else {}
+        reflowed = cls.from_page_dict(page.get_text("dict", **extra)).text()
         if reflowed.strip():
             return reflowed
         flat = str(page.get_text())
@@ -219,11 +217,11 @@ class PdfReflow:
         """Return the page's reflowed text: paragraphs joined by blank lines."""
         if not self.blocks:
             return ""
-        page_top = min(block.y_top for block in self.blocks)
-        page_bottom = max(block.y_bottom for block in self.blocks)
+        chrome = PageChrome.for_page(self.blocks, self.page_height)
         paragraphs: list[str] = []
-        for block in self.blocks:
-            if block.is_page_number() and block.in_margin(page_top, page_bottom):
+        for index, block in enumerate(self.blocks):
+            others = self.blocks[:index] + self.blocks[index + 1 :]
+            if chrome.is_droppable(block, others):
                 logger.debug(
                     "Stripped page-number block %r", block.lines[0].text.strip()
                 )
