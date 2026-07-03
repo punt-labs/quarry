@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -13,9 +14,11 @@ import pytest
 
 from quarry.config import Settings
 from quarry.db.chunk_store import ChunkStore
+from quarry.db.optimizer import FRAGMENT_THRESHOLD, TableOptimizer
 from quarry.db.schema import TABLE_NAME
 from quarry.db.storage import get_db
 from quarry.ingestion.pipeline import plan_file_chunks
+from quarry.ingestion.progressive import ProgressiveIndexer
 from quarry.models import PageContent, PageType
 from quarry.sync import compute_sync_plan, sync_all, sync_collection
 from quarry.sync_discovery import _DEFAULT_IGNORE_PATTERNS, FileDiscovery
@@ -928,6 +931,13 @@ class TestFragmentBudgetAndExceptions:
         assert result.ingested == 200
         # 200 tiny files coalesce into a handful of flushes, not 200.
         assert calls["n"] <= 3
+        # Fragment count stays far below the guard, so optimize() runs (not skipped)
+        # and compacts — the DES-026 death-spiral door stays shut.
+        opt = TableOptimizer(db)
+        assert opt.count_fragments() < FRAGMENT_THRESHOLD
+        opt.optimize()  # would early-return if fragments exceeded the threshold
+        assert opt.count_fragments() < FRAGMENT_THRESHOLD
+        assert ChunkStore(db).count(collection_filter="col") == 200
         conn.close()
 
     def test_commit_failure_reconciles_next_sync(self, tmp_path: Path):
@@ -1087,6 +1097,121 @@ class TestConcurrencyLiveness:
         rows = {r.document_name: r for r in conn.list_files("col")}
         assert rows["a.txt"].partial_hash is None
         assert rows["b.txt"].partial_hash is None
+        conn.close()
+
+    def test_g4_two_file_flush_crash_reconciles_both(self, tmp_path: Path):
+        """G4 end-to-end: one flush carries A-final + B-partial; commit fails there.
+
+        A (small) completes and B (large) is mid-file in the SAME size-gated flush.
+        conn.commit raises after the Lance add, so neither file's registry row
+        commits (all-or-none). A clean re-sync reconciles both with zero dups.
+        """
+        settings = _settings(tmp_path, flush_mb=1, window=8, max_chars=45)
+        db, conn, d = _make_collection(tmp_path, settings)
+        # ~170 chunks < one 1 MB flush (341), so A buffers whole; B spills the flush.
+        (d / "a.txt").write_text(_SENTENCE * 170)
+        (d / "b.txt").write_text(_SENTENCE * 600)
+        resolved = d.resolve()
+        a_path, b_path = resolved / "a.txt", resolved / "b.txt"
+        a_total = len(plan_file_chunks(a_path, settings, document_name="a.txt")[0])
+        b_total = len(plan_file_chunks(b_path, settings, document_name="b.txt")[0])
+
+        real_commit = conn.commit
+        calls = {"n": 0}
+
+        def failing_commit() -> None:
+            calls["n"] += 1
+            if calls["n"] == 1:  # the first flush is the shared A-final + B-partial one
+                raise RuntimeError("commit boom on the A+B flush")
+            real_commit()
+
+        conn.commit = failing_commit  # type: ignore[method-assign]
+        ingestor = CollectionIngestor(
+            ChunkStore(db),
+            conn,
+            settings,
+            collection="col",
+            resolved=resolved,
+            max_workers=1,  # A fully buffers, then B — a deterministic shared flush
+            progress=lambda _m: None,
+        )
+        with _patched_embedder(_FakeEmbedder()):
+            result = _run_with_timeout(lambda: ingestor.run([a_path, b_path]))
+        conn.commit = real_commit  # type: ignore[method-assign]
+        assert result is not None
+        _ingested, failed, _errors = cast("tuple[int, int, list[str]]", result)
+        assert failed >= 1
+        # G4 atomicity: neither file committed a registry row at the failed flush.
+        assert conn.get_file(str(a_path)) is None
+        assert conn.get_file(str(b_path)) is None
+
+        # Clean re-sync reconciles both — contiguous, zero duplicates across both.
+        with _patched_embedder(_FakeEmbedder()):
+            CollectionIngestor(
+                ChunkStore(db),
+                conn,
+                settings,
+                collection="col",
+                resolved=resolved,
+                max_workers=1,
+                progress=lambda _m: None,
+            ).run([a_path, b_path])
+        assert _chunk_indexes(db, "a.txt") == list(range(a_total))
+        assert _chunk_indexes(db, "b.txt") == list(range(b_total))
+        conn.close()
+
+    def test_bounded_queue_backpressure_caps_in_flight(self, tmp_path: Path):
+        """A slow consumer makes producers block at the bounded queue's capacity."""
+        settings = _settings(tmp_path, flush_mb=32, window=8, max_chars=45)
+        db, conn, d = _make_collection(tmp_path, settings)
+        for i in range(4):
+            (d / f"f{i}.txt").write_text(_SENTENCE * 40)
+
+        ingestor = CollectionIngestor(
+            ChunkStore(db),
+            conn,
+            settings,
+            collection="col",
+            resolved=d.resolve(),
+            max_workers=4,
+            progress=lambda _m: None,
+        )
+        queue = ingestor._queue
+        capacity = queue.maxsize
+        assert capacity > 0  # the queue is bounded, so in-flight windows are capped
+
+        observed: list[int] = []
+        stop = threading.Event()
+
+        def watch() -> None:
+            while not stop.is_set():
+                observed.append(queue.qsize())
+
+        # Slow the single consumer so producers outpace it and fill the queue.
+        real_add = ProgressiveIndexer.add_window
+
+        def slow_add(
+            self: ProgressiveIndexer, file_id: str, batch: object, vectors: object
+        ) -> None:
+            time.sleep(0.002)
+            real_add(self, file_id, batch, vectors)  # type: ignore[arg-type]
+
+        watcher = threading.Thread(target=watch, daemon=True)
+        watcher.start()
+        try:
+            with (
+                _patched_embedder(_FakeEmbedder()),
+                patch.object(ProgressiveIndexer, "add_window", slow_add),
+            ):
+                files = [d.resolve() / f"f{i}.txt" for i in range(4)]
+                _run_with_timeout(lambda: ingestor.run(files))
+        finally:
+            stop.set()
+            watcher.join()
+
+        assert observed  # the watcher sampled the queue
+        assert max(observed) <= capacity  # never exceeds capacity (bounded)
+        assert max(observed) == capacity  # backpressure actually engaged (queue filled)
         conn.close()
 
 

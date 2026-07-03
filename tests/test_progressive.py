@@ -184,8 +184,10 @@ def test_resume_watermark_advances_from_seed() -> None:
     assert checkpoint.complete is True
 
 
-def test_g4_flush_carries_final_and_partial_atomically() -> None:
-    """One flush reports A complete and B mid-file in a single on_flush call."""
+def test_g4_flush_emits_final_and_partial_checkpoints_in_one_on_flush() -> None:
+    """Unit: one flush emits A-complete + B-partial checkpoints in a single
+    on_flush call (checkpoint emission only; the end-to-end registry atomicity
+    under a crashing commit is covered by test_sync's real two-file G4 test)."""
     target = _FakeTarget()
     # Budget large enough that A's final + B's window share one flush at drain.
     indexer = ProgressiveIndexer(target, flush_bytes=100 * _VEC_BYTES)
