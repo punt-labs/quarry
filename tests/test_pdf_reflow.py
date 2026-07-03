@@ -381,6 +381,30 @@ class TestMalformedInput:
         text = PdfReflow.from_page_dict(page).text()
         assert "real content." in text
 
+    def test_all_lines_filtered_yields_empty_block_without_raising(self) -> None:
+        # Every line has a malformed bbox, so from_block_dict builds a block with
+        # an empty lines tuple. __post_init__ must not raise on max()/min() over
+        # empty, and from_page_dict must drop the block so the page still extracts.
+        bad_block = {
+            "type": 0,
+            "lines": [
+                {"bbox": None, "spans": [{"text": "dropped one"}]},
+                {"bbox": (1.0, 2.0, 3.0, 4.0), "spans": [{"text": "   "}]},
+            ],
+        }
+        page: dict[str, object] = {
+            "width": 595.0,
+            "blocks": [bad_block, _block(_line("surviving content.", 300.0))],
+        }
+        text = PdfReflow.from_page_dict(page).text()
+        assert "surviving content." in text
+        assert "dropped one" not in text
+
+    def test_empty_block_constructed_directly_has_zero_geometry(self) -> None:
+        block = ReflowBlock(lines=())
+        assert block.right_margin == 0.0
+        assert block.width == 0.0
+
 
 class TestPhysicalPageChrome:
     """Page-number stripping keys on the physical page, not the text span."""

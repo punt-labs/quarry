@@ -97,13 +97,14 @@ class ReflowBlock:
     """A text block: an ordered run of lines forming one or more paragraphs."""
 
     lines: tuple[ReflowLine, ...]
-    _right_margin: float = field(init=False)  # cached once; lines are non-empty
+    _right_margin: float = field(init=False)  # cached; 0.0 when lines is empty
     _width: float = field(init=False)
 
     def __post_init__(self) -> None:
-        right = max(line.x1 for line in self.lines)
+        right = max((line.x1 for line in self.lines), default=0.0)
+        left = min((line.x0 for line in self.lines), default=0.0)
         object.__setattr__(self, "_right_margin", right)
-        object.__setattr__(self, "_width", right - min(ln.x0 for ln in self.lines))
+        object.__setattr__(self, "_width", right - left)
 
     @classmethod
     def from_block_dict(cls, block: Any) -> Self:  # fitz block dict; no stubs
@@ -197,10 +198,9 @@ class PdfReflow:
     def page_text(cls, page: Any, *, dict_flags: int | None = None) -> str:
         """Return a page's reflowed text, falling back to flat text if empty.
 
-        An empty reflow (all-numeric page, missing "blocks", only non-text
-        blocks) must not silently drop an extractable page: it falls back to flat
-        ``get_text()`` with a warning. ``dict_flags`` are forwarded to
-        ``get_text("dict", flags=...)`` so the caller can exclude image bytes.
+        An empty reflow falls back to flat ``get_text()`` with a warning rather
+        than silently dropping an extractable page. ``dict_flags`` are forwarded
+        to ``get_text("dict", flags=...)`` so the caller can exclude image bytes.
         """
         extra = {"flags": dict_flags} if dict_flags is not None else {}
         reflowed = cls.from_page_dict(page.get_text("dict", **extra)).text()
