@@ -3,6 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+from pydantic import ValidationError
+
 from quarry import __version__
 from quarry.config import Settings
 
@@ -86,6 +89,34 @@ class TestResolveDbPaths:
 
         with pytest.raises(ValueError, match="Invalid database name"):
             settings.resolve_db_paths(db_name="..")
+
+
+class TestSyncBudget:
+    def test_defaults(self):
+        settings = Settings()
+        assert settings.sync_flush_mb == 32
+        assert settings.embed_window_chunks == 512
+
+    def test_sync_flush_mb_zero_rejected(self):
+        with pytest.raises(ValidationError, match="greater_than_equal"):
+            Settings(sync_flush_mb=0)
+
+    def test_embed_window_chunks_zero_rejected(self):
+        with pytest.raises(ValidationError, match="greater_than_equal"):
+            Settings(embed_window_chunks=0)
+
+    def test_sync_flush_mb_negative_rejected(self):
+        with pytest.raises(ValidationError, match="greater_than_equal"):
+            Settings(sync_flush_mb=-1)
+
+    def test_embed_window_chunks_negative_rejected(self):
+        with pytest.raises(ValidationError, match="greater_than_equal"):
+            Settings(embed_window_chunks=-1)
+
+    def test_one_accepted(self):
+        settings = Settings(sync_flush_mb=1, embed_window_chunks=1)
+        assert settings.sync_flush_mb == 1
+        assert settings.embed_window_chunks == 1
 
 
 class TestPersistentDb:

@@ -6,6 +6,7 @@ import tomllib
 from pathlib import Path
 from typing import ClassVar
 
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 ONNX_MODEL_REPO = "Snowflake/snowflake-arctic-embed-m-v1.5"
@@ -16,12 +17,8 @@ ONNX_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
 class Settings(BaseSettings):
     quarry_root: Path = Path.home() / ".punt-labs" / "quarry" / "data"
-    lancedb_path: Path = (
-        Path.home() / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
-    )
-    registry_path: Path = (
-        Path.home() / ".punt-labs" / "quarry" / "data" / "default" / "registry.db"
-    )
+    lancedb_path: Path = quarry_root / "default" / "lancedb"
+    registry_path: Path = quarry_root / "default" / "registry.db"
     embedding_model: str = "Snowflake/snowflake-arctic-embed-m-v1.5"
     embedding_dimension: int = 768
 
@@ -29,14 +26,14 @@ class Settings(BaseSettings):
     chunk_overlap_chars: int = 200
 
     # Bounded progressive commit (DES-034); embed_window_chunks is a kpz seam.
-    sync_flush_mb: int = 32
-    embed_window_chunks: int = 512
+    # Both are >= 1: ProgressiveIndexer rejects a non-positive flush budget, so an
+    # invalid value must fail loud at construction, not deep in the ingestor.
+    sync_flush_mb: int = Field(default=32, ge=1)
+    embed_window_chunks: int = Field(default=512, ge=1)
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
-    _DEFAULT_LANCEDB: ClassVar[Path] = (
-        Path.home() / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
-    )
+    _DEFAULT_LANCEDB: ClassVar[Path] = quarry_root / "default" / "lancedb"
 
     _CONFIG_PATH: ClassVar[Path] = Path.home() / ".punt-labs" / "quarry" / "config.toml"
 
