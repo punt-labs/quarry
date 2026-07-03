@@ -14,6 +14,32 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- **transform (pdf)**: PDF text pages are now reflowed at extraction instead of
+  stored hard-wrapped. Previously `pdf_text_extractor` used PyMuPDF's flat
+  `page.get_text()`, which emits one newline per *visual* line, so a paragraph
+  that wrapped across several screen lines was stored with spurious mid-sentence
+  newlines — every consumer (`/show`, the menu-bar app, agents) had to re-guess
+  paragraph structure. Extraction now reconstructs paragraphs from
+  `page.get_text("dict")` block/line geometry (new `ingestion/pdf_reflow.py`,
+  a `PdfReflow` value tree): soft-wrapped lines that reach the block's right
+  margin are joined and de-hyphenated; a short line that closes a sentence
+  before a capitalised line is kept as a paragraph break; block boundaries
+  become blank-line paragraph breaks; short schema/heading lines stay on their
+  own line. Standalone page-number lines (1–3 digit runs and 4-digit non-years,
+  exempting plausible years 1000–2999) are stripped. De-hyphenation follows a
+  conservative curated bias — hard compounds like `well-known` keep their
+  hyphen, clear fragments like `inas-much` merge to `inasmuch`, and when unsure
+  the hyphen is kept. `page_raw_text` and the `/show` output shape are unchanged
+  (still a plain string) — only the content is cleaner, so there is no schema or
+  API migration. The OCR path (`ingestion/ocr_local.py`) has no per-line bounding
+  boxes and is a separate follow-on.
+
+  **Migration**: content-hash sync will not auto-re-extract already-indexed
+  documents, because the source files are unchanged. Existing PDF content stays
+  hard-wrapped until re-ingested — re-ingest affected documents to reflow them.
+
 ## [1.17.0] - 2026-07-03
 
 ### Fixed
