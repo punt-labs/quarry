@@ -609,11 +609,17 @@ Five changes:
    child directories are rejected when a parent is already registered.
    Prevents duplicate scanning.
 
-3. **Batch LanceDB writes** — `prepare_document()` chunks and embeds
-   without writing to LanceDB. `sync_collection()` accumulates all
-   chunks and does a single `batch_insert_chunks()` at the end.
-   Reduces N write transactions to 1 per collection sync. Deletes
-   remain per-document (required for overwrite semantics).
+3. **Batch LanceDB writes** — **SUPERSEDED by DES-034.** `prepare_document()`
+   chunked and embedded a whole document without writing to LanceDB;
+   `sync_collection()` accumulated every document's chunks and did a single
+   `batch_insert_chunks()` at the end. This reduced write transactions to 1
+   per collection sync but made nothing searchable until the sync finished, lost
+   all embedding work on a crash, and scaled peak memory with data size (a single
+   large file materialized all its vectors before any write). DES-034 replaces it
+   with bounded progressive commit: a streaming embed producer plus a
+   `ProgressiveIndexer` that flushes every `sync_flush_mb` and commits one
+   registry transaction per flush. `prepare_document()` and `batch_insert` are
+   removed.
 
 4. **optimize_table() guard** — Skips when fragment count exceeds
    10,000 to prevent the death spiral. `quarry optimize --force`
@@ -1073,3 +1079,107 @@ This decision depends on DES-027's `narenas:1,tcache:false`. If `MALLOC_CONF` ch
 3. **Async search route** — Making `_search_route` async and using explicit `run_in_threadpool` for blocking calls. Did not help: the bottleneck is the ONNX session mutex, not Starlette's thread dispatch.
 4. **Process isolation** — Separate ONNX worker process. Eliminates all contention but adds IPC complexity. Disproportionate when session isolation achieves the same result in-process.
 5. **User-configurable thread count** — Adding an `embedding_threads` field to `Settings`. Rejected for this PR because auto-detection covers all known hardware configurations correctly. Future work (DES-033) if edge cases emerge.
+
+## DES-034: Bounded Progressive Commit for Sync Ingestion
+
+**Date:** 2026-07-03
+**Status:** SETTLED
+**Supersedes:** DES-026 change #3 (batch-write-at-end)
+**Topic:** Making ingestion incremental, crash-resilient, and memory-bounded
+
+### Problem
+
+DES-026 change #3 accumulated every `(chunks, vectors)` for a collection in
+memory and did one `batch_insert` at the end. Consequences: nothing searchable
+until the whole sync finished; a crash lost all embedding work; peak memory
+scaled with collection size *and* with a single large file's chunk count
+(`prepare_document` embedded a whole file at once). LanceDB (append-only, MVCC)
+is fully capable of concurrent read/write and large data — the bottleneck was
+quarry's batch-at-end usage, not the engine. Very large single files are a
+primary use case, so the whole-file embed path was the load-bearing failure.
+
+### Design
+
+1. **Streaming producer** — a `DocumentStreamer` chunks a document once
+   (assigning a document-global, contiguous `chunk_index`) and embeds it in
+   bounded windows (`embed_window_chunks`, default 512), yielding
+   `(chunks, vectors)` sub-batches so a single large document never materializes
+   all its vectors. The window size is an embedding-throughput tuning seam
+   (kpz per the CLAUDE.md pairing table).
+
+2. **Bounded progressive commit** — a `ProgressiveIndexer` buffers windows and
+   flushes to LanceDB when the buffered vector bytes reach `sync_flush_mb`
+   (default 32 MB, **can fire mid-file**) and at end-of-collection. Each flush is
+   Lance-add → **one** registry transaction covering every file the flush
+   touched: completion rows for files whose final window is durable *and*
+   advanced watermarks for files still mid-flight. All registry mutations for one
+   flush commit atomically (single `conn.commit()`), so the registry can never be
+   partially consistent with the one durable Lance version. Peak resident vectors
+   are bounded by `N + queue_capacity × window`, independent of file or
+   collection size. Writes serialize because exactly one consumer thread performs
+   them (not `_table_lock`, which guards only `create_table`); a `_write_lock`
+   additionally serializes producer overwrite-deletes against the consumer's adds.
+
+3. **Fragment budget** — flush count is `O(total_vectors / N)`, independent of
+   file count, keeping fragments two-plus orders of magnitude below the 10K guard
+   so the single post-sync `optimize()` runs and compacts. A *file completion* is
+   a registry checkpoint, not necessarily a Lance flush — small files coalesce
+   into a shared flush, so a many-tiny-files collection cannot reopen the DES-026
+   spiral.
+
+4. **MVCC progressive visibility** — each flush commits a new manifest version;
+   readers `open_table` per query (`chunk_search.py`) and snapshot-isolate from
+   the writer, so concurrent search returns partial results without blocking. The
+   vector channel sees fresh chunks immediately; FTS coverage lags until the
+   post-sync FTS rebuild (graceful vector-only fallback). LanceDB MVCC provides
+   blue/green visibility for incremental updates for free — no manual 2× shadow
+   swap; a shadow swap is reserved for a full re-index (embedding-model change),
+   scoped separately.
+
+5. **Crash-resume (within-file, v1)** — committed flushes are durable. The
+   `files` table carries a `chunks_committed` watermark and a `partial_hash`
+   column; each flush advances the watermark for files it touched. On resume, a
+   file with a partial watermark `w` re-enters ingestion and resumes *within* the
+   file, re-embedding only `[w, total)`. Two rules keep this correct:
+   - **Delete-tail-on-resume (required).** Before re-embedding, delete every
+     chunk with `chunk_index >= w`. A crash between a mid-file `add` and the
+     watermark commit can leave durable chunks `[w, K)` in Lance with the
+     watermark unadvanced; without delete-tail, resume would re-add `[w, end)` and
+     duplicate `[w, K)`. Delete-tail makes the document's Lance contents exactly
+     `[0, w)` before re-embedding, so resume is idempotent under repeated crashes.
+   - **Determinism precondition + fallback.** The watermark is valid only when
+     re-chunking the same bytes yields byte-identical boundaries (holds for the
+     deterministic text/PDF loaders). If `partial_hash != content_hash` (file
+     changed) or the loader is non-deterministic (OCR/rapidocr), the watermark is
+     discarded and the file is fully overwrite-deleted and re-embedded from
+     `chunk_index 0`.
+
+### Relationship to DES-027 / DES-032
+
+Progressive flush bounds the resident **vector** working set to
+`N + queue_capacity × window` in-process (source-text residency stays O(file)
+until the loaders stream — a separate follow-on) and produces a bounded sawtooth
+that DES-027's `dirty_decay_ms:1000` reclaims between flushes. Because the vector
+working set is bounded in-process and DES-032's thread caps + session isolation
+already protect query latency, **process isolation of the ingest worker is
+deferred** (revisit only if benchmarks show query p99 regressing during large
+syncs; the future path is an ingest subprocess writing Lance directly, read via
+MVCC — candidate DES-035).
+
+### Rejected / deferred
+
+1. **Literal per-file flush** — reopens the fragment spiral on >10K-file
+   collections (fragments decouple from data size). Rejected in favor of
+   size-gated flush + per-file registry checkpoint.
+2. **Add-without-delete-tail on resume** — not idempotent; a crash between a
+   mid-file `add` and the watermark commit would duplicate the post-watermark
+   chunks. Delete-tail-on-resume is required.
+3. **Trusting the watermark under non-deterministic extraction** — an OCR re-run
+   can produce different boundaries, so the watermark is discarded when
+   `partial_hash` mismatches or the loader is non-deterministic.
+4. **Streaming the loaders (bound source-text residency)** — deferred to a
+   follow-on bead; v1 bounds the vector working set, not the extracted-text
+   residency (O(file) via `_extract_pages`).
+5. **`pyarrow.RecordBatch` build (drop the ~6× `.tolist()` transient)** — deferred
+   to a follow-on bead (DES-027 rejected-alt #3).
+6. **Process isolation** — deferred (see above).
