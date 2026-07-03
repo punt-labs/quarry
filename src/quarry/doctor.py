@@ -997,9 +997,9 @@ def run_install() -> int:  # noqa: C901
     # detection can trigger FP16 model caching)
     print("[2/8] Checking GPU runtime...")  # noqa: T201
     try:
-        from quarry.service import ensure_gpu_runtime  # noqa: PLC0415
+        from quarry.gpu_runtime import GpuRuntime  # noqa: PLC0415
 
-        gpu_status = ensure_gpu_runtime()
+        gpu_status = GpuRuntime.ensure()
         if "failed" in gpu_status:
             print(f"  \u2717 {gpu_status}")  # noqa: T201
             failed = True

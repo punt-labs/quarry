@@ -1207,7 +1207,7 @@ class TestRunInstall:
         _mock_install_deps(monkeypatch)
         with (
             patch(
-                "quarry.service.ensure_gpu_runtime",
+                "quarry.gpu_runtime.GpuRuntime.ensure",
                 return_value="onnxruntime-gpu install failed, CPU restored",
             ),
             patch(self._DL) as mock_dl,
