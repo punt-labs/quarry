@@ -9,10 +9,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import numpy as np
-    from numpy.typing import NDArray
     from PIL.Image import Image as PILImage
 
+    from quarry.models import Chunk
     from quarry.sitemap import SitemapEntry
 
 from quarry.config import Settings
@@ -30,8 +29,8 @@ from quarry.extractors.spreadsheet_extractor import (
     SpreadsheetExtractor,
 )
 from quarry.extractors.text_extractor import SUPPORTED_TEXT_EXTENSIONS, TextExtractor
-from quarry.ingestion.backends import get_embedding_backend, get_ocr_backend
-from quarry.ingestion.chunker import chunk_pages
+from quarry.ingestion.backends import get_ocr_backend
+from quarry.ingestion.streaming import DocumentStreamer, progressive_insert
 from quarry.models import Chunk, PageContent, PageType
 from quarry.results import IngestResult, SitemapResult
 
@@ -1367,50 +1366,37 @@ def _chunk_embed_store(
     memory_type: str = "",
     summary: str = "",
 ) -> IngestResult:
-    """Shared pipeline: chunk pages, embed, store in LanceDB."""
+    """Shared pipeline: chunk pages, embed in bounded windows, store progressively."""
     progress("Chunking")
     t0 = time.perf_counter()
-    chunks = chunk_pages(
+    chunks = DocumentStreamer(settings).build_chunks(
         pages,
-        max_chars=settings.chunk_max_chars,
-        overlap_chars=settings.chunk_overlap_chars,
         collection=collection,
         source_format=source_format,
         agent_handle=agent_handle,
         memory_type=memory_type,
         summary=summary,
     )
-    t_chunk = time.perf_counter() - t0
     logger.info(
         "pipeline: chunked %d pages → %d chunks in %.2fs",
         len(pages),
         len(chunks),
-        t_chunk,
+        time.perf_counter() - t0,
     )
     progress("Created %d chunks", len(chunks))
 
-    inserted = 0
     if chunks:
-        embedder = get_embedding_backend(settings)
-        progress("Generating embeddings (%s)", embedder.model_name)
-        texts = [c.text for c in chunks]
+        progress("Embedding + storing in bounded windows")
         t0 = time.perf_counter()
-        vectors = embedder.embed_texts(texts)
-        t_embed = time.perf_counter() - t0
+        inserted = progressive_insert(chunks, database.store, settings, document_name)
         logger.info(
-            "pipeline: embedded %d chunks in %.2fs (%.1f chunks/s)",
-            len(chunks),
-            t_embed,
-            len(chunks) / t_embed if t_embed > 0 else float("inf"),
+            "pipeline: embedded + stored %d chunks in %.2fs",
+            inserted,
+            time.perf_counter() - t0,
         )
-
-        progress("Storing in LanceDB")
-        t0 = time.perf_counter()
-        inserted = database.store.insert(chunks, vectors)
-        t_store = time.perf_counter() - t0
-        logger.info("pipeline: stored %d chunks in %.2fs", inserted, t_store)
         progress("Done: %d chunks indexed from %s", inserted, document_name)
     else:
+        inserted = 0
         progress("No text found — nothing to index")
 
     result: IngestResult = {
@@ -1437,7 +1423,7 @@ def _chunk_embed_store(
     return result
 
 
-def prepare_document(
+def plan_file_chunks(
     file_path: Path,
     settings: Settings,
     *,
@@ -1446,12 +1432,12 @@ def prepare_document(
     agent_handle: str = "",
     memory_type: str = "",
     summary: str = "",
-) -> tuple[list[Chunk], NDArray[np.float32]] | None:
-    """Chunk and embed a document without writing to LanceDB.
+) -> list[Chunk]:
+    """Extract and chunk a file for sync, assigning a document-global chunk_index.
 
-    Returns a ``(chunks, vectors)`` pair ready for batch insertion, or
-    ``None`` if the document produces no chunks.  Used by the sync
-    pipeline to accumulate chunks across documents and batch-write them.
+    Returns the full ordered chunk list with embedding deferred, so the sync
+    producer knows the document's total chunk count before streaming windows and
+    can resume within the file.
 
     Raises:
         FileNotFoundError: If *file_path* does not exist.
@@ -1460,34 +1446,30 @@ def prepare_document(
     if not file_path.exists():
         msg = f"File not found: {file_path}"
         raise FileNotFoundError(msg)
-
     document_name = document_name or file_path.name
     suffix = file_path.suffix.lower()
-
-    pages: list[PageContent] = _extract_pages(
-        file_path, suffix, document_name, settings
-    )
+    pages = _extract_pages(file_path, suffix, document_name, settings)
     if not pages:
-        return None
-
-    source_format = suffix
-    chunks = chunk_pages(
+        return []
+    return DocumentStreamer(settings).build_chunks(
         pages,
-        max_chars=settings.chunk_max_chars,
-        overlap_chars=settings.chunk_overlap_chars,
         collection=collection,
-        source_format=source_format,
+        source_format=suffix,
         agent_handle=agent_handle,
         memory_type=memory_type,
         summary=summary,
     )
-    if not chunks:
-        return None
 
-    embedder = get_embedding_backend(settings)
-    texts = [c.text for c in chunks]
-    vectors: NDArray[np.float32] = embedder.embed_texts(texts)
-    return chunks, vectors
+
+def is_deterministic_loader(file_path: Path) -> bool:
+    """Return whether re-chunking *file_path* yields byte-identical boundaries.
+
+    Text/PDF/code/spreadsheet/HTML/presentation loaders are pure functions of the
+    file bytes, so a within-file resume watermark is trustworthy. Standalone image
+    OCR (rapidocr) is non-deterministic (DES-034 §5.3, G3), so its watermark is
+    discarded and the file is re-embedded from ``chunk_index 0``.
+    """
+    return file_path.suffix.lower() not in SUPPORTED_IMAGE_EXTENSIONS
 
 
 def _extract_image_pages(
