@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+import threading
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 from unittest.mock import patch
 
 import numpy as np
+import pytest
 
 from quarry.config import Settings
 from quarry.db.chunk_store import ChunkStore
@@ -20,11 +22,29 @@ from quarry.sync_ingest import CollectionIngestor
 from quarry.sync_registry import FileRecord, SyncRegistry
 
 if TYPE_CHECKING:
-    import pytest
     from numpy.typing import NDArray
 
     from quarry.models import Chunk
     from quarry.types import LanceDB
+
+
+def _run_with_timeout(fn: Callable[[], object], *, timeout: float = 20.0) -> object:
+    """Run *fn* in a thread; fail fast if it does not finish (deadlock guard).
+
+    Producer/consumer liveness regressions manifest as a hang, not a wrong value;
+    running under a watchdog turns a would-be hang into a clear failure.
+    """
+    box: dict[str, object] = {}
+
+    def target() -> None:
+        box["value"] = fn()
+
+    thread = threading.Thread(target=target, daemon=True)
+    thread.start()
+    thread.join(timeout)
+    if thread.is_alive():
+        pytest.fail(f"sync did not terminate within {timeout}s — deadlock regression")
+    return box.get("value")
 
 
 class _FakeEmbedder:
@@ -920,6 +940,86 @@ class TestFragmentBudgetAndExceptions:
         assert _chunk_indexes(db, "big.txt") == list(range(total))
         rec2 = conn.get_file(str(f.resolve()))
         assert rec2 is not None and rec2.partial_hash is None
+        conn.close()
+
+
+class _ConsumerBoomError(Exception):
+    """A consumer-side error outside _RECOVERABLE/_FLUSH_ERRORS (e.g. MemoryError)."""
+
+
+class TestConcurrencyLiveness:
+    """Regressions for the producer/consumer deadlock blockers (#1, #2)."""
+
+    def test_producer_non_recoverable_fails_cleanly_no_hang(self, tmp_path: Path):
+        """A KeyError (not in _RECOVERABLE) in a producer must not hang the sync."""
+        settings = _settings(tmp_path)
+        db, conn, d = _make_collection(tmp_path, settings)
+        (d / "good.txt").write_text(_SENTENCE * 2)
+        (d / "bad.txt").write_text(_SENTENCE * 2)
+
+        real_plan = plan_file_chunks
+
+        def flaky(fp: Path, *a: object, **k: object) -> object:
+            if fp.name == "bad.txt":
+                raise KeyError("non-recoverable producer failure")
+            return real_plan(fp, *a, **k)  # type: ignore[arg-type]
+
+        with (
+            _patched_embedder(_FakeEmbedder()),
+            patch("quarry.sync_ingest.plan_file_chunks", side_effect=flaky),
+        ):
+            result = _run_with_timeout(
+                lambda: sync_collection(d, "col", db, settings, conn, max_workers=2)
+            )
+        assert result is not None
+        assert result.ingested == 1  # type: ignore[attr-defined]
+        assert result.failed == 1  # type: ignore[attr-defined]
+        assert any("bad.txt" in e for e in result.errors)  # type: ignore[attr-defined]
+        conn.close()
+
+    def test_consumer_non_flush_error_aborts_no_deadlock(self, tmp_path: Path):
+        """A consumer flush error outside _FLUSH_ERRORS aborts + drains, no hang."""
+        settings = _settings(tmp_path, flush_mb=1, window=8, max_chars=45)
+        db, conn, d = _make_collection(tmp_path, settings)
+        # >341 chunks so a size-gated flush fires mid-file on the consumer thread.
+        (d / "big.txt").write_text(_SENTENCE * 800)
+        (d / "small.txt").write_text(_SENTENCE * 2)
+
+        def boom(_self: ChunkStore, _records: list[dict[str, object]]) -> int:
+            raise _ConsumerBoomError("table.add blew up")
+
+        with (
+            _patched_embedder(_FakeEmbedder()),
+            patch.object(ChunkStore, "insert_records", boom),
+        ):
+            result = _run_with_timeout(
+                lambda: sync_collection(d, "col", db, settings, conn, max_workers=2)
+            )
+        assert result is not None
+        assert result.failed >= 1  # type: ignore[attr-defined]
+        assert result.errors  # type: ignore[attr-defined]
+        conn.close()
+
+    def test_parallel_sync_two_files_max_workers_2(self, tmp_path: Path):
+        """End-to-end sync under real concurrency (single-consumer serializes)."""
+        settings = _settings(tmp_path, flush_mb=1, window=8, max_chars=45)
+        db, conn, d = _make_collection(tmp_path, settings)
+        (d / "a.txt").write_text(_SENTENCE * 300)
+        (d / "b.txt").write_text(_SENTENCE * 300)
+        with _patched_embedder(_FakeEmbedder()):
+            result = _run_with_timeout(
+                lambda: sync_collection(d, "col", db, settings, conn, max_workers=2)
+            )
+        assert result is not None
+        assert result.ingested == 2  # type: ignore[attr-defined]
+        assert result.failed == 0  # type: ignore[attr-defined]
+        # Each file's chunk indexes are contiguous [0, n) with no interleave gaps.
+        assert _chunk_indexes(db, "a.txt") == list(
+            range(len(plan_file_chunks(d / "a.txt", settings, document_name="a.txt")))
+        )
+        rows = {r.document_name: r for r in conn.list_files("col")}
+        assert rows["a.txt"].partial_hash is None
+        assert rows["b.txt"].partial_hash is None
         conn.close()
 
 
