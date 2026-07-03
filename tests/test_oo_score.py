@@ -8,11 +8,15 @@ import sys
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
+import pytest
+
 if TYPE_CHECKING:
     from pathlib import Path
     from types import ModuleType
 
-    import pytest
+
+def _raise_oserror(*_args: object, **_kwargs: object) -> None:
+    raise OSError("disk full")
 
 
 def _load_oo_score() -> ModuleType:
@@ -204,6 +208,39 @@ class TestScopedCorrection:
         key, _ = self._phantom_repo(tmp_path)
         ratchet = oo.Ratchet(tmp_path)
         assert ratchet.correct(key, "   ") == 2
+
+    def test_correct_refuses_flag_like_reason(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """`--reason --check` (value omitted, next flag swallowed) fails loud."""
+        key, _ = self._phantom_repo(tmp_path)
+        before = (tmp_path / oo.Ratchet.BASELINE_FILE).read_text()
+        ratchet = oo.Ratchet(tmp_path)
+        assert ratchet.correct(key, "--check") == 2
+        assert "looks like a flag" in capsys.readouterr().out
+        assert (tmp_path / oo.Ratchet.BASELINE_FILE).read_text() == before
+        assert not (tmp_path / oo.Ratchet.AUDIT_FILE).exists()
+
+    def test_correct_audits_before_persisting(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed baseline write must still leave the audit record behind.
+
+        Audit-before-save guarantees a correction never persists without its
+        accountability line.
+        """
+        key, _ = self._phantom_repo(tmp_path)
+        before = (tmp_path / oo.Ratchet.BASELINE_FILE).read_text()
+        ratchet = oo.Ratchet(tmp_path)
+        monkeypatch.setattr(ratchet, "_save_baseline", _raise_oserror)
+        with pytest.raises(OSError, match="disk full"):
+            ratchet.correct(key, "phantom fix")
+        audit = tmp_path / oo.Ratchet.AUDIT_FILE
+        assert audit.exists()
+        entry = json.loads(audit.read_text().splitlines()[-1])
+        assert entry["verdict"] == "correct"
+        # Save raised, so the baseline on disk is unchanged.
+        assert (tmp_path / oo.Ratchet.BASELINE_FILE).read_text() == before
 
     def test_correct_missing_file_returns_2(self, tmp_path: Path) -> None:
         self._phantom_repo(tmp_path)

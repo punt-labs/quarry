@@ -993,6 +993,12 @@ class Ratchet:
         if not reason.strip():
             _writeln("--correct requires a non-empty --reason")
             return 2
+        # A reason that looks like a flag (e.g. "--check") means --reason was
+        # given no value and swallowed the next flag — fail loud rather than
+        # log a flag name as the accountability record.
+        if reason.startswith("--"):
+            _writeln(f"--reason looks like a flag: {reason!r} -- pass a real reason")
+            return 2
 
         path = Path(target_file)
         if not path.is_file():
@@ -1021,10 +1027,9 @@ class Ratchet:
             and old_entry[metric] != true_metrics[metric]
         }
 
-        new_baseline = dict(self._baseline)
-        new_baseline[key] = true_metrics
-        self._save_baseline(new_baseline)
-
+        # Audit BEFORE the mutation persists: a corrected baseline must never
+        # exist without its accountability record. If the audit write raises,
+        # the baseline is left untouched.
         self._append_audit(
             files_scored=1,
             files_improved=0,
@@ -1033,6 +1038,10 @@ class Ratchet:
             deltas={key: file_deltas} if file_deltas else {},
             reason=reason,
         )
+
+        new_baseline = dict(self._baseline)
+        new_baseline[key] = true_metrics
+        self._save_baseline(new_baseline)
 
         _writeln(f"\nCorrected baseline entry: {key}")
         _writeln(f"  reason: {reason}")
