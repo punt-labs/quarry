@@ -14,6 +14,26 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Added
+
+- **infra (oo-ratchet)**: three hardening features for `tools/oo_score.py`, the
+  OO quality gate. `--verify` recomputes scores for the committed code and fails
+  if any `.oo-baseline.json` entry diverges from the file's true score, catching
+  a phantom baseline (one committed out of sync with its code) at PR time; it
+  fails closed on a missing baseline unless `--allow-missing` is passed. It runs
+  as a CI-only step (`make check-oo-integrity`, wired into
+  `.github/workflows/lint.yml`), not in the local `make check` chain, because the
+  ratchet requires each commit to improve a metric — which diverges from the
+  not-yet-updated baseline until `make update-oo` runs. `--correct <file>
+  --reason <text>` (`make correct-oo FILE=... REASON=...`) re-records ONE
+  baseline entry to its true score with a mandatory, audited reason — a scoped
+  fix for a proven phantom without the nuclear full `--rebaseline`. Ratio metrics
+  (`avg_params`, `avg_complexity`, `method_ratio`) now tolerate a sub-0.02
+  micro-regression when the file still comfortably clears its absolute threshold
+  and a companion size/complexity metric improved, absorbing the denominator
+  artifact from extracting a 0-param function without loosening any absolute
+  threshold (quarry-0bdi).
+
 ### Changed
 
 - **sync**: ingestion now commits progressively instead of accumulating every

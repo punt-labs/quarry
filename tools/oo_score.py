@@ -597,6 +597,17 @@ class Ratchet:
         comfortably clears its ABSOLUTE threshold, and a companion size or
         complexity metric improved in the same change. Non-ratio metrics
         (module_size, max_complexity, counts) are never tolerated here.
+
+        Shared companion (reviewer note): the companion check is evaluated
+        independently per ratio metric against the SAME change, so one small
+        module_size/max_complexity win can absorb a sub-epsilon nudge on all
+        three ratio metrics at once. This is bounded and by design — the
+        _comfortably_meets floor still holds for each metric independently, so
+        no ratio can drift past (or even up to) its absolute threshold no
+        matter how many share the companion. Tightening to one tolerated nudge
+        per change was considered and left out: the absolute-threshold floor is
+        the real guarantee, and per-metric accounting would add state for no
+        additional safety.
         """
         if metric not in self.RATIO_METRICS:
             return False
