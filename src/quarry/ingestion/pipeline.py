@@ -1432,12 +1432,13 @@ def plan_file_chunks(
     agent_handle: str = "",
     memory_type: str = "",
     summary: str = "",
-) -> list[Chunk]:
-    """Extract and chunk a file for sync, assigning a document-global chunk_index.
+) -> tuple[list[Chunk], bool]:
+    """Extract and chunk a file for sync, reporting extraction determinism.
 
-    Returns the full ordered chunk list with embedding deferred, so the sync
-    producer knows the document's total chunk count before streaming windows and
-    can resume within the file.
+    Returns ``(chunks, deterministic)``: the full ordered chunk list (embedding
+    deferred) so the sync producer knows the document's total chunk count before
+    streaming windows, plus whether the extraction is deterministic so resume can
+    decide whether to trust a mid-file watermark (DES-034 §5.3, G3).
 
     Raises:
         FileNotFoundError: If *file_path* does not exist.
@@ -1449,9 +1450,10 @@ def plan_file_chunks(
     document_name = document_name or file_path.name
     suffix = file_path.suffix.lower()
     pages = _extract_pages(file_path, suffix, document_name, settings)
+    deterministic = _pages_are_deterministic(pages)
     if not pages:
-        return []
-    return DocumentStreamer(settings).build_chunks(
+        return [], deterministic
+    chunks = DocumentStreamer(settings).build_chunks(
         pages,
         collection=collection,
         source_format=suffix,
@@ -1459,17 +1461,16 @@ def plan_file_chunks(
         memory_type=memory_type,
         summary=summary,
     )
+    return chunks, deterministic
 
 
-def is_deterministic_loader(file_path: Path) -> bool:
-    """Return whether re-chunking *file_path* yields byte-identical boundaries.
+def _pages_are_deterministic(pages: list[PageContent]) -> bool:
+    """Return False if any page came from OCR (``PageType.IMAGE``), else True.
 
-    Text/PDF/code/spreadsheet/HTML/presentation loaders are pure functions of the
-    file bytes, so a within-file resume watermark is trustworthy. Standalone image
-    OCR (rapidocr) is non-deterministic (DES-034 §5.3, G3), so its watermark is
-    discarded and the file is re-embedded from ``chunk_index 0``.
+    OCR (rapidocr) re-segments text differently on re-run, so a document with any
+    OCR'd page cannot honor a within-file resume watermark (DES-034 §5.3, G3).
     """
-    return file_path.suffix.lower() not in SUPPORTED_IMAGE_EXTENSIONS
+    return not any(page.page_type == PageType.IMAGE for page in pages)
 
 
 def _extract_image_pages(

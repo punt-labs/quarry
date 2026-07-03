@@ -16,6 +16,7 @@ from quarry.db.chunk_store import ChunkStore
 from quarry.db.schema import TABLE_NAME
 from quarry.db.storage import get_db
 from quarry.ingestion.pipeline import plan_file_chunks
+from quarry.models import PageContent, PageType
 from quarry.sync import compute_sync_plan, sync_all, sync_collection
 from quarry.sync_discovery import _DEFAULT_IGNORE_PATTERNS, FileDiscovery
 from quarry.sync_ingest import CollectionIngestor
@@ -83,6 +84,38 @@ class _RaisingEmbedder(_FakeEmbedder):
             msg = "embedder boom"
             raise RuntimeError(msg)
         return super().embed_texts(texts)
+
+
+class _FakeOcr:
+    """OCR backend double that returns a fixed IMAGE page (non-deterministic)."""
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+
+    def _page(self, document_name: str, document_path: Path) -> PageContent:
+        return PageContent(
+            document_name=document_name,
+            document_path=str(document_path),
+            page_number=1,
+            total_pages=1,
+            text=self._text,
+            page_type=PageType.IMAGE,
+        )
+
+    def ocr_image_bytes(
+        self, image_bytes: bytes, document_name: str, document_path: Path
+    ) -> PageContent:
+        return self._page(document_name, document_path)
+
+    def ocr_document(
+        self,
+        document_path: Path,
+        page_numbers: list[int],
+        total_pages: int,
+        *,
+        document_name: str | None = None,
+    ) -> list[PageContent]:
+        return [self._page(document_name or "", document_path)]
 
 
 def _settings(
@@ -677,7 +710,7 @@ def _seed_crash_state(
     f = d / "big.txt"
     f.write_text(_SENTENCE * 12)
     doc = "big.txt"
-    chunks = plan_file_chunks(f, settings, collection="col", document_name=doc)
+    chunks, _ = plan_file_chunks(f, settings, collection="col", document_name=doc)
     total = len(chunks)
     assert total >= 4
     w = int(total * watermark_from_total)
@@ -823,19 +856,52 @@ class TestWithinFileResume:
         assert _chunk_indexes(db, doc) == list(range(total))
         conn.close()
 
-    def test_g3_nondeterministic_loader_full_reembed(self, tmp_path: Path):
-        """G3: a non-deterministic loader discards the watermark regardless of hash."""
-        settings, db, conn, d, doc, chunks, total, _w = _seed_crash_state(
-            tmp_path, watermark_from_total=0.5, prefill_from_total=0.5
+    def test_g3_ocr_image_extraction_full_reembed(self, tmp_path: Path):
+        """G3: an OCR'd (IMAGE) extraction is non-deterministic → discard watermark.
+
+        Drives the real image path (``_extract_image_pages`` → OCR backend) rather
+        than patching the determinism flag, so the classifier itself is exercised.
+        """
+        from PIL import Image
+
+        settings = _settings(tmp_path, max_chars=45)
+        db, conn, d = _make_collection(tmp_path, settings)
+        img = d / "scan.png"
+        Image.new("RGB", (64, 64), "white").save(img)
+        ocr = _FakeOcr(_SENTENCE * 12)
+
+        with patch("quarry.ingestion.pipeline.get_ocr_backend", return_value=ocr):
+            chunks, deterministic = plan_file_chunks(
+                img, settings, collection="col", document_name="scan.png"
+            )
+        assert deterministic is False  # OCR pages are IMAGE → non-deterministic
+        total = len(chunks)
+        assert total >= 4
+        w = total // 2
+        content_hash = FileDiscovery.content_hash(img)
+        ChunkStore(db).insert(chunks[:w], np.zeros((w, 768), dtype=np.float32))
+        conn.upsert_file(
+            FileRecord(
+                path=str(img.resolve()),
+                collection="col",
+                document_name="scan.png",
+                mtime=img.stat().st_mtime,
+                size=img.stat().st_size,
+                ingested_at="2025-01-01",
+                content_hash=content_hash,  # hash matches — only OCR non-determinism
+                chunks_committed=w,
+                partial_hash=content_hash,
+            ),
         )
         embedder = _FakeEmbedder()
         with (
+            patch("quarry.ingestion.pipeline.get_ocr_backend", return_value=ocr),
             _patched_embedder(embedder),
-            patch("quarry.sync_ingest.is_deterministic_loader", return_value=False),
         ):
             sync_collection(d, "col", db, settings, conn, max_workers=1)
-        assert embedder.embedded == [c.text for c in chunks]  # full re-embed
-        assert _chunk_indexes(db, doc) == list(range(total))
+        # Non-deterministic extraction → watermark discarded → full re-embed from 0.
+        assert embedder.embedded == [c.text for c in chunks]
+        assert _chunk_indexes(db, "scan.png") == list(range(total))
         conn.close()
 
 
@@ -909,7 +975,9 @@ class TestFragmentBudgetAndExceptions:
                 max_workers=1,
                 progress=lambda _m: None,
             ).run([resolved / "a.txt"])
-        chunks = plan_file_chunks(f, settings, collection="col", document_name="a.txt")
+        chunks, _ = plan_file_chunks(
+            f, settings, collection="col", document_name="a.txt"
+        )
         assert _chunk_indexes(db, "a.txt") == list(range(len(chunks)))
         rec = conn.get_file(str(resolved / "a.txt"))
         assert rec is not None and rec.partial_hash is None
@@ -922,7 +990,7 @@ class TestFragmentBudgetAndExceptions:
         f = d / "big.txt"
         f.write_text(_SENTENCE * 12)
         total = len(
-            plan_file_chunks(f, settings, collection="col", document_name="big.txt")
+            plan_file_chunks(f, settings, collection="col", document_name="big.txt")[0]
         )
         # Raise on the 2nd embed window so window 1 (chunks [0, 2)) is durable.
         embedder = _RaisingEmbedder(fail_on_call=2)
@@ -1014,9 +1082,8 @@ class TestConcurrencyLiveness:
         assert result.ingested == 2  # type: ignore[attr-defined]
         assert result.failed == 0  # type: ignore[attr-defined]
         # Each file's chunk indexes are contiguous [0, n) with no interleave gaps.
-        assert _chunk_indexes(db, "a.txt") == list(
-            range(len(plan_file_chunks(d / "a.txt", settings, document_name="a.txt")))
-        )
+        a_chunks, _ = plan_file_chunks(d / "a.txt", settings, document_name="a.txt")
+        assert _chunk_indexes(db, "a.txt") == list(range(len(a_chunks)))
         rows = {r.document_name: r for r in conn.list_files("col")}
         assert rows["a.txt"].partial_hash is None
         assert rows["b.txt"].partial_hash is None

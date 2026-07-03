@@ -13,7 +13,7 @@ from queue import Queue
 from typing import TYPE_CHECKING, Self
 
 from quarry.db.chunk_table import ChunkTable, DocumentRef
-from quarry.ingestion.pipeline import is_deterministic_loader, plan_file_chunks
+from quarry.ingestion.pipeline import plan_file_chunks
 from quarry.ingestion.progressive import ProgressiveIndexer
 from quarry.ingestion.streaming import DocumentStreamer
 from quarry.sync_discovery import FileDiscovery
@@ -190,7 +190,7 @@ class CollectionIngestor:
         document_name = str(file_path.relative_to(self._resolved))
         error: str | None = None
         try:
-            chunks = plan_file_chunks(
+            chunks, deterministic = plan_file_chunks(
                 file_path,
                 self._settings,
                 collection=self._collection,
@@ -199,7 +199,7 @@ class CollectionIngestor:
             content_hash = self._safe_hash(file_path)
             record = self._registry.get_file(file_id)
             watermark = self._resume_watermark(
-                file_path, record, content_hash, len(chunks)
+                record, content_hash, len(chunks), deterministic=deterministic
             )
             self._reconcile(document_name, watermark)
             self._meta[file_id] = _FileMeta(
@@ -283,16 +283,13 @@ class CollectionIngestor:
 
     def _resume_watermark(
         self,
-        file_path: Path,
         record: FileRecord | None,
         content_hash: str | None,
         total: int,
+        *,
+        deterministic: bool,
     ) -> int:
-        """Return the within-file resume index, or 0 for a full (re-)embed.
-
-        The G3 gate: honor a mid-file watermark only when the bytes are unchanged
-        and the loader is deterministic; else re-embed from 0.
-        """
+        """Return the within-file resume index, or 0 for a full (re-)embed (G3 gate)."""
         if record is None or not record.is_partial:
             return 0
         watermark = record.chunks_committed
@@ -300,7 +297,7 @@ class CollectionIngestor:
             return 0
         if record.partial_hash != content_hash:
             return 0
-        if not is_deterministic_loader(file_path):
+        if not deterministic:
             return 0
         return watermark
 

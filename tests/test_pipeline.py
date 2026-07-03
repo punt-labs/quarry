@@ -560,15 +560,32 @@ class TestSingleDocProgressiveInsert:
 
 
 class TestDeterminismFlag:
-    def test_text_and_pdf_are_deterministic(self) -> None:
-        from quarry.ingestion.pipeline import is_deterministic_loader
+    """_pages_are_deterministic keys off OCR (IMAGE) pages, not the file suffix."""
 
-        assert is_deterministic_loader(Path("notes.txt")) is True
-        assert is_deterministic_loader(Path("paper.pdf")) is True
-        assert is_deterministic_loader(Path("code.py")) is True
+    def _page(self, page_type: PageType) -> PageContent:
+        return PageContent(
+            document_name="d",
+            document_path="/d",
+            page_number=1,
+            total_pages=1,
+            text="text",
+            page_type=page_type,
+        )
 
-    def test_images_are_non_deterministic(self) -> None:
-        from quarry.ingestion.pipeline import is_deterministic_loader
+    def test_text_pages_are_deterministic(self) -> None:
+        from quarry.ingestion.pipeline import _pages_are_deterministic
 
-        assert is_deterministic_loader(Path("scan.png")) is False
-        assert is_deterministic_loader(Path("photo.jpg")) is False
+        pages = [self._page(PageType.TEXT), self._page(PageType.SECTION)]
+        assert _pages_are_deterministic(pages) is True
+
+    def test_any_ocr_image_page_is_non_deterministic(self) -> None:
+        from quarry.ingestion.pipeline import _pages_are_deterministic
+
+        # A scanned/OCR'd PDF mixes text and IMAGE pages — one IMAGE page taints it.
+        pages = [self._page(PageType.TEXT), self._page(PageType.IMAGE)]
+        assert _pages_are_deterministic(pages) is False
+
+    def test_empty_extraction_is_deterministic(self) -> None:
+        from quarry.ingestion.pipeline import _pages_are_deterministic
+
+        assert _pages_are_deterministic([]) is True
