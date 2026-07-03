@@ -5,8 +5,19 @@ module is. Produces JSON output with numeric scores for agent consumption.
 Usage:
     python tools/oo_score.py <file_or_directory> [--json] [--threshold]
     python tools/oo_score.py <file_or_directory> --check     # ratchet check
+    python tools/oo_score.py <file_or_directory> --verify     # baseline integrity
     python tools/oo_score.py <file_or_directory> --update    # update baseline
+    python tools/oo_score.py <file_or_directory> --correct <path> --reason <text>
+    python tools/oo_score.py <file_or_directory> --rebaseline # reset baseline
     python tools/oo_score.py <file_or_directory> --log       # audit history
+
+The ratchet trusts .oo-baseline.json, but two failure modes break that trust:
+a baseline can be committed out of sync with its code (a "phantom" that --check
+never catches because --check only gates *touched* files), and ratio metrics
+(avg_params, avg_complexity, method_ratio) regress mechanically under genuine
+refactors because their denominator shifts. --verify catches phantoms; --correct
+fixes one entry without a nuclear --rebaseline; ratio tolerance absorbs the
+denominator artifact without loosening the absolute thresholds.
 
 Metrics produced:
     method_ratio        % of functions that are class methods (target: >= 80%)
@@ -425,6 +436,10 @@ class Ratchet:
     # Metrics tracked in the baseline — must match Scorer.THRESHOLDS keys.
     METRIC_KEYS: ClassVar[tuple[str, ...]] = tuple(Scorer.THRESHOLDS)
 
+    # Float slack for --verify: recomputed rounded scores must match the
+    # committed baseline exactly, so any gap beyond rounding noise is a phantom.
+    VERIFY_EPSILON: ClassVar[float] = 1e-6
+
     def __new__(cls, root: Path | None = None) -> Self:
         self = super().__new__(cls)
         base = root if root is not None else Path.cwd()
@@ -674,6 +689,80 @@ class Ratchet:
         return 0
 
     # ------------------------------------------------------------------
+    # --verify
+    # ------------------------------------------------------------------
+
+    def verify(self, scorer: Scorer) -> int:
+        """Fail if any baseline entry diverges from the committed code's score.
+
+        Distinct from --check: --check gates *touched* files against the
+        baseline to block regressions, while --verify asserts the *entire*
+        committed baseline faithfully matches the current source. A phantom —
+        a baseline entry committed out of sync with its code — is caught here
+        at PR time before it can sit dormant. In CI the working tree is the
+        committed checkout, so scoring it and comparing against the committed
+        baseline is exactly "does the baseline match the code?".
+        """
+        if not self.has_baseline:
+            _writeln("No baseline -- run --update to create one")
+            return 0
+
+        current_by_file = self._results_by_file(scorer.results)
+        rows = self._integrity_rows(current_by_file)
+
+        if not rows:
+            _writeln("\nPASS: baseline matches committed code")
+            return 0
+
+        _writeln(
+            f"\n{'File':<40} {'Metric':<24} {'Baseline':>10} "
+            f"{'Current':>10} {'Issue':>10}",
+        )
+        _writeln("-" * 98)
+        for fpath, metric, base_s, cur_s, issue in rows:
+            _writeln(f"{fpath:<40} {metric:<24} {base_s:>10} {cur_s:>10} {issue:>10}")
+
+        _writeln("\nFAIL: baseline diverges from committed code")
+        _writeln(
+            "  fix a proven phantom with: "
+            "python tools/oo_score.py <dir> --correct <file> --reason <why>",
+        )
+        return 1
+
+    def _integrity_rows(
+        self,
+        current_by_file: dict[str, dict[str, float]],
+    ) -> list[tuple[str, str, str, str, str]]:
+        """Return (file, metric, baseline, current, issue) rows for divergences."""
+        baseline_files = set(self._baseline)
+        scored_files = set(current_by_file)
+
+        stale = [
+            (fpath, "(file)", "present", "absent", "stale")
+            for fpath in sorted(baseline_files - scored_files)
+        ]
+        unrecorded = [
+            (fpath, "(file)", "absent", "present", "unrecorded")
+            for fpath in sorted(scored_files - baseline_files)
+        ]
+        phantom = [
+            (
+                fpath,
+                metric,
+                f"{self._baseline[fpath][metric]:.3f}",
+                f"{current_by_file[fpath][metric]:.3f}",
+                "phantom",
+            )
+            for fpath in sorted(baseline_files & scored_files)
+            for metric in self.METRIC_KEYS
+            if metric in self._baseline[fpath]
+            and metric in current_by_file[fpath]
+            and abs(self._baseline[fpath][metric] - current_by_file[fpath][metric])
+            > self.VERIFY_EPSILON
+        ]
+        return stale + unrecorded + phantom
+
+    # ------------------------------------------------------------------
     # --update
     # ------------------------------------------------------------------
 
@@ -847,7 +936,8 @@ def main() -> None:
     if len(sys.argv) < 2:
         _writeln(
             f"Usage: {sys.argv[0]} <file_or_directory> "
-            f"[--json] [--threshold] [--check] [--update] [--rebaseline] [--log]",
+            f"[--json] [--threshold] [--check] [--verify] [--update] "
+            f"[--correct <file> --reason <text>] [--rebaseline] [--log]",
         )
         sys.exit(1)
 
@@ -861,6 +951,8 @@ def main() -> None:
 
     if "--check" in sys.argv:
         sys.exit(ratchet.check(scorer))
+    elif "--verify" in sys.argv:
+        sys.exit(ratchet.verify(scorer))
     elif "--rebaseline" in sys.argv:
         sys.exit(ratchet.rebaseline(scorer))
     elif "--update" in sys.argv:
