@@ -35,6 +35,16 @@ class FileRecord:
     chunks_committed: int = 0
     partial_hash: str | None = None
 
+    def __post_init__(self) -> None:
+        if self.chunks_committed < 0:
+            msg = f"chunks_committed must be >= 0, got {self.chunks_committed}"
+            raise ValueError(msg)
+        # A mid-file (partial) row must have made progress; a complete row leaves
+        # partial_hash NULL. This rejects the incoherent "partial at watermark 0".
+        if self.partial_hash is not None and self.chunks_committed <= 0:
+            msg = "a partial resume row must have chunks_committed > 0"
+            raise ValueError(msg)
+
     @property
     def is_partial(self) -> bool:
         """Return True when the row is a mid-file resume watermark, not complete."""

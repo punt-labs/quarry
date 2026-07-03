@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, cast
 
 import numpy as np
+import pytest
 
 from quarry.db.chunk_store import ChunkStore
 from quarry.db.chunk_table import ChunkTable, DocumentRef
@@ -83,12 +84,15 @@ class TestDeleteDocumentTail:
         assert removed == 4
         assert _chunk_indexes(lance_db, "doc.txt") == [0, 1, 2, 3, 4, 5]
 
-    def test_watermark_zero_removes_all(self, lance_db: LanceDB) -> None:
+    def test_zero_watermark_rejected_not_whole_document(
+        self, lance_db: LanceDB
+    ) -> None:
+        """A tail delete with min_chunk_index 0 must raise, never wipe the doc."""
         store = ChunkStore(lance_db)
         _seed(store, total=5)
-        removed = store.delete_document_tail(DocumentRef("doc.txt", "col", 0))
-        assert removed == 5
-        assert _chunk_indexes(lance_db, "doc.txt") == []
+        with pytest.raises(ValueError, match="positive watermark"):
+            store.delete_document_tail(DocumentRef("doc.txt", "col", 0))
+        assert _chunk_indexes(lance_db, "doc.txt") == [0, 1, 2, 3, 4]  # untouched
 
     def test_watermark_at_total_removes_nothing(self, lance_db: LanceDB) -> None:
         store = ChunkStore(lance_db)
@@ -110,3 +114,20 @@ class TestDeleteDocumentTail:
             ChunkStore(lance_db).delete_document_tail(DocumentRef("doc.txt", "col", 1))
             == 0
         )
+
+
+class TestDocumentRefInvariants:
+    def test_rejects_empty_document_name(self) -> None:
+        with pytest.raises(ValueError, match="document_name must be non-empty"):
+            DocumentRef("", "col")
+
+    def test_rejects_negative_watermark(self) -> None:
+        with pytest.raises(ValueError, match="min_chunk_index must be >= 0"):
+            DocumentRef("doc.txt", "col", -1)
+
+    def test_zero_watermark_is_a_valid_whole_document_ref(self) -> None:
+        # min 0 is legal for a whole-document selector (delete_document uses it);
+        # only delete_document_tail additionally requires a positive watermark.
+        ref = DocumentRef("doc.txt", "col")
+        assert ref.min_chunk_index == 0
+        assert "chunk_index" not in ref.predicate()

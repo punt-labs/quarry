@@ -99,7 +99,14 @@ class ChunkStore:
         post-watermark write ``[w, K)`` while preserving the confirmed prefix
         ``[0, w)``, making resume idempotent under repeated crashes. Returns the
         number of rows removed.
+
+        Raises ``ValueError`` if *ref* has no positive watermark — a tail delete
+        with ``min_chunk_index <= 0`` would drop the whole document; use
+        ``delete_document`` for that.
         """
+        if ref.min_chunk_index <= 0:
+            msg = f"delete_document_tail needs a positive watermark, got {ref!r}"
+            raise ValueError(msg)
         table = self._open()
         if table is None:
             return 0

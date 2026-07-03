@@ -432,6 +432,21 @@ class TestResumeWatermark:
         assert got.is_partial is False
         conn.close()
 
+    def test_partial_with_zero_watermark_is_rejected(self):
+        """A partial row (partial_hash set) must have chunks_committed > 0."""
+        with pytest.raises(ValueError, match="chunks_committed > 0"):
+            self._record(partial_hash="h", chunks_committed=0)
+
+    def test_negative_watermark_is_rejected(self):
+        with pytest.raises(ValueError, match="chunks_committed must be >= 0"):
+            self._record(chunks_committed=-1)
+
+    def test_complete_row_with_positive_count_is_valid(self):
+        # completion sets chunks_committed = total and partial_hash = None
+        rec = self._record(chunks_committed=12, partial_hash=None)
+        assert rec.is_partial is False
+        assert rec.chunks_committed == 12
+
     def test_upsert_sets_partial_watermark(self, tmp_path: Path):
         conn = SyncRegistry(tmp_path / "r.db")
         self._register(conn, tmp_path)
