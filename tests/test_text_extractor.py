@@ -7,8 +7,16 @@ from quarry.models import PageType
 
 
 def _mock_page(text: str) -> MagicMock:
+    """Mock a page whose ``get_text("dict")`` yields one single-line block."""
     page = MagicMock()
-    page.get_text.return_value = text
+    page.get_text.return_value = {
+        "blocks": [
+            {
+                "type": 0,
+                "lines": [{"bbox": (0.0, 0.0, 100.0, 0.0), "spans": [{"text": text}]}],
+            }
+        ]
+    }
     return page
 
 

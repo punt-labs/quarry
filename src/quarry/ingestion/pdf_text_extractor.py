@@ -7,6 +7,7 @@ from pathlib import Path
 
 import fitz
 
+from quarry.ingestion.pdf_reflow import PdfReflow
 from quarry.models import PageContent, PageType
 
 logger = logging.getLogger(__name__)
@@ -43,8 +44,7 @@ def extract_text_pages(
         )
         for page_num in page_numbers:
             page = doc[page_num - 1]
-            raw = page.get_text()
-            text = str(raw).strip()
+            text = PdfReflow.from_page_dict(page.get_text("dict")).text().strip()
             logger.debug("Page %d: %d chars", page_num, len(text))
             results.append(
                 PageContent(
