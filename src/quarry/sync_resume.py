@@ -75,3 +75,23 @@ class ResumePolicy:
         if checkpoint.complete:
             return None
         return content_hash if content_hash is not None else self._hash_unknown
+
+    def clear_stale_on_failure(
+        self, record: FileRecord | None, content_hash: str | None
+    ) -> bool:
+        """Return True when a failed re-ingest must drop the stored document.
+
+        A within-file resume whose committed prefix still matches the on-disk
+        content (verified hash) is current and is kept. Everything else — a changed
+        complete file, a changed-since-partial file, or an unverifiable hash — is
+        stale: its old chunks must not survive a failed sync, so removed or redacted
+        content stops being searchable the moment the file changes (DES-034 §5.3).
+        """
+        if record is None:
+            return False
+        current_resume = (
+            record.is_partial
+            and content_hash is not None
+            and record.partial_hash == content_hash
+        )
+        return not current_resume

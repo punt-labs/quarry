@@ -23,7 +23,8 @@ from quarry.ingestion.progressive import FlushCheckpoint, ProgressiveIndexer
 from quarry.models import PageContent, PageType
 from quarry.sync import compute_sync_plan, sync_all, sync_collection
 from quarry.sync_discovery import _DEFAULT_IGNORE_PATTERNS, FileDiscovery
-from quarry.sync_ingest import CollectionIngestor, _FileMeta
+from quarry.sync_ingest import CollectionIngestor
+from quarry.sync_messages import FileMeta
 from quarry.sync_registry import FileRecord, SyncRegistry
 from quarry.sync_resume import HASH_UNKNOWN, ResumePolicy
 
@@ -971,7 +972,7 @@ class TestPartialHashSentinel:
             ingested_at="2025-01-01",
             content_hash=None,  # hashing failed
         )
-        ingestor._meta[file_id] = _FileMeta(
+        ingestor._meta[file_id] = FileMeta(
             record=record, resume_watermark=0, total_chunks=10
         )
         ingestor.on_flush(
@@ -1016,6 +1017,92 @@ class TestPartialHashSentinel:
         assert _chunk_indexes(db, doc) == list(range(total))
         rec = conn.get_file(str(f.resolve()))
         assert rec is not None and rec.partial_hash is None  # completed, mark cleared
+        conn.close()
+
+
+def _record(
+    *, content_hash: str | None, chunks_committed: int, partial_hash: str | None
+) -> FileRecord:
+    return FileRecord(
+        path="/p",
+        collection="col",
+        document_name="d",
+        mtime=1.0,
+        size=1,
+        ingested_at="2025-01-01",
+        content_hash=content_hash,
+        chunks_committed=chunks_committed,
+        partial_hash=partial_hash,
+    )
+
+
+class TestStaleClearOnFailure:
+    """Fix #327-2: a changed file's stale chunks must not survive a failed re-ingest."""
+
+    def test_no_record_keeps_nothing_to_clear(self):
+        assert ResumePolicy().clear_stale_on_failure(None, "h") is False
+
+    def test_changed_complete_file_is_stale(self):
+        rec = _record(content_hash="old", chunks_committed=0, partial_hash=None)
+        assert ResumePolicy().clear_stale_on_failure(rec, "new") is True
+
+    def test_matching_resume_prefix_is_kept(self):
+        rec = _record(content_hash="h", chunks_committed=3, partial_hash="h")
+        assert ResumePolicy().clear_stale_on_failure(rec, "h") is False
+
+    def test_changed_since_partial_is_stale(self):
+        rec = _record(content_hash="h", chunks_committed=3, partial_hash="h")
+        assert ResumePolicy().clear_stale_on_failure(rec, "different") is True
+
+    def test_unverifiable_hash_is_stale(self):
+        rec = _record(content_hash="h", chunks_committed=3, partial_hash="h")
+        assert ResumePolicy().clear_stale_on_failure(rec, None) is True
+
+    def test_changed_file_failed_reextract_clears_stale(self, tmp_path: Path):
+        """A changed file whose re-extraction raises: old chunks gone, sync failed."""
+        settings = _settings(tmp_path)
+        db, conn, d = _make_collection(tmp_path, settings)
+        f = d / "a.txt"
+        f.write_text(_SENTENCE * 3)
+        with _patched_embedder(_FakeEmbedder()):
+            sync_collection(d, "col", db, settings, conn, max_workers=1)
+        assert ChunkStore(db).count(collection_filter="col") >= 1  # old chunks durable
+
+        f.write_text(_SENTENCE * 9)  # change content → full re-ingest
+
+        def boom(_fp: Path, *_a: object, **_k: object) -> object:
+            msg = "extract boom"
+            raise RuntimeError(msg)
+
+        with (
+            _patched_embedder(_FakeEmbedder()),
+            patch("quarry.sync_ingest.plan_file_chunks", side_effect=boom),
+        ):
+            result = sync_collection(d, "col", db, settings, conn, max_workers=1)
+        assert result.ingested == 0
+        assert result.failed == 1
+        # Stale old chunks must be gone — removed/redacted content not searchable.
+        assert ChunkStore(db).count(collection_filter="col") == 0
+        conn.close()
+
+    def test_resume_failure_keeps_committed_prefix(self, tmp_path: Path):
+        """A within-file resume that fails re-extraction keeps its committed prefix."""
+        settings, db, conn, d, doc, _chunks, _total, w = _seed_crash_state(
+            tmp_path, watermark_from_total=0.5, prefill_from_total=0.5
+        )
+
+        def boom(_fp: Path, *_a: object, **_k: object) -> object:
+            msg = "extract boom"
+            raise RuntimeError(msg)
+
+        with (
+            _patched_embedder(_FakeEmbedder()),
+            patch("quarry.sync_ingest.plan_file_chunks", side_effect=boom),
+        ):
+            result = sync_collection(d, "col", db, settings, conn, max_workers=1)
+        assert result.failed == 1
+        # Resume path is not stale: the committed prefix [0, w) must be preserved.
+        assert _chunk_indexes(db, doc) == list(range(w))
         conn.close()
 
 

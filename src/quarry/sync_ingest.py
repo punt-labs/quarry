@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -17,6 +17,7 @@ from quarry.ingestion.pipeline import plan_file_chunks
 from quarry.ingestion.progressive import ProgressiveIndexer
 from quarry.ingestion.streaming import DocumentStreamer
 from quarry.sync_discovery import FileDiscovery
+from quarry.sync_messages import FileMeta, WindowMsg
 from quarry.sync_registry import FileRecord
 from quarry.sync_resume import ResumePolicy
 
@@ -35,28 +36,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _RECOVERABLE = (sqlite3.Error, OSError, ValueError, RuntimeError, TimeoutError)
-
-
-@dataclass(frozen=True, slots=True)
-class _FileMeta:
-    """Per-file context the consumer needs to begin and checkpoint a file."""
-
-    record: FileRecord
-    resume_watermark: int
-    total_chunks: int
-
-
-@dataclass(frozen=True, slots=True)
-class _WindowMsg:
-    """One queue item: an embed window, or a file-complete/error sentinel."""
-
-    file_id: str
-    batch: list[Chunk]
-    # None on the final sentinel — a completion/error carries no vectors.
-    vectors: NDArray[np.float32] | None
-    final: bool = False
-    # Set only when a producer failed before completing the file.
-    error: str | None = None
 
 
 class CollectionIngestor:
@@ -91,8 +70,8 @@ class CollectionIngestor:
     _resolved: Path
     _max_workers: int
     _progress: Callable[[str], None]
-    _queue: Queue[_WindowMsg]
-    _meta: dict[str, _FileMeta]
+    _queue: Queue[WindowMsg]
+    _meta: dict[str, FileMeta]
     _records: dict[str, FileRecord | None]
     _indexer: ProgressiveIndexer
     _aborted: bool
@@ -204,7 +183,7 @@ class CollectionIngestor:
             watermark = self._policy.resume_watermark(
                 record, content_hash, len(chunks), deterministic=deterministic
             )
-            self._meta[file_id] = _FileMeta(
+            self._meta[file_id] = FileMeta(
                 record=self._build_record(file_path, document_name, content_hash),
                 resume_watermark=watermark,
                 total_chunks=len(chunks),
@@ -213,7 +192,7 @@ class CollectionIngestor:
             for batch, vectors in streamer.stream_batches(
                 chunks, start_index=watermark
             ):
-                self._queue.put(_WindowMsg(file_id, batch, vectors))
+                self._queue.put(WindowMsg(file_id, batch, vectors))
         except _RECOVERABLE as exc:
             logger.warning("Ingest failed for %s: %s", document_name, exc)
             error = f"{document_name}: {exc}"
@@ -221,7 +200,12 @@ class CollectionIngestor:
             logger.exception("Unexpected ingest failure for %s", document_name)
             error = f"{document_name}: {exc}"
         finally:
-            self._queue.put(_WindowMsg(file_id, [], None, final=True, error=error))
+            stale = error is not None and self._policy.clear_stale_on_failure(
+                self._records.get(file_id), self._safe_hash(file_path)
+            )
+            self._queue.put(
+                WindowMsg(file_id, [], None, final=True, error=error, clear_stale=stale)
+            )
 
     def _consume(self, n_files: int) -> tuple[int, int, list[str]]:
         """Drain windows into the indexer until every file sends its sentinel."""
@@ -242,9 +226,7 @@ class CollectionIngestor:
                 failed += 1
         return ingested, failed, errors
 
-    def _apply_window(
-        self, msg: _WindowMsg, begun: set[str], errors: list[str]
-    ) -> None:
+    def _apply_window(self, msg: WindowMsg, begun: set[str], errors: list[str]) -> None:
         """Feed one window to the indexer, unless the sync already aborted."""
         vectors = msg.vectors
         if self._aborted or vectors is None:
@@ -252,18 +234,20 @@ class CollectionIngestor:
         self._run_indexer(errors, partial(self._feed, msg, vectors, begun))
 
     def _feed(
-        self, msg: _WindowMsg, vectors: NDArray[np.float32], begun: set[str]
+        self, msg: WindowMsg, vectors: NDArray[np.float32], begun: set[str]
     ) -> None:
         self._ensure_begun(msg.file_id, begun)
         self._indexer.add_window(msg.file_id, msg.batch, vectors)
 
-    def _apply_final(self, msg: _WindowMsg, begun: set[str], errors: list[str]) -> str:
+    def _apply_final(self, msg: WindowMsg, begun: set[str], errors: list[str]) -> str:
         """Handle a file's final sentinel; return ``"ingested"`` or ``"failed"``.
 
         Progress runs through _run_indexer so a raising callback aborts, not escapes.
         """
         if msg.error is not None:
             errors.append(msg.error)
+            if msg.clear_stale:
+                self._run_indexer(errors, partial(self._clear_stale, msg.file_id))
             self._run_indexer(errors, partial(self._progress, f"Failed {msg.error}"))
             return "failed"
         if self._aborted:
@@ -274,9 +258,21 @@ class CollectionIngestor:
         self._run_indexer(errors, partial(self._progress, f"Ingested {msg.file_id}"))
         return "ingested"
 
-    def _finish(self, msg: _WindowMsg, begun: set[str]) -> None:
+    def _finish(self, msg: WindowMsg, begun: set[str]) -> None:
         self._ensure_begun(msg.file_id, begun)
         self._indexer.complete_file(msg.file_id)
+
+    def _clear_stale(self, file_id: str) -> None:
+        """Drop a changed file's stored chunks after a failed re-ingest (consumer).
+
+        Runs on the single-writer consumer, never a producer, so it cannot race the
+        LanceDB writes. The stored record names the exact scope to clear in Lance.
+        """
+        record = self._records.get(file_id)
+        if record is not None:
+            self._store.delete_document(
+                record.document_name, collection=self._collection, count=False
+            )
 
     def _ensure_begun(self, file_id: str, begun: set[str]) -> None:
         """Reconcile-delete (on the consumer → single-writer) then register the file.
