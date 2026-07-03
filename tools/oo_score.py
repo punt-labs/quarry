@@ -49,6 +49,15 @@ def _writeln(text: str = "") -> None:
     sys.stdout.write(text + "\n")
 
 
+def _flag_value(flag: str) -> str | None:
+    """Return the argv token following ``flag``, or None if absent."""
+    if flag in sys.argv:
+        idx = sys.argv.index(flag)
+        if idx + 1 < len(sys.argv):
+            return sys.argv[idx + 1]
+    return None
+
+
 class ModuleMetrics:
     _path: str
     _tree: ast.Module
@@ -877,6 +886,76 @@ class Ratchet:
         return 0
 
     # ------------------------------------------------------------------
+    # --correct
+    # ------------------------------------------------------------------
+
+    def correct(self, target_file: str, reason: str) -> int:
+        """Re-record ONE file's baseline entry to its true current score.
+
+        Fixes a proven phantom (a baseline out of sync with committed code)
+        without the nuclear full --rebaseline that resets every file.
+
+        Guardrail: a non-empty reason is mandatory and is written to the audit
+        log under a distinct "correct" verdict. This is NOT a way to bless a
+        real code regression — the single-file scope and the audited reason
+        make every correction visible and reviewable in the PR diff, exactly
+        where a laundered regression would be caught. Use it only when --verify
+        reports a phantom, never to silence --check.
+        """
+        if not reason.strip():
+            _writeln("--correct requires a non-empty --reason")
+            return 2
+
+        path = Path(target_file)
+        if not path.is_file():
+            _writeln(f"Not a file: {target_file}")
+            return 2
+
+        try:
+            scored = self._results_by_file([Scorer._score_file(path)])
+        except SyntaxError as exc:
+            _writeln(f"Cannot score {target_file}: {exc}")
+            return 2
+
+        key = str(path)
+        true_metrics = scored.get(key)
+        if true_metrics is None:
+            _writeln(f"No metrics produced for {target_file}")
+            return 2
+
+        old_entry = self._baseline.get(key)
+        file_deltas = {
+            metric: [old_entry[metric], true_metrics[metric]]
+            for metric in self.METRIC_KEYS
+            if old_entry is not None
+            and metric in old_entry
+            and metric in true_metrics
+            and old_entry[metric] != true_metrics[metric]
+        }
+
+        new_baseline = dict(self._baseline)
+        new_baseline[key] = true_metrics
+        self._save_baseline(new_baseline)
+
+        self._append_audit(
+            files_scored=1,
+            files_improved=0,
+            files_regressed=0,
+            verdict="correct",
+            deltas={key: file_deltas} if file_deltas else {},
+            reason=reason,
+        )
+
+        _writeln(f"\nCorrected baseline entry: {key}")
+        _writeln(f"  reason: {reason}")
+        if file_deltas:
+            for metric, (before, after) in sorted(file_deltas.items()):
+                _writeln(f"    {metric}: {before} -> {after}")
+        else:
+            _writeln("  (entry added — no prior value)")
+        return 0
+
+    # ------------------------------------------------------------------
     # Audit log
     # ------------------------------------------------------------------
 
@@ -888,9 +967,10 @@ class Ratchet:
         files_regressed: int,
         verdict: str,
         deltas: dict[str, dict[str, list[float]]],
+        reason: str | None = None,
     ) -> None:
         commit = self._git_commit_short()
-        entry = {
+        entry: dict[str, object] = {
             "ts": datetime.datetime.now(datetime.UTC).strftime(
                 "%Y-%m-%dT%H:%M:%SZ",
             ),
@@ -901,6 +981,8 @@ class Ratchet:
             "verdict": verdict,
             "deltas": deltas,
         }
+        if reason is not None:
+            entry["reason"] = reason
         with self._audit_path.open("a") as f:
             f.write(json.dumps(entry, separators=(",", ":")) + "\n")
 
@@ -946,8 +1028,20 @@ def main() -> None:
         _writeln(f"Not found: {target}")
         sys.exit(1)
 
-    scorer = Scorer(target)
     ratchet = Ratchet()
+
+    if "--correct" in sys.argv:
+        target_file = _flag_value("--correct")
+        reason = _flag_value("--reason")
+        if target_file is None:
+            _writeln("--correct requires a file path")
+            sys.exit(2)
+        if reason is None:
+            _writeln("--correct requires --reason <text>")
+            sys.exit(2)
+        sys.exit(ratchet.correct(target_file, reason))
+
+    scorer = Scorer(target)
 
     if "--check" in sys.argv:
         sys.exit(ratchet.check(scorer))

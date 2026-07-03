@@ -133,3 +133,73 @@ class TestVerifyPhantomGuard:
         scorer, _ = self._sample_repo(tmp_path)
         ratchet = oo.Ratchet(tmp_path)
         assert ratchet.verify(scorer) == 0
+
+
+class TestScopedCorrection:
+    """--correct: fix ONE phantom entry, with a mandatory audited reason."""
+
+    def _phantom_repo(self, tmp_path: Path) -> tuple[str, dict[str, float]]:
+        src = tmp_path / "mod.py"
+        src.write_text(_SAMPLE_SOURCE)
+        scorer = oo.Scorer(tmp_path)
+        key = str(src)
+        true_metrics = _true_metrics(scorer, key)
+        phantom = dict(true_metrics)
+        phantom["classes_per_module"] = true_metrics["classes_per_module"] + 1.0
+        # A second, untouched file must survive the scoped correction intact.
+        _write_baseline(tmp_path, {key: phantom, "src/other.py": {"module_size": 42.0}})
+        return key, true_metrics
+
+    def test_correct_records_true_score(self, tmp_path: Path) -> None:
+        key, true_metrics = self._phantom_repo(tmp_path)
+        ratchet = oo.Ratchet(tmp_path)
+        assert ratchet.correct(key, "verify flagged a phantom from PR #292") == 0
+        written = json.loads((tmp_path / oo.Ratchet.BASELINE_FILE).read_text())
+        assert written[key]["classes_per_module"] == true_metrics["classes_per_module"]
+        # The scope is exactly one file — the sibling entry is untouched.
+        assert written["src/other.py"] == {"module_size": 42.0}
+
+    def test_correct_appends_audit_reason(self, tmp_path: Path) -> None:
+        key, _ = self._phantom_repo(tmp_path)
+        ratchet = oo.Ratchet(tmp_path)
+        reason = "verify flagged a phantom from PR #292"
+        ratchet.correct(key, reason)
+        audit = tmp_path / oo.Ratchet.AUDIT_FILE
+        entry = json.loads(audit.read_text().splitlines()[-1])
+        assert entry["verdict"] == "correct"
+        assert entry["reason"] == reason
+        assert entry["files_scored"] == 1
+
+    def test_correct_refuses_empty_reason(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """No reason => no correction. The guardrail against silent laundering."""
+        key, _ = self._phantom_repo(tmp_path)
+        before = (tmp_path / oo.Ratchet.BASELINE_FILE).read_text()
+        ratchet = oo.Ratchet(tmp_path)
+        assert ratchet.correct(key, "") == 2
+        assert "requires a non-empty --reason" in capsys.readouterr().out
+        # Baseline untouched and no audit entry written.
+        assert (tmp_path / oo.Ratchet.BASELINE_FILE).read_text() == before
+        assert not (tmp_path / oo.Ratchet.AUDIT_FILE).exists()
+
+    def test_correct_refuses_whitespace_reason(self, tmp_path: Path) -> None:
+        key, _ = self._phantom_repo(tmp_path)
+        ratchet = oo.Ratchet(tmp_path)
+        assert ratchet.correct(key, "   ") == 2
+
+    def test_correct_missing_file_returns_2(self, tmp_path: Path) -> None:
+        self._phantom_repo(tmp_path)
+        ratchet = oo.Ratchet(tmp_path)
+        assert ratchet.correct(str(tmp_path / "nope.py"), "reason") == 2
+
+    def test_corrected_baseline_then_verifies(self, tmp_path: Path) -> None:
+        """After a correction, --verify must pass — the phantom is gone."""
+        key, _ = self._phantom_repo(tmp_path)
+        oo.Ratchet(tmp_path).correct(key, "phantom fix")
+        # Drop the synthetic sibling so verify sees only the real file.
+        baseline = json.loads((tmp_path / oo.Ratchet.BASELINE_FILE).read_text())
+        del baseline["src/other.py"]
+        _write_baseline(tmp_path, baseline)
+        scorer = oo.Scorer(tmp_path)
+        assert oo.Ratchet(tmp_path).verify(scorer) == 0
