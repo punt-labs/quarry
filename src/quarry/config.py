@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     chunk_max_chars: int = 1800
     chunk_overlap_chars: int = 200
 
+    # Bounded progressive commit (DES-034); embed_window_chunks is a kpz seam.
+    sync_flush_mb: int = 32
+    embed_window_chunks: int = 512
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
     _DEFAULT_LANCEDB: ClassVar[Path] = (
@@ -37,15 +41,12 @@ class Settings(BaseSettings):
     _CONFIG_PATH: ClassVar[Path] = Path.home() / ".punt-labs" / "quarry" / "config.toml"
 
     def resolve_db_paths(self, db_name: str | None = None) -> Settings:
-        """Return a copy of this settings with lancedb_path and registry_path resolved.
+        """Return a copy with lancedb_path and registry_path resolved.
 
-        If *db_name* is provided, paths resolve to ``quarry_root / db_name / ...``.
-        If ``LANCEDB_PATH`` was overridden (via env var or ``.env``), the caller's
-        explicit path is preserved.
-        When *db_name* is None and no override, paths use the ``default`` database.
-
-        Raises ``ValueError`` if *db_name* contains path separators or traversal
-        segments.
+        With *db_name*, paths resolve under ``quarry_root / db_name``. An explicit
+        ``LANCEDB_PATH`` override is preserved; otherwise the ``default`` database
+        is used. Raises ``ValueError`` if *db_name* contains path separators or
+        traversal segments.
         """
         if db_name is not None and (
             "/" in db_name or "\\" in db_name or db_name in (".", "..")
@@ -92,5 +93,4 @@ class Settings(BaseSettings):
         return cls()
 
 
-DEFAULT_PORT = 8420
-"""Well-known port for ``quarry serve`` and mcp-proxy/service configs."""
+DEFAULT_PORT = 8420  # well-known port for ``quarry serve`` + mcp-proxy configs

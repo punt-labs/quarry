@@ -6,7 +6,9 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Self
+from typing import Self, cast
+
+from quarry.sync_schema import SyncSchema
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +27,18 @@ class FileRecord:
     size: int
     ingested_at: str
     content_hash: str | None = None
+    # Within-file resume watermark (DES-034). ``chunks_committed`` counts the
+    # contiguous chunks ``[0, chunks_committed)`` durable in LanceDB and reflected
+    # here; ``partial_hash`` is the content hash the watermark was computed against
+    # and, when non-NULL, marks the row incomplete so the next sync resumes within
+    # the file. Both reset (0 / NULL) on completion.
+    chunks_committed: int = 0
+    partial_hash: str | None = None
+
+    @property
+    def is_partial(self) -> bool:
+        """Return True when the row is a mid-file resume watermark, not complete."""
+        return self.partial_hash is not None
 
 
 class SyncRegistry:
@@ -46,16 +60,21 @@ class SyncRegistry:
         # boundaries that include threaded code paths, so disable the affinity check.
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
         try:
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            # Wait up to 5 s for a contended write lock, not instant lock error.
-            self._conn.execute("PRAGMA busy_timeout=5000")
-            self._conn.execute("PRAGMA foreign_keys=ON")
-            self._init_schema()
-            self._migrate_schema()
+            self._ensure_schema()
         except Exception:
             self._conn.close()
             raise
         return self
+
+    def _ensure_schema(self) -> None:
+        """Set connection pragmas, create tables, and apply migrations."""
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        # Wait up to 5 s for a contended write lock, not instant lock error.
+        self._conn.execute("PRAGMA busy_timeout=5000")
+        self._conn.execute("PRAGMA foreign_keys=ON")
+        schema = SyncSchema(self._conn)
+        schema.initialize()
+        schema.migrate()
 
     # ------------------------------------------------------------------
     # sqlite3.Connection proxy — callers may call these directly on conn
@@ -224,27 +243,20 @@ class SyncRegistry:
         """Look up a file record by absolute path."""
         row = self._conn.execute(
             "SELECT path, collection, document_name, mtime, size, ingested_at, "
-            "content_hash FROM files WHERE path = ?",
+            "content_hash, chunks_committed, partial_hash FROM files WHERE path = ?",
             (path,),
         ).fetchone()
         if row is None:
             return None
-        return FileRecord(
-            path=row[0],
-            collection=row[1],
-            document_name=row[2],
-            mtime=row[3],
-            size=row[4],
-            ingested_at=row[5],
-            content_hash=row[6],
-        )
+        return self._row_to_record(row)
 
     def upsert_file(self, record: FileRecord, *, commit: bool = True) -> None:
-        """Insert or replace a file record."""
+        """Insert or replace a file record, including its resume watermark."""
         self._conn.execute(
             "INSERT OR REPLACE INTO files "
-            "(path, collection, document_name, mtime, size, ingested_at, content_hash) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "(path, collection, document_name, mtime, size, ingested_at, "
+            "content_hash, chunks_committed, partial_hash) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 record.path,
                 record.collection,
@@ -253,6 +265,8 @@ class SyncRegistry:
                 record.size,
                 record.ingested_at,
                 record.content_hash,
+                record.chunks_committed,
+                record.partial_hash,
             ),
         )
         if commit:
@@ -262,21 +276,11 @@ class SyncRegistry:
         """Return all file records for a collection."""
         rows = self._conn.execute(
             "SELECT path, collection, document_name, mtime, size, ingested_at, "
-            "content_hash FROM files WHERE collection = ? ORDER BY path",
+            "content_hash, chunks_committed, partial_hash FROM files "
+            "WHERE collection = ? ORDER BY path",
             (collection,),
         ).fetchall()
-        return [
-            FileRecord(
-                path=r[0],
-                collection=r[1],
-                document_name=r[2],
-                mtime=r[3],
-                size=r[4],
-                ingested_at=r[5],
-                content_hash=r[6],
-            )
-            for r in rows
-        ]
+        return [self._row_to_record(r) for r in rows]
 
     def delete_file(self, path: str, *, commit: bool = True) -> None:
         """Delete a single file record by path."""
@@ -284,46 +288,20 @@ class SyncRegistry:
         if commit:
             self._conn.commit()
 
-    # ------------------------------------------------------------------
-    # Private schema helpers
-    # ------------------------------------------------------------------
-
-    def _init_schema(self) -> None:
-        self._conn.executescript(
-            """\
-            CREATE TABLE IF NOT EXISTS directories (
-                directory     TEXT PRIMARY KEY,
-                collection    TEXT NOT NULL UNIQUE,
-                registered_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS files (
-                path          TEXT PRIMARY KEY,
-                collection    TEXT NOT NULL,
-                document_name TEXT NOT NULL,
-                mtime         REAL NOT NULL,
-                size          INTEGER NOT NULL,
-                ingested_at   TEXT NOT NULL,
-                content_hash  TEXT,
-                FOREIGN KEY (collection) REFERENCES directories(collection)
-            );
-            CREATE INDEX IF NOT EXISTS idx_files_collection_path
-                ON files(collection, path);
-            """
+    @staticmethod
+    def _row_to_record(row: tuple[object, ...]) -> FileRecord:
+        """Build a FileRecord from a row in ``_SELECT_COLUMNS`` order."""
+        return FileRecord(
+            path=cast("str", row[0]),
+            collection=cast("str", row[1]),
+            document_name=cast("str", row[2]),
+            mtime=cast("float", row[3]),
+            size=cast("int", row[4]),
+            ingested_at=cast("str", row[5]),
+            content_hash=cast("str | None", row[6]),
+            chunks_committed=cast("int", row[7]),
+            partial_hash=cast("str | None", row[8]),
         )
-
-    def _migrate_schema(self) -> None:
-        """Apply idempotent migrations for columns added after v1.
-
-        Uses ``PRAGMA table_info`` to check for presence rather than
-        catching ``OperationalError`` — the pragma is explicit and the
-        intent reads straight from the code.
-        """
-        file_columns = {
-            row[1] for row in self._conn.execute("PRAGMA table_info(files)")
-        }
-        if "content_hash" not in file_columns:
-            self._conn.execute("ALTER TABLE files ADD COLUMN content_hash TEXT")
-            self._conn.commit()
 
 
 def _is_ancestor_of(ancestor: Path, descendant: Path) -> bool:
