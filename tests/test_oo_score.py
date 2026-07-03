@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -203,3 +204,84 @@ class TestScopedCorrection:
         _write_baseline(tmp_path, baseline)
         scorer = oo.Scorer(tmp_path)
         assert oo.Ratchet(tmp_path).verify(scorer) == 0
+
+
+def _fake_scorer(fpath: str, metrics: dict[str, float]) -> object:
+    """A stand-in exposing .results — check()/update() read only that."""
+    return SimpleNamespace(results=[{"file": fpath, **metrics}])
+
+
+class TestRatioMetricTolerance:
+    """Ratio metrics may micro-regress under a real structural improvement."""
+
+    def _prepare(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        baseline: dict[str, float],
+    ) -> None:
+        _write_baseline(tmp_path, {"src/x.py": baseline})
+        # Compare every scored file, not only git-touched ones.
+        monkeypatch.setattr(
+            oo.Ratchet, "_git_touched_files", staticmethod(lambda: None)
+        )
+
+    def test_zero_param_extraction_artifact_tolerated(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """avg_params 0.10 -> 0.11 with module_size shrinking is not a regression."""
+        self._prepare(tmp_path, monkeypatch, {"avg_params": 0.10, "module_size": 100.0})
+        scorer = _fake_scorer("src/x.py", {"avg_params": 0.11, "module_size": 95.0})
+        assert oo.Ratchet(tmp_path).check(scorer) == 0
+
+    def test_real_ratio_blowout_past_threshold_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A ratio jump beyond epsilon is a genuine regression even with a win."""
+        self._prepare(tmp_path, monkeypatch, {"avg_params": 3.90, "module_size": 100.0})
+        scorer = _fake_scorer("src/x.py", {"avg_params": 4.50, "module_size": 95.0})
+        assert oo.Ratchet(tmp_path).check(scorer) == 1
+
+    def test_no_companion_improvement_not_tolerated(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A ratio nudge alone — no size/complexity win — stays a regression."""
+        self._prepare(tmp_path, monkeypatch, {"avg_params": 0.10, "module_size": 100.0})
+        scorer = _fake_scorer("src/x.py", {"avg_params": 0.11, "module_size": 100.0})
+        assert oo.Ratchet(tmp_path).check(scorer) == 1
+
+    def test_teetering_at_threshold_not_tolerated(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A tiny nudge is refused when the metric only barely clears threshold."""
+        self._prepare(tmp_path, monkeypatch, {"avg_params": 3.99, "module_size": 100.0})
+        scorer = _fake_scorer("src/x.py", {"avg_params": 4.00, "module_size": 95.0})
+        assert oo.Ratchet(tmp_path).check(scorer) == 1
+
+    def test_non_ratio_metric_never_tolerated(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """module_size is not a ratio — a size regression is never absorbed."""
+        self._prepare(
+            tmp_path, monkeypatch, {"module_size": 100.0, "max_complexity": 8.0}
+        )
+        # module_size worsens by 1 line while max_complexity improves; strict.
+        scorer = _fake_scorer("src/x.py", {"module_size": 101.0, "max_complexity": 7.0})
+        assert oo.Ratchet(tmp_path).check(scorer) == 1
+
+    def test_update_tolerates_and_records(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--update accepts the artifact and writes the new ratio value."""
+        self._prepare(tmp_path, monkeypatch, {"avg_params": 0.10, "module_size": 100.0})
+        scorer = _fake_scorer("src/x.py", {"avg_params": 0.11, "module_size": 95.0})
+        assert oo.Ratchet(tmp_path).update(scorer) == 0
+        written = json.loads((tmp_path / oo.Ratchet.BASELINE_FILE).read_text())
+        assert written["src/x.py"]["avg_params"] == 0.11
+
+    def test_update_refuses_real_blowout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._prepare(tmp_path, monkeypatch, {"avg_params": 3.90, "module_size": 100.0})
+        scorer = _fake_scorer("src/x.py", {"avg_params": 4.50, "module_size": 95.0})
+        assert oo.Ratchet(tmp_path).update(scorer) == 1

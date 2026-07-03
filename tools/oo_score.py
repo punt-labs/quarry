@@ -449,6 +449,19 @@ class Ratchet:
     # committed baseline exactly, so any gap beyond rounding noise is a phantom.
     VERIFY_EPSILON: ClassVar[float] = 1e-6
 
+    # Ratio metrics have a denominator (function/method count) that shifts when
+    # functions move, so a genuine refactor can nudge them the wrong way with
+    # zero quality loss. These are the only metrics eligible for micro-tolerance.
+    RATIO_METRICS: ClassVar[frozenset[str]] = frozenset(
+        {"method_ratio", "avg_params", "avg_complexity"},
+    )
+    # A tolerated ratio nudge must be paired with a real structural win on one
+    # of these size/complexity metrics — never granted on its own.
+    COMPANION_METRICS: ClassVar[tuple[str, ...]] = ("module_size", "max_complexity")
+    # Largest ratio micro-regression treated as a denominator artifact (0.10 ->
+    # 0.105 is a rounding-boundary flag, not a quality loss).
+    RATIO_EPSILON: ClassVar[float] = 0.02
+
     def __new__(cls, root: Path | None = None) -> Self:
         self = super().__new__(cls)
         base = root if root is not None else Path.cwd()
@@ -566,6 +579,61 @@ class Ratchet:
         return abs(current - target) < abs(baseline_val - target)
 
     # ------------------------------------------------------------------
+    # Ratio-metric tolerance
+    # ------------------------------------------------------------------
+
+    def _is_tolerable_ratio_regression(
+        self,
+        metric: str,
+        current: dict[str, float],
+        baseline_entry: dict[str, float],
+    ) -> bool:
+        """Return True if a ratio metric's regression is a denominator artifact.
+
+        Ratio metrics (avg_params, avg_complexity, method_ratio) divide by the
+        function/method count, so extracting a 0-param function out of a module
+        mechanically shifts them the wrong way (0.10 -> 0.105) with zero quality
+        loss. Absorb such a nudge only when it is tiny, the metric still
+        comfortably clears its ABSOLUTE threshold, and a companion size or
+        complexity metric improved in the same change. Non-ratio metrics
+        (module_size, max_complexity, counts) are never tolerated here.
+        """
+        if metric not in self.RATIO_METRICS:
+            return False
+        if metric not in current or metric not in baseline_entry:
+            return False
+        if abs(current[metric] - baseline_entry[metric]) > self.RATIO_EPSILON:
+            return False
+        if not self._comfortably_meets(metric, current[metric]):
+            return False
+        return self._companion_improved(current, baseline_entry)
+
+    @classmethod
+    def _comfortably_meets(cls, metric: str, value: float) -> bool:
+        """Return True if value clears the threshold by more than the epsilon."""
+        op, target = Scorer.THRESHOLDS[metric]
+        if op == ">=":
+            return value >= target + cls.RATIO_EPSILON
+        if op == "<=":
+            return value <= target - cls.RATIO_EPSILON
+        return value == target
+
+    def _companion_improved(
+        self,
+        current: dict[str, float],
+        baseline_entry: dict[str, float],
+    ) -> bool:
+        """Return True if any size/complexity companion metric strictly improved."""
+        return any(
+            metric in current
+            and metric in baseline_entry
+            and self._is_strictly_better(
+                metric, current[metric], baseline_entry[metric]
+            )
+            for metric in self.COMPANION_METRICS
+        )
+
+    # ------------------------------------------------------------------
     # Extract per-file metric dicts from Scorer results
     # ------------------------------------------------------------------
 
@@ -655,6 +723,10 @@ class Ratchet:
                     any_improvement = True
                 elif self._is_better_or_equal(metric, cur_val, base_val):
                     grade = "PASS"
+                elif self._is_tolerable_ratio_regression(
+                    metric, current, baseline_entry
+                ):
+                    grade = "TOLERATED"
                 else:
                     grade = "REGRESSED"
                     any_regression = True
@@ -810,7 +882,11 @@ class Ratchet:
                     continue
                 cur_val = current[metric]
                 base_val = baseline_entry[metric]
-                if not self._is_better_or_equal(metric, cur_val, base_val):
+                if not self._is_better_or_equal(
+                    metric, cur_val, base_val
+                ) and not self._is_tolerable_ratio_regression(
+                    metric, current, baseline_entry
+                ):
                     refused.append((fpath, metric))
                     has_regression = True
 
