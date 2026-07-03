@@ -997,9 +997,9 @@ def run_install() -> int:  # noqa: C901
     # detection can trigger FP16 model caching)
     print("[2/8] Checking GPU runtime...")  # noqa: T201
     try:
-        from quarry.service import ensure_gpu_runtime  # noqa: PLC0415
+        from quarry.gpu_runtime import GpuRuntime  # noqa: PLC0415
 
-        gpu_status = ensure_gpu_runtime()
+        gpu_status = GpuRuntime.ensure()
         if "failed" in gpu_status:
             print(f"  \u2717 {gpu_status}")  # noqa: T201
             failed = True
@@ -1017,7 +1017,7 @@ def run_install() -> int:  # noqa: C901
         print("  \u2713 snowflake-arctic-embed-m-v1.5 (INT8 ONNX) cached")  # noqa: T201
         # Also download FP16 model if CUDA is available.
         # NOTE: This is an in-process import. If onnxruntime was already
-        # imported earlier in this process *before* ensure_gpu_runtime()
+        # imported earlier in this process *before* GpuRuntime.ensure()
         # swapped the package in step 2, the native shared libraries (.so)
         # from the old onnxruntime remain loaded and provider detection here
         # may be stale. In a typical `quarry install` run where onnxruntime

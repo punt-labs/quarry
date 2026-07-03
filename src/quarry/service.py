@@ -14,10 +14,8 @@ from __future__ import annotations
 import logging
 import os
 import platform
-import shutil
 import socket
 import subprocess
-import sys
 import textwrap
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -373,113 +371,6 @@ def _systemd_status() -> bool:
         text=True,
     )
     return result.stdout.strip() == "active"
-
-
-# ---------------------------------------------------------------------------
-# GPU runtime
-# ---------------------------------------------------------------------------
-
-
-def ensure_gpu_runtime() -> str:
-    """Swap onnxruntime for onnxruntime-gpu when an NVIDIA GPU is present.
-
-    Safe to call on any platform -- returns early when nvidia-smi is absent
-    (macOS, CPU-only Linux).  Uses ``uv pip`` to swap the package inside
-    the current interpreter's environment.
-
-    Returns a status string for display:
-      - ``"no NVIDIA GPU"``
-      - ``"CUDA already available"``
-      - ``"onnxruntime-gpu installed"``
-      - ``"onnxruntime-gpu install failed, CPU restored"``
-      - ``"onnxruntime-gpu install failed, CPU restore also failed"``
-      - ``"uv not found, skipped GPU check"``
-    """
-    uv_path = shutil.which("uv")
-    if uv_path is None:
-        logger.info("uv not on PATH — skipping GPU runtime check")
-        return "uv not found, skipped GPU check"
-
-    nvidia_smi = shutil.which("nvidia-smi")
-    if nvidia_smi is None:
-        logger.info("nvidia-smi not found — no NVIDIA GPU")
-        return "no NVIDIA GPU"
-
-    result = subprocess.run(
-        [nvidia_smi],
-        capture_output=True,
-        stdin=subprocess.DEVNULL,
-    )
-    if result.returncode != 0:
-        logger.info(
-            "nvidia-smi failed (rc=%d) — no usable NVIDIA GPU",
-            result.returncode,
-        )
-        return "no NVIDIA GPU"
-
-    # GPU is present — check if CUDA provider is already available.
-    # Use a subprocess to avoid stale native shared libraries (.so) that
-    # persist in the current process after a previous onnxruntime import.
-    provider_check = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "import onnxruntime; "
-            "print(','.join(onnxruntime.get_available_providers()))",
-        ],
-        capture_output=True,
-        text=True,
-        stdin=subprocess.DEVNULL,
-    )
-    cuda_available = (
-        provider_check.returncode == 0
-        and "CUDAExecutionProvider" in provider_check.stdout
-    )
-    if cuda_available:
-        logger.info("CUDAExecutionProvider already available")
-        return "CUDA already available"
-
-    python = sys.executable
-    logger.info("Swapping onnxruntime for onnxruntime-gpu (python=%s)", python)
-
-    # Uninstall CPU onnxruntime (suppress errors — may not be installed).
-    subprocess.run(
-        [uv_path, "pip", "uninstall", "--python", python, "onnxruntime"],
-        capture_output=True,
-        stdin=subprocess.DEVNULL,
-    )
-
-    # Install onnxruntime-gpu.
-    gpu_install = subprocess.run(
-        [uv_path, "pip", "install", "--python", python, "onnxruntime-gpu>=1.18.0"],
-        capture_output=True,
-        stdin=subprocess.DEVNULL,
-    )
-    if gpu_install.returncode == 0:
-        logger.info("onnxruntime-gpu installed successfully")
-        # Clear stale module cache so subsequent imports see the new package.
-        sys.modules.pop("onnxruntime", None)
-        return "onnxruntime-gpu installed"
-
-    # GPU install failed — restore CPU onnxruntime.
-    logger.warning(
-        "onnxruntime-gpu install failed (rc=%d), restoring CPU runtime",
-        gpu_install.returncode,
-    )
-    cpu_restore = subprocess.run(
-        [uv_path, "pip", "install", "--python", python, "onnxruntime>=1.18.0"],
-        capture_output=True,
-        stdin=subprocess.DEVNULL,
-    )
-    # Clear stale module cache so subsequent imports see the restored package.
-    sys.modules.pop("onnxruntime", None)
-    if cpu_restore.returncode != 0:
-        logger.error(
-            "CPU onnxruntime restore also failed (rc=%d)",
-            cpu_restore.returncode,
-        )
-        return "onnxruntime-gpu install failed, CPU restore also failed"
-    return "onnxruntime-gpu install failed, CPU restored"
 
 
 # ---------------------------------------------------------------------------
