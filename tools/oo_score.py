@@ -5,7 +5,7 @@ module is. Produces JSON output with numeric scores for agent consumption.
 Usage:
     python tools/oo_score.py <file_or_directory> [--json] [--threshold]
     python tools/oo_score.py <file_or_directory> --check     # ratchet check
-    python tools/oo_score.py <file_or_directory> --verify     # baseline integrity
+    python tools/oo_score.py <file_or_directory> --verify [--allow-missing]  # integrity
     python tools/oo_score.py <file_or_directory> --update    # update baseline
     python tools/oo_score.py <file_or_directory> --correct <path> --reason <text>
     python tools/oo_score.py <file_or_directory> --rebaseline # reset baseline
@@ -1126,8 +1126,9 @@ def main() -> None:
     if len(sys.argv) < 2:
         _writeln(
             f"Usage: {sys.argv[0]} <file_or_directory> "
-            f"[--json] [--threshold] [--check] [--verify] [--update] "
-            f"[--correct <file> --reason <text>] [--rebaseline] [--log]",
+            f"[--json] [--threshold] [--check] [--verify [--allow-missing]] "
+            f"[--update] [--correct <file> --reason <text>] "
+            f"[--rebaseline] [--log]",
         )
         sys.exit(1)
 
