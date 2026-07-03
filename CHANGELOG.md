@@ -14,6 +14,28 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Changed
+
+- **sync**: ingestion now commits progressively instead of accumulating every
+  document's vectors and writing once at the end (DES-034, supersedes DES-026
+  change #3). A streaming embed producer chunks each document once and embeds it
+  in bounded windows, and a new `ProgressiveIndexer` flushes to LanceDB whenever
+  the buffered vector bytes reach `sync_flush_mb` (default 32) — a flush can fire
+  mid-document, so a single very large file no longer materializes all its
+  vectors. Three user-visible consequences: **bounded memory** (peak resident
+  vectors are `sync_flush_mb + one window`, independent of file or collection
+  size), **progressive visibility** (each flush commits a new LanceDB version, so
+  concurrent search returns partial results as a sync fills, with no read block —
+  the FTS channel catches up at the post-sync rebuild), and **crash-resume** that
+  is now *within-file*: the registry stores a `chunks_committed` watermark and
+  `partial_hash` per file, so a resumed sync re-embeds only the incomplete tail
+  `[watermark, end)` rather than the whole file or the whole collection. Resume
+  deletes any post-watermark chunks before re-embedding (no duplicates) and falls
+  back to a full re-embed when the file changed or the loader is non-deterministic
+  (OCR). Single-document `quarry ingest` shares the same bounded, progressive
+  path. New settings `sync_flush_mb` and `embed_window_chunks`. The
+  `prepare_document`/`batch_insert` whole-file path is removed (quarry-4qk2).
+
 ### Fixed
 
 - **transform (pdf)**: PDF text pages are now reflowed at extraction instead of

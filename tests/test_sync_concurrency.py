@@ -17,6 +17,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from quarry.db import ChunkStore, TableOptimizer
+from quarry.db.chunk_table import ChunkTable
 from quarry.db.optimizer import FRAGMENT_THRESHOLD
 from quarry.db.schema import TABLE_NAME
 from quarry.http_server import TaskState, _QuarryContext, build_app
@@ -294,8 +295,8 @@ class TestRegistrationSubsumption:
 # ---------------------------------------------------------------------------
 
 
-class TestBatchInsertChunks:
-    """Fix 3: batch_insert_chunks writes all chunks in one table.add() call."""
+class TestInsertRecords:
+    """DES-034: insert_records writes one flush's records in a single table.add()."""
 
     def _make_chunk(self, name: str, collection: str = "col") -> Chunk:
         from datetime import UTC, datetime
@@ -314,45 +315,44 @@ class TestBatchInsertChunks:
             ingestion_timestamp=datetime.now(UTC),
         )
 
-    def test_empty_batch_returns_zero(self) -> None:
+    def test_empty_records_returns_zero(self) -> None:
         db = MagicMock()
-        assert ChunkStore(db).batch_insert([]) == 0
+        assert ChunkStore(db).insert_records([]) == 0
 
-    def test_single_document_batch(self) -> None:
+    def test_single_flush_one_add(self) -> None:
         db = MagicMock()
         db.list_tables.return_value.tables = [TABLE_NAME]
         table = MagicMock()
         db.open_table.return_value = table
         table.schema = MagicMock()
 
-        chunks = [self._make_chunk("a.txt")]
-        vectors = np.zeros((1, 768), dtype=np.float32)
-
-        count = ChunkStore(db).batch_insert([(chunks, vectors)])
-        assert count == 1
+        store = ChunkStore(db)
+        records = ChunkTable.build_records(
+            [self._make_chunk("a.txt")], np.zeros((1, 768), dtype=np.float32)
+        )
+        assert store.insert_records(records) == 1
         table.add.assert_called_once()
 
     def test_multiple_documents_single_add(self) -> None:
-        """N documents should produce exactly 1 table.add() call."""
+        """A flush spanning N documents produces exactly 1 table.add() call."""
         db = MagicMock()
         db.list_tables.return_value.tables = [TABLE_NAME]
         table = MagicMock()
         db.open_table.return_value = table
         table.schema = MagicMock()
 
-        batch = []
+        store = ChunkStore(db)
+        records: list[dict[str, object]] = []
         for name in ("a.txt", "b.txt", "c.txt"):
-            chunks = [self._make_chunk(name)]
-            vectors = np.zeros((1, 768), dtype=np.float32)
-            batch.append((chunks, vectors))
+            records.extend(
+                ChunkTable.build_records(
+                    [self._make_chunk(name)], np.zeros((1, 768), dtype=np.float32)
+                )
+            )
 
-        count = ChunkStore(db).batch_insert(batch)
-        assert count == 3
-        # Only 1 add call, not 3.
+        assert store.insert_records(records) == 3
         assert table.add.call_count == 1
-        # The single add call should have 3 records.
-        records = table.add.call_args[0][0]
-        assert len(records) == 3
+        assert len(table.add.call_args[0][0]) == 3
 
 
 # ---------------------------------------------------------------------------

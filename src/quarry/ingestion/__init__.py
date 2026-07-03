@@ -18,7 +18,6 @@ from quarry.ingestion.pipeline import (
     ingest_document,
     ingest_sitemap,
     ingest_url,
-    prepare_document,
 )
 from quarry.ingestion.provider import PROVIDER_MODEL_MAP, ProviderSelection
 from quarry.ingestion.text_splitter import (
@@ -50,7 +49,6 @@ __all__ = [
     "ingest_document",
     "ingest_sitemap",
     "ingest_url",
-    "prepare_document",
     "read_text_with_fallback",
     "sections_to_pages",
     "split_latex",

@@ -7,35 +7,19 @@ import logging
 import os
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    import numpy as np
-    from numpy.typing import NDArray
-
-    from quarry.models import Chunk
 
 from quarry.config import Settings
 from quarry.db import ChunkStore, TableOptimizer
-from quarry.ingestion.pipeline import SUPPORTED_EXTENSIONS, prepare_document
+from quarry.ingestion.pipeline import SUPPORTED_EXTENSIONS
 from quarry.sync_discovery import FileDiscovery
+from quarry.sync_ingest import CollectionIngestor
 from quarry.sync_registry import FileRecord, SyncRegistry
 from quarry.types import LanceDB
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True, slots=True)
-class SyncConfig:
-    """Configuration for a directory sync operation."""
-
-    directory: Path
-    collection: str
-    max_workers: int = 4
 
 
 @dataclass(frozen=True)
@@ -44,6 +28,37 @@ class SyncPlan:
     to_refresh: list[tuple[Path, str]]
     to_delete: list[str]
     unchanged: int
+
+
+@dataclass(frozen=True, slots=True)
+class SyncContext:
+    """Shared handles a single-collection sync threads through its helpers."""
+
+    collection: str
+    resolved: Path
+    db: LanceDB
+    conn: SyncRegistry
+    progress: Callable[[str], None]
+
+
+def _refresh_hash(
+    file_path: Path,
+    record: FileRecord,
+    stat: os.stat_result,
+) -> str | None:
+    """Return the disk hash if *file_path* is a refresh (content unchanged), else None.
+
+    A refresh means ``(mtime, size)`` shifted but the content hash still matches
+    the stored value, so only the registry row needs updating — LanceDB is left
+    alone. Missing stored hash, size mismatch, or a hash read error all decline.
+    """
+    if record.content_hash is None or record.size != stat.st_size:
+        return None
+    try:
+        disk_hash = FileDiscovery.content_hash(file_path)
+    except OSError:
+        return None
+    return disk_hash if disk_hash == record.content_hash else None
 
 
 def compute_sync_plan(
@@ -56,25 +71,20 @@ def compute_sync_plan(
 
     Categorizes each discovered file into one of four buckets:
 
-    - ``to_ingest``: new files, size mismatches, or files whose content
-      hash has changed.  These need full re-embedding.
-    - ``to_refresh``: files whose ``(mtime, size)`` shifted but whose
-      content hash still matches the stored value.  Only the registry
-      row needs updating — LanceDB is left alone.  Each entry carries
-      the freshly-computed hash so the refresh helper can reuse it.
-    - ``to_delete``: ``document_name``s present in the registry but no
-      longer on disk.
+    - ``to_ingest``: new files, size mismatches, files whose content hash
+      changed, or files with a partial resume watermark (mid-file, DES-034).
+    - ``to_refresh``: files whose ``(mtime, size)`` shifted but whose content
+      hash still matches — only the registry row is updated.
+    - ``to_delete``: ``document_name``s present in the registry but no longer
+      on disk.
     - ``unchanged``: files with identical ``(mtime, size)``.
 
-    Fail-safe rules: size mismatch, missing stored hash, or hash read
-    errors all fall through to ``to_ingest``.  We never put a file in
-    ``to_refresh`` unless we are certain its content matches.
+    Fail-safe rules: size mismatch, missing stored hash, or hash read errors
+    all fall through to ``to_ingest``.
     """
     discovery = FileDiscovery(directory)
     disk_files = discovery.discover(extensions)
     disk_paths = {str(p) for p in disk_files}
-
-    # Single query: load all known files for this collection into a dict
     known_files = {r.path: r for r in conn.list_files(collection)}
 
     to_ingest: list[Path] = []
@@ -84,28 +94,21 @@ def compute_sync_plan(
     for file_path in disk_files:
         stat = file_path.stat()
         record = known_files.get(str(file_path))
-        if record is None:
+        if record is None or record.is_partial:
             to_ingest.append(file_path)
             continue
         if record.mtime == stat.st_mtime and record.size == stat.st_size:
             unchanged += 1
             continue
-        # mtime or size changed — consult content hash if we have one.
-        if record.content_hash is not None and record.size == stat.st_size:
-            try:
-                disk_hash = FileDiscovery.content_hash(file_path)
-            except OSError:
-                to_ingest.append(file_path)
-                continue
-            if disk_hash == record.content_hash:
-                to_refresh.append((file_path, disk_hash))
-                continue
-        to_ingest.append(file_path)
+        refresh = _refresh_hash(file_path, record, stat)
+        if refresh is not None:
+            to_refresh.append((file_path, refresh))
+        else:
+            to_ingest.append(file_path)
 
     to_delete = [
         r.document_name for r in known_files.values() if r.path not in disk_paths
     ]
-
     return SyncPlan(
         to_ingest=to_ingest,
         to_refresh=to_refresh,
@@ -128,133 +131,16 @@ class SyncResult:
 _RECOVERABLE = (OSError, ValueError, RuntimeError, TimeoutError)
 
 
-def _ingest_files(
-    plan_to_ingest: list[Path],
-    resolved: Path,
-    collection: str,
-    db: LanceDB,
-    settings: Settings,
-    conn: SyncRegistry,
-    max_workers: int,
-    progress: Callable[[str], None],
-) -> tuple[int, int, list[str], list[tuple[list[Chunk], NDArray[np.float32]]]]:
-    """Ingest files from a sync plan.
-
-    Returns ``(ingested, failed, errors, chunk_batch)`` where *chunk_batch*
-    is a list of ``(chunks, vectors)`` pairs ready for a single batched
-    ``table.add()`` call.  The caller (``sync_collection``) performs the
-    batch write after all documents have been processed.
-
-    Per-document deletes (for overwrite semantics) happen inside each
-    worker thread.  Per-document embedding happens in the worker thread
-    too, but the results are accumulated and written in one shot at the
-    end to reduce LanceDB fragment churn.
-
-    Registry rows are written with ``commit=False`` — the caller
-    (``sync_collection``) commits after ``batch_insert_chunks`` succeeds,
-    so a crash between prepare and batch-write rolls back the registry
-    and the next sync re-processes those files.
-    """
-    ingested = 0
-    failed = 0
-    errors: list[str] = []
-    chunk_batch: list[tuple[list[Chunk], NDArray[np.float32]]] = []
-
-    def _timed_prepare(
-        fp: Path, document_name: str
-    ) -> tuple[
-        float,
-        os.stat_result,
-        str | None,
-        tuple[list[Chunk], NDArray[np.float32]] | None,
-    ]:
-        t = time.perf_counter()
-        # Delete existing chunks for overwrite semantics.
-        ChunkStore(db).delete_document(
-            document_name, collection=collection, count=False
-        )
-        # Chunk + embed without writing to LanceDB.
-        # Agent memory params (agent_handle, memory_type, summary) are not
-        # passed — directory sync does not support per-document memory tagging.
-        # See DES-018 for the agent memory design.
-        prepared = prepare_document(
-            fp,
-            settings,
-            collection=collection,
-            document_name=document_name,
-        )
-        elapsed = time.perf_counter() - t
-        stat = fp.stat()
-        try:
-            content_hash: str | None = FileDiscovery.content_hash(fp)
-        except OSError:
-            content_hash = None
-        return elapsed, stat, content_hash, prepared
-
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(
-                _timed_prepare,
-                fp,
-                str(fp.relative_to(resolved)),
-            ): fp
-            for fp in plan_to_ingest
-        }
-        for future in as_completed(futures):
-            fp = futures[future]
-            document_name = str(fp.relative_to(resolved))
-            try:
-                elapsed, stat, content_hash, prepared = future.result()
-                conn.upsert_file(
-                    FileRecord(
-                        path=str(fp),
-                        collection=collection,
-                        document_name=document_name,
-                        mtime=stat.st_mtime,
-                        size=stat.st_size,
-                        ingested_at=datetime.now(UTC).isoformat(),
-                        content_hash=content_hash,
-                    ),
-                    commit=False,
-                )
-                if prepared is not None:
-                    chunk_batch.append(prepared)
-                    ingested += 1
-                    progress(
-                        f"[{collection}] Ingested {document_name} in {elapsed:.2f}s"
-                    )
-                else:
-                    progress(f"[{collection}] No chunks from {document_name}")
-            except _RECOVERABLE as exc:
-                failed += 1
-                errors.append(f"{document_name}: {exc}")
-                logger.exception("Ingest failed for %s", document_name)
-                progress(f"[{collection}] Failed {document_name}: {exc}")
-    return ingested, failed, errors, chunk_batch
-
-
 def _refresh_files(
     plan_to_refresh: list[tuple[Path, str]],
-    resolved: Path,
-    collection: str,
-    conn: SyncRegistry,
-    progress: Callable[[str], None],
+    ctx: SyncContext,
 ) -> tuple[int, int, list[str]]:
     """Update registry rows for files whose content hash still matches.
 
     No LanceDB work, no re-embedding — just a fresh ``(mtime, size,
-    content_hash, ingested_at)`` for each row.
-
-    Re-hashes the file at refresh time to guard against TOCTOU: if the
-    file changed between ``compute_sync_plan`` and now, the refresh is
-    skipped so the old registry row stays and the next sync detects the
-    mtime mismatch again.
-
-    Registry rows are written with ``commit=False`` — the caller
-    (``sync_collection``) commits after ``batch_insert_chunks`` succeeds.
-
-    Returns ``(refreshed, failed, errors)`` matching the pattern used
-    by ``_ingest_files`` and ``_delete_documents``.
+    content_hash, ingested_at)`` for each row, committed as one unit. Re-hashes
+    the file at refresh time to guard against TOCTOU: if the file changed since
+    ``compute_sync_plan``, the refresh is skipped so the next sync detects it.
     """
     refreshed = 0
     failed = 0
@@ -266,11 +152,11 @@ def _refresh_files(
             if current_hash != plan_hash:
                 logger.info("File changed since plan, skipping refresh: %s", fp)
                 continue
-            document_name = str(fp.relative_to(resolved))
-            conn.upsert_file(
+            document_name = str(fp.relative_to(ctx.resolved))
+            ctx.conn.upsert_file(
                 FileRecord(
                     path=str(fp),
-                    collection=collection,
+                    collection=ctx.collection,
                     document_name=document_name,
                     mtime=stat.st_mtime,
                     size=stat.st_size,
@@ -280,30 +166,27 @@ def _refresh_files(
                 commit=False,
             )
             refreshed += 1
-            progress(f"[{collection}] Refreshed {document_name}")
+            ctx.progress(f"[{ctx.collection}] Refreshed {document_name}")
         except OSError as exc:
             failed += 1
             errors.append(f"{fp}: {exc}")
             logger.warning("Refresh failed for %s: %s", fp, exc)
+    ctx.conn.commit()
     return refreshed, failed, errors
 
 
 def _delete_documents(
     plan_to_delete: list[str],
-    collection: str,
-    db: LanceDB,
-    conn: SyncRegistry,
-    progress: Callable[[str], None],
+    ctx: SyncContext,
 ) -> tuple[int, int, list[str]]:
     """Delete documents from a sync plan, returning (deleted, failed, errors).
 
-    Registry rows are deleted with ``commit=False`` — the caller
-    (``sync_collection``) commits after ``batch_insert_chunks`` succeeds.
+    Each deletion is a Lance delete plus a registry-row delete; the whole batch
+    commits as one unit (idempotent — deleting an absent doc is a no-op).
     """
     t_delete_start = time.perf_counter()
-    # Pre-build lookup for O(1) path resolution during deletes
     files_by_document_name: dict[str, list[FileRecord]] = {}
-    for rec in conn.list_files(collection):
+    for rec in ctx.conn.list_files(ctx.collection):
         files_by_document_name.setdefault(rec.document_name, []).append(rec)
 
     deleted = 0
@@ -311,22 +194,23 @@ def _delete_documents(
     errors: list[str] = []
     for document_name in plan_to_delete:
         try:
-            ChunkStore(db).delete_document(
-                document_name, collection=collection, count=False
+            ChunkStore(ctx.db).delete_document(
+                document_name, collection=ctx.collection, count=False
             )
             for rec in files_by_document_name.get(document_name, []):
-                conn.delete_file(rec.path, commit=False)
+                ctx.conn.delete_file(rec.path, commit=False)
             deleted += 1
-            progress(f"[{collection}] Deleted {document_name}")
+            ctx.progress(f"[{ctx.collection}] Deleted {document_name}")
         except _RECOVERABLE as exc:
             failed += 1
             errors.append(f"{document_name}: {exc}")
             logger.exception("Delete failed for %s", document_name)
-            progress(f"[{collection}] Failed to delete {document_name}: {exc}")
+            ctx.progress(f"[{ctx.collection}] Failed to delete {document_name}: {exc}")
+    ctx.conn.commit()
     if plan_to_delete:
         logger.info(
             "sync: [%s] deleted %d documents in %.2fs",
-            collection,
+            ctx.collection,
             deleted,
             time.perf_counter() - t_delete_start,
         )
@@ -345,11 +229,14 @@ def sync_collection(
 ) -> SyncResult:
     """Sync a single registered directory with LanceDB.
 
-    Computes the delta, ingests new/changed files in parallel,
-    removes deleted files, and updates the registry.
+    Computes the delta, removes deleted files, refreshes touched-but-unchanged
+    files, then ingests new/changed/partial files through bounded progressive
+    commit (DES-034): each flush writes a batch to LanceDB and commits one
+    registry transaction, so a crash loses at most one in-flight window and the
+    collection is searchable as it fills.
 
-    Catches OSError, ValueError, RuntimeError, and TimeoutError for
-    individual file ingest/delete failures so sync continues when one fails.
+    Catches OSError, ValueError, RuntimeError, and TimeoutError for individual
+    file ingest/delete failures so sync continues when one fails.
     """
 
     def _progress(msg: str) -> None:
@@ -358,14 +245,13 @@ def sync_collection(
             progress_callback(msg)
 
     t_sync_start = time.perf_counter()
-
     resolved = directory.resolve()
+    ctx = SyncContext(collection, resolved, db, conn, _progress)
+
     t0 = time.perf_counter()
     plan = compute_sync_plan(resolved, collection, conn, SUPPORTED_EXTENSIONS)
     logger.info(
-        "sync: [%s] plan computed in %.2fs",
-        collection,
-        time.perf_counter() - t0,
+        "sync: [%s] plan computed in %.2fs", collection, time.perf_counter() - t0
     )
     _progress(
         f"[{collection}] {len(plan.to_ingest)} to ingest, "
@@ -373,68 +259,25 @@ def sync_collection(
         f"{len(plan.to_delete)} to delete, {plan.unchanged} unchanged"
     )
 
+    deleted, failed, errors = _delete_documents(plan.to_delete, ctx)
+    refreshed, ref_failed, ref_errors = _refresh_files(plan.to_refresh, ctx)
+    failed += ref_failed
+    errors.extend(ref_errors)
+
     ingested = 0
-    refreshed = 0
-    failed = 0
-    errors: list[str] = []
-    chunk_batch: list[tuple[list[Chunk], NDArray[np.float32]]] = []
-
     if plan.to_ingest:
-        ingested, failed, errors, chunk_batch = _ingest_files(
-            plan.to_ingest,
-            resolved,
-            collection,
-            db,
+        ingestor = CollectionIngestor(
+            ChunkStore(db),
+            conn,
             settings,
-            conn,
-            max_workers,
-            _progress,
+            collection=collection,
+            resolved=resolved,
+            max_workers=max_workers,
+            progress=_progress,
         )
-
-    if plan.to_refresh:
-        refreshed, ref_failed, ref_errors = _refresh_files(
-            plan.to_refresh,
-            resolved,
-            collection,
-            conn,
-            _progress,
-        )
-        failed += ref_failed
-        errors.extend(ref_errors)
-
-    del_count, del_failed, del_errors = _delete_documents(
-        plan.to_delete,
-        collection,
-        db,
-        conn,
-        _progress,
-    )
-    deleted = del_count
-    failed += del_failed
-    errors.extend(del_errors)
-
-    # Batch-write all accumulated chunks in a single LanceDB transaction.
-    if chunk_batch:
-        t0 = time.perf_counter()
-        total_inserted = ChunkStore(db).batch_insert(chunk_batch)
-        logger.info(
-            "sync: [%s] batch-inserted %d chunks in %.2fs",
-            collection,
-            total_inserted,
-            time.perf_counter() - t0,
-        )
-
-    # Release numpy arrays promptly — chunk_batch holds all vectors
-    # for this collection and can be hundreds of MiB on large syncs.
-    if chunk_batch:
-        del chunk_batch
-        gc.collect(0)
-
-    # Commit registry rows AFTER the batch insert succeeds.  Ingest rows
-    # are written with commit=False so a crash between prepare and
-    # batch-write rolls back the registry — the next sync re-processes
-    # those files instead of silently losing chunks.
-    conn.commit()
+        ingested, ing_failed, ing_errors = ingestor.run(plan.to_ingest)
+        failed += ing_failed
+        errors.extend(ing_errors)
 
     logger.info(
         "sync: [%s] completed in %.2fs"
@@ -447,7 +290,6 @@ def sync_collection(
         plan.unchanged,
         failed,
     )
-
     return SyncResult(
         collection=collection,
         ingested=ingested,

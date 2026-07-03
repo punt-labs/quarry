@@ -1,70 +1,166 @@
 from __future__ import annotations
 
 import os
-import sqlite3
+import threading
+import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from typing import TYPE_CHECKING, cast
+from unittest.mock import patch
 
 import numpy as np
 import pytest
 
-from quarry.models import Chunk
-from quarry.sync import (
-    SyncConfig,
-    compute_sync_plan,
-    sync_all,
-    sync_collection,
-)
+from quarry.config import Settings
+from quarry.db.chunk_store import ChunkStore
+from quarry.db.chunk_table import ChunkTable
+from quarry.db.optimizer import TableOptimizer
+from quarry.db.schema import TABLE_NAME
+from quarry.db.storage import get_db
+from quarry.ingestion.pipeline import plan_file_chunks
+from quarry.ingestion.progressive import FlushCheckpoint, ProgressiveIndexer
+from quarry.models import PageContent, PageType
+from quarry.sync import compute_sync_plan, sync_all, sync_collection
 from quarry.sync_discovery import _DEFAULT_IGNORE_PATTERNS, FileDiscovery
+from quarry.sync_ingest import CollectionIngestor
+from quarry.sync_messages import FileMeta
 from quarry.sync_registry import FileRecord, SyncRegistry
+from quarry.sync_resume import HASH_UNKNOWN, ResumePolicy
 
-# ---------------------------------------------------------------------------
-# SyncConfig
-# ---------------------------------------------------------------------------
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
 
-
-class TestSyncConfig:
-    def test_construction_with_defaults(self) -> None:
-        cfg = SyncConfig(directory=Path("/tmp/docs"), collection="test")
-        assert cfg.directory == Path("/tmp/docs")
-        assert cfg.collection == "test"
-        assert cfg.max_workers == 4
-
-    def test_construction_with_explicit_workers(self) -> None:
-        cfg = SyncConfig(directory=Path("/data"), collection="main", max_workers=8)
-        assert cfg.max_workers == 8
-
-    def test_frozen(self) -> None:
-        cfg = SyncConfig(directory=Path("/tmp"), collection="c")
-        with pytest.raises(AttributeError):
-            cfg.collection = "other"  # type: ignore[misc]
+    from quarry.models import Chunk
+    from quarry.types import LanceDB
 
 
-def _fake_prepare(
-    fp: Path,
-    settings: object,
-    **kwargs: object,
-) -> tuple[list[Chunk], np.ndarray]:
-    """Return a minimal (chunks, vectors) pair for testing."""
-    from datetime import UTC, datetime
+def _run_with_timeout(fn: Callable[[], object], *, timeout: float = 20.0) -> object:
+    """Run *fn* in a thread; fail fast if it does not finish (deadlock guard).
 
-    doc_name = kwargs.get("document_name", fp.name)
-    assert isinstance(doc_name, str)
-    chunk = Chunk(
-        document_name=doc_name,
-        document_path=str(fp),
-        collection=str(kwargs.get("collection", "default")),
-        page_number=1,
-        total_pages=1,
-        chunk_index=0,
-        text="test",
-        page_raw_text="test",
-        page_type="text",
-        source_format=fp.suffix,
-        ingestion_timestamp=datetime.now(UTC),
+    Producer/consumer liveness regressions manifest as a hang, not a wrong value;
+    running under a watchdog turns a would-be hang into a clear failure.
+    """
+    box: dict[str, object] = {}
+
+    def target() -> None:
+        box["value"] = fn()
+
+    thread = threading.Thread(target=target, daemon=True)
+    thread.start()
+    thread.join(timeout)
+    if thread.is_alive():
+        pytest.fail(f"sync did not terminate within {timeout}s — deadlock regression")
+    return box.get("value")
+
+
+class _FakeEmbedder:
+    """Deterministic embedder: records embedded texts, returns zero vectors."""
+
+    def __init__(self) -> None:
+        self.embedded: list[str] = []
+
+    @property
+    def dimension(self) -> int:
+        return 768
+
+    @property
+    def model_name(self) -> str:
+        return "fake"
+
+    def embed_texts(self, texts: list[str]) -> NDArray[np.float32]:
+        self.embedded.extend(texts)
+        return np.zeros((len(texts), 768), dtype=np.float32)
+
+    def embed_query(self, query: str) -> NDArray[np.float32]:
+        return np.zeros(768, dtype=np.float32)
+
+
+class _RaisingEmbedder(_FakeEmbedder):
+    """Embeds normally until the *fail_on_call*-th embed_texts, then raises."""
+
+    def __init__(self, fail_on_call: int) -> None:
+        super().__init__()
+        self._fail_on_call = fail_on_call
+        self._calls = 0
+
+    def embed_texts(self, texts: list[str]) -> NDArray[np.float32]:
+        self._calls += 1
+        if self._calls >= self._fail_on_call:
+            msg = "embedder boom"
+            raise RuntimeError(msg)
+        return super().embed_texts(texts)
+
+
+class _FakeOcr:
+    """OCR backend double that returns a fixed IMAGE page (non-deterministic)."""
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+
+    def _page(self, document_name: str, document_path: Path) -> PageContent:
+        return PageContent(
+            document_name=document_name,
+            document_path=str(document_path),
+            page_number=1,
+            total_pages=1,
+            text=self._text,
+            page_type=PageType.IMAGE,
+        )
+
+    def ocr_image_bytes(
+        self, image_bytes: bytes, document_name: str, document_path: Path
+    ) -> PageContent:
+        return self._page(document_name, document_path)
+
+    def ocr_document(
+        self,
+        document_path: Path,
+        page_numbers: list[int],
+        total_pages: int,
+        *,
+        document_name: str | None = None,
+    ) -> list[PageContent]:
+        return [self._page(document_name or "", document_path)]
+
+
+def _settings(
+    tmp_path: Path,
+    *,
+    flush_mb: int = 32,
+    window: int = 512,
+    max_chars: int = 1800,
+    overlap: int = 0,
+) -> Settings:
+    return Settings(
+        quarry_root=tmp_path / "data",
+        lancedb_path=tmp_path / "lancedb",
+        registry_path=tmp_path / "registry.db",
+        chunk_max_chars=max_chars,
+        chunk_overlap_chars=overlap,
+        sync_flush_mb=flush_mb,
+        embed_window_chunks=window,
     )
-    vectors = np.zeros((1, 768), dtype=np.float32)
-    return [chunk], vectors
+
+
+@contextmanager
+def _patched_embedder(embedder: _FakeEmbedder) -> Iterator[_FakeEmbedder]:
+    with patch(
+        "quarry.ingestion.streaming.get_embedding_backend", return_value=embedder
+    ):
+        yield embedder
+
+
+def _chunk_indexes(db: LanceDB, document_name: str) -> list[int]:
+    table = db.open_table(TABLE_NAME)
+    rows = (
+        table.search()
+        .where(f"document_name = '{document_name}'")
+        .select(["chunk_index"])
+        .limit(100_000)
+        .to_list()
+    )
+    return sorted(cast("int", r["chunk_index"]) for r in rows)
 
 
 class TestDiscoverFiles:
@@ -559,84 +655,137 @@ class TestComputeSyncPlan:
         assert plan.to_refresh == []
         conn.close()
 
-
-def _mock_settings(tmp_path: Path) -> MagicMock:
-    s = MagicMock()
-    s.registry_path = tmp_path / "registry.db"
-    s.lancedb_path = tmp_path / "lancedb"
-    s.embedding_model = "Snowflake/snowflake-arctic-embed-m-v1.5"
-    s.chunk_max_chars = 1800
-    s.chunk_overlap_chars = 200
-    return s
-
-
-class TestSyncCollection:
-    def _setup(self, tmp_path: Path) -> tuple[SyncRegistry, Path]:
-        """Create registry, docs directory, and register collection 'col'."""
-        conn = SyncRegistry(tmp_path / "r.db")
-        d = tmp_path / "docs"
-        d.mkdir()
-        conn.register_directory(d, "col")
-        return conn, d
-
-    def test_ingests_new_files(self, tmp_path: Path):
+    def test_partial_watermark_routes_to_ingest(self, tmp_path: Path):
+        """A row with a partial resume watermark always re-enters to_ingest."""
         conn, d = self._setup(tmp_path)
-        (d / "a.txt").write_text("hello")
+        f = d / "resume.txt"
+        f.write_bytes(b"stable content")
+        stat = f.stat()
+        conn.upsert_file(
+            FileRecord(
+                path=str(f.resolve()),
+                collection="col",
+                document_name="resume.txt",
+                mtime=stat.st_mtime,
+                size=stat.st_size,
+                ingested_at="2025-01-01",
+                content_hash="h",
+                chunks_committed=3,
+                partial_hash="h",  # mid-file — must resume
+            ),
+        )
+        plan = compute_sync_plan(d, "col", conn, self.EXTS)
+        assert [p.name for p in plan.to_ingest] == ["resume.txt"]
+        assert plan.unchanged == 0
+        conn.close()
 
-        db = MagicMock()
-        settings = _mock_settings(tmp_path)
 
-        with (
-            patch("quarry.sync.prepare_document", side_effect=_fake_prepare),
-            patch("quarry.db.chunk_store.ChunkStore.delete_document"),
-            patch(
-                "quarry.db.chunk_store.ChunkStore.batch_insert", return_value=1
-            ) as mock_batch,
-        ):
+# ---------------------------------------------------------------------------
+# Progressive sync against a real LanceDB with a deterministic fake embedder
+# ---------------------------------------------------------------------------
+
+_SENTENCE = "The quick brown fox jumps over the lazy dog. "
+
+
+def _make_collection(
+    tmp_path: Path, settings: Settings
+) -> tuple[LanceDB, SyncRegistry, Path]:
+    d = tmp_path / "docs"
+    d.mkdir()
+    db = get_db(settings.lancedb_path)
+    conn = SyncRegistry(settings.registry_path)
+    conn.register_directory(d, "col")
+    return db, conn, d
+
+
+def _seed_crash_state(
+    tmp_path: Path,
+    *,
+    watermark_from_total: float,
+    prefill_from_total: float,
+    partial_hash: str | None = None,
+    use_real_hash: bool = True,
+) -> tuple[Settings, LanceDB, SyncRegistry, Path, str, list[Chunk], int, int]:
+    """Set up a post-crash state: chunks [0, prefill) durable, watermark at *w*.
+
+    ``watermark_from_total`` / ``prefill_from_total`` are fractions of the file's
+    chunk count so tests read as "resume from the middle" independent of chunking.
+    """
+    settings = _settings(tmp_path, max_chars=45)
+    db, conn, d = _make_collection(tmp_path, settings)
+    f = d / "big.txt"
+    f.write_text(_SENTENCE * 12)
+    doc = "big.txt"
+    chunks, _ = plan_file_chunks(f, settings, collection="col", document_name=doc)
+    total = len(chunks)
+    assert total >= 4
+    w = int(total * watermark_from_total)
+    prefill = int(total * prefill_from_total)
+    if prefill:
+        ChunkStore(db).insert(
+            chunks[:prefill], np.zeros((prefill, 768), dtype=np.float32)
+        )
+    real_hash = FileDiscovery.content_hash(f)
+    stored = real_hash if use_real_hash else partial_hash
+    conn.upsert_file(
+        FileRecord(
+            path=str(f.resolve()),
+            collection="col",
+            document_name=doc,
+            mtime=f.stat().st_mtime,
+            size=f.stat().st_size,
+            ingested_at="2025-01-01",
+            content_hash=stored,
+            chunks_committed=w,
+            partial_hash=stored,
+        ),
+    )
+    return settings, db, conn, d, doc, chunks, total, w
+
+
+class TestSyncCollectionProgressive:
+    def test_ingests_new_file(self, tmp_path: Path):
+        settings = _settings(tmp_path)
+        db, conn, d = _make_collection(tmp_path, settings)
+        (d / "a.txt").write_text(_SENTENCE * 3)
+        with _patched_embedder(_FakeEmbedder()):
             result = sync_collection(d, "col", db, settings, conn, max_workers=1)
-
         assert result.ingested == 1
         assert result.failed == 0
-        assert result.skipped == 0
-        mock_batch.assert_called_once()
-        # Verify file record was created
-        rec = conn.get_file(str((d / "a.txt").resolve()))
-        assert rec is not None
-        assert rec.collection == "col"
+        assert ChunkStore(db).count(collection_filter="col") >= 1
+        files = conn.list_files("col")
+        assert len(files) == 1
+        assert files[0].partial_hash is None  # complete
+        assert files[0].content_hash is not None
         conn.close()
 
     def test_error_isolation(self, tmp_path: Path):
-        conn, d = self._setup(tmp_path)
-        (d / "good.txt").write_text("ok")
-        (d / "bad.txt").write_text("fail")
+        settings = _settings(tmp_path)
+        db, conn, d = _make_collection(tmp_path, settings)
+        (d / "good.txt").write_text(_SENTENCE * 2)
+        (d / "bad.txt").write_text(_SENTENCE * 2)
 
-        db = MagicMock()
-        settings = _mock_settings(tmp_path)
+        real_plan = plan_file_chunks
 
-        def side_effect(
-            fp: Path, settings: object, **kwargs: object
-        ) -> tuple[list[Chunk], np.ndarray]:
+        def flaky(fp: Path, *a: object, **k: object) -> object:
             if fp.name == "bad.txt":
                 msg = "boom"
                 raise RuntimeError(msg)
-            return _fake_prepare(fp, settings, **kwargs)
+            return real_plan(fp, *a, **k)  # type: ignore[arg-type]
 
         with (
-            patch("quarry.sync.prepare_document", side_effect=side_effect),
-            patch("quarry.db.chunk_store.ChunkStore.delete_document"),
-            patch("quarry.db.chunk_store.ChunkStore.batch_insert", return_value=0),
+            _patched_embedder(_FakeEmbedder()),
+            patch("quarry.sync_ingest.plan_file_chunks", side_effect=flaky),
         ):
             result = sync_collection(d, "col", db, settings, conn, max_workers=1)
-
         assert result.ingested == 1
         assert result.failed == 1
-        assert len(result.errors) == 1
-        assert "bad.txt" in result.errors[0]
+        assert any("bad.txt" in e for e in result.errors)
         conn.close()
 
     def test_deletes_removed_files(self, tmp_path: Path):
-        conn, d = self._setup(tmp_path)
-        # Register a file that no longer exists on disk
+        settings = _settings(tmp_path)
+        db, conn, d = _make_collection(tmp_path, settings)
         conn.upsert_file(
             FileRecord(
                 path=str((d / "gone.txt").resolve()),
@@ -647,300 +796,773 @@ class TestSyncCollection:
                 ingested_at="2025-01-01",
             ),
         )
+        with _patched_embedder(_FakeEmbedder()):
+            result = sync_collection(d, "col", db, settings, conn, max_workers=1)
+        assert result.deleted == 1
+        assert conn.get_file(str((d / "gone.txt").resolve())) is None
+        conn.close()
 
-        db = MagicMock()
-        settings = _mock_settings(tmp_path)
+    def test_idempotent_reingest(self, tmp_path: Path):
+        settings = _settings(tmp_path)
+        db, conn, d = _make_collection(tmp_path, settings)
+        (d / "a.txt").write_text(_SENTENCE * 3)
+        with _patched_embedder(_FakeEmbedder()):
+            first = sync_collection(d, "col", db, settings, conn, max_workers=1)
+            count_after_first = ChunkStore(db).count(collection_filter="col")
+            second = sync_collection(d, "col", db, settings, conn, max_workers=1)
+        assert first.ingested == 1
+        assert second.ingested == 0
+        assert second.skipped == 1
+        assert ChunkStore(db).count(collection_filter="col") == count_after_first
+        conn.close()
+
+
+class TestWithinFileResume:
+    def test_happy_resume_embeds_only_tail(self, tmp_path: Path):
+        """G1: resume embeds only [w, total); final set is contiguous, no gaps."""
+        settings, db, conn, d, doc, chunks, total, w = _seed_crash_state(
+            tmp_path, watermark_from_total=0.5, prefill_from_total=0.5
+        )
+        embedder = _FakeEmbedder()
+        with _patched_embedder(embedder):
+            result = sync_collection(d, "col", db, settings, conn, max_workers=1)
+        assert result.ingested == 1
+        assert embedder.embedded == [c.text for c in chunks[w:]]  # tail only
+        assert _chunk_indexes(db, doc) == list(range(total))
+        rec = conn.get_file(str((d / "big.txt").resolve()))
+        assert rec is not None and rec.partial_hash is None
+        conn.close()
+
+    def test_g2_delete_tail_dedups(self, tmp_path: Path):
+        """G2: durable [w, K) with unadvanced watermark is delete-tailed, no dups."""
+        # prefill past the watermark: a crash left extra durable chunks.
+        settings, db, conn, d, doc, chunks, total, w = _seed_crash_state(
+            tmp_path, watermark_from_total=0.33, prefill_from_total=0.9
+        )
+        embedder = _FakeEmbedder()
+        with _patched_embedder(embedder):
+            sync_collection(d, "col", db, settings, conn, max_workers=1)
+        assert _chunk_indexes(db, doc) == list(range(total))  # no [w, K) dups
+        assert embedder.embedded == [c.text for c in chunks[w:]]
+        conn.close()
+
+    def test_g3_hash_mismatch_full_reembed(self, tmp_path: Path):
+        """G3: partial_hash != content_hash discards the watermark, re-embeds all."""
+        settings, db, conn, d, doc, chunks, total, _w = _seed_crash_state(
+            tmp_path,
+            watermark_from_total=0.5,
+            prefill_from_total=0.5,
+            partial_hash="STALE",
+            use_real_hash=False,
+        )
+        embedder = _FakeEmbedder()
+        with _patched_embedder(embedder):
+            sync_collection(d, "col", db, settings, conn, max_workers=1)
+        assert embedder.embedded == [c.text for c in chunks]  # full re-embed
+        assert _chunk_indexes(db, doc) == list(range(total))
+        conn.close()
+
+    def test_g3_ocr_image_extraction_full_reembed(self, tmp_path: Path):
+        """G3: an OCR'd (IMAGE) extraction is non-deterministic → discard watermark.
+
+        Drives the real image path (``_extract_image_pages`` → OCR backend) rather
+        than patching the determinism flag, so the classifier itself is exercised.
+        """
+        from PIL import Image
+
+        settings = _settings(tmp_path, max_chars=45)
+        db, conn, d = _make_collection(tmp_path, settings)
+        img = d / "scan.png"
+        Image.new("RGB", (64, 64), "white").save(img)
+        ocr = _FakeOcr(_SENTENCE * 12)
+
+        with patch("quarry.ingestion.pipeline.get_ocr_backend", return_value=ocr):
+            chunks, deterministic = plan_file_chunks(
+                img, settings, collection="col", document_name="scan.png"
+            )
+        assert deterministic is False  # OCR pages are IMAGE → non-deterministic
+        total = len(chunks)
+        assert total >= 4
+        w = total // 2
+        content_hash = FileDiscovery.content_hash(img)
+        ChunkStore(db).insert(chunks[:w], np.zeros((w, 768), dtype=np.float32))
+        conn.upsert_file(
+            FileRecord(
+                path=str(img.resolve()),
+                collection="col",
+                document_name="scan.png",
+                mtime=img.stat().st_mtime,
+                size=img.stat().st_size,
+                ingested_at="2025-01-01",
+                content_hash=content_hash,  # hash matches — only OCR non-determinism
+                chunks_committed=w,
+                partial_hash=content_hash,
+            ),
+        )
+        embedder = _FakeEmbedder()
+        with (
+            patch("quarry.ingestion.pipeline.get_ocr_backend", return_value=ocr),
+            _patched_embedder(embedder),
+        ):
+            sync_collection(d, "col", db, settings, conn, max_workers=1)
+        # Non-deterministic extraction → watermark discarded → full re-embed from 0.
+        assert embedder.embedded == [c.text for c in chunks]
+        assert _chunk_indexes(db, "scan.png") == list(range(total))
+        conn.close()
+
+
+class TestPartialHashSentinel:
+    """Fix #327-1: a mid-file flush with an unknown content hash must stay partial."""
+
+    def test_partial_mark_uses_sentinel_when_hash_none(self):
+        """An incomplete checkpoint with no content hash marks the row partial."""
+        policy = ResumePolicy()
+        incomplete = FlushCheckpoint(file_id="f", chunks_committed=3, complete=False)
+        assert policy.partial_mark(incomplete, None) == HASH_UNKNOWN
+        assert policy.partial_mark(incomplete, "abc") == "abc"
+
+    def test_partial_mark_clears_on_complete(self):
+        """A complete checkpoint clears the mark regardless of the hash."""
+        policy = ResumePolicy()
+        complete = FlushCheckpoint(file_id="f", chunks_committed=9, complete=True)
+        assert policy.partial_mark(complete, None) is None
+        assert policy.partial_mark(complete, "abc") is None
+
+    def test_resume_gate_never_trusts_unknown_hash(self):
+        """A hash-unknown watermark always re-embeds from 0, even if in range."""
+        policy = ResumePolicy()
+        record = FileRecord(
+            path="/p",
+            collection="col",
+            document_name="d",
+            mtime=1.0,
+            size=1,
+            ingested_at="2025-01-01",
+            content_hash="real",
+            chunks_committed=5,
+            partial_hash=HASH_UNKNOWN,
+        )
+        watermark = policy.resume_watermark(
+            record, "real", total=10, deterministic=True
+        )
+        assert watermark == 0
+
+    def test_incomplete_flush_no_hash_persists_partial_row(self, tmp_path: Path):
+        """on_flush persists is_partial=True when content_hash is None (the bug)."""
+        settings = _settings(tmp_path)
+        db, conn, d = _make_collection(tmp_path, settings)
+        f = d / "big.txt"
+        f.write_text(_SENTENCE * 4)
+        file_id = str(f.resolve())
+        ingestor = CollectionIngestor(
+            ChunkStore(db),
+            conn,
+            settings,
+            collection="col",
+            resolved=d.resolve(),
+            max_workers=1,
+            progress=lambda _m: None,
+        )
+        record = FileRecord(
+            path=file_id,
+            collection="col",
+            document_name="big.txt",
+            mtime=f.stat().st_mtime,
+            size=f.stat().st_size,
+            ingested_at="2025-01-01",
+            content_hash=None,  # hashing failed
+        )
+        ingestor._meta[file_id] = FileMeta(
+            record=record, resume_watermark=0, total_chunks=10
+        )
+        ingestor.on_flush(
+            [FlushCheckpoint(file_id=file_id, chunks_committed=3, complete=False)]
+        )
+        rec = conn.get_file(file_id)
+        assert rec is not None
+        assert rec.is_partial is True  # before the fix this was False (silent skip)
+        assert rec.chunks_committed == 3
+        conn.close()
+
+    def test_unknown_hash_watermark_reingests_full(self, tmp_path: Path):
+        """Next sync of a hash-unknown partial row re-embeds all chunks, no skip."""
+        settings = _settings(tmp_path, max_chars=45)
+        db, conn, d = _make_collection(tmp_path, settings)
+        f = d / "big.txt"
+        f.write_text(_SENTENCE * 12)
+        doc = "big.txt"
+        chunks, _ = plan_file_chunks(f, settings, collection="col", document_name=doc)
+        total = len(chunks)
+        assert total >= 4
+        w = total // 2
+        ChunkStore(db).insert(chunks[:w], np.zeros((w, 768), dtype=np.float32))
+        conn.upsert_file(
+            FileRecord(
+                path=str(f.resolve()),
+                collection="col",
+                document_name=doc,
+                mtime=f.stat().st_mtime,
+                size=f.stat().st_size,
+                ingested_at="2025-01-01",
+                content_hash=FileDiscovery.content_hash(f),
+                chunks_committed=w,
+                partial_hash=HASH_UNKNOWN,  # watermark whose hash is unknown
+            ),
+        )
+        embedder = _FakeEmbedder()
+        with _patched_embedder(embedder):
+            result = sync_collection(d, "col", db, settings, conn, max_workers=1)
+        assert result.ingested == 1
+        assert embedder.embedded == [c.text for c in chunks]  # full re-embed from 0
+        assert _chunk_indexes(db, doc) == list(range(total))
+        rec = conn.get_file(str(f.resolve()))
+        assert rec is not None and rec.partial_hash is None  # completed, mark cleared
+        conn.close()
+
+
+def _record(
+    *, content_hash: str | None, chunks_committed: int, partial_hash: str | None
+) -> FileRecord:
+    return FileRecord(
+        path="/p",
+        collection="col",
+        document_name="d",
+        mtime=1.0,
+        size=1,
+        ingested_at="2025-01-01",
+        content_hash=content_hash,
+        chunks_committed=chunks_committed,
+        partial_hash=partial_hash,
+    )
+
+
+class TestStaleClearOnFailure:
+    """Fix #327-2: a changed file's stale chunks must not survive a failed re-ingest."""
+
+    def test_no_record_keeps_nothing_to_clear(self):
+        assert ResumePolicy().clear_stale_on_failure(None, "h") is False
+
+    def test_changed_complete_file_is_stale(self):
+        rec = _record(content_hash="old", chunks_committed=0, partial_hash=None)
+        assert ResumePolicy().clear_stale_on_failure(rec, "new") is True
+
+    def test_matching_resume_prefix_is_kept(self):
+        rec = _record(content_hash="h", chunks_committed=3, partial_hash="h")
+        assert ResumePolicy().clear_stale_on_failure(rec, "h") is False
+
+    def test_changed_since_partial_is_stale(self):
+        rec = _record(content_hash="h", chunks_committed=3, partial_hash="h")
+        assert ResumePolicy().clear_stale_on_failure(rec, "different") is True
+
+    def test_unverifiable_hash_is_stale(self):
+        rec = _record(content_hash="h", chunks_committed=3, partial_hash="h")
+        assert ResumePolicy().clear_stale_on_failure(rec, None) is True
+
+    def test_changed_file_failed_reextract_clears_stale(self, tmp_path: Path):
+        """A changed file whose re-extraction raises: old chunks gone, sync failed."""
+        settings = _settings(tmp_path)
+        db, conn, d = _make_collection(tmp_path, settings)
+        f = d / "a.txt"
+        f.write_text(_SENTENCE * 3)
+        with _patched_embedder(_FakeEmbedder()):
+            sync_collection(d, "col", db, settings, conn, max_workers=1)
+        assert ChunkStore(db).count(collection_filter="col") >= 1  # old chunks durable
+
+        f.write_text(_SENTENCE * 9)  # change content → full re-ingest
+
+        def boom(_fp: Path, *_a: object, **_k: object) -> object:
+            msg = "extract boom"
+            raise RuntimeError(msg)
 
         with (
-            patch("quarry.sync.prepare_document", side_effect=_fake_prepare),
-            patch("quarry.db.chunk_store.ChunkStore.delete_document") as mock_del,
-            patch("quarry.db.chunk_store.ChunkStore.batch_insert", return_value=0),
+            _patched_embedder(_FakeEmbedder()),
+            patch("quarry.sync_ingest.plan_file_chunks", side_effect=boom),
         ):
             result = sync_collection(d, "col", db, settings, conn, max_workers=1)
-
-        assert result.deleted == 1
-        # delete_document called for both the "gone" file in _delete_documents
-        # and potentially for overwrite in _ingest_files.  Check at least the
-        # deletion path call is present.
-        del_calls = [c for c in mock_del.call_args_list if c.args[0] == "gone.txt"]
-        assert len(del_calls) == 1
+        assert result.ingested == 0
+        assert result.failed == 1
+        # Stale old chunks must be gone — removed/redacted content not searchable.
+        assert ChunkStore(db).count(collection_filter="col") == 0
         conn.close()
 
-    def test_registry_updated_after_sync(self, tmp_path: Path):
-        conn, d = self._setup(tmp_path)
-        (d / "new.txt").write_text("data")
-
-        db = MagicMock()
-        settings = _mock_settings(tmp_path)
-
-        with (
-            patch("quarry.sync.prepare_document", side_effect=_fake_prepare),
-            patch("quarry.db.chunk_store.ChunkStore.delete_document"),
-            patch("quarry.db.chunk_store.ChunkStore.batch_insert", return_value=1),
-        ):
-            sync_collection(d, "col", db, settings, conn, max_workers=1)
-
-        files = conn.list_files("col")
-        assert len(files) == 1
-        assert files[0].document_name == "new.txt"
-        conn.close()
-
-    def test_subdirectory_document_names_match_registry(self, tmp_path: Path):
-        """Regression: sync must use the same document_name in LanceDB and SQLite.
-
-        When syncing a directory with subdirectories, the document_name for
-        each file is a relative path (e.g. "sub/file.txt").  Both the
-        prepare call and the registry upsert must use this relative name.
-
-        See quarry-5sg.
-        """
-        conn, d = self._setup(tmp_path)
-        sub = d / "pkg"
-        sub.mkdir()
-        (sub / "mod.py").write_text("def hello():\n    pass\n")
-
-        db = MagicMock()
-        settings = _mock_settings(tmp_path)
-
-        with (
-            patch(
-                "quarry.sync.prepare_document", side_effect=_fake_prepare
-            ) as mock_prepare,
-            patch("quarry.db.chunk_store.ChunkStore.delete_document"),
-            patch("quarry.db.chunk_store.ChunkStore.batch_insert", return_value=1),
-        ):
-            sync_collection(d, "col", db, settings, conn, max_workers=1)
-
-        # The document_name passed to prepare_document must be the relative path
-        _, kwargs = mock_prepare.call_args
-        assert kwargs["document_name"] == "pkg/mod.py"
-
-        # The registry must store the same relative path
-        files = conn.list_files("col")
-        assert len(files) == 1
-        assert files[0].document_name == "pkg/mod.py"
-        conn.close()
-
-
-class TestSyncCollectionDurabilityAndRefresh:
-    """Tests for quarry-272m: content-hash refresh path and durable ingest."""
-
-    def _setup(self, tmp_path: Path) -> tuple[SyncRegistry, Path, Path]:
-        registry_path = tmp_path / "r.db"
-        conn = SyncRegistry(registry_path)
-        d = tmp_path / "docs"
-        d.mkdir()
-        conn.register_directory(d, "col")
-        return conn, d, registry_path
-
-    def test_sync_collection_crash_before_batch_insert_leaves_no_registry_rows(
-        self, tmp_path: Path
-    ):
-        """A crash mid-ingest must leave zero registry rows.
-
-        Registry rows are written with ``commit=False`` during
-        ``_ingest_files``; the commit happens only after
-        ``batch_insert_chunks`` succeeds.  A crash before the batch
-        insert rolls back all uncommitted registry rows so the next sync
-        re-processes them — preventing silent data loss where the
-        registry says a file is synced but LanceDB has no chunks.
-        """
-        conn, d, registry_path = self._setup(tmp_path)
-        for name in ("a.txt", "b.txt", "c.txt", "d.txt"):
-            (d / name).write_text(f"content of {name}")
-
-        db = MagicMock()
-        settings = _mock_settings(tmp_path)
-
-        calls: list[str] = []
-
-        def _prepare(
-            fp: Path,
-            settings_arg: object,
-            **kwargs: object,
-        ) -> tuple[list[Chunk], np.ndarray]:
-            name = kwargs["document_name"]
-            assert isinstance(name, str)
-            calls.append(name)
-            if len(calls) == 3:
-                msg = "user interrupt"
-                raise KeyboardInterrupt(msg)
-            return _fake_prepare(fp, settings_arg, **kwargs)
-
-        with (
-            patch("quarry.sync.prepare_document", side_effect=_prepare),
-            patch("quarry.db.chunk_store.ChunkStore.delete_document"),
-            patch("quarry.db.chunk_store.ChunkStore.batch_insert", return_value=0),
-            pytest.raises(KeyboardInterrupt),
-        ):
-            sync_collection(d, "col", db, settings, conn, max_workers=1)
-
-        conn.close()
-
-        # Fresh connection — must not rely on the sync's own conn's
-        # uncommitted state.
-        verify = sqlite3.connect(str(registry_path))
-        verify.row_factory = sqlite3.Row
-        rows = verify.execute(
-            "SELECT path, content_hash FROM files WHERE collection = ? ORDER BY path",
-            ("col",),
-        ).fetchall()
-        verify.close()
-
-        # No rows committed because the crash happened before
-        # batch_insert_chunks and the deferred conn.commit().
-        assert len(rows) == 0, (
-            f"expected 0 durable rows (deferred commit), got {len(rows)}; calls={calls}"
+    def test_resume_failure_keeps_committed_prefix(self, tmp_path: Path):
+        """A within-file resume that fails re-extraction keeps its committed prefix."""
+        settings, db, conn, d, doc, _chunks, _total, w = _seed_crash_state(
+            tmp_path, watermark_from_total=0.5, prefill_from_total=0.5
         )
 
-    def test_sync_collection_refresh_path_updates_registry_mtime_without_reingest(
-        self, tmp_path: Path
-    ):
-        """Bumping mtime on a hashed file must refresh, not re-ingest."""
-        conn, d, _ = self._setup(tmp_path)
-        for name in ("a.txt", "b.txt", "c.txt"):
-            (d / name).write_text(f"payload for {name}")
-
-        db = MagicMock()
-        settings = _mock_settings(tmp_path)
+        def boom(_fp: Path, *_a: object, **_k: object) -> object:
+            msg = "extract boom"
+            raise RuntimeError(msg)
 
         with (
-            patch(
-                "quarry.sync.prepare_document", side_effect=_fake_prepare
-            ) as mock_prepare,
-            patch("quarry.db.chunk_store.ChunkStore.delete_document"),
-            patch("quarry.db.chunk_store.ChunkStore.batch_insert", return_value=1),
+            _patched_embedder(_FakeEmbedder()),
+            patch("quarry.sync_ingest.plan_file_chunks", side_effect=boom),
         ):
-            first = sync_collection(d, "col", db, settings, conn, max_workers=1)
-        assert first.ingested == 3
-        assert first.refreshed == 0
-        assert mock_prepare.call_count == 3
+            result = sync_collection(d, "col", db, settings, conn, max_workers=1)
+        assert result.failed == 1
+        # Resume path is not stale: the committed prefix [0, w) must be preserved.
+        assert _chunk_indexes(db, doc) == list(range(w))
+        conn.close()
 
-        # Capture post-ingest mtimes from the registry.
-        pre_refresh = {r.path: r.mtime for r in conn.list_files("col")}
 
-        # Bump every file's mtime without touching content.
-        for name in ("a.txt", "b.txt", "c.txt"):
-            f = d / name
-            stat = f.stat()
-            os.utime(f, (stat.st_atime, stat.st_mtime + 100))
+class TestFragmentBudgetAndExceptions:
+    def test_risk1_many_tiny_files_coalesce(self, tmp_path: Path):
+        """RISK-1: N tiny files share flushes — fragments O(vectors/N), not O(files)."""
+        settings = _settings(tmp_path)
+        db, conn, d = _make_collection(tmp_path, settings)
+        for i in range(200):
+            (d / f"f{i}.txt").write_text("tiny one sentence.")
+
+        orig = ChunkStore.insert_records
+        calls = {"n": 0}
+
+        def counting(self: ChunkStore, records: list[dict[str, object]]) -> int:
+            calls["n"] += 1
+            return orig(self, records)
 
         with (
-            patch(
-                "quarry.sync.prepare_document", side_effect=_fake_prepare
-            ) as mock_prepare,
-            patch("quarry.db.chunk_store.ChunkStore.delete_document"),
-            patch("quarry.db.chunk_store.ChunkStore.batch_insert", return_value=0),
+            _patched_embedder(_FakeEmbedder()),
+            patch.object(ChunkStore, "insert_records", counting),
         ):
-            second = sync_collection(d, "col", db, settings, conn, max_workers=1)
-        assert second.ingested == 0
-        assert second.refreshed == 3
-        assert second.skipped == 0
-        assert mock_prepare.call_count == 0
+            result = sync_collection(d, "col", db, settings, conn, max_workers=1)
+        assert result.ingested == 200
+        # 200 tiny files coalesce into O(vectors/N) flushes (a handful), not O(200).
+        # Fragment count therefore tracks flush count, not file count — the
+        # DES-026 death-spiral door stays shut. (The threshold skip/run branch is
+        # covered directly by test_sync_concurrency::TestOptimizeGuard; the
+        # optimize() compaction effect by test_optimize_strictly_reduces_fragments.)
+        assert calls["n"] <= 3
+        assert TableOptimizer(db).count_fragments() == calls["n"]
+        assert ChunkStore(db).count(collection_filter="col") == 200
+        conn.close()
 
-        post_refresh = {r.path: r.mtime for r in conn.list_files("col")}
-        assert set(pre_refresh) == set(post_refresh)
-        for path, old_mtime in pre_refresh.items():
-            assert post_refresh[path] > old_mtime, (
-                f"{path} mtime did not advance: {old_mtime} -> {post_refresh[path]}"
+    def test_optimize_compacts_fragments_strictly_fewer(self, tmp_path: Path):
+        """Compaction strictly reduces fragments: 4 separate adds → 1 compacted.
+
+        ``count_fragments`` is a disk-file proxy and our ``optimize()`` retains
+        superseded versions for 1 h (rollback safety, DES-023), so the decrease is
+        observable only after those files are pruned. Forcing immediate cleanup
+        exposes the compaction our optimize() performs.
+        """
+        from datetime import timedelta
+
+        settings = _settings(tmp_path, max_chars=45)
+        db, conn, d = _make_collection(tmp_path, settings)
+        f = d / "a.txt"
+        f.write_text(_SENTENCE * 8)  # small chunks → several chunks to fragment
+        chunks, _ = plan_file_chunks(f, settings, document_name="a.txt")
+        assert len(chunks) >= 4
+        store = ChunkStore(db)
+        # Each insert_records is one table.add → one Lance fragment.
+        for chunk in chunks[:4]:
+            store.insert_records(
+                ChunkTable.build_records([chunk], np.zeros((1, 768), dtype=np.float32))
             )
+        opt = TableOptimizer(db)
+        before = opt.count_fragments()
+        assert before > 1
+        db.open_table(TABLE_NAME).optimize(cleanup_older_than=timedelta(0))
+        after = opt.count_fragments()
+        assert after < before  # strictly fewer fragments after compaction
+        assert store.count() == 4  # compaction is lossless
         conn.close()
 
-    def test_refresh_files_partial_failure(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        """Class 2 failure-injection: _refresh_files catches OSError per file."""
-        conn, d, registry_path = self._setup(tmp_path)
-        for name in ("a.txt", "b.txt"):
-            (d / name).write_text(f"content of {name}")
+    def test_commit_failure_reconciles_next_sync(self, tmp_path: Path):
+        """conn.commit raising leaves durable chunks + no watermark; resume fixes it."""
+        settings = _settings(tmp_path)
+        db, conn, d = _make_collection(tmp_path, settings)
+        f = d / "a.txt"
+        f.write_text(_SENTENCE * 4)
+        resolved = d.resolve()
 
-        db = MagicMock()
-        settings = _mock_settings(tmp_path)
+        def boom() -> None:
+            msg = "commit boom"
+            raise RuntimeError(msg)
 
-        # Initial ingest so content_hash is populated.
-        with (
-            patch("quarry.sync.prepare_document", side_effect=_fake_prepare),
-            patch("quarry.db.chunk_store.ChunkStore.delete_document"),
-            patch("quarry.db.chunk_store.ChunkStore.batch_insert", return_value=1),
-        ):
-            first = sync_collection(d, "col", db, settings, conn, max_workers=1)
-        assert first.ingested == 2
-
-        pre_mtimes = {r.path: r.mtime for r in conn.list_files("col")}
-
-        # Bump mtimes without changing content — triggers refresh path.
-        for name in ("a.txt", "b.txt"):
-            f = d / name
-            stat = f.stat()
-            os.utime(f, (stat.st_atime, stat.st_mtime + 200))
-
-        # Make SyncRegistry.upsert_file raise OSError on the second call only.
-        call_count = 0
-        _real_upsert = SyncRegistry.upsert_file
-
-        def _failing_upsert(
-            self: SyncRegistry,
-            record: FileRecord,
-            *,
-            commit: bool = True,
-        ) -> None:
-            nonlocal call_count
-            call_count += 1
-            if call_count == 2:
-                raise OSError("disk full")
-            _real_upsert(self, record, commit=commit)
-
-        monkeypatch.setattr(SyncRegistry, "upsert_file", _failing_upsert)
-
-        with (
-            patch("quarry.sync.prepare_document", side_effect=_fake_prepare),
-            patch("quarry.db.chunk_store.ChunkStore.delete_document"),
-            patch("quarry.db.chunk_store.ChunkStore.batch_insert", return_value=0),
-        ):
-            second = sync_collection(d, "col", db, settings, conn, max_workers=1)
-        assert second.refreshed == 1
-        assert second.failed == 1
-        assert len(second.errors) == 1
-        assert "disk full" in second.errors[0]
-
-        # Verify via a fresh connection: only the first file's mtime advanced.
-        verify = SyncRegistry(registry_path)
-        post_mtimes = {r.path: r.mtime for r in verify.list_files("col")}
-        verify.close()
-
-        updated = [p for p, m in post_mtimes.items() if m != pre_mtimes[p]]
-        assert len(updated) == 1, (
-            f"expected exactly 1 file refreshed, got {len(updated)}"
+        ingestor = CollectionIngestor(
+            ChunkStore(db),
+            conn,
+            settings,
+            collection="col",
+            resolved=resolved,
+            max_workers=1,
+            progress=lambda _m: None,
         )
+        original_commit = conn.commit
+        conn.commit = boom  # type: ignore[method-assign]
+        with _patched_embedder(_FakeEmbedder()):
+            _ingested, failed, errors = ingestor.run([resolved / "a.txt"])
+        conn.commit = original_commit  # type: ignore[method-assign]
+        assert failed >= 1
+        assert errors
+        # Chunks were written to Lance before the failing commit — durable.
+        assert ChunkStore(db).count(collection_filter="col") >= 1
+        # But the registry rolled back: no committed row for the file.
+        assert conn.get_file(str(resolved / "a.txt")) is None
+
+        # A clean sync reconciles via delete-tail: exact chunks, no duplicates.
+        embedder = _FakeEmbedder()
+        with _patched_embedder(embedder):
+            CollectionIngestor(
+                ChunkStore(db),
+                conn,
+                settings,
+                collection="col",
+                resolved=resolved,
+                max_workers=1,
+                progress=lambda _m: None,
+            ).run([resolved / "a.txt"])
+        chunks, _ = plan_file_chunks(
+            f, settings, collection="col", document_name="a.txt"
+        )
+        assert _chunk_indexes(db, "a.txt") == list(range(len(chunks)))
+        rec = conn.get_file(str(resolved / "a.txt"))
+        assert rec is not None and rec.partial_hash is None
+        conn.close()
+
+    def test_embedder_raises_mid_file_leaves_partial_watermark(self, tmp_path: Path):
+        """An embedder failure mid-file leaves flushed windows durable + a watermark."""
+        settings = _settings(tmp_path, max_chars=45, window=2)
+        db, conn, d = _make_collection(tmp_path, settings)
+        f = d / "big.txt"
+        f.write_text(_SENTENCE * 12)
+        total = len(
+            plan_file_chunks(f, settings, collection="col", document_name="big.txt")[0]
+        )
+        # Raise on the 2nd embed window so window 1 (chunks [0, 2)) is durable.
+        embedder = _RaisingEmbedder(fail_on_call=2)
+        with _patched_embedder(embedder):
+            result = sync_collection(d, "col", db, settings, conn, max_workers=1)
+        assert result.failed == 1
+        rec = conn.get_file(str(f.resolve()))
+        assert rec is not None
+        assert rec.is_partial is True  # a torn-free resume watermark was stored
+        assert 0 < rec.chunks_committed < total
+        # A clean resume completes with no duplicate chunk indexes.
+        embedder2 = _FakeEmbedder()
+        with _patched_embedder(embedder2):
+            sync_collection(d, "col", db, settings, conn, max_workers=1)
+        assert _chunk_indexes(db, "big.txt") == list(range(total))
+        rec2 = conn.get_file(str(f.resolve()))
+        assert rec2 is not None and rec2.partial_hash is None
+        conn.close()
+
+
+class _ConsumerBoomError(Exception):
+    """A consumer-side error outside _RECOVERABLE/_FLUSH_ERRORS (e.g. MemoryError)."""
+
+
+class TestConcurrencyLiveness:
+    """Regressions for the producer/consumer deadlock blockers (#1, #2)."""
+
+    def test_producer_non_recoverable_fails_cleanly_no_hang(self, tmp_path: Path):
+        """A KeyError (not in _RECOVERABLE) in a producer must not hang the sync."""
+        settings = _settings(tmp_path)
+        db, conn, d = _make_collection(tmp_path, settings)
+        (d / "good.txt").write_text(_SENTENCE * 2)
+        (d / "bad.txt").write_text(_SENTENCE * 2)
+
+        real_plan = plan_file_chunks
+
+        def flaky(fp: Path, *a: object, **k: object) -> object:
+            if fp.name == "bad.txt":
+                raise KeyError("non-recoverable producer failure")
+            return real_plan(fp, *a, **k)  # type: ignore[arg-type]
+
+        with (
+            _patched_embedder(_FakeEmbedder()),
+            patch("quarry.sync_ingest.plan_file_chunks", side_effect=flaky),
+        ):
+            result = _run_with_timeout(
+                lambda: sync_collection(d, "col", db, settings, conn, max_workers=2)
+            )
+        assert result is not None
+        assert result.ingested == 1  # type: ignore[attr-defined]
+        assert result.failed == 1  # type: ignore[attr-defined]
+        assert any("bad.txt" in e for e in result.errors)  # type: ignore[attr-defined]
+        conn.close()
+
+    def test_consumer_non_flush_error_aborts_no_deadlock(self, tmp_path: Path):
+        """A consumer flush error outside _FLUSH_ERRORS aborts + drains, no hang."""
+        settings = _settings(tmp_path, flush_mb=1, window=8, max_chars=45)
+        db, conn, d = _make_collection(tmp_path, settings)
+        # >341 chunks so a size-gated flush fires mid-file on the consumer thread.
+        (d / "big.txt").write_text(_SENTENCE * 800)
+        (d / "small.txt").write_text(_SENTENCE * 2)
+
+        def boom(_self: ChunkStore, _records: list[dict[str, object]]) -> int:
+            raise _ConsumerBoomError("table.add blew up")
+
+        with (
+            _patched_embedder(_FakeEmbedder()),
+            patch.object(ChunkStore, "insert_records", boom),
+        ):
+            result = _run_with_timeout(
+                lambda: sync_collection(d, "col", db, settings, conn, max_workers=2)
+            )
+        assert result is not None
+        assert result.failed >= 1  # type: ignore[attr-defined]
+        assert result.errors  # type: ignore[attr-defined]
+
+        # Post-abort consistency: the aborted sync left nothing half-written, so a
+        # clean re-sync (insert_records restored) yields contiguous, zero-dup chunks
+        # and complete registry rows for both files.
+        with _patched_embedder(_FakeEmbedder()):
+            _run_with_timeout(
+                lambda: sync_collection(d, "col", db, settings, conn, max_workers=2)
+            )
+        for name in ("big.txt", "small.txt"):
+            total = len(plan_file_chunks(d / name, settings, document_name=name)[0])
+            assert _chunk_indexes(db, name) == list(range(total))
+        rows = {r.document_name: r for r in conn.list_files("col")}
+        assert rows["big.txt"].partial_hash is None
+        assert rows["small.txt"].partial_hash is None
+        conn.close()
+
+    def test_parallel_sync_two_files_max_workers_2(self, tmp_path: Path):
+        """End-to-end sync under real concurrency (single-consumer serializes)."""
+        settings = _settings(tmp_path, flush_mb=1, window=8, max_chars=45)
+        db, conn, d = _make_collection(tmp_path, settings)
+        (d / "a.txt").write_text(_SENTENCE * 300)
+        (d / "b.txt").write_text(_SENTENCE * 300)
+        with _patched_embedder(_FakeEmbedder()):
+            result = _run_with_timeout(
+                lambda: sync_collection(d, "col", db, settings, conn, max_workers=2)
+            )
+        assert result is not None
+        assert result.ingested == 2  # type: ignore[attr-defined]
+        assert result.failed == 0  # type: ignore[attr-defined]
+        # Each file's chunk indexes are contiguous [0, n) with no interleave gaps.
+        a_chunks, _ = plan_file_chunks(d / "a.txt", settings, document_name="a.txt")
+        assert _chunk_indexes(db, "a.txt") == list(range(len(a_chunks)))
+        rows = {r.document_name: r for r in conn.list_files("col")}
+        assert rows["a.txt"].partial_hash is None
+        assert rows["b.txt"].partial_hash is None
+        conn.close()
+
+    def test_g4_two_file_flush_crash_reconciles_both(self, tmp_path: Path):
+        """G4 end-to-end: one flush carries A-final + B-partial; commit fails there.
+
+        A (small) completes and B (large) is mid-file in the SAME size-gated flush.
+        conn.commit raises after the Lance add, so neither file's registry row
+        commits (all-or-none). A clean re-sync reconciles both with zero dups.
+        """
+        settings = _settings(tmp_path, flush_mb=1, window=8, max_chars=45)
+        db, conn, d = _make_collection(tmp_path, settings)
+        # ~170 chunks < one 1 MB flush (341), so A buffers whole; B spills the flush.
+        (d / "a.txt").write_text(_SENTENCE * 170)
+        (d / "b.txt").write_text(_SENTENCE * 600)
+        resolved = d.resolve()
+        a_path, b_path = resolved / "a.txt", resolved / "b.txt"
+        a_total = len(plan_file_chunks(a_path, settings, document_name="a.txt")[0])
+        b_total = len(plan_file_chunks(b_path, settings, document_name="b.txt")[0])
+
+        real_commit = conn.commit
+        calls = {"n": 0}
+
+        def failing_commit() -> None:
+            calls["n"] += 1
+            if calls["n"] == 1:  # the first flush is the shared A-final + B-partial one
+                raise RuntimeError("commit boom on the A+B flush")
+            real_commit()
+
+        conn.commit = failing_commit  # type: ignore[method-assign]
+        ingestor = CollectionIngestor(
+            ChunkStore(db),
+            conn,
+            settings,
+            collection="col",
+            resolved=resolved,
+            max_workers=1,  # A fully buffers, then B — a deterministic shared flush
+            progress=lambda _m: None,
+        )
+        with _patched_embedder(_FakeEmbedder()):
+            result = _run_with_timeout(lambda: ingestor.run([a_path, b_path]))
+        conn.commit = real_commit  # type: ignore[method-assign]
+        assert result is not None
+        _ingested, failed, _errors = cast("tuple[int, int, list[str]]", result)
+        assert failed >= 1
+        # G4 atomicity: neither file committed a registry row at the failed flush.
+        assert conn.get_file(str(a_path)) is None
+        assert conn.get_file(str(b_path)) is None
+
+        # Clean re-sync reconciles both — contiguous, zero duplicates across both.
+        with _patched_embedder(_FakeEmbedder()):
+            CollectionIngestor(
+                ChunkStore(db),
+                conn,
+                settings,
+                collection="col",
+                resolved=resolved,
+                max_workers=1,
+                progress=lambda _m: None,
+            ).run([a_path, b_path])
+        assert _chunk_indexes(db, "a.txt") == list(range(a_total))
+        assert _chunk_indexes(db, "b.txt") == list(range(b_total))
+        conn.close()
+
+    def test_g4_crash_mid_commit_under_real_concurrency(self, tmp_path: Path):
+        """G4 crash-mid-commit under max_workers=2 — the interleave is the point.
+
+        Two large files stream concurrently; the first flush's commit raises. The
+        interleaving of A's and B's windows in the failing flush is nondeterministic
+        under real threads, so the assertion is the invariant: nothing commits at
+        the failed flush, and a clean re-sync reconciles both with zero duplicates.
+        """
+        settings = _settings(tmp_path, flush_mb=1, window=8, max_chars=45)
+        db, conn, d = _make_collection(tmp_path, settings)
+        (d / "a.txt").write_text(_SENTENCE * 500)
+        (d / "b.txt").write_text(_SENTENCE * 500)
+        resolved = d.resolve()
+        a_path, b_path = resolved / "a.txt", resolved / "b.txt"
+
+        real_commit = conn.commit
+        calls = {"n": 0}
+
+        def failing_commit() -> None:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("commit boom on the first concurrent flush")
+            real_commit()
+
+        conn.commit = failing_commit  # type: ignore[method-assign]
+        ingestor = CollectionIngestor(
+            ChunkStore(db),
+            conn,
+            settings,
+            collection="col",
+            resolved=resolved,
+            max_workers=2,  # real concurrency: A and B interleave into the flush
+            progress=lambda _m: None,
+        )
+        with _patched_embedder(_FakeEmbedder()):
+            result = _run_with_timeout(lambda: ingestor.run([a_path, b_path]))
+        conn.commit = real_commit  # type: ignore[method-assign]
+        assert result is not None
+        _ingested, failed, _errors = cast("tuple[int, int, list[str]]", result)
+        assert failed >= 1
+        assert conn.get_file(str(a_path)) is None  # neither committed (all-or-none)
+        assert conn.get_file(str(b_path)) is None
+
+        with _patched_embedder(_FakeEmbedder()):
+            CollectionIngestor(
+                ChunkStore(db),
+                conn,
+                settings,
+                collection="col",
+                resolved=resolved,
+                max_workers=2,
+                progress=lambda _m: None,
+            ).run([a_path, b_path])
+        for name in ("a.txt", "b.txt"):
+            total = len(plan_file_chunks(d / name, settings, document_name=name)[0])
+            assert _chunk_indexes(db, name) == list(range(total))
+        conn.close()
+
+    def test_raising_progress_callback_fails_cleanly_no_hang(self, tmp_path: Path):
+        """Gap A: a progress callback that raises aborts + drains, never dead-locks."""
+        settings = _settings(tmp_path, flush_mb=1, window=8, max_chars=45)
+        db, conn, d = _make_collection(tmp_path, settings)
+        (d / "a.txt").write_text(_SENTENCE * 60)
+        (d / "b.txt").write_text(_SENTENCE * 60)
+
+        def boom_progress(message: str) -> None:
+            # The user callback raises on a per-file "Ingested ..." completion,
+            # which runs on the consumer thread inside the drain loop.
+            if "Ingested" in message:
+                raise RuntimeError("progress callback boom")
+
+        with _patched_embedder(_FakeEmbedder()):
+            result = _run_with_timeout(
+                lambda: sync_collection(
+                    d,
+                    "col",
+                    db,
+                    settings,
+                    conn,
+                    max_workers=2,
+                    progress_callback=boom_progress,
+                )
+            )
+        assert result is not None  # did not hang — the watchdog would have failed
+        assert result.failed >= 1  # type: ignore[attr-defined]
+        conn.close()
+
+    def test_bounded_queue_backpressure_caps_in_flight(self, tmp_path: Path):
+        """A slow consumer makes producers block at the bounded queue's capacity."""
+        settings = _settings(tmp_path, flush_mb=32, window=8, max_chars=45)
+        db, conn, d = _make_collection(tmp_path, settings)
+        for i in range(4):
+            (d / f"f{i}.txt").write_text(_SENTENCE * 40)
+
+        ingestor = CollectionIngestor(
+            ChunkStore(db),
+            conn,
+            settings,
+            collection="col",
+            resolved=d.resolve(),
+            max_workers=4,
+            progress=lambda _m: None,
+        )
+        queue = ingestor._queue
+        capacity = queue.maxsize
+        assert capacity > 0  # the queue is bounded, so in-flight windows are capped
+
+        observed: list[int] = []
+        stop = threading.Event()
+
+        def watch() -> None:
+            while not stop.is_set():
+                observed.append(queue.qsize())
+
+        # Slow the single consumer so producers outpace it and fill the queue.
+        real_add = ProgressiveIndexer.add_window
+
+        def slow_add(
+            self: ProgressiveIndexer, file_id: str, batch: object, vectors: object
+        ) -> None:
+            time.sleep(0.002)
+            real_add(self, file_id, batch, vectors)  # type: ignore[arg-type]
+
+        watcher = threading.Thread(target=watch, daemon=True)
+        watcher.start()
+        try:
+            with (
+                _patched_embedder(_FakeEmbedder()),
+                patch.object(ProgressiveIndexer, "add_window", slow_add),
+            ):
+                files = [d.resolve() / f"f{i}.txt" for i in range(4)]
+                _run_with_timeout(lambda: ingestor.run(files))
+        finally:
+            stop.set()
+            watcher.join()
+
+        assert observed  # the watcher sampled the queue
+        # Backpressure actually engaged: a slow consumer let producers fill the
+        # bounded queue to its capacity (the load-bearing assertion — that the
+        # queue never *exceeds* maxsize is a stdlib guarantee, not ours to test).
+        assert max(observed) == capacity
         conn.close()
 
 
 class TestSyncAll:
     def test_syncs_all_registered(self, tmp_path: Path):
-        settings = _mock_settings(tmp_path)
+        settings = _settings(tmp_path)
         conn = SyncRegistry(settings.registry_path)
         d1 = tmp_path / "a"
         d1.mkdir()
-        (d1 / "one.txt").write_text("hello")
+        (d1 / "one.txt").write_text(_SENTENCE * 2)
         d2 = tmp_path / "b"
         d2.mkdir()
-        (d2 / "two.txt").write_text("world")
+        (d2 / "two.txt").write_text(_SENTENCE * 2)
         conn.register_directory(d1, "alpha")
         conn.register_directory(d2, "beta")
         conn.close()
 
-        db = MagicMock()
-        # Mock table operations used by create_collection_index and optimize_table
-        db.list_tables.return_value.tables = []
-
-        with (
-            patch("quarry.sync.prepare_document", side_effect=_fake_prepare),
-            patch("quarry.db.chunk_store.ChunkStore.delete_document"),
-            patch("quarry.db.chunk_store.ChunkStore.batch_insert", return_value=1),
-        ):
+        db = get_db(settings.lancedb_path)
+        with _patched_embedder(_FakeEmbedder()):
             results = sync_all(db, settings, max_workers=1)
 
-        assert "alpha" in results
-        assert "beta" in results
         assert results["alpha"].ingested == 1
         assert results["beta"].ingested == 1
