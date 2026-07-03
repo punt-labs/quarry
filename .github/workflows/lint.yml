@@ -25,3 +25,8 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy src/ tests/
+      # Phantom guard: the committed baseline must match the committed code.
+      # Runs only in CI (post-update-oo state), never in the local `check`
+      # chain — see the check-oo-integrity comment in the Makefile.
+      - name: OO baseline integrity
+        run: make check-oo-integrity
