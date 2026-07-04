@@ -224,6 +224,84 @@ class TestDotLeaderDetection:
         assert not self._is_leader("Released as version 1.2.3.4 last week.")
 
 
+class TestMixedFontRowReassembly:
+    """A TOC row whose fragments differ in ``y0`` still reflows to one line.
+
+    Real TOCs mix font sizes: a title and its page number share a baseline but
+    their bbox tops (``y0``, what fitz reports) differ by a point or two. A
+    fixed global y-grid would drop the two into different bands and split the
+    page number off as an orphan. Adjacency clustering keeps the row together.
+    """
+
+    def _paragraphs(self) -> list[str]:
+        # Entry 10.1's page number sits 2.5pt below its title/dots baseline —
+        # a larger title font. A round(y0/tolerance) grid bands 100.0 and 102.5
+        # separately (33 vs 34) and would split "11" off. Adjacency keeps them.
+        block = _block(
+            _line(
+                "10.1 Bearer Token Authentication", 236.0, x0=87.0, y0=100.0, y1=110.0
+            ),
+            _line(". . . . . . . .", 503.0, x0=245.0, y0=100.0, y1=108.0),
+            _line("11", 523.0, x0=513.0, y0=102.5, y1=112.5),
+            _line("10.2 WebSocket Security", 243.0, x0=87.0, y0=112.0, y1=122.0),
+            _line("................", 503.0, x0=252.0, y0=112.0, y1=120.0),
+            _line("12", 523.0, x0=513.0, y0=112.0, y1=122.0),
+        )
+        return PdfReflow.from_page_dict(_page(block)).text().split("\n\n")
+
+    def test_two_entries_stay_two_lines(self) -> None:
+        assert len(self._paragraphs()) == 2
+
+    def test_page_number_not_split_from_its_entry(self) -> None:
+        paragraphs = self._paragraphs()
+        entry = next(p for p in paragraphs if "10.1 Bearer" in p)
+        assert entry.endswith("11")
+        # "11" is part of the entry line, never an orphaned paragraph of its own.
+        assert "11" not in paragraphs
+
+
+class TestSingleDotRunStaysProse:
+    """One accidental dot run must not reclassify a prose block as a TOC.
+
+    A prose block with a single ``......`` pause, a fill-in field, or dot-art
+    has exactly one dot-leader line. Requiring ``_MIN_TOC_LEADER_LINES`` keeps
+    it on the prose path, where it still soft-wrap joins and de-hyphenates.
+    """
+
+    def test_single_run_block_joins_and_dehyphenates(self) -> None:
+        block = _block(
+            _line(
+                "Sign on the dotted line ...... then develop-",
+                523.0,
+                y0=100.0,
+                y1=110.0,
+            ),
+            _line("ment continues on the next line.", 300.0, y0=112.0, y1=122.0),
+        )
+        paragraphs = PdfReflow.from_page_dict(_page(block)).text().split("\n\n")
+        assert len(paragraphs) == 1  # prose path joined the wrapped line
+        assert "development continues" in paragraphs[0]  # hyphen was stripped
+
+    def test_block_with_one_leader_is_not_toc(self) -> None:
+        block = ReflowBlock(
+            lines=(
+                ReflowLine(
+                    text="Sign here ...... please", x0=72.0, y0=0.0, x1=523.0, y1=10.0
+                ),
+            )
+        )
+        assert not block.is_table_of_contents()
+
+    def test_block_with_two_leaders_is_toc(self) -> None:
+        block = ReflowBlock(
+            lines=(
+                ReflowLine(text="Intro ...... 1", x0=72.0, y0=0.0, x1=523.0, y1=10.0),
+                ReflowLine(text="Setup ...... 2", x0=72.0, y0=12.0, x1=523.0, y1=22.0),
+            )
+        )
+        assert block.is_table_of_contents()
+
+
 class TestWrapJoining:
     def test_justified_lines_all_join(self) -> None:
         page = _page(

@@ -17,7 +17,6 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from itertools import groupby
 from typing import Any, Self
 
 from quarry.ingestion.hyphenation import Dehyphenator
@@ -40,7 +39,8 @@ _MIN_PLAUSIBLE_YEAR = 1000  # years exempt from page-number strip
 _MAX_PLAUSIBLE_YEAR = 2999
 _SHORT_LINE_FRACTION = 0.15  # a line this far short of the margin is "short"
 _MARGIN_TOLERANCE = 2.0  # points of slack for "reached the right margin"
-_ROW_Y_TOLERANCE = 3.0  # points; lines within this y-band share a visual row
+_ROW_Y_TOLERANCE = 3.0  # points; adjacent lines within this y-gap share a row
+_MIN_TOC_LEADER_LINES = 2  # dot-leader lines needed to treat a block as a TOC
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,13 +165,26 @@ class ReflowBlock:
         return True
 
     def is_table_of_contents(self) -> bool:
-        """Whether the block holds dot-leader TOC entries (title, dots, page)."""
-        return any(line.is_dot_leader() for line in self.lines)
+        """Whether the block holds dot-leader TOC entries (title, dots, page).
+
+        A genuine TOC has one dot-leader line per entry, hence several. A prose
+        block with a single accidental run — a ``......`` pause, a fill-in field,
+        or dot-art — has exactly one and must stay on the prose path so it still
+        soft-wrap joins and de-hyphenates. Requiring ``_MIN_TOC_LEADER_LINES``
+        keeps the count threshold well below a real TOC (leaders are only ~1/3
+        of its lines) while rejecting a lone stray run.
+        """
+        leaders = sum(line.is_dot_leader() for line in self.lines)
+        return leaders >= _MIN_TOC_LEADER_LINES
 
     def paragraphs(self) -> list[str]:
-        """Join soft-wrapped lines into paragraphs, splitting at real breaks."""
+        """Split the block into paragraphs: TOC rows or soft-wrapped prose."""
         if self.is_table_of_contents():
             return self._toc_rows()
+        return self._prose_paragraphs()
+
+    def _prose_paragraphs(self) -> list[str]:
+        """Join soft-wrapped prose lines, splitting at real paragraph breaks."""
         result: list[str] = []
         current = ""
         previous: ReflowLine | None = None
@@ -191,15 +204,30 @@ class ReflowBlock:
         """Reassemble TOC fragments into one clean line per visual row.
 
         fitz fragments each entry into separate title, dot-leader, and
-        page-number lines sharing a baseline. Bucketing lines into
-        ``_ROW_Y_TOLERANCE``-point y-bands and joining them left-to-right
-        rebuilds ``<title> <dots> <page>`` per row, so the prose soft-wrap
-        heuristic never concatenates adjacent entries. Sorting by ``y0`` first
-        keeps the band key monotonic, which ``groupby`` requires.
+        page-number lines sharing a baseline — but with differing font sizes
+        their reported bbox tops (``y0``) differ by a point or two. Clustering
+        by *adjacency* — a new row starts only when the ``y0`` gap to the
+        previous line exceeds ``_ROW_Y_TOLERANCE`` — keeps a mixed-size row
+        together, where a fixed global grid would split the page number off. Each
+        row is joined left-to-right (re-sorted by ``x0``, since the adjacency
+        walk is ``y0``-ordered), rebuilding ``<title> <dots> <page>`` so the
+        prose soft-wrap heuristic never concatenates adjacent entries.
         """
+        # is_table_of_contents gates this path on >= 2 dot-leader lines, so
+        # ``ordered`` is never empty and can seed the first row directly.
         ordered = sorted(self.lines, key=lambda line: (line.y0, line.x0))
-        bands = groupby(ordered, key=lambda line: round(line.y0 / _ROW_Y_TOLERANCE))
-        return [" ".join(line.text.strip() for line in row) for _, row in bands]
+        rows: list[list[ReflowLine]] = [[ordered[0]]]
+        for line in ordered[1:]:
+            if line.y0 - rows[-1][-1].y0 > _ROW_Y_TOLERANCE:
+                rows.append([])
+            rows[-1].append(line)
+        return list(map(self._join_row, rows))
+
+    @staticmethod
+    def _join_row(row: list[ReflowLine]) -> str:
+        """Join one visual row's fragments left-to-right into a single line."""
+        ordered = sorted(row, key=lambda fragment: fragment.x0)
+        return " ".join(fragment.text.strip() for fragment in ordered)
 
     def _joins(self, previous: ReflowLine, following: ReflowLine) -> bool:
         # Cached _right_margin/_width keep this O(1) per line pair. A full-width
