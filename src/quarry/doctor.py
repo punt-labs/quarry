@@ -1004,7 +1004,9 @@ def run_install() -> int:  # noqa: C901
         if gpu_status.is_failure:
             failed = True
     except Exception as exc:  # noqa: BLE001
-        print(f"  \u2022 Skipped: {exc}")  # noqa: T201
+        # Unexpected: legit outcomes return GpuStatus, so a raise means failure.
+        print(f"  \u2717 GPU runtime check failed: {exc}")  # noqa: T201
+        failed = True
 
     # Step 3: embedding model
     print("[3/8] Downloading embedding model...")  # noqa: T201
@@ -1081,12 +1083,9 @@ def run_install() -> int:  # noqa: C901
         print("    Ethos extension configuration is optional.")  # noqa: T201
 
     # Verification
-    print()  # noqa: T201
-    print("Verifying installation...")  # noqa: T201
+    print("\nVerifying installation...")  # noqa: T201
     exit_code = check_environment(_skip_header=True)
-    if failed:
-        return 1
-    return exit_code
+    return 1 if failed else exit_code
 
 
 def check_environment(*, _skip_header: bool = False) -> int:

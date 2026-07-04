@@ -1,7 +1,7 @@
 {
-  "total": 264,
+  "total": 260,
   "by_category": {
-    "noqa": 220,
+    "noqa": 216,
     "type_ignore": 10,
     "pylint_disable": 0,
     "pyright_ignore": 12,
@@ -24,15 +24,12 @@
     "src/quarry/db/chunk_search.py": {
       "noqa": 2
     },
-    "src/quarry/db/chunk_store.py": {
-      "noqa": 3
-    },
     "src/quarry/db/storage.py": {
       "noqa": 7,
       "type_ignore": 1
     },
     "src/quarry/doctor.py": {
-      "noqa": 76,
+      "noqa": 74,
       "type_ignore": 1,
       "pyright_ignore": 2
     },
@@ -97,7 +94,10 @@
     "src/quarry/sitemap.py": {
       "noqa": 3,
       "type_ignore": 1
+    },
+    "src/quarry/sync_ingest.py": {
+      "noqa": 1
     }
   },
-  "updated_at": "2026-07-01T20:20:28Z"
+  "updated_at": "2026-07-04T01:58:36Z"
 }

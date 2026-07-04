@@ -1274,6 +1274,33 @@ class TestRunInstall:
         captured = capsys.readouterr()
         assert f"\u2713 {status}" in captured.out
 
+    def test_gpu_unexpected_exception_fails(
+        self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
+    ):
+        """A raised exception (not a GpuStatus) fails the install, never skips.
+
+        Every legitimate outcome returns a GpuStatus. A raised OSError -- e.g.
+        the uv binary vanishing mid-run after the CPU onnxruntime was already
+        uninstalled -- is unexpected and may leave a broken runtime, so install
+        must exit non-zero and print an error rather than a benign "Skipped".
+        """
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _mock_install_deps(monkeypatch)
+        with (
+            patch(
+                "quarry.gpu_runtime.GpuRuntime.ensure",
+                side_effect=OSError("uv binary vanished"),
+            ),
+            patch(self._DL) as mock_dl,
+        ):
+            mock_dl.return_value = ("/fake/model.onnx", "/fake/tokenizer.json")
+            result = run_install()
+        assert result == 1
+        captured = capsys.readouterr()
+        assert "✗ GPU runtime check failed" in captured.out
+        assert "uv binary vanished" in captured.out
+        assert "Skipped: uv binary vanished" not in captured.out
+
     def test_model_download_failure_returns_one(self, tmp_path: Path, monkeypatch: MP):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         _mock_install_deps(monkeypatch)
