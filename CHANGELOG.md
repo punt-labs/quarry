@@ -14,6 +14,19 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- **query (search)**: search similarity is now a true cosine score in `[-1, 1]`.
+  Embeddings were never L2-normalized and LanceDB used its default L2 metric, so
+  `similarity = 1 - _distance` was unbounded and non-comparable — a passage that
+  literally contained the query text could score near zero. Vectors are now
+  L2-normalized to unit length in `embed_texts` (ingest and query alike, one
+  choke point) and vector search uses the cosine metric, so a matching passage
+  scores near `1.0` and every score is bounded. Verified end-to-end on the built
+  wheel: a relevant match scored `0.0185` before and `0.5093` after. Re-ingest
+  content to store the new unit-length vectors, though existing vectors still
+  rank correctly under the cosine metric (quarry-3a7f).
+
 ## [1.18.0] - 2026-07-03
 
 ### Added
