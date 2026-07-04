@@ -81,22 +81,29 @@ class TestEmbedTexts:
         np.testing.assert_allclose(result, expected, atol=1e-5)
 
     def test_uses_sentence_embedding_not_token_embeddings(self):
-        """Verify the model's sentence_embedding output is used directly."""
+        """The sentence_embedding output is used, not the token embeddings.
+
+        The two mock outputs point in distinct directions: the token
+        embeddings are uniform (all 1.0) while the sentence embedding follows
+        a linear ramp. L2-normalization preserves direction, so the token
+        source normalizes to a uniform unit vector while the sentence source
+        keeps its ramp direction. Any pooling of the uniform token output
+        (mean, first-token, etc.) yields the uniform direction, which differs
+        from the ramp — so this test fails if embed_texts ever sources the
+        token embeddings instead of sentence_embedding.
+        """
         session = _mock_session()
         tokenizer = _mock_tokenizer()
         token_emb = np.ones((1, 5, 768), dtype=np.float32)
-        sentence_emb = np.full((1, 768), 0.5, dtype=np.float32)
+        sentence_emb = np.arange(1, 769, dtype=np.float32).reshape(1, 768)
         session.run.return_value = (token_emb, sentence_emb)
 
         with _patch_onnx_backend(session, tokenizer):
             backend = OnnxEmbeddingBackend()
             result = backend.embed_texts(["test"])
 
-        # The sentence_embedding (all 0.5) normalizes to a uniform unit vector;
-        # a token-embedding source (all 1.0) would normalize identically, so the
-        # distinguishing check is that the direction matches sentence_emb.
         expected = sentence_emb[0] / np.linalg.norm(sentence_emb[0])
-        np.testing.assert_allclose(result[0], expected, atol=1e-5)
+        np.testing.assert_allclose(result[0], expected, atol=1e-6)
 
     def test_empty_texts_returns_empty_array(self):
         session = _mock_session()

@@ -77,9 +77,12 @@ class TestCosineMetric:
         db = get_db(tmp_path / "db")
         query = _unit([1.0, 0.0, 0.0])
         # Increasing angle from the query -> decreasing cosine similarity.
+        # `far` carries a large magnitude (10x) to prove ranking ignores it:
+        # under a dot-product metric the long `far` vector would rank first,
+        # but cosine keeps it last because its angle from the query is widest.
         near = _unit([1.0, 0.2, 0.0])
         mid = _unit([1.0, 1.0, 0.0])
-        far = _unit([0.2, 1.0, 0.0])
+        far = _unit([0.2, 1.0, 0.0]) * np.float32(10.0)
         chunks = [
             _make_chunk(0, "near"),
             _make_chunk(1, "mid"),
