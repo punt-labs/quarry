@@ -198,7 +198,14 @@ class OnnxEmbeddingBackend:
         )
 
         result: NDArray[np.float32] = np.concatenate(parts)
-        return result
+        # L2-normalize each row to unit length so that cosine similarity equals
+        # the dot product of stored and query vectors (quarry-3a7f). The
+        # zero-norm guard divides by 1.0 instead of 0.0 so a pathological
+        # all-zero embedding stays all-zero rather than becoming NaN.
+        norms = np.linalg.norm(result, axis=1, keepdims=True)
+        norms = np.where(norms == 0.0, np.float32(1.0), norms)
+        normalized: NDArray[np.float32] = (result / norms).astype(np.float32)
+        return normalized
 
     def embed_query(self, query: str) -> NDArray[np.float32]:
         """Embed a search query. Returns shape (dimension,)."""

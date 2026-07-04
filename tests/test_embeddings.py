@@ -2,15 +2,12 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+import pytest
 
 from quarry.embeddings import _EMBED_BATCH_SIZE, OnnxEmbeddingBackend
-
-if TYPE_CHECKING:
-    import pytest
 
 
 def _mock_session() -> MagicMock:
@@ -79,22 +76,34 @@ class TestEmbedTexts:
             result = backend.embed_texts(["a", "b", "c"])
 
         assert result.shape == (3, 768)
-        # Result should be the sentence_embedding output directly
-        np.testing.assert_array_equal(result, sentence_emb)
+        # Result is the sentence_embedding output, L2-normalized row-wise.
+        expected = sentence_emb / np.linalg.norm(sentence_emb, axis=1, keepdims=True)
+        np.testing.assert_allclose(result, expected, atol=1e-5)
 
     def test_uses_sentence_embedding_not_token_embeddings(self):
-        """Verify the model's sentence_embedding output is used directly."""
+        """The sentence_embedding output is used, not the token embeddings.
+
+        The two mock outputs point in distinct directions: the token
+        embeddings are uniform (all 1.0) while the sentence embedding follows
+        a linear ramp. L2-normalization preserves direction, so the token
+        source normalizes to a uniform unit vector while the sentence source
+        keeps its ramp direction. Any pooling of the uniform token output
+        (mean, first-token, etc.) yields the uniform direction, which differs
+        from the ramp — so this test fails if embed_texts ever sources the
+        token embeddings instead of sentence_embedding.
+        """
         session = _mock_session()
         tokenizer = _mock_tokenizer()
         token_emb = np.ones((1, 5, 768), dtype=np.float32)
-        sentence_emb = np.full((1, 768), 0.5, dtype=np.float32)
+        sentence_emb = np.arange(1, 769, dtype=np.float32).reshape(1, 768)
         session.run.return_value = (token_emb, sentence_emb)
 
         with _patch_onnx_backend(session, tokenizer):
             backend = OnnxEmbeddingBackend()
             result = backend.embed_texts(["test"])
 
-        np.testing.assert_array_equal(result[0], sentence_emb[0])
+        expected = sentence_emb[0] / np.linalg.norm(sentence_emb[0])
+        np.testing.assert_allclose(result[0], expected, atol=1e-6)
 
     def test_empty_texts_returns_empty_array(self):
         session = _mock_session()
@@ -106,6 +115,61 @@ class TestEmbedTexts:
 
         assert result.shape == (0, 768)
         session.run.assert_not_called()
+
+
+class TestNormalization:
+    """Every embedded row is L2-normalized to unit length (quarry-3a7f)."""
+
+    def test_rows_are_unit_length(self):
+        session = _mock_session()
+        tokenizer = _mock_tokenizer()
+        rng = np.random.default_rng(1)
+        sentence_emb = rng.standard_normal((4, 768)).astype(np.float32)
+        session.run.return_value = (
+            np.zeros((4, 5, 768), dtype=np.float32),
+            sentence_emb,
+        )
+
+        with _patch_onnx_backend(session, tokenizer):
+            backend = OnnxEmbeddingBackend()
+            result = backend.embed_texts(["a", "b", "c", "d"])
+
+        norms = np.linalg.norm(result, axis=1)
+        np.testing.assert_allclose(norms, np.ones(4), atol=1e-5)
+
+    def test_identical_text_dot_product_is_one(self):
+        session = _mock_session()
+        tokenizer = _mock_tokenizer()
+        rng = np.random.default_rng(2)
+        row = rng.standard_normal((1, 768)).astype(np.float32)
+        sentence_emb = np.concatenate([row, row])  # two identical rows
+        session.run.return_value = (
+            np.zeros((2, 5, 768), dtype=np.float32),
+            sentence_emb,
+        )
+
+        with _patch_onnx_backend(session, tokenizer):
+            backend = OnnxEmbeddingBackend()
+            result = backend.embed_texts(["same", "same"])
+
+        # Unit vectors of identical direction: dot product == cosine == 1.
+        dot = float(np.dot(result[0], result[1]))
+        assert dot == pytest.approx(1.0, abs=1e-5)
+
+    def test_all_zero_embedding_does_not_nan(self):
+        session = _mock_session()
+        tokenizer = _mock_tokenizer()
+        session.run.return_value = (
+            np.zeros((1, 5, 768), dtype=np.float32),
+            np.zeros((1, 768), dtype=np.float32),
+        )
+
+        with _patch_onnx_backend(session, tokenizer):
+            backend = OnnxEmbeddingBackend()
+            result = backend.embed_texts(["zero"])
+
+        assert not np.isnan(result).any()
+        np.testing.assert_array_equal(result[0], np.zeros(768, dtype=np.float32))
 
 
 class TestEmbedQuery:

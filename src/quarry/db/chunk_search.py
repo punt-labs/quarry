@@ -185,7 +185,9 @@ class ChunkSearch:
             return []
 
         table = self._db.open_table(TABLE_NAME)
-        query = table.search(query_vector.tolist()).limit(limit)
+        # Cosine metric on unit-length vectors makes ``_distance = 1 - cos(θ)``
+        # so ``similarity = 1 - _distance`` is true cosine ∈ [-1, 1] (quarry-3a7f).
+        query = table.search(query_vector.tolist()).metric("cosine").limit(limit)
 
         predicates: list[str] = []
         if document_filter:
@@ -233,8 +235,10 @@ class ChunkSearch:
         )
         fetch_limit = limit * 3  # over-fetch for better fusion
 
-        # Channel 1: Vector similarity
-        vec_query = table.search(query_vector.tolist()).limit(fetch_limit)
+        # Channel 1: Vector similarity (cosine metric — see vector_search)
+        vec_query = (
+            table.search(query_vector.tolist()).metric("cosine").limit(fetch_limit)
+        )
         if predicate:
             vec_query = vec_query.where(predicate)
         vec_results = vec_query.to_list()
