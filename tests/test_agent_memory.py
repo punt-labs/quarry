@@ -258,9 +258,9 @@ class TestNewColumnsInPipeline:
 
         results = ChunkSearch(db).vector_search(vectors[0], limit=1)
         assert len(results) == 1
-        assert results[0]["agent_handle"] == "rmh"
-        assert results[0]["memory_type"] == "fact"
-        assert results[0]["summary"] == "API rate limit documentation"
+        assert results[0].agent_handle == "rmh"
+        assert results[0].memory_type == "fact"
+        assert results[0].summary == "API rate limit documentation"
 
     def test_insert_without_new_fields(self, tmp_path: Path) -> None:
         """Chunks without new fields store empty strings (backwards compatible)."""
@@ -271,9 +271,9 @@ class TestNewColumnsInPipeline:
 
         results = ChunkSearch(db).vector_search(vectors[0], limit=1)
         assert len(results) == 1
-        assert results[0]["agent_handle"] == ""
-        assert results[0]["memory_type"] == ""
-        assert results[0]["summary"] == ""
+        assert results[0].agent_handle == ""
+        assert results[0].memory_type == ""
+        assert results[0].summary == ""
 
     def test_schema_includes_new_columns(self) -> None:
         """The canonical schema includes agent_handle, memory_type, summary."""
@@ -354,7 +354,7 @@ class TestHybridSearch:
         assert len(results) >= 1
         # The LanceDB chunk should rank highly due to both
         # vector similarity and keyword match
-        texts = [str(r["text"]) for r in results]
+        texts = [r.text for r in results]
         assert any("LanceDB" in t for t in texts)
 
     def test_hybrid_empty_table(self, tmp_path: Path) -> None:
@@ -392,7 +392,7 @@ class TestHybridSearch:
 
         # Query with "OAuth2" — FTS should boost chunks 0 and 2
         results = ChunkSearch(db).hybrid_search("OAuth2", vecs[1], limit=10)
-        texts = [str(r["text"]) for r in results]
+        texts = [r.text for r in results]
         assert any("OAuth2" in t for t in texts)
 
     def test_hybrid_with_agent_handle_filter(self, tmp_path: Path) -> None:
@@ -419,7 +419,7 @@ class TestHybridSearch:
             agent_handle_filter="rmh",
         )
         assert len(results) >= 1
-        assert all(str(r["agent_handle"]) == "rmh" for r in results)
+        assert all(r.agent_handle == "rmh" for r in results)
 
     def test_hybrid_with_memory_type_filter(self, tmp_path: Path) -> None:
         """Hybrid search filters by memory_type."""
@@ -445,7 +445,7 @@ class TestHybridSearch:
             memory_type_filter="procedure",
         )
         assert len(results) >= 1
-        assert all(str(r["memory_type"]) == "procedure" for r in results)
+        assert all(r.memory_type == "procedure" for r in results)
 
 
 class TestRRFFusion:
@@ -476,7 +476,7 @@ class TestRRFFusion:
         results = ChunkSearch(db).hybrid_search("LanceDB", vectors[0], limit=2)
         assert len(results) >= 1
         # The dual-channel match should be ranked first
-        assert "LanceDB" in str(results[0]["text"])
+        assert "LanceDB" in results[0].text
 
 
 class TestTemporalDecay:
@@ -553,7 +553,7 @@ class TestTemporalDecay:
         )
         assert len(results) == 2
         # Recent chunk (index 1) should outrank old chunk (index 0)
-        assert int(str(results[0]["chunk_index"])) == 1
+        assert results[0].chunk_index == 1
 
     def test_decay_exempts_empty_memory_type(self, tmp_path: Path) -> None:
         """Rows with empty memory_type (documents, expertise) are exempt from decay."""
@@ -606,7 +606,7 @@ class TestTemporalDecay:
         assert len(results) == 2
         # With no decay applied, vector similarity determines order:
         # vectors[0] is the query, so chunk_index=0 should rank first
-        assert int(str(results[0]["chunk_index"])) == 0
+        assert results[0].chunk_index == 0
 
 
 # ── Ethos identity tagging tests ──────────────────────────────────

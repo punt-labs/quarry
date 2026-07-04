@@ -32,7 +32,6 @@ from quarry.ingestion.pipeline import (
 )
 from quarry.ingestion.provider import ProviderSelection
 from quarry.logging_config import LoggingConfig
-from quarry.results import result_similarity
 from quarry.sync import sync_all as engine_sync_all
 from quarry.sync_registry import SyncRegistry
 
@@ -143,19 +142,7 @@ def find(
         memory_type_filter=memory_type or None,
     )
 
-    formatted = [
-        {
-            "document_name": r["document_name"],
-            "collection": r["collection"],
-            "page_number": r["page_number"],
-            "chunk_index": r["chunk_index"],
-            "text": r["text"],
-            "page_type": r["page_type"],
-            "source_format": r["source_format"],
-            "similarity": result_similarity(r),
-        }
-        for r in results
-    ]
+    formatted = [r.to_dict() for r in results]
 
     return format_search_results(query, formatted)
 

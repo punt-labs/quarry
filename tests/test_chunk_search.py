@@ -48,7 +48,7 @@ class TestCosineMetric:
 
         results = ChunkSearch(db).vector_search(vec, limit=1)
         assert len(results) == 1
-        similarity = 1 - float(results[0]["_distance"])
+        similarity = 1 - float(results[0].distance)
         assert similarity == pytest.approx(1.0, abs=1e-5)
 
     def test_similarity_bounded(self, tmp_path: Path) -> None:
@@ -58,7 +58,7 @@ class TestCosineMetric:
 
         query = _unit([1.0, 0.0, 0.0])
         results = ChunkSearch(db).vector_search(query, limit=1)
-        similarity = 1 - float(results[0]["_distance"])
+        similarity = 1 - float(results[0].distance)
         assert -1.0 - 1e-5 <= similarity <= 1.0 + 1e-5
         # Antipodal unit vectors have cosine -1.
         assert similarity == pytest.approx(-1.0, abs=1e-5)
@@ -70,7 +70,7 @@ class TestCosineMetric:
 
         query = _unit([1.0, 0.0, 0.0])
         results = ChunkSearch(db).vector_search(query, limit=1)
-        similarity = 1 - float(results[0]["_distance"])
+        similarity = 1 - float(results[0].distance)
         assert similarity == pytest.approx(0.0, abs=1e-5)
 
     def test_angular_ordering(self, tmp_path: Path) -> None:
@@ -92,7 +92,7 @@ class TestCosineMetric:
         ChunkStore(db).insert(chunks, np.stack([near, mid, far]))
 
         results = ChunkSearch(db).vector_search(query, limit=3)
-        order = [r["text"] for r in results]
+        order = [r.text for r in results]
         assert order == ["near", "mid", "far"]
 
     def test_hybrid_search_similarity_bounded(self, tmp_path: Path) -> None:
@@ -103,7 +103,7 @@ class TestCosineMetric:
         results = ChunkSearch(db).hybrid_search("alpha bravo", vec, limit=5)
         assert len(results) >= 1
         for r in results:
-            similarity = 1 - float(r["_distance"])
+            similarity = 1 - float(r.distance)
             assert -1.0 - 1e-5 <= similarity <= 1.0 + 1e-5
 
 
@@ -174,9 +174,9 @@ class TestFtsOnlyCosine:
         )
 
         results = ChunkSearch(db).hybrid_search("zorpzorp", query, limit=2)
-        fts_only = [r for r in results if "zorpzorp" in r["text"]]
+        fts_only = [r for r in results if "zorpzorp" in r.text]
         assert len(fts_only) == 1
-        similarity = 1 - float(fts_only[0]["_distance"])
+        similarity = 1 - float(fts_only[0].distance)
         # True cosine of an orthogonal vector is ~0 -- NOT the old fake 1.00.
         assert similarity == pytest.approx(float(np.dot(query, target)), abs=1e-4)
         assert similarity < 0.5

@@ -13,6 +13,7 @@ from typer.testing import CliRunner
 
 import quarry.__main__ as cli_mod
 from quarry.__main__ import app
+from quarry.results import SearchResult
 
 runner = CliRunner()
 
@@ -83,7 +84,7 @@ def _find_context() -> Generator[None]:
         patch("quarry.__main__.get_embedding_backend", return_value=mock_backend),
         patch(
             "quarry.db.chunk_search.ChunkSearch.hybrid_search",
-            return_value=mock_results,
+            return_value=[SearchResult.from_row(r) for r in mock_results],
         ),
     ):
         yield

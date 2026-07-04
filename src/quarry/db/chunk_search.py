@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import math
 from collections import defaultdict
-from typing import TYPE_CHECKING, Self, cast
+from typing import TYPE_CHECKING, Self
 
 import numpy as np
 
@@ -130,13 +130,9 @@ def _fuse_rrf(
 
     ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:limit]
 
-    results: list[SearchResult] = []
-    for key, score in ranked:
-        row = all_rows[key]
-        # Every row now carries a real ``_distance``: vector-channel rows from
-        # LanceDB, FTS-only rows from ``_annotate_fts_distances`` (quarry-gcnf).
-        row["rrf_score"] = score
-        results.append(cast("SearchResult", row))
+    # Every row now carries a real ``_distance``: vector-channel rows from
+    # LanceDB, FTS-only rows from ``_annotate_fts_distances`` (quarry-gcnf).
+    results = [SearchResult.from_row(all_rows[key]) for key, _ in ranked]
 
     logger.debug(
         "RRF fusion: %d vector + %d FTS → %d results",
@@ -202,7 +198,7 @@ class ChunkSearch:
 
         results = query.to_list()
         logger.debug("Search: %d results returned", len(results))
-        return cast("list[SearchResult]", results)
+        return [SearchResult.from_row(r) for r in results]
 
     def hybrid_search(
         self,

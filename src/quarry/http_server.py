@@ -45,7 +45,6 @@ from quarry.db import Database
 from quarry.db.storage import dir_size_bytes, format_size
 from quarry.http_resources import QuarryResources
 from quarry.ingestion.provider import ProviderSelection
-from quarry.results import result_similarity
 from quarry.sync_registry import DirectoryRegistration, SyncRegistry
 
 if TYPE_CHECKING:
@@ -372,22 +371,7 @@ def _search_route(request: Request) -> JSONResponse:
         memory_type_filter=memory_type,
     )
 
-    formatted = [
-        {
-            "document_name": r["document_name"],
-            "collection": r["collection"],
-            "page_number": r["page_number"],
-            "chunk_index": r["chunk_index"],
-            "text": r["text"],
-            "page_type": r["page_type"],
-            "source_format": r["source_format"],
-            "agent_handle": r.get("agent_handle"),
-            "memory_type": r.get("memory_type"),
-            "summary": r.get("summary", ""),
-            "similarity": result_similarity(r),
-        }
-        for r in results
-    ]
+    formatted = [r.to_dict() for r in results]
 
     logger.info("Search results=%d", len(formatted))
     return JSONResponse(

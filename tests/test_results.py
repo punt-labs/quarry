@@ -3,35 +3,79 @@
 from __future__ import annotations
 
 import dataclasses
-from typing import cast
 
 import pytest
 
-from quarry.results import SearchFilter, SearchResult, result_similarity
+from quarry.results import SearchFilter, SearchResult
 
 
-class TestResultSimilarity:
+class TestSearchResultSimilarity:
     def test_normal_distance_yields_cosine(self):
-        row = cast("SearchResult", {"_distance": 0.1})
-        assert result_similarity(row) == 0.9
+        assert SearchResult.from_row({"_distance": 0.1}).similarity == 0.9
 
     def test_zero_distance_is_perfect(self):
-        row = cast("SearchResult", {"_distance": 0.0})
-        assert result_similarity(row) == 1.0
+        assert SearchResult.from_row({"_distance": 0.0}).similarity == 1.0
 
     def test_missing_distance_sinks_to_worst_case(self):
         # A row lacking _distance defaults to distance 2.0 => similarity -1,
         # never a fake perfect 1.0 (quarry-gcnf).
-        row = cast("SearchResult", {})
-        assert result_similarity(row) == -1.0
+        assert SearchResult.from_row({}).similarity == -1.0
 
     def test_rounding_to_four_places(self):
-        row = cast("SearchResult", {"_distance": 0.123456})
-        assert result_similarity(row) == 0.8765
+        assert SearchResult.from_row({"_distance": 0.123456}).similarity == 0.8765
 
     def test_string_valued_distance_is_coerced(self):
-        row = cast("SearchResult", {"_distance": "0.25"})
-        assert result_similarity(row) == 0.75
+        assert SearchResult.from_row({"_distance": "0.25"}).similarity == 0.75
+
+
+class TestSearchResultFromRow:
+    def test_missing_string_fields_default_empty(self):
+        r = SearchResult.from_row({"_distance": 0.1})
+        assert r.document_name == ""
+        assert r.collection == ""
+        assert r.text == ""
+        assert r.agent_handle == ""
+        assert r.memory_type == ""
+        assert r.summary == ""
+
+    def test_missing_counts_default_zero(self):
+        r = SearchResult.from_row({"_distance": 0.1})
+        assert r.page_number == 0
+        assert r.chunk_index == 0
+
+    def test_populated_row_round_trips_to_dict(self):
+        row = {
+            "document_name": "doc.md",
+            "collection": "default",
+            "page_number": 3,
+            "chunk_index": 7,
+            "text": "hello",
+            "page_type": "body",
+            "source_format": ".md",
+            "agent_handle": "rmh",
+            "memory_type": "fact",
+            "summary": "a summary",
+            "_distance": 0.1,
+        }
+        d = SearchResult.from_row(row).to_dict()
+        assert d == {
+            "document_name": "doc.md",
+            "collection": "default",
+            "page_number": 3,
+            "chunk_index": 7,
+            "text": "hello",
+            "page_type": "body",
+            "source_format": ".md",
+            "agent_handle": "rmh",
+            "memory_type": "fact",
+            "summary": "a summary",
+            "similarity": 0.9,
+        }
+
+    def test_frozen(self):
+        r = SearchResult.from_row({"_distance": 0.1})
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            r.distance = 0.5  # type: ignore[misc]
 
 
 class TestSearchFilterConstruction:

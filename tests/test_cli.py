@@ -17,6 +17,7 @@ import quarry.__main__ as cli_mod
 from quarry.__main__ import app
 from quarry.config import Settings
 from quarry.remote_client import RemoteError
+from quarry.results import SearchResult
 
 runner = CliRunner()
 
@@ -973,7 +974,7 @@ class TestFindCmd:
             ),
             patch(
                 "quarry.db.chunk_search.ChunkSearch.hybrid_search",
-                return_value=mock_results,
+                return_value=[SearchResult.from_row(r) for r in mock_results],
             ),
         ):
             result = runner.invoke(app, ["find", "revenue growth"])
@@ -1145,7 +1146,7 @@ class TestFindCmd:
             ),
             patch(
                 "quarry.db.chunk_search.ChunkSearch.hybrid_search",
-                return_value=mock_results,
+                return_value=[SearchResult.from_row(r) for r in mock_results],
             ),
         ):
             result = runner.invoke(app, ["find", "hello"])
@@ -3690,7 +3691,7 @@ class TestJsonOutput:
             ),
             patch(
                 "quarry.db.chunk_search.ChunkSearch.hybrid_search",
-                return_value=mock_results,
+                return_value=[SearchResult.from_row(r) for r in mock_results],
             ),
         ):
             result = runner.invoke(app, ["--json", "find", "revenue"])

@@ -54,7 +54,6 @@ from quarry.remote import (
     write_proxy_config,
 )
 from quarry.remote_client import RemoteClient, RemoteError
-from quarry.results import result_similarity
 from quarry.sync import sync_all
 from quarry.sync_registry import SyncRegistry
 from quarry.tls import TLS_DIR, cert_fingerprint
@@ -350,29 +349,13 @@ def find_cmd(
     local_json_results: list[dict[str, object]] = []
     local_lines: list[str] = []
     for row in results:
-        similarity = result_similarity(row)
-        meta = f"{row['page_type']}/{row['source_format']}"
+        meta = f"{row.page_type}/{row.source_format}"
         local_lines.append(
-            f"\n[{row['document_name']} p.{row['page_number']} | {meta}]"
-            f" (similarity: {similarity})"
+            f"\n[{row.document_name} p.{row.page_number} | {meta}]"
+            f" (similarity: {row.similarity})"
         )
-        text = str(row["text"])
-        local_lines.append(text[:300])
-        local_json_results.append(
-            {
-                "document_name": row["document_name"],
-                "collection": row.get("collection", ""),
-                "page_number": row["page_number"],
-                "chunk_index": row.get("chunk_index", 0),
-                "page_type": row["page_type"],
-                "source_format": row["source_format"],
-                "agent_handle": row.get("agent_handle", ""),
-                "memory_type": row.get("memory_type", ""),
-                "summary": row.get("summary", ""),
-                "similarity": similarity,
-                "text": text,
-            }
-        )
+        local_lines.append(row.text[:300])
+        local_json_results.append(row.to_dict())
 
     _emit(local_json_results, "\n".join(local_lines))
 
