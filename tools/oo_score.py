@@ -554,8 +554,8 @@ class Ratchet:
 
         module_size is the one metric with below-target headroom: growth is a
         regression only once the file EXCEEDS the absolute threshold. Below the
-        target a file may grow freely (up to the target); at/over the target it
-        must ratchet down (no growth vs baseline). Crossing the target via
+        target a file may grow freely (up to the target); over the target it
+        must not grow vs baseline (ratchet-down only). Crossing the target via
         growth is refused because the result exceeds it. This keeps pressure on
         the god-modules while sparing tiny files needless micro-extractions.
 

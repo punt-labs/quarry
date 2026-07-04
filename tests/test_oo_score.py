@@ -398,8 +398,8 @@ class TestRatioMetricTolerance:
 class TestModuleSizeHeadroom:
     """module_size ratchet only bites ABOVE the 300 target (asymmetric).
 
-    Below the target a file may grow (up to the target); at/over the target it
-    must ratchet down. A below-target grow is neutral — allowed but never an
+    Below the target a file may grow (up to the target); over the target it
+    must not grow vs baseline. A below-target grow is neutral — never an
     improvement — so it cannot satisfy the 'at least one metric improved' gate.
     """
 
