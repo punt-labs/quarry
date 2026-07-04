@@ -3,10 +3,35 @@
 from __future__ import annotations
 
 import dataclasses
+from typing import cast
 
 import pytest
 
-from quarry.results import SearchFilter
+from quarry.results import SearchFilter, SearchResult, result_similarity
+
+
+class TestResultSimilarity:
+    def test_normal_distance_yields_cosine(self):
+        row = cast("SearchResult", {"_distance": 0.1})
+        assert result_similarity(row) == 0.9
+
+    def test_zero_distance_is_perfect(self):
+        row = cast("SearchResult", {"_distance": 0.0})
+        assert result_similarity(row) == 1.0
+
+    def test_missing_distance_sinks_to_worst_case(self):
+        # A row lacking _distance defaults to distance 2.0 => similarity -1,
+        # never a fake perfect 1.0 (quarry-gcnf).
+        row = cast("SearchResult", {})
+        assert result_similarity(row) == -1.0
+
+    def test_rounding_to_four_places(self):
+        row = cast("SearchResult", {"_distance": 0.123456})
+        assert result_similarity(row) == 0.8765
+
+    def test_string_valued_distance_is_coerced(self):
+        row = cast("SearchResult", {"_distance": "0.25"})
+        assert result_similarity(row) == 0.75
 
 
 class TestSearchFilterConstruction:

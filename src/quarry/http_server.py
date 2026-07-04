@@ -45,6 +45,7 @@ from quarry.db import Database
 from quarry.db.storage import dir_size_bytes, format_size
 from quarry.http_resources import QuarryResources
 from quarry.ingestion.provider import ProviderSelection
+from quarry.results import result_similarity
 from quarry.sync_registry import DirectoryRegistration, SyncRegistry
 
 if TYPE_CHECKING:
@@ -383,7 +384,7 @@ def _search_route(request: Request) -> JSONResponse:
             "agent_handle": r.get("agent_handle"),
             "memory_type": r.get("memory_type"),
             "summary": r.get("summary", ""),
-            "similarity": round(1 - float(str(r.get("_distance", 0))), 4),
+            "similarity": result_similarity(r),
         }
         for r in results
     ]

@@ -1123,7 +1123,7 @@ class TestFindCmd:
         assert result.exit_code == 0
         assert mock_search.call_args[1]["collection_filter"] is None
 
-    def test_missing_distance_defaults_zero(self):
+    def test_missing_distance_defaults_worst_case(self):
         mock_vector = np.zeros(768, dtype=np.float32)
         mock_backend = MagicMock()
         mock_backend.embed_query.return_value = mock_vector
@@ -1151,7 +1151,10 @@ class TestFindCmd:
             result = runner.invoke(app, ["find", "hello"])
 
         assert result.exit_code == 0
-        assert "similarity: 1.0" in result.output
+        # A row lacking ``_distance`` must sink to the bottom (similarity -1),
+        # not surface as a fake perfect 1.0 (quarry-gcnf).
+        assert "similarity: -1.0" in result.output
+        assert "similarity: 1.0" not in result.output
 
     def test_embedding_backend_error(self):
         mock_backend = MagicMock()

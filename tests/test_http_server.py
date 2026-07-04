@@ -278,6 +278,28 @@ class TestSearch:
 
         assert data["results"][0]["summary"] == ""
 
+    def test_search_missing_distance_sinks_to_bottom(self, client: TestClient) -> None:
+        """A row lacking _distance must serialize as similarity -1, not a fake 1.0."""
+        mock_results = [
+            {
+                "document_name": "doc.md",
+                "collection": "default",
+                "page_number": 1,
+                "chunk_index": 0,
+                "text": "content",
+                "page_type": "text",
+                "source_format": ".md",
+                # no _distance key (quarry-gcnf)
+            }
+        ]
+        with patch(
+            "quarry.db.chunk_search.ChunkSearch.hybrid_search",
+            return_value=mock_results,
+        ):
+            data = client.get("/search?q=content").json()
+
+        assert data["results"][0]["similarity"] == -1.0
+
     def test_search_with_limit(self, client: TestClient) -> None:
         with patch(
             "quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]

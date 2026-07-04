@@ -54,6 +54,7 @@ from quarry.remote import (
     write_proxy_config,
 )
 from quarry.remote_client import RemoteClient, RemoteError
+from quarry.results import result_similarity
 from quarry.sync import sync_all
 from quarry.sync_registry import SyncRegistry
 from quarry.tls import TLS_DIR, cert_fingerprint
@@ -349,7 +350,7 @@ def find_cmd(
     local_json_results: list[dict[str, object]] = []
     local_lines: list[str] = []
     for row in results:
-        similarity = round(1 - float(str(row.get("_distance", 0))), 4)
+        similarity = result_similarity(row)
         meta = f"{row['page_type']}/{row['source_format']}"
         local_lines.append(
             f"\n[{row['document_name']} p.{row['page_number']} | {meta}]"

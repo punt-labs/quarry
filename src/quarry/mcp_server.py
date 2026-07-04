@@ -32,6 +32,7 @@ from quarry.ingestion.pipeline import (
 )
 from quarry.ingestion.provider import ProviderSelection
 from quarry.logging_config import LoggingConfig
+from quarry.results import result_similarity
 from quarry.sync import sync_all as engine_sync_all
 from quarry.sync_registry import SyncRegistry
 
@@ -151,7 +152,7 @@ def find(
             "text": r["text"],
             "page_type": r["page_type"],
             "source_format": r["source_format"],
-            "similarity": round(1 - float(str(r.get("_distance", 0))), 4),
+            "similarity": result_similarity(r),
         }
         for r in results
     ]

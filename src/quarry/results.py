@@ -52,6 +52,17 @@ class SearchResult(TypedDict):
     _distance: float
 
 
+def result_similarity(row: SearchResult) -> float:
+    """Return a row's cosine similarity from its ``_distance``.
+
+    Under the cosine metric ``_distance = 1 - cos(θ)``, so similarity is
+    ``1 - _distance`` in ``[-1, 1]``. A row missing ``_distance`` defaults to
+    the worst-case distance ``2.0`` (similarity ``-1``), so it sinks to the
+    bottom rather than surfacing as a fake perfect ``1.0`` (quarry-gcnf).
+    """
+    return round(1.0 - float(str(row.get("_distance", 2.0))), 4)
+
+
 class DocumentSummary(TypedDict):
     """Summary of an indexed document from list_documents."""
 
