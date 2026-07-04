@@ -120,7 +120,7 @@ Functions in `src/quarry/ingestion/pipeline.py` and `src/quarry/ingestion/url_in
 | Shell scripts | `make test` (via pytest) | yes | Install script ordering, shellcheck |
 | HTTP API contract | `make test` | yes | Endpoint shape, params, response fields (growing) |
 | Wheel install | `make test-wheel` | local pre-PR gate | Build wheel → isolated venv → serve on 8422 → smoke checks |
-| MCP smoke test | `docs/smoke-test.md` | post-release manual | 35 checks: all MCP tools + CLI mirror + install verification |
+| MCP smoke test | `docs/smoke-test.md` | post-release manual | 38 checks (14 MCP + 17 CLI + 7 enable/disable) + install verification |
 
 `make check-full` = `make check` + `make test-wheel`. Full test suite needs `timeout=300000` on the Bash tool (5 minutes). During development, use targeted tests: `uv run pytest tests/test_specific.py -v`.
 
@@ -242,7 +242,9 @@ Use `/punt:auto release [version=X.Y.Z]`. Quarry is a CLI + Plugin Hybrid — re
 - `docs/architecture.tex` → `docs/architecture.pdf` — system architecture, module responsibilities, search and retrieval, deployment
 - `prfaq.tex` → `prfaq.pdf` — product direction and risk assumptions
 - `docs/improving-agent-memory.md` — agent memory design rationale
-- `docs/provider-detection-design.md` — ONNX provider auto-detection design
+- `docs/retrieval-quality-improvements.md` — retrieval-quality research + eval-harness plan (active work)
+- `docs/smoke-test.md` — post-release manual smoke test
+- `docs/README.md` — docs index; `docs/archive/` holds completed build-plans, reviews, and superseded designs mapped to DES-### in DESIGN.md. ONNX provider auto-detection design (formerly `docs/provider-detection-design.md`) is now in `docs/architecture.tex` + DES-016.
 
 <!-- quarry:begin -->
 ## Quarry
