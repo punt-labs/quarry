@@ -469,6 +469,32 @@ class TestModuleSizeHeadroom:
         scorer = _fake_scorer("src/x.py", {"module_size": 310.0})
         assert oo.Ratchet(tmp_path).check(scorer) == 1
 
+    def test_one_line_past_target_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """300 -> 301 fails: growth one line past the target is a regression."""
+        self._prepare(tmp_path, monkeypatch, {"module_size": 300.0})
+        scorer = _fake_scorer("src/x.py", {"module_size": 301.0})
+        assert oo.Ratchet(tmp_path).check(scorer) == 1
+
+    def test_grow_exactly_to_target_passes_size_gate(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """299 -> 300 clears the size gate: growth to exactly the target is allowed.
+
+        The grow is neutral (not an improvement), so alone — with nothing else
+        improving — it still trips the 'nothing improved' gate. Both facts are
+        asserted here to pin the exact boundary against future edits.
+        """
+        self._prepare(tmp_path, monkeypatch, {"module_size": 299.0})
+        scorer = _fake_scorer("src/x.py", {"module_size": 300.0})
+        # Size gate is not a regression, but nothing improved -> exit 1.
+        assert oo.Ratchet(tmp_path).check(scorer) == 1
+        # And --update records it — a below/at-target grow is not refused.
+        assert oo.Ratchet(tmp_path).update(scorer) == 0
+        written = json.loads((tmp_path / oo.Ratchet.BASELINE_FILE).read_text())
+        assert written["src/x.py"]["module_size"] == 300.0
+
     def test_below_target_grow_alone_fails_nothing_improved(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
