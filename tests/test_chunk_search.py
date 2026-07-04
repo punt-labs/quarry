@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import numpy as np
+import pytest
 
 from quarry.db import ChunkSearch, ChunkStore, get_db
 from quarry.models import Chunk
@@ -48,7 +49,7 @@ class TestCosineMetric:
         results = ChunkSearch(db).vector_search(vec, limit=1)
         assert len(results) == 1
         similarity = 1 - float(results[0]["_distance"])
-        assert similarity == np.float32(1.0).item() or abs(similarity - 1.0) < 1e-5
+        assert similarity == pytest.approx(1.0, abs=1e-5)
 
     def test_similarity_bounded(self, tmp_path: Path) -> None:
         db = get_db(tmp_path / "db")
@@ -60,7 +61,7 @@ class TestCosineMetric:
         similarity = 1 - float(results[0]["_distance"])
         assert -1.0 - 1e-5 <= similarity <= 1.0 + 1e-5
         # Antipodal unit vectors have cosine -1.
-        assert abs(similarity - (-1.0)) < 1e-5
+        assert similarity == pytest.approx(-1.0, abs=1e-5)
 
     def test_orthogonal_similarity_near_zero(self, tmp_path: Path) -> None:
         db = get_db(tmp_path / "db")
@@ -70,7 +71,7 @@ class TestCosineMetric:
         query = _unit([1.0, 0.0, 0.0])
         results = ChunkSearch(db).vector_search(query, limit=1)
         similarity = 1 - float(results[0]["_distance"])
-        assert abs(similarity) < 1e-5
+        assert similarity == pytest.approx(0.0, abs=1e-5)
 
     def test_angular_ordering(self, tmp_path: Path) -> None:
         """Results rank by angular (cosine) similarity, not vector magnitude."""
