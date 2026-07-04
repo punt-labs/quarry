@@ -5,8 +5,19 @@ module is. Produces JSON output with numeric scores for agent consumption.
 Usage:
     python tools/oo_score.py <file_or_directory> [--json] [--threshold]
     python tools/oo_score.py <file_or_directory> --check     # ratchet check
+    python tools/oo_score.py <file_or_directory> --verify [--allow-missing]  # integrity
     python tools/oo_score.py <file_or_directory> --update    # update baseline
+    python tools/oo_score.py <file_or_directory> --correct <path> --reason <text>
+    python tools/oo_score.py <file_or_directory> --rebaseline # reset baseline
     python tools/oo_score.py <file_or_directory> --log       # audit history
+
+The ratchet trusts .oo-baseline.json, but two failure modes break that trust:
+a baseline can be committed out of sync with its code (a "phantom" that --check
+never catches because --check only gates *touched* files), and ratio metrics
+(avg_params, avg_complexity, method_ratio) regress mechanically under genuine
+refactors because their denominator shifts. --verify catches phantoms; --correct
+fixes one entry without a nuclear --rebaseline; ratio tolerance absorbs the
+denominator artifact without loosening the absolute thresholds.
 
 Metrics produced:
     method_ratio        % of functions that are class methods (target: >= 80%)
@@ -36,6 +47,15 @@ from typing import ClassVar, Self
 def _writeln(text: str = "") -> None:
     """Write a line to stdout."""
     sys.stdout.write(text + "\n")
+
+
+def _flag_value(flag: str) -> str | None:
+    """Return the argv token following ``flag``, or None if absent."""
+    if flag in sys.argv:
+        idx = sys.argv.index(flag)
+        if idx + 1 < len(sys.argv):
+            return sys.argv[idx + 1]
+    return None
 
 
 class ModuleMetrics:
@@ -425,6 +445,23 @@ class Ratchet:
     # Metrics tracked in the baseline — must match Scorer.THRESHOLDS keys.
     METRIC_KEYS: ClassVar[tuple[str, ...]] = tuple(Scorer.THRESHOLDS)
 
+    # Float slack for --verify: recomputed rounded scores must match the
+    # committed baseline exactly, so any gap beyond rounding noise is a phantom.
+    VERIFY_EPSILON: ClassVar[float] = 1e-6
+
+    # Ratio metrics have a denominator (function/method count) that shifts when
+    # functions move, so a genuine refactor can nudge them the wrong way with
+    # zero quality loss. These are the only metrics eligible for micro-tolerance.
+    RATIO_METRICS: ClassVar[frozenset[str]] = frozenset(
+        {"method_ratio", "avg_params", "avg_complexity"},
+    )
+    # A tolerated ratio nudge must be paired with a real structural win on one
+    # of these size/complexity metrics — never granted on its own.
+    COMPANION_METRICS: ClassVar[tuple[str, ...]] = ("module_size", "max_complexity")
+    # Largest ratio micro-regression treated as a denominator artifact (0.10 ->
+    # 0.105 is a rounding-boundary flag, not a quality loss).
+    RATIO_EPSILON: ClassVar[float] = 0.02
+
     def __new__(cls, root: Path | None = None) -> Self:
         self = super().__new__(cls)
         base = root if root is not None else Path.cwd()
@@ -542,6 +579,72 @@ class Ratchet:
         return abs(current - target) < abs(baseline_val - target)
 
     # ------------------------------------------------------------------
+    # Ratio-metric tolerance
+    # ------------------------------------------------------------------
+
+    def _is_tolerable_ratio_regression(
+        self,
+        metric: str,
+        current: dict[str, float],
+        baseline_entry: dict[str, float],
+    ) -> bool:
+        """Return True if a ratio metric's regression is a denominator artifact.
+
+        Ratio metrics (avg_params, avg_complexity, method_ratio) divide by the
+        function/method count, so extracting a 0-param function out of a module
+        mechanically shifts them the wrong way (0.10 -> 0.105) with zero quality
+        loss. Absorb such a nudge only when it is tiny, the metric still
+        comfortably clears its ABSOLUTE threshold, and a companion size or
+        complexity metric improved in the same change. Non-ratio metrics
+        (module_size, max_complexity, counts) are never tolerated here.
+
+        Shared companion (reviewer note): the companion check is evaluated
+        independently per ratio metric against the SAME change, so one small
+        module_size/max_complexity win can absorb a sub-epsilon nudge on all
+        three ratio metrics at once. This is bounded and by design — the
+        _comfortably_meets floor still holds for each metric independently, so
+        no ratio can drift past (or even up to) its absolute threshold no
+        matter how many share the companion. Tightening to one tolerated nudge
+        per change was considered and left out: the absolute-threshold floor is
+        the real guarantee, and per-metric accounting would add state for no
+        additional safety.
+        """
+        if metric not in self.RATIO_METRICS:
+            return False
+        if metric not in current or metric not in baseline_entry:
+            return False
+        if abs(current[metric] - baseline_entry[metric]) > self.RATIO_EPSILON:
+            return False
+        if not self._comfortably_meets(metric, current[metric]):
+            return False
+        return self._companion_improved(current, baseline_entry)
+
+    @classmethod
+    def _comfortably_meets(cls, metric: str, value: float) -> bool:
+        """Return True if value clears the threshold by more than the epsilon."""
+        op, target = Scorer.THRESHOLDS[metric]
+        if op == ">=":
+            return value >= target + cls.RATIO_EPSILON
+        if op == "<=":
+            return value <= target - cls.RATIO_EPSILON
+        return value == target
+
+    def _companion_improved(
+        self,
+        current: dict[str, float],
+        baseline_entry: dict[str, float],
+    ) -> bool:
+        """Return True if any size/complexity companion metric strictly improved."""
+        return any(
+            metric in current
+            and metric in baseline_entry
+            and self._is_strictly_better(
+                metric, current[metric], baseline_entry[metric]
+            )
+            for metric in self.COMPANION_METRICS
+        )
+
+    # ------------------------------------------------------------------
     # Extract per-file metric dicts from Scorer results
     # ------------------------------------------------------------------
 
@@ -631,6 +734,10 @@ class Ratchet:
                     any_improvement = True
                 elif self._is_better_or_equal(metric, cur_val, base_val):
                     grade = "PASS"
+                elif self._is_tolerable_ratio_regression(
+                    metric, current, baseline_entry
+                ):
+                    grade = "TOLERATED"
                 else:
                     grade = "REGRESSED"
                     any_regression = True
@@ -674,6 +781,110 @@ class Ratchet:
         return 0
 
     # ------------------------------------------------------------------
+    # --verify
+    # ------------------------------------------------------------------
+
+    def verify(self, scorer: Scorer, *, allow_missing: bool = False) -> int:
+        """Fail if any baseline entry diverges from the committed code's score.
+
+        Distinct from --check: --check gates *touched* files against the
+        baseline to block regressions, while --verify asserts the *entire*
+        committed baseline faithfully matches the current source. A phantom —
+        a baseline entry committed out of sync with its code — is caught here
+        at PR time before it can sit dormant. In CI the working tree is the
+        committed checkout, so scoring it and comparing against the committed
+        baseline is exactly "does the baseline match the code?".
+
+        Fail-closed: a missing baseline is maximal divergence — with no
+        baseline the ratchet is disabled entirely, so deleting the file must
+        not green the gate. Pass --allow-missing (the ``allow_missing`` flag)
+        only for a genuine first-time bootstrap.
+        """
+        if not self.has_baseline:
+            if allow_missing:
+                _writeln("No baseline -- bootstrap allowed via --allow-missing")
+                return 0
+            _writeln(
+                "FAIL: no baseline -- a missing .oo-baseline.json disables the "
+                "ratchet (maximal divergence). Run --update to create one, or "
+                "pass --allow-missing to bootstrap.",
+            )
+            return 1
+
+        current_by_file = self._results_by_file(scorer.results)
+        # A file that fails to parse is dropped from current_by_file by
+        # _results_by_file; surface it explicitly as a scan error rather than
+        # letting it masquerade as a "stale" baseline entry.
+        scan_errors = {
+            str(r["file"]): str(r["error"]) for r in scorer.results if "error" in r
+        }
+        rows = self._integrity_rows(current_by_file, scan_errors)
+
+        if not rows:
+            _writeln("\nPASS: baseline matches committed code")
+            return 0
+
+        _writeln(
+            f"\n{'File':<40} {'Metric':<24} {'Baseline':>10} "
+            f"{'Current':>10} {'Issue':>10}",
+        )
+        _writeln("-" * 98)
+        for fpath, metric, base_s, cur_s, issue in rows:
+            _writeln(f"{fpath:<40} {metric:<24} {base_s:>10} {cur_s:>10} {issue:>10}")
+
+        if scan_errors:
+            _writeln("\nScan errors (file could not be parsed):")
+            for fpath, reason in sorted(scan_errors.items()):
+                _writeln(f"  {fpath}: {reason}")
+
+        _writeln("\nFAIL: baseline diverges from committed code")
+        _writeln(
+            "  fix a proven phantom with: "
+            "python tools/oo_score.py <dir> --correct <file> --reason <why>",
+        )
+        return 1
+
+    def _integrity_rows(
+        self,
+        current_by_file: dict[str, dict[str, float]],
+        scan_errors: dict[str, str],
+    ) -> list[tuple[str, str, str, str, str]]:
+        """Return (file, metric, baseline, current, issue) rows for divergences."""
+        baseline_files = set(self._baseline)
+        scored_files = set(current_by_file)
+        error_files = set(scan_errors)
+
+        # An unparseable file surfaces as its own row, not as stale — exclude
+        # it from the stale set so the real cause (a scan error) is reported.
+        scanerr = [
+            (fpath, "(scan)", "-", "-", "scan error") for fpath in sorted(error_files)
+        ]
+        stale = [
+            (fpath, "(file)", "present", "absent", "stale")
+            for fpath in sorted(baseline_files - scored_files - error_files)
+        ]
+        unrecorded = [
+            (fpath, "(file)", "absent", "present", "unrecorded")
+            for fpath in sorted(scored_files - baseline_files)
+        ]
+        phantom = [
+            (
+                fpath,
+                metric,
+                f"{self._baseline[fpath][metric]:.3f}",
+                f"{current_by_file[fpath][metric]:.3f}",
+                "phantom",
+            )
+            for fpath in sorted(baseline_files & scored_files)
+            for metric in self.METRIC_KEYS
+            if metric in self._baseline[fpath]
+            and metric in current_by_file[fpath]
+            and abs(self._baseline[fpath][metric] - current_by_file[fpath][metric])
+            > self.VERIFY_EPSILON
+        ]
+        return scanerr + stale + unrecorded + phantom
+
+    # ------------------------------------------------------------------
     # --update
     # ------------------------------------------------------------------
 
@@ -712,7 +923,11 @@ class Ratchet:
                     continue
                 cur_val = current[metric]
                 base_val = baseline_entry[metric]
-                if not self._is_better_or_equal(metric, cur_val, base_val):
+                if not self._is_better_or_equal(
+                    metric, cur_val, base_val
+                ) and not self._is_tolerable_ratio_regression(
+                    metric, current, baseline_entry
+                ):
                     refused.append((fpath, metric))
                     has_regression = True
 
@@ -788,6 +1003,110 @@ class Ratchet:
         return 0
 
     # ------------------------------------------------------------------
+    # --correct
+    # ------------------------------------------------------------------
+
+    def correct(self, target_file: str, reason: str) -> int:
+        """Re-record ONE file's baseline entry to its true current score.
+
+        Fixes a proven phantom (a baseline out of sync with committed code)
+        without the nuclear full --rebaseline that resets every file.
+
+        Guardrail: a non-empty reason is mandatory and is written to the audit
+        log under a distinct "correct" verdict. This is NOT a way to bless a
+        real code regression — the single-file scope and the audited reason
+        make every correction visible and reviewable in the PR diff, exactly
+        where a laundered regression would be caught. Use it only when --verify
+        reports a phantom, never to silence --check.
+        """
+        if not reason.strip():
+            _writeln("--correct requires a non-empty --reason")
+            return 2
+        # A reason that looks like a flag (e.g. "--check") means --reason was
+        # given no value and swallowed the next flag — fail loud rather than
+        # log a flag name as the accountability record.
+        if reason.startswith("--"):
+            _writeln(f"--reason looks like a flag: {reason!r} -- pass a real reason")
+            return 2
+
+        path = Path(target_file)
+        if not path.is_file():
+            _writeln(f"Not a file: {target_file}")
+            return 2
+
+        try:
+            scored = self._results_by_file([Scorer._score_file(path)])
+        except SyntaxError as exc:
+            _writeln(f"Cannot score {target_file}: {exc}")
+            return 2
+
+        true_metrics = next(iter(scored.values()), None)
+        if true_metrics is None:
+            _writeln(f"No metrics produced for {target_file}")
+            return 2
+
+        # Match the existing entry by resolved filesystem identity, so an
+        # absolute path, a ./ prefix, or a trailing slash still hits the entry
+        # the scorer wrote instead of adding a divergent duplicate. --correct
+        # fixes a proven phantom; adding a brand-new file is --update's job.
+        key = self._match_baseline_key(path)
+        if key is None:
+            _writeln(
+                f"no baseline entry for {target_file} -- --correct fixes an "
+                f"existing entry; run --update to record a new file",
+            )
+            return 2
+
+        old_entry = self._baseline[key]
+        file_deltas = {
+            metric: [old_entry[metric], true_metrics[metric]]
+            for metric in self.METRIC_KEYS
+            if metric in old_entry
+            and metric in true_metrics
+            and old_entry[metric] != true_metrics[metric]
+        }
+
+        # Audit BEFORE the mutation persists: a corrected baseline must never
+        # exist without its accountability record. If the audit write raises,
+        # the baseline is left untouched.
+        self._append_audit(
+            files_scored=1,
+            files_improved=0,
+            files_regressed=0,
+            verdict="correct",
+            deltas={key: file_deltas} if file_deltas else {},
+            reason=reason,
+        )
+
+        new_baseline = dict(self._baseline)
+        new_baseline[key] = true_metrics
+        self._save_baseline(new_baseline)
+
+        _writeln(f"\nCorrected baseline entry: {key}")
+        _writeln(f"  reason: {reason}")
+        if file_deltas:
+            for metric, (before, after) in sorted(file_deltas.items()):
+                _writeln(f"    {metric}: {before} -> {after}")
+        else:
+            _writeln("  (entry already matched — no metric changed)")
+        return 0
+
+    def _match_baseline_key(self, path: Path) -> str | None:
+        """Return the baseline key referring to ``path``, or None if absent.
+
+        Baseline keys are stored exactly as the scorer wrote them (relative to
+        the scan directory). Compare on the resolved absolute path so a
+        non-canonical ``--correct`` argument still identifies the existing
+        entry rather than inserting a near-duplicate that the next --verify
+        would flag.
+        """
+        target = path.resolve()
+        for existing in self._baseline:
+            if Path(existing).resolve() == target:
+                return existing
+        return None
+
+    # ------------------------------------------------------------------
     # Audit log
     # ------------------------------------------------------------------
 
@@ -799,9 +1118,10 @@ class Ratchet:
         files_regressed: int,
         verdict: str,
         deltas: dict[str, dict[str, list[float]]],
+        reason: str | None = None,
     ) -> None:
         commit = self._git_commit_short()
-        entry = {
+        entry: dict[str, object] = {
             "ts": datetime.datetime.now(datetime.UTC).strftime(
                 "%Y-%m-%dT%H:%M:%SZ",
             ),
@@ -812,6 +1132,8 @@ class Ratchet:
             "verdict": verdict,
             "deltas": deltas,
         }
+        if reason is not None:
+            entry["reason"] = reason
         with self._audit_path.open("a") as f:
             f.write(json.dumps(entry, separators=(",", ":")) + "\n")
 
@@ -847,7 +1169,9 @@ def main() -> None:
     if len(sys.argv) < 2:
         _writeln(
             f"Usage: {sys.argv[0]} <file_or_directory> "
-            f"[--json] [--threshold] [--check] [--update] [--rebaseline] [--log]",
+            f"[--json] [--threshold] [--check] [--verify [--allow-missing]] "
+            f"[--update] [--correct <file> --reason <text>] "
+            f"[--rebaseline] [--log]",
         )
         sys.exit(1)
 
@@ -856,11 +1180,25 @@ def main() -> None:
         _writeln(f"Not found: {target}")
         sys.exit(1)
 
-    scorer = Scorer(target)
     ratchet = Ratchet()
+
+    if "--correct" in sys.argv:
+        target_file = _flag_value("--correct")
+        reason = _flag_value("--reason")
+        if target_file is None:
+            _writeln("--correct requires a file path")
+            sys.exit(2)
+        if reason is None:
+            _writeln("--correct requires --reason <text>")
+            sys.exit(2)
+        sys.exit(ratchet.correct(target_file, reason))
+
+    scorer = Scorer(target)
 
     if "--check" in sys.argv:
         sys.exit(ratchet.check(scorer))
+    elif "--verify" in sys.argv:
+        sys.exit(ratchet.verify(scorer, allow_missing="--allow-missing" in sys.argv))
     elif "--rebaseline" in sys.argv:
         sys.exit(ratchet.rebaseline(scorer))
     elif "--update" in sys.argv:

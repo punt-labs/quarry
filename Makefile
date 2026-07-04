@@ -1,4 +1,4 @@
-.PHONY: help test lint lint-docs type check check-full check-oo update-oo check-coupling update-coupling check-suppressions update-suppressions report format install build test-wheel clean depot bench-cuda docs docs-clean metrics coverage
+.PHONY: help test lint lint-docs type check check-full check-oo check-oo-integrity update-oo correct-oo check-coupling update-coupling check-suppressions update-suppressions report format install build test-wheel clean depot bench-cuda docs docs-clean metrics coverage
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -19,11 +19,23 @@ type: ## Type check with mypy and pyright
 
 check: lint type test check-oo check-suppressions ## Run all quality gates
 
-check-oo: ## OO ratchet — must improve over baseline, never regress
+check-oo: ## OO ratchet — touched files must improve over baseline, never regress
 	uv run python tools/oo_score.py src/quarry/ --check
+
+# CI-only: --verify demands baseline == committed code, which holds only AFTER
+# update-oo runs. It cannot join the local `check` chain because the ratchet
+# requires each commit to *improve* a metric, so the improved value diverges
+# from the baseline until update-oo — verify would flag every improving commit
+# as a phantom. CI runs it on the committed, post-update-oo state where code
+# and baseline are in sync (see .github/workflows/lint.yml).
+check-oo-integrity: ## CI phantom guard — committed baseline must match committed code
+	uv run python tools/oo_score.py src/quarry/ --verify
 
 update-oo: ## Update OO baseline after improvements (stage .oo-baseline.json and .oo-audit.jsonl)
 	uv run python tools/oo_score.py src/quarry/ --update
+
+correct-oo: ## Correct one phantom baseline entry (FILE=path REASON="why")
+	uv run python tools/oo_score.py src/quarry/ --correct "$(FILE)" --reason "$(REASON)"
 
 check-coupling: ## Coupling/cohesion analysis (informational, not in check chain)
 	uv run python tools/oo_coupling.py src/quarry/ --check
