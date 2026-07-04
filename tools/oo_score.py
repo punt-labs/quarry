@@ -549,12 +549,30 @@ class Ratchet:
         return value == target
 
     @staticmethod
+    def _module_size_regressed(current: float, baseline_val: float) -> bool:
+        """Return True if a module_size change breaches the asymmetric ratchet.
+
+        module_size is the one metric with below-target headroom: growth is a
+        regression only once the file EXCEEDS the absolute threshold. Below the
+        target a file may grow freely (up to the target); at/over the target it
+        must ratchet down (no growth vs baseline). Crossing the target via
+        growth is refused because the result exceeds it. This keeps pressure on
+        the god-modules while sparing tiny files needless micro-extractions.
+
+        Reuses the single Scorer module_size threshold — no second 300.
+        """
+        _, target = Scorer.THRESHOLDS["module_size"]
+        return current > target and current > baseline_val
+
+    @staticmethod
     def _is_better_or_equal(
         metric: str,
         current: float,
         baseline_val: float,
     ) -> bool:
         """Return True if current is at least as good as baseline for the metric."""
+        if metric == "module_size":
+            return not Ratchet._module_size_regressed(current, baseline_val)
         op, target = Scorer.THRESHOLDS[metric]
         if op == ">=":
             return current >= baseline_val
