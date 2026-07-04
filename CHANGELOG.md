@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [1.18.2] - 2026-07-04
+
 ### Fixed
 
 - **query (search)**: hybrid-search results matched only by the keyword (BM25)
