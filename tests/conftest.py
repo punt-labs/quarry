@@ -53,22 +53,30 @@ def _isolate_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def _force_no_color(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Force typer/rich to emit plain, ANSI-free CLI output.
+    """Force quarry's rich consoles to emit plain, ANSI-free CLI output.
 
-    ``CliRunner`` captures output through a pipe, so rich normally disables
-    color on its own. A color-forcing ambient env (``FORCE_COLOR``) is read
-    once at import time: typer bakes it into ``rich_utils.FORCE_TERMINAL`` and
-    quarry constructs ``err_console`` as a forced terminal. Both then inject
-    ANSI escape codes into captured output, breaking substring assertions.
-    Deleting the env var at runtime is too late — patch the already-built
-    console objects so the gate is color-deterministic regardless of the shell.
+    ``CliRunner`` captures output through a pipe, so rich would normally
+    disable color on its own. But each ``Console(stderr=True)`` in
+    ``src/quarry`` is built with ``force_terminal=None`` and holds a live
+    ``os.environ`` reference: rich re-reads ``FORCE_COLOR`` at *render* time,
+    not at construction. So a color-forcing ambient env makes these consoles
+    emit ANSI escapes into the captured output at print time, breaking the
+    plain substring assertions. Deleting the env var at runtime does not help
+    — rich re-reads it on the next render. Replacing each console with one
+    pinned to ``force_terminal=False, no_color=True`` defeats that render-time
+    re-read, making the gate color-deterministic regardless of the shell.
+
+    Every production ``Console(`` in ``src/quarry`` must be patched here:
+    ``__main__.err_console`` (local CLI errors) and
+    ``remote_client._err_console`` (remote-path errors). Add any new one.
+    Typer is not patched: every ``typer.Typer`` app sets
+    ``rich_markup_mode=None``, so typer renders errors/help through click's
+    plain formatter, never through ``rich_utils`` — it emits no color.
     """
-    monkeypatch.setattr("typer.rich_utils.FORCE_TERMINAL", False)
-    monkeypatch.setattr("typer.rich_utils.COLOR_SYSTEM", None)
-    monkeypatch.setattr(
-        "quarry.__main__.err_console",
-        Console(stderr=True, no_color=True, force_terminal=False),
-    )
+    for target in ("quarry.__main__.err_console", "quarry.remote_client._err_console"):
+        monkeypatch.setattr(
+            target, Console(stderr=True, no_color=True, force_terminal=False)
+        )
 
 
 @pytest.fixture(scope="session")
