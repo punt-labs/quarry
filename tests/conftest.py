@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from rich.console import Console
 
 from quarry.config import Settings
 from quarry.db import Database
@@ -48,6 +49,26 @@ def _isolate_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     for var in _QUARRY_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _force_no_color(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force typer/rich to emit plain, ANSI-free CLI output.
+
+    ``CliRunner`` captures output through a pipe, so rich normally disables
+    color on its own. A color-forcing ambient env (``FORCE_COLOR``) is read
+    once at import time: typer bakes it into ``rich_utils.FORCE_TERMINAL`` and
+    quarry constructs ``err_console`` as a forced terminal. Both then inject
+    ANSI escape codes into captured output, breaking substring assertions.
+    Deleting the env var at runtime is too late — patch the already-built
+    console objects so the gate is color-deterministic regardless of the shell.
+    """
+    monkeypatch.setattr("typer.rich_utils.FORCE_TERMINAL", False)
+    monkeypatch.setattr("typer.rich_utils.COLOR_SYSTEM", None)
+    monkeypatch.setattr(
+        "quarry.__main__.err_console",
+        Console(stderr=True, no_color=True, force_terminal=False),
+    )
 
 
 @pytest.fixture(scope="session")

@@ -36,6 +36,21 @@ def _reset_globals() -> None:
     cli_mod._global_db = ""
 
 
+class TestColorDeterminism:
+    """CLI output must stay ANSI-free even under a color-forcing ambient env."""
+
+    def test_output_is_ansi_free_under_forced_color(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("FORCE_COLOR", "3")
+
+        result = runner.invoke(app, ["show", "report.pdf", "--page", "0"])
+
+        assert result.exit_code == 1
+        assert "\x1b" not in result.output
+        assert "page number must be >= 1" in result.output
+
+
 class TestListDocumentsCmd:
     def test_lists_documents(self):
         mock_docs = [
