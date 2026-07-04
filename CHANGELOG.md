@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [1.18.1] - 2026-07-04
+
 ### Fixed
 
 - **query (search)**: search similarity is now a true cosine score in `[-1, 1]`.
