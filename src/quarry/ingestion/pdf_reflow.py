@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from itertools import groupby
 from typing import Any, Self
 
 from quarry.ingestion.hyphenation import Dehyphenator
@@ -25,6 +26,10 @@ from quarry.ingestion.page_geometry import PageChrome
 logger = logging.getLogger(__name__)
 
 _PAGE_NUMBER_RE = re.compile(r"\d{1,4}")
+# A leader-dot run of four or more dots, spaced ". . . ." or solid "....". Four
+# is the threshold: a bare ellipsis is three dots, and a decimal ("10.1") has
+# lone dots, so ordinary prose is not misclassified as a TOC entry.
+_DOT_LEADER_RE = re.compile(r"\.(?:\s*\.){3,}")
 _TERMINAL_PUNCT = frozenset({".", "!", "?"})
 # Trailing quotes/brackets stripped before the terminal-punct test, so a
 # sentence ending .' or .") still reads as terminal. The u201d/u2019 escapes
@@ -35,6 +40,7 @@ _MIN_PLAUSIBLE_YEAR = 1000  # years exempt from page-number strip
 _MAX_PLAUSIBLE_YEAR = 2999
 _SHORT_LINE_FRACTION = 0.15  # a line this far short of the margin is "short"
 _MARGIN_TOLERANCE = 2.0  # points of slack for "reached the right margin"
+_ROW_Y_TOLERANCE = 3.0  # points; lines within this y-band share a visual row
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +81,17 @@ class ReflowLine:
         """Whether the line ends in terminal punctuation (trailing quotes ok)."""
         trimmed = self.text.rstrip().rstrip(_CLOSING_CHARS)
         return bool(trimmed) and trimmed[-1] in _TERMINAL_PUNCT
+
+    def is_dot_leader(self) -> bool:
+        """Whether the line carries a table-of-contents dot-leader run.
+
+        A run of four or more leader dots — spaced ``. . . .`` or solid
+        ``....`` — marks a TOC entry (typically ``<title> <dots> <page>``). Such
+        a line is a complete entry, so it must never be joined to the next line
+        as a soft wrap. A single ellipsis or a decimal number is below the
+        threshold and is not misclassified.
+        """
+        return _DOT_LEADER_RE.search(self.text) is not None
 
     def precedes_new_sentence(self, following: ReflowLine) -> bool:
         """Return whether this line closes a sentence and the next opens capital."""
@@ -147,8 +164,14 @@ class ReflowBlock:
             return not (_MIN_PLAUSIBLE_YEAR <= int(token) <= _MAX_PLAUSIBLE_YEAR)
         return True
 
+    def is_table_of_contents(self) -> bool:
+        """Whether the block holds dot-leader TOC entries (title, dots, page)."""
+        return any(line.is_dot_leader() for line in self.lines)
+
     def paragraphs(self) -> list[str]:
         """Join soft-wrapped lines into paragraphs, splitting at real breaks."""
+        if self.is_table_of_contents():
+            return self._toc_rows()
         result: list[str] = []
         current = ""
         previous: ReflowLine | None = None
@@ -163,6 +186,20 @@ class ReflowBlock:
         if current:
             result.append(current)
         return result
+
+    def _toc_rows(self) -> list[str]:
+        """Reassemble TOC fragments into one clean line per visual row.
+
+        fitz fragments each entry into separate title, dot-leader, and
+        page-number lines sharing a baseline. Bucketing lines into
+        ``_ROW_Y_TOLERANCE``-point y-bands and joining them left-to-right
+        rebuilds ``<title> <dots> <page>`` per row, so the prose soft-wrap
+        heuristic never concatenates adjacent entries. Sorting by ``y0`` first
+        keeps the band key monotonic, which ``groupby`` requires.
+        """
+        ordered = sorted(self.lines, key=lambda line: (line.y0, line.x0))
+        bands = groupby(ordered, key=lambda line: round(line.y0 / _ROW_Y_TOLERANCE))
+        return [" ".join(line.text.strip() for line in row) for _, row in bands]
 
     def _joins(self, previous: ReflowLine, following: ReflowLine) -> bool:
         # Cached _right_margin/_width keep this O(1) per line pair. A full-width
