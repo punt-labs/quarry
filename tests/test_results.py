@@ -77,6 +77,33 @@ class TestSearchResultFromRow:
         with pytest.raises(dataclasses.FrozenInstanceError):
             r.distance = 0.5  # type: ignore[misc]
 
+    def test_float_like_string_count_is_coerced(self):
+        r = SearchResult.from_row({"page_number": "3.0", "_distance": 0.1})
+        assert r.page_number == 3
+
+
+class TestSearchResultDistanceInvariant:
+    def test_negative_distance_raises(self):
+        with pytest.raises(ValueError, match="outside cosine range"):
+            SearchResult.from_row({"_distance": -0.5})
+
+    def test_distance_above_two_raises(self):
+        with pytest.raises(ValueError, match="outside cosine range"):
+            SearchResult.from_row({"_distance": 2.5})
+
+    def test_worst_case_distance_is_accepted(self):
+        # distance 2.0 is the valid worst case -> similarity -1, must not raise.
+        r = SearchResult.from_row({"_distance": 2.0})
+        assert r.similarity == -1.0
+
+    def test_float_overshoot_within_tolerance_is_accepted(self):
+        # A unit-vector cosine can float-overshoot to ~-1.0000001.
+        r = SearchResult.from_row({"_distance": 2.0000001})
+        assert r.distance == pytest.approx(2.0000001)
+
+    def test_normal_distance_is_accepted(self):
+        assert SearchResult.from_row({"_distance": 0.3}).similarity == 0.7
+
 
 class TestSearchFilterConstruction:
     def test_defaults(self):

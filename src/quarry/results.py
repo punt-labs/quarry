@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import NotRequired, Self, TypedDict
+from typing import ClassVar, NotRequired, Self, TypedDict
 
 from quarry._sql import escape_sql
 
@@ -55,6 +55,21 @@ class SearchResult:
     summary: str
     distance: float
 
+    # Slack on the cosine-distance bounds: float error lets a unit-vector cosine
+    # overshoot to ~-1.0000001, i.e. distance ~2.0000001; WORST_CASE_DISTANCE
+    # (2.0) is a valid worst case, so tolerate epsilon rather than reject it.
+    _DISTANCE_EPSILON: ClassVar[float] = 1e-6
+
+    def __post_init__(self) -> None:
+        """Enforce the cosine-distance invariant so ``similarity`` stays in range.
+
+        Cosine distance ``1 - cos(θ)`` lies in ``[0, 2]``; anything outside
+        (beyond float slack) would silently produce an out-of-range similarity.
+        """
+        if not -self._DISTANCE_EPSILON <= self.distance <= 2.0 + self._DISTANCE_EPSILON:
+            msg = f"distance {self.distance!r} outside cosine range [0, 2]"
+            raise ValueError(msg)
+
     @property
     def similarity(self) -> float:
         """Return cosine similarity in ``[-1, 1]``: ``1 - distance``, rounded.
@@ -86,7 +101,13 @@ class SearchResult:
         )
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-ready mapping including the derived similarity."""
+        """Return a JSON-ready mapping including the derived similarity.
+
+        A one-way display/serialization projection, not ``from_row``'s inverse:
+        it emits ``similarity`` and omits ``distance``, so feeding the output
+        back through ``from_row`` would default distance to WORST_CASE_DISTANCE.
+        """
+        # JSON serialization boundary — keys are the public wire shape (PY-TS-14).
         return {
             "document_name": self.document_name,
             "collection": self.collection,
@@ -109,7 +130,8 @@ class SearchResult:
     @staticmethod
     def _as_count(row: Mapping[str, object], key: str) -> int:
         value = row.get(key)
-        return 0 if value is None else int(str(value))
+        # via float() to tolerate float-like values ("3.0", 3.0) as well as ints.
+        return 0 if value is None else int(float(str(value)))
 
     @staticmethod
     def _as_distance(row: Mapping[str, object]) -> float:
