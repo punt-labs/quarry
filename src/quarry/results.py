@@ -7,6 +7,10 @@ from typing import NotRequired, TypedDict
 
 from quarry._sql import escape_sql
 
+# Cosine distance for a missing/uncomputable vector -> similarity -1, sinks to
+# the bottom. Single source of truth for the worst-case sentinel (quarry-gcnf).
+WORST_CASE_DISTANCE: float = 2.0
+
 
 class IngestResult(TypedDict):
     """Result of document ingestion.
@@ -60,7 +64,7 @@ def result_similarity(row: SearchResult) -> float:
     the worst-case distance ``2.0`` (similarity ``-1``), so it sinks to the
     bottom rather than surfacing as a fake perfect ``1.0`` (quarry-gcnf).
     """
-    return round(1.0 - float(str(row.get("_distance", 2.0))), 4)
+    return round(1.0 - float(str(row.get("_distance", WORST_CASE_DISTANCE))), 4)
 
 
 class DocumentSummary(TypedDict):

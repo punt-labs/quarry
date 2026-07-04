@@ -11,7 +11,7 @@ import numpy as np
 
 from quarry._sql import escape_sql
 from quarry.db.schema import TABLE_NAME, SchemaManager
-from quarry.results import SearchResult
+from quarry.results import WORST_CASE_DISTANCE, SearchResult
 from quarry.types import LanceDB
 
 if TYPE_CHECKING:
@@ -269,20 +269,20 @@ class ChunkSearch:
         without one. Under the cosine metric ``_distance = 1 - cos(θ)``, so a
         row's displayed ``similarity = 1 - _distance`` is its real cosine. A row
         whose stored vector is missing or zero-length gets the worst-case
-        distance 2.0 (similarity -1), never the fake 0.0 that made irrelevant
-        keyword hits display as 1.00 (quarry-gcnf).
+        distance ``WORST_CASE_DISTANCE`` (similarity -1), never the fake 0.0 that
+        made irrelevant keyword hits display as 1.00 (quarry-gcnf).
         """
         query = np.asarray(query_vector, dtype=np.float32).ravel()
         q_norm = float(np.linalg.norm(query))
         for row in fts_rows:
             raw = row.get("vector")
             if raw is None or q_norm == 0.0:
-                row["_distance"] = 2.0
+                row["_distance"] = WORST_CASE_DISTANCE
                 continue
             stored = np.asarray(raw, dtype=np.float32).ravel()
             s_norm = float(np.linalg.norm(stored))
             if s_norm == 0.0:
-                row["_distance"] = 2.0
+                row["_distance"] = WORST_CASE_DISTANCE
                 continue
             cos = float(np.dot(query, stored) / (q_norm * s_norm))
             row["_distance"] = 1.0 - cos
