@@ -36,6 +36,51 @@ def _reset_globals() -> None:
     cli_mod._global_db = ""
 
 
+class TestColorDeterminism:
+    """CLI output must stay ANSI-free even under a color-forcing ambient env."""
+
+    def test_output_is_ansi_free_under_forced_color(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("FORCE_COLOR", "3")
+
+        result = runner.invoke(app, ["show", "report.pdf", "--page", "0"])
+
+        assert result.exit_code == 1
+        assert "\x1b" not in result.output
+        assert "page number must be >= 1" in result.output
+
+    def test_remote_error_output_is_ansi_free_under_forced_color(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Remote-path errors print through ``remote_client._err_console``.
+
+        This fails unless that second console is also patched color-off — the
+        exact gap that let ANSI leak into remote-error assertions.
+        """
+        monkeypatch.setenv("FORCE_COLOR", "3")
+        proxy_config = {
+            "quarry": {
+                "url": "wss://quarry.example.com:8420/mcp",
+                "headers": {"Authorization": "Bearer tok"},
+            }
+        }
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch(
+                "quarry.remote_client.RemoteClient.get",
+                side_effect=RemoteError(
+                    0, "Cannot connect to remote quarry server at host:8420"
+                ),
+            ),
+        ):
+            result = runner.invoke(app, ["find", "some query"])
+
+        assert result.exit_code == 1
+        assert "\x1b" not in result.output
+        assert "Cannot connect to remote quarry server" in result.output
+
+
 class TestListDocumentsCmd:
     def test_lists_documents(self):
         mock_docs = [
