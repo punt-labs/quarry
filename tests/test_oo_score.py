@@ -363,12 +363,18 @@ class TestRatioMetricTolerance:
     def test_non_ratio_metric_never_tolerated(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """module_size is not a ratio — a size regression is never absorbed."""
+        """module_size is not a ratio — an over-target grow is never absorbed.
+
+        Uses over-300 values so the grow is a genuine regression under the
+        asymmetric module_size rule (below 300 a grow is allowed, so 100 -> 101
+        would no longer be a regression to test against).
+        """
         self._prepare(
-            tmp_path, monkeypatch, {"module_size": 100.0, "max_complexity": 8.0}
+            tmp_path, monkeypatch, {"module_size": 350.0, "max_complexity": 8.0}
         )
-        # module_size worsens by 1 line while max_complexity improves; strict.
-        scorer = _fake_scorer("src/x.py", {"module_size": 101.0, "max_complexity": 7.0})
+        # module_size worsens by 1 line above target while max_complexity
+        # improves; ratio tolerance must not absorb the size regression.
+        scorer = _fake_scorer("src/x.py", {"module_size": 351.0, "max_complexity": 7.0})
         assert oo.Ratchet(tmp_path).check(scorer) == 1
 
     def test_update_tolerates_and_records(
@@ -387,3 +393,130 @@ class TestRatioMetricTolerance:
         self._prepare(tmp_path, monkeypatch, {"avg_params": 3.90, "module_size": 100.0})
         scorer = _fake_scorer("src/x.py", {"avg_params": 4.50, "module_size": 95.0})
         assert oo.Ratchet(tmp_path).update(scorer) == 1
+
+
+class TestModuleSizeHeadroom:
+    """module_size ratchet only bites ABOVE the 300 target (asymmetric).
+
+    Below the target a file may grow (up to the target); over the target it
+    must not grow vs baseline. A below-target grow is neutral — never an
+    improvement — so it cannot satisfy the 'at least one metric improved' gate.
+    """
+
+    def _prepare(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        baseline: dict[str, float],
+    ) -> None:
+        _write_baseline(tmp_path, {"src/x.py": baseline})
+        # Compare every scored file, not only git-touched ones.
+        monkeypatch.setattr(
+            oo.Ratchet, "_git_touched_files", staticmethod(lambda: None)
+        )
+
+    def test_below_target_grow_passes_check(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """133 -> 176 (both < 300) is not a regression; a companion win passes."""
+        self._prepare(
+            tmp_path, monkeypatch, {"module_size": 133.0, "max_complexity": 8.0}
+        )
+        scorer = _fake_scorer("src/x.py", {"module_size": 176.0, "max_complexity": 7.0})
+        assert oo.Ratchet(tmp_path).check(scorer) == 0
+
+    def test_below_target_grow_update_records(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--update accepts a below-target grow and writes the larger size."""
+        self._prepare(tmp_path, monkeypatch, {"module_size": 133.0})
+        scorer = _fake_scorer("src/x.py", {"module_size": 176.0})
+        assert oo.Ratchet(tmp_path).update(scorer) == 0
+        written = json.loads((tmp_path / oo.Ratchet.BASELINE_FILE).read_text())
+        assert written["src/x.py"]["module_size"] == 176.0
+
+    def test_over_target_grow_fails_check(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """310 -> 330 (both > 300) is a strict regression on a god-module."""
+        self._prepare(tmp_path, monkeypatch, {"module_size": 310.0})
+        scorer = _fake_scorer("src/x.py", {"module_size": 330.0})
+        assert oo.Ratchet(tmp_path).check(scorer) == 1
+
+    def test_over_target_grow_refused_by_update(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--update mirrors --check: an over-target grow is refused, not recorded."""
+        self._prepare(tmp_path, monkeypatch, {"module_size": 310.0})
+        scorer = _fake_scorer("src/x.py", {"module_size": 330.0})
+        assert oo.Ratchet(tmp_path).update(scorer) == 1
+        written = json.loads((tmp_path / oo.Ratchet.BASELINE_FILE).read_text())
+        assert written["src/x.py"]["module_size"] == 310.0
+
+    def test_over_target_shrink_passes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """350 -> 340 shrinks a god-module: a genuine improvement, check passes."""
+        self._prepare(tmp_path, monkeypatch, {"module_size": 350.0})
+        scorer = _fake_scorer("src/x.py", {"module_size": 340.0})
+        assert oo.Ratchet(tmp_path).check(scorer) == 0
+
+    def test_crossing_target_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """290 -> 310 crosses the target via growth — refused (current > 300)."""
+        self._prepare(tmp_path, monkeypatch, {"module_size": 290.0})
+        scorer = _fake_scorer("src/x.py", {"module_size": 310.0})
+        assert oo.Ratchet(tmp_path).check(scorer) == 1
+
+    def test_one_line_past_target_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """300 -> 301 fails: growth one line past the target is a regression."""
+        self._prepare(tmp_path, monkeypatch, {"module_size": 300.0})
+        scorer = _fake_scorer("src/x.py", {"module_size": 301.0})
+        assert oo.Ratchet(tmp_path).check(scorer) == 1
+
+    def test_grow_exactly_to_target_passes_size_gate(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """299 -> 300 clears the size gate: growth to exactly the target is allowed.
+
+        The grow is neutral (not an improvement), so alone — with nothing else
+        improving — it still trips the 'nothing improved' gate. Both facts are
+        asserted here to pin the exact boundary against future edits.
+        """
+        self._prepare(tmp_path, monkeypatch, {"module_size": 299.0})
+        scorer = _fake_scorer("src/x.py", {"module_size": 300.0})
+        # Size gate is not a regression, but nothing improved -> exit 1.
+        assert oo.Ratchet(tmp_path).check(scorer) == 1
+        # And --update records it — a below/at-target grow is not refused.
+        assert oo.Ratchet(tmp_path).update(scorer) == 0
+        written = json.loads((tmp_path / oo.Ratchet.BASELINE_FILE).read_text())
+        assert written["src/x.py"]["module_size"] == 300.0
+
+    def test_below_target_grow_alone_fails_nothing_improved(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A below-target grow is NEUTRAL, not an improvement.
+
+        With no other metric improving, the 'nothing improved' gate still
+        fires — a bare size grow cannot green a commit on its own.
+        """
+        self._prepare(tmp_path, monkeypatch, {"module_size": 133.0})
+        scorer = _fake_scorer("src/x.py", {"module_size": 176.0})
+        assert oo.Ratchet(tmp_path).check(scorer) == 1
+
+    def test_other_metric_gets_no_headroom(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only module_size has below-target headroom; max_complexity is strict.
+
+        5 -> 6 (both < the 10 threshold) is still a regression — the asymmetry
+        is module_size-specific.
+        """
+        self._prepare(
+            tmp_path, monkeypatch, {"max_complexity": 5.0, "module_size": 100.0}
+        )
+        scorer = _fake_scorer("src/x.py", {"max_complexity": 6.0, "module_size": 100.0})
+        assert oo.Ratchet(tmp_path).check(scorer) == 1
