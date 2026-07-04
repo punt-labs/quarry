@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [1.18.0] - 2026-07-03
+
 ### Added
 
 - **infra (oo-ratchet)**: three hardening features for `tools/oo_score.py`, the
