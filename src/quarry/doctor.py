@@ -1000,11 +1000,9 @@ def run_install() -> int:  # noqa: C901
         from quarry.gpu_runtime import GpuRuntime  # noqa: PLC0415
 
         gpu_status = GpuRuntime.ensure()
-        if "failed" in gpu_status:
-            print(f"  \u2717 {gpu_status}")  # noqa: T201
+        print(f"  {gpu_status.symbol} {gpu_status}")  # noqa: T201
+        if gpu_status.is_failure:
             failed = True
-        else:
-            print(f"  \u2713 {gpu_status}")  # noqa: T201
     except Exception as exc:  # noqa: BLE001
         print(f"  \u2022 Skipped: {exc}")  # noqa: T201
 

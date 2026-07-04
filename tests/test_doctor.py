@@ -2,13 +2,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING
 from unittest.mock import patch
 
-if TYPE_CHECKING:
-    import pytest
-
-    MP = pytest.MonkeyPatch
+import pytest
 
 from quarry.doctor import (
     CheckResult,
@@ -34,6 +30,9 @@ from quarry.doctor import (
     check_environment,
     run_install,
 )
+from quarry.gpu_status import GpuStatus
+
+MP = pytest.MonkeyPatch
 
 
 class TestCheckPythonVersion:
@@ -1200,15 +1199,16 @@ class TestRunInstall:
         assert result == 0
         assert data_dir.is_dir()
 
-    def test_gpu_failure_marks_error(
+    def test_gpu_restore_failed_marks_error(
         self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
     ):
+        """A genuine failure (RESTORE_FAILED) sets failed and prints a cross."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         _mock_install_deps(monkeypatch)
         with (
             patch(
                 "quarry.gpu_runtime.GpuRuntime.ensure",
-                return_value="onnxruntime-gpu install failed, CPU restored",
+                return_value=GpuStatus.RESTORE_FAILED,
             ),
             patch(self._DL) as mock_dl,
         ):
@@ -1217,7 +1217,62 @@ class TestRunInstall:
         assert result == 1
         captured = capsys.readouterr()
         assert "\u2717" in captured.out
-        assert "failed" in captured.out
+        assert "CPU restore also failed" in captured.out
+
+    def test_gpu_restored_warns_not_error(
+        self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
+    ):
+        """A recovered swap (RESTORED) warns but does not fail the install.
+
+        RESTORED's message contains the word "failed", but the CPU runtime was
+        restored and the daemon can start, so install returns 0 and the GPU
+        line shows a warning glyph, not a cross.
+        """
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _mock_install_deps(monkeypatch)
+        with (
+            patch(
+                "quarry.gpu_runtime.GpuRuntime.ensure",
+                return_value=GpuStatus.RESTORED,
+            ),
+            patch(self._DL) as mock_dl,
+        ):
+            mock_dl.return_value = ("/fake/model.onnx", "/fake/tokenizer.json")
+            result = run_install()
+        assert result == 0
+        captured = capsys.readouterr()
+        assert "\u26a0" in captured.out
+        assert "CPU restored" in captured.out
+        assert "\u2717 onnxruntime" not in captured.out
+
+    @pytest.mark.parametrize(
+        "status",
+        [
+            GpuStatus.INSTALLED,
+            GpuStatus.CUDA_PRESENT,
+            GpuStatus.NO_GPU,
+            GpuStatus.NO_UV,
+        ],
+    )
+    def test_gpu_happy_states_pass(
+        self,
+        status: GpuStatus,
+        tmp_path: Path,
+        monkeypatch: MP,
+        capsys: pytest.CaptureFixture[str],
+    ):
+        """Non-failure states print a check and never fail the install."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _mock_install_deps(monkeypatch)
+        with (
+            patch("quarry.gpu_runtime.GpuRuntime.ensure", return_value=status),
+            patch(self._DL) as mock_dl,
+        ):
+            mock_dl.return_value = ("/fake/model.onnx", "/fake/tokenizer.json")
+            result = run_install()
+        assert result == 0
+        captured = capsys.readouterr()
+        assert f"\u2713 {status}" in captured.out
 
     def test_model_download_failure_returns_one(self, tmp_path: Path, monkeypatch: MP):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)

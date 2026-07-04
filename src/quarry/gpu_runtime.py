@@ -14,24 +14,14 @@ import logging
 import shutil
 import subprocess
 import sys
-from enum import StrEnum
 from typing import Self
+
+from quarry.gpu_status import GpuStatus
 
 logger = logging.getLogger(__name__)
 
 _ORT_GPU_SPEC = "onnxruntime-gpu>=1.18.0"
 _ORT_CPU_SPEC = "onnxruntime>=1.18.0"
-
-
-class GpuStatus(StrEnum):
-    """Outcome of a GPU runtime check, suitable for display."""
-
-    NO_UV = "uv not found, skipped GPU check"
-    NO_GPU = "no NVIDIA GPU"
-    CUDA_PRESENT = "CUDA already available"
-    INSTALLED = "onnxruntime-gpu installed"
-    RESTORED = "onnxruntime-gpu install failed, CPU restored"
-    RESTORE_FAILED = "onnxruntime-gpu install failed, CPU restore also failed"
 
 
 class GpuRuntime:

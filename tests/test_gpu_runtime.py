@@ -5,7 +5,8 @@ from __future__ import annotations
 import sys
 from unittest.mock import MagicMock, patch
 
-from quarry.gpu_runtime import GpuRuntime, GpuStatus
+from quarry.gpu_runtime import GpuRuntime
+from quarry.gpu_status import GpuStatus
 
 
 class TestGpuRuntimeEnsure:
