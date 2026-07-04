@@ -795,10 +795,10 @@
   "src/quarry/results.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 0.86,
+    "avg_params": 0.75,
     "max_complexity": 3.0,
-    "avg_complexity": 1.29,
-    "module_size": 155.0,
+    "avg_complexity": 1.38,
+    "module_size": 173.0,
     "classes_per_module": 2.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
