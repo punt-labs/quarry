@@ -53,7 +53,7 @@ class TestTextFileIngestAndSearch:
 
         results = _search(lance_db, "how plants convert sunlight", integration_settings)
         assert len(results) > 0
-        top_text = str(results[0]["text"]).lower()
+        top_text = results[0].text.lower()
         assert "photosynthesis" in top_text or "chloroplast" in top_text
 
     def test_search_ranks_relevant_higher(
@@ -73,7 +73,7 @@ class TestTextFileIngestAndSearch:
             lance_db, "quantum superposition qubits", integration_settings
         )
         assert len(results) > 0
-        assert str(results[0]["document_name"]) == "quantum-computing.txt"
+        assert results[0].document_name == "quantum-computing.txt"
 
     def test_ingest_reports_correct_metadata(
         self,
@@ -110,7 +110,7 @@ class TestMarkdownIngestAndSearch:
 
         results = _search(lance_db, "SQL relational databases", integration_settings)
         assert len(results) > 0
-        top_text = str(results[0]["text"]).lower()
+        top_text = results[0].text.lower()
         assert "database" in top_text
 
     def test_markdown_search_across_sections(
@@ -125,7 +125,7 @@ class TestMarkdownIngestAndSearch:
             lance_db, "neural networks machine learning", integration_settings
         )
         assert len(results) > 0
-        top_text = str(results[0]["text"]).lower()
+        top_text = results[0].text.lower()
         assert "learning" in top_text or "neural" in top_text
 
 
@@ -170,7 +170,7 @@ class TestPdfIngestion:
             lance_db, "software engineering testing", integration_settings
         )
         assert len(results) > 0
-        top_text = str(results[0]["text"]).lower()
+        top_text = results[0].text.lower()
         assert "software" in top_text
 
     def test_pdf_page_retrieval(
@@ -207,7 +207,7 @@ class TestDocxIngestion:
             lance_db, "virtual memory process scheduling", integration_settings
         )
         assert len(results) > 0
-        top_text = str(results[0]["text"]).lower()
+        top_text = results[0].text.lower()
         assert "operating" in top_text or "memory" in top_text
 
 
@@ -260,7 +260,7 @@ class TestCollectionIsolation:
         )
         assert len(results) > 0
         for r in results:
-            assert str(r["collection"]) == "biology"
+            assert r.collection == "biology"
 
     def test_list_documents_by_collection(
         self,
@@ -339,11 +339,11 @@ class TestOverwriteBehavior:
             lance_db, "tectonic plates earthquakes", integration_settings
         )
 
-        old_texts = [str(r["text"]).lower() for r in old_results]
+        old_texts = [r.text.lower() for r in old_results]
         assert not any("mitochondria" in t for t in old_texts)
 
         assert len(new_results) > 0
-        assert "tectonic" in str(new_results[0]["text"]).lower()
+        assert "tectonic" in new_results[0].text.lower()
 
         docs = ChunkCatalog(lance_db).list_documents()
         assert len(docs) == 1
@@ -399,9 +399,8 @@ class TestMultiDocumentSearch:
         for query, expected_doc in queries.items():
             results = _search(lance_db, query, integration_settings)
             assert len(results) > 0, f"No results for: {query}"
-            assert str(results[0]["document_name"]) == expected_doc, (
-                f"Expected {expected_doc} for '{query}', "
-                f"got {results[0]['document_name']}"
+            assert results[0].document_name == expected_doc, (
+                f"Expected {expected_doc} for '{query}', got {results[0].document_name}"
             )
 
     def test_document_filter(
@@ -424,7 +423,7 @@ class TestMultiDocumentSearch:
             document_filter="photosynthesis.txt",
         )
         for r in results:
-            assert str(r["document_name"]) == "photosynthesis.txt"
+            assert r.document_name == "photosynthesis.txt"
 
 
 # ── raw text ingestion tests ─────────────────────────────────────────
@@ -447,7 +446,7 @@ class TestRawTextIngestion:
 
         results = _search(lance_db, "tectonic plates lithosphere", integration_settings)
         assert len(results) > 0
-        assert "tectonic" in str(results[0]["text"]).lower()
+        assert "tectonic" in results[0].text.lower()
 
     def test_ingest_text_with_collection(
         self,

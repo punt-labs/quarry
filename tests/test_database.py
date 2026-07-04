@@ -61,7 +61,7 @@ class TestInsertAndSearch:
 
         results = ChunkSearch(db).vector_search(vectors[0], limit=5)
         assert len(results) >= 1
-        assert results[0]["text"] == "financial report 2024"
+        assert results[0].text == "financial report 2024"
 
     def test_search_empty_table(self, tmp_path: Path):
         db = get_db(tmp_path / "db")
@@ -81,7 +81,7 @@ class TestInsertAndSearch:
         results = ChunkSearch(db).vector_search(
             vectors[0], limit=10, document_filter="a.pdf"
         )
-        doc_names = {r["document_name"] for r in results}
+        doc_names = {r.document_name for r in results}
         assert doc_names == {"a.pdf"}
 
     def test_search_limit(self, tmp_path: Path):
@@ -342,7 +342,7 @@ class TestSearchWithCollection:
         results = ChunkSearch(db).vector_search(
             vectors[0], limit=10, collection_filter="math"
         )
-        collections = {r["collection"] for r in results}
+        collections = {r.collection for r in results}
         assert collections == {"math"}
 
     def test_collection_and_document_filter(self, tmp_path: Path):
@@ -377,8 +377,8 @@ class TestSearchWithCollection:
             collection_filter="math",
         )
         assert len(results) == 1
-        assert results[0]["collection"] == "math"
-        assert results[0]["document_name"] == "a.pdf"
+        assert results[0].collection == "math"
+        assert results[0].document_name == "a.pdf"
 
     def test_no_results_for_unknown_collection(self, tmp_path: Path):
         db = get_db(tmp_path / "db")
@@ -405,7 +405,7 @@ class TestSearchWithMetadataFilters:
         results = ChunkSearch(db).vector_search(
             vectors[0], limit=10, page_type_filter="code"
         )
-        page_types = {r["page_type"] for r in results}
+        page_types = {r.page_type for r in results}
         assert page_types == {"code"}
 
     def test_source_format_filter(self, tmp_path: Path):
@@ -428,7 +428,7 @@ class TestSearchWithMetadataFilters:
         results = ChunkSearch(db).vector_search(
             vectors[0], limit=10, source_format_filter=".py"
         )
-        formats = {r["source_format"] for r in results}
+        formats = {r.source_format for r in results}
         assert formats == {".py"}
 
     def test_combined_metadata_filters(self, tmp_path: Path):
@@ -463,8 +463,8 @@ class TestSearchWithMetadataFilters:
             source_format_filter=".py",
         )
         assert len(results) == 1
-        assert results[0]["page_type"] == "code"
-        assert results[0]["source_format"] == ".py"
+        assert results[0].page_type == "code"
+        assert results[0].source_format == ".py"
 
     def test_metadata_with_collection_filter(self, tmp_path: Path):
         db = get_db(tmp_path / "db")
@@ -501,8 +501,8 @@ class TestSearchWithMetadataFilters:
             page_type_filter="code",
         )
         assert len(results) == 1
-        assert results[0]["collection"] == "math"
-        assert results[0]["page_type"] == "code"
+        assert results[0].collection == "math"
+        assert results[0].page_type == "code"
 
     def test_no_results_for_unknown_page_type(self, tmp_path: Path):
         db = get_db(tmp_path / "db")
@@ -757,7 +757,7 @@ class TestOptimizeRebuildsFtsIndex:
         # Search for a term that only matches via FTS keyword.
         query_vec = _random_vectors(1)[0]
         results = ChunkSearch(db).hybrid_search("xylophone", query_vec, limit=10)
-        texts = [r["text"] for r in results]
+        texts = [r.text for r in results]
         assert any("xylophone" in t for t in texts)
 
     def test_optimize_passes_cleanup_older_than(self, tmp_path: Path):

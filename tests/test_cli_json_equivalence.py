@@ -17,6 +17,7 @@ from typer.testing import CliRunner
 
 import quarry.__main__ as cli_mod
 from quarry.__main__ import app
+from quarry.results import SearchResult
 
 runner = CliRunner()
 
@@ -122,7 +123,7 @@ class TestJsonEquivalenceFind:
             ),
             patch(
                 "quarry.db.chunk_search.ChunkSearch.hybrid_search",
-                return_value=[local_row],
+                return_value=[SearchResult.from_row(local_row)],
             ),
         ):
             local_res = runner.invoke(app, ["--json", "find", "query"])

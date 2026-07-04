@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import NotRequired, TypedDict
+from typing import ClassVar, NotRequired, Self, TypedDict
 
 from quarry._sql import escape_sql
+
+# Cosine distance for a missing/uncomputable vector -> similarity -1, sinks to
+# the bottom. Single source of truth for the worst-case sentinel (quarry-gcnf).
+WORST_CASE_DISTANCE: float = 2.0
 
 
 class IngestResult(TypedDict):
@@ -28,28 +33,110 @@ class IngestResult(TypedDict):
     format: NotRequired[str]
 
 
-class SearchResult(TypedDict):
-    """A single search hit from vector similarity search.
+@dataclass(frozen=True, slots=True)
+class SearchResult:
+    """A single search hit with the metadata needed to display and rank it.
 
-    All keys except _distance come from stored chunk metadata.
-    _distance is added by LanceDB (lower = more similar).
+    ``distance`` is the cosine distance LanceDB reports for the vector channel
+    (``_distance``); FTS-only rows receive it from ``_annotate_fts_distances``.
+    A missing distance defaults to :data:`WORST_CASE_DISTANCE`. Build instances
+    with :meth:`from_row` from a LanceDB or FTS row mapping.
     """
 
     document_name: str
-    document_path: str
     collection: str
     page_number: int
-    total_pages: int
     chunk_index: int
     text: str
-    page_raw_text: str
     page_type: str
     source_format: str
-    ingestion_timestamp: str
     agent_handle: str
     memory_type: str
     summary: str
-    _distance: float
+    distance: float
+
+    # Slack on the cosine-distance bounds: float error lets a unit-vector cosine
+    # overshoot to ~-1.0000001, i.e. distance ~2.0000001; WORST_CASE_DISTANCE
+    # (2.0) is a valid worst case, so tolerate epsilon rather than reject it.
+    _DISTANCE_EPSILON: ClassVar[float] = 1e-6
+
+    def __post_init__(self) -> None:
+        """Enforce the cosine-distance invariant so ``similarity`` stays in range.
+
+        Cosine distance ``1 - cos(θ)`` lies in ``[0, 2]``; anything outside
+        (beyond float slack) would silently produce an out-of-range similarity.
+        """
+        if not -self._DISTANCE_EPSILON <= self.distance <= 2.0 + self._DISTANCE_EPSILON:
+            msg = f"distance {self.distance!r} outside cosine range [0, 2]"
+            raise ValueError(msg)
+
+    @property
+    def similarity(self) -> float:
+        """Return cosine similarity in ``[-1, 1]``: ``1 - distance``, rounded.
+
+        A row with the worst-case distance sinks to ``-1`` rather than
+        surfacing as a fake perfect ``1.0`` (quarry-gcnf).
+        """
+        return round(1.0 - self.distance, 4)
+
+    @classmethod
+    def from_row(cls, row: Mapping[str, object]) -> Self:
+        """Build a result from a LanceDB/FTS row mapping.
+
+        Missing string fields default to ``""``, missing counts to ``0``, and a
+        missing ``_distance`` to :data:`WORST_CASE_DISTANCE`.
+        """
+        return cls(
+            document_name=cls._as_text(row, "document_name"),
+            collection=cls._as_text(row, "collection"),
+            page_number=cls._as_count(row, "page_number"),
+            chunk_index=cls._as_count(row, "chunk_index"),
+            text=cls._as_text(row, "text"),
+            page_type=cls._as_text(row, "page_type"),
+            source_format=cls._as_text(row, "source_format"),
+            agent_handle=cls._as_text(row, "agent_handle"),
+            memory_type=cls._as_text(row, "memory_type"),
+            summary=cls._as_text(row, "summary"),
+            distance=cls._as_distance(row),
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a JSON-ready mapping including the derived similarity.
+
+        A one-way display/serialization projection, not ``from_row``'s inverse:
+        it emits ``similarity`` and omits ``distance``, so feeding the output
+        back through ``from_row`` would default distance to WORST_CASE_DISTANCE.
+        """
+        # JSON serialization boundary — keys are the public wire shape (PY-TS-14).
+        return {
+            "document_name": self.document_name,
+            "collection": self.collection,
+            "page_number": self.page_number,
+            "chunk_index": self.chunk_index,
+            "text": self.text,
+            "page_type": self.page_type,
+            "source_format": self.source_format,
+            "agent_handle": self.agent_handle,
+            "memory_type": self.memory_type,
+            "summary": self.summary,
+            "similarity": self.similarity,
+        }
+
+    @staticmethod
+    def _as_text(row: Mapping[str, object], key: str) -> str:
+        value = row.get(key)
+        return "" if value is None else str(value)
+
+    @staticmethod
+    def _as_count(row: Mapping[str, object], key: str) -> int:
+        value = row.get(key)
+        # via float() to tolerate float-like values ("3.0", 3.0) as well as ints.
+        return 0 if value is None else int(float(str(value)))
+
+    @staticmethod
+    def _as_distance(row: Mapping[str, object]) -> float:
+        value = row.get("_distance")
+        return WORST_CASE_DISTANCE if value is None else float(str(value))
 
 
 class DocumentSummary(TypedDict):

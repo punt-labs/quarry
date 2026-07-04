@@ -14,6 +14,7 @@ import typer
 from rich.console import Console
 
 from quarry.remote import ws_to_http
+from quarry.results import WORST_CASE_DISTANCE
 
 _err_console = Console(stderr=True)
 
@@ -137,7 +138,11 @@ class RemoteClient:
         json_results: list[dict[str, object]] = []
         lines: list[str] = []
         for r in remote_results:
-            similarity = round(float(str(r.get("similarity", 0))), 4)
+            # Worst-case similarity default keeps the new convention (quarry-gcnf);
+            # unreachable in practice since http_server always emits similarity.
+            similarity = round(
+                float(str(r.get("similarity", 1.0 - WORST_CASE_DISTANCE))), 4
+            )
             meta = f"{r.get('page_type', '')}/{r.get('source_format', '')}"
             doc = r.get("document_name", "")
             pg = r.get("page_number", "")

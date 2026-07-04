@@ -83,6 +83,8 @@ Bootstrap (first time only): run `make update-oo` to create the initial baseline
 
 **Do not negotiate with the ratchet.** Do not edit `.oo-baseline.json` by hand. Do not suppress `check-oo`. Do not argue a regression is "acceptable." If the ratchet fails, improve the code until it passes. The ratchet is the quality standard's enforcement — working around it defeats the purpose.
 
+**The ratchet is debt amortization, not a limbo bar.** Its purpose is to pay the codebase's OO debt down incrementally: every commit should *fund a medium-scale improvement* — to the file you're touching or to unrelated code nearby — the way you amortize a loan a chunk at a time. This deliberately takes on additional scope, and that is intended. Do **not** treat the ratchet as a constraint to squeak under. Offsetting a two-line addition with a micro-simplification, hunting for `module_size` headroom to avoid an extraction, or gaming a single metric by the minimum all satisfy the letter and waste the intent — and they burn time. When you open a file, make a *real* improvement sized to the opportunity (extract a class, split a god module, internalize public attributes, cut a complex function down), not the smallest change that clears the gate. Bias toward making the improvement, never toward avoiding it.
+
 **Org standards override review tools.** Copilot, Bugbot, and Cursor are advisory. When a review suggestion conflicts with rules in `../.claude/rules/python-*.md`, the rules win. Read the rules before accepting a reviewer's suggestion. PY-CC-1 (`__new__` as constructor) is the most common conflict.
 
 **Verify outputs, not just metrics.** After writing a file, open it and read the content. After backfilling transcripts, search them and confirm the results make sense. `make check` passing does not mean the feature works — it means the code compiles and tests pass. Those are necessary but not sufficient.
@@ -167,6 +169,8 @@ Identity: `agent: claude` per `.punt-labs/ethos.yaml`. Sub-agent calls (`Agent(s
 
 All code delegation uses ethos missions. Every non-trivial delegation has two phases: (1) **design mission** — describes the problem, constraints, and invariants but does NOT prescribe a write set; (2) **implementation mission** — uses the write set produced by the design phase. The design mission's output IS the write set — the specialist decides what to create, split, or extract. This is critical: prescribing a write set before design prevents refactoring and forces code into existing modules (which is how `__main__.py` reached 2,008 lines).
 
+**Every implementation mission MUST direct the worker to make a real OO improvement on the files it touches** — sized to the opportunity (extract a class, split a god module, internalize public attributes, cut complexity), not minimal ratchet-clearing. The ratchet is debt amortization; every mission pays some down (see the "debt amortization" note in Code Quality). A worker that offsets a small addition with a micro-simplification, or hunts for `module_size` headroom to dodge an extraction, has missed the point. Purity is not a goal: an adjacent improvement riding along the mission's diff is welcome.
+
 ### Why these pairings
 
 Quarry spans four technical domains that require distinct expertise: (1) **ML/numerical** — ONNX embedding, quantization, GPU dispatch, search algorithm design — owned by `kpz` because these are inference pipeline and hardware abstraction problems; (2) **data infrastructure** — LanceDB schema, migrations, chunk storage, agent memory — owned by `rmh` because these are Python data-layer problems with strict type contracts; (3) **network trust** — TLS cert generation, pinned CA contexts, HTTP API contracts — owned by `djb` because TLS semantics are security-critical and the bug class history proves subtle mistakes recur; (4) **user surface** — CLI commands, install scripts, system service lifecycle — split between `mdm` (CLI design) and `adb` (infrastructure/service).
@@ -225,6 +229,8 @@ After all missions for the feature complete and each has passed its inner loop:
 ### PR boundaries
 
 Split by **rollback granularity**, not size. Ask: if this broke production, what reverts together? That is one PR. "The diff is large" and "separate concern" are prohibited split reasons. Independent rollback capability and sequential dependency are valid.
+
+**PRs do not need to be "pure," and purity is never a reason to hold back an improvement.** These PRs are agent-reviewed and squash-merged — the whole branch collapses to one commit on `main`, so the "normal fencing" (one-concern-per-PR, keep-the-diff-minimal, split-out-the-unrelated-bit) does not apply. Do not spend time policing scope: a docs tweak, an OO/complexity paydown, or an adjacent bug fix riding along with a feature PR is welcome, not a violation. **The operator explicitly rejects rules that make it harder to improve code.** If you are in a file and can make it better, do it — never revert or defer a genuine improvement to keep a PR "clean," and never open a separate PR solely for purity. The one real constraint is mechanical, not stylistic: when multiple agents share one worktree, don't let them edit the same uncommitted lines simultaneously — sequence them so no one's work is clobbered. That is about not losing work, not about scope.
 
 ## Release
 

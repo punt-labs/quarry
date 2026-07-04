@@ -5,15 +5,16 @@ from __future__ import annotations
 import logging
 import math
 from collections import defaultdict
-from typing import TYPE_CHECKING, Self, cast
+from typing import TYPE_CHECKING, Self
+
+import numpy as np
 
 from quarry._sql import escape_sql
 from quarry.db.schema import TABLE_NAME, SchemaManager
-from quarry.results import SearchResult
+from quarry.results import WORST_CASE_DISTANCE, SearchResult
 from quarry.types import LanceDB
 
 if TYPE_CHECKING:
-    import numpy as np
     from numpy.typing import NDArray
 
 logger = logging.getLogger(__name__)
@@ -129,15 +130,9 @@ def _fuse_rrf(
 
     ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:limit]
 
-    results: list[SearchResult] = []
-    for key, score in ranked:
-        row = all_rows[key]
-        # Preserve the original vector distance when available; FTS-only
-        # results (no vector channel hit) get _distance 0.0.
-        if "_distance" not in row:
-            row["_distance"] = 0.0
-        row["rrf_score"] = score
-        results.append(cast("SearchResult", row))
+    # Every row now carries a real ``_distance``: vector-channel rows from
+    # LanceDB, FTS-only rows from ``_annotate_fts_distances`` (quarry-gcnf).
+    results = [SearchResult.from_row(all_rows[key]) for key, _ in ranked]
 
     logger.debug(
         "RRF fusion: %d vector + %d FTS → %d results",
@@ -203,7 +198,7 @@ class ChunkSearch:
 
         results = query.to_list()
         logger.debug("Search: %d results returned", len(results))
-        return cast("list[SearchResult]", results)
+        return [SearchResult.from_row(r) for r in results]
 
     def hybrid_search(
         self,
@@ -256,4 +251,34 @@ class ChunkSearch:
                 "FTS search failed, using vector-only results", exc_info=True
             )
 
+        self._annotate_fts_distances(query_vector, fts_results)
         return _fuse_rrf(vec_results, fts_results, limit, decay_rate)
+
+    def _annotate_fts_distances(
+        self,
+        query_vector: NDArray[np.float32],
+        fts_rows: list[dict[str, object]],
+    ) -> None:
+        """Set each FTS row's ``_distance`` to its true cosine distance.
+
+        LanceDB supplies ``_distance`` for the vector channel; FTS rows arrive
+        without one. Under the cosine metric ``_distance = 1 - cos(θ)``, so a
+        row's displayed ``similarity = 1 - _distance`` is its real cosine. A row
+        whose stored vector is missing or zero-length gets the worst-case
+        distance ``WORST_CASE_DISTANCE`` (similarity -1), never the fake 0.0 that
+        made irrelevant keyword hits display as 1.00 (quarry-gcnf).
+        """
+        query = np.asarray(query_vector, dtype=np.float32).ravel()
+        q_norm = float(np.linalg.norm(query))
+        for row in fts_rows:
+            raw = row.get("vector")
+            if raw is None or q_norm == 0.0:
+                row["_distance"] = WORST_CASE_DISTANCE
+                continue
+            stored = np.asarray(raw, dtype=np.float32).ravel()
+            s_norm = float(np.linalg.norm(stored))
+            if s_norm == 0.0:
+                row["_distance"] = WORST_CASE_DISTANCE
+                continue
+            cos = float(np.dot(query, stored) / (q_norm * s_norm))
+            row["_distance"] = 1.0 - cos

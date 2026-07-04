@@ -19,6 +19,7 @@ from quarry.mcp_server import (
     sync_all_registrations,
     use_database,
 )
+from quarry.results import SearchResult
 
 
 def _settings(tmp_path: Path) -> MagicMock:
@@ -233,7 +234,7 @@ class TestFind:
             ),
             patch(
                 "quarry.db.chunk_search.ChunkSearch.hybrid_search",
-                return_value=mock_results,
+                return_value=[SearchResult.from_row(r) for r in mock_results],
             ),
         ):
             result = find("revenue growth")
@@ -377,7 +378,7 @@ class TestFind:
             ),
             patch(
                 "quarry.db.chunk_search.ChunkSearch.hybrid_search",
-                return_value=mock_results,
+                return_value=[SearchResult.from_row(r) for r in mock_results],
             ),
         ):
             result = find("test")

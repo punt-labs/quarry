@@ -48,7 +48,7 @@ class TestCosineMetric:
 
         results = ChunkSearch(db).vector_search(vec, limit=1)
         assert len(results) == 1
-        similarity = 1 - float(results[0]["_distance"])
+        similarity = 1 - float(results[0].distance)
         assert similarity == pytest.approx(1.0, abs=1e-5)
 
     def test_similarity_bounded(self, tmp_path: Path) -> None:
@@ -58,7 +58,7 @@ class TestCosineMetric:
 
         query = _unit([1.0, 0.0, 0.0])
         results = ChunkSearch(db).vector_search(query, limit=1)
-        similarity = 1 - float(results[0]["_distance"])
+        similarity = 1 - float(results[0].distance)
         assert -1.0 - 1e-5 <= similarity <= 1.0 + 1e-5
         # Antipodal unit vectors have cosine -1.
         assert similarity == pytest.approx(-1.0, abs=1e-5)
@@ -70,7 +70,7 @@ class TestCosineMetric:
 
         query = _unit([1.0, 0.0, 0.0])
         results = ChunkSearch(db).vector_search(query, limit=1)
-        similarity = 1 - float(results[0]["_distance"])
+        similarity = 1 - float(results[0].distance)
         assert similarity == pytest.approx(0.0, abs=1e-5)
 
     def test_angular_ordering(self, tmp_path: Path) -> None:
@@ -92,7 +92,7 @@ class TestCosineMetric:
         ChunkStore(db).insert(chunks, np.stack([near, mid, far]))
 
         results = ChunkSearch(db).vector_search(query, limit=3)
-        order = [r["text"] for r in results]
+        order = [r.text for r in results]
         assert order == ["near", "mid", "far"]
 
     def test_hybrid_search_similarity_bounded(self, tmp_path: Path) -> None:
@@ -103,5 +103,80 @@ class TestCosineMetric:
         results = ChunkSearch(db).hybrid_search("alpha bravo", vec, limit=5)
         assert len(results) >= 1
         for r in results:
-            similarity = 1 - float(r["_distance"])
+            similarity = 1 - float(r.distance)
             assert -1.0 - 1e-5 <= similarity <= 1.0 + 1e-5
+
+
+class TestFtsOnlyCosine:
+    """FTS-only rows report their true cosine, never a fake 1.00 (quarry-gcnf)."""
+
+    def _similarity(self, row: dict[str, object]) -> float:
+        return 1 - float(str(row["_distance"]))
+
+    def test_annotate_sets_true_cosine_not_one(self, tmp_path: Path) -> None:
+        db = get_db(tmp_path / "db")
+        query = _unit([1.0, 0.0, 0.0])
+        stored = _unit([1.0, 1.0, 0.0])  # 45 degrees from the query
+        rows: list[dict[str, object]] = [{"vector": stored.tolist()}]
+
+        ChunkSearch(db)._annotate_fts_distances(query, rows)
+
+        similarity = self._similarity(rows[0])
+        assert similarity == pytest.approx(float(np.dot(query, stored)), abs=1e-6)
+        assert similarity == pytest.approx(0.70710677, abs=1e-5)
+        assert similarity < 0.9  # the old placeholder would have shown 1.0
+
+    def test_annotate_orthogonal_scores_near_zero(self, tmp_path: Path) -> None:
+        db = get_db(tmp_path / "db")
+        query = _unit([1.0, 0.0, 0.0])
+        stored = _unit([0.0, 1.0, 0.0])  # orthogonal -> cosine 0
+        rows: list[dict[str, object]] = [{"vector": stored.tolist()}]
+
+        ChunkSearch(db)._annotate_fts_distances(query, rows)
+
+        assert self._similarity(rows[0]) == pytest.approx(0.0, abs=1e-6)
+
+    def test_annotate_missing_vector_is_worst_case(self, tmp_path: Path) -> None:
+        db = get_db(tmp_path / "db")
+        query = _unit([1.0, 0.0, 0.0])
+        rows: list[dict[str, object]] = [{"text": "keyword hit, no vector"}]
+
+        ChunkSearch(db)._annotate_fts_distances(query, rows)
+
+        # Worst-case distance 2.0 => similarity -1, never the fake 1.0.
+        assert rows[0]["_distance"] == pytest.approx(2.0)
+        assert self._similarity(rows[0]) == pytest.approx(-1.0)
+
+    def test_annotate_zero_norm_vector_is_worst_case(self, tmp_path: Path) -> None:
+        db = get_db(tmp_path / "db")
+        query = _unit([1.0, 0.0, 0.0])
+        rows: list[dict[str, object]] = [{"vector": [0.0] * 768}]
+
+        ChunkSearch(db)._annotate_fts_distances(query, rows)
+
+        assert self._similarity(rows[0]) == pytest.approx(-1.0)
+
+    def test_hybrid_fts_only_row_shows_true_cosine(self, tmp_path: Path) -> None:
+        """A keyword hit outside the vector top-N reports its real cosine."""
+        db = get_db(tmp_path / "db")
+        query = _unit([1.0, 0.0, 0.0])
+        # Six fillers sit almost on the query (cosine ~1) with no rare keyword,
+        # so they saturate the vector channel's top-N (fetch_limit = 2 * 3 = 6).
+        fillers = [_unit([1.0, 0.01 * (i + 1), 0.0]) for i in range(6)]
+        filler_chunks = [_make_chunk(i, "alpha common") for i in range(6)]
+        # The target is orthogonal to the query (cosine ~0) and is the only
+        # chunk carrying the keyword: it matches ONLY the FTS channel.
+        target = _unit([0.0, 1.0, 0.0])
+        target_chunk = _make_chunk(6, "zorpzorp keyword")
+        ChunkStore(db).insert(
+            [*filler_chunks, target_chunk],
+            np.stack([*fillers, target]),
+        )
+
+        results = ChunkSearch(db).hybrid_search("zorpzorp", query, limit=2)
+        fts_only = [r for r in results if "zorpzorp" in r.text]
+        assert len(fts_only) == 1
+        similarity = 1 - float(fts_only[0].distance)
+        # True cosine of an orthogonal vector is ~0 -- NOT the old fake 1.00.
+        assert similarity == pytest.approx(float(np.dot(query, target)), abs=1e-4)
+        assert similarity < 0.5

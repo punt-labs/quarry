@@ -24,6 +24,7 @@ from quarry.http_server import (
     _write_port_file,
     build_app,
 )
+from quarry.results import SearchResult
 
 
 def _poll_task_done(
@@ -219,7 +220,7 @@ class TestSearch:
         ]
         with patch(
             "quarry.db.chunk_search.ChunkSearch.hybrid_search",
-            return_value=mock_results,
+            return_value=[SearchResult.from_row(r) for r in mock_results],
         ):
             data = client.get("/search?q=hello").json()
 
@@ -246,7 +247,7 @@ class TestSearch:
         ]
         with patch(
             "quarry.db.chunk_search.ChunkSearch.hybrid_search",
-            return_value=mock_results,
+            return_value=[SearchResult.from_row(r) for r in mock_results],
         ):
             data = client.get("/search?q=content").json()
 
@@ -272,11 +273,33 @@ class TestSearch:
         ]
         with patch(
             "quarry.db.chunk_search.ChunkSearch.hybrid_search",
-            return_value=mock_results,
+            return_value=[SearchResult.from_row(r) for r in mock_results],
         ):
             data = client.get("/search?q=content").json()
 
         assert data["results"][0]["summary"] == ""
+
+    def test_search_missing_distance_sinks_to_bottom(self, client: TestClient) -> None:
+        """A row lacking _distance must serialize as similarity -1, not a fake 1.0."""
+        mock_results = [
+            {
+                "document_name": "doc.md",
+                "collection": "default",
+                "page_number": 1,
+                "chunk_index": 0,
+                "text": "content",
+                "page_type": "text",
+                "source_format": ".md",
+                # no _distance key (quarry-gcnf)
+            }
+        ]
+        with patch(
+            "quarry.db.chunk_search.ChunkSearch.hybrid_search",
+            return_value=[SearchResult.from_row(r) for r in mock_results],
+        ):
+            data = client.get("/search?q=content").json()
+
+        assert data["results"][0]["similarity"] == -1.0
 
     def test_search_with_limit(self, client: TestClient) -> None:
         with patch(
@@ -373,7 +396,7 @@ class TestSearch:
         ]
         with patch(
             "quarry.db.chunk_search.ChunkSearch.hybrid_search",
-            return_value=mock_results,
+            return_value=[SearchResult.from_row(r) for r in mock_results],
         ):
             data = client.get("/search?q=remember").json()
 

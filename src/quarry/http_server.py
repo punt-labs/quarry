@@ -371,22 +371,7 @@ def _search_route(request: Request) -> JSONResponse:
         memory_type_filter=memory_type,
     )
 
-    formatted = [
-        {
-            "document_name": r["document_name"],
-            "collection": r["collection"],
-            "page_number": r["page_number"],
-            "chunk_index": r["chunk_index"],
-            "text": r["text"],
-            "page_type": r["page_type"],
-            "source_format": r["source_format"],
-            "agent_handle": r.get("agent_handle"),
-            "memory_type": r.get("memory_type"),
-            "summary": r.get("summary", ""),
-            "similarity": round(1 - float(str(r.get("_distance", 0))), 4),
-        }
-        for r in results
-    ]
+    formatted = [r.to_dict() for r in results]
 
     logger.info("Search results=%d", len(formatted))
     return JSONResponse(

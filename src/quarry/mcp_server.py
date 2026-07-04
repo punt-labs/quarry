@@ -142,19 +142,7 @@ def find(
         memory_type_filter=memory_type or None,
     )
 
-    formatted = [
-        {
-            "document_name": r["document_name"],
-            "collection": r["collection"],
-            "page_number": r["page_number"],
-            "chunk_index": r["chunk_index"],
-            "text": r["text"],
-            "page_type": r["page_type"],
-            "source_format": r["source_format"],
-            "similarity": round(1 - float(str(r.get("_distance", 0))), 4),
-        }
-        for r in results
-    ]
+    formatted = [r.to_dict() for r in results]
 
     return format_search_results(query, formatted)
 
