@@ -58,6 +58,17 @@ across `transform`, `index`, and `connector`).
 
 ### Fixed
 
+- **tool (install)**: `quarry install` no longer reports a hard failure when the
+  onnxruntime GPU wheel swap fails but the CPU runtime is successfully restored.
+  The GPU-swap outcome is now classified on the `GpuStatus` enum member instead
+  of substring-matching `"failed"` — `GpuStatus.RESTORED`'s message
+  (`"onnxruntime-gpu install failed, CPU restored"`) contains `"failed"`, so a
+  recovered swap was wrongly reported as a hard install failure (exit 1). It now
+  warns (⚠) and exits 0, since the daemon still starts on CPU. Additionally, an
+  *unexpected* exception during the GPU step now fails the install (✗, non-zero)
+  rather than being silently skipped, so a half-completed swap that leaves the
+  runtime broken can no longer be reported as success (quarry-773e).
+
 - **transform (pdf)**: PDF text pages are now reflowed at extraction instead of
   stored hard-wrapped. Previously `pdf_text_extractor` used PyMuPDF's flat
   `page.get_text()`, which emits one newline per *visual* line, so a paragraph
