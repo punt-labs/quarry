@@ -110,6 +110,198 @@ class TestDecoratedIdentifiersGoldenOracle:
         assert "Decorated Identifiers" in self._oracle_text().split("\n\n")
 
 
+class TestTableOfContentsOracle:
+    """Pinned oracle mirroring architecture.pdf p2 TOC geometry.
+
+    fitz fragments each TOC entry into three lines sharing a baseline: a title
+    (left, well short of the margin), a dot-leader run (middle), and a page
+    number (far right, reaching the margin). Consecutive rows sit ~12pt apart.
+    Without row reassembly the prose soft-wrap heuristic concatenates the title
+    and page-number fragments of adjacent rows into one garbled run. The block
+    is recognised as a TOC by its dot leaders and rebuilt one line per row.
+
+    Both the spaced ``. . .`` and solid ``....`` leader forms appear, alongside
+    a separate prose block on the same page that must still join — proving the
+    detector separates TOC chrome from real wrapped prose.
+    """
+
+    _INTRO = (
+        "This document describes the security model in full detail across "
+        "several sections and appendices for the reader to consult."
+    )
+
+    def _entry(
+        self, title: str, dots: str, page: str, y: float
+    ) -> list[dict[str, object]]:
+        # One visual row: title (x0=87), dot leader (x0=245), page number
+        # (x1=523, reaching the block margin), all sharing baseline ``y``.
+        return [
+            _line(title, 236.0, x0=87.0, y0=y, y1=y),
+            _line(dots, 503.0, x0=245.0, y0=y, y1=y),
+            _line(page, 523.0, x0=513.0, y0=y, y1=y),
+        ]
+
+    def _oracle(self) -> list[str]:
+        toc_lines = [
+            # Chapter heading row: title at the left margin, page number right.
+            _line("10 Security", 128.0, x0=72.0, y0=10.0, y1=10.0),
+            _line("11", 523.0, x0=511.0, y0=10.0, y1=10.0),
+            *self._entry(
+                "10.1 Bearer Token Authentication", ". . . . . . . .", "11", 22.0
+            ),
+            *self._entry("10.2 WebSocket Security", "................", "12", 34.0),
+            *self._entry("10.3 Certificate Pinning", ". . . . . . . .", "14", 46.0),
+        ]
+        page = _page(
+            _block(_line("Contents", 200.0)),
+            _block(
+                _line(
+                    "This document describes the security model in full detail across",
+                    523.0,
+                ),
+                _line(
+                    "several sections and appendices for the reader to consult.",
+                    400.0,
+                ),
+            ),
+            _block(*toc_lines),
+        )
+        return PdfReflow.from_page_dict(page).text().split("\n\n")
+
+    def test_chapter_heading_row_reassembled(self) -> None:
+        assert "10 Security 11" in self._oracle()
+
+    def test_spaced_leader_entry_on_its_own_line(self) -> None:
+        entry = self._find("10.1 Bearer Token Authentication")
+        assert entry.startswith("10.1 Bearer Token Authentication")
+        assert entry.endswith("11")
+        assert ". . ." in entry
+
+    def test_solid_leader_entry_on_its_own_line(self) -> None:
+        entry = self._find("10.2 WebSocket Security")
+        assert entry.startswith("10.2 WebSocket Security")
+        assert entry.endswith("12")
+        assert "...." in entry
+
+    def test_no_entries_concatenated_into_a_run(self) -> None:
+        # The failure mode was runs like "10 Security 11 10.1 Bearer ... 11 10.2".
+        for paragraph in self._oracle():
+            entry_starts = sum(
+                marker in paragraph for marker in ("10.1", "10.2", "10.3")
+            )
+            assert entry_starts <= 1, f"entries concatenated: {paragraph!r}"
+
+    def test_prose_on_the_same_page_still_joins(self) -> None:
+        assert self._INTRO in self._oracle()
+
+    def _find(self, needle: str) -> str:
+        return next(p for p in self._oracle() if needle in p)
+
+
+class TestDotLeaderDetection:
+    """The dot-leader detector fires on TOC runs, not on prose or decimals."""
+
+    def _is_leader(self, text: str) -> bool:
+        return ReflowLine(text=text, x0=72.0, y0=0.0, x1=523.0, y1=10.0).is_dot_leader()
+
+    def test_spaced_leader_detected(self) -> None:
+        assert self._is_leader("Introduction . . . . . . . 3")
+
+    def test_solid_leader_detected(self) -> None:
+        assert self._is_leader("Introduction ............ 3")
+
+    def test_bare_ellipsis_not_a_leader(self) -> None:
+        assert not self._is_leader("The story continues... and then ends.")
+
+    def test_spaced_ellipsis_not_a_leader(self) -> None:
+        # Three spaced dots is a stylistic ellipsis, below the four-dot threshold.
+        assert not self._is_leader("Wait . . . what happened here?")
+
+    def test_decimal_number_not_a_leader(self) -> None:
+        assert not self._is_leader("The value of pi is 3.14159 exactly.")
+
+    def test_version_string_not_a_leader(self) -> None:
+        assert not self._is_leader("Released as version 1.2.3.4 last week.")
+
+
+class TestMixedFontRowReassembly:
+    """A TOC row whose fragments differ in ``y0`` still reflows to one line.
+
+    Real TOCs mix font sizes: a title and its page number share a baseline but
+    their bbox tops (``y0``, what fitz reports) differ by a point or two. A
+    fixed global y-grid would drop the two into different bands and split the
+    page number off as an orphan. Adjacency clustering keeps the row together.
+    """
+
+    def _paragraphs(self) -> list[str]:
+        # Entry 10.1's page number sits 2.5pt below its title/dots baseline —
+        # a larger title font. A round(y0/tolerance) grid bands 100.0 and 102.5
+        # separately (33 vs 34) and would split "11" off. Adjacency keeps them.
+        block = _block(
+            _line(
+                "10.1 Bearer Token Authentication", 236.0, x0=87.0, y0=100.0, y1=110.0
+            ),
+            _line(". . . . . . . .", 503.0, x0=245.0, y0=100.0, y1=108.0),
+            _line("11", 523.0, x0=513.0, y0=102.5, y1=112.5),
+            _line("10.2 WebSocket Security", 243.0, x0=87.0, y0=112.0, y1=122.0),
+            _line("................", 503.0, x0=252.0, y0=112.0, y1=120.0),
+            _line("12", 523.0, x0=513.0, y0=112.0, y1=122.0),
+        )
+        return PdfReflow.from_page_dict(_page(block)).text().split("\n\n")
+
+    def test_two_entries_stay_two_lines(self) -> None:
+        assert len(self._paragraphs()) == 2
+
+    def test_page_number_not_split_from_its_entry(self) -> None:
+        paragraphs = self._paragraphs()
+        entry = next(p for p in paragraphs if "10.1 Bearer" in p)
+        assert entry.endswith("11")
+        # "11" is part of the entry line, never an orphaned paragraph of its own.
+        assert "11" not in paragraphs
+
+
+class TestSingleDotRunStaysProse:
+    """One accidental dot run must not reclassify a prose block as a TOC.
+
+    A prose block with a single ``......`` pause, a fill-in field, or dot-art
+    has exactly one dot-leader line. Requiring ``_MIN_TOC_LEADER_LINES`` keeps
+    it on the prose path, where it still soft-wrap joins and de-hyphenates.
+    """
+
+    def test_single_run_block_joins_and_dehyphenates(self) -> None:
+        block = _block(
+            _line(
+                "Sign on the dotted line ...... then develop-",
+                523.0,
+                y0=100.0,
+                y1=110.0,
+            ),
+            _line("ment continues on the next line.", 300.0, y0=112.0, y1=122.0),
+        )
+        paragraphs = PdfReflow.from_page_dict(_page(block)).text().split("\n\n")
+        assert len(paragraphs) == 1  # prose path joined the wrapped line
+        assert "development continues" in paragraphs[0]  # hyphen was stripped
+
+    def test_block_with_one_leader_is_not_toc(self) -> None:
+        block = ReflowBlock(
+            lines=(
+                ReflowLine(
+                    text="Sign here ...... please", x0=72.0, y0=0.0, x1=523.0, y1=10.0
+                ),
+            )
+        )
+        assert not block.is_table_of_contents()
+
+    def test_block_with_two_leaders_is_toc(self) -> None:
+        block = ReflowBlock(
+            lines=(
+                ReflowLine(text="Intro ...... 1", x0=72.0, y0=0.0, x1=523.0, y1=10.0),
+                ReflowLine(text="Setup ...... 2", x0=72.0, y0=12.0, x1=523.0, y1=22.0),
+            )
+        )
+        assert block.is_table_of_contents()
+
+
 class TestWrapJoining:
     def test_justified_lines_all_join(self) -> None:
         page = _page(

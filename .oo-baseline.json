@@ -574,10 +574,10 @@
   "src/quarry/ingestion/pdf_reflow.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 0.78,
+    "avg_params": 0.65,
     "max_complexity": 6.0,
-    "avg_complexity": 2.83,
-    "module_size": 193.0,
+    "avg_complexity": 2.65,
+    "module_size": 250.0,
     "classes_per_module": 3.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,

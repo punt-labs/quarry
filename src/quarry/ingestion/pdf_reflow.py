@@ -25,6 +25,10 @@ from quarry.ingestion.page_geometry import PageChrome
 logger = logging.getLogger(__name__)
 
 _PAGE_NUMBER_RE = re.compile(r"\d{1,4}")
+# A leader-dot run of four or more dots, spaced ". . . ." or solid "....". Four
+# is the threshold: a bare ellipsis is three dots, and a decimal ("10.1") has
+# lone dots, so ordinary prose is not misclassified as a TOC entry.
+_DOT_LEADER_RE = re.compile(r"\.(?:\s*\.){3,}")
 _TERMINAL_PUNCT = frozenset({".", "!", "?"})
 # Trailing quotes/brackets stripped before the terminal-punct test, so a
 # sentence ending .' or .") still reads as terminal. The u201d/u2019 escapes
@@ -35,6 +39,8 @@ _MIN_PLAUSIBLE_YEAR = 1000  # years exempt from page-number strip
 _MAX_PLAUSIBLE_YEAR = 2999
 _SHORT_LINE_FRACTION = 0.15  # a line this far short of the margin is "short"
 _MARGIN_TOLERANCE = 2.0  # points of slack for "reached the right margin"
+_ROW_Y_TOLERANCE = 3.0  # points; adjacent lines within this y-gap share a row
+_MIN_TOC_LEADER_LINES = 2  # dot-leader lines needed to treat a block as a TOC
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +81,17 @@ class ReflowLine:
         """Whether the line ends in terminal punctuation (trailing quotes ok)."""
         trimmed = self.text.rstrip().rstrip(_CLOSING_CHARS)
         return bool(trimmed) and trimmed[-1] in _TERMINAL_PUNCT
+
+    def is_dot_leader(self) -> bool:
+        """Whether the line carries a table-of-contents dot-leader run.
+
+        A run of four or more leader dots — spaced ``. . . .`` or solid
+        ``....`` — marks a TOC entry (typically ``<title> <dots> <page>``). Such
+        a line is a complete entry, so it must never be joined to the next line
+        as a soft wrap. A single ellipsis or a decimal number is below the
+        threshold and is not misclassified.
+        """
+        return _DOT_LEADER_RE.search(self.text) is not None
 
     def precedes_new_sentence(self, following: ReflowLine) -> bool:
         """Return whether this line closes a sentence and the next opens capital."""
@@ -147,8 +164,27 @@ class ReflowBlock:
             return not (_MIN_PLAUSIBLE_YEAR <= int(token) <= _MAX_PLAUSIBLE_YEAR)
         return True
 
+    def is_table_of_contents(self) -> bool:
+        """Whether the block holds dot-leader TOC entries (title, dots, page).
+
+        A genuine TOC has one dot-leader line per entry, hence several. A prose
+        block with a single accidental run — a ``......`` pause, a fill-in field,
+        or dot-art — has exactly one and must stay on the prose path so it still
+        soft-wrap joins and de-hyphenates. Requiring ``_MIN_TOC_LEADER_LINES``
+        keeps the count threshold well below a real TOC (leaders are only ~1/3
+        of its lines) while rejecting a lone stray run.
+        """
+        leaders = sum(line.is_dot_leader() for line in self.lines)
+        return leaders >= _MIN_TOC_LEADER_LINES
+
     def paragraphs(self) -> list[str]:
-        """Join soft-wrapped lines into paragraphs, splitting at real breaks."""
+        """Split the block into paragraphs: TOC rows or soft-wrapped prose."""
+        if self.is_table_of_contents():
+            return self._toc_rows()
+        return self._prose_paragraphs()
+
+    def _prose_paragraphs(self) -> list[str]:
+        """Join soft-wrapped prose lines, splitting at real paragraph breaks."""
         result: list[str] = []
         current = ""
         previous: ReflowLine | None = None
@@ -163,6 +199,35 @@ class ReflowBlock:
         if current:
             result.append(current)
         return result
+
+    def _toc_rows(self) -> list[str]:
+        """Reassemble TOC fragments into one clean line per visual row.
+
+        fitz fragments each entry into separate title, dot-leader, and
+        page-number lines sharing a baseline — but with differing font sizes
+        their reported bbox tops (``y0``) differ by a point or two. Clustering
+        by *adjacency* — a new row starts only when the ``y0`` gap to the
+        previous line exceeds ``_ROW_Y_TOLERANCE`` — keeps a mixed-size row
+        together, where a fixed global grid would split the page number off. Each
+        row is joined left-to-right (re-sorted by ``x0``, since the adjacency
+        walk is ``y0``-ordered), rebuilding ``<title> <dots> <page>`` so the
+        prose soft-wrap heuristic never concatenates adjacent entries.
+        """
+        # is_table_of_contents gates this path on >= 2 dot-leader lines, so
+        # ``ordered`` is never empty and can seed the first row directly.
+        ordered = sorted(self.lines, key=lambda line: (line.y0, line.x0))
+        rows: list[list[ReflowLine]] = [[ordered[0]]]
+        for line in ordered[1:]:
+            if line.y0 - rows[-1][-1].y0 > _ROW_Y_TOLERANCE:
+                rows.append([])
+            rows[-1].append(line)
+        return list(map(self._join_row, rows))
+
+    @staticmethod
+    def _join_row(row: list[ReflowLine]) -> str:
+        """Join one visual row's fragments left-to-right into a single line."""
+        ordered = sorted(row, key=lambda fragment: fragment.x0)
+        return " ".join(fragment.text.strip() for fragment in ordered)
 
     def _joins(self, previous: ReflowLine, following: ReflowLine) -> bool:
         # Cached _right_margin/_width keep this O(1) per line pair. A full-width
