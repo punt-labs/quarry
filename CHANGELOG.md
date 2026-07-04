@@ -14,6 +14,18 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- **query (search)**: hybrid-search results matched only by the keyword (BM25)
+  channel no longer report a bogus `similarity: 1.00`. They previously got a
+  placeholder distance of `0`, so an off-topic keyword hit could show a perfect
+  score above a genuinely-relevant semantic match. Such rows now report their
+  true cosine similarity (query vs. stored vector), and a row with no usable
+  vector sinks to the bottom (`-1`) instead of floating to the top.
+  `SearchResult` is now a value type that owns the distance→similarity
+  conversion in one place, so the CLI, HTTP, and MCP surfaces report identical,
+  bounded scores (quarry-gcnf).
+
 ## [1.18.1] - 2026-07-04
 
 ### Fixed
