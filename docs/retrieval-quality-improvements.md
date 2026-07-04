@@ -46,7 +46,7 @@ bounded cosine.
 
 | Layer | Quarry today |
 |---|---|
-| Dense | `snowflake-arctic-embed-m-v1.5`, 768-dim, **512-token max, mean-pooled**, ONNX int8 on CPU (no GPU) |
+| Dense | `snowflake-arctic-embed-m-v1.5`, 768-dim, **512-token max, mean-pooled**, ONNX int8 on CPU by default; FP16 on CUDA when detected (DES-016) |
 | Sparse | BM25 full-text via Tantivy |
 | Fusion | Reciprocal Rank Fusion, `_RRF_K = 60` |
 | Store | LanceDB, one `chunks` table |
@@ -104,8 +104,10 @@ per-query IDF-weighted RRF weighting (0-3) both failed adversarial verification.
 ## 4. What this means for quarry (corrected direction)
 
 The general-purpose advice — "add a cross-encoder reranker, it's the biggest lever" — is
-**right for a SaaS stack and wrong as the first move for quarry.** Quarry is local, no-GPU,
-and its corpus (code, design docs, transcripts, textbooks, Z specs) is exactly the technical
+**right for a SaaS stack and wrong as the first move for quarry.** Quarry is local and, in its
+common deployment (including the dev machine), CPU-only — FP16 on CUDA is supported and
+auto-detected (DES-016), but most instances run int8 on CPU, where the reranker's added latency
+bites. Its corpus (code, design docs, transcripts, textbooks, Z specs) is exactly the technical
 distribution where off-the-shelf rerankers backfire. The on-target, lower-risk fix is at the
 **embedding**.
 
