@@ -58,6 +58,20 @@ across `transform`, `index`, and `connector`).
 
 ### Fixed
 
+- **transform (pdf)**: PDF reflow no longer garbles table-of-contents pages. The
+  `quarry-qa2d` reflow joins lines that reach the block right margin, but a
+  dot-leader entry (`10.1 Bearer Token Authentication . . . . . 11`) reaches the
+  margin like a wrapped prose line, so consecutive TOC entries concatenated into
+  runs — worse than the old hard-wrapped output. (fitz fragments each entry into
+  separate title / dot-leader / page-number lines sharing a baseline; the
+  page-number fragment is what reaches the margin.) Reflow now detects dot-leader
+  runs (≥ 4 leader dots — a bare ellipsis or a decimal like `3.14` is excluded),
+  treats a block with ≥ 2 such lines as a table of contents, and reassembles its
+  fragments into one line per visual row by clustering on `y0` adjacency (so a
+  mixed-font title and its smaller page number stay on the same row). Ordinary
+  prose is untouched — it takes the byte-identical soft-wrap-plus-de-hyphenation
+  path (quarry-e8ma).
+
 - **tool (install)**: `quarry install` no longer reports a hard failure when the
   onnxruntime GPU wheel swap fails but the CPU runtime is successfully restored.
   The GPU-swap outcome is now classified on the `GpuStatus` enum member instead
