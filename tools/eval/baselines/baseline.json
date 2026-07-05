@@ -1,0 +1,51 @@
+{
+  "buckets": {
+    "known-item": {
+      "judged@10": 0.20000000000000004,
+      "metadata_pollution@10": 0.3333333333333333,
+      "mrr": 0.8333333333333334,
+      "n_queries": 3,
+      "n_scorable": 3,
+      "success@10": 1.0,
+      "success@5": 1.0
+    },
+    "natural": {
+      "judged@10": null,
+      "metadata_pollution@10": 0.2,
+      "mrr": null,
+      "n_queries": 2,
+      "n_scorable": 0,
+      "success@10": null,
+      "success@5": null
+    },
+    "regression": {
+      "judged@10": 0.2,
+      "metadata_pollution@10": 0.55,
+      "mrr": 1.0,
+      "n_queries": 2,
+      "n_scorable": 2,
+      "success@10": 1.0,
+      "success@5": 1.0
+    }
+  },
+  "config_tag": "baseline-rrf60-fm3-exact",
+  "metrics_note": "MRR/success@k only; nDCG omitted (degenerate under single-relevant known-item). metadata-pollution@10 is a reported-only diagnostic.",
+  "overall": {
+    "judged@10": 0.2,
+    "metadata_pollution@10": 0.35714285714285715,
+    "mrr": 0.9,
+    "n_queries": 7,
+    "n_scorable": 5,
+    "success@10": 1.0,
+    "success@5": 1.0
+  },
+  "phase": "phase-1",
+  "provenance": {
+    "cpu_arch": "arm64",
+    "intra_op_threads": 2,
+    "model_repo": "Snowflake/snowflake-arctic-embed-m-v1.5",
+    "model_revision": "e58a8f756156a1293d763f17e3aae643474e9b8a",
+    "numpy_version": "2.4.6",
+    "ort_version": "1.24.1"
+  }
+}

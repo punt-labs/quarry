@@ -87,6 +87,8 @@ module-name = "quarry"
 [tool.ruff]
 line-length = 88
 target-version = "py313"
+# Eval fixtures are raw corpus data (sample source files), not project code.
+extend-exclude = ["tools/eval/fixtures"]
 
 [tool.ruff.lint]
 select = [
@@ -127,6 +129,7 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tools/*" = ["T20", "S603", "S607", "C901"]
+"tools/eval/**/*.py" = ["T20"]  # the eval CLI prints its report to stdout
 "tests/*" = ["S101", "S106", "S108", "T20", "SLF001", "ARG", "PLC0415", "A002"]
 "benchmarks/*" = ["T20", "S311", "BLE001", "PLC0415", "SIM905"]
 "src/quarry/__main__.py" = ["T20", "FBT"]
@@ -202,6 +205,8 @@ ignore_missing_imports = true
 [tool.pyright]
 pythonVersion = "3.13"
 typeCheckingMode = "strict"
+# Resolve first-party ``tools.eval`` (the eval harness) imported from tests.
+extraPaths = ["."]
 # These 6 suppressions exist because lancedb, rapidocr, onnxruntime, fitz,
 # and pyarrow ship no type stubs. Every value returned from these libraries
 # is Unknown, cascading 591 errors across the codebase. The alternative is
