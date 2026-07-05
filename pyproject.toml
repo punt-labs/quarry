@@ -59,6 +59,15 @@ dev = [
     "pytest-timeout>=2.3.0",
     "types-PyYAML>=6.0.0",
 ]
+# Eval-only. NEVER a core dependency, NEVER a dependency of `make check` or any
+# CI job. ranx pulls Numba/llvmlite (a C-JIT stack, not pure Python); it must
+# stay quarantined here so a compiler-less install of quarry proper is never
+# blocked. `make eval` runs `uv sync --extra eval`; nothing else needs it.
+# Verified 2026-07-04: resolves + installs + imports on CPython 3.13.5 with
+# numba 0.66.0 / llvmlite 0.48.0 wheels (no compiler required).
+eval = [
+    "ranx>=0.3.20",
+]
 
 [project.scripts]
 quarry = "quarry.__main__:app"
@@ -185,6 +194,8 @@ module = [
     "bs4",
     "bs4.*",
     "markdownify",
+    "ranx",
+    "ranx.*",
 ]
 ignore_missing_imports = true
 

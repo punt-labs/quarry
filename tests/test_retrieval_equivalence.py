@@ -51,7 +51,8 @@ GOLDEN: list[tuple[str, int, int, float]] = [
 def _unit(values: list[float]) -> NDArray[np.float32]:
     vec = np.zeros(768, dtype=np.float32)
     vec[: len(values)] = values
-    return vec / np.linalg.norm(vec)
+    unit: NDArray[np.float32] = (vec / np.linalg.norm(vec)).astype(np.float32)
+    return unit
 
 
 def _chunk(idx: int, text: str, *, collection: str, document: str) -> Chunk:
