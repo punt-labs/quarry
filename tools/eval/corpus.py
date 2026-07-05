@@ -8,6 +8,7 @@ per-config artifact the runner keys on ``content_signature``.
 from __future__ import annotations
 
 import hashlib
+from collections import defaultdict
 from typing import TYPE_CHECKING, Self
 
 if TYPE_CHECKING:
@@ -24,7 +25,13 @@ _SUFFIXES = frozenset({".tex", ".md", ".txt", ".py", ".rst"})
 
 
 class Corpus:
-    """The set of raw fixture documents under one directory."""
+    """The set of raw fixture documents under one directory.
+
+    Fixture basenames must be unique across every subdirectory: ``path.name`` is
+    the ``document_name`` written to LanceDB and the join key for JudgedUnit and
+    qrels. Two files sharing a basename would collide on ingest (last write wins,
+    silently dropping a doc), so the constructor rejects them at load time.
+    """
 
     __slots__ = ("_documents", "_root")
 
@@ -41,7 +48,26 @@ class Corpus:
                 if p.is_file() and p.suffix.lower() in _SUFFIXES
             )
         )
+        self._reject_duplicate_basenames()
         return self
+
+    def _reject_duplicate_basenames(self) -> None:
+        """Raise if any basename repeats — it is the document_name join key."""
+        by_name: dict[str, list[Path]] = defaultdict(list)
+        for path in self._documents:
+            by_name[path.name].append(path)
+        collisions = {name: paths for name, paths in by_name.items() if len(paths) > 1}
+        if collisions:
+            detail = "; ".join(
+                f"{name}: {', '.join(str(p) for p in paths)}"
+                for name, paths in sorted(collisions.items())
+            )
+            msg = (
+                "Fixture basenames must be unique — they are the document_name "
+                "join key for qrels/JudgedUnit. Colliding basenames under "
+                f"{self._root}: {detail}"
+            )
+            raise ValueError(msg)
 
     @property
     def root(self) -> Path:

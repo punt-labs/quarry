@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import pytest
+
 from tools.eval.trec import Qrels, TrecRun
 
 if TYPE_CHECKING:
@@ -59,9 +61,22 @@ def test_qrels_subset() -> None:
     assert qrels.subset(["q2"]).query_ids == ["q2"]
 
 
-def test_run_to_ranx_encodes_rank_as_decreasing_score() -> None:
-    import pytest
+def test_run_from_path_rejects_mixed_run_tags(tmp_path: Path) -> None:
+    # A run file whose lines carry different tags has no single well-defined
+    # TrecRun.tag. Silently taking the last line's tag would mislabel the run,
+    # so from_path must fail loud and name the conflicting tags.
+    path = tmp_path / "run.trec"
+    path.write_text(
+        "q1 Q0 a#doc 1 0.9 runA\nq1 Q0 b#doc 2 0.8 runB\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="mixes run tags") as excinfo:
+        TrecRun.from_path(path)
+    message = str(excinfo.value)
+    assert "runA" in message
+    assert "runB" in message
 
+
+def test_run_to_ranx_encodes_rank_as_decreasing_score() -> None:
     pytest.importorskip("ranx")
     run = TrecRun({"q1": [("a#doc", 0.01), ("b#doc", 0.009)]}, "t")
     ranx_run = run.to_ranx()

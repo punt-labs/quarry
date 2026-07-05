@@ -76,19 +76,32 @@ class TrecRun:
 
     @classmethod
     def from_path(cls, path: Path) -> Self:
-        """Parse a six-column TREC run file, ordering each query by rank column."""
+        """Parse a six-column TREC run file, ordering each query by rank column.
+
+        Every line must carry the same run tag (column 6). A file mixing tags
+        has no single well-defined ``TrecRun.tag``, so it is rejected at load
+        time rather than silently adopting whichever tag came last.
+        """
         by_query: dict[str, list[tuple[int, str, float]]] = {}
-        tag = ""
+        tag: str | None = None
         for line in path.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
-            query_id, _iter, docid, rank, score, tag = line.split()
+            query_id, _iter, docid, rank, score, line_tag = line.split()
+            if tag is None:
+                tag = line_tag
+            elif line_tag != tag:
+                msg = (
+                    f"TREC run file {path} mixes run tags: found {line_tag!r} "
+                    f"after {tag!r}. Every line must share one tag."
+                )
+                raise ValueError(msg)
             by_query.setdefault(query_id, []).append((int(rank), docid, float(score)))
         rankings = {
             query_id: [(docid, score) for _rank, docid, score in sorted(rows)]
             for query_id, rows in by_query.items()
         }
-        return cls(rankings, tag)
+        return cls(rankings, tag or "")
 
     def to_ranx(self) -> RanxRun:
         """Build a ranx Run whose scores encode this object's exact order.

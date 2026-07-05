@@ -4,8 +4,8 @@ It labels a *chunk* as structural metadata (changelog / TOC / frontmatter /
 heading stub) rather than substantive content. metadata-pollution@10 is the
 fraction of a query's top-10 chunks so labelled. Per the design it is a
 guardrail diagnostic: reported, never gated, never optimized. The rules are
-heuristic over the chunk text (and a weak page_type signal) and are meant to be
-refined against the fixture, not treated as ground truth.
+heuristic over the chunk text alone (``result.page_type`` is not inspected) and
+are meant to be refined against the fixture, not treated as ground truth.
 """
 
 from __future__ import annotations

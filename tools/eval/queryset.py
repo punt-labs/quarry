@@ -100,8 +100,14 @@ class QuerySet:
 
     @classmethod
     def from_path(cls, path: Path) -> Self:
-        """Load and validate every JSONL line into a Query."""
+        """Load and validate every JSONL line into a Query.
+
+        Query ids must be unique: they key the qrels dict and per-query scores,
+        so a duplicate would silently overwrite an earlier query. A repeated id
+        is rejected at load time, naming the offender.
+        """
         queries: list[Query] = []
+        seen: set[str] = set()
         for line in path.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
@@ -109,7 +115,15 @@ class QuerySet:
             if not isinstance(obj, dict):
                 msg = f"query line is not a JSON object: {line!r}"
                 raise ValueError(msg)
-            queries.append(Query.from_json(obj))
+            query = Query.from_json(obj)
+            if query.query_id in seen:
+                msg = (
+                    f"duplicate query id {query.query_id!r} in {path}: ids must "
+                    "be unique because they key qrels and per-query scores"
+                )
+                raise ValueError(msg)
+            seen.add(query.query_id)
+            queries.append(query)
         return cls(tuple(queries))
 
     def buckets(self) -> list[str]:
