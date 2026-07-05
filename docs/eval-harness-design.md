@@ -1,7 +1,12 @@
 # Retrieval Evaluation Harness — Design
 
-**Status:** Design ratified in principle (operator, 2026-07-04); revised after peer review
-(`kpz` methodology, `adb` infra/CI, `rmh` runner/data). Phase 0 + Phase 1 to build.
+**Status:** Design ratified + twice peer-reviewed (`kpz` methodology, `adb` infra/CI, `rmh` runner/data).
+**Phase 0 merged** (#343 — parameterizable retrieval seam in `src/quarry/retrieval/`) and **Phase 1 merged**
+(#344 — `make eval` bootstrap harness: MRR/success@k, metadata-pollution diagnostic, determinism contract,
+known-item baseline). **Next:** curate the full representative fixture → first *meaningful* baseline (the
+current overall MRR 0.900 is a 5-doc smoke-test, not a real signal); then Phase 2 (Label Studio graded gold),
+Phase 3 (calibrated LLM judge), then the lever bake-offs (metadata-handling, context-aware embeddings).
+Last updated 2026-07-05.
 **Owner:** search domain — `kpz` (worker), `adb`/`rmh` (evaluator).
 **Companion:** [`retrieval-quality-improvements.md`](retrieval-quality-improvements.md) — the *why*
 (token-density ranking failure) and the levers this harness measures.
@@ -97,7 +102,7 @@ quarry better or worse, on quarry's own kind of data?** It is internal developer
 Sequencing principle: **never block measurement on labeling infrastructure, and never claim more
 rigor than the sample supports.**
 
-### Phase 0 — extract the retrieval config seam (prerequisite, production code)
+### Phase 0 — extract the retrieval config seam (prerequisite, production code) — ✅ merged (#343)
 
 The runner cannot exist cleanly until retrieval is parameterizable without forking. Extract into a
 new `src/quarry/retrieval/`:
@@ -117,7 +122,7 @@ new `src/quarry/retrieval/`:
   reproducibility risk Phase 0 introduces; it must be a Phase-0 success criterion, not discovered
   mid-build.
 
-### Phase 1 — bootstrap (no UI, no judge)
+### Phase 1 — bootstrap (no UI, no judge) — ✅ merged (#344)
 
 - Assemble the fixed corpus fixture (§5); ~30 queries with known-item/regression answers,
   page-keyed.
