@@ -233,7 +233,7 @@ class TestFind:
                 return_value=_mock_embedding_backend(mock_vector),
             ),
             patch(
-                "quarry.db.chunk_search.ChunkSearch.hybrid_search",
+                "quarry.retrieval.hybrid.HybridRetriever.retrieve",
                 return_value=[SearchResult.from_row(r) for r in mock_results],
             ),
         ):
@@ -257,7 +257,7 @@ class TestFind:
                 return_value=_mock_embedding_backend(mock_vector),
             ),
             patch(
-                "quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]
+                "quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]
             ) as mock_search,
         ):
             find("test", limit=100)
@@ -284,12 +284,16 @@ class TestFind:
                 return_value=_mock_embedding_backend(mock_vector),
             ),
             patch(
-                "quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]
+                "quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]
             ) as mock_search,
         ):
             find("test", **{tool_kwarg: tool_value})
 
-        assert mock_search.call_args[1][expected_key] == expected_value
+        # The retriever receives a SearchFilter; map the legacy "<name>_filter"
+        # kwarg to the SearchFilter field name.
+        search_filter = mock_search.call_args.kwargs["search_filter"]
+        field = expected_key.removesuffix("_filter")
+        assert getattr(search_filter, field) == expected_value
 
     def test_passes_document_filter(self, tmp_path: Path) -> None:
         self._assert_filter_passthrough(
@@ -377,7 +381,7 @@ class TestFind:
                 return_value=_mock_embedding_backend(mock_vector),
             ),
             patch(
-                "quarry.db.chunk_search.ChunkSearch.hybrid_search",
+                "quarry.retrieval.hybrid.HybridRetriever.retrieve",
                 return_value=[SearchResult.from_row(r) for r in mock_results],
             ),
         ):

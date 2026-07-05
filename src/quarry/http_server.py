@@ -45,6 +45,8 @@ from quarry.db import Database
 from quarry.db.storage import dir_size_bytes, format_size
 from quarry.http_resources import QuarryResources
 from quarry.ingestion.provider import ProviderSelection
+from quarry.results import SearchFilter
+from quarry.retrieval import SearchService
 from quarry.sync_registry import DirectoryRegistration, SyncRegistry
 
 if TYPE_CHECKING:
@@ -344,9 +346,8 @@ def _search_route(request: Request) -> JSONResponse:
     if not query:
         return JSONResponse({"error": "Missing required parameter: q"}, status_code=400)
 
-    limit_str = request.query_params.get("limit", "10")
     try:
-        limit = max(1, min(int(limit_str), 50))
+        limit = max(1, min(int(request.query_params.get("limit", "10")), 50))
     except ValueError:
         limit = 10
 
@@ -358,18 +359,17 @@ def _search_route(request: Request) -> JSONResponse:
     memory_type = request.query_params.get("memory_type") or None
 
     ctx = _ctx(request)
+    db = ctx.query_database
     query_vector = ctx.embedder.embed_query(query)
-    results = ctx.query_database.search.hybrid_search(
-        query,
-        query_vector,
-        limit=limit,
-        document_filter=document,
-        collection_filter=collection,
-        page_type_filter=page_type,
-        source_format_filter=source_format,
-        agent_handle_filter=agent_handle,
-        memory_type_filter=memory_type,
+    search_filter = SearchFilter(
+        collection=collection,
+        document=document,
+        page_type=page_type,
+        source_format=source_format,
+        agent_handle=agent_handle,
+        memory_type=memory_type,
     )
+    results = SearchService(db).search(query, query_vector, search_filter, limit)
 
     formatted = [r.to_dict() for r in results]
 

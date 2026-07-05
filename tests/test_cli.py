@@ -973,7 +973,7 @@ class TestFindCmd:
                 return_value=mock_backend,
             ),
             patch(
-                "quarry.db.chunk_search.ChunkSearch.hybrid_search",
+                "quarry.retrieval.hybrid.HybridRetriever.retrieve",
                 return_value=[SearchResult.from_row(r) for r in mock_results],
             ),
         ):
@@ -996,7 +996,7 @@ class TestFindCmd:
                 "quarry.__main__.get_embedding_backend",
                 return_value=mock_backend,
             ),
-            patch("quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]),
+            patch("quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]),
         ):
             result = runner.invoke(app, ["find", "nonexistent topic"])
 
@@ -1009,7 +1009,7 @@ class TestFindCmd:
         expected_key: str,
         expected_value: str | None,
     ) -> None:
-        """Invoke find with one CLI flag and assert it reaches search()."""
+        """Invoke find with one CLI flag and assert it reaches the retriever."""
         mock_vector = np.zeros(768, dtype=np.float32)
         mock_backend = MagicMock()
         mock_backend.embed_query.return_value = mock_vector
@@ -1021,19 +1021,20 @@ class TestFindCmd:
                 return_value=mock_backend,
             ),
             patch(
-                "quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]
+                "quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]
             ) as mock_search,
         ):
             result = runner.invoke(app, ["find", "query", cli_flag, cli_value])
 
         assert result.exit_code == 0
-        assert mock_search.call_args[1][expected_key] == expected_value
+        search_filter = mock_search.call_args.kwargs["search_filter"]
+        assert getattr(search_filter, expected_key) == expected_value
 
     def test_passes_document_filter(self):
         self._assert_filter_passthrough(
             "--document",
             "report.pdf",
-            "document_filter",
+            "document",
             "report.pdf",
         )
 
@@ -1041,7 +1042,7 @@ class TestFindCmd:
         self._assert_filter_passthrough(
             "--page-type",
             "code",
-            "page_type_filter",
+            "page_type",
             "code",
         )
 
@@ -1049,7 +1050,7 @@ class TestFindCmd:
         self._assert_filter_passthrough(
             "--source-format",
             ".py",
-            "source_format_filter",
+            "source_format",
             ".py",
         )
 
@@ -1065,16 +1066,16 @@ class TestFindCmd:
                 return_value=mock_backend,
             ),
             patch(
-                "quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]
+                "quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]
             ) as mock_search,
         ):
             result = runner.invoke(app, ["find", "query"])
 
         assert result.exit_code == 0
-        call_kwargs = mock_search.call_args[1]
-        assert call_kwargs["document_filter"] is None
-        assert call_kwargs["page_type_filter"] is None
-        assert call_kwargs["source_format_filter"] is None
+        search_filter = mock_search.call_args.kwargs["search_filter"]
+        assert search_filter.document is None
+        assert search_filter.page_type is None
+        assert search_filter.source_format is None
 
     def test_passes_limit_flag(self):
         mock_vector = np.zeros(768, dtype=np.float32)
@@ -1088,7 +1089,7 @@ class TestFindCmd:
                 return_value=mock_backend,
             ),
             patch(
-                "quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]
+                "quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]
             ) as mock_search,
         ):
             result = runner.invoke(app, ["find", "query", "--limit", "5"])
@@ -1100,7 +1101,7 @@ class TestFindCmd:
         self._assert_filter_passthrough(
             "--collection",
             "math",
-            "collection_filter",
+            "collection",
             "math",
         )
 
@@ -1116,13 +1117,13 @@ class TestFindCmd:
                 return_value=mock_backend,
             ),
             patch(
-                "quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]
+                "quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]
             ) as mock_search,
         ):
             result = runner.invoke(app, ["find", "query"])
 
         assert result.exit_code == 0
-        assert mock_search.call_args[1]["collection_filter"] is None
+        assert mock_search.call_args.kwargs["search_filter"].collection is None
 
     def test_missing_distance_defaults_worst_case(self):
         mock_vector = np.zeros(768, dtype=np.float32)
@@ -1145,7 +1146,7 @@ class TestFindCmd:
                 return_value=mock_backend,
             ),
             patch(
-                "quarry.db.chunk_search.ChunkSearch.hybrid_search",
+                "quarry.retrieval.hybrid.HybridRetriever.retrieve",
                 return_value=[SearchResult.from_row(r) for r in mock_results],
             ),
         ):
@@ -1261,7 +1262,7 @@ class TestFindCmd:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.db.facade.get_db"),
             patch("quarry.__main__.get_embedding_backend", return_value=mock_backend),
-            patch("quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]),
+            patch("quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]),
         ):
             result = runner.invoke(app, ["find", "query"])
 
@@ -1280,7 +1281,7 @@ class TestFindCmd:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.db.facade.get_db"),
             patch("quarry.__main__.get_embedding_backend", return_value=mock_backend),
-            patch("quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]),
+            patch("quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]),
         ):
             result = runner.invoke(app, ["find", "query"])
 
@@ -1358,7 +1359,7 @@ class TestProxyConfigIsinstanceGuard:
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.db.facade.get_db"),
             patch("quarry.__main__.get_embedding_backend", return_value=mock_backend),
-            patch("quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]),
+            patch("quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]),
         ):
             result = runner.invoke(app, ["find", "query"])
 
@@ -2002,7 +2003,7 @@ class TestDbOption:
                 "quarry.__main__.get_embedding_backend",
                 return_value=mock_backend,
             ),
-            patch("quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]),
+            patch("quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]),
         ):
             result = runner.invoke(app, ["--db", "work", "find", "query"])
         assert result.exit_code == 0
@@ -3690,7 +3691,7 @@ class TestJsonOutput:
                 return_value=mock_backend,
             ),
             patch(
-                "quarry.db.chunk_search.ChunkSearch.hybrid_search",
+                "quarry.retrieval.hybrid.HybridRetriever.retrieve",
                 return_value=[SearchResult.from_row(r) for r in mock_results],
             ),
         ):
@@ -3718,7 +3719,7 @@ class TestJsonOutput:
                 "quarry.__main__.get_embedding_backend",
                 return_value=mock_backend,
             ),
-            patch("quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]),
+            patch("quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]),
         ):
             result = runner.invoke(app, ["--json", "find", "query"])
 

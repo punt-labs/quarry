@@ -56,7 +56,7 @@ class TableOptimizer:
         rebuilds the Tantivy full-text index so it references the new
         fragment layout.  Without the rebuild, the FTS index retains stale
         row references to compacted-away fragments, causing RuntimeError
-        on hybrid_search queries.
+        on hybrid retrieval queries (HybridRetriever.retrieve).
 
         Also prunes old manifest versions older than 1 hour to reclaim
         disk space from the ``_versions/`` directory.
