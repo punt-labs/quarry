@@ -45,7 +45,10 @@ quarry better or worse, on quarry's own kind of data?** It is internal developer
 - **Judged unit (`JudgedUnit`)** — `(document_name, page_number)`. Stable across chunking configs
   (`page_number` is fixed by the extractor before chunking; `chunk_index` is *not* and must never be
   a key). Run rows are emitted at this granularity (best-ranked chunk per page). Chunk-level judging
-  (round-2 late chunking) re-pools per chunking config.
+  (round-2 late chunking) re-pools per chunking config. **Non-paginated formats** (code, markdown)
+  may carry a null/uniform `page_number`, in which case `JudgedUnit` degrades to **document-level**
+  for those buckets — acceptable for Phase-1 known-item, but a *documented* choice: Phase 0 confirms
+  the extractor's `page_number` behavior for code/markdown rather than discovering it silently.
 - **Qrels** — TREC-format over `JudgedUnit`. Known-item (Phase 1) is document/page-keyed and binary;
   graded (Phase 2) is 0–3 per pooled unit.
 - **Pooling** — union of each compared config's top-K, judged once. **Pool depth ≥ the deepest
@@ -99,13 +102,20 @@ rigor than the sample supports.**
 The runner cannot exist cleanly until retrieval is parameterizable without forking. Extract into a
 new `src/quarry/retrieval/`:
 
-- `RetrievalConfig` — frozen dataclass (`rrf_k`, `fetch_multiplier`, `metric`, `reranker`, embedding
-  strategy).
+- `RetrievalConfig` — frozen dataclass (`rrf_k`, `fetch_multiplier`, `metric`, `exact_search`,
+  `reranker`, embedding strategy). `exact_search` carries the determinism contract's flat-vs-ANN
+  choice through the seam rather than monkeypatching the LanceDB query in the runner.
 - `Retriever` Protocol — `retrieve(query_text, query_vector, filter, limit) -> list[SearchResult]`.
 - `Reranker` Protocol + `NullReranker` (on/off is a swap, not a branch).
 - `HybridRetriever(config)` — today's `hybrid_search` body. All three production call-sites
   (`__main__.py`, `http_server.py`, `mcp_server.py`) **and** the eval runner call the identical
   retriever. This is also a real OO paydown on the procedural `chunk_search.py` (ratchet-positive).
+- **Equivalence gate — lands *before* the extraction:** a characterization test asserting the new
+  `HybridRetriever` produces byte-identical results to today's `hybrid_search` at all three
+  call-sites on a fixed corpus. Without it, a subtle refactor drift means the Phase-1 baseline
+  measures a *different* retriever than ships, invalidating the regression guard. This is the one
+  reproducibility risk Phase 0 introduces; it must be a Phase-0 success criterion, not discovered
+  mid-build.
 
 ### Phase 1 — bootstrap (no UI, no judge)
 
@@ -156,7 +166,10 @@ bucket with CIs + correction. Round 2: late chunking (chunk-level re-pool), rera
   don't re-wrap). Uses `new_embedding_backend()` for model-distinct configs (the cached
   `get_embedding_backend` would serve a stale backend on a model swap); **reuses one index across
   configs that don't change embeddings** (metadata/fusion/reranker knobs), the dominant cost saving.
-  Emits a page-keyed TREC run → `ranx` + pollution metric.
+  Emits a page-keyed TREC run → `ranx` + pollution metric. The page-collapse (best chunk per page)
+  happens **in the runner, after the retriever returns** — never inside the shared `HybridRetriever`,
+  which keeps returning per-chunk results for production. Report headers are **phase-labeled**
+  (Phase-1 MRR/success vs Phase-2+ graded nDCG) so a cross-phase delta cannot be eyeballed.
 - **Value objects (not free-function piles):** `JudgedUnit` (`.docid`), `TrecRun`/`Qrels`
   (`.write`/`.from_path`) — single source of truth for the join key so run-emission and
   qrels-authoring cannot drift.
@@ -179,7 +192,7 @@ bucket with CIs + correction. Round 2: late chunking (chunk-level re-pool), rera
 
 - `make eval` — runs the harness against the committed fixture + qrels; prints per-bucket metrics with
   CIs. Requires `uv sync --extra eval`.
-- `tools/eval/` — glue: `corpus` (manifest→ingest), `trec` (run/qrels I/O), `runner`, `metrics`
+- `tools/eval/` — glue: `corpus` (loads the committed raw docs → ingest), `trec` (run/qrels I/O), `runner`, `metrics`
   (ranx + pollution), `judge`. The **retrieval seam lives in `src/quarry/retrieval/`, not here.**
 - **CI (later, opt-in) — split gate:**
   - **Regression subset = hard, binary, deterministic.** The named failures are known-item pass/fail
@@ -208,6 +221,9 @@ bucket with CIs + correction. Round 2: late chunking (chunk-level re-pool), rera
   heading). Heuristic over `page_type`/text first; refine against the fixture.
 - **Chunk-level qrels for round-2 late chunking** — re-pool per chunking config; page-level qrels
   remain valid for all same-index levers.
+- **Tolerance band ε** — derived empirically, not guessed: run the harness ≥10× identically on one
+  machine, measure the metric noise floor, set ε above it, so the aggregate gate's false-fail rate is
+  known. Recorded alongside the baseline provenance.
 
 ---
 
