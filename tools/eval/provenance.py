@@ -3,29 +3,19 @@
 A baseline number is only a regression signal against another run on the *same*
 profile, so every committed baseline is stamped with the ONNX Runtime version,
 the pinned model revision, the CPU arch, numpy's version, and the effective ORT
-intra-op thread count. ``Determinism.apply`` pins the thread/BLAS environment
-before the embedding session is built.
+intra-op thread count. The BLAS/OMP pins that make a run reproducible are set at
+the process entry (``_threadpins``, before numpy loads); ``Determinism.apply``
+re-affirms them for callers that construct the embedding backend directly.
 """
 
 from __future__ import annotations
 
-import os
 import platform
 from dataclasses import dataclass
 from typing import Self
 
 from quarry.config import ONNX_MODEL_REPO, ONNX_MODEL_REVISION
-
-# Single-thread every pool that can reorder a float reduction. Forced (not
-# setdefault) so determinism wins over any ambient cap; ThreadConfig later
-# reads OMP via setdefault, so this value survives.
-_THREAD_ENV = (
-    "OMP_NUM_THREADS",
-    "OPENBLAS_NUM_THREADS",
-    "MKL_NUM_THREADS",
-    "NUMEXPR_NUM_THREADS",
-    "VECLIB_MAXIMUM_THREADS",
-)
+from tools.eval._threadpins import ThreadPins
 
 
 class Determinism:
@@ -35,16 +25,16 @@ class Determinism:
 
     @staticmethod
     def apply() -> None:
-        """Force single-threaded BLAS/OMP and disable tokenizer parallelism.
+        """Re-affirm the single-thread BLAS/OMP pins and tokenizer parallelism.
 
-        Call before the embedding backend is constructed. It cannot lower the
-        ORT intra-op pool below ThreadConfig's CPU floor (that lives behind the
-        frozen embedding seam), so the effective intra-op count is *stamped*
-        into provenance rather than forced here.
+        The *effective* pin happens at ``tools.eval`` import (``_threadpins``),
+        before numpy sizes its pools; calling this later cannot resize an
+        already-loaded OpenBLAS. It also cannot lower the ORT intra-op pool below
+        ThreadConfig's CPU floor (that lives behind the frozen embedding seam),
+        so the effective intra-op count is *stamped* into provenance rather than
+        forced here.
         """
-        for var in _THREAD_ENV:
-            os.environ[var] = "1"
-        os.environ["TOKENIZERS_PARALLELISM"] = "false"
+        ThreadPins.pin()
 
     @staticmethod
     def effective_intra_op_threads() -> int:

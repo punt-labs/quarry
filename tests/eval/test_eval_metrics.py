@@ -6,10 +6,11 @@ import pytest
 
 from quarry.results import SearchResult
 from tools.eval.judged_unit import JudgedUnit
-from tools.eval.metrics import BucketReport, Scorer
+from tools.eval.metrics import Scorer
 from tools.eval.pollution import MetadataPollutionClassifier
 from tools.eval.provenance import Provenance
 from tools.eval.queryset import Query, QuerySet
+from tools.eval.report import BucketReport
 from tools.eval.trec import Qrels, TrecRun
 
 pytest.importorskip("ranx")
@@ -119,3 +120,55 @@ def test_report_to_dict_is_phase_labeled_and_serializable() -> None:
     assert payload["phase"] == "phase-1"
     assert "nDCG omitted" in str(payload["metrics_note"])
     assert "known-item" in payload["buckets"]  # type: ignore[operator]
+
+
+def test_report_render_has_a_header_and_one_row_per_bucket() -> None:
+    queryset = _queryset()
+    run = TrecRun({"q1": [("a.md#doc", 1.0)]}, "t")
+    report = Scorer(queryset, MetadataPollutionClassifier()).score(
+        run, queryset.to_qrels(), {}, "t", _provenance()
+    )
+    text = report.render()
+    assert "Phase-1 retrieval metrics" in text
+    assert "bucket" in text  # the row header
+    for label in ("known-item", "natural", "OVERALL"):
+        assert label in text
+
+
+def test_scorable_query_with_empty_ranking_scores_as_miss() -> None:
+    # MIXED empty case: q1 retrieves its answer, q2 (also scorable) retrieves
+    # nothing. Without make_comparable ranx raises on the qrel/run mismatch;
+    # with it, q2 is an honest miss (RR=0), not a crash.
+    queryset = QuerySet(
+        (
+            Query("q1", "a", "known-item", "test", JudgedUnit("a.md", None)),
+            Query("q2", "b", "known-item", "test", JudgedUnit("b.md", None)),
+        )
+    )
+    run = TrecRun({"q1": [("a.md#doc", 1.0)], "q2": []}, "t")
+    report = Scorer(queryset, MetadataPollutionClassifier()).score(
+        run, queryset.to_qrels(), {}, "t", _provenance()
+    )
+    known = _bucket(report.buckets, "known-item").scores
+    assert known.n_scorable == 2
+    assert known.mrr == pytest.approx(0.5)  # (1.0 + 0) / 2
+    assert known.success_at_5 == pytest.approx(0.5)  # 1 of 2 hit
+    assert known.success_at_10 == pytest.approx(0.5)
+
+
+def test_page_level_answer_joins_paged_run_row() -> None:
+    # A page-level known-item: the qrel docid is the "#pN" form, and the run row
+    # keyed on the same page joins end-to-end through the Scorer (doc-level joins
+    # are covered elsewhere; this pins the page-granularity join).
+    queryset = QuerySet(
+        (Query("q1", "a", "known-item", "test", JudgedUnit("a.md", 2)),)
+    )
+    assert queryset.to_qrels().relevant_docids("q1") == {"a.md#p2"}
+    run = TrecRun({"q1": [("a.md#p2", 1.0), ("a.md#p1", 0.5)]}, "t")
+    report = Scorer(queryset, MetadataPollutionClassifier()).score(
+        run, queryset.to_qrels(), {}, "t", _provenance()
+    )
+    known = _bucket(report.buckets, "known-item").scores
+    assert known.n_scorable == 1
+    assert known.mrr == pytest.approx(1.0)  # a.md#p2 at rank 1
+    assert known.success_at_5 == pytest.approx(1.0)

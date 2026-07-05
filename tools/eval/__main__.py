@@ -23,7 +23,7 @@ from tools.eval.queryset import QuerySet
 from tools.eval.runner import EvalRunner
 
 if TYPE_CHECKING:
-    from tools.eval.metrics import EvalReport
+    from tools.eval.report import EvalReport
     from tools.eval.runner import RunOutput
 
 _PKG_DIR = Path(__file__).resolve().parent
@@ -97,6 +97,10 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     """Run the harness and print the report; optionally emit the baseline."""
     logging.basicConfig(level=logging.WARNING)
+    # The eval process forces OMP_NUM_THREADS=1 (below ThreadConfig's cap of 2),
+    # so apply_env_limits logs a spurious DES-032 oversubscription warning. The
+    # single thread is intentional here, not a defeated mitigation — silence it.
+    logging.getLogger("quarry.thread_config").setLevel(logging.ERROR)
     args = _parse_args(argv)
     harness = Harness(args.fixtures, args.queries, args.workdir)
     config = RetrievalConfig(exact_search=not args.ann)

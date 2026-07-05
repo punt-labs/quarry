@@ -65,6 +65,12 @@ dev = [
 # blocked. `make eval` runs `uv sync --extra eval`; nothing else needs it.
 # Verified 2026-07-04: resolves + installs + imports on CPython 3.13.5 with
 # numba 0.66.0 / llvmlite 0.48.0 wheels (no compiler required).
+#
+# numpy skew: ranx -> numba caps the resolved numpy to <2.5, so `uv.lock` (and
+# thus CI, which installs the locked env) tests against numpy 2.4.6, while the
+# shipped wheel and `make test-wheel` resolve numpy 2.5.x unconstrained. This is
+# safe — the numpy 2.x C-ABI is stable across 2.4/2.5, so embeddings and search
+# behave identically; only the eval harness pins the older numpy.
 eval = [
     "ranx>=0.3.20",
 ]

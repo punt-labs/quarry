@@ -94,8 +94,11 @@ class TrecRun:
         """Build a ranx Run whose scores encode this object's exact order.
 
         Queries with an empty ranking are omitted: ranx cannot represent a
-        zero-document query, and a query that retrieved nothing is correctly
-        scored as a miss (absent from the run) against its qrels.
+        zero-document query. A query that retrieved nothing is therefore absent
+        from the run — it is scored as a miss against its qrels ONLY when the
+        caller passes ``make_comparable=True`` to ``ranx.evaluate`` (Scorer does).
+        Without that flag ranx's ``check_keys`` raises on the qrel/run mismatch
+        instead of scoring the miss.
         """
         from ranx import Run  # noqa: PLC0415
 
