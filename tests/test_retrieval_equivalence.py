@@ -1,10 +1,16 @@
-"""Equivalence gate: HybridRetriever must match the legacy hybrid_search exactly.
+"""Characterization guard: HybridRetriever's output is frozen to the shipped path.
 
-This is the Phase-0 characterization test. It lands *before* the extraction
-deletes ``ChunkSearch.hybrid_search`` and proves the new seam produces
-byte-identical results — same ordering AND same similarity scores — so the
-future eval baseline measures the retriever that actually ships. Without it a
-subtle refactor drift would silently invalidate the regression guard.
+The Phase-0 equivalence gate proved (in the commit that introduced this file)
+that ``HybridRetriever`` with the default ``RetrievalConfig`` returns
+byte-identical results to the legacy ``ChunkSearch.hybrid_search`` — same
+ordering AND same similarity scores — across FTS-only, vector+FTS-overlap, and
+filtered scenarios, including both-filters-set (proving the SearchFilter
+predicate order is result-neutral under AND-commutativity).
+
+The legacy code is now deleted, so this guard freezes that proven output as a
+golden snapshot. ``GOLDEN`` was captured from the retriever at the moment it was
+verified equal to the legacy path; a drift here means the shipped retriever
+changed and the eval baseline would no longer measure what ships.
 """
 
 from __future__ import annotations
@@ -14,7 +20,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from quarry.db import ChunkSearch, ChunkStore, Database, get_db
+from quarry.db import ChunkStore, Database, get_db
 from quarry.models import Chunk
 from quarry.results import SearchFilter, SearchResult
 from quarry.retrieval import HybridRetriever, RetrievalConfig
@@ -25,6 +31,20 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
     from quarry.types import LanceDB
+
+# (document_name, chunk_index, page_number, similarity) for query "alpha rare
+# beta", limit 8, no filter over the fixed corpus below. RRF-ordered rows with
+# cosine-valued similarity -- the documented "RRF order, cosine score" shape.
+GOLDEN: list[tuple[str, int, int, float]] = [
+    ("b.md", 2, 3, 0.9578),
+    ("a.md", 1, 2, 0.9988),
+    ("c.md", 3, 4, 0.995),
+    ("a.md", 0, 1, 0.9998),
+    ("d.md", 5, 6, 0.0),
+    ("a.md", 7, 8, 0.9968),
+    ("c.md", 4, 5, 0.9889),
+    ("b.md", 6, 7, 0.0),
+]
 
 
 def _unit(values: list[float]) -> NDArray[np.float32]:
@@ -78,28 +98,7 @@ def _corpus(db: LanceDB) -> NDArray[np.float32]:
     return query
 
 
-def _legacy(
-    db: LanceDB,
-    query_text: str,
-    vec: NDArray[np.float32],
-    limit: int,
-    sf: SearchFilter | None,
-) -> list[SearchResult]:
-    f = sf or SearchFilter()
-    return ChunkSearch(db).hybrid_search(
-        query_text,
-        vec,
-        limit=limit,
-        document_filter=f.document,
-        collection_filter=f.collection,
-        page_type_filter=f.page_type,
-        source_format_filter=f.source_format,
-        agent_handle_filter=f.agent_handle,
-        memory_type_filter=f.memory_type,
-    )
-
-
-def _new(
+def _retrieve(
     db: LanceDB,
     query_text: str,
     vec: NDArray[np.float32],
@@ -110,51 +109,45 @@ def _new(
     return retriever.retrieve(query_text, vec, sf, limit)
 
 
-def _rows(results: list[SearchResult]) -> list[dict[str, object]]:
-    return [r.to_dict() for r in results]
+class TestShippedRetrieverIsFrozen:
+    """The default HybridRetriever reproduces the proven legacy output."""
 
-
-class TestEquivalence:
-    """New retriever == legacy hybrid_search: identical ordering and scores."""
-
-    def test_fts_only_scenario_matches(self, tmp_path: Path) -> None:
+    def test_matches_golden_ordering_and_scores(self, tmp_path: Path) -> None:
         db = get_db(tmp_path / "db")
         query = _corpus(db)
-        old = _legacy(db, "zorpzorp", query, 3, None)
-        new = _new(db, "zorpzorp", query, 3, None)
-        assert _rows(new) == _rows(old)
-
-    def test_vector_and_fts_overlap_matches(self, tmp_path: Path) -> None:
-        db = get_db(tmp_path / "db")
-        query = _corpus(db)
-        old = _legacy(db, "alpha common", query, 5, None)
-        new = _new(db, "alpha common", query, 5, None)
-        assert _rows(new) == _rows(old)
-
-    def test_collection_filter_matches(self, tmp_path: Path) -> None:
-        db = get_db(tmp_path / "db")
-        query = _corpus(db)
-        sf = SearchFilter(collection="notes")
-        old = _legacy(db, "alpha common", query, 10, sf)
-        new = _new(db, "alpha common", query, 10, sf)
-        assert _rows(new) == _rows(old)
-
-    def test_document_and_collection_filter_matches(self, tmp_path: Path) -> None:
-        """Both filters set: SearchFilter's predicate order differs from the
-        legacy builder's, but AND is commutative so results are identical."""
-        db = get_db(tmp_path / "db")
-        query = _corpus(db)
-        sf = SearchFilter(collection="docs", document="a.md")
-        old = _legacy(db, "alpha common", query, 10, sf)
-        new = _new(db, "alpha common", query, 10, sf)
-        assert _rows(new) == _rows(old)
-
-    def test_scores_identical_not_just_ordering(self, tmp_path: Path) -> None:
-        db = get_db(tmp_path / "db")
-        query = _corpus(db)
-        old = _legacy(db, "alpha rare beta", query, 8, None)
-        new = _new(db, "alpha rare beta", query, 8, None)
-        assert [r.similarity for r in new] == [r.similarity for r in old]
-        assert [(r.document_name, r.chunk_index) for r in new] == [
-            (r.document_name, r.chunk_index) for r in old
+        results = _retrieve(db, "alpha rare beta", query, 8, None)
+        actual = [
+            (r.document_name, r.chunk_index, r.page_number, r.similarity)
+            for r in results
         ]
+        assert actual == GOLDEN
+
+    def test_collection_filter_scopes_to_that_collection(self, tmp_path: Path) -> None:
+        db = get_db(tmp_path / "db")
+        query = _corpus(db)
+        results = _retrieve(
+            db, "alpha common", query, 10, SearchFilter(collection="notes")
+        )
+        assert {r.document_name for r in results} <= {"c.md", "d.md"}
+        assert results  # the filter matches at least one chunk
+
+    def test_both_filters_set_is_result_neutral(self, tmp_path: Path) -> None:
+        """collection + document filters: only a.md chunks in docs come back."""
+        db = get_db(tmp_path / "db")
+        query = _corpus(db)
+        results = _retrieve(
+            db,
+            "alpha common",
+            query,
+            10,
+            SearchFilter(collection="docs", document="a.md"),
+        )
+        assert {r.document_name for r in results} == {"a.md"}
+
+    def test_fts_only_row_reports_true_cosine(self, tmp_path: Path) -> None:
+        db = get_db(tmp_path / "db")
+        query = _corpus(db)
+        results = _retrieve(db, "zorpzorp", query, 3, None)
+        fts_only = [r for r in results if "zorpzorp" in r.text]
+        assert len(fts_only) == 1
+        assert (1 - fts_only[0].distance) < 0.5  # orthogonal, not a fake 1.00

@@ -13,10 +13,28 @@ import numpy as np
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
+    from quarry.types import LanceDB
+
 from quarry.db import ChunkSearch, ChunkStore, Database, SchemaManager, get_db
-from quarry.db.chunk_search import _RRF_K, _row_key, _temporal_weight
 from quarry.db.schema import TABLE_NAME
 from quarry.models import Chunk
+from quarry.results import SearchFilter, SearchResult
+from quarry.retrieval import HybridRetriever, RetrievalConfig
+from quarry.retrieval.fusion import RrfFusion
+
+
+def _hybrid(
+    db: LanceDB,
+    query_text: str,
+    query_vector: NDArray[np.float32],
+    *,
+    limit: int = 10,
+    search_filter: SearchFilter | None = None,
+    decay_rate: float = 0.0,
+) -> list[SearchResult]:
+    """Retrieve through the shipped HybridRetriever (replaces hybrid_search)."""
+    retriever = HybridRetriever(Database(db), RetrievalConfig(decay_rate=decay_rate))
+    return retriever.retrieve(query_text, query_vector, search_filter, limit)
 
 
 def _make_chunk(
@@ -350,7 +368,7 @@ class TestHybridSearch:
         vectors = _random_vectors(2)
         ChunkStore(db).insert(chunks, vectors)
 
-        results = ChunkSearch(db).hybrid_search("LanceDB vector", vectors[0], limit=5)
+        results = _hybrid(db, "LanceDB vector", vectors[0], limit=5)
         assert len(results) >= 1
         # The LanceDB chunk should rank highly due to both
         # vector similarity and keyword match
@@ -361,7 +379,7 @@ class TestHybridSearch:
         """Hybrid search returns empty list when table doesn't exist."""
         db = get_db(tmp_path / "db")
         vec = _random_vectors(1)[0]
-        results = ChunkSearch(db).hybrid_search("test", vec)
+        results = _hybrid(db, "test", vec)
         assert results == []
 
     def test_hybrid_fts_boosts_keyword_matches(self, tmp_path: Path) -> None:
@@ -391,7 +409,7 @@ class TestHybridSearch:
         ChunkStore(db).insert(chunks, vecs)
 
         # Query with "OAuth2" — FTS should boost chunks 0 and 2
-        results = ChunkSearch(db).hybrid_search("OAuth2", vecs[1], limit=10)
+        results = _hybrid(db, "OAuth2", vecs[1], limit=10)
         texts = [r.text for r in results]
         assert any("OAuth2" in t for t in texts)
 
@@ -413,10 +431,11 @@ class TestHybridSearch:
         vectors = _random_vectors(2)
         ChunkStore(db).insert(chunks, vectors)
 
-        results = ChunkSearch(db).hybrid_search(
+        results = _hybrid(
+            db,
             "API rate limit",
             vectors[0],
-            agent_handle_filter="rmh",
+            search_filter=SearchFilter(agent_handle="rmh"),
         )
         assert len(results) >= 1
         assert all(r.agent_handle == "rmh" for r in results)
@@ -439,10 +458,11 @@ class TestHybridSearch:
         vectors = _random_vectors(2)
         ChunkStore(db).insert(chunks, vectors)
 
-        results = ChunkSearch(db).hybrid_search(
+        results = _hybrid(
+            db,
             "deploy",
             vectors[0],
-            memory_type_filter="procedure",
+            search_filter=SearchFilter(memory_type="procedure"),
         )
         assert len(results) >= 1
         assert all(r.memory_type == "procedure" for r in results)
@@ -451,7 +471,7 @@ class TestHybridSearch:
 class TestRRFFusion:
     def test_rrf_score_calculation(self) -> None:
         """RRF score for rank 0 is 1/(K+0) = 1/60."""
-        expected = 1.0 / (_RRF_K + 0)
+        expected = 1.0 / (RetrievalConfig().rrf_k + 0)
         assert abs(expected - 1.0 / 60) < 1e-9
 
     def test_rrf_dual_channel_boost(self, tmp_path: Path) -> None:
@@ -473,7 +493,7 @@ class TestRRFFusion:
 
         # Use the first chunk's vector as query — it should match
         # on vector AND on FTS for "LanceDB"
-        results = ChunkSearch(db).hybrid_search("LanceDB", vectors[0], limit=2)
+        results = _hybrid(db, "LanceDB", vectors[0], limit=2)
         assert len(results) >= 1
         # The dual-channel match should be ranked first
         assert "LanceDB" in results[0].text
@@ -483,7 +503,7 @@ class TestTemporalDecay:
     def test_no_decay_returns_one(self) -> None:
         """With decay_rate=0, temporal weight is always 1.0."""
         ts = datetime.now(tz=UTC)
-        assert _temporal_weight(ts, ts.timestamp(), 0.0) == 1.0
+        assert RrfFusion.temporal_weight(ts, ts.timestamp(), 0.0) == 1.0
 
     def test_recent_memory_weighted_higher(self) -> None:
         """Recent timestamps get higher weight than old ones."""
@@ -491,15 +511,15 @@ class TestTemporalDecay:
         recent = now - timedelta(hours=1)
         old = now - timedelta(hours=100)
 
-        w_recent = _temporal_weight(recent, now.timestamp(), 0.01)
-        w_old = _temporal_weight(old, now.timestamp(), 0.01)
+        w_recent = RrfFusion.temporal_weight(recent, now.timestamp(), 0.01)
+        w_old = RrfFusion.temporal_weight(old, now.timestamp(), 0.01)
         assert w_recent > w_old
 
     def test_decay_with_string_timestamp(self) -> None:
         """Temporal weight works with ISO format string timestamps."""
         now = datetime.now(tz=UTC)
         ts_str = (now - timedelta(hours=24)).isoformat()
-        weight = _temporal_weight(ts_str, now.timestamp(), 0.01)
+        weight = RrfFusion.temporal_weight(ts_str, now.timestamp(), 0.01)
         # exp(-0.01 * 24) ≈ 0.787
         assert 0.75 < weight < 0.80
 
@@ -545,7 +565,8 @@ class TestTemporalDecay:
         ChunkStore(db).insert(chunks, vectors)
 
         # With high decay, the recent chunk should rank first
-        results = ChunkSearch(db).hybrid_search(
+        results = _hybrid(
+            db,
             "API rate limit",
             vectors[0],
             limit=2,
@@ -597,7 +618,8 @@ class TestTemporalDecay:
         vectors = _random_vectors(2)
         ChunkStore(db).insert(chunks, vectors)
 
-        results = ChunkSearch(db).hybrid_search(
+        results = _hybrid(
+            db,
             "unscoped content",
             vectors[0],
             limit=2,
@@ -809,9 +831,9 @@ class TestTemporalWeightEdgeCases:
         from datetime import UTC, datetime
 
         now = datetime.now(tz=UTC).timestamp()
-        assert _temporal_weight("", now, 0.01) == 1.0
-        assert _temporal_weight(None, now, 0.01) == 1.0
-        assert _temporal_weight("not-a-date", now, 0.01) == 1.0
+        assert RrfFusion.temporal_weight("", now, 0.01) == 1.0
+        assert RrfFusion.temporal_weight(None, now, 0.01) == 1.0
+        assert RrfFusion.temporal_weight("not-a-date", now, 0.01) == 1.0
 
     def test_naive_datetime_treated_as_utc(self) -> None:
         """_temporal_weight treats naive datetimes as UTC (no crash)."""
@@ -823,17 +845,17 @@ class TestTemporalWeightEdgeCases:
         from datetime import UTC
 
         now_aware = now_utc.replace(tzinfo=UTC)
-        weight = _temporal_weight(naive_ts, now_aware.timestamp(), 0.01)
+        weight = RrfFusion.temporal_weight(naive_ts, now_aware.timestamp(), 0.01)
         assert 0 < weight < 1.0
 
 
 class TestRowKeyMissingFields:
     def test_missing_fields_no_crash(self) -> None:
         """_row_key returns defaults when dict keys are missing."""
-        key = _row_key({})
+        key = RrfFusion._row_key({})
         assert key == ("", 0, 0)
 
     def test_partial_fields(self) -> None:
         """_row_key handles partial dict without crashing."""
-        key = _row_key({"document_name": "doc.pdf"})
+        key = RrfFusion._row_key({"document_name": "doc.pdf"})
         assert key == ("doc.pdf", 0, 0)

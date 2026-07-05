@@ -122,7 +122,7 @@ class TestJsonEquivalenceFind:
                 return_value=mock_backend,
             ),
             patch(
-                "quarry.db.chunk_search.ChunkSearch.hybrid_search",
+                "quarry.retrieval.hybrid.HybridRetriever.retrieve",
                 return_value=[SearchResult.from_row(local_row)],
             ),
         ):

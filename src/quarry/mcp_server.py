@@ -32,6 +32,8 @@ from quarry.ingestion.pipeline import (
 )
 from quarry.ingestion.provider import ProviderSelection
 from quarry.logging_config import LoggingConfig
+from quarry.results import SearchFilter
+from quarry.retrieval import SearchService
 from quarry.sync import sync_all as engine_sync_all
 from quarry.sync_registry import SyncRegistry
 
@@ -127,23 +129,17 @@ def find(
     limit = min(limit, 50)
     settings = _settings()
     database = _database()
-
     query_vector = get_embedding_backend(settings).embed_query(query)
-
-    results = database.search.hybrid_search(
-        query,
-        query_vector,
-        limit=limit,
-        document_filter=document_filter or None,
-        collection_filter=collection or None,
-        page_type_filter=page_type or None,
-        source_format_filter=source_format or None,
-        agent_handle_filter=agent_handle or None,
-        memory_type_filter=memory_type or None,
+    search_filter = SearchFilter(
+        collection=collection or None,
+        document=document_filter or None,
+        page_type=page_type or None,
+        source_format=source_format or None,
+        agent_handle=agent_handle or None,
+        memory_type=memory_type or None,
     )
-
+    results = SearchService(database).search(query, query_vector, search_filter, limit)
     formatted = [r.to_dict() for r in results]
-
     return format_search_results(query, formatted)
 
 

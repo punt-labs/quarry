@@ -7,6 +7,7 @@ from quarry.retrieval.fusion import RrfFusion as RrfFusion
 from quarry.retrieval.hybrid import HybridRetriever as HybridRetriever
 from quarry.retrieval.protocols import Reranker as Reranker, Retriever as Retriever
 from quarry.retrieval.reranker import NullReranker as NullReranker
+from quarry.retrieval.service import SearchService as SearchService
 
 __all__ = [
     "HybridRetriever",
@@ -15,4 +16,5 @@ __all__ = [
     "RetrievalConfig",
     "Retriever",
     "RrfFusion",
+    "SearchService",
 ]

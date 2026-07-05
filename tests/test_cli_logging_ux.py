@@ -83,7 +83,7 @@ def _find_context() -> Generator[None]:
         patch("quarry.db.facade.get_db"),
         patch("quarry.__main__.get_embedding_backend", return_value=mock_backend),
         patch(
-            "quarry.db.chunk_search.ChunkSearch.hybrid_search",
+            "quarry.retrieval.hybrid.HybridRetriever.retrieve",
             return_value=[SearchResult.from_row(r) for r in mock_results],
         ),
     ):
@@ -775,7 +775,7 @@ class TestFatalErrorsUnderQuiet:
                 return_value=mock_backend,
             ),
             patch(
-                "quarry.db.chunk_search.ChunkSearch.hybrid_search",
+                "quarry.retrieval.hybrid.HybridRetriever.retrieve",
                 side_effect=RuntimeError("search index corrupt"),
             ),
         ):

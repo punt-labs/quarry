@@ -178,7 +178,7 @@ class TestConcurrency:
 
         transport = httpx.ASGITransport(app=app)
         with patch(
-            "quarry.db.chunk_search.ChunkSearch.hybrid_search",
+            "quarry.retrieval.hybrid.HybridRetriever.retrieve",
             side_effect=slow_search,
         ):
             async with httpx.AsyncClient(
@@ -219,7 +219,7 @@ class TestSearch:
             }
         ]
         with patch(
-            "quarry.db.chunk_search.ChunkSearch.hybrid_search",
+            "quarry.retrieval.hybrid.HybridRetriever.retrieve",
             return_value=[SearchResult.from_row(r) for r in mock_results],
         ):
             data = client.get("/search?q=hello").json()
@@ -246,7 +246,7 @@ class TestSearch:
             }
         ]
         with patch(
-            "quarry.db.chunk_search.ChunkSearch.hybrid_search",
+            "quarry.retrieval.hybrid.HybridRetriever.retrieve",
             return_value=[SearchResult.from_row(r) for r in mock_results],
         ):
             data = client.get("/search?q=content").json()
@@ -272,7 +272,7 @@ class TestSearch:
             }
         ]
         with patch(
-            "quarry.db.chunk_search.ChunkSearch.hybrid_search",
+            "quarry.retrieval.hybrid.HybridRetriever.retrieve",
             return_value=[SearchResult.from_row(r) for r in mock_results],
         ):
             data = client.get("/search?q=content").json()
@@ -294,7 +294,7 @@ class TestSearch:
             }
         ]
         with patch(
-            "quarry.db.chunk_search.ChunkSearch.hybrid_search",
+            "quarry.retrieval.hybrid.HybridRetriever.retrieve",
             return_value=[SearchResult.from_row(r) for r in mock_results],
         ):
             data = client.get("/search?q=content").json()
@@ -303,7 +303,7 @@ class TestSearch:
 
     def test_search_with_limit(self, client: TestClient) -> None:
         with patch(
-            "quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]
+            "quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]
         ) as mock_search:
             client.get("/search?q=hello&limit=5")
 
@@ -312,7 +312,7 @@ class TestSearch:
 
     def test_search_limit_capped_at_50(self, client: TestClient) -> None:
         with patch(
-            "quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]
+            "quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]
         ) as mock_search:
             client.get("/search?q=hello&limit=999")
 
@@ -321,7 +321,7 @@ class TestSearch:
 
     def test_search_negative_limit_clamped_to_1(self, client: TestClient) -> None:
         with patch(
-            "quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]
+            "quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]
         ) as mock_search:
             client.get("/search?q=hello&limit=-5")
 
@@ -330,15 +330,15 @@ class TestSearch:
 
     def test_search_with_collection_filter(self, client: TestClient) -> None:
         with patch(
-            "quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]
+            "quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]
         ) as mock_search:
             client.get("/search?q=hello&collection=research")
 
         _, kwargs = mock_search.call_args
-        assert kwargs["collection_filter"] == "research"
+        assert kwargs["search_filter"].collection == "research"
 
     def test_search_empty_results(self, client: TestClient) -> None:
-        with patch("quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]):
+        with patch("quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]):
             data = client.get("/search?q=nonexistent").json()
 
         assert data["total_results"] == 0
@@ -349,32 +349,32 @@ class TestSearch:
     ) -> None:
         """agent_handle query param must reach hybrid_search as agent_handle_filter."""
         with patch(
-            "quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]
+            "quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]
         ) as mock_search:
             client.get("/search?q=hello&agent_handle=someagent")
 
         _, kwargs = mock_search.call_args
-        assert kwargs["agent_handle_filter"] == "someagent"
+        assert kwargs["search_filter"].agent_handle == "someagent"
 
     def test_search_memory_type_filter_passed_through(self, client: TestClient) -> None:
         """memory_type query param must reach hybrid_search as memory_type_filter."""
         with patch(
-            "quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]
+            "quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]
         ) as mock_search:
             client.get("/search?q=hello&memory_type=episodic")
 
         _, kwargs = mock_search.call_args
-        assert kwargs["memory_type_filter"] == "episodic"
+        assert kwargs["search_filter"].memory_type == "episodic"
 
     def test_search_document_filter_passed_through(self, client: TestClient) -> None:
         """document query param must reach hybrid_search as document_filter."""
         with patch(
-            "quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]
+            "quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]
         ) as mock_search:
             client.get("/search?q=hello&document=report.pdf")
 
         _, kwargs = mock_search.call_args
-        assert kwargs["document_filter"] == "report.pdf"
+        assert kwargs["search_filter"].document == "report.pdf"
 
     def test_search_result_includes_agent_and_memory_fields(
         self, client: TestClient
@@ -395,7 +395,7 @@ class TestSearch:
             }
         ]
         with patch(
-            "quarry.db.chunk_search.ChunkSearch.hybrid_search",
+            "quarry.retrieval.hybrid.HybridRetriever.retrieve",
             return_value=[SearchResult.from_row(r) for r in mock_results],
         ):
             data = client.get("/search?q=remember").json()
@@ -678,7 +678,7 @@ class TestApiKeyAuth:
         assert resp.status_code == 401
 
     def test_search_allowed_with_correct_key(self, auth_client: TestClient) -> None:
-        with patch("quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]):
+        with patch("quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]):
             data = auth_client.get(
                 "/search?q=test",
                 headers={"Authorization": f"Bearer {_TEST_API_KEY}"},
@@ -700,7 +700,7 @@ class TestApiKeyAuth:
 
     def test_no_auth_required_when_key_not_configured(self, client: TestClient) -> None:
         """The default client fixture has no api_key -- all open."""
-        with patch("quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]):
+        with patch("quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]):
             data = client.get("/search?q=test").json()
         assert data["query"] == "test"
 
@@ -712,7 +712,7 @@ class TestApiKeyAuth:
 
     def test_bearer_scheme_case_insensitive(self, auth_client: TestClient) -> None:
         """RFC 7235: auth scheme names are case-insensitive."""
-        with patch("quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]):
+        with patch("quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]):
             data = auth_client.get(
                 "/search?q=test",
                 headers={"Authorization": f"bearer {_TEST_API_KEY}"},
@@ -735,7 +735,7 @@ class TestEmptyApiKey:
     def test_empty_key_does_not_require_auth(
         self, empty_key_client: TestClient
     ) -> None:
-        with patch("quarry.db.chunk_search.ChunkSearch.hybrid_search", return_value=[]):
+        with patch("quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]):
             data = empty_key_client.get("/search?q=test").json()
         assert data["query"] == "test"
 

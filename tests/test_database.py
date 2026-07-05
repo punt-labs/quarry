@@ -10,8 +10,16 @@ import numpy as np
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
-from quarry.db import ChunkCatalog, ChunkSearch, ChunkStore, TableOptimizer, get_db
+from quarry.db import (
+    ChunkCatalog,
+    ChunkSearch,
+    ChunkStore,
+    Database,
+    TableOptimizer,
+    get_db,
+)
 from quarry.models import Chunk
+from quarry.retrieval import HybridRetriever, RetrievalConfig
 
 
 def _make_chunk(
@@ -728,9 +736,10 @@ class TestOptimizeRebuildsFtsIndex:
         # would become stale.
         TableOptimizer(db).optimize()
 
-        # hybrid_search must work without RuntimeError.
+        # Hybrid retrieval must work without RuntimeError.
         query_vec = _random_vectors(1)[0]
-        results = ChunkSearch(db).hybrid_search("quantum physics", query_vec, limit=5)
+        retriever = HybridRetriever(Database(db), RetrievalConfig())
+        results = retriever.retrieve("quantum physics", query_vec, None, 5)
         assert len(results) >= 1
 
     def test_fts_results_nonempty_after_optimize(self, tmp_path: Path):
@@ -756,7 +765,8 @@ class TestOptimizeRebuildsFtsIndex:
 
         # Search for a term that only matches via FTS keyword.
         query_vec = _random_vectors(1)[0]
-        results = ChunkSearch(db).hybrid_search("xylophone", query_vec, limit=10)
+        retriever = HybridRetriever(Database(db), RetrievalConfig())
+        results = retriever.retrieve("xylophone", query_vec, None, 10)
         texts = [r.text for r in results]
         assert any("xylophone" in t for t in texts)
 
