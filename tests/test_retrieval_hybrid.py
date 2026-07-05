@@ -166,3 +166,14 @@ class TestAnnotateFtsDistances:
         self._annotate(db, query, rows)
 
         assert self._similarity(rows[0]) == pytest.approx(-1.0)
+
+    def test_zero_norm_query_is_worst_case(self, tmp_path: Path) -> None:
+        """A zero-length query has no direction: every row is worst-case."""
+        db = get_db(tmp_path / "db")
+        query = np.zeros(768, dtype=np.float32)  # degenerate: norm 0, no direction
+        rows: list[dict[str, object]] = [{"vector": _unit([1.0, 0.0, 0.0]).tolist()}]
+
+        self._annotate(db, query, rows)
+
+        assert rows[0]["_distance"] == pytest.approx(2.0)
+        assert self._similarity(rows[0]) == pytest.approx(-1.0)

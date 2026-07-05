@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import numpy as np
+import pytest
 
 from quarry.db import ChunkStore, Database, get_db
 from quarry.models import Chunk
@@ -145,9 +146,22 @@ class TestShippedRetrieverIsFrozen:
         assert {r.document_name for r in results} == {"a.md"}
 
     def test_fts_only_row_reports_true_cosine(self, tmp_path: Path) -> None:
+        """The FTS-only 'zorpzorp' row reports its real cosine on the golden corpus.
+
+        limit=2 -> fetch_limit=6, so the six alpha rows saturate the vector
+        channel and push the orthogonal 'zorpzorp' row OUT of the vector
+        top-N. Its distance can then come only from the annotate path
+        (quarry-gcnf), not the vector channel -- so this assertion is
+        load-bearing on ``_annotate_fts_distances``. With limit=3 (fetch=9 >
+        8-row corpus) the vector channel returned the whole corpus and the
+        annotate path was never exercised.
+        """
         db = get_db(tmp_path / "db")
         query = _corpus(db)
-        results = _retrieve(db, "zorpzorp", query, 3, None)
+        results = _retrieve(db, "zorpzorp", query, 2, None)
         fts_only = [r for r in results if "zorpzorp" in r.text]
         assert len(fts_only) == 1
-        assert (1 - fts_only[0].distance) < 0.5  # orthogonal, not a fake 1.00
+        # Orthogonal to the query: true cosine 0.0, never the fake 1.00 a
+        # missing annotation would show. A no-op annotate defaults the row to
+        # WORST_CASE_DISTANCE (similarity -1.0), failing this exact assertion.
+        assert (1 - fts_only[0].distance) == pytest.approx(0.0, abs=1e-4)
