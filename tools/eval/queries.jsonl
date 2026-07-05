@@ -1,0 +1,7 @@
+{"id": "nat-1", "text": "why does quarry run both a vector channel and a keyword channel instead of one", "bucket": "natural", "split": "test"}
+{"id": "nat-2", "text": "how do the universal and existential quantifiers differ when reasoning in Z", "bucket": "natural", "split": "dev"}
+{"id": "ki-1", "text": "reciprocal rank fusion implementation with the k constant", "bucket": "known-item", "split": "test", "answer": {"document_name": "rrf_fusion.py", "page_number": null}}
+{"id": "ki-2", "text": "hybrid search design and the over-fetch multiplier before cutting", "bucket": "known-item", "split": "test", "answer": {"document_name": "hybrid-search-design.md", "page_number": null}}
+{"id": "ki-3", "text": "int8 embedding quantization quality cost on CPU", "bucket": "known-item", "split": "dev", "answer": {"document_name": "embedding-quantization.md", "page_number": null}}
+{"id": "reg-1", "text": "predicate logic in Z", "bucket": "regression", "split": "test", "answer": {"document_name": "predicate-logic-in-z.tex", "page_number": null}}
+{"id": "reg-2", "text": "changelog entry for the one-point rule worked examples", "bucket": "regression", "split": "test", "answer": {"document_name": "CHANGELOG.md", "page_number": null}}

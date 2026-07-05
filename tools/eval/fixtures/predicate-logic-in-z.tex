@@ -1,0 +1,49 @@
+% Course material: formal methods with the Z notation.
+% Deliberately carries a metadata/changelog preamble so the pollution
+% diagnostic has realistic structural distractors to classify.
+
+\documentclass{article}
+\title{Predicate Logic in Z}
+\author{Formal Methods Course}
+\date{Revision history below}
+
+% Changelog (structural metadata, not substantive content):
+%   2026-01-04  Initial draft of the predicate-logic chapter.
+%   2026-02-11  Added worked examples for the one-point rule.
+%   2026-03-02  Fixed a typo in the universal-quantifier schema.
+
+\begin{document}
+\maketitle
+
+\section{Introduction}
+The Z notation builds specifications on typed set theory and first-order
+predicate logic. Before schemas and state, a specifier needs the predicate
+calculus: quantifiers, bound and free variables, and the laws that let one
+predicate be rewritten as another while preserving meaning.
+
+\section{Predicate Logic in Z}
+A predicate in Z is a boolean-valued expression over typed variables. The
+universal quantifier is written $\forall x : T \bullet P$, read ``for all
+$x$ of type $T$, the predicate $P$ holds.'' The existential quantifier
+$\exists x : T \bullet P$ asserts that some $x$ of type $T$ makes $P$ true.
+Quantifiers introduce a declaration, a constraint, and a predicate body,
+separated by a vertical bar and a bullet: $\forall x : T | C \bullet P$.
+
+A variable is bound when a quantifier ranges over it and free otherwise.
+The one-point rule eliminates an existential quantifier when the bound
+variable is fixed by an equality: $\exists x : T \bullet x = e \land P$
+simplifies to $P[e/x]$ provided $e$ has type $T$. De Morgan's laws relate
+the quantifiers: $\lnot (\forall x : T \bullet P)$ equals
+$\exists x : T \bullet \lnot P$.
+
+\section{Schemas and State}
+A schema packages a declaration part and a predicate part. The predicate
+part is ordinary predicate logic over the declared variables, so every
+law from the previous section applies unchanged inside a schema.
+
+\section{Sequences and Bags}
+Sequences model ordered collections and bags model multisets. Both are
+defined as functions, and reasoning about them again reduces to the
+predicate calculus over their defining functions.
+
+\end{document}

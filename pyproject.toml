@@ -59,6 +59,21 @@ dev = [
     "pytest-timeout>=2.3.0",
     "types-PyYAML>=6.0.0",
 ]
+# Eval-only. NEVER a core dependency, NEVER a dependency of `make check` or any
+# CI job. ranx pulls Numba/llvmlite (a C-JIT stack, not pure Python); it must
+# stay quarantined here so a compiler-less install of quarry proper is never
+# blocked. `make eval` runs `uv sync --extra eval`; nothing else needs it.
+# Verified 2026-07-04: resolves + installs + imports on CPython 3.13.5 with
+# numba 0.66.0 / llvmlite 0.48.0 wheels (no compiler required).
+#
+# numpy skew: ranx -> numba caps the resolved numpy to <2.5, so `uv.lock` (and
+# thus CI, which installs the locked env) tests against numpy 2.4.6, while the
+# shipped wheel and `make test-wheel` resolve numpy 2.5.x unconstrained. This is
+# safe — the numpy 2.x C-ABI is stable across 2.4/2.5, so embeddings and search
+# behave identically; only the eval harness pins the older numpy.
+eval = [
+    "ranx>=0.3.20",
+]
 
 [project.scripts]
 quarry = "quarry.__main__:app"
@@ -78,6 +93,8 @@ module-name = "quarry"
 [tool.ruff]
 line-length = 88
 target-version = "py313"
+# Eval fixtures are raw corpus data (sample source files), not project code.
+extend-exclude = ["tools/eval/fixtures"]
 
 [tool.ruff.lint]
 select = [
@@ -118,6 +135,7 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tools/*" = ["T20", "S603", "S607", "C901"]
+"tools/eval/**/*.py" = ["T20"]  # the eval CLI prints its report to stdout
 "tests/*" = ["S101", "S106", "S108", "T20", "SLF001", "ARG", "PLC0415", "A002"]
 "benchmarks/*" = ["T20", "S311", "BLE001", "PLC0415", "SIM905"]
 "src/quarry/__main__.py" = ["T20", "FBT"]
@@ -185,12 +203,16 @@ module = [
     "bs4",
     "bs4.*",
     "markdownify",
+    "ranx",
+    "ranx.*",
 ]
 ignore_missing_imports = true
 
 [tool.pyright]
 pythonVersion = "3.13"
 typeCheckingMode = "strict"
+# Resolve first-party ``tools.eval`` (the eval harness) imported from tests.
+extraPaths = ["."]
 # These 6 suppressions exist because lancedb, rapidocr, onnxruntime, fitz,
 # and pyarrow ship no type stubs. Every value returned from these libraries
 # is Unknown, cascading 591 errors across the codebase. The alternative is

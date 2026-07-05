@@ -1,4 +1,4 @@
-.PHONY: help test lint lint-docs type check check-full check-oo check-oo-integrity update-oo correct-oo check-coupling update-coupling check-suppressions update-suppressions report format install build test-wheel clean depot bench-cuda docs docs-clean metrics coverage
+.PHONY: help test lint lint-docs type check check-full check-oo check-oo-integrity update-oo correct-oo check-coupling update-coupling check-suppressions update-suppressions report format install build test-wheel clean depot bench-cuda docs docs-clean metrics coverage eval eval-baseline
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -123,3 +123,13 @@ metrics: ## ABC complexity analysis (magnitude >200 needs attention)
 coverage: ## Test coverage with HTML report
 	uv run pytest --cov=quarry --cov-report=html --cov-report=term-missing
 	@echo "HTML report: htmlcov/index.html"
+
+# Sync eval alongside dev so running the harness never uninstalls the toolchain.
+eval: ## Phase-1 retrieval eval harness — per-bucket MRR/success + pollution
+	uv sync --extra dev --extra eval
+	uv run --extra eval python -m tools.eval
+
+eval-baseline: ## Regenerate the committed Phase-1 baseline (run + qrels + JSON)
+	uv sync --extra dev --extra eval
+	uv run --extra eval python -m tools.eval \
+		--emit-baseline tools/eval/baselines/baseline.json
