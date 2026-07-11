@@ -2157,3 +2157,77 @@ class TestT20PreCompactFallback:
 
         args = mock_popen.call_args[0][0]
         assert args[6] == _SESSION_NOTES_FALLBACK
+
+
+class TestPreCompactCaptureRedaction:
+    """The PreCompact producer writes a PII-clean capture file (bug class 3)."""
+
+    def test_capture_file_has_zero_pii(self, tmp_path: Path) -> None:
+        from quarry.artifacts import SessionArtifacts
+        from quarry.hooks import _write_capture_file
+
+        artifacts = SessionArtifacts(
+            commit_shas=(),
+            pr_numbers=(),
+            branch_names=(),
+            bead_ids=(),
+        )
+        text = "worked in /Users/jfreeman/repo and pinged jmf@pobox.com"
+        _write_capture_file(
+            project_dir=tmp_path,
+            session_id="abcd1234ef",
+            timestamp="2026-07-11T00:00:00Z",
+            artifacts=artifacts,
+            text=text,
+        )
+
+        capture = (
+            tmp_path / ".punt-labs" / "quarry" / "captures" / "session-abcd1234.md"
+        )
+        content = capture.read_text(encoding="utf-8")
+        assert "/Users/" not in content
+        assert "@" not in content
+        assert "~/repo" in content
+
+
+class TestWebFetchScrubbing:
+    """WebFetch content is scrubbed before it reaches the DB (bug class 3)."""
+
+    def test_ingest_content_receives_scrubbed_text(self) -> None:
+        from quarry.models import PageContent, PageType
+
+        payload: dict[str, object] = {
+            "tool_input": {"url": "https://example.com/page"},
+            "tool_response": json.dumps({"result": "<html>page</html>"}),
+        }
+        mock_pages = [
+            PageContent(
+                text="see /Users/jfreeman/secret in the log",
+                page_number=1,
+                total_pages=1,
+                page_type=PageType.SECTION,
+                document_name="https://example.com/page",
+                document_path="https://example.com/page",
+            )
+        ]
+
+        with (
+            patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
+            patch("quarry.db.facade.get_db", return_value=MagicMock()),
+            patch("quarry.hooks._is_already_ingested", return_value=False),
+            patch("quarry.hooks._collection_for_cwd", return_value=None),
+            patch(
+                "quarry.extractors.html_extractor.HtmlExtractor.extract_from_html",
+                return_value=mock_pages,
+            ),
+            patch(
+                "quarry.ingestion.pipeline.ingest_content",
+                return_value={"chunks": 1},
+            ) as mock_content,
+            patch("quarry.ingestion.pipeline.ingest_url"),
+        ):
+            handle_post_web_fetch(payload)
+
+        passed_text = mock_content.call_args[0][0]
+        assert "/Users/" not in passed_text
+        assert "~/secret" in passed_text
