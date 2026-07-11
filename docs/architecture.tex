@@ -158,13 +158,12 @@ LanceDB connection.
 \midrule
 Facade        & \modpath{db/facade.py}        & \texttt{Database} ---
                 single entry point composing the store, search, catalog,
-                schema, and optimizer subsystems (DES-010). \\
+                schema, and optimizer subsystems (DES-031). \\
 Chunk store   & \modpath{db/chunk\_store.py}   & Insert,
                 progressive-flush, delete, and count operations on the
                 \texttt{chunks} table. \\
 Chunk search  & \modpath{db/chunk\_search.py}  & Vector-similarity
-                search under the cosine metric (the vector channel of
-                hybrid search). \\
+                search under the cosine metric. \\
 Chunk catalog & \modpath{db/chunk\_catalog.py} & List documents, list
                 collections, and fetch page text. \\
 Optimizer     & \modpath{db/optimizer.py}      & Table compaction, FTS
@@ -269,7 +268,7 @@ HTML          & \modpath{extractors/html\_extractor.py}         & HTML
 Spreadsheet   & \modpath{extractors/spreadsheet\_extractor.py}  & XLSX,
                 CSV (LaTeX tabular serialization) \\
 Presentation  & \modpath{extractors/presentation\_extractor.py} & PPTX
-                (slide-per-chunk) \\
+                (slide-per-chunk with notes) \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -656,6 +655,7 @@ snowflake-arctic-embed-m-v1.5 via ONNX Runtime:
   \item Output vectors are L2-normalized to unit length, so search runs
     under the \textbf{cosine} metric and similarity
     ($1 - \text{distance}$) is bounded true cosine in $[-1, 1]$
+    (DES-038)
   \item int8 quantized ONNX for CPU ($\sim$120\,MB), FP16 for CUDA
     ($\sim$220\,MB)
   \item Provider auto-detection: CUDA+FP16 when available, CPU+int8
@@ -738,7 +738,7 @@ from decay (production leaves $\lambda = 0$).
 
 \subsection{Retrieval Seam and Evaluation}
 
-The \modpath{retrieval/} package is a deliberate seam: the same
+The \modpath{retrieval/} package is a deliberate seam (DES-037): the same
 \texttt{HybridRetriever} that serves production also serves the retrieval
 evaluation harness (\texttt{make eval}), so the committed baseline
 measures the retriever that actually ships.  \texttt{RetrievalConfig}
