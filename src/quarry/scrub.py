@@ -1,4 +1,4 @@
-"""Scrub secrets and profanity from text before writing to disk.
+"""Scrub secrets, PII, and profanity from text before writing to disk.
 
 Regex-driven redaction replaces matches with labeled markers like
 ``[REDACTED:gh-pat]`` so a downstream auditor can tell *what* was
@@ -20,16 +20,35 @@ Categories:
 | gpg-private-key   | multi-line PGP private key blocks                              |
 | env-secret        | KEY=value where KEY contains TOKEN/SECRET/PASSWORD/etc.        |
 | slack-token       | xox[baprs]-... tokens                                          |
+| path              | home directories: /Users/<user>/ and /home/<user>/ -> ~/       |
+| email             | any RFC-shaped address -> [REDACTED:email]                     |
+| hostname          | the local machine hostname (socket.gethostname())             |
 | profanity         | words from a configurable word list                            |
+
+The PII passes (path, email, hostname) run write-time so filesystem
+paths, email addresses, and the operator's machine name never reach a
+git-committed capture file.  Ordering is load-bearing: email precedes
+hostname so a hostname inside an email domain is subsumed by the whole
+-email redaction rather than half-redacted, which would leak the local
+part.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+import socket
 from collections import Counter
 from dataclasses import dataclass
 from re import Pattern
+from typing import Self
+
+from quarry.scrub_rules import (
+    AWS_SECRET_LINE_HINT,
+    BLOCK_RULES,
+    LINE_RULES,
+    SecretRule,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,116 +81,22 @@ DEFAULT_PROFANITY: tuple[str, ...] = (
 
 
 # ---------------------------------------------------------------------------
-# Secret rules
+# PII patterns
 # ---------------------------------------------------------------------------
 
+# Home directories for any user. Case-sensitive (macOS /Users, Linux /home);
+# no re.IGNORECASE so /users/ inside a URL is not over-matched. Only the
+# username segment (``[^/\s]+``) is consumed, so deeper path structure — the
+# useful part of a capture — is retained. ``/root`` is intentionally excluded:
+# no username to generalize, and it is not the PII class this targets.
+_PATH_RE = re.compile(r"(?:/Users|/home)/[^/\s]+")
 
-@dataclass(frozen=True)
-class _SecretRule:
-    """A single regex-based secret detector.
-
-    Whether a rule runs whole-document or per-line is determined by
-    which tuple it lives in — see ``_build_secret_rules``.
-    """
-
-    category: str
-    pattern: Pattern[str]
-    replace: str | None = None
-
-
-def _build_secret_rules() -> tuple[tuple[_SecretRule, ...], tuple[_SecretRule, ...]]:
-    """Return ``(block_rules, line_rules)``.
-
-    Block rules run once over the whole document (multi-line patterns).
-    Line rules run per-line so context-sensitive detectors can inspect
-    their own line.
-    """
-    block_rules = (
-        # PGP before PEM — PGP is technically PEM-shaped.
-        _SecretRule(
-            category="gpg-private-key",
-            pattern=re.compile(
-                r"-----BEGIN PGP PRIVATE KEY BLOCK-----"
-                r".*?"
-                r"-----END PGP PRIVATE KEY BLOCK-----",
-                re.DOTALL,
-            ),
-        ),
-        _SecretRule(
-            category="pem-private-key",
-            pattern=re.compile(
-                r"-----BEGIN (?:[A-Z][A-Z ]*)?PRIVATE KEY-----"
-                r".*?"
-                r"-----END (?:[A-Z][A-Z ]*)?PRIVATE KEY-----",
-                re.DOTALL,
-            ),
-        ),
-        # env-secret: KEY=value where KEY contains a secret-bearing suffix.
-        # Every whitespace class is ``[ \t]`` — never ``\s`` — to prevent
-        # cross-line matching in MULTILINE mode.
-        _SecretRule(
-            category="env-secret",
-            pattern=re.compile(
-                r"""(?xm)
-                (?<![A-Za-z0-9_])
-                ((?:export[ \t]+)?)
-                (\w*(?:TOKEN|SECRET|PASSWORD|PASSPHRASE|API_KEY|ACCESS_KEY|PRIVATE_KEY|AUTH_KEY)\w*)
-                ([ \t]*=[ \t]*)
-                (?!\[REDACTED:)
-                ([^\r\n]+?)
-                [ \t]*
-                (?=\r?$)
-                """,
-            ),
-            replace=r"\1\2\3[REDACTED:env-secret]",
-        ),
-    )
-
-    line_rules = (
-        # aws-secret-key: 40-char base64 on a line mentioning the key name.
-        _SecretRule(
-            category="aws-secret-key",
-            pattern=re.compile(
-                r"(?<![A-Za-z0-9])(?!\[REDACTED)([A-Za-z0-9/+=]{40})(?![A-Za-z0-9])",
-            ),
-        ),
-        _SecretRule(
-            category="gh-pat",
-            pattern=re.compile(r"\b(?:ghp|ghs|ghu|gho|ghr)_[A-Za-z0-9]{36,255}\b"),
-        ),
-        _SecretRule(
-            category="aws-access-key",
-            pattern=re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
-        ),
-        # anthropic-key must run BEFORE openai-key.
-        _SecretRule(
-            category="anthropic-key",
-            pattern=re.compile(r"\bsk-ant-[A-Za-z0-9_-]{32,}\b"),
-        ),
-        _SecretRule(
-            category="openai-key",
-            pattern=re.compile(r"\bsk-(?!ant-)[A-Za-z0-9_-]{32,}"),
-        ),
-        _SecretRule(
-            category="bearer",
-            pattern=re.compile(r"\bBearer [A-Za-z0-9_\-\.=]{20,}"),
-        ),
-        _SecretRule(
-            category="jwt",
-            pattern=re.compile(
-                r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"
-            ),
-        ),
-        _SecretRule(
-            category="slack-token",
-            pattern=re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),
-        ),
-    )
-    return block_rules, line_rules
-
-
-_BLOCK_RULES, _LINE_RULES = _build_secret_rules()
-_AWS_SECRET_LINE_HINT = re.compile(r"aws_secret_access_key", re.IGNORECASE)
+# RFC-shaped email. The lookbehind/lookahead keep the match from starting or
+# ending inside a longer token. The ``[REDACTED:email]`` marker has no ``@``,
+# so a scrubbed address cannot re-match.
+_EMAIL_RE = re.compile(
+    r"(?<![\w.+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?![\w.-])"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -185,97 +110,200 @@ class ScrubConfig:
 
     scrub_secrets: bool = True
     scrub_profanity: bool = True
+    scrub_pii: bool = True
     profanity_words: tuple[str, ...] = DEFAULT_PROFANITY
+    email_placeholder: str = "[REDACTED:email]"
+    hostname_placeholder: str = "[REDACTED:hostname]"
+    # None -> resolve the local hostname via socket.gethostname() at build time.
+    # Tests inject an explicit value so results do not depend on the CI machine.
+    local_hostname: str | None = None
 
 
 # ---------------------------------------------------------------------------
-# Core scrubbing
+# Scrubber
 # ---------------------------------------------------------------------------
 
 
-def _build_profanity_re(words: tuple[str, ...]) -> Pattern[str] | None:
-    """Compile a whole-word regex covering all profanity words.
+class Scrubber:
+    """Owns the compiled rules and applies every redaction pass in order.
 
-    Returns ``None`` if the list is empty.
+    A single instance holds the secret rules, the profanity regex, the PII
+    patterns, and the resolved local-hostname regex, so a call is just
+    ``Scrubber(config).scrub(text)``.  The module-level ``scrub`` and
+    ``scrub_and_log`` functions are thin shims over a shared default
+    instance — callers keep their existing signatures.
     """
-    cleaned = sorted({w.strip().lower() for w in words if w.strip()})
-    if not cleaned:
-        return None
-    body = "|".join(re.escape(w) for w in cleaned)
-    return re.compile(rf"\b(?:{body})\b", re.IGNORECASE)
 
+    __slots__ = (
+        "_block_rules",
+        "_config",
+        "_email_re",
+        "_host_re",
+        "_line_rules",
+        "_path_re",
+        "_profanity_re",
+    )
 
-def _replacement_for(rule: _SecretRule) -> str:
-    """Return the substitution string for a secret rule."""
-    if rule.replace is not None:
-        return rule.replace
-    return f"[REDACTED:{rule.category}]"
+    _config: ScrubConfig
+    _block_rules: tuple[SecretRule, ...]
+    _line_rules: tuple[SecretRule, ...]
+    _path_re: Pattern[str]
+    _email_re: Pattern[str]
+    _profanity_re: Pattern[str] | None
+    _host_re: Pattern[str] | None
 
+    def __new__(cls, config: ScrubConfig | None = None) -> Self:
+        self = super().__new__(cls)
+        self._config = config if config is not None else ScrubConfig()
+        self._block_rules = BLOCK_RULES
+        self._line_rules = LINE_RULES
+        self._path_re = _PATH_RE
+        self._email_re = _EMAIL_RE
+        self._profanity_re = self._build_profanity_re()
+        self._host_re = self._build_host_re()
+        return self
 
-def _scrub_block_secrets(text: str, counts: Counter[str]) -> str:
-    """Apply whole-document redactions (PEM/GPG/env-secret)."""
-    for rule in _BLOCK_RULES:
-        new_text, n = rule.pattern.subn(
-            _replacement_for(rule),
-            text,
-        )
+    @property
+    def config(self) -> ScrubConfig:
+        return self._config
+
+    def scrub(self, text: str) -> tuple[str, dict[str, int]]:
+        """Scrub *text*.  Return ``(scrubbed_text, redaction_counts)``.
+
+        Counts only include categories that fired at least once.  The pass
+        order is secrets -> paths -> emails -> hostname -> profanity; email
+        must precede hostname (see the module docstring).
+        """
+        counts: Counter[str] = Counter()
+        if not text:
+            return text, dict(counts)
+
+        cfg = self._config
+        if cfg.scrub_secrets:
+            text = self._scrub_block_secrets(text, counts)
+            text = "".join(
+                self._scrub_line_secrets(line, counts)
+                for line in text.splitlines(keepends=True)
+            )
+
+        if cfg.scrub_pii:
+            text = self._scrub_paths(text, counts)
+            text = self._scrub_emails(text, counts)
+            text = self._scrub_hostname(text, counts)
+
+        if cfg.scrub_profanity:
+            text = self._scrub_profanity(text, counts)
+
+        return text, dict(counts)
+
+    def _scrub_block_secrets(self, text: str, counts: Counter[str]) -> str:
+        """Apply whole-document redactions (PEM/GPG/env-secret)."""
+        for rule in self._block_rules:
+            new_text, n = rule.pattern.subn(rule.replacement(), text)
+            if n:
+                counts[rule.category] += n
+                text = new_text
+        return text
+
+    def _scrub_line_secrets(self, line: str, counts: Counter[str]) -> str:
+        """Apply per-line redactions, honoring rule order and context."""
+        for rule in self._line_rules:
+            if rule.category == "aws-secret-key" and not AWS_SECRET_LINE_HINT.search(
+                line
+            ):
+                continue
+            new_line, n = rule.pattern.subn(rule.replacement(), line)
+            if n:
+                counts[rule.category] += n
+                line = new_line
+        return line
+
+    def _scrub_paths(self, text: str, counts: Counter[str]) -> str:
+        """Replace home directories with ``~`` (the trailing slash is kept)."""
+        new_text, n = self._path_re.subn("~", text)
         if n:
-            counts[rule.category] += n
-            text = new_text
-    return text
+            counts["path"] += n
+        return new_text
 
-
-def _scrub_line_secrets(line: str, counts: Counter[str]) -> str:
-    """Apply per-line redactions, honoring rule order and context."""
-    for rule in _LINE_RULES:
-        if rule.category == "aws-secret-key" and not _AWS_SECRET_LINE_HINT.search(line):
-            continue
-        new_line, n = rule.pattern.subn(
-            _replacement_for(rule),
-            line,
-        )
+    def _scrub_emails(self, text: str, counts: Counter[str]) -> str:
+        """Replace RFC-shaped addresses with the email placeholder."""
+        new_text, n = self._email_re.subn(self._config.email_placeholder, text)
         if n:
-            counts[rule.category] += n
-            line = new_line
-    return line
+            counts["email"] += n
+        return new_text
+
+    def _scrub_hostname(self, text: str, counts: Counter[str]) -> str:
+        """Redact the local machine hostname, if one was resolved."""
+        if self._host_re is None:
+            return text
+        new_text, n = self._host_re.subn(self._config.hostname_placeholder, text)
+        if n:
+            counts["hostname"] += n
+        return new_text
+
+    def _scrub_profanity(self, text: str, counts: Counter[str]) -> str:
+        """Replace whole-word profanity matches with the marker."""
+        if self._profanity_re is None:
+            return text
+        new_text, n = self._profanity_re.subn("[REDACTED:profanity]", text)
+        if n:
+            counts["profanity"] += n
+        return new_text
+
+    def _build_profanity_re(self) -> Pattern[str] | None:
+        """Compile a whole-word regex covering the config's profanity words.
+
+        Returns ``None`` if the list is empty.
+        """
+        words = self._config.profanity_words
+        cleaned = sorted({w.strip().lower() for w in words if w.strip()})
+        if not cleaned:
+            return None
+        body = "|".join(re.escape(w) for w in cleaned)
+        return re.compile(rf"\b(?:{body})\b", re.IGNORECASE)
+
+    def _build_host_re(self) -> Pattern[str] | None:
+        """Compile a whole-word regex for the local hostname and its forms.
+
+        A ``None`` ``local_hostname`` resolves the live hostname via
+        ``socket.gethostname()``.  The forms are the full hostname, the name
+        without a trailing ``.local`` (mDNS), and the short leaf when it is at
+        least four characters (the length guard prevents redacting a 2-3 char
+        leaf that collides with a common word).  Returns ``None`` when no
+        usable form exists.
+        """
+        hostname = self._config.local_hostname
+        host = hostname if hostname is not None else socket.gethostname()
+        forms = {host}
+        if host.endswith(".local"):
+            forms.add(host[: -len(".local")])
+        leaf = host.split(".", 1)[0]
+        if len(leaf) >= 4:
+            forms.add(leaf)
+        usable = sorted((f for f in forms if f), key=len, reverse=True)
+        if not usable:
+            return None
+        body = "|".join(re.escape(f) for f in usable)
+        return re.compile(rf"\b(?:{body})\b")
+
+
+# ---------------------------------------------------------------------------
+# Shared default scrubber and public shims
+# ---------------------------------------------------------------------------
+
+_DEFAULT_CONFIG = ScrubConfig()
+_DEFAULT_SCRUBBER = Scrubber(_DEFAULT_CONFIG)
 
 
 def scrub(text: str, config: ScrubConfig | None = None) -> tuple[str, dict[str, int]]:
     """Scrub *text* per *config*.  Return ``(scrubbed_text, redaction_counts)``.
 
-    Counts only include categories that fired at least once.
+    A ``None`` config uses the shared default scrubber (secrets, PII, and
+    profanity all on, live local hostname resolved).
     """
     if config is None:
-        config = ScrubConfig()
-
-    counts: Counter[str] = Counter()
-    if not text:
-        return text, dict(counts)
-
-    if config.scrub_secrets:
-        text = _scrub_block_secrets(text, counts)
-        scrubbed_lines = [
-            _scrub_line_secrets(line, counts) for line in text.splitlines(keepends=True)
-        ]
-        text = "".join(scrubbed_lines)
-
-    if config.scrub_profanity:
-        prof_re = _build_profanity_re(config.profanity_words)
-        if prof_re is not None:
-            new_text, n = prof_re.subn("[REDACTED:profanity]", text)
-            if n:
-                counts["profanity"] += n
-                text = new_text
-
-    return text, dict(counts)
-
-
-# ---------------------------------------------------------------------------
-# Integration helper
-# ---------------------------------------------------------------------------
-
-# Module-level default config — created once, shared across calls.
-_DEFAULT_CONFIG = ScrubConfig()
+        return _DEFAULT_SCRUBBER.scrub(text)
+    return Scrubber(config).scrub(text)
 
 
 def scrub_and_log(text: str, label: str) -> str:
@@ -284,7 +312,7 @@ def scrub_and_log(text: str, label: str) -> str:
     *label* identifies the call site in the log message (e.g.
     ``"pre-compact"`` or ``"backfill"``).  Returns the scrubbed text.
     """
-    scrubbed, counts = scrub(text, _DEFAULT_CONFIG)
+    scrubbed, counts = _DEFAULT_SCRUBBER.scrub(text)
     if counts:
         summary = ", ".join(f"{k}: {v}" for k, v in sorted(counts.items()))
         logger.info("%s: scrubbed capture file (%s)", label, summary)
