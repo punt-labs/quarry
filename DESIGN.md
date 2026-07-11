@@ -293,6 +293,8 @@ Benchmarked 6 configurations on two machines (M2 Air, AMD + RTX 5080):
 **Date:** 2026-03-28
 **Status:** SETTLED
 **Topic:** How to retrieve agent memories and documents
+**Implemented by:** `retrieval/hybrid.py` (`HybridRetriever`) behind the DES-037
+seam; scoring uses normalized embeddings + cosine (DES-038).
 
 ### Design
 
@@ -479,7 +481,7 @@ The original `--server`/`--client` split was based on a false premise — that "
 
 ### Why This Design
 
-`table.optimize()` compacts data fragments — merging small fragments and removing deleted rows. The Tantivy FTS index stores row references by fragment ID. After compaction, those fragment IDs no longer exist. Every subsequent FTS query hit `RuntimeError: lance error: ... fragment id N but this fragment does not exist` and fell back to vector-only search via the existing exception handler at `database.py:485`.
+`table.optimize()` compacts data fragments — merging small fragments and removing deleted rows. The Tantivy FTS index stores row references by fragment ID. After compaction, those fragment IDs no longer exist. Every subsequent FTS query hit `RuntimeError: lance error: ... fragment id N but this fragment does not exist` and fell back to vector-only search via the existing exception handler in the FTS search path (now `db/chunk_search.py`, after `database.py` was decomposed into the `db/` package).
 
 This meant the BM25 leg of hybrid search (DES-017) was dead after every `sync_all` cycle since the feature shipped. The RRF fusion that hybrid search was designed to provide — catching keyword matches that vector search misses — never worked in production. The fallback masked the failure: search returned results, but only from the vector channel.
 
@@ -1080,6 +1082,15 @@ This decision depends on DES-027's `narenas:1,tcache:false`. If `MALLOC_CONF` ch
 4. **Process isolation** — Separate ONNX worker process. Eliminates all contention but adds IPC complexity. Disproportionate when session isolation achieves the same result in-process.
 5. **User-configurable thread count** — Adding an `embedding_threads` field to `Settings`. Rejected for this PR because auto-detection covers all known hardware configurations correctly. Future work (DES-033) if edge cases emerge.
 
+## DES-033: User-Configurable Embedding Thread Count — RESERVED
+
+**Status:** RESERVED (not adopted)
+
+Reserved by DES-032 (rejected alternative #5) for a possible `embedding_threads`
+`Settings` knob. Not written: ONNX thread auto-detection covers all known
+hardware. Open this entry only if a hardware edge case forces a manual override.
+The number is held so DES cross-references stay stable — do not reuse it.
+
 ## DES-034: Bounded Progressive Commit for Sync Ingestion
 
 **Date:** 2026-07-03
@@ -1184,7 +1195,23 @@ MVCC — candidate DES-035).
    to a follow-on bead (DES-027 rejected-alt #3).
 6. **Process isolation** — deferred (see above).
 
+## DES-035: Ingest-Worker Process Isolation — RESERVED (DEFERRED)
+
+**Status:** RESERVED (deferred)
+
+Reserved by DES-034 for a possible ingest subprocess that writes Lance directly
+and is read via MVCC. Deferred: DES-034's in-process progressive commit already
+bounds the vector working set, and DES-032's thread caps + session isolation
+protect query latency, so a separate process is unnecessary. Revisit only if
+benchmarks show query p99 regressing during large syncs. The number is held so
+DES cross-references stay stable — do not reuse it.
+
 ## DES-036: Capture PII Redaction — Placeholder Emails, Bounded Local Hostname, Single Write Choke Point
+
+**Date:** 2026-07-11
+**Status:** SETTLED
+**Topic:** Write-time PII redaction of captures (paths, emails, hostname, URL metadata)
+**Relates:** DES-030 (capture lifecycle); quarry-ow3k (private shadow-repo sync, depends on this)
 
 Captures (session transcripts and WebFetch auto-captures) previously scrubbed
 secrets and profanity at write time but not PII. vox reported ~598
@@ -1226,6 +1253,27 @@ parameter on `ingest_url`.
    re-run). Both WebFetch ingress branches (primary + `ingest_url` re-fetch
    fallback) scrub before content reaches the pushable `web-captures` collection.
 
+5. **URL metadata redaction via `CaptureUrl` (`capture_url.py`), not just the
+   body.** The page body scrub (decisions 1–4) does not protect the URL itself,
+   which is persisted as a capture's `document_name`/`document_path`. A fetched
+   URL like `…/reset?email=a@b.com&token=xyz` would leak PII/secrets into the
+   pushable `web-captures` collection even with the body scrubbed. `CaptureUrl`
+   strips userinfo, query, and fragment and runs the bare `scheme://host/path`
+   through the scrubber before it is stored, on **both** WebFetch branches
+   (primary `hooks.py`, fallback `pipeline.py::ingest_url`) and for the dedup key.
+   IPv6 host literals keep their `[...]` brackets so the netloc stays valid
+   (`CaptureUrl._bracketed`). This is defence-in-depth distinct from body
+   scrubbing, and it is the specific property `quarry-ow3k` relies on.
+
+### Path pass scope
+
+The path pass rewrites `/Users|/home/<user>/` → `~/` at a genuine path boundary,
+including `file:///Users/…` and protocol-relative `//Users/…`, but a lookbehind
+(`(?<!:/)`) excludes a URL scheme authority so `http://home/dashboard`,
+`https://example.com/home/…`, and nested `/var/home/…` are left intact (they are
+not a user home directory). This distinguishes a real home path from a hostname
+or URL path segment.
+
 ### Scope boundary
 
 `content_scrubber` on `ingest_url` defaults to `None` (byte-unchanged), so
@@ -1248,3 +1296,86 @@ their content searchable.
 5. **Unicode/IDN emails and SSH-remote (`git@host`) matching** — documented
    accepted limits of the ASCII email regex (over-match on SSH remotes is
    over-redaction, not a leak; IDN under-match is low-frequency).
+
+## DES-037: Retrieval Seam — `RetrievalConfig` + `SearchService` for Single-Path, Reproducible Search
+
+**Date:** 2026-07-05
+**Status:** SETTLED
+**Topic:** One production retrieval path shared by every surface and by the eval harness
+**Relates:** DES-017 (hybrid algorithm), DES-031 (engine-first single path)
+
+### Problem
+
+Hybrid search lived in `search.py` and was invoked directly by each surface
+(CLI, HTTP, MCP). This is the origin of bug class 3 (remote/local divergence):
+the HTTP `/search` route once ran vector-only while the CLI ran hybrid, and query
+params drifted between paths. There was also no seam to hold retrieval tunables
+constant while measuring quality, which the eval work (DES tie-in below) requires.
+
+### Decision
+
+Introduce a `src/quarry/retrieval/` package that makes retrieval one object with
+one entry point:
+
+- **`RetrievalConfig`** (`config.py`) — a frozen config carrying the committed
+  production baseline: `rrf_k=60`, `fetch_multiplier=3` (3× over-fetch),
+  `metric="cosine"`, `embedding_strategy="baseline"`. This is the single place a
+  tunable is defined, so an eval run can vary one lever and hold the rest fixed.
+- **`SearchService`** (`service.py`) — the one `retrieve()` path. All three
+  surfaces (`http_server.py`, `__main__.py`, `mcp_server.py`) now construct a
+  `SearchService` and call it; none reach into the ranking internals. This kills
+  the divergence bug class *by construction* — there is no second path to drift.
+- **`HybridRetriever`** (`hybrid.py`), RRF **`fusion.py`**, **`reranker.py`**,
+  and structural **`protocols.py`** (`Retriever`/`Reranker`) — the algorithm
+  (DES-017) extracted out of `search.py` behind protocols so a lever
+  (reranker, embedding strategy) can be swapped without touching callers.
+
+The same seam is what the eval harness drives: `make eval` (PR #344) constructs a
+`SearchService` from a `RetrievalConfig` and measures ranx metrics (per-bucket
+MRR/success@k + a metadata-pollution diagnostic) against a known-item baseline.
+Production and evaluation therefore exercise identical retrieval code.
+
+### Rejected / deferred
+
+1. **Leaving hybrid in `search.py` and adding an eval shim** — the shim would be
+   a second path, reintroducing the divergence risk; rejected in favour of one
+   `SearchService` both production and eval share.
+2. **Baking lever choices in now** — `embedding_strategy` and reranker are behind
+   protocols but the production default stays `"baseline"` until a lever wins on
+   the numbers (a lever bake-off is future eval work; see
+   `docs/eval-harness-design.md`).
+
+## DES-038: Normalized Embeddings + Cosine Metric, with Honest FTS-Only Scores
+
+**Date:** 2026-07-04
+**Status:** SETTLED
+**Topic:** Bounded, comparable similarity scores across both retrieval channels
+**Relates:** DES-017 (hybrid), DES-037 (retrieval seam)
+
+### Problem
+
+Vector search ran LanceDB's default (unbounded) distance and reported
+`similarity` without normalization, so scores were not bounded to `[0, 1]` and
+were not comparable across queries. Separately, FTS-only result rows (matched by
+BM25 but absent from the vector channel) reported a synthetic `1.00` similarity —
+a fake perfect score that mis-ranked keyword-only hits and polluted any
+score-based diagnostics.
+
+### Decision
+
+- **L2-normalize embeddings and search with the cosine metric** (PR #336). Every
+  vector is unit-normalized at embed time and vector search uses
+  `metric("cosine")` (`db/chunk_search.py`); `RetrievalConfig.metric` defaults to
+  `"cosine"` (DES-037). Similarity is now bounded and comparable — a precondition
+  for meaningful RRF fusion and for eval metrics.
+- **FTS-only rows report their true cosine** (PR #339), computed against the
+  query embedding, instead of the fake `1.00`. A `SearchResult` value type
+  carries the real score so keyword-only hits rank honestly.
+
+### Rejected / deferred
+
+1. **Keeping unbounded distance and post-hoc rescaling** — rescaling a
+   per-query, unbounded distance is not stable across queries; normalization +
+   cosine is bounded by construction.
+2. **Dropping FTS-only rows that lack a vector score** — they are legitimate
+   keyword hits; computing their true cosine keeps them and ranks them correctly.
