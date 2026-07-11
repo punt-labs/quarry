@@ -26,12 +26,12 @@
     "future_annotations": 1.0
   },
   "src/quarry/_hook_entry.py": {
-    "method_ratio": 0.0,
+    "method_ratio": 0.4,
     "encapsulation_ratio": 1.0,
     "avg_params": 0.0,
-    "max_complexity": 9.0,
-    "avg_complexity": 2.67,
-    "module_size": 155.0,
+    "max_complexity": 6.0,
+    "avg_complexity": 2.0,
+    "module_size": 172.0,
     "classes_per_module": 1.0,
     "class_to_func_ratio": 0.143,
     "init_violations": 0.0,

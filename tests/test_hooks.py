@@ -8,13 +8,10 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
-
-if TYPE_CHECKING:
-    import pytest
 
 from quarry.__main__ import app
 from quarry._stdlib import HookConfig, load_hook_config, read_hook_stdin
@@ -1690,6 +1687,16 @@ class TestIngestBackground:
             _ingest_background()
 
         assert not text_file.exists()
+
+    def test_exits_with_usage_on_bad_arg_count(self) -> None:
+        """Too few argv slots exit non-zero before any ingest work runs."""
+        from quarry._hook_entry import _ingest_background
+
+        with (
+            patch("sys.argv", ["quarry-hook", "ingest-background", "only-one-arg"]),
+            pytest.raises(SystemExit),
+        ):
+            _ingest_background()
 
 
 # ---------------------------------------------------------------------------
