@@ -354,6 +354,37 @@ quarry remote list --ping
 **Verify:** Shows remote config with host, port, pinned fingerprint,
 and connection status (healthy/unhealthy).
 
+### 2.18 Capture PII redaction (DES-036)
+
+Verifies the write-time scrub that the capture writers (PreCompact,
+backfill, WebFetch auto-capture) run before content reaches a
+`<name>-captures`/`web-captures` collection.
+
+```bash
+# Canary: the shipped scrub actually redacts (this is what CaptureWriter runs).
+# Run from a source checkout / the project venv.
+uv run python -c "from quarry.scrub import scrub, ScrubConfig; \
+o,_=scrub('mail a@b.com path /Users/dave/secret file:///Users/erin/k host testbox', \
+ScrubConfig(local_hostname='testbox')); print(o)"
+
+# Scope-boundary negative control: deliberate ingest is NOT scrubbed.
+echo "control a@b.com /Users/dave/secret" | quarry remember --name scope --collection smoke-scope
+quarry find "control" --collection smoke-scope
+```
+
+**Verify:**
+
+- Canary output redacts every class: `[REDACTED:email]`, `~/secret`,
+  `file://~/k`, `[REDACTED:hostname]` — and no raw `a@b.com`, `/Users/`,
+  `dave`, `erin`, or `testbox` survives.
+- The `find` result still shows the raw email and path — deliberate ingest is
+  intentionally not scrubbed (only automatic captures are). If the stored
+  `remember` text is redacted, the scope boundary is broken (fail).
+- (If a real session transcript is handy, `quarry backfill-sessions --dry-run`
+  and inspect a written `<name>-captures` `.md` for the same redaction.)
+
+Cleanup: `quarry delete smoke-scope --type collection`.
+
 ## Phase 3: Enable/Disable
 
 Tests `quarry enable` and `quarry disable` end-to-end. Use a
@@ -566,9 +597,9 @@ Phase 4: Install
   4.4  TLS health                PASS / FAIL
 
 Result: PASS / FAIL
-  Passed: N/42
-  Failed: N/42
-  Skipped: N/42
+  Passed: N/43
+  Failed: N/43
+  Skipped: N/43
   Notes: <any observations, warnings, or follow-up beads created>
 ```
 

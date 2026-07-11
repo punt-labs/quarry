@@ -9,18 +9,24 @@ this directory holds reference material, active design work, and archived proces
   retrieval, embedding/provider, deployment. The consolidation target every archived design
   points to (DES-012).
 - **`claude-code-quarry.tex` → `.pdf`** — standalone whitepaper on the Claude Code integration.
+- **`improving-agent-memory.md`** — design rationale for the agent-memory layer (identity
+  tagging, summaries, temporal decay). Historical (implemented 2026-03); kept for the "why".
 - **`tex/`** — LaTeX build support (`fuzz.sty`, MetaFont) for `make docs`.
 
 ## Active work
 
+- **`eval-harness-design.md`** — ratified design for the retrieval-quality eval harness.
+  **Phase 0 (retrieval seam, #343) and Phase 1 (`make eval`, ranx MRR/success@k, #344) are
+  merged** (see DES-037); next is full-fixture curation, then Phase 2/3 lever bake-offs.
 - **`retrieval-quality-improvements.md`** — 2026-07 research synthesis (turbopuffer / reranker /
-  late-chunking) plus the proposed direction and eval-harness plan for fixing token-density
-  ranking. Not yet implemented.
+  late-chunking) and the case for eval-first. The eval harness it calls a prerequisite has
+  shipped (Phase 0–1, above); the **embedding levers themselves are not yet implemented** —
+  they are measured against `make eval` before adoption.
 
 ## Operations
 
-- **`smoke-test.md`** — post-release manual smoke test: 14 MCP + 17 CLI + 7 enable/disable
-  checks, plus install verification. Run after every release.
+- **`smoke-test.md`** — post-release manual smoke test: 14 MCP + 18 CLI + 7 enable/disable
+  checks (incl. a capture PII-redaction check), plus install verification. Run after every release.
 
 ## Archive (`archive/`)
 

@@ -206,6 +206,10 @@ Beyond explicit `/ingest` and `/find` commands, quarry runs as a Claude Code plu
 
 All hooks are fail-open — failures are ignored and never block Claude Code. Each hook is individually toggleable via `.punt-labs/quarry/config.md` YAML frontmatter. See [AGENTS.md](AGENTS.md) for the full integration model.
 
+### Privacy: captures are scrubbed before write
+
+Captures (session transcripts and auto-ingested web fetches) are redacted **at write time**, before anything touches disk or the `<name>-captures`/`web-captures` collection. A single write choke point scrubs, in order, secrets → filesystem paths (`/Users`/`/home/<user>/` → `~/`) → emails (→ `[REDACTED:email]`) → the local hostname (→ `[REDACTED:hostname]`) → profanity. Web-fetch captures also redact the source URL's userinfo, query, and fragment so a URL like `…/reset?email=…&token=…` cannot leak. Redaction is idempotent and fail-closed (on any scrub error, no capture is written). Deliberately-ingested content (`quarry ingest`, `remember`) is **not** scrubbed — only the automatic capture paths are, since those feed the shared/pushable collections. See [DES-036](DESIGN.md).
+
 ## How It Works
 
 Quarry runs as a daemon. Claude Code sessions connect through mcp-proxy:
@@ -236,7 +240,15 @@ make check                     # run all quality gates (lint, type, test)
 make test                      # test suite only
 make format                    # auto-format code
 make docs                      # build LaTeX documents
+make eval                      # retrieval-quality eval harness (MRR/success@k, dev/CI only)
 ```
+
+## Roadmap
+
+Direction tracks the [PR/FAQ](prfaq.tex). Current focus:
+
+- **Retrieval quality** — a `make eval` harness (per-bucket MRR/success@k + a metadata-pollution diagnostic) now baselines search on quarry's own data; embedding levers (contextual embeddings, late chunking) are measured against it before adoption. See [docs/eval-harness-design.md](docs/eval-harness-design.md).
+- **Private capture sync** — captures redact PII at write time (above); a planned per-project private shadow repo (`<repo>` → `<repo>-quarry`) will push the redacted captures off the public repo entirely.
 
 ## License
 
