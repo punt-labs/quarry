@@ -53,3 +53,4 @@
 {"ts":"2026-07-11T20:45:20Z","commit":"57aaa39","files_scored":90,"files_improved":0,"files_regressed":1,"verdict":"fail","deltas":{}}
 {"ts":"2026-07-11T20:57:18Z","commit":"57aaa39","files_scored":90,"files_improved":0,"files_regressed":2,"verdict":"fail","deltas":{}}
 {"ts":"2026-07-11T21:04:37Z","commit":"57aaa39","files_scored":90,"files_improved":1,"files_regressed":0,"verdict":"pass","deltas":{"src/quarry/_hook_entry.py":{"method_ratio":[0.0,0.4],"max_complexity":[9.0,6.0],"avg_complexity":[2.67,2.0],"module_size":[155.0,172.0]}}}
+{"ts":"2026-07-11T21:21:45Z","commit":"5cb7e09","files_scored":90,"files_improved":1,"files_regressed":0,"verdict":"pass","deltas":{"src/quarry/capture_url.py":{"avg_complexity":[2.0,1.5],"module_size":[23.0,32.0]}}}

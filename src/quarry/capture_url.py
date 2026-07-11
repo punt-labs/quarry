@@ -24,7 +24,18 @@ class CaptureUrl:
     def redacted(self, scrubber: Callable[[str], str]) -> str:
         """Return the metadata URL: userinfo/query/fragment stripped, then scrubbed."""
         parts = urlsplit(self._raw)
-        host = parts.hostname or ""
+        host = self._bracketed(parts.hostname or "")
         netloc = f"{host}:{parts.port}" if parts.port else host
         bare = urlunsplit((parts.scheme, netloc, parts.path, "", ""))
         return scrubber(bare)
+
+    @staticmethod
+    def _bracketed(host: str) -> str:
+        """Wrap an IPv6 literal in ``[]`` so its colons aren't read as a port.
+
+        ``urlsplit(...).hostname`` strips the RFC 3986 brackets from IPv6 hosts,
+        so ``[2001:db8::1]`` returns as ``2001:db8::1``.  Reassembling a netloc
+        from the bare literal yields an ambiguous, invalid URL; restore the
+        brackets whenever the host carries the tell-tale colon.
+        """
+        return f"[{host}]" if ":" in host else host

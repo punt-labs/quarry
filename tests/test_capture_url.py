@@ -47,3 +47,22 @@ def test_redacted_plain_url_unchanged() -> None:
     """A URL with no userinfo/query/fragment round-trips unchanged."""
     meta = CaptureUrl("https://example.com/page").redacted(_scrub)
     assert meta == "https://example.com/page"
+
+
+def test_redacted_ipv6_host_keeps_brackets() -> None:
+    """An IPv6 literal host stays bracketed so its colons aren't read as a port."""
+    meta = CaptureUrl("https://[2001:db8::1]/path").redacted(_scrub)
+    assert meta == "https://[2001:db8::1]/path"
+
+
+def test_redacted_ipv6_host_with_port_keeps_brackets() -> None:
+    """Brackets survive alongside a port, and the query is still dropped."""
+    meta = CaptureUrl("https://[2001:db8::1]:8080/p?x=1").redacted(_scrub)
+    assert meta == "https://[2001:db8::1]:8080/p"
+
+
+def test_redacted_ipv6_host_strips_userinfo() -> None:
+    """Userinfo is dropped while the bracketed IPv6 host is preserved."""
+    meta = CaptureUrl("https://u:pw@[2001:db8::1]/p").redacted(_scrub)
+    assert meta == "https://[2001:db8::1]/p"
+    assert "pw" not in meta
