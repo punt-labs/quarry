@@ -21,11 +21,12 @@ import contextlib
 import logging
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from quarry._stdlib import load_hook_config
+from quarry.background_ingest import BackgroundIngestJob
+from quarry.web_capture import WebFetchPayload
 
 if TYPE_CHECKING:
     from quarry.artifacts import SessionArtifacts
@@ -362,42 +363,6 @@ def _collection_for_cwd(cwd: str) -> str | None:
         conn.close()
 
 
-def _extract_url(payload: dict[str, object]) -> str | None:
-    """Extract the fetched URL from a PostToolUse WebFetch payload."""
-    tool_input = payload.get("tool_input")
-    if isinstance(tool_input, dict):
-        url = tool_input.get("url")
-        if isinstance(url, str) and url.startswith(("http://", "https://")):
-            return url
-    return None
-
-
-def _extract_web_fetch_content(payload: dict[str, object]) -> str | None:
-    """Extract already-fetched content from a PostToolUse WebFetch payload.
-
-    The ``tool_response`` field is a JSON-encoded string containing the
-    fetched HTML/text.  When present and valid, using this avoids a second
-    network fetch and reduces SSRF exposure by not issuing an additional
-    request from quarry itself on that code path.
-    """
-    import json as _json  # noqa: PLC0415
-
-    tool_response = payload.get("tool_response")
-    if not isinstance(tool_response, str):
-        return None
-    try:
-        parsed = _json.loads(tool_response)
-    except (ValueError, TypeError):
-        return None
-    if isinstance(parsed, dict):
-        result = parsed.get("result")
-        if isinstance(result, str) and result.strip():
-            return result
-    if isinstance(parsed, str) and parsed.strip():
-        return parsed
-    return None
-
-
 def _is_already_ingested(url: str, database: Database, collection: str) -> bool:
     """Check if *url* is already in the given collection."""
     docs = database.catalog.list_documents(collection_filter=collection)
@@ -421,7 +386,8 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
             logger.debug("post-web-fetch: disabled by config")
             return {}
 
-    url = _extract_url(payload)
+    parsed = WebFetchPayload(payload)
+    url = parsed.url
     if not url:
         logger.debug("post-web-fetch: no valid URL in payload, skipping")
         return {}
@@ -438,10 +404,7 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     settings = _resolve_settings()
     database = Database.connect(settings.lancedb_path)
 
-    if _is_already_ingested(url, database, collection):
-        logger.debug("post-web-fetch: already ingested %s, skipping", url)
-        return {}
-
+    from quarry.capture_url import CaptureUrl  # noqa: PLC0415
     from quarry.scrub import scrub_and_log  # noqa: PLC0415
 
     # Both ingest paths scrub before content reaches the pushable web-captures
@@ -449,18 +412,27 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     def web_fetch_scrub(raw: str) -> str:
         return scrub_and_log(raw, "web-fetch")
 
+    # A capture must not persist the URL's userinfo/query/fragment as document
+    # metadata. Redact once and reuse for dedup and the primary branch; the
+    # fallback ingest_url redacts identically, so the stored name/path matches.
+    meta_url = CaptureUrl(url).redacted(web_fetch_scrub)
+
+    if _is_already_ingested(meta_url, database, collection):
+        logger.debug("post-web-fetch: already ingested %s, skipping", meta_url)
+        return {}
+
     # Prefer already-fetched tool_response content (avoids a second fetch).
-    content = _extract_web_fetch_content(payload)
+    content = parsed.content
     result = None
     if content:
         from quarry.extractors.html_extractor import HtmlExtractor  # noqa: PLC0415
 
-        pages = HtmlExtractor().extract_from_html(content, url, url)
+        pages = HtmlExtractor().extract_from_html(content, meta_url, meta_url)
         if pages:
             clean_text = web_fetch_scrub("\n\n".join(p.text for p in pages))
             result = ingest_content(
                 clean_text,
-                url,
+                meta_url,
                 database,
                 settings,
                 collection=collection,
@@ -470,8 +442,8 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
             logger.debug("post-web-fetch: no text in tool_response, falling back")
 
     if result is None:
-        # Fallback re-fetch; the scrubber runs per page inside ingest_url so this
-        # capture is redacted identically to the primary branch.
+        # Fallback re-fetch; ingest_url redacts the URL and scrubs each page, so
+        # this capture is stored identically to the primary branch.
         result = ingest_url(
             url,
             database,
@@ -481,7 +453,7 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
         )
     logger.info(
         "post-web-fetch: ingested %s (%d chunks)",
-        url,
+        meta_url,
         result["chunks"],
     )
     return {}
@@ -672,22 +644,13 @@ def _archive_transcript(
 
 
 def _spawn_background_ingest(
-    text_file: Path,
-    text: str,
-    document_name: str,
-    collection: str,
-    lancedb_path: Path,
-    session_prefix: str,
-    agent_handle: str = "",
-    memory_type: str = "",
-    summary: str = "",
+    text_file: Path, text: str, job: BackgroundIngestJob
 ) -> bool:
     """Write text to a temp file and spawn detached ingestion process.
 
-    Uses ``sys.executable`` to avoid PATH trust issues (same pattern as
-    ``_sync_in_background``).  Redirects stdin/stdout/stderr to DEVNULL;
-    the subprocess calls ``LoggingConfig.configure()`` itself, so the rotating
-    file handler captures all diagnostics.
+    Redirects stdin/stdout/stderr to DEVNULL; the subprocess calls
+    ``LoggingConfig.configure()`` itself, so the rotating file handler captures
+    all diagnostics.
 
     Returns True on success, False if the spawn failed (temp file cleaned up).
     """
@@ -700,20 +663,7 @@ def _spawn_background_ingest(
 
     try:
         subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "quarry._hook_entry",
-                "ingest-background",
-                str(text_file),
-                document_name,
-                collection,
-                str(lancedb_path),
-                session_prefix,
-                agent_handle,
-                memory_type,
-                summary,
-            ],
+            job.command(text_file),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -724,7 +674,7 @@ def _spawn_background_ingest(
         text_file.unlink(missing_ok=True)
         return False
 
-    logger.info("pre-compact: spawned background ingest for %s", document_name)
+    logger.info("pre-compact: spawned background ingest for %s", job.document_name)
     return True
 
 
@@ -836,11 +786,13 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
     if not _spawn_background_ingest(
         text_file,
         text,
-        document_name,
-        collection,
-        settings.lancedb_path,
-        session_id[:8],
-        agent_handle=agent_handle,
+        BackgroundIngestJob(
+            document_name=document_name,
+            collection=collection,
+            lancedb_path=settings.lancedb_path,
+            session_prefix=session_id[:8],
+            agent_handle=agent_handle,
+        ),
     ):
         return {
             "systemMessage": (

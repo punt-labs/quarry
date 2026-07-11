@@ -20,8 +20,6 @@ from quarry.__main__ import app
 from quarry._stdlib import HookConfig, load_hook_config, read_hook_stdin
 from quarry.hooks import (
     _collection_for_cwd,
-    _extract_url,
-    _extract_web_fetch_content,
     _find_registration,
     _unique_collection_name,
     extract_message_text,
@@ -639,61 +637,6 @@ class TestHandleSessionStart:
         assert isinstance(output, dict)
         ctx = str(output["additionalContext"])
         assert ctx.startswith("Quarry semantic search is active")
-
-
-class TestExtractUrl:
-    def test_extracts_url_from_tool_input(self) -> None:
-        payload: dict[str, object] = {"tool_input": {"url": "https://example.com/docs"}}
-        assert _extract_url(payload) == "https://example.com/docs"
-
-    def test_returns_none_for_missing_tool_input(self) -> None:
-        assert _extract_url({}) is None
-
-    def test_returns_none_for_non_dict_tool_input(self) -> None:
-        assert _extract_url({"tool_input": "not a dict"}) is None
-
-    def test_returns_none_for_non_http_url(self) -> None:
-        payload: dict[str, object] = {"tool_input": {"url": "ftp://x.com"}}
-        assert _extract_url(payload) is None
-
-    def test_returns_none_for_missing_url(self) -> None:
-        payload: dict[str, object] = {"tool_input": {"other": "value"}}
-        assert _extract_url(payload) is None
-
-
-class TestExtractWebFetchContent:
-    def test_extracts_from_json_result_field(self) -> None:
-        payload: dict[str, object] = {
-            "tool_response": json.dumps({"result": "<html>Hello</html>"}),
-        }
-        assert _extract_web_fetch_content(payload) == "<html>Hello</html>"
-
-    def test_extracts_from_json_string(self) -> None:
-        payload: dict[str, object] = {
-            "tool_response": json.dumps("Plain text content"),
-        }
-        assert _extract_web_fetch_content(payload) == "Plain text content"
-
-    def test_returns_none_for_missing_tool_response(self) -> None:
-        assert _extract_web_fetch_content({}) is None
-
-    def test_returns_none_for_non_string_tool_response(self) -> None:
-        assert _extract_web_fetch_content({"tool_response": 42}) is None
-
-    def test_returns_none_for_invalid_json(self) -> None:
-        assert _extract_web_fetch_content({"tool_response": "not json{{"}) is None
-
-    def test_returns_none_for_empty_result(self) -> None:
-        payload: dict[str, object] = {
-            "tool_response": json.dumps({"result": "  "}),
-        }
-        assert _extract_web_fetch_content(payload) is None
-
-    def test_returns_none_for_empty_string(self) -> None:
-        payload: dict[str, object] = {
-            "tool_response": json.dumps("   "),
-        }
-        assert _extract_web_fetch_content(payload) is None
 
 
 class TestHandlePostWebFetch:
@@ -2265,3 +2208,51 @@ class TestWebFetchScrubbing:
         passed_text = mock_content.call_args[0][0]
         assert "/Users/" not in passed_text
         assert "~/secret" in passed_text
+
+    def test_primary_branch_redacts_url_metadata(self) -> None:
+        """A capture URL's userinfo/query/fragment never reach document metadata."""
+        from quarry.models import PageContent, PageType
+
+        dirty = "https://alice:pw@example.com/reset?email=a@b.com&token=xyz#frag"
+        redacted = "https://example.com/reset"
+        payload: dict[str, object] = {
+            "tool_input": {"url": dirty},
+            "tool_response": json.dumps({"result": "<html>page</html>"}),
+        }
+        mock_pages = [
+            PageContent(
+                text="body",
+                page_number=1,
+                total_pages=1,
+                page_type=PageType.SECTION,
+                document_name=dirty,
+                document_path=dirty,
+            )
+        ]
+
+        with (
+            patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
+            patch("quarry.db.facade.get_db", return_value=MagicMock()),
+            patch(
+                "quarry.hooks._is_already_ingested", return_value=False
+            ) as mock_dedup,
+            patch("quarry.hooks._collection_for_cwd", return_value=None),
+            patch(
+                "quarry.extractors.html_extractor.HtmlExtractor.extract_from_html",
+                return_value=mock_pages,
+            ),
+            patch(
+                "quarry.ingestion.pipeline.ingest_content",
+                return_value={"chunks": 1},
+            ) as mock_content,
+            patch("quarry.ingestion.pipeline.ingest_url"),
+        ):
+            handle_post_web_fetch(payload)
+
+        stored_name = mock_content.call_args[0][1]
+        assert stored_name == redacted
+        assert "token=xyz" not in stored_name
+        assert "a@b.com" not in stored_name
+        assert "alice" not in stored_name
+        # Dedup keys on the redacted name so re-captures still match.
+        assert mock_dedup.call_args[0][0] == redacted
