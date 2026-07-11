@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from pathlib import Path
 
 from quarry.artifacts import (
@@ -17,6 +16,7 @@ from quarry.db.facade import Database
 from quarry.hooks import extract_transcript_text
 from quarry.ingestion.pipeline import ingest_content
 from quarry.sync_registry import DirectoryRegistration, SyncRegistry
+from quarry.transcript import Transcript
 
 logger = logging.getLogger(__name__)
 
@@ -112,17 +112,8 @@ def list_transcript_files(encoded_dir: str) -> list[Path]:
 
 
 def document_name_for_transcript(transcript_path: Path) -> str:
-    """Derive the document name from a transcript file path.
-
-    Format: ``session-<id[:8]>-<mtime_timestamp>``.
-    """
-    session_id = transcript_path.stem
-    try:
-        mtime = transcript_path.stat().st_mtime
-        timestamp = datetime.fromtimestamp(mtime, tz=UTC).strftime("%Y%m%dT%H%M%S")
-    except OSError:
-        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
-    return f"session-{session_id[:8]}-{timestamp}"
+    """Derive the ``session-<id[:8]>-<mtime>`` document name for a transcript."""
+    return Transcript(transcript_path).document_name()
 
 
 def is_already_ingested(
@@ -162,8 +153,7 @@ def _write_backfill_capture_file(
     """
     from quarry.capture import CaptureRequest, CaptureWriter  # noqa: PLC0415
 
-    mtime = transcript.stat().st_mtime
-    timestamp = datetime.fromtimestamp(mtime, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    timestamp = Transcript(transcript).timestamp("%Y-%m-%dT%H:%M:%SZ")
     CaptureWriter().write(
         CaptureRequest(
             project_dir=Path(project_path),

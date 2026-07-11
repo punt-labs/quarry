@@ -500,3 +500,34 @@ class TestBackfillCaptureRedaction:
         first = capture.read_bytes()
         capture = self._write(tmp_path, "path /Users/jane/proj here")
         assert capture.read_bytes() == first
+
+    def test_missing_transcript_degrades_instead_of_aborting(
+        self, tmp_path: Path
+    ) -> None:
+        """A transcript deleted mid-run must not abort the backfill.
+
+        ``stat()`` on a vanished file raises ``OSError``; the writer falls back
+        to ``now()`` and still produces the capture rather than propagating.
+        """
+        from quarry.artifacts import SessionArtifacts
+        from quarry.backfill import _write_backfill_capture_file
+
+        missing = tmp_path / "gone.jsonl"  # never created — stat() will raise
+
+        _write_backfill_capture_file(
+            project_path=str(tmp_path),
+            session_id="sess1234abcd",
+            transcript=missing,
+            artifacts=SessionArtifacts(
+                commit_shas=(),
+                pr_numbers=(),
+                branch_names=(),
+                bead_ids=(),
+            ),
+            text="ran /Users/jfreeman/x here",
+        )
+
+        captures = tmp_path / ".punt-labs" / "quarry" / "captures"
+        content = (captures / "session-sess1234.md").read_text(encoding="utf-8")
+        assert "~/x" in content
+        assert "/Users/" not in content
