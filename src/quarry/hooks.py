@@ -453,7 +453,11 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
 
         pages = HtmlExtractor().extract_from_html(content, url, url)
         if pages:
-            clean_text = "\n\n".join(p.text for p in pages)
+            from quarry.scrub import scrub_and_log  # noqa: PLC0415
+
+            # Scrub before the content reaches LanceDB: the web-captures
+            # collection is pushable, so DB ingress must be PII-clean too.
+            clean_text = scrub_and_log("\n\n".join(p.text for p in pages), "web-fetch")
             result = ingest_content(
                 clean_text,
                 url,
@@ -730,29 +734,24 @@ def _write_capture_file(
     artifacts: SessionArtifacts,
     text: str,
 ) -> None:
-    """Write session capture file to project .punt-labs/quarry/captures/.
+    """Write the PreCompact session capture via the shared CaptureWriter.
 
-    Scrubs secrets and profanity before writing — capture files are
-    git-tracked.  Fails silently so capture file issues never block
-    the main ingest flow.
+    The writer scrubs secrets, PII, and profanity before any bytes reach the
+    git-tracked capture file, and fails silently so capture issues never
+    block the main ingest flow.
     """
-    try:
-        from quarry.artifacts import format_artifacts_frontmatter  # noqa: PLC0415
-        from quarry.scrub import scrub_and_log  # noqa: PLC0415
+    from quarry.capture import CaptureRequest, CaptureWriter  # noqa: PLC0415
 
-        frontmatter = format_artifacts_frontmatter(session_id, timestamp, artifacts)
-        if not frontmatter:
-            return
-
-        captures_dir = project_dir / ".punt-labs" / "quarry" / "captures"
-        captures_dir.mkdir(parents=True, exist_ok=True)
-
-        content = scrub_and_log(frontmatter + "\n\n" + text, "pre-compact")
-        filename = f"session-{session_id[:8]}.md"
-        capture_file = captures_dir / filename
-        capture_file.write_text(content, encoding="utf-8")
-    except Exception:
-        logger.exception("pre-compact: capture file write failed")
+    CaptureWriter().write(
+        CaptureRequest(
+            project_dir=project_dir,
+            session_id=session_id,
+            timestamp=timestamp,
+            artifacts=artifacts,
+            text=text,
+            label="pre-compact",
+        )
+    )
 
 
 def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
