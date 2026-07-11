@@ -399,6 +399,14 @@ run \texttt{quarry install}, and start searching.
   engine (RapidOCR), and all hooks execute locally. No data is sent to any
   cloud service. Captured web pages are re-fetched and stored locally, not
   forwarded through a proxy.
+
+  One planned feature involves the network by design: an opt-in sync that pushes
+  captured session transcripts to a \emph{user-owned} private git repository for
+  cross-machine continuity. It is off by default and never targets a Punt Labs
+  server. Captures are PII-redacted at write time---secrets, filesystem paths,
+  email addresses, and the local hostname are stripped before a capture file is
+  written (DES-036)---so redaction, not trust in a remote, is the mitigation for
+  anything that would leave the machine.
 \end{faqpair}
 
 \begin{faqpair}{How much does it cost?}\label{faq:cost}
@@ -568,9 +576,13 @@ run \texttt{quarry install}, and start searching.
   cross-encoder reranker degrades quality on technical corpora, so one is adopted
   only if it wins on Quarry's own corpus. This direction touches DES-004's ``the
   embedding model is fixed'' stance---late chunking needs a long-context model
-  and may require swapping off arctic-embed's 512-token cap---which is an open
-  decision to be settled by an evaluation harness measured on Quarry's own data
-  (\texttt{docs/retrieval-quality-improvements.md}).
+  and may require swapping off arctic-embed's 512-token cap---an open decision
+  the evaluation harness is now in place to settle. Phase~0/1 have landed on main
+  (\texttt{make eval}, measuring per-bucket MRR/success@k plus a
+  metadata-pollution diagnostic on Quarry's own data); full-fixture curation and
+  the lever bake-offs are the remaining work
+  (\texttt{docs/retrieval-quality-improvements.md},
+  \texttt{docs/eval-harness-design.md}).
 
   \textbf{OCR accuracy on degraded scans (low risk):} RapidOCR produces
   good-enough text for semantic search but lower character accuracy than
@@ -643,9 +655,19 @@ run \texttt{quarry install}, and start searching.
   mid-flush visibility and within-file crash-resume (DES-034). Over 1{,}100
   automated tests, strict type checking (mypy + pyright).
 
+  \textbf{Landed on main since v1.18.2 (pending the next release):} the
+  retrieval-quality eval harness---\texttt{make eval}, an internal dev/CI tool
+  reporting per-bucket MRR/success@k plus a metadata-pollution diagnostic, built
+  on a parameterizable retrieval seam (\texttt{src/quarry/retrieval/}) shared by
+  production and eval (Phase~0/1); and capture-path write-time PII redaction that
+  scrubs secrets, PII, and profanity from session transcripts and WebFetch
+  captures before they are written (DES-036).
+
   \textbf{Roadmap:} \texttt{quarry sync --watch} for live filesystem monitoring,
-  PII detection and redaction, Google Drive connector, and a retrieval-quality
-  evaluation harness with context-aware embeddings (see \faqref{faq:tech-risks}).
+  index-wide PII detection over arbitrary ingested files, a Google Drive
+  connector, and the retrieval-ranking lever bake-offs---context-aware embeddings
+  and metadata down-weighting---that the eval harness is built to settle (see
+  \faqref{faq:tech-risks}).
 \end{faqpair}
 
 \begin{faqpair}{What is the scaling story?}\label{faq:scaling}
@@ -864,10 +886,10 @@ Defines scope. Features are categorized to prevent scope creep.
 \subsection*{Should Do}
 
 \begin{enumerate}[nosep,leftmargin=2.5em]
-  \featureitem{Retrieval-quality eval harness}{A committed query set with graded relevance judgments and a \texttt{quarry eval} entry point (nDCG@10, Recall@50, metadata-pollution) to A/B context-aware embeddings---contextual embeddings or late chunking---and metadata down-weighting against the current bi-encoder baseline (see \faqref{faq:tech-risks}).}\label{feat:eval-harness}
+  \featureitem{Retrieval-quality eval harness}{A \texttt{make eval} harness (internal dev/CI tooling, not an end-user command) over a committed query set, reporting per-bucket MRR and success@k plus a metadata-pollution diagnostic. Phase~0 (the parameterizable retrieval seam in \texttt{src/quarry/retrieval/}) and Phase~1 (\texttt{make eval} with ranx metrics and a known-item baseline) have landed on main; full-fixture curation and the lever bake-offs---metadata down-weighting and context-aware embeddings (contextual embeddings or late chunking)---remain, with graded relevance judgments and nDCG@10 deferred to Phase~2 (see \faqref{faq:tech-risks}).}\label{feat:eval-harness}
   \featureitem{Live filesystem monitoring}{\texttt{sync --watch} automatically re-indexes on file changes.}\label{feat:sync-watch}
   \featureitem{Google Drive connector}{Ingest cloud-hosted documents without manual download.}\label{feat:google-drive}
-  \featureitem{PII detection and redaction}{Prevents sensitive personal information from entering the search index.}\label{feat:pii-redaction}
+  \featureitem{Index-wide PII detection}{General PII detection over arbitrary ingested files, before content enters the search index. Distinct from the capture-path write-time redaction that has already landed on main (session transcripts and WebFetch captures; DES-036)---this extends redaction to deliberately-ingested documents.}\label{feat:pii-redaction}
 \end{enumerate}
 
 \subsection*{Won't Do}
