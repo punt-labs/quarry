@@ -488,6 +488,37 @@ def test_email_multiple_all_redacted() -> None:
     assert counts.get("email", 0) == 3
 
 
+@pytest.mark.parametrize(
+    "raw,tail",
+    [
+        ("jmf@pobox.com.", "."),
+        ("jmf@pobox.com. ", ". "),
+        ("jmf@pobox.com...", "..."),
+        ("jmf@pobox.com,", ","),
+        ("jmf@pobox.com)", ")"),
+        ("jmf@pobox.com", ""),
+    ],
+)
+def test_email_redacted_before_trailing_punctuation(raw: str, tail: str) -> None:
+    """A sentence-final address must redact — the trailing char is not part of it.
+
+    Regression: the old ``(?![\\w.-])`` lookahead rejected a match when a period
+    followed, leaking ``jmf@pobox.com.`` — the most common address context in prose.
+    """
+    out, counts = _pii_scrub(f"reach {raw} ok")
+    assert "jmf@pobox.com" not in out
+    assert out == f"reach [REDACTED:email]{tail} ok"
+    assert counts.get("email", 0) == 1
+
+
+def test_email_multi_label_tld_with_trailing_period() -> None:
+    """A multi-label TLD still matches via backtracking, even with a trailing dot."""
+    out, counts = _pii_scrub("write jmf@pobox.co.uk. now")
+    assert "jmf@pobox.co.uk" not in out
+    assert out == "write [REDACTED:email]. now"
+    assert counts.get("email", 0) == 1
+
+
 # ---------------------------------------------------------------------------
 # PII: hostname (bounded scope — anti false positive)
 # ---------------------------------------------------------------------------
@@ -523,6 +554,20 @@ def test_hostname_full_dotted_form_redacted() -> None:
         "box srv.corp.example.com here", local_hostname="srv.corp.example.com"
     )
     assert "srv.corp.example.com" not in out
+    assert "[REDACTED:hostname]" in out
+    assert counts.get("hostname", 0) == 1
+
+
+def test_hostname_case_insensitive_leaf_redacted() -> None:
+    """DNS/mDNS is case-insensitive — a lowercased occurrence must still redact.
+
+    Regression: without ``re.IGNORECASE`` a captured ``jims-macbook-pro`` leaked
+    when the resolved host was ``Jims-MacBook-Pro.local``.
+    """
+    out, counts = _pii_scrub(
+        "host jims-macbook-pro is up", local_hostname="Jims-MacBook-Pro.local"
+    )
+    assert "jims-macbook-pro" not in out
     assert "[REDACTED:hostname]" in out
     assert counts.get("hostname", 0) == 1
 

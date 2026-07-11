@@ -91,11 +91,19 @@ DEFAULT_PROFANITY: tuple[str, ...] = (
 # no username to generalize, and it is not the PII class this targets.
 _PATH_RE = re.compile(r"(?:/Users|/home)/[^/\s]+")
 
-# RFC-shaped email. The lookbehind/lookahead keep the match from starting or
-# ending inside a longer token. The ``[REDACTED:email]`` marker has no ``@``,
-# so a scrubbed address cannot re-match.
+# RFC-shaped email. The lookbehind keeps the match from starting inside a longer
+# token; the trailing ``(?!\w)`` only rejects a match that would continue into
+# another word character, so a sentence-final ``jmf@pobox.com.`` still redacts
+# (the ``.`` is not ``\w``) — excluding ``.``/``-`` from the trailing set here
+# was a leak, since a period follows an address in the most common prose context.
+# Multi-label TLDs (``jmf@pobox.co.uk``) still match: the engine backtracks the
+# greedy domain so ``\.[A-Za-z]{2,}`` lands on the final label. The
+# ``[REDACTED:email]`` marker has no ``@``, so a scrubbed address cannot re-match.
+# Accepted limit: the ASCII character classes do not match unicode/IDN addresses
+# (e.g. ``用户@例え.jp``); over-matching ``git@github.com:org/repo.git`` SSH remotes
+# is over-redaction, not a leak.
 _EMAIL_RE = re.compile(
-    r"(?<![\w.+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?![\w.-])"
+    r"(?<![\w.+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?!\w)"
 )
 
 
@@ -104,7 +112,7 @@ _EMAIL_RE = re.compile(
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ScrubConfig:
     """Scrubber configuration.  Frozen for safe sharing across calls."""
 
@@ -268,9 +276,13 @@ class Scrubber:
         A ``None`` ``local_hostname`` resolves the live hostname via
         ``socket.gethostname()``.  The forms are the full hostname, the name
         without a trailing ``.local`` (mDNS), and the short leaf when it is at
-        least four characters (the length guard prevents redacting a 2-3 char
-        leaf that collides with a common word).  Returns ``None`` when no
-        usable form exists.
+        least four characters.  Accepted limit: the length guard prevents
+        redacting a 2-3 char leaf that collides with a common word, but a leaf
+        ≥4 chars that happens to be an English word can still over-redact — an
+        accepted tradeoff (closing the leak direction wins for a security
+        property).  Matching is case-insensitive because DNS/mDNS names are
+        (``Jims-MacBook-Pro`` and ``jims-macbook-pro`` name the same host).
+        Returns ``None`` when no usable form exists.
         """
         hostname = self._config.local_hostname
         host = hostname if hostname is not None else socket.gethostname()
@@ -284,7 +296,7 @@ class Scrubber:
         if not usable:
             return None
         body = "|".join(re.escape(f) for f in usable)
-        return re.compile(rf"\b(?:{body})\b")
+        return re.compile(rf"\b(?:{body})\b", re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
