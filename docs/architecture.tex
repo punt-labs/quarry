@@ -38,7 +38,7 @@
 
 \title{Quarry: Technical Architecture Specification}
 \author{Local Semantic Search for AI Agents}
-\date{March 2026}
+\date{July 2026}
 \hypersetup{
   pdftitle={Quarry: Technical Architecture Specification},
   pdfauthor={Punt Labs},
@@ -117,11 +117,14 @@ Installed services use TLS with TOFU certificate pinning (DES-020)
 
 When a remote server is configured (DES-021), the CLI routes
 all data commands over HTTPS to the server, with only authentication
-and administration commands remaining local.  As of v1.12.4,
-\texttt{find}, \texttt{show}, \texttt{status}, \texttt{ingest},
-\texttt{remember}, \texttt{delete}, \texttt{sync}, and all
-\texttt{list} subcommands route remotely.  Registration
-create/delete and \texttt{use} are the remaining gaps.
+and administration commands remaining local.  \texttt{find},
+\texttt{show}, \texttt{status}, \texttt{ingest}, \texttt{remember},
+\texttt{delete}, \texttt{sync}, all \texttt{list} subcommands, and
+directory \texttt{register}/\texttt{deregister} route remotely.
+\texttt{use} is local by design: it sets the client's persistent default
+database, but the remote server is fixed to the database it was started
+with, so switching databases is a client-side setting rather than a
+remote call.
 
 \subsection{Surface Summary}
 
@@ -142,55 +145,110 @@ Plugin      & Hook shell commands  & Auto-register, auto-ingest, compaction safe
 \section{Module Responsibilities}
 % ===================================================================
 
-\subsection{Data Layer}
+\subsection{Data Layer (\modpath{db/})}
+
+The database facade composes five subsystems behind a single entry
+point (\texttt{Database}), so callers pass one object rather than a raw
+LanceDB connection.
 
 \begin{center}
 \begin{tabular}{llp{7cm}}
 \toprule
 \textbf{Module} & \textbf{File} & \textbf{Responsibility} \\
 \midrule
-Models    & \modpath{models.py}   & Immutable dataclasses: \texttt{PageType}
-            enum, \texttt{PageContent}, \texttt{Chunk},
-            \texttt{PageAnalysis}.  All \texttt{@dataclass(frozen=True)}. \\
-Types     & \modpath{types.py}    & Protocol definitions for external
-            dependencies: \texttt{LanceDB}, \texttt{LanceTable},
-            \texttt{LanceQuery}, \texttt{ListTablesResult},
-            \texttt{OcrBackend}, \texttt{EmbeddingBackend}.
-            Structural typing instead of \texttt{Any}. \\
-Config    & \modpath{config.py}   & \texttt{Settings} (pydantic
-            \texttt{BaseSettings}), \texttt{resolve\_db\_paths()} for
-            named databases, ONNX model constants. \\
-Database  & \modpath{database.py} & LanceDB operations:
-            \texttt{insert\_chunks}, \texttt{search},
-            \texttt{list\_documents}, \texttt{delete\_document},
-            \texttt{count\_chunks}, etc.  Single table
-            \texttt{chunks}. \\
+Facade        & \modpath{db/facade.py}        & \texttt{Database} ---
+                single entry point composing the store, search, catalog,
+                schema, and optimizer subsystems (DES-010). \\
+Chunk store   & \modpath{db/chunk\_store.py}   & Insert,
+                progressive-flush, delete, and count operations on the
+                \texttt{chunks} table. \\
+Chunk search  & \modpath{db/chunk\_search.py}  & Vector-similarity
+                search under the cosine metric (the vector channel of
+                hybrid search). \\
+Chunk catalog & \modpath{db/chunk\_catalog.py} & List documents, list
+                collections, and fetch page text. \\
+Optimizer     & \modpath{db/optimizer.py}      & Table compaction, FTS
+                index rebuild, and per-collection indexing. \\
+Schema        & \modpath{db/schema.py}         & Chunks-table schema and
+                idempotent migration (agent-memory columns, FTS index). \\
+Storage       & \modpath{db/storage.py}        & LanceDB connection,
+                database discovery, and size formatting. \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-\subsection{Ingestion Pipeline}
+Supporting types: \modpath{models.py} (immutable \texttt{PageContent},
+\texttt{Chunk}, \texttt{PageAnalysis} dataclasses), \modpath{types.py}
+(structural \texttt{Protocol}s for LanceDB, OCR, and embedding
+backends), \modpath{results.py} (\texttt{SearchResult},
+\texttt{SearchFilter}, \texttt{WORST\_CASE\_DISTANCE}), and
+\modpath{config.py} (\texttt{Settings}, \texttt{resolve\_db\_paths()},
+ONNX model constants).
+
+\subsection{Ingestion Pipeline (\modpath{ingestion/})}
 
 \begin{center}
 \begin{tabular}{llp{7cm}}
 \toprule
 \textbf{Module} & \textbf{File} & \textbf{Responsibility} \\
 \midrule
-Pipeline    & \modpath{pipeline.py}    & Orchestrator: dispatches by
-              format, chunks, embeds, stores.  Entry points:
+Pipeline    & \modpath{ingestion/pipeline.py}    & Orchestrator:
+              dispatch by format, chunk, embed, store.  Entry points
               \texttt{ingest\_document}, \texttt{ingest\_content},
-              \texttt{ingest\_auto} (URL with sitemap discovery). \\
-Chunker     & \modpath{chunker.py}     & Text splitting with overlap.
-              Respects page boundaries and heading structure. \\
-Collections & \modpath{collections.py} & \texttt{derive\_collection()}
-              --- determines collection name from path or URL. \\
+              \texttt{ingest\_url}. \\
+Chunker     & \modpath{ingestion/chunker.py}     & Split page text into
+              overlapping chunks; respects page and heading boundaries. \\
+URL ingester & \modpath{ingestion/url\_ingester.py} & Fetch, parse HTML,
+              chunk, embed, store.  \texttt{ingest\_url} takes an opt-in
+              \texttt{content\_scrubber} (see PII redaction). \\
+Web fetch   & \modpath{ingestion/web\_fetch.py}  & Fetch a URL over
+              HTTP(S) and return validated HTML text. \\
+Ingest stats & \modpath{ingestion/ingest\_stats.py} & Per-format ingest
+              counters merged into an ingest result. \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-\subsection{Format Processors}
+Format extraction lives in \modpath{extractors/}; embedding and OCR
+provider selection in \modpath{ingestion/provider.py},
+\modpath{ingestion/backends.py}, and \modpath{ingestion/ocr\_local.py}.
 
-Each processor converts a source format into
+\subsection{Retrieval Seam (\modpath{retrieval/})}
+
+Hybrid search runs through one parameterizable seam shared by every
+surface and by the eval harness, so the production path and the
+committed baseline cannot drift.
+
+\begin{center}
+\begin{tabular}{llp{7cm}}
+\toprule
+\textbf{Module} & \textbf{File} & \textbf{Responsibility} \\
+\midrule
+Service    & \modpath{retrieval/service.py}   & \texttt{SearchService}
+             --- the single call every surface (CLI, HTTP, MCP) makes
+             for search.  Kills remote/local divergence (bug class 3). \\
+Hybrid     & \modpath{retrieval/hybrid.py}    & \texttt{HybridRetriever}
+             --- vector + BM25 channels fused with RRF, behind a
+             config. \\
+Config     & \modpath{retrieval/config.py}    & \texttt{RetrievalConfig}
+             --- frozen retrieval knobs (RRF $k$, over-fetch, cosine
+             metric, decay rate, reranker).  Defaults reproduce shipped
+             search bit-for-bit. \\
+Protocols  & \modpath{retrieval/protocols.py} & \texttt{Retriever} and
+             \texttt{Reranker} structural interfaces (one method
+             each). \\
+Fusion     & \modpath{retrieval/fusion.py}    & \texttt{RrfFusion} ---
+             Reciprocal Rank Fusion with optional temporal decay. \\
+Reranker   & \modpath{retrieval/reranker.py}  & \texttt{NullReranker}
+             --- pass-through Null Object when reranking is off. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Format Processors (\modpath{extractors/})}
+
+Each extractor implements a common \texttt{Protocol}
+(\modpath{extractors/protocol.py}) and converts a source format into
 \texttt{list[PageContent]}:
 
 \begin{center}
@@ -198,21 +256,20 @@ Each processor converts a source format into
 \toprule
 \textbf{Module} & \textbf{File} & \textbf{Formats} \\
 \midrule
-PDF           & \modpath{pdf\_analyzer.py}           & PDF (text via
-                PyMuPDF, OCR fallback for image pages) \\
-Image         & \modpath{image\_analyzer.py}          & PNG, JPG, TIFF,
-                BMP, WebP (OCR) \\
-Text          & \modpath{text\_processor.py}          & TXT, MD, LaTeX, DOCX \\
-Code          & \modpath{code\_processor.py}          & 30+ languages
-                (AST-aware splitting) \\
-HTML          & \modpath{html\_processor.py}          & HTML
+PDF           & \modpath{extractors/pdf\_extractor.py}          & PDF
+                (text via PyMuPDF, OCR fallback for image pages) \\
+Image         & \modpath{extractors/image\_extractor.py}        & PNG,
+                JPG, TIFF, BMP, WebP (OCR) \\
+Text          & \modpath{extractors/text\_extractor.py}         & TXT,
+                MD, LaTeX, DOCX \\
+Code          & \modpath{extractors/code\_extractor.py}         & 30+
+                languages (tree-sitter section splitting) \\
+HTML          & \modpath{extractors/html\_extractor.py}         & HTML
                 (boilerplate stripping, Markdown conversion) \\
-Spreadsheet   & \modpath{spreadsheet\_processor.py}   & XLSX, CSV
-                (tabular serialization) \\
-Presentation  & \modpath{presentation\_processor.py}  & PPTX
-                (slide-per-chunk with notes) \\
-Dispatcher    & \modpath{text\_extractor.py}          & Extracts text
-                from text-based PDF pages (PyMuPDF) \\
+Spreadsheet   & \modpath{extractors/spreadsheet\_extractor.py}  & XLSX,
+                CSV (LaTeX tabular serialization) \\
+Presentation  & \modpath{extractors/presentation\_extractor.py} & PPTX
+                (slide-per-chunk) \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -224,16 +281,49 @@ Dispatcher    & \modpath{text\_extractor.py}          & Extracts text
 \toprule
 \textbf{Module} & \textbf{File} & \textbf{Responsibility} \\
 \midrule
-Factory     & \modpath{backends.py}    & Thread-safe factory with
-              double-checked locking.
-              \texttt{get\_ocr\_backend()} and
-              \texttt{get\_embedding\_backend()} return cached
+Factory     & \modpath{ingestion/backends.py}  & Thread-safe factory
+              with double-checked locking.  \texttt{get\_ocr\_backend()}
+              and \texttt{get\_embedding\_backend()} return cached
               singletons. \\
-OCR         & \modpath{ocr\_local.py}  & Local OCR via RapidOCR
+OCR         & \modpath{ingestion/ocr\_local.py} & Local OCR via RapidOCR
               (offline, no setup). \\
-Embeddings  & \modpath{embeddings.py}  & Local ONNX embedding
-              (snowflake-arctic-embed-m-v1.5, 768-dim, 512
-              tokens). \\
+Embeddings  & \modpath{embeddings.py}          & Local ONNX embedding
+              (snowflake-arctic-embed-m-v1.5, 768-dim, 512 tokens).
+              Vectors are L2-normalized to unit length. \\
+Provider    & \modpath{ingestion/provider.py}  & ONNX Runtime execution
+              provider auto-detection (CUDA/FP16 or CPU/int8). \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Capture and Redaction}
+
+Session transcripts and WebFetch auto-captures are scrubbed at write
+time before any bytes reach a git-tracked (and soon pushed) surface
+(DES-036).
+
+\begin{center}
+\begin{tabular}{llp{7cm}}
+\toprule
+\textbf{Module} & \textbf{File} & \textbf{Responsibility} \\
+\midrule
+Capture writer & \modpath{capture.py}       & \texttt{CaptureWriter} ---
+                 the single choke point both \texttt{.md} producers
+                 route through.  Scrubs, then atomically writes. \\
+Scrubber       & \modpath{scrub.py}         & \texttt{Scrubber} ---
+                 ordered redaction passes (secrets, paths, emails,
+                 hostname, profanity).  Idempotent. \\
+Scrub rules    & \modpath{scrub\_rules.py}  & Secret-detection regex
+                 catalog applied by the scrubber. \\
+Capture URL    & \modpath{capture\_url.py}  & \texttt{CaptureUrl} ---
+                 strips userinfo/query/fragment from a captured URL's
+                 metadata form. \\
+Web capture    & \modpath{web\_capture.py}  & Parse a PostToolUse
+                 WebFetch payload into URL + fetched content. \\
+Transcript     & \modpath{transcript.py}    & The session transcript
+                 file and its derived identifiers. \\
+Backfill       & \modpath{backfill.py}      & Backfill historical
+                 session transcripts through the capture writer. \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -245,13 +335,15 @@ Embeddings  & \modpath{embeddings.py}  & Local ONNX embedding
 \toprule
 \textbf{Module} & \textbf{File} & \textbf{Responsibility} \\
 \midrule
-Sync     & \modpath{sync.py}          & Directory sync: discover
-           files, compute delta (new/changed/deleted),
-           ingest/delete accordingly.
-           \texttt{ThreadPoolExecutor} for concurrent ingestion. \\
-Registry & \modpath{sync\_registry.py} & SQLite registry of watched
-           directories.  Maps directories to collections with
-           timestamps. \\
+Sync       & \modpath{sync.py}           & Directory sync: discover
+             files, compute delta (new/changed/deleted),
+             ingest/delete accordingly. \\
+Discovery  & \modpath{sync\_discovery.py} & Walk, filter, and hash files
+             for the sync delta. \\
+Ingest     & \modpath{sync\_ingest.py}    & Progressive per-collection
+             ingest (producer/consumer with within-file resume). \\
+Registry   & \modpath{sync\_registry.py}  & SQLite registry of watched
+             directories and per-file state. \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -279,9 +371,14 @@ Hook Entry  & \modpath{\_hook\_entry.py} & Lightweight hook dispatcher
               that bypasses full CLI import chain.  Dispatches
               via \texttt{sys.argv} with lazy imports
               ($\sim$0.1\,s vs $\sim$1.5\,s for full CLI). \\
-Remote      & \modpath{remote.py}       & Remote server HTTP client:
+Remote      & \modpath{remote.py}       & Remote server config:
               mcp-proxy config read/write, TOFU CA cert fetch
               and storage, connection validation. \\
+Remote client & \modpath{remote\_client.py} & \texttt{RemoteClient} ---
+              authenticated HTTP client the CLI uses to route data
+              commands to a remote daemon over pinned-CA HTTPS. \\
+Daemon      & \modpath{service.py}      & \texttt{quarry serve} lifecycle
+              via \texttt{launchd}/\texttt{systemd}. \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -296,8 +393,6 @@ Remote      & \modpath{remote.py}       & Remote server HTTP client:
 Formatting & \modpath{formatting.py} & Pre-formatted plain text
              output using unicode box-drawing.  Used by both CLI
              and MCP for consistent output. \\
-Results    & \modpath{results.py}    & \texttt{SyncResult} dataclass
-             for sync operation reporting. \\
 Sitemap    & \modpath{sitemap.py}    & Sitemap discovery and URL
              extraction for web ingestion. \\
 Doctor     & \modpath{doctor.py}     & Health checks and install flow:
@@ -558,12 +653,15 @@ snowflake-arctic-embed-m-v1.5 via ONNX Runtime:
   \item 768-dimensional vectors, 512-token context window
   \item Asymmetric retrieval: queries are prefixed with a search
     instruction, documents are not
+  \item Output vectors are L2-normalized to unit length, so search runs
+    under the \textbf{cosine} metric and similarity
+    ($1 - \text{distance}$) is bounded true cosine in $[-1, 1]$
   \item int8 quantized ONNX for CPU ($\sim$120\,MB), FP16 for CUDA
     ($\sim$220\,MB)
   \item Provider auto-detection: CUDA+FP16 when available, CPU+int8
     fallback.  \texttt{QUARRY\_PROVIDER} env var overrides
     (\texttt{cpu}, \texttt{cuda}, or unset for auto).
-    See DES-016 and \texttt{provider.py}.
+    See DES-016 and \modpath{ingestion/provider.py}.
   \item Auto-downloads on first use via \texttt{huggingface\_hub}
 \end{itemize}
 
@@ -596,13 +694,22 @@ changes semantic meaning enough to affect search ranking.
 
 \subsection{Hybrid Search}
 
-When an \texttt{agent\_handle} filter is provided, quarry uses dual-channel
-retrieval instead of vector-only search.
+Hybrid search is the \textbf{default for every query} --- there is no
+vector-only path.  All three surfaces (CLI, HTTP, MCP) construct a
+\texttt{SearchService} (\modpath{retrieval/service.py}) and call its one
+\texttt{search} method, so the surfaces cannot drift into different
+retrieval behavior.  This closes bug class 3 (remote/local divergence),
+where the HTTP \texttt{/search} endpoint once ran vector-only search
+while the CLI ran hybrid.  \texttt{SearchService} wraps a
+\texttt{HybridRetriever} parameterized by a \texttt{RetrievalConfig}
+whose defaults reproduce the shipped pipeline bit-for-bit.
 
 \textbf{Channels:}
 \begin{enumerate}
-  \item \textbf{Vector similarity} --- existing ANN search via LanceDB
-  \item \textbf{BM25 full-text search} --- Tantivy index on the \texttt{text} column, created during schema migration
+  \item \textbf{Vector similarity} --- ANN search via LanceDB under the
+    cosine metric
+  \item \textbf{BM25 full-text search} --- Tantivy index on the
+    \texttt{text} column, created during schema migration
 \end{enumerate}
 
 Results are fused using Reciprocal Rank Fusion (RRF):
@@ -610,15 +717,36 @@ Results are fused using Reciprocal Rank Fusion (RRF):
   \text{score}(m) = \sum_{\text{channel}} \frac{1}{60 + \text{rank}_{\text{channel}}(m)}
 \]
 
-\textbf{Temporal decay} applies to agent-scoped memories (non-empty \texttt{agent\_handle}):
+\textbf{FTS scoring.}  FTS rows arrive from Tantivy without a vector
+distance.  Rather than displaying a synthetic $1.00$ (which made
+irrelevant keyword hits appear as perfect matches), each FTS-only row is
+annotated with its \emph{true} cosine distance against the query vector;
+a row whose stored vector is missing or zero-length is assigned the
+worst-case distance (similarity $-1$) instead.
+
+\textbf{Temporal decay} is not a second retrieval channel --- it is an
+additional weighting term applied only to agent-scoped memories (non-empty
+\texttt{agent\_handle}).  An \texttt{agent\_handle} filter therefore
+narrows the result set and enables decay; it does not switch retrieval
+modes.
 \[
   w = e^{-\lambda \cdot h}
 \]
-where $\lambda$ is the decay rate and $h$ is hours since ingestion. Unscoped documents ($\texttt{agent\_handle} = \text{``''}$) are exempt from decay.
+where $\lambda$ is the decay rate and $h$ is hours since ingestion.
+Unscoped documents ($\texttt{agent\_handle} = \text{``''}$) are exempt
+from decay (production leaves $\lambda = 0$).
 
-When no \texttt{agent\_handle} is provided, search uses the existing vector-only path (backwards compatible).
+\subsection{Retrieval Seam and Evaluation}
 
-\subsection{Agent Memory Schema}
+The \modpath{retrieval/} package is a deliberate seam: the same
+\texttt{HybridRetriever} that serves production also serves the retrieval
+evaluation harness (\texttt{make eval}), so the committed baseline
+measures the retriever that actually ships.  \texttt{RetrievalConfig}
+exposes the levers a bake-off varies --- RRF $k$, over-fetch multiplier,
+distance metric, exact-vs-ANN vector search, reranker, and embedding
+strategy --- without forking the code path.  The harness is internal
+dev/CI tooling; it is not an end-user command.  See
+\texttt{docs/eval-harness-design.md}.
 
 Three columns extend the chunks table for agent-scoped memory:
 
@@ -836,6 +964,57 @@ are sanitized before logging: control characters stripped via
 \texttt{\_CONTROL\_CHAR\_RE} and truncated to 64 characters to prevent
 log injection (CWE-117) and log flooding.
 
+\subsection{Capture PII Redaction (DES-036)}
+
+Captures --- session transcripts and WebFetch auto-captures --- are the
+input to the planned private shadow-repo sync (quarry-ow3k), so
+un-redacted content in a capture is a leak into a git-tracked (and soon
+pushed) surface.  Every capture is scrubbed \textbf{at write time},
+fail-closed, before any bytes reach disk.
+
+\textbf{Scrubber (\modpath{scrub.py}).}  A \texttt{Scrubber} applies
+redaction passes in a load-bearing order: \emph{secrets $\to$ paths
+$\to$ emails $\to$ hostname $\to$ profanity}.  Email must precede
+hostname so a hostname inside an email domain is subsumed by the
+whole-email redaction rather than half-redacted (which would leak the
+local part).  Each pass emits a marker no pass can re-match, so scrubbing
+is idempotent --- backfill may safely re-run.
+
+\begin{itemize}
+  \item \textbf{Secrets} (\modpath{scrub\_rules.py}): GitHub PATs, AWS
+    keys, Anthropic/OpenAI keys, bearer headers, JWTs, PEM/GPG private
+    key blocks, \texttt{KEY=value} env secrets, Slack tokens.
+  \item \textbf{Paths}: home directories (\texttt{/Users/<user>/},
+    \texttt{/home/<user>/}) collapse to \texttt{\~{}}, retaining the
+    useful deeper structure.
+  \item \textbf{Emails}: any RFC-shaped address $\to$
+    \texttt{[REDACTED:email]}.  A placeholder redacts every address
+    (completeness beats attribution), not an ethos-handle mapping.
+  \item \textbf{Hostname}: bounded to the local machine name
+    (\texttt{socket.gethostname()} + \texttt{.local} + short leaf), not
+    arbitrary dotted-token detection --- the latter has a catastrophic
+    false-positive rate on identifiers like \texttt{github.com} or
+    \texttt{quarry.db.facade}.
+\end{itemize}
+
+\textbf{Single write choke point (\modpath{capture.py}).}  Both
+\texttt{.md} producers --- the PreCompact hook (\modpath{hooks.py}) and
+the backfill path (\modpath{backfill.py}) --- route through one
+\texttt{CaptureWriter}.  Scrubbing runs to completion before an atomic
+temp-file rename, so a scrub failure writes no file and a partial or
+half-redacted capture is never left behind.
+
+\textbf{WebFetch DB-ingest.}  The WebFetch auto-capture path scrubs page
+text via an opt-in \texttt{content\_scrubber} parameter on
+\texttt{ingest\_url} (\modpath{ingestion/pipeline.py}).  The parameter
+defaults to \texttt{None}: user-initiated \texttt{quarry ingest <url>},
+sitemap crawls, and directory sync are \emph{not} scrubbed --- redaction
+is a captures concern, not a general-ingestion one.  The URL's persisted
+metadata form is redacted separately by \texttt{CaptureUrl}
+(\modpath{capture\_url.py}), which strips userinfo, query, and fragment
+(preserving IPv6 brackets) before the same text scrubber runs over the
+bare \texttt{scheme://host/path}.
+
 % ===================================================================
 \section{Deployment}
 % ===================================================================
@@ -968,9 +1147,9 @@ SessionStart  & * & Auto-register directory + background sync &
   No \\
 PostToolUse   & quarry tools & Suppress tool output formatting &
   No \\
-PostToolUse   & WebFetch & Auto-ingest fetched URL &
+PostToolUse   & WebFetch & Auto-ingest fetched URL (scrubbed) &
   No \\
-PreCompact    & * & Capture transcript as session notes &
+PreCompact    & * & Capture transcript as session notes (scrubbed) &
   No \\
 \bottomrule
 \end{tabular}
@@ -989,14 +1168,19 @@ atomic PID-file locking (\texttt{O\_CREAT|O\_EXCL}) at
 \texttt{handle\_post\_web\_fetch()} ingests URLs fetched during a
 session into the \texttt{web-captures} collection.  Deduplicates by
 document name.  Prefers already-fetched content from the tool response
-(avoids re-fetch, reduces SSRF surface).
+(avoids re-fetch, reduces SSRF surface).  Both ingress branches (primary
+and the \texttt{ingest\_url} re-fetch fallback) scrub page text and
+redact the URL metadata before content reaches the pushable
+\texttt{web-captures} collection (DES-036).
 
 \subsection{Pre-Compact Capture}
 
 \texttt{handle\_pre\_compact()} reads the transcript (JSONL) and
 ingests it into the \texttt{session-notes} collection.  Extracts
 user/assistant message text, skipping tool-use blocks.  Capped at
-500{,}000 characters.
+500{,}000 characters.  The capture file is written through the shared
+\texttt{CaptureWriter}, which scrubs secrets, PII, and profanity before
+the atomic write (DES-036).
 
 % ===================================================================
 \section{CLI Commands}
@@ -1054,16 +1238,18 @@ remote server over HTTPS with the pinned CA cert.  Only authentication
 commands (\texttt{login}, \texttt{logout}, \texttt{remote}) and
 administration commands (\texttt{install}, \texttt{uninstall},
 \texttt{serve}, \texttt{mcp}, \texttt{version}) are local-only.
-As of v1.12.4, all data commands (\texttt{find}, \texttt{show},
-\texttt{status}, \texttt{ingest}, \texttt{remember}, \texttt{delete},
-\texttt{sync}, and all \texttt{list} subcommands) route remotely.
-Registration create/delete and \texttt{use} remain local-only.
+All data commands --- \texttt{find}, \texttt{show}, \texttt{status},
+\texttt{ingest}, \texttt{remember}, \texttt{delete}, \texttt{sync},
+every \texttt{list} subcommand, and directory
+\texttt{register}/\texttt{deregister} --- route remotely.  \texttt{use}
+is local-only by design (the remote server is fixed to its own
+database).
 
 % ===================================================================
 \section{Test Architecture}
 % ===================================================================
 
-1559 tests across 44 files.  Three tiers plus integration:
+Roughly 1{,}500 tests across the suite.  Three tiers plus integration:
 
 \begin{center}
 \begin{tabular}{lp{5cm}p{5cm}}
