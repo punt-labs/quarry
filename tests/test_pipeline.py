@@ -505,10 +505,11 @@ class TestIngestUrlScrubbing:
     _RAW = "contact jmf@pobox.com now"
 
     def _patch_fetch_and_extract(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from quarry.ingestion import pipeline
-
         pages = [PageContent("u", "u", 1, 1, self._RAW, PageType.TEXT)]
-        monkeypatch.setattr(pipeline, "_fetch_url", lambda _url, timeout=30: "<html/>")
+        monkeypatch.setattr(
+            "quarry.ingestion.web_fetch.WebFetcher.fetch",
+            lambda _self, _url: "<html/>",
+        )
         monkeypatch.setattr(
             "quarry.extractors.html_extractor.HtmlExtractor.extract_from_html",
             lambda _self, _html, _name, _url: pages,

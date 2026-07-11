@@ -103,6 +103,19 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/quarry/capture_url.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.0,
+    "max_complexity": 2.0,
+    "avg_complexity": 2.0,
+    "module_size": 23.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/quarry/collections.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
@@ -558,6 +571,19 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/quarry/ingestion/ingest_stats.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.0,
+    "max_complexity": 3.0,
+    "avg_complexity": 3.0,
+    "module_size": 27.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/quarry/ingestion/ocr_local.py": {
     "method_ratio": 0.636,
     "encapsulation_ratio": 1.0,
@@ -613,10 +639,10 @@
   "src/quarry/ingestion/pipeline.py": {
     "method_ratio": 0.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 8.16,
+    "avg_params": 8.12,
     "max_complexity": 11.0,
-    "avg_complexity": 4.92,
-    "module_size": 1321.0,
+    "avg_complexity": 4.71,
+    "module_size": 1280.0,
     "classes_per_module": 0.0,
     "class_to_func_ratio": 0.0,
     "init_violations": 0.0,
@@ -697,6 +723,19 @@
     "module_size": 411.0,
     "classes_per_module": 1.0,
     "class_to_func_ratio": 0.333,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
+  "src/quarry/ingestion/web_fetch.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.0,
+    "max_complexity": 5.0,
+    "avg_complexity": 4.5,
+    "module_size": 57.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
     "public_attr_violations": 0.0,
     "future_annotations": 1.0

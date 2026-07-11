@@ -387,7 +387,7 @@ class TestIngestSitemapIntegration:
     """End-to-end integration following test_url_ingestion.py pattern."""
 
     @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
-    @patch("quarry.ingestion.pipeline._fetch_url")
+    @patch("quarry.ingestion.web_fetch.WebFetcher.fetch")
     def test_end_to_end(
         self,
         mock_fetch_url: MagicMock,
@@ -448,7 +448,7 @@ class TestIngestSitemapIntegration:
         assert result["errors"] == []
 
     @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
-    @patch("quarry.ingestion.pipeline._fetch_url")
+    @patch("quarry.ingestion.web_fetch.WebFetcher.fetch")
     def test_with_filters(
         self,
         mock_fetch_url: MagicMock,
