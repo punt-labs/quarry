@@ -1183,3 +1183,68 @@ MVCC — candidate DES-035).
 5. **`pyarrow.RecordBatch` build (drop the ~6× `.tolist()` transient)** — deferred
    to a follow-on bead (DES-027 rejected-alt #3).
 6. **Process isolation** — deferred (see above).
+
+## DES-036: Capture PII Redaction — Placeholder Emails, Bounded Local Hostname, Single Write Choke Point
+
+Captures (session transcripts and WebFetch auto-captures) previously scrubbed
+secrets and profanity at write time but not PII. vox reported ~598
+`/Users/<user>/` path findings in its captures. Because captures are the input
+to DES-030's lifecycle and to the planned private shadow-repo sync (quarry-ow3k),
+un-redacted PII in a capture is a leak into a git-tracked (and soon pushed)
+surface. This ADR records the settled redaction invariant that ow3k depends on.
+
+### Decision
+
+Three write-time PII passes were added to `scrub.py`, composed as a `Scrubber`
+class (secrets → paths → emails → hostname → profanity), and a single
+`CaptureWriter` choke point (`capture.py`) now serves both `.md` producers
+(PreCompact via `hooks.py`, backfill via `backfill.py`), replacing two duplicated
+writers. WebFetch DB-ingest is scrubbed via an opt-in `content_scrubber`
+parameter on `ingest_url`.
+
+1. **Emails → `[REDACTED:email]` placeholder, not ethos-handle mapping.**
+   Redaction is a security property: completeness (no false negatives) beats
+   attribution. A placeholder redacts every address — team, third-party, pasted
+   git-log authors — while handle-mapping would leak unknown emails and pull
+   ethos identity resolution (YAML + filesystem walks) into a leaf text
+   transform. Idempotent and zero-coupling.
+
+2. **Hostnames → bounded to the local machine name** (`socket.gethostname()` +
+   `.local` + short leaf ≥4, case-insensitive), not arbitrary dotted-token
+   detection. Arbitrary detection has a catastrophic false-positive rate
+   (`github.com`, `config.yaml`, `quarry.db.facade`, version strings). The actual
+   PII is the operator's machine name; `gethostname()` targets exactly that.
+
+3. **Ordering: email before hostname (hard constraint).** A hostname inside an
+   email domain must be subsumed by the whole-email redaction; if hostname ran
+   first it would produce `jim@[REDACTED:hostname]`, which the email regex then
+   fails to match, leaking the local part `jim`.
+
+4. **Redaction is at write time and fail-closed.** Scrub runs to completion
+   before any atomic write; on scrub failure no file is written. Every pass emits
+   a marker no pass can re-match, so `scrub(scrub(x)) == scrub(x)` (backfill may
+   re-run). Both WebFetch ingress branches (primary + `ingest_url` re-fetch
+   fallback) scrub before content reaches the pushable `web-captures` collection.
+
+### Scope boundary
+
+`content_scrubber` on `ingest_url` defaults to `None` (byte-unchanged), so
+user-initiated `quarry ingest <url>`, sitemap/bulk, and directory sync are NOT
+scrubbed — only the WebFetch auto-capture path opts in. Redaction is a captures
+concern, not a general-ingestion concern; deliberately-ingested documents keep
+their content searchable.
+
+### Rejected / deferred
+
+1. **Ethos-handle email mapping** — false negatives on unknown addresses +
+   layering/coupling cost; rejected for a security property (operator-ratified).
+2. **Arbitrary hostname detection** — catastrophic false positives corrupt
+   capture usefulness and code snippets; rejected (operator-ratified).
+3. **Scrubbing globally in `_chunk_embed_store`** — would corrupt user-initiated
+   ingests; rejected in favor of the opt-in WebFetch-only parameter.
+4. **Git-history scrub of already-committed captures** — separate concern
+   (quarry-mr0l). vox's public history verified clean (0 committed captures);
+   forward redaction (this ADR) + shadow-repo sync (ow3k) are the go-forward fix.
+5. **Unicode/IDN emails and SSH-remote (`git@host`) matching** — documented
+   accepted limits of the ASCII email regex (over-match on SSH remotes is
+   over-redaction, not a leak; IDN under-match is low-frequency).
