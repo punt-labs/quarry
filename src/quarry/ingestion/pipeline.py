@@ -5,8 +5,10 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
+from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from PIL.Image import Image as PILImage
@@ -887,7 +889,9 @@ def ingest_url(
     collection: str = "default",
     document_name: str | None = None,
     timeout: int = 30,
+    delay: float = 0.0,
     progress_callback: Callable[[str], None] | None = None,
+    content_scrubber: Callable[[str], str] | None = None,
     agent_handle: str = "",
     memory_type: str = "",
     summary: str = "",
@@ -902,7 +906,14 @@ def ingest_url(
         collection: Collection name for organizing documents.
         document_name: Override for the stored document name. Defaults to URL.
         timeout: HTTP request timeout in seconds.
+        delay: Pre-fetch sleep in seconds plus 0-1s random jitter, to avoid
+            synchronized bursts when many workers fetch in parallel. 0 disables.
         progress_callback: Optional callable for progress messages.
+        content_scrubber: Optional redaction hook applied to each extracted page
+            before chunking. ``None`` (the default) stores the fetched text
+            byte-for-byte, so user-initiated ingests are unchanged; the WebFetch
+            auto-capture ingress passes a scrubber so its pushable collection
+            never receives raw PII.
 
     Returns:
         Dict with ingestion results.
@@ -912,6 +923,11 @@ def ingest_url(
     """
     progress = _make_progress(progress_callback)
     document_name = document_name or url
+
+    if delay:
+        import random  # noqa: PLC0415
+
+        time.sleep(delay + random.uniform(0, 1.0))  # noqa: S311
 
     progress("Fetching: %s", url)
     html = _fetch_url(url, timeout=timeout)
@@ -923,6 +939,8 @@ def ingest_url(
         )
 
     pages = HtmlExtractor().extract_from_html(html, document_name, url)
+    if content_scrubber is not None:
+        pages = [replace(page, text=content_scrubber(page.text)) for page in pages]
     progress("Sections: %d", len(pages))
 
     return _chunk_embed_store(
@@ -940,43 +958,19 @@ def ingest_url(
     )
 
 
-def _ingest_url_with_delay(
-    page_url: str,
-    database: Database,
-    settings: Settings,
-    *,
-    overwrite: bool,
-    collection: str,
-    document_name: str | None,
-    timeout: int,
-    delay: float,
-    agent_handle: str = "",
-    memory_type: str = "",
-    summary: str = "",
-) -> IngestResult:
-    """Ingest a single URL with a pre-fetch delay to avoid rate limiting.
+def _entry_is_current(existing_ts: str, lastmod: datetime) -> bool:
+    """Return True if *lastmod* is not newer than the stored *existing_ts*.
 
-    The delay includes random jitter (0-1.0s) to prevent synchronized
-    bursts when multiple workers start at the same time.
+    An unparseable stored timestamp returns False so the URL is re-ingested
+    rather than silently skipped.
     """
-    import random  # noqa: PLC0415
-    import time  # noqa: PLC0415
-
-    jitter = random.uniform(0, 1.0)  # noqa: S311
-    time.sleep(delay + jitter)
-
-    return ingest_url(
-        page_url,
-        database,
-        settings,
-        overwrite=overwrite,
-        collection=collection,
-        document_name=document_name,
-        timeout=timeout,
-        agent_handle=agent_handle,
-        memory_type=memory_type,
-        summary=summary,
-    )
+    try:
+        existing_dt = datetime.fromisoformat(str(existing_ts).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return False
+    if existing_dt.tzinfo is None:
+        existing_dt = existing_dt.replace(tzinfo=UTC)
+    return lastmod <= existing_dt
 
 
 def _bulk_ingest_entries(
@@ -1031,20 +1025,14 @@ def _bulk_ingest_entries(
 
     for entry in filtered:
         existing_ts = existing_timestamps.get(entry.loc)
-        if existing_ts and not overwrite and entry.lastmod is not None:
-            from datetime import UTC, datetime  # noqa: PLC0415
-
-            try:
-                existing_dt = datetime.fromisoformat(
-                    str(existing_ts).replace("Z", "+00:00")
-                )
-                if existing_dt.tzinfo is None:
-                    existing_dt = existing_dt.replace(tzinfo=UTC)
-                if entry.lastmod <= existing_dt:
-                    skipped += 1
-                    continue
-            except (ValueError, TypeError):
-                pass  # Can't parse — re-ingest to be safe
+        if (
+            existing_ts
+            and not overwrite
+            and entry.lastmod is not None
+            and _entry_is_current(existing_ts, entry.lastmod)
+        ):
+            skipped += 1
+            continue
         to_ingest.append((entry.loc, None))
 
     progress("%d to ingest, %d up-to-date", len(to_ingest), skipped)
@@ -1057,7 +1045,7 @@ def _bulk_ingest_entries(
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {
                 executor.submit(
-                    _ingest_url_with_delay,
+                    ingest_url,
                     page_url,
                     database,
                     settings,
@@ -1404,22 +1392,20 @@ def _chunk_embed_store(
         "collection": collection,
         "chunks": inserted,
     }
-    if total_pages is not None:
-        result["total_pages"] = total_pages
-    if text_pages is not None:
-        result["text_pages"] = text_pages
-    if image_pages is not None:
-        result["image_pages"] = image_pages
-    if sections is not None:
-        result["sections"] = sections
-    if definitions is not None:
-        result["definitions"] = definitions
-    if sheets is not None:
-        result["sheets"] = sheets
-    if slides is not None:
-        result["slides"] = slides
-    if file_format is not None:
-        result["format"] = file_format
+    optional: dict[str, int | str | None] = {
+        "total_pages": total_pages,
+        "text_pages": text_pages,
+        "image_pages": image_pages,
+        "sections": sections,
+        "definitions": definitions,
+        "sheets": sheets,
+        "slides": slides,
+        "format": file_format,
+    }
+    # IngestResult keys are literal-typed, so a variable-key assignment can't be
+    # expressed directly; cast the runtime-filtered subset of present fields.
+    present = {key: value for key, value in optional.items() if value is not None}
+    result.update(cast("IngestResult", present))
     return result
 
 

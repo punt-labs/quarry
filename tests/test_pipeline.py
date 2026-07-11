@@ -494,6 +494,82 @@ class TestIngestText:
         assert result["chunks"] == 0
 
 
+class TestIngestUrlScrubbing:
+    """``ingest_url`` scrubs only when a ``content_scrubber`` is supplied.
+
+    The WebFetch auto-capture ingress passes one so its pushable collection is
+    PII-clean on both branches; user-initiated ``quarry ingest <url>`` passes
+    none, so a deliberately ingested document is stored byte-for-byte.
+    """
+
+    _RAW = "contact jmf@pobox.com now"
+
+    def _patch_fetch_and_extract(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from quarry.ingestion import pipeline
+
+        pages = [PageContent("u", "u", 1, 1, self._RAW, PageType.TEXT)]
+        monkeypatch.setattr(pipeline, "_fetch_url", lambda _url, timeout=30: "<html/>")
+        monkeypatch.setattr(
+            "quarry.extractors.html_extractor.HtmlExtractor.extract_from_html",
+            lambda _self, _html, _name, _url: pages,
+        )
+
+    def _capture_stored_pages(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> list[PageContent]:
+        from quarry.ingestion import pipeline
+
+        captured: list[PageContent] = []
+
+        def _capture(
+            pages_arg: list[PageContent], *_a: object, **_k: object
+        ) -> dict[str, object]:
+            captured.extend(pages_arg)
+            return {"document_name": "u", "collection": "web-captures", "chunks": 0}
+
+        monkeypatch.setattr(pipeline, "_chunk_embed_store", _capture)
+        return captured
+
+    def test_scrubber_redacts_page_text_before_store(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from quarry.ingestion.pipeline import ingest_url
+        from quarry.scrub import scrub_and_log
+
+        self._patch_fetch_and_extract(monkeypatch)
+        captured = self._capture_stored_pages(monkeypatch)
+
+        ingest_url(
+            "https://example.com/p",
+            Database(MagicMock()),
+            _settings(),
+            collection="web-captures",
+            content_scrubber=lambda t: scrub_and_log(t, "web-fetch"),
+        )
+
+        assert captured
+        assert "jmf@pobox.com" not in captured[0].text
+        assert "[REDACTED:email]" in captured[0].text
+
+    def test_no_scrubber_leaves_text_byte_unchanged(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from quarry.ingestion.pipeline import ingest_url
+
+        self._patch_fetch_and_extract(monkeypatch)
+        captured = self._capture_stored_pages(monkeypatch)
+
+        ingest_url(
+            "https://example.com/p",
+            Database(MagicMock()),
+            _settings(),
+            collection="default",
+        )
+
+        assert captured
+        assert captured[0].text == self._RAW
+
+
 class _FakeEmbedder:
     @property
     def dimension(self) -> int:

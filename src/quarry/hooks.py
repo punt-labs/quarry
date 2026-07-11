@@ -442,10 +442,14 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
         logger.debug("post-web-fetch: already ingested %s, skipping", url)
         return {}
 
-    # Prefer already-fetched content from tool_response (avoids extra fetch).
-    # Trade-off: chunks are tagged source_format="inline" instead of ".html"
-    # since we strip HTML before ingestion. The URL is preserved as
-    # document_name, which is the primary identifier in search results.
+    from quarry.scrub import scrub_and_log  # noqa: PLC0415
+
+    # Both ingest paths scrub before content reaches the pushable web-captures
+    # collection, so DB ingress is PII-clean on primary AND fallback.
+    def web_fetch_scrub(raw: str) -> str:
+        return scrub_and_log(raw, "web-fetch")
+
+    # Prefer already-fetched tool_response content (avoids a second fetch).
     content = _extract_web_fetch_content(payload)
     result = None
     if content:
@@ -453,11 +457,7 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
 
         pages = HtmlExtractor().extract_from_html(content, url, url)
         if pages:
-            from quarry.scrub import scrub_and_log  # noqa: PLC0415
-
-            # Scrub before the content reaches LanceDB: the web-captures
-            # collection is pushable, so DB ingress must be PII-clean too.
-            clean_text = scrub_and_log("\n\n".join(p.text for p in pages), "web-fetch")
+            clean_text = web_fetch_scrub("\n\n".join(p.text for p in pages))
             result = ingest_content(
                 clean_text,
                 url,
@@ -470,13 +470,14 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
             logger.debug("post-web-fetch: no text in tool_response, falling back")
 
     if result is None:
-        # Fallback: re-fetch if tool_response is missing/empty/boilerplate.
-        # No agent memory fields for auto-ingested web fetches.
+        # Fallback re-fetch; the scrubber runs per page inside ingest_url so this
+        # capture is redacted identically to the primary branch.
         result = ingest_url(
             url,
             database,
             settings,
             collection=collection,
+            content_scrubber=web_fetch_scrub,
         )
     logger.info(
         "post-web-fetch: ingested %s (%d chunks)",

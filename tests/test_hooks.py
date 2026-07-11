@@ -804,6 +804,40 @@ class TestHandlePostWebFetch:
         assert mock_url.call_args[1]["collection"] == "web-captures"
         mock_content.assert_not_called()
 
+    def test_fallback_ingest_url_receives_scrubbing_content_scrubber(self) -> None:
+        """The fallback re-fetch path must scrub before storing, like the primary.
+
+        The web-captures collection is pushable, so both branches must redact
+        PII. This asserts the fallback passes a ``content_scrubber`` and that the
+        scrubber actually redacts (equivalence with the primary branch's scrub).
+        """
+        payload: dict[str, object] = {
+            "tool_input": {"url": "https://example.com/page"},
+        }
+        mock_ingest_result = {
+            "document_name": "https://example.com/page",
+            "collection": "web-captures",
+            "chunks": 5,
+        }
+
+        with (
+            patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
+            patch("quarry.db.facade.get_db", return_value=MagicMock()),
+            patch("quarry.hooks._is_already_ingested", return_value=False),
+            patch("quarry.hooks._collection_for_cwd", return_value=None),
+            patch(
+                "quarry.ingestion.pipeline.ingest_url",
+                return_value=mock_ingest_result,
+            ) as mock_url,
+        ):
+            handle_post_web_fetch(payload)
+
+        scrubber = mock_url.call_args[1]["content_scrubber"]
+        assert scrubber is not None
+        scrubbed = scrubber("email jmf@pobox.com in body")
+        assert "jmf@pobox.com" not in scrubbed
+        assert "[REDACTED:email]" in scrubbed
+
     def test_falls_back_when_html_is_boilerplate(self) -> None:
         """Falls back to ingest_url when tool_response has no extractable text."""
         payload: dict[str, object] = {
