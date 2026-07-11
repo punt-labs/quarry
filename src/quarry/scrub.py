@@ -28,9 +28,9 @@ Categories:
 The PII passes (path, email, hostname) run write-time so filesystem
 paths, email addresses, and the operator's machine name never reach a
 git-committed capture file.  Ordering is load-bearing: email precedes
-hostname so a hostname inside an email domain is subsumed by the whole
--email redaction rather than half-redacted, which would leak the local
-part.
+hostname so a hostname inside an email domain is subsumed by the
+whole-email redaction rather than half-redacted, which would leak the
+local part.
 """
 
 from __future__ import annotations
@@ -88,8 +88,12 @@ DEFAULT_PROFANITY: tuple[str, ...] = (
 # no re.IGNORECASE so /users/ inside a URL is not over-matched. Only the
 # username segment (``[^/\s]+``) is consumed, so deeper path structure — the
 # useful part of a capture — is retained. ``/root`` is intentionally excluded:
-# no username to generalize, and it is not the PII class this targets.
-_PATH_RE = re.compile(r"(?:/Users|/home)/[^/\s]+")
+# no username to generalize, and it is not the PII class this targets. The
+# ``(?<![\w/])`` guard anchors the match to a genuine path boundary: a
+# preceding word char rejects a URL segment (``example.com/home/x``) or a
+# nested path (``/var/home/alice``), and a preceding ``/`` rejects a host in
+# ``scheme://home/…`` — so only a real ``/Users``/``/home`` root redacts.
+_PATH_RE = re.compile(r"(?<![\w/])(?:/Users|/home)/[^/\s]+")
 
 # RFC-shaped email. The lookbehind keeps the match from starting inside a longer
 # token; the trailing ``(?!\w)`` only rejects a match that would continue into

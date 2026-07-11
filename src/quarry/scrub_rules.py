@@ -18,7 +18,7 @@ from re import Pattern
 AWS_SECRET_LINE_HINT = re.compile(r"aws_secret_access_key", re.IGNORECASE)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SecretRule:
     """A single regex-based secret detector.
 

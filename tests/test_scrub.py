@@ -468,6 +468,34 @@ def test_path_case_sensitive_lowercase_users_unchanged() -> None:
     assert counts.get("path", 0) == 0
 
 
+def test_path_url_home_segment_unchanged() -> None:
+    """A ``/home/`` URL path segment is not a home directory — leave it intact."""
+    out, counts = _pii_scrub("https://example.com/home/dashboard")
+    assert out == "https://example.com/home/dashboard"
+    assert counts.get("path", 0) == 0
+
+
+def test_path_scheme_host_named_home_unchanged() -> None:
+    """``scheme://home/…`` names a host, not a home directory."""
+    out, counts = _pii_scrub("http://home/dashboard")
+    assert out == "http://home/dashboard"
+    assert counts.get("path", 0) == 0
+
+
+def test_path_nested_var_home_unchanged() -> None:
+    """A nested ``/var/home/alice`` is not a top-level home root — leave it."""
+    out, counts = _pii_scrub("logs under /var/home/alice/app stay")
+    assert out == "logs under /var/home/alice/app stay"
+    assert counts.get("path", 0) == 0
+
+
+def test_path_bare_home_root_still_redacts() -> None:
+    """A genuine ``/home/<user>`` root at a path boundary still collapses to ~."""
+    out, counts = _pii_scrub("cd /home/alice/proj")
+    assert out == "cd ~/proj"
+    assert counts.get("path", 0) == 1
+
+
 # ---------------------------------------------------------------------------
 # PII: email addresses
 # ---------------------------------------------------------------------------
