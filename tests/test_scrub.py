@@ -496,6 +496,47 @@ def test_path_bare_home_root_still_redacts() -> None:
     assert counts.get("path", 0) == 1
 
 
+@pytest.mark.parametrize(
+    "raw,expected,leaked_user",
+    [
+        # file:// URLs use three slashes before a PATH — the segment is a real
+        # home directory, not a host, so the username must not survive.
+        ("file:///Users/dave/private/keys", "file://~/private/keys", "dave"),
+        ("file:///home/erin/.ssh/id_rsa", "file://~/.ssh/id_rsa", "erin"),
+        # Protocol-relative ``//Users`` is a path, not a scheme authority.
+        ("//Users/frank/data", "/~/data", "frank"),
+    ],
+)
+def test_path_file_url_home_still_redacts(
+    raw: str, expected: str, leaked_user: str
+) -> None:
+    """A home path behind a ``file://`` URL redacts — the username never leaks.
+
+    The ``://host`` guard only rejects the two-slash scheme authority; three
+    slashes (``file:///Users/…``) mark a path, so it must still collapse to ~.
+    Regression: a blanket ``(?<!/)`` lookbehind let these leak the username.
+    """
+    out, counts = _pii_scrub(raw)
+    assert out == expected
+    assert leaked_user not in out
+    assert counts.get("path", 0) == 1
+
+
+def test_path_https_scheme_host_named_home_unchanged() -> None:
+    """``https://home/…`` names a host, not a home directory — leave it intact."""
+    out, counts = _pii_scrub("https://home/dashboard")
+    assert out == "https://home/dashboard"
+    assert counts.get("path", 0) == 0
+
+
+def test_path_vox_corpus_style_home_redacts_to_tilde() -> None:
+    """The vox capture case: ``/Users/jfreeman/x`` collapses to ``~/x``."""
+    out, counts = _pii_scrub("/Users/jfreeman/x")
+    assert out == "~/x"
+    assert "jfreeman" not in out
+    assert counts.get("path", 0) == 1
+
+
 # ---------------------------------------------------------------------------
 # PII: email addresses
 # ---------------------------------------------------------------------------

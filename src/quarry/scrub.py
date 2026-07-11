@@ -88,12 +88,17 @@ DEFAULT_PROFANITY: tuple[str, ...] = (
 # no re.IGNORECASE so /users/ inside a URL is not over-matched. Only the
 # username segment (``[^/\s]+``) is consumed, so deeper path structure — the
 # useful part of a capture — is retained. ``/root`` is intentionally excluded:
-# no username to generalize, and it is not the PII class this targets. The
-# ``(?<![\w/])`` guard anchors the match to a genuine path boundary: a
-# preceding word char rejects a URL segment (``example.com/home/x``) or a
-# nested path (``/var/home/alice``), and a preceding ``/`` rejects a host in
-# ``scheme://home/…`` — so only a real ``/Users``/``/home`` root redacts.
-_PATH_RE = re.compile(r"(?<![\w/])(?:/Users|/home)/[^/\s]+")
+# no username to generalize, and it is not the PII class this targets. Two
+# negative lookbehinds anchor the match to a genuine path boundary. A preceding
+# word char (``(?<!\w)``) rejects a URL segment (``example.com/home/x``) or a
+# nested path (``/var/home/alice``). A preceding ``:/`` (``(?<!:/)``) rejects a
+# scheme-authority host — the ``://host`` form, where ``//`` after the scheme's
+# colon introduces a hostname, not a path (``http://home/x``, ``https://home/x``).
+# A bare slash must NOT block the match: a real home path reached through a
+# ``file://`` URL uses three slashes (``file:///Users/dave`` → ``/Users`` is a
+# PATH, preceded by ``//`` not ``:/``) and still redacts, as do the
+# protocol-relative ``//Users/frank`` and the bare ``/Users``/``/home`` roots.
+_PATH_RE = re.compile(r"(?<!\w)(?<!:/)(?:/Users|/home)/[^/\s]+")
 
 # RFC-shaped email. The lookbehind keeps the match from starting inside a longer
 # token; the trailing ``(?!\w)`` only rejects a match that would continue into
