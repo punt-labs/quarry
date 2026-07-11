@@ -1,17 +1,17 @@
-"""Tests for URL ingestion: fetch, process HTML, chunk, embed, store."""
+"""Tests for URL ingestion: process HTML, chunk, embed, store."""
 
 from __future__ import annotations
 
-from http.client import HTTPResponse
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import numpy as np
-import pytest
 
 from quarry.db import Database
 from quarry.extractors.html_extractor import HtmlExtractor
 from quarry.models import PageType
+
+_FETCH = "quarry.ingestion.web_fetch.WebFetcher.fetch"
 
 
 class TestProcessHtmlText:
@@ -57,117 +57,10 @@ class TestProcessHtmlText:
         assert any("My Page" in p.text for p in pages)
 
 
-class TestFetchUrl:
-    """Test the HTTP fetch helper with mocked responses."""
-
-    def test_rejects_non_http(self):
-        from quarry.ingestion.pipeline import _fetch_url
-
-        with pytest.raises(ValueError, match="Only HTTP"):
-            _fetch_url("ftp://example.com")
-
-    def test_rejects_file_scheme(self):
-        from quarry.ingestion.pipeline import _fetch_url
-
-        with pytest.raises(ValueError, match="Only HTTP"):
-            _fetch_url("file:///etc/passwd")
-
-    @patch("urllib.request.urlopen")
-    def test_fetches_html(self, mock_urlopen: MagicMock):
-        from quarry.ingestion.pipeline import _fetch_url
-
-        body = b"<html><body><p>Hello</p></body></html>"
-        mock_resp = _mock_response(body, "text/html; charset=utf-8")
-        mock_urlopen.return_value = mock_resp
-
-        result = _fetch_url("https://example.com")
-        assert "Hello" in result
-
-    @patch("urllib.request.urlopen")
-    def test_rejects_non_html_content_type(self, mock_urlopen: MagicMock):
-        from quarry.ingestion.pipeline import _fetch_url
-
-        mock_resp = _mock_response(b"%PDF-1.4", "application/pdf")
-        mock_urlopen.return_value = mock_resp
-
-        with pytest.raises(ValueError, match="non-HTML"):
-            _fetch_url("https://example.com/report.pdf")
-
-    @patch("urllib.request.urlopen")
-    def test_accepts_xhtml(self, mock_urlopen: MagicMock):
-        from quarry.ingestion.pipeline import _fetch_url
-
-        body = b"<html><body><p>XHTML</p></body></html>"
-        mock_resp = _mock_response(body, "application/xhtml+xml")
-        mock_urlopen.return_value = mock_resp
-
-        result = _fetch_url("https://example.com")
-        assert "XHTML" in result
-
-    @patch("urllib.request.urlopen")
-    def test_content_type_case_insensitive(self, mock_urlopen: MagicMock):
-        from quarry.ingestion.pipeline import _fetch_url
-
-        body = b"<html><body><p>OK</p></body></html>"
-        mock_resp = _mock_response(body, "Text/HTML; charset=UTF-8")
-        mock_urlopen.return_value = mock_resp
-
-        result = _fetch_url("https://example.com")
-        assert "OK" in result
-
-    @patch("urllib.request.urlopen")
-    def test_missing_content_type_allowed(self, mock_urlopen: MagicMock):
-        from quarry.ingestion.pipeline import _fetch_url
-
-        body = b"<html><body><p>No CT</p></body></html>"
-        mock_resp = _mock_response(body, "")
-        mock_urlopen.return_value = mock_resp
-
-        result = _fetch_url("https://example.com")
-        assert "No CT" in result
-
-    @patch("urllib.request.urlopen")
-    def test_rejects_redirect_to_non_http(self, mock_urlopen: MagicMock):
-        from quarry.ingestion.pipeline import _fetch_url
-
-        mock_resp = _mock_response(b"", "text/html")
-        mock_resp.geturl.return_value = "ftp://evil.com/file"
-        mock_urlopen.return_value = mock_resp
-
-        with pytest.raises(ValueError, match="Redirect left HTTP"):
-            _fetch_url("https://example.com/redirect")
-
-    @patch("urllib.request.urlopen")
-    def test_http_error_raises_valueerror(self, mock_urlopen: MagicMock):
-        from urllib.error import HTTPError
-
-        from quarry.ingestion.pipeline import _fetch_url
-
-        mock_urlopen.side_effect = HTTPError(
-            "https://example.com/missing",
-            404,
-            "Not Found",
-            {},  # type: ignore[arg-type]
-            None,
-        )
-        with pytest.raises(ValueError, match="HTTP 404"):
-            _fetch_url("https://example.com/missing")
-
-    @patch("urllib.request.urlopen")
-    def test_url_error_raises_oserror(self, mock_urlopen: MagicMock):
-        from urllib.error import URLError
-
-        from quarry.ingestion.pipeline import _fetch_url
-
-        mock_urlopen.side_effect = URLError("Name or service not known")
-        with pytest.raises(OSError, match="Cannot reach"):
-            _fetch_url("https://nonexistent.invalid")
-
-
 class TestIngestUrl:
     """Integration test: fetch -> process -> chunk -> embed -> store."""
 
-    @patch("quarry.ingestion.pipeline._fetch_url")
+    @patch(_FETCH)
     def test_end_to_end(self, mock_fetch: MagicMock):
         from quarry.ingestion.pipeline import ingest_url
 
@@ -177,57 +70,8 @@ class TestIngestUrl:
             "<p>The authenticate endpoint accepts a JWT token.</p>"
             "</body></html>"
         )
-
-        settings = MagicMock()
-        settings.chunk_max_chars = 1800
-        settings.chunk_overlap_chars = 200
-        settings.sync_flush_mb = 32
-        settings.embed_window_chunks = 512
-
-        mock_lance = MagicMock()
-        mock_lance.open_table.return_value = MagicMock()
-        db = Database(mock_lance)
-
-        with patch(
-            "quarry.ingestion.streaming.get_embedding_backend",
-        ) as mock_embed_factory:
-            mock_backend = MagicMock()
-            mock_backend.model_name = "test-model"
-            mock_backend.embed_texts.side_effect = lambda texts: np.zeros(
-                (len(texts), 768), dtype=np.float32
-            )
-            mock_embed_factory.return_value = mock_backend
-
-            with patch(
-                "quarry.db.chunk_store.ChunkStore.insert_records", return_value=1
-            ):
-                result = ingest_url(
-                    "https://docs.example.com/api",
-                    db,
-                    settings,
-                    collection="docs",
-                )
-
-        assert result["document_name"] == "https://docs.example.com/api"
-        assert result["collection"] == "docs"
-        assert result["chunks"] >= 1
-        mock_fetch.assert_called_once_with("https://docs.example.com/api", timeout=30)
-
-    @patch("quarry.ingestion.pipeline._fetch_url")
-    def test_custom_document_name(self, mock_fetch: MagicMock):
-        from quarry.ingestion.pipeline import ingest_url
-
-        mock_fetch.return_value = "<html><body><p>Content.</p></body></html>"
-
-        settings = MagicMock()
-        settings.chunk_max_chars = 1800
-        settings.chunk_overlap_chars = 200
-        settings.sync_flush_mb = 32
-        settings.embed_window_chunks = 512
-
-        mock_lance = MagicMock()
-        mock_lance.open_table.return_value = MagicMock()
-        db = Database(mock_lance)
+        settings = _fake_settings()
+        db = _fake_db()
 
         with (
             patch(
@@ -235,13 +79,34 @@ class TestIngestUrl:
             ) as mock_embed_factory,
             patch("quarry.db.chunk_store.ChunkStore.insert_records", return_value=1),
         ):
-            mock_backend = MagicMock()
-            mock_backend.model_name = "test-model"
-            mock_backend.embed_texts.side_effect = lambda texts: np.zeros(
-                (len(texts), 768), dtype=np.float32
+            mock_embed_factory.return_value = _fake_backend()
+            result = ingest_url(
+                "https://docs.example.com/api",
+                db,
+                settings,
+                collection="docs",
             )
-            mock_embed_factory.return_value = mock_backend
 
+        assert result["document_name"] == "https://docs.example.com/api"
+        assert result["collection"] == "docs"
+        assert result["chunks"] >= 1
+        mock_fetch.assert_called_once_with("https://docs.example.com/api")
+
+    @patch(_FETCH)
+    def test_custom_document_name(self, mock_fetch: MagicMock):
+        from quarry.ingestion.pipeline import ingest_url
+
+        mock_fetch.return_value = "<html><body><p>Content.</p></body></html>"
+        settings = _fake_settings()
+        db = _fake_db()
+
+        with (
+            patch(
+                "quarry.ingestion.streaming.get_embedding_backend",
+            ) as mock_embed_factory,
+            patch("quarry.db.chunk_store.ChunkStore.insert_records", return_value=1),
+        ):
+            mock_embed_factory.return_value = _fake_backend()
             result = ingest_url(
                 "https://example.com/page",
                 db,
@@ -251,27 +116,98 @@ class TestIngestUrl:
 
         assert result["document_name"] == "my-page"
 
+    @patch(_FETCH)
+    def test_capture_path_redacts_url_metadata(self, mock_fetch: MagicMock):
+        """A capture (scrubber set) must not persist query/userinfo in metadata."""
+        from quarry.ingestion.pipeline import ingest_url
+        from quarry.scrub import scrub_and_log
 
-def _mock_response(
-    body: bytes,
-    content_type: str,
-    final_url: str = "https://example.com",
-) -> MagicMock:
-    """Create a mock HTTP response with headers and context manager."""
-    mock_resp = MagicMock(spec=HTTPResponse)
-    mock_resp.read.return_value = body
-    mock_resp.headers = _make_headers(content_type)
-    mock_resp.geturl.return_value = final_url
-    mock_resp.__enter__ = lambda s: s
-    mock_resp.__exit__ = MagicMock(return_value=False)
-    return mock_resp
+        mock_fetch.return_value = (
+            "<html><body><p>Reset your password.</p></body></html>"
+        )
+        settings = _fake_settings()
+        db = _fake_db()
+
+        recorded: dict[str, str] = {}
+        real_extract = HtmlExtractor.extract_from_html
+
+        def spy(
+            self: HtmlExtractor, html: str, document_name: str, document_path: str
+        ) -> Any:
+            recorded["document_path"] = document_path
+            return real_extract(self, html, document_name, document_path)
+
+        url = "https://x.test/reset?email=user@example.com&token=abc123secret"
+        with (
+            patch(
+                "quarry.ingestion.streaming.get_embedding_backend",
+            ) as mock_embed_factory,
+            patch("quarry.db.chunk_store.ChunkStore.insert_records", return_value=1),
+            patch.object(HtmlExtractor, "extract_from_html", spy),
+        ):
+            mock_embed_factory.return_value = _fake_backend()
+            result = ingest_url(
+                url,
+                db,
+                settings,
+                content_scrubber=lambda t: scrub_and_log(t, "test"),
+            )
+
+        name = result["document_name"]
+        path = recorded["document_path"]
+        assert name == "https://x.test/reset"
+        assert path == "https://x.test/reset"
+        for leaked in ("user@example.com", "token=abc123secret", "abc123secret"):
+            assert leaked not in name
+            assert leaked not in path
+        # The fetch itself still uses the full URL — the secret path is needed to
+        # retrieve the page; only the persisted metadata is redacted.
+        mock_fetch.assert_called_once_with(url)
+
+    @patch(_FETCH)
+    def test_plain_ingest_keeps_full_url(self, mock_fetch: MagicMock):
+        """A user-initiated ingest (no scrubber) keeps the full URL as metadata."""
+        from quarry.ingestion.pipeline import ingest_url
+
+        mock_fetch.return_value = "<html><body><p>Content.</p></body></html>"
+        settings = _fake_settings()
+        db = _fake_db()
+
+        url = "https://x.test/reset?email=user@example.com&token=abc123secret"
+        with (
+            patch(
+                "quarry.ingestion.streaming.get_embedding_backend",
+            ) as mock_embed_factory,
+            patch("quarry.db.chunk_store.ChunkStore.insert_records", return_value=1),
+        ):
+            mock_embed_factory.return_value = _fake_backend()
+            result = ingest_url(url, db, settings)
+
+        assert result["document_name"] == url
 
 
-def _make_headers(content_type: str) -> Any:
-    """Create a mock headers object with Content-Type."""
-    from email.message import Message
+def _fake_settings() -> MagicMock:
+    """Settings stub with the chunking/embedding knobs ingest_url reads."""
+    settings = MagicMock()
+    settings.chunk_max_chars = 1800
+    settings.chunk_overlap_chars = 200
+    settings.sync_flush_mb = 32
+    settings.embed_window_chunks = 512
+    return settings
 
-    msg = Message()
-    if content_type:
-        msg["Content-Type"] = content_type
-    return msg
+
+def _fake_db() -> Database:
+    """Database facade over a mocked LanceDB connection."""
+    mock_lance = MagicMock()
+    mock_lance.open_table.return_value = MagicMock()
+    return Database(mock_lance)
+
+
+def _fake_backend() -> MagicMock:
+    """Embedding backend stub that returns zero vectors of the right shape."""
+    backend = MagicMock()
+    backend.model_name = "test-model"
+    backend.embed_texts.side_effect = lambda texts: np.zeros(
+        (len(texts), 768), dtype=np.float32
+    )
+    return backend

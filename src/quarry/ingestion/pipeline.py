@@ -5,8 +5,10 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
+from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from PIL.Image import Image as PILImage
@@ -14,6 +16,7 @@ if TYPE_CHECKING:
     from quarry.models import Chunk
     from quarry.sitemap import SitemapEntry
 
+from quarry.capture_url import CaptureUrl
 from quarry.config import Settings
 from quarry.db import Database
 from quarry.extractors.code_extractor import SUPPORTED_CODE_EXTENSIONS, CodeExtractor
@@ -30,7 +33,9 @@ from quarry.extractors.spreadsheet_extractor import (
 )
 from quarry.extractors.text_extractor import SUPPORTED_TEXT_EXTENSIONS, TextExtractor
 from quarry.ingestion.backends import get_ocr_backend
+from quarry.ingestion.ingest_stats import IngestStats
 from quarry.ingestion.streaming import DocumentStreamer, progressive_insert
+from quarry.ingestion.web_fetch import WebFetcher
 from quarry.models import Chunk, PageContent, PageType
 from quarry.results import IngestResult, SitemapResult
 
@@ -45,6 +50,9 @@ SUPPORTED_EXTENSIONS = (
     | SUPPORTED_HTML_EXTENSIONS
     | SUPPORTED_PRESENTATION_EXTENSIONS
 )
+
+
+_NO_STATS = IngestStats()
 
 
 def ingest_document(
@@ -245,9 +253,11 @@ def ingest_pdf(
         progress,
         collection=collection,
         source_format=".pdf",
-        total_pages=total_pages,
-        text_pages=text_pages,
-        image_pages=image_pages,
+        stats=IngestStats(
+            total_pages=total_pages,
+            text_pages=text_pages,
+            image_pages=image_pages,
+        ),
         agent_handle=agent_handle,
         memory_type=memory_type,
         summary=summary,
@@ -304,7 +314,7 @@ def ingest_text_file(
         progress,
         collection=collection,
         source_format=file_path.suffix.lower(),
-        sections=len(pages),
+        stats=IngestStats(sections=len(pages)),
         agent_handle=agent_handle,
         memory_type=memory_type,
         summary=summary,
@@ -361,7 +371,7 @@ def ingest_code_file(
         progress,
         collection=collection,
         source_format=file_path.suffix.lower(),
-        definitions=len(pages),
+        stats=IngestStats(definitions=len(pages)),
         agent_handle=agent_handle,
         memory_type=memory_type,
         summary=summary,
@@ -419,7 +429,7 @@ def ingest_spreadsheet(
         progress,
         collection=collection,
         source_format=file_path.suffix.lower(),
-        sections=len(pages),
+        stats=IngestStats(sections=len(pages)),
         agent_handle=agent_handle,
         memory_type=memory_type,
         summary=summary,
@@ -476,7 +486,7 @@ def ingest_html_file(
         progress,
         collection=collection,
         source_format=file_path.suffix.lower(),
-        sections=len(pages),
+        stats=IngestStats(sections=len(pages)),
         agent_handle=agent_handle,
         memory_type=memory_type,
         summary=summary,
@@ -535,7 +545,7 @@ def ingest_presentation(
         progress,
         collection=collection,
         source_format=file_path.suffix.lower(),
-        slides=len(pages),
+        stats=IngestStats(slides=len(pages)),
         agent_handle=agent_handle,
         memory_type=memory_type,
         summary=summary,
@@ -626,8 +636,7 @@ def ingest_image(
         progress,
         collection=collection,
         source_format=file_path.suffix.lower(),
-        file_format=analysis.format,
-        image_pages=1,
+        stats=IngestStats(file_format=analysis.format, image_pages=1),
         agent_handle=agent_handle,
         memory_type=memory_type,
         summary=summary,
@@ -770,8 +779,7 @@ def _ingest_multipage_image(
         progress,
         collection=collection,
         source_format=file_path.suffix.lower(),
-        file_format="TIFF",
-        image_pages=page_count,
+        stats=IngestStats(file_format="TIFF", image_pages=page_count),
         agent_handle=agent_handle,
         memory_type=memory_type,
         summary=summary,
@@ -830,52 +838,11 @@ def ingest_content(
         progress,
         collection=collection,
         source_format="inline",
-        sections=len(pages),
+        stats=IngestStats(sections=len(pages)),
         agent_handle=agent_handle,
         memory_type=memory_type,
         summary=summary,
     )
-
-
-def _fetch_url(url: str, *, timeout: int = 30) -> str:
-    """Fetch a URL and return the response body as text.
-
-    Raises:
-        ValueError: If the URL is not HTTP(S) or the response is not HTML.
-        OSError: On network errors.
-    """
-    import urllib.request  # noqa: PLC0415
-    from urllib.error import HTTPError, URLError  # noqa: PLC0415
-
-    if not url.startswith(("http://", "https://")):
-        msg = f"Only HTTP(S) URLs are supported: {url}"
-        raise ValueError(msg)
-
-    request = urllib.request.Request(  # noqa: S310
-        url,
-        headers={"User-Agent": "quarry/1.0 (+https://github.com/punt-labs/quarry)"},
-    )
-    _allowed_media_types = {"text/html", "application/xhtml+xml"}
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as resp:  # noqa: S310
-            final_url: str = resp.geturl()
-            if not final_url.startswith(("http://", "https://")):
-                msg = f"Redirect left HTTP(S): {final_url}"
-                raise ValueError(msg)
-            content_type: str = resp.headers.get("Content-Type", "")
-            media_type = content_type.split(";", 1)[0].strip().lower()
-            if media_type and media_type not in _allowed_media_types:
-                msg = f"URL returned non-HTML content: {content_type}"
-                raise ValueError(msg)
-            charset = resp.headers.get_content_charset() or "utf-8"
-            body: bytes = resp.read()
-            return body.decode(charset, errors="replace")
-    except HTTPError as exc:
-        msg = f"HTTP {exc.code} fetching {url}"
-        raise ValueError(msg) from exc
-    except URLError as exc:
-        msg = f"Cannot reach {url}: {exc.reason}"
-        raise OSError(msg) from exc
 
 
 def ingest_url(
@@ -887,7 +854,9 @@ def ingest_url(
     collection: str = "default",
     document_name: str | None = None,
     timeout: int = 30,
+    delay: float = 0.0,
     progress_callback: Callable[[str], None] | None = None,
+    content_scrubber: Callable[[str], str] | None = None,
     agent_handle: str = "",
     memory_type: str = "",
     summary: str = "",
@@ -902,7 +871,14 @@ def ingest_url(
         collection: Collection name for organizing documents.
         document_name: Override for the stored document name. Defaults to URL.
         timeout: HTTP request timeout in seconds.
+        delay: Pre-fetch sleep in seconds plus 0-1s sub-second jitter, to avoid
+            synchronized bursts when many workers fetch in parallel. 0 disables.
         progress_callback: Optional callable for progress messages.
+        content_scrubber: Optional redaction hook applied to each extracted page
+            before chunking. ``None`` (the default) stores the fetched text
+            byte-for-byte, so user-initiated ingests are unchanged; the WebFetch
+            auto-capture ingress passes a scrubber so its pushable collection
+            never receives raw PII.
 
     Returns:
         Dict with ingestion results.
@@ -911,10 +887,23 @@ def ingest_url(
         ValueError: If URL is invalid, unreachable, or returns non-HTML.
     """
     progress = _make_progress(progress_callback)
-    document_name = document_name or url
+    # A capture (content_scrubber set) must not persist userinfo/query/fragment
+    # from the URL as document metadata; a plain ingest keeps the full URL.
+    meta_url = (
+        CaptureUrl(url).redacted(content_scrubber)
+        if content_scrubber is not None
+        else url
+    )
+    document_name = document_name or meta_url
 
-    progress("Fetching: %s", url)
-    html = _fetch_url(url, timeout=timeout)
+    if delay:
+        # Sub-second jitter from the monotonic clock (non-security-critical) to
+        # desync parallel fetchers without importing random.
+        jitter = time.monotonic_ns() % 1_000_000_000 / 1_000_000_000
+        time.sleep(delay + jitter)
+
+    progress("Fetching: %s", meta_url)
+    html = WebFetcher(timeout).fetch(url)
     progress("Fetched %d characters", len(html))
 
     if overwrite:
@@ -922,7 +911,9 @@ def ingest_url(
             document_name, collection=collection, count=False
         )
 
-    pages = HtmlExtractor().extract_from_html(html, document_name, url)
+    pages = HtmlExtractor().extract_from_html(html, document_name, meta_url)
+    if content_scrubber is not None:
+        pages = [replace(page, text=content_scrubber(page.text)) for page in pages]
     progress("Sections: %d", len(pages))
 
     return _chunk_embed_store(
@@ -933,50 +924,26 @@ def ingest_url(
         progress,
         collection=collection,
         source_format=".html",
-        sections=len(pages),
+        stats=IngestStats(sections=len(pages)),
         agent_handle=agent_handle,
         memory_type=memory_type,
         summary=summary,
     )
 
 
-def _ingest_url_with_delay(
-    page_url: str,
-    database: Database,
-    settings: Settings,
-    *,
-    overwrite: bool,
-    collection: str,
-    document_name: str | None,
-    timeout: int,
-    delay: float,
-    agent_handle: str = "",
-    memory_type: str = "",
-    summary: str = "",
-) -> IngestResult:
-    """Ingest a single URL with a pre-fetch delay to avoid rate limiting.
+def _entry_is_current(existing_ts: str, lastmod: datetime) -> bool:
+    """Return True if *lastmod* is not newer than the stored *existing_ts*.
 
-    The delay includes random jitter (0-1.0s) to prevent synchronized
-    bursts when multiple workers start at the same time.
+    An unparseable stored timestamp returns False so the URL is re-ingested
+    rather than silently skipped.
     """
-    import random  # noqa: PLC0415
-    import time  # noqa: PLC0415
-
-    jitter = random.uniform(0, 1.0)  # noqa: S311
-    time.sleep(delay + jitter)
-
-    return ingest_url(
-        page_url,
-        database,
-        settings,
-        overwrite=overwrite,
-        collection=collection,
-        document_name=document_name,
-        timeout=timeout,
-        agent_handle=agent_handle,
-        memory_type=memory_type,
-        summary=summary,
-    )
+    try:
+        existing_dt = datetime.fromisoformat(str(existing_ts).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return False
+    if existing_dt.tzinfo is None:
+        existing_dt = existing_dt.replace(tzinfo=UTC)
+    return lastmod <= existing_dt
 
 
 def _bulk_ingest_entries(
@@ -1031,20 +998,14 @@ def _bulk_ingest_entries(
 
     for entry in filtered:
         existing_ts = existing_timestamps.get(entry.loc)
-        if existing_ts and not overwrite and entry.lastmod is not None:
-            from datetime import UTC, datetime  # noqa: PLC0415
-
-            try:
-                existing_dt = datetime.fromisoformat(
-                    str(existing_ts).replace("Z", "+00:00")
-                )
-                if existing_dt.tzinfo is None:
-                    existing_dt = existing_dt.replace(tzinfo=UTC)
-                if entry.lastmod <= existing_dt:
-                    skipped += 1
-                    continue
-            except (ValueError, TypeError):
-                pass  # Can't parse — re-ingest to be safe
+        if (
+            existing_ts
+            and not overwrite
+            and entry.lastmod is not None
+            and _entry_is_current(existing_ts, entry.lastmod)
+        ):
+            skipped += 1
+            continue
         to_ingest.append((entry.loc, None))
 
     progress("%d to ingest, %d up-to-date", len(to_ingest), skipped)
@@ -1057,7 +1018,7 @@ def _bulk_ingest_entries(
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {
                 executor.submit(
-                    _ingest_url_with_delay,
+                    ingest_url,
                     page_url,
                     database,
                     settings,
@@ -1145,7 +1106,7 @@ def ingest_sitemap(
         overwrite: Force re-ingest regardless of <lastmod>.
         workers: Parallel fetch workers (minimum 1).
         delay: Base delay in seconds between fetches per worker
-            (adds 0-1.0s random jitter). Default 0.5s.
+            (adds 0-1.0s sub-second jitter). Default 0.5s.
         timeout: HTTP timeout in seconds.
         progress_callback: Optional callable for progress messages.
 
@@ -1354,14 +1315,7 @@ def _chunk_embed_store(
     *,
     collection: str = "default",
     source_format: str = "",
-    total_pages: int | None = None,
-    text_pages: int | None = None,
-    image_pages: int | None = None,
-    sections: int | None = None,
-    definitions: int | None = None,
-    sheets: int | None = None,
-    slides: int | None = None,
-    file_format: str | None = None,
+    stats: IngestStats = _NO_STATS,
     agent_handle: str = "",
     memory_type: str = "",
     summary: str = "",
@@ -1404,22 +1358,9 @@ def _chunk_embed_store(
         "collection": collection,
         "chunks": inserted,
     }
-    if total_pages is not None:
-        result["total_pages"] = total_pages
-    if text_pages is not None:
-        result["text_pages"] = text_pages
-    if image_pages is not None:
-        result["image_pages"] = image_pages
-    if sections is not None:
-        result["sections"] = sections
-    if definitions is not None:
-        result["definitions"] = definitions
-    if sheets is not None:
-        result["sheets"] = sheets
-    if slides is not None:
-        result["slides"] = slides
-    if file_format is not None:
-        result["format"] = file_format
+    # IngestResult keys are literal-typed, so a variable-key assignment can't be
+    # expressed directly; cast the runtime-filtered subset of present fields.
+    result.update(cast("IngestResult", stats.as_result_fields()))
     return result
 
 

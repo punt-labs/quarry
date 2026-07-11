@@ -8,20 +8,15 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
-
-if TYPE_CHECKING:
-    import pytest
 
 from quarry.__main__ import app
 from quarry._stdlib import HookConfig, load_hook_config, read_hook_stdin
 from quarry.hooks import (
     _collection_for_cwd,
-    _extract_url,
-    _extract_web_fetch_content,
     _find_registration,
     _unique_collection_name,
     extract_message_text,
@@ -641,61 +636,6 @@ class TestHandleSessionStart:
         assert ctx.startswith("Quarry semantic search is active")
 
 
-class TestExtractUrl:
-    def test_extracts_url_from_tool_input(self) -> None:
-        payload: dict[str, object] = {"tool_input": {"url": "https://example.com/docs"}}
-        assert _extract_url(payload) == "https://example.com/docs"
-
-    def test_returns_none_for_missing_tool_input(self) -> None:
-        assert _extract_url({}) is None
-
-    def test_returns_none_for_non_dict_tool_input(self) -> None:
-        assert _extract_url({"tool_input": "not a dict"}) is None
-
-    def test_returns_none_for_non_http_url(self) -> None:
-        payload: dict[str, object] = {"tool_input": {"url": "ftp://x.com"}}
-        assert _extract_url(payload) is None
-
-    def test_returns_none_for_missing_url(self) -> None:
-        payload: dict[str, object] = {"tool_input": {"other": "value"}}
-        assert _extract_url(payload) is None
-
-
-class TestExtractWebFetchContent:
-    def test_extracts_from_json_result_field(self) -> None:
-        payload: dict[str, object] = {
-            "tool_response": json.dumps({"result": "<html>Hello</html>"}),
-        }
-        assert _extract_web_fetch_content(payload) == "<html>Hello</html>"
-
-    def test_extracts_from_json_string(self) -> None:
-        payload: dict[str, object] = {
-            "tool_response": json.dumps("Plain text content"),
-        }
-        assert _extract_web_fetch_content(payload) == "Plain text content"
-
-    def test_returns_none_for_missing_tool_response(self) -> None:
-        assert _extract_web_fetch_content({}) is None
-
-    def test_returns_none_for_non_string_tool_response(self) -> None:
-        assert _extract_web_fetch_content({"tool_response": 42}) is None
-
-    def test_returns_none_for_invalid_json(self) -> None:
-        assert _extract_web_fetch_content({"tool_response": "not json{{"}) is None
-
-    def test_returns_none_for_empty_result(self) -> None:
-        payload: dict[str, object] = {
-            "tool_response": json.dumps({"result": "  "}),
-        }
-        assert _extract_web_fetch_content(payload) is None
-
-    def test_returns_none_for_empty_string(self) -> None:
-        payload: dict[str, object] = {
-            "tool_response": json.dumps("   "),
-        }
-        assert _extract_web_fetch_content(payload) is None
-
-
 class TestHandlePostWebFetch:
     def test_no_url_returns_empty(self) -> None:
         result = handle_post_web_fetch({})
@@ -803,6 +743,40 @@ class TestHandlePostWebFetch:
         assert mock_url.call_args[0][0] == "https://example.com/page"
         assert mock_url.call_args[1]["collection"] == "web-captures"
         mock_content.assert_not_called()
+
+    def test_fallback_ingest_url_receives_scrubbing_content_scrubber(self) -> None:
+        """The fallback re-fetch path must scrub before storing, like the primary.
+
+        The web-captures collection is pushable, so both branches must redact
+        PII. This asserts the fallback passes a ``content_scrubber`` and that the
+        scrubber actually redacts (equivalence with the primary branch's scrub).
+        """
+        payload: dict[str, object] = {
+            "tool_input": {"url": "https://example.com/page"},
+        }
+        mock_ingest_result = {
+            "document_name": "https://example.com/page",
+            "collection": "web-captures",
+            "chunks": 5,
+        }
+
+        with (
+            patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
+            patch("quarry.db.facade.get_db", return_value=MagicMock()),
+            patch("quarry.hooks._is_already_ingested", return_value=False),
+            patch("quarry.hooks._collection_for_cwd", return_value=None),
+            patch(
+                "quarry.ingestion.pipeline.ingest_url",
+                return_value=mock_ingest_result,
+            ) as mock_url,
+        ):
+            handle_post_web_fetch(payload)
+
+        scrubber = mock_url.call_args[1]["content_scrubber"]
+        assert scrubber is not None
+        scrubbed = scrubber("email jmf@pobox.com in body")
+        assert "jmf@pobox.com" not in scrubbed
+        assert "[REDACTED:email]" in scrubbed
 
     def test_falls_back_when_html_is_boilerplate(self) -> None:
         """Falls back to ingest_url when tool_response has no extractable text."""
@@ -1714,6 +1688,16 @@ class TestIngestBackground:
 
         assert not text_file.exists()
 
+    def test_exits_with_usage_on_bad_arg_count(self) -> None:
+        """Too few argv slots exit non-zero before any ingest work runs."""
+        from quarry._hook_entry import _ingest_background
+
+        with (
+            patch("sys.argv", ["quarry-hook", "ingest-background", "only-one-arg"]),
+            pytest.raises(SystemExit),
+        ):
+            _ingest_background()
+
 
 # ---------------------------------------------------------------------------
 # CLI dispatcher tests
@@ -2157,3 +2141,125 @@ class TestT20PreCompactFallback:
 
         args = mock_popen.call_args[0][0]
         assert args[6] == _SESSION_NOTES_FALLBACK
+
+
+class TestPreCompactCaptureRedaction:
+    """The PreCompact producer writes a PII-clean capture file (bug class 3)."""
+
+    def test_capture_file_has_zero_pii(self, tmp_path: Path) -> None:
+        from quarry.artifacts import SessionArtifacts
+        from quarry.hooks import _write_capture_file
+
+        artifacts = SessionArtifacts(
+            commit_shas=(),
+            pr_numbers=(),
+            branch_names=(),
+            bead_ids=(),
+        )
+        text = "worked in /Users/jfreeman/repo and pinged jmf@pobox.com"
+        _write_capture_file(
+            project_dir=tmp_path,
+            session_id="abcd1234ef",
+            timestamp="2026-07-11T00:00:00Z",
+            artifacts=artifacts,
+            text=text,
+        )
+
+        capture = (
+            tmp_path / ".punt-labs" / "quarry" / "captures" / "session-abcd1234.md"
+        )
+        content = capture.read_text(encoding="utf-8")
+        assert "/Users/" not in content
+        assert "@" not in content
+        assert "~/repo" in content
+
+
+class TestWebFetchScrubbing:
+    """WebFetch content is scrubbed before it reaches the DB (bug class 3)."""
+
+    def test_ingest_content_receives_scrubbed_text(self) -> None:
+        from quarry.models import PageContent, PageType
+
+        payload: dict[str, object] = {
+            "tool_input": {"url": "https://example.com/page"},
+            "tool_response": json.dumps({"result": "<html>page</html>"}),
+        }
+        mock_pages = [
+            PageContent(
+                text="see /Users/jfreeman/secret in the log",
+                page_number=1,
+                total_pages=1,
+                page_type=PageType.SECTION,
+                document_name="https://example.com/page",
+                document_path="https://example.com/page",
+            )
+        ]
+
+        with (
+            patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
+            patch("quarry.db.facade.get_db", return_value=MagicMock()),
+            patch("quarry.hooks._is_already_ingested", return_value=False),
+            patch("quarry.hooks._collection_for_cwd", return_value=None),
+            patch(
+                "quarry.extractors.html_extractor.HtmlExtractor.extract_from_html",
+                return_value=mock_pages,
+            ),
+            patch(
+                "quarry.ingestion.pipeline.ingest_content",
+                return_value={"chunks": 1},
+            ) as mock_content,
+            patch("quarry.ingestion.pipeline.ingest_url"),
+        ):
+            handle_post_web_fetch(payload)
+
+        passed_text = mock_content.call_args[0][0]
+        assert "/Users/" not in passed_text
+        assert "~/secret" in passed_text
+
+    def test_primary_branch_redacts_url_metadata(self) -> None:
+        """A capture URL's userinfo/query/fragment never reach document metadata."""
+        from quarry.models import PageContent, PageType
+
+        dirty = "https://alice:pw@example.com/reset?email=a@b.com&token=xyz#frag"
+        redacted = "https://example.com/reset"
+        payload: dict[str, object] = {
+            "tool_input": {"url": dirty},
+            "tool_response": json.dumps({"result": "<html>page</html>"}),
+        }
+        mock_pages = [
+            PageContent(
+                text="body",
+                page_number=1,
+                total_pages=1,
+                page_type=PageType.SECTION,
+                document_name=dirty,
+                document_path=dirty,
+            )
+        ]
+
+        with (
+            patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
+            patch("quarry.db.facade.get_db", return_value=MagicMock()),
+            patch(
+                "quarry.hooks._is_already_ingested", return_value=False
+            ) as mock_dedup,
+            patch("quarry.hooks._collection_for_cwd", return_value=None),
+            patch(
+                "quarry.extractors.html_extractor.HtmlExtractor.extract_from_html",
+                return_value=mock_pages,
+            ),
+            patch(
+                "quarry.ingestion.pipeline.ingest_content",
+                return_value={"chunks": 1},
+            ) as mock_content,
+            patch("quarry.ingestion.pipeline.ingest_url"),
+        ):
+            handle_post_web_fetch(payload)
+
+        stored_name = mock_content.call_args[0][1]
+        assert stored_name == redacted
+        assert "token=xyz" not in stored_name
+        assert "a@b.com" not in stored_name
+        assert "alice" not in stored_name
+        # Dedup keys on the redacted name so re-captures still match.
+        assert mock_dedup.call_args[0][0] == redacted

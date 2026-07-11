@@ -803,7 +803,7 @@ class TestIngestUrlThreadsAgentHandle:
             "chunks": 0,
         }
         with (
-            patch("quarry.ingestion.pipeline._fetch_url", return_value=html),
+            patch("quarry.ingestion.web_fetch.WebFetcher.fetch", return_value=html),
             patch(
                 "quarry.extractors.html_extractor.HtmlExtractor.extract_from_html",
                 return_value=[],

@@ -460,3 +460,74 @@ class TestBackfillCLI:
         assert "--project" in result.output
         assert "--limit" in result.output
         assert "--provider" in result.output
+
+
+class TestBackfillCaptureRedaction:
+    """The backfill producer writes a PII-clean capture file (bug class 3)."""
+
+    def _write(self, tmp_path: Path, text: str) -> Path:
+        from quarry.artifacts import SessionArtifacts
+        from quarry.backfill import _write_backfill_capture_file
+
+        transcript = tmp_path / "sess1234abcd.jsonl"
+        transcript.write_text("{}\n", encoding="utf-8")
+        _write_backfill_capture_file(
+            project_path=str(tmp_path),
+            session_id="sess1234abcd",
+            transcript=transcript,
+            artifacts=SessionArtifacts(
+                commit_shas=(),
+                pr_numbers=(),
+                branch_names=(),
+                bead_ids=(),
+            ),
+            text=text,
+        )
+        return tmp_path / ".punt-labs" / "quarry" / "captures" / "session-sess1234.md"
+
+    def test_capture_file_has_zero_pii(self, tmp_path: Path) -> None:
+        capture = self._write(
+            tmp_path, "ran /Users/jfreeman/x and emailed jmf@pobox.com"
+        )
+        content = capture.read_text(encoding="utf-8")
+        assert "/Users/" not in content
+        assert "@" not in content
+        assert "~/x" in content
+
+    def test_rerun_produces_identical_capture(self, tmp_path: Path) -> None:
+        """A second backfill of the same transcript yields the same bytes."""
+        capture = self._write(tmp_path, "path /Users/jane/proj here")
+        first = capture.read_bytes()
+        capture = self._write(tmp_path, "path /Users/jane/proj here")
+        assert capture.read_bytes() == first
+
+    def test_missing_transcript_degrades_instead_of_aborting(
+        self, tmp_path: Path
+    ) -> None:
+        """A transcript deleted mid-run must not abort the backfill.
+
+        ``stat()`` on a vanished file raises ``OSError``; the writer falls back
+        to ``now()`` and still produces the capture rather than propagating.
+        """
+        from quarry.artifacts import SessionArtifacts
+        from quarry.backfill import _write_backfill_capture_file
+
+        missing = tmp_path / "gone.jsonl"  # never created — stat() will raise
+
+        _write_backfill_capture_file(
+            project_path=str(tmp_path),
+            session_id="sess1234abcd",
+            transcript=missing,
+            artifacts=SessionArtifacts(
+                commit_shas=(),
+                pr_numbers=(),
+                branch_names=(),
+                bead_ids=(),
+            ),
+            text="ran /Users/jfreeman/x here",
+        )
+
+        captures = tmp_path / ".punt-labs" / "quarry" / "captures"
+        content = (captures / "session-sess1234.md").read_text(encoding="utf-8")
+        assert "~/x" in content
+        assert "/Users/" not in content

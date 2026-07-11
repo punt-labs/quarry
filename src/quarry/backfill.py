@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from pathlib import Path
 
 from quarry.artifacts import (
@@ -17,6 +16,7 @@ from quarry.db.facade import Database
 from quarry.hooks import extract_transcript_text
 from quarry.ingestion.pipeline import ingest_content
 from quarry.sync_registry import DirectoryRegistration, SyncRegistry
+from quarry.transcript import Transcript
 
 logger = logging.getLogger(__name__)
 
@@ -112,17 +112,8 @@ def list_transcript_files(encoded_dir: str) -> list[Path]:
 
 
 def document_name_for_transcript(transcript_path: Path) -> str:
-    """Derive the document name from a transcript file path.
-
-    Format: ``session-<id[:8]>-<mtime_timestamp>``.
-    """
-    session_id = transcript_path.stem
-    try:
-        mtime = transcript_path.stat().st_mtime
-        timestamp = datetime.fromtimestamp(mtime, tz=UTC).strftime("%Y%m%dT%H%M%S")
-    except OSError:
-        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
-    return f"session-{session_id[:8]}-{timestamp}"
+    """Derive the ``session-<id[:8]>-<mtime>`` document name for a transcript."""
+    return Transcript(transcript_path).document_name()
 
 
 def is_already_ingested(
@@ -155,30 +146,24 @@ def _write_backfill_capture_file(
     artifacts: SessionArtifacts,
     text: str,
 ) -> None:
-    """Write capture file during backfill.
+    """Write a backfill session capture via the shared CaptureWriter.
 
-    Scrubs secrets and profanity before writing — capture files are
-    git-tracked.  Fails silently.
+    The writer scrubs secrets, PII, and profanity before any bytes reach the
+    git-tracked capture file, and fails silently.
     """
-    try:
-        from quarry.artifacts import format_artifacts_frontmatter  # noqa: PLC0415
-        from quarry.scrub import scrub_and_log  # noqa: PLC0415
+    from quarry.capture import CaptureRequest, CaptureWriter  # noqa: PLC0415
 
-        mtime = transcript.stat().st_mtime
-        timestamp = datetime.fromtimestamp(mtime, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        frontmatter = format_artifacts_frontmatter(session_id, timestamp, artifacts)
-        if not frontmatter:
-            return
-
-        captures_dir = Path(project_path) / ".punt-labs" / "quarry" / "captures"
-        captures_dir.mkdir(parents=True, exist_ok=True)
-
-        content = scrub_and_log(frontmatter + "\n\n" + text, "backfill")
-        filename = f"session-{session_id[:8]}.md"
-        capture_file = captures_dir / filename
-        capture_file.write_text(content, encoding="utf-8")
-    except Exception:
-        logger.exception("backfill: capture file write failed for %s", session_id[:8])
+    timestamp = Transcript(transcript).timestamp("%Y-%m-%dT%H:%M:%SZ")
+    CaptureWriter().write(
+        CaptureRequest(
+            project_dir=Path(project_path),
+            session_id=session_id,
+            timestamp=timestamp,
+            artifacts=artifacts,
+            text=text,
+            label="backfill",
+        )
+    )
 
 
 def _process_project(

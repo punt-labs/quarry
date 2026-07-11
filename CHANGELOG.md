@@ -14,6 +14,23 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Security
+
+- **index (capture)**: session capture files and WebFetch DB ingest now redact
+  personally identifying information at write time, in addition to the existing
+  secret and profanity scrubbing. Three write-time passes run for every capture:
+  filesystem home directories (`/Users/<user>/` and `/home/<user>/` for any
+  username) collapse to `~/`, email addresses become `[REDACTED:email]`, and the
+  local machine hostname (resolved via `socket.gethostname()`, plus its `.local`
+  and short-leaf forms) becomes `[REDACTED:hostname]`. Email redaction runs
+  before hostname redaction so a hostname inside an email domain is subsumed by
+  whole-email redaction rather than leaking the local part. Redaction is
+  idempotent, so re-running backfill over prior captures is a no-op. Both capture
+  producers (PreCompact and backfill) now write through a single `CaptureWriter`
+  choke point that scrubs before an atomic write, so a scrub or write failure
+  never leaves a partial or half-redacted file. WebFetch content is scrubbed
+  before it reaches the pushable `web-captures` collection (quarry-fpc5).
+
 ## [1.18.2] - 2026-07-04
 
 ### Fixed

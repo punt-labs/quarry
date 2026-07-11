@@ -423,3 +423,301 @@ def test_secret_in_fenced_code_block_still_redacted() -> None:
     out, _ = _scrub(text)
     assert secret not in out
     assert "[REDACTED:" in out
+
+
+# ---------------------------------------------------------------------------
+# PII: filesystem paths
+# ---------------------------------------------------------------------------
+
+_HOST = "Jims-MBP.local"
+
+
+def _pii_scrub(text: str, **kw: object) -> tuple[str, dict[str, int]]:
+    """Scrub with a fixed local hostname so results are machine-independent."""
+    kw.setdefault("local_hostname", _HOST)
+    return _scrub(text, **kw)
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("/Users/jfreeman/Coding/x", "~/Coding/x"),
+        ("/home/alice/proj", "~/proj"),
+        ("/Users/bob/", "~/"),
+        ("/home/bob", "~"),
+        ("path is /Users/jane/a and /home/kate/b", "path is ~/a and ~/b"),
+    ],
+)
+def test_path_redaction_any_username(raw: str, expected: str) -> None:
+    out, counts = _pii_scrub(raw)
+    assert out == expected
+    assert counts.get("path", 0) >= 1
+
+
+def test_path_root_home_unchanged() -> None:
+    """/root has no username to generalize — out of scope, left intact."""
+    out, counts = _pii_scrub("logs under /root/x stay")
+    assert out == "logs under /root/x stay"
+    assert counts.get("path", 0) == 0
+
+
+def test_path_case_sensitive_lowercase_users_unchanged() -> None:
+    """Lowercase /users/ (e.g. inside a URL) must not be over-matched."""
+    out, counts = _pii_scrub("https://site/users/list")
+    assert out == "https://site/users/list"
+    assert counts.get("path", 0) == 0
+
+
+def test_path_url_home_segment_unchanged() -> None:
+    """A ``/home/`` URL path segment is not a home directory — leave it intact."""
+    out, counts = _pii_scrub("https://example.com/home/dashboard")
+    assert out == "https://example.com/home/dashboard"
+    assert counts.get("path", 0) == 0
+
+
+def test_path_scheme_host_named_home_unchanged() -> None:
+    """``scheme://home/…`` names a host, not a home directory."""
+    out, counts = _pii_scrub("http://home/dashboard")
+    assert out == "http://home/dashboard"
+    assert counts.get("path", 0) == 0
+
+
+def test_path_nested_var_home_unchanged() -> None:
+    """A nested ``/var/home/alice`` is not a top-level home root — leave it."""
+    out, counts = _pii_scrub("logs under /var/home/alice/app stay")
+    assert out == "logs under /var/home/alice/app stay"
+    assert counts.get("path", 0) == 0
+
+
+def test_path_bare_home_root_still_redacts() -> None:
+    """A genuine ``/home/<user>`` root at a path boundary still collapses to ~."""
+    out, counts = _pii_scrub("cd /home/alice/proj")
+    assert out == "cd ~/proj"
+    assert counts.get("path", 0) == 1
+
+
+@pytest.mark.parametrize(
+    "raw,expected,leaked_user",
+    [
+        # file:// URLs use three slashes before a PATH — the segment is a real
+        # home directory, not a host, so the username must not survive.
+        ("file:///Users/dave/private/keys", "file://~/private/keys", "dave"),
+        ("file:///home/erin/.ssh/id_rsa", "file://~/.ssh/id_rsa", "erin"),
+        # Protocol-relative ``//Users`` is a path, not a scheme authority.
+        ("//Users/frank/data", "/~/data", "frank"),
+    ],
+)
+def test_path_file_url_home_still_redacts(
+    raw: str, expected: str, leaked_user: str
+) -> None:
+    """A home path behind a ``file://`` URL redacts — the username never leaks.
+
+    The ``://host`` guard only rejects the two-slash scheme authority; three
+    slashes (``file:///Users/…``) mark a path, so it must still collapse to ~.
+    Regression: a blanket ``(?<!/)`` lookbehind let these leak the username.
+    """
+    out, counts = _pii_scrub(raw)
+    assert out == expected
+    assert leaked_user not in out
+    assert counts.get("path", 0) == 1
+
+
+def test_path_https_scheme_host_named_home_unchanged() -> None:
+    """``https://home/…`` names a host, not a home directory — leave it intact."""
+    out, counts = _pii_scrub("https://home/dashboard")
+    assert out == "https://home/dashboard"
+    assert counts.get("path", 0) == 0
+
+
+def test_path_vox_corpus_style_home_redacts_to_tilde() -> None:
+    """The vox capture case: ``/Users/jfreeman/x`` collapses to ``~/x``."""
+    out, counts = _pii_scrub("/Users/jfreeman/x")
+    assert out == "~/x"
+    assert "jfreeman" not in out
+    assert counts.get("path", 0) == 1
+
+
+# ---------------------------------------------------------------------------
+# PII: email addresses
+# ---------------------------------------------------------------------------
+
+
+def test_email_single_redacted() -> None:
+    out, counts = _pii_scrub("reach me at jmf@pobox.com anytime")
+    assert "jmf@pobox.com" not in out
+    assert "[REDACTED:email]" in out
+    assert counts.get("email", 0) == 1
+
+
+def test_email_multiple_all_redacted() -> None:
+    text = "a@b.co, c.d+tag@e-f.org, g_h@sub.example.io"
+    out, counts = _pii_scrub(text)
+    assert "@" not in out
+    assert out.count("[REDACTED:email]") == 3
+    assert counts.get("email", 0) == 3
+
+
+@pytest.mark.parametrize(
+    "raw,tail",
+    [
+        ("jmf@pobox.com.", "."),
+        ("jmf@pobox.com. ", ". "),
+        ("jmf@pobox.com...", "..."),
+        ("jmf@pobox.com,", ","),
+        ("jmf@pobox.com)", ")"),
+        ("jmf@pobox.com", ""),
+    ],
+)
+def test_email_redacted_before_trailing_punctuation(raw: str, tail: str) -> None:
+    """A sentence-final address must redact — the trailing char is not part of it.
+
+    Regression: the old ``(?![\\w.-])`` lookahead rejected a match when a period
+    followed, leaking ``jmf@pobox.com.`` — the most common address context in prose.
+    """
+    out, counts = _pii_scrub(f"reach {raw} ok")
+    assert "jmf@pobox.com" not in out
+    assert out == f"reach [REDACTED:email]{tail} ok"
+    assert counts.get("email", 0) == 1
+
+
+def test_email_multi_label_tld_with_trailing_period() -> None:
+    """A multi-label TLD still matches via backtracking, even with a trailing dot."""
+    out, counts = _pii_scrub("write jmf@pobox.co.uk. now")
+    assert "jmf@pobox.co.uk" not in out
+    assert out == "write [REDACTED:email]. now"
+    assert counts.get("email", 0) == 1
+
+
+# ---------------------------------------------------------------------------
+# PII: hostname (bounded scope — anti false positive)
+# ---------------------------------------------------------------------------
+
+
+def test_hostname_local_forms_redacted() -> None:
+    out, counts = _pii_scrub(f"host {_HOST} and leaf Jims-MBP here")
+    assert _HOST not in out
+    assert "Jims-MBP" not in out
+    assert out.count("[REDACTED:hostname]") == 2
+    assert counts.get("hostname", 0) == 2
+
+
+def test_hostname_bounded_does_not_touch_domains_or_modules() -> None:
+    """A dotted token that is not the local host must survive untouched."""
+    text = "see example.com and quarry.db.facade and github.com"
+    out, counts = _pii_scrub(text)
+    assert out == text
+    assert counts.get("hostname", 0) == 0
+
+
+def test_hostname_short_leaf_not_redacted_alone() -> None:
+    """A <4 char leaf is not added as a form — it collides with common words."""
+    # leaf "srv" (len 3) is guarded out; only the full dotted host is a form.
+    out, counts = _pii_scrub("the srv is up", local_hostname="srv.corp.example.com")
+    assert out == "the srv is up"
+    assert counts.get("hostname", 0) == 0
+
+
+def test_hostname_full_dotted_form_redacted() -> None:
+    """The full hostname is always a form, even when its leaf is guarded out."""
+    out, counts = _pii_scrub(
+        "box srv.corp.example.com here", local_hostname="srv.corp.example.com"
+    )
+    assert "srv.corp.example.com" not in out
+    assert "[REDACTED:hostname]" in out
+    assert counts.get("hostname", 0) == 1
+
+
+def test_hostname_case_insensitive_leaf_redacted() -> None:
+    """DNS/mDNS is case-insensitive — a lowercased occurrence must still redact.
+
+    Regression: without ``re.IGNORECASE`` a captured ``jims-macbook-pro`` leaked
+    when the resolved host was ``Jims-MacBook-Pro.local``.
+    """
+    out, counts = _pii_scrub(
+        "host jims-macbook-pro is up", local_hostname="Jims-MacBook-Pro.local"
+    )
+    assert "jims-macbook-pro" not in out
+    assert "[REDACTED:hostname]" in out
+    assert counts.get("hostname", 0) == 1
+
+
+def test_email_precedes_hostname_no_local_part_leak() -> None:
+    """A hostname inside an email domain is subsumed by whole-email redaction."""
+    out, counts = _pii_scrub("login jim@Jims-MBP.local ok")
+    assert out == "login [REDACTED:email] ok"
+    assert "jim" not in out
+    assert counts.get("email", 0) == 1
+    assert counts.get("hostname", 0) == 0
+
+
+# ---------------------------------------------------------------------------
+# PII: security property, idempotency, corpus shape, toggles
+# ---------------------------------------------------------------------------
+
+
+def test_zero_pii_survives_mixed_fixture() -> None:
+    """The security invariant: no path, email, or hostname leaks through."""
+    text = f"path /Users/jfreeman/Coding/quarry\nmail jmf@pobox.com\nbox {_HOST}\n"
+    out, counts = _pii_scrub(text)
+    assert "/Users/" not in out
+    assert "@" not in out
+    assert _HOST not in out
+    assert counts.get("path", 0) >= 1
+    assert counts.get("email", 0) >= 1
+    assert counts.get("hostname", 0) >= 1
+
+
+def test_all_six_categories_fire_together() -> None:
+    """Secrets + profanity are unweakened by the added PII passes."""
+    text = (
+        "GH=ghp_" + "A" * 40 + "\n"
+        "aws_secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n"
+        "damn this /Users/jane/x file\n"
+        "mail jmf@pobox.com\n"
+        f"host {_HOST}\n"
+    )
+    out, counts = _pii_scrub(text)
+    expected = ("gh-pat", "aws-secret-key", "profanity", "path", "email", "hostname")
+    for category in expected:
+        assert counts.get(category, 0) >= 1, f"{category} did not fire"
+    assert "/Users/" not in out
+    assert "@" not in out
+
+
+def test_pii_idempotent_over_five_categories() -> None:
+    text = (
+        "ghp_" + "C" * 40 + "\n"
+        "/Users/jane/Coding/x\n"
+        "jmf@pobox.com\n"
+        f"{_HOST}\n"
+        "this is damn loud\n"
+    )
+    once, _ = _pii_scrub(text)
+    twice, twice_counts = _pii_scrub(once)
+    assert twice == once, "PII scrubber not idempotent"
+    assert sum(twice_counts.values()) == 0
+
+
+def test_vox_corpus_paths_all_redacted() -> None:
+    """598 /Users/jfreeman/ occurrences collapse to 0 paths and 598 ~/."""
+    text = "/Users/jfreeman/repo/file.py\n" * 598
+    out, counts = _pii_scrub(text)
+    assert out.count("/Users/") == 0
+    assert out.count("/home/") == 0
+    assert out.count("~/") == 598
+    assert counts.get("path", 0) == 598
+
+
+def test_pii_disabled_keeps_everything() -> None:
+    text = f"/Users/jane/x jmf@pobox.com {_HOST}"
+    out, counts = _pii_scrub(text, scrub_pii=False)
+    assert out == text
+    assert counts.get("path", 0) == 0
+    assert counts.get("email", 0) == 0
+    assert counts.get("hostname", 0) == 0
+
+
+def test_pii_empty_input_never_propagates() -> None:
+    out, counts = _pii_scrub("")
+    assert out == ""
+    assert sum(counts.values()) == 0
