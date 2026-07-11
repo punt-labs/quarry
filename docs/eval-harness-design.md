@@ -3,7 +3,7 @@
 **Status:** Design ratified + twice peer-reviewed (`kpz` methodology, `adb` infra/CI, `rmh` runner/data).
 **Phase 0 merged** (#343 — parameterizable retrieval seam in `src/quarry/retrieval/`) and **Phase 1 merged**
 (#344 — `make eval` bootstrap harness: MRR/success@k, metadata-pollution diagnostic, determinism contract,
-known-item baseline). **Next:** curate the full representative fixture → first *meaningful* baseline (the
+known-item baseline). **Next:** curate the full representative fixture (quarry-#345) → first *meaningful* baseline (the
 current overall MRR 0.900 is a 5-doc smoke-test, not a real signal); then Phase 2 (Label Studio graded gold),
 Phase 3 (calibrated LLM judge), then the lever bake-offs (metadata-handling, context-aware embeddings).
 Last updated 2026-07-05.

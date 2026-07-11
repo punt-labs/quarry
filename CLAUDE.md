@@ -22,15 +22,15 @@ Local semantic search for AI agents and humans. Indexes 20+ document formats, em
 
 ### How a query works
 
-A user (human or agent) issues a search via any surface (CLI, MCP, HTTP, plugin). The query hits `search.py` which runs hybrid search: (1) vector similarity via the ONNX embedding model against LanceDB, (2) BM25 full-text via Tantivy, (3) results fused via Reciprocal Rank Fusion. Agent-scoped memories apply temporal decay — recent memories rank higher. Results return as ranked chunks with source metadata.
+A user (human or agent) issues a search via any surface (CLI, MCP, HTTP, plugin). Every surface goes through one `SearchService` (the `retrieval/` seam, DES-037), which runs hybrid search: (1) vector similarity (L2-normalized embeddings, cosine metric — DES-038) via the ONNX model against LanceDB, (2) BM25 full-text via Tantivy, (3) results fused via Reciprocal Rank Fusion. Agent-scoped memories apply temporal decay — recent memories rank higher. Results return as ranked chunks with source metadata.
 
 ### How ingestion works
 
-Documents enter via `pipeline.py`. The pipeline detects format (20+ types via `loaders/`), extracts text, splits into chunks, generates embeddings via ONNX Runtime, and writes vectors + metadata to LanceDB. Directory registration (`sync.py`) tracks which paths to re-index on change.
+Documents enter via `ingestion/pipeline.py`. The pipeline detects format (20+ types via `loaders/`), extracts text, splits into chunks, generates embeddings via ONNX Runtime, and writes vectors + metadata to LanceDB. Directory registration (`sync.py`) tracks which paths to re-index on change. Automatic captures (session transcripts, web fetches) are PII/secret-scrubbed at write time through a single `CaptureWriter` choke point (DES-036).
 
 ### Key architectural boundary: local vs. remote
 
-Quarry has two operational modes. **Local mode**: direct LanceDB access via `database.py`. **Remote mode**: HTTP client → `http_server.py` → same database layer. The HTTP API must be a faithful proxy of every local operation — same parameters, same response fields, same behavior. Bug class 3 (remote/local divergence) documents the repeated failure mode where these paths drift. Every new query parameter or response field must exist on both paths simultaneously.
+Quarry has two operational modes. **Local mode**: direct LanceDB access via the `db/` package (`Database` facade). **Remote mode**: HTTP client → `http_server.py` → same database layer. The HTTP API must be a faithful proxy of every local operation — same parameters, same response fields, same behavior. Bug class 3 (remote/local divergence) documents the repeated failure mode where these paths drift. Every new query parameter or response field must exist on both paths simultaneously.
 
 ### Subsystems
 
@@ -45,10 +45,11 @@ Quarry has two operational modes. **Local mode**: direct LanceDB access via `dat
 
 | Module | Responsibility |
 |--------|---------------|
-| `pipeline.py` | Ingestion: format detection → chunking → embedding → LanceDB write |
-| `database.py` | LanceDB operations: table creation, writes, queries, migrations |
-| `search.py` | Hybrid search: vector + BM25 + RRF fusion, temporal decay |
-| `embedding.py` | ONNX provider: model loading, quantization, batch embedding |
+| `ingestion/pipeline.py` | Ingestion: format detection → chunking → embedding → LanceDB write |
+| `db/` (package) | LanceDB operations behind a `Database` facade (`facade.py`) — `chunk_store.py`, `chunk_search.py`, `chunk_catalog.py`, `schema.py`, `optimizer.py`, `storage.py` |
+| `retrieval/` (package) | Single retrieval seam (DES-037): `SearchService`, `HybridRetriever` (vector + BM25 + RRF), `RetrievalConfig`, `reranker.py`, temporal decay |
+| `embeddings.py` | ONNX provider: model loading, quantization, batch embedding |
+| `scrub.py` / `capture.py` | Write-time PII/secret redaction (`Scrubber`) + the single `CaptureWriter` choke point for captures (DES-036) |
 | `http_server.py` | REST API: must mirror every local operation faithfully |
 | `mcp_server.py` | FastMCP server (stdio + WebSocket on port 8420) |
 | `sync.py` | Directory registration, change tracking, re-indexing |
@@ -60,7 +61,7 @@ See `docs/architecture.tex` for the full system description.
 
 ## Code Quality
 
-**Module size limits.** No module over 500 lines without a design reason. Known violations: `__main__.py` (2,008), `pipeline.py` (1,589), `http_server.py` (1,530), `doctor.py` (1,141), `database.py` (925), `hooks.py` (868), `sync.py` (660), `mcp_server.py` (581). When a module grows past the limit, the next change to that module must include extraction.
+**Module size limits.** No module over 500 lines without a design reason. Known violations (as of 2026-07-11): `__main__.py` (1,795), `http_server.py` (1,498), `ingestion/pipeline.py` (1,475), `doctor.py` (1,128), `hooks.py` (811), `mcp_server.py` (557). (`database.py` and `search.py` are retired — decomposed into the `db/` and `retrieval/` packages; `sync.py` is now 359.) When a module grows past the limit, the next change to that module must include extraction. `pipeline.py`/`hooks.py` full strategy decomposition is tracked as a bead.
 
 **Class design.** Classes have a single responsibility. Prefer composition over inheritance. Use `Protocol` for structural typing at boundaries. A module with zero classes and 20+ module-level functions is procedural — it needs a design pass, not more functions.
 

@@ -6,6 +6,9 @@
 > Tag memories with `quarry ingest file.md --agent-handle claude --memory-type fact`.
 > Filter with `quarry find "query" --agent-handle claude --memory-type procedure`.
 > Hybrid search (vector + BM25 via RRF) is used for all `find` calls.
+> Automatic captures (session transcripts, web fetches) are PII-scrubbed at write
+> time (paths, emails, local hostname) before storage — see DES-036; deliberate
+> `quarry ingest`/`remember` memories are stored verbatim.
 > See `docs/architecture.tex` Section 8 for technical details.
 
 ## The Problem

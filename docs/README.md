@@ -25,8 +25,8 @@ this directory holds reference material, active design work, and archived proces
 
 ## Operations
 
-- **`smoke-test.md`** — post-release manual smoke test: 14 MCP + 17 CLI + 7 enable/disable
-  checks, plus install verification. Run after every release.
+- **`smoke-test.md`** — post-release manual smoke test: 14 MCP + 18 CLI + 7 enable/disable
+  checks (incl. a capture PII-redaction check), plus install verification. Run after every release.
 
 ## Archive (`archive/`)
 

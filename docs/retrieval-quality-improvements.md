@@ -1,6 +1,12 @@
 # Retrieval Quality Improvements
 
-**Status:** Research complete, direction proposed, not yet implemented.
+**Status:** Research complete, direction proposed. The eval harness this doc calls
+a prerequisite has since **shipped** (Phase 0 retrieval seam #343 / DES-037; Phase 1
+`make eval` + ranx metrics #344) — see `eval-harness-design.md` for the authoritative,
+current design. The **embedding levers** below (contextual embeddings, late chunking,
+metadata handling) remain unimplemented; they are now measured against `make eval`
+before adoption. Where §5–§6 restate an eval plan, `eval-harness-design.md` supersedes
+it (notably: Phase 1 uses MRR/success@k, not the nDCG@10/Recall@50 sketched here).
 **Date:** 2026-07-04.
 **Owner:** search domain (`kpz` worker, `rmh`/`gvr` evaluator).
 **Prompted by:** live queries on real data (`course-ox-*`) showing short, term-dense
