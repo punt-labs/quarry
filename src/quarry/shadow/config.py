@@ -6,10 +6,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Self
 
+from quarry._frontmatter import Frontmatter
+
 _CONFIG_FILENAME = ".punt-labs/quarry/config.md"
 _SHADOW_SUFFIX = "-quarry"
 _YAML_TRUE = frozenset({"true", "yes", "on"})
-_YAML_FALSE = frozenset({"false", "no", "off"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,7 +41,7 @@ class ShadowConfig:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             return None
-        block = cls._block(cls._frontmatter_lines(text), "shadow")
+        block = Frontmatter(text).block("shadow")
         if block is None:
             return None
         return cls(
@@ -66,43 +67,11 @@ class ShadowConfig:
         return f"{url}{_SHADOW_SUFFIX}"
 
     @staticmethod
-    def _frontmatter_lines(text: str) -> list[str]:
-        """Return the lines between the leading ``---`` fences (empty if none)."""
-        lines = text.splitlines()
-        if not lines or lines[0].strip() != "---":
-            return []
-        for i, line in enumerate(lines[1:], start=1):
-            if line.strip() == "---":
-                return lines[1:i]
-        return []
-
-    @staticmethod
-    def _block(lines: list[str], block_name: str) -> dict[str, str] | None:
-        """Return ``key: value`` under ``<block_name>:`` (None absent, {} empty)."""
-        result: dict[str, str] = {}
-        in_block = False
-        header = f"{block_name}:"
-        for line in lines:
-            stripped = line.strip()
-            if stripped == header:
-                in_block = True
-                continue
-            if in_block:
-                if not stripped:
-                    continue
-                if not line.startswith((" ", "\t")):
-                    break
-                if ":" in stripped:
-                    key, _, val = stripped.partition(":")
-                    result[key.strip()] = val.split("#")[0].strip()
-        return result if in_block else None
-
-    @staticmethod
     def _bool(block: dict[str, str], key: str, *, default: bool) -> bool:
         """Parse a YAML boolean alias; fail closed on an unrecognized value."""
         val = block.get(key)
         if val is None:
             return default
-        normalized = val.lower()
-        # _YAML_FALSE and any unrecognized value both fail closed to False.
-        return normalized in _YAML_TRUE
+        # Anything not in the true-set (an explicit false alias or garbage)
+        # fails closed to False.
+        return val.lower() in _YAML_TRUE
