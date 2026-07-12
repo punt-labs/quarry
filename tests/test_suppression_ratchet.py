@@ -62,10 +62,17 @@ class TestTokenizeScan:
         fs = FileSuppressions("f.py", source)
         assert fs.count("noqa") == 0
 
-    def test_tokenize_error_returns_zero(self) -> None:
-        """Untokenizable source must degrade to zero, not crash or miscount."""
+    def test_untokenizable_source_fails_closed_not_zeroed(self) -> None:
+        """Untokenizable source must fail CLOSED (over-count), never zero out.
+
+        Zeroing would let the suppression gate read a PR that both broke
+        tokenization and added suppressions as "count decreased -> PASS". The
+        fallback over-counts marker-bearing lines instead, so the marker on the
+        code line is still seen and the total can only rise or hold.
+        """
         fs = FileSuppressions("f.py", '"""open string never closes\nx = 1  # noqa\n')
-        assert fs.total == 0
+        assert fs.count("noqa") >= 1
+        assert fs.total >= 1
 
     # --- the four documented blind spots of the retired regex+AST heuristic ---
 
@@ -204,6 +211,33 @@ class TestMergeBaseCheck:
             ["src", "--check", "--base-ref", base, "--require-base"]
         )
         assert code == 0
+
+    def test_untokenizable_edit_cannot_launder_increase(
+        self,
+        git_sandbox: GitSandbox,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A PR that adds a suppression AND breaks tokenization must FAIL.
+
+        The base baseline records the file's count while it tokenized cleanly;
+        the base side is never re-tokenized. If the worktree re-scan zeroed the
+        now-untokenizable file, its total would drop below base and the gate
+        would read "count decreased -> PASS", hiding the old and newly added
+        suppressions. The fail-closed over-count keeps the total above base.
+        """
+        monkeypatch.chdir(git_sandbox.root)
+        base = _seat_and_commit(git_sandbox, _SRC)  # 1 suppression, tokenizes
+        # Add a suppression AND make the file untokenizable (unterminated string).
+        git_sandbox.write(
+            "src/mod.py", _SRC + 'y = 2  # type: ignore\nz = """unterminated\n'
+        )
+        code = tools.suppression.main(
+            ["src", "--check", "--base-ref", base, "--require-base"]
+        )
+        out = capsys.readouterr().out
+        assert code == 1  # NOT "count decreased -> PASS"
+        assert "increased" in out
 
 
 class TestFailClosed:

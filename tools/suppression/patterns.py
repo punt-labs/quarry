@@ -87,7 +87,16 @@ class FileSuppressions:
         try:
             tokens = list(tokenize.tokenize(io.BytesIO(source.encode()).readline))
         except (tokenize.TokenError, SyntaxError, IndentationError):
-            # Unparseable source — degrade to zero rather than crash.
+            # Unparseable source must fail CLOSED, never degrade to zero: the
+            # suppression ratchet compares this re-scanned worktree total against
+            # the base-commit baseline (the base side is never re-tokenized), so
+            # zeroing a file would push the total DOWN and the gate would read a
+            # PR that both added suppressions and broke tokenization as "count
+            # decreased -> PASS", hiding old and new suppressions. Degrade to an
+            # OVER-count instead (every marker-bearing line, no code-line gate) so
+            # the total can only rise or hold — matching scanner.py's fail-closed
+            # contract and vox's original parse-failure direction.
+            self._fallback_scan(source)
             return
 
         code_lines: set[int] = set()
@@ -111,4 +120,16 @@ class FileSuppressions:
                 continue
             for name, pattern in PATTERNS:
                 if pattern.search(comment_text):
+                    self._counts[name] += 1
+
+    def _fallback_scan(self, source: str) -> None:
+        """Count every marker-bearing line when the source will not tokenize.
+
+        No code-line gate is applied: a marker inside a string or comment is
+        counted too. This over-counts by design so the total can only rise or
+        hold on a tokenization failure, never fall — the fail-closed direction.
+        """
+        for line in source.splitlines():
+            for name, pattern in PATTERNS:
+                if pattern.search(line):
                     self._counts[name] += 1
