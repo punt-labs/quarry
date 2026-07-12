@@ -138,6 +138,53 @@ class TestBootstrapCreatesNestedRepo:
         assert tracked == [".gitignore", "session-keep.md"]
 
 
+class TestStagedCaptures:
+    def test_stage_returns_true_on_success(self, tmp_path: Path) -> None:
+        public = _public_repo(tmp_path)
+        repo = _repo(public)
+        repo.bootstrap()
+        (repo.captures_dir / "session-a.md").write_text("clean\n")
+        assert repo.stage() is True
+
+    def test_staged_captures_reads_index_blobs(self, tmp_path: Path) -> None:
+        public = _public_repo(tmp_path)
+        repo = _repo(public)
+        repo.bootstrap()
+        (repo.captures_dir / "session-a.md").write_text("hello\n")
+        (repo.captures_dir / "notes.txt").write_text("ignored\n")
+        repo.stage()
+        staged = repo.staged_captures()
+        # Only session-*.md is staged (allowlist) and read from the index.
+        assert set(staged) == {"session-a.md"}
+        assert "hello" in staged["session-a.md"]
+
+    def test_staged_captures_empty_when_nothing_staged(self, tmp_path: Path) -> None:
+        public = _public_repo(tmp_path)
+        repo = _repo(public)
+        repo.bootstrap()
+        assert repo.staged_captures() == {}
+
+
+class TestHasUnpushedCommits:
+    def test_local_commit_without_origin_main_is_unpushed(self, tmp_path: Path) -> None:
+        # After bootstrap there is no origin/main (never pushed). A local commit
+        # must read as UNPUSHED, not "in sync" — the safe direction for a leak.
+        public = _public_repo(tmp_path)
+        repo = _repo(public)
+        repo.bootstrap()
+        (repo.captures_dir / "session-a.md").write_text("captured\n")
+        repo.stage()
+        assert repo.commit() is True
+        assert repo.has_unpushed_commits() is True
+
+    def test_no_commits_is_not_unpushed(self, tmp_path: Path) -> None:
+        public = _public_repo(tmp_path)
+        repo = _repo(public)
+        repo.bootstrap()
+        # Freshly bootstrapped, no commit yet -> nothing to push.
+        assert repo.has_unpushed_commits() is False
+
+
 class TestRemoteVisibility:
     def _completed(
         self, stdout: str, returncode: int = 0
@@ -147,7 +194,7 @@ class TestRemoteVisibility:
     def test_public_detected(self, tmp_path: Path) -> None:
         repo = _repo(tmp_path)
         with patch(
-            "quarry.shadow.repo.subprocess.run",
+            "quarry.shadow._git.subprocess.run",
             return_value=self._completed('{"visibility": "PUBLIC"}'),
         ):
             assert repo.remote_visibility() is Visibility.PUBLIC
@@ -155,7 +202,7 @@ class TestRemoteVisibility:
     def test_private_detected(self, tmp_path: Path) -> None:
         repo = _repo(tmp_path)
         with patch(
-            "quarry.shadow.repo.subprocess.run",
+            "quarry.shadow._git.subprocess.run",
             return_value=self._completed('{"visibility": "private"}'),
         ):
             assert repo.remote_visibility() is Visibility.PRIVATE
@@ -163,7 +210,7 @@ class TestRemoteVisibility:
     def test_unknown_when_gh_raises(self, tmp_path: Path) -> None:
         repo = _repo(tmp_path)
         with patch(
-            "quarry.shadow.repo.subprocess.run",
+            "quarry.shadow._git.subprocess.run",
             side_effect=FileNotFoundError("gh not installed"),
         ):
             assert repo.remote_visibility() is Visibility.UNKNOWN
@@ -171,7 +218,7 @@ class TestRemoteVisibility:
     def test_unknown_when_gh_nonzero(self, tmp_path: Path) -> None:
         repo = _repo(tmp_path)
         with patch(
-            "quarry.shadow.repo.subprocess.run",
+            "quarry.shadow._git.subprocess.run",
             return_value=self._completed("", returncode=1),
         ):
             assert repo.remote_visibility() is Visibility.UNKNOWN

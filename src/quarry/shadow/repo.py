@@ -13,16 +13,15 @@ from __future__ import annotations
 
 import json
 import logging
-import subprocess
 from enum import Enum
 from pathlib import Path
 from typing import Self, final
 
+from quarry.shadow._git import GitRunner
 from quarry.shadow.config import ShadowConfig
 
 logger = logging.getLogger(__name__)
 
-_GIT_TIMEOUT = 30
 _COMMIT_MESSAGE = "quarry: sync redacted captures"
 
 # Fail-closed allowlist: only quarry's own capture files (and this .gitignore)
@@ -61,39 +60,6 @@ class Visibility(Enum):
 
 
 @final
-class _Git:
-    """Run a ``git``/``gh`` subprocess in one working directory, never raising."""
-
-    __slots__ = ("_cwd",)
-
-    _cwd: Path
-
-    def __new__(cls, cwd: Path) -> Self:
-        self = super().__new__(cls)
-        self._cwd = cwd
-        return self
-
-    def run(self, argv: list[str]) -> tuple[int, str]:
-        """Return ``(returncode, stripped_stdout)``; ``(1, "")`` on any failure."""
-        try:
-            proc = subprocess.run(  # noqa: S603
-                argv,
-                cwd=self._cwd,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=_GIT_TIMEOUT,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return 1, ""
-        return proc.returncode, proc.stdout.strip()
-
-    def ok(self, argv: list[str]) -> bool:
-        """Return whether *argv* exited zero."""
-        return self.run(argv)[0] == 0
-
-
-@final
 class ShadowRepo:
     """The captures dir as a nested git repo pointing at the private shadow."""
 
@@ -108,16 +74,16 @@ class ShadowRepo:
     _captures_dir: Path
     _configured_remote: str
     _parent: Path
-    _parent_git: _Git
-    _repo_git: _Git
+    _parent_git: GitRunner
+    _repo_git: GitRunner
 
     def __new__(cls, captures_dir: Path, parent: Path, configured_remote: str) -> Self:
         self = super().__new__(cls)
         self._captures_dir = captures_dir
         self._parent = parent
         self._configured_remote = configured_remote
-        self._repo_git = _Git(captures_dir)
-        self._parent_git = _Git(parent)
+        self._repo_git = GitRunner(captures_dir)
+        self._parent_git = GitRunner(parent)
         return self
 
     @property
@@ -146,7 +112,7 @@ class ShadowRepo:
         path under it matches the rule whether or not the dir yet exists.
         """
         probe = str(Path(self._captures_rel()) / "session-probe.md")
-        return self._parent_git.ok(["git", "check-ignore", probe])
+        return self._parent_git.ok(["git", "check-ignore", "--", probe])
 
     def parent_tracked_captures(self) -> list[Path]:
         """Return capture paths the parent public repo already TRACKS (B3).
@@ -170,38 +136,86 @@ class ShadowRepo:
         origin, and adopts any existing remote history without clobbering local
         capture files.
         """
-        if not self.is_ignored_by_parent():
-            logger.warning(
-                "shadow: %s is not gitignored by the parent repo; refusing",
-                self._captures_dir,
-            )
-            return False
-        tracked = self.parent_tracked_captures()
-        if tracked:
-            logger.warning(
-                "shadow: parent repo already tracks captures (%s); refusing. %s",
-                ", ".join(str(p) for p in tracked),
-                PARENT_TRACKED_REMEDIATION,
-            )
+        refusal = self._refusal_reason()
+        if refusal is not None:
+            logger.warning("shadow: %s", refusal)
             return False
         remote = self.resolved_remote()
         if not remote:
             logger.warning("shadow: no shadow remote configured or derivable")
             return False
-        self._captures_dir.mkdir(parents=True, exist_ok=True)
-        if not self.is_initialized and not self._repo_git.ok(
-            ["git", "init", "-b", "main", "."]
-        ):
-            logger.warning("shadow: git init failed in %s", self._captures_dir)
+        if not self._init_repo():
             return False
         self._write_allowlist_gitignore()
         self._ensure_origin(remote)
         self._fetch_and_reconcile()
         return True
 
-    def stage(self) -> None:
-        """Stage the working tree; the allowlist bounds it to session-*.md."""
-        self._repo_git.run(["git", "add", "-A"])
+    def _refusal_reason(self) -> str | None:
+        """Return why bootstrap must refuse (a leak risk), or None when safe.
+
+        None is the "safe to proceed" state, not an error: the captures dir is
+        gitignored by the parent and the parent tracks no captures.
+        """
+        if not self.is_ignored_by_parent():
+            return f"{self._captures_dir} is not gitignored by the parent; refusing"
+        tracked = self.parent_tracked_captures()
+        if tracked:
+            names = ", ".join(str(p) for p in tracked)
+            return (
+                f"parent repo already tracks captures ({names}); refusing. "
+                f"{PARENT_TRACKED_REMEDIATION}"
+            )
+        return None
+
+    def _init_repo(self) -> bool:
+        """Create the captures dir and nested git repo; False on init failure."""
+        self._captures_dir.mkdir(parents=True, exist_ok=True)
+        if not self.is_initialized and not self._repo_git.ok(
+            ["git", "init", "-b", "main", "."]
+        ):
+            logger.warning("shadow: git init failed in %s", self._captures_dir)
+            return False
+        return True
+
+    def stage(self) -> bool:
+        """Stage the working tree; the allowlist bounds it to session-*.md.
+
+        Return whether ``git add`` succeeded.  A silent failure here (e.g. an
+        ``index.lock`` race) would leave the index holding pre-rescrub blobs
+        while the working tree reads clean, so the caller MUST abort — never
+        commit — when this returns ``False``.
+        """
+        return self._repo_git.ok(["git", "add", "-A"])
+
+    def staged_captures(self) -> dict[str, str]:
+        """Return ``{relpath: blob text}`` for every staged ``session-*.md``.
+
+        Reads the git INDEX — exactly the bytes a commit will ship — not the
+        working tree, so the commit-time fixed-point guard covers what actually
+        leaves the machine.  ``_Git.run`` strips surrounding whitespace; the
+        scrubber never alters leading/trailing whitespace, so a fixed point
+        stays a fixed point and PII (never whitespace) stays detectable.
+        """
+        # A non-zero exit yields ``out == ""`` -> the filter is empty -> ``{}``,
+        # so no separate failure guard is needed.
+        _, out = self._repo_git.run(["git", "ls-files", "-z", "--", "session-*.md"])
+        staged: dict[str, str] = {}
+        for rel in filter(None, out.split("\0")):
+            blob = self._staged_blob(rel)
+            if blob is not None:
+                staged[rel] = blob
+        return staged
+
+    def _staged_blob(self, rel: str) -> str | None:
+        """Return the index blob text for *rel*, or None when git cannot read it.
+
+        None is the documented "not in the index" outcome: a path ``git
+        ls-files`` reports but ``git show`` cannot read is not in the commit, so
+        the caller safely drops it from the fixed-point check.
+        """
+        code, content = self._repo_git.run(["git", "show", f":{rel}"])
+        return content if code == 0 else None
 
     def commit(self) -> bool:
         """Commit the staged index; False when there is nothing to commit."""
@@ -212,11 +226,20 @@ class ShadowRepo:
         return self._repo_git.ok(["git", "push", "-u", "origin", "main"])
 
     def has_unpushed_commits(self) -> bool:
-        """Return whether local ``main`` is ahead of ``origin/main``."""
+        """Return whether local ``main`` holds commits not on ``origin/main``.
+
+        When ``origin/main`` is unresolvable — the remote was never created, or
+        a visibility-refused push left it absent — ``rev-list`` exits non-zero.
+        A non-zero exit must NOT read as "in sync": any local commit is by
+        definition unpushed, so fail toward "unpushed" (the safe direction for
+        a leak indicator) whenever the repo holds a commit.
+        """
         code, out = self._repo_git.run(
             ["git", "rev-list", "--count", "origin/main..HEAD"]
         )
-        return code == 0 and out.isdigit() and int(out) > 0
+        if code == 0:
+            return out.isdigit() and int(out) > 0
+        return self._repo_git.ok(["git", "rev-parse", "--verify", "HEAD"])
 
     def remote_visibility(self) -> Visibility:
         """Return the shadow remote's visibility via ``gh`` (UNKNOWN if absent)."""
@@ -228,8 +251,13 @@ class ShadowRepo:
         )
         if code != 0 or not out:
             return Visibility.UNKNOWN
+        return self._parse_visibility(out)
+
+    @staticmethod
+    def _parse_visibility(gh_json: str) -> Visibility:
+        """Map a ``gh repo view --json visibility`` payload to a Visibility."""
         try:
-            data = json.loads(out)
+            data = json.loads(gh_json)
         except json.JSONDecodeError:
             return Visibility.UNKNOWN
         return Visibility.from_gh(str(data.get("visibility", "")))
@@ -260,9 +288,9 @@ class ShadowRepo:
     def _ensure_origin(self, remote: str) -> None:
         code, current = self._repo_git.run(["git", "remote", "get-url", "origin"])
         if code != 0:
-            self._repo_git.run(["git", "remote", "add", "origin", remote])
+            self._repo_git.run(["git", "remote", "add", "--", "origin", remote])
         elif current != remote:
-            self._repo_git.run(["git", "remote", "set-url", "origin", remote])
+            self._repo_git.run(["git", "remote", "set-url", "--", "origin", remote])
 
     def _fetch_and_reconcile(self) -> None:
         if not self._repo_git.ok(["git", "fetch", "origin"]):

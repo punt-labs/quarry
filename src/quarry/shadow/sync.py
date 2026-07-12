@@ -156,19 +156,10 @@ class CaptureSync:
         if not self._repo.bootstrap():
             return ShadowSyncResult.aborted("bootstrap-refused")
 
-        self._repo.stage()
-        rescrubbed = self._rescrubber.rescrub_all()
-        self._repo.stage()
-
-        races = self._rescrubber.verify_clean()
-        if races:
-            logger.warning(
-                "shadow: aborting commit; %d file(s) failed the I/O-race guard",
-                len(races),
-            )
-            return ShadowSyncResult.aborted(
-                "race-guard", rescrubbed=rescrubbed, races=tuple(races)
-            )
+        # None in the first slot means "index prepared, proceed to commit".
+        abort, rescrubbed = self._stage_and_verify()
+        if abort is not None:
+            return abort
 
         committed = self._repo.commit()
         gate = self._visibility_gate()
@@ -176,13 +167,61 @@ class CaptureSync:
             return ShadowSyncResult.aborted(
                 gate, rescrubbed=rescrubbed, committed=committed
             )
-        pushed = self._repo.push()
         return ShadowSyncResult(
-            pushed=pushed,
+            pushed=self._push_and_warn(),
             committed=committed,
             rescrubbed=rescrubbed,
             aborted_reason="",
             race_failures=(),
+        )
+
+    def _push_and_warn(self) -> bool:
+        """Push and, on failure, log fail-open — captures stay off the remote.
+
+        Returns whether the push succeeded.  A ``False`` is not an error (the
+        commit is safe locally) but IS leak-relevant, so it is logged rather
+        than swallowed silently.
+        """
+        pushed = self._repo.push()
+        if not pushed:
+            logger.warning(
+                "shadow: committed but push failed for %s (offline?); "
+                "captures remain unpushed",
+                self._directory,
+            )
+        return pushed
+
+    def _stage_and_verify(self) -> tuple[ShadowSyncResult | None, int]:
+        """Stage, re-scrub, re-stage, and verify the STAGED blobs.
+
+        Return ``(abort_result, rescrubbed)``.  ``abort_result`` is non-None
+        when the run must abort before committing; ``None`` signals the index is
+        clean and the caller may commit.  Verifying the staged blobs (what the
+        commit ships) rather than the working tree closes the gap where a silent
+        re-stage failure leaves the index unscrubbed while the disk reads clean.
+        """
+        if not self._repo.stage():
+            return ShadowSyncResult.aborted("stage-failed"), 0
+        rescrubbed = self._rescrubber.rescrub_all()
+        if not self._repo.stage():
+            logger.warning("shadow: re-stage after re-scrub failed; aborting commit")
+            return ShadowSyncResult.aborted("stage-failed", rescrubbed=rescrubbed), 0
+        return self._verify_staged(rescrubbed), rescrubbed
+
+    def _verify_staged(self, rescrubbed: int) -> ShadowSyncResult | None:
+        """Return a race-guard abort if any STAGED blob is unscrubbed, else None.
+
+        None signals a clean index — the caller may commit.
+        """
+        races = self._rescrubber.verify_staged_clean(self._repo.staged_captures())
+        if not races:
+            return None
+        logger.warning(
+            "shadow: aborting commit; %d staged file(s) failed the race guard",
+            len(races),
+        )
+        return ShadowSyncResult.aborted(
+            "race-guard", rescrubbed=rescrubbed, races=tuple(races)
         )
 
     def _visibility_gate(self) -> str | None:

@@ -30,11 +30,13 @@ def _sync(
     repo = repo or MagicMock(name="repo")
     rescrubber = rescrubber or MagicMock(name="rescrubber")
     repo.bootstrap.return_value = True
+    repo.stage.return_value = True
+    repo.staged_captures.return_value = {}
     repo.commit.return_value = True
     repo.push.return_value = True
     repo.remote_visibility.return_value = Visibility.PRIVATE
     rescrubber.rescrub_all.return_value = 0
-    rescrubber.verify_clean.return_value = []
+    rescrubber.verify_staged_clean.return_value = []
     sync = CaptureSync(Path("/proj"), config or _config(), repo, rescrubber)
     return sync, repo, rescrubber
 
@@ -48,8 +50,8 @@ class TestCommitTimeGateOrder:
         # Strip the "repo." / "rescrubber." prefix for a flat op sequence.
         ops = [name.split(".", 1)[1] for name in order]
         assert ops.index("stage") < ops.index("rescrub_all")
-        assert ops.index("rescrub_all") < ops.index("verify_clean")
-        assert ops.index("verify_clean") < ops.index("commit")
+        assert ops.index("rescrub_all") < ops.index("verify_staged_clean")
+        assert ops.index("verify_staged_clean") < ops.index("commit")
         # stage is called twice (before and after re-scrub).
         assert ops.count("stage") == 2
 
@@ -66,7 +68,7 @@ class TestCommitTimeGateOrder:
 class TestAbortBeforeCommit:
     def test_race_guard_aborts_before_commit(self) -> None:
         sync, repo, rescrubber = _sync()
-        rescrubber.verify_clean.return_value = [Path("session-abc.md")]
+        rescrubber.verify_staged_clean.return_value = [Path("session-abc.md")]
         result = sync.run(fail_open=True)
         assert result.committed is False
         assert result.pushed is False
@@ -74,6 +76,20 @@ class TestAbortBeforeCommit:
         assert result.race_failures == (Path("session-abc.md"),)
         repo.commit.assert_not_called()
         repo.push.assert_not_called()
+
+    def test_restage_failure_aborts_before_commit(self) -> None:
+        # A silent re-stage failure (index.lock race) must abort: the index may
+        # still hold pre-rescrub blobs, so committing would ship unscrubbed data.
+        sync, repo, rescrubber = _sync()
+        repo.stage.side_effect = [True, False]  # initial stage ok, re-stage fails
+        result = sync.run(fail_open=True)
+        assert result.aborted_reason == "stage-failed"
+        assert result.committed is False
+        assert result.pushed is False
+        repo.commit.assert_not_called()
+        repo.push.assert_not_called()
+        # rescrub ran (between the two stages) but the staged verify never did.
+        rescrubber.verify_staged_clean.assert_not_called()
 
     def test_rescrub_raises_no_commit_no_push(self) -> None:
         sync, repo, rescrubber = _sync()
@@ -85,7 +101,7 @@ class TestAbortBeforeCommit:
 
     def test_verify_guard_raises_no_commit_no_push(self) -> None:
         sync, repo, rescrubber = _sync()
-        rescrubber.verify_clean.side_effect = OSError("stat failed")
+        rescrubber.verify_staged_clean.side_effect = OSError("stat failed")
         result = sync.run(fail_open=True)
         assert result.pushed is False
         repo.commit.assert_not_called()

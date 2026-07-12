@@ -6,21 +6,24 @@ every ``session-*.md`` in the captures dir before a commit, so a pre-fpc5 file
 commit.  Because the scrubber is idempotent, an already-redacted file is a
 byte-for-byte no-op.
 
-``verify_clean`` is an I/O-race / write-failure guard, NOT an independent PII
-oracle.  It asserts the on-disk bytes are a ``scrub`` fixed point, so it catches
-a write race or a concurrent hook write between stage and commit.  It shares the
-scrubber's exact rules, so it can never catch a scrubber blind spot — the
-residual PII classes (§4.5 of the design) are backstopped solely by the private
-remote, not by this guard.
+``verify_staged_clean`` is an I/O-race / write-failure guard, NOT an independent
+PII oracle.  It asserts the git-STAGED bytes are a ``scrub`` fixed point, so it
+catches a write race or a silent re-stage failure between stage and commit.  It
+shares the scrubber's exact rules, so it can never catch a scrubber blind spot —
+the residual PII classes (§4.5 of the design) are backstopped solely by the
+private remote, not by this guard.
 """
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Self, final
+from typing import TYPE_CHECKING, Self, final
 
 from quarry.scrub import Scrubber
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 logger = logging.getLogger(__name__)
 
@@ -36,10 +39,10 @@ class CaptureReScrubber:
     _captures_dir: Path
     _scrubber: Scrubber
 
-    def __new__(cls, captures_dir: Path, scrubber: Scrubber | None = None) -> Self:
+    def __new__(cls, captures_dir: Path) -> Self:
         self = super().__new__(cls)
         self._captures_dir = captures_dir
-        self._scrubber = scrubber if scrubber is not None else Scrubber()
+        self._scrubber = Scrubber()
         return self
 
     def rescrub_all(self) -> int:
@@ -57,19 +60,22 @@ class CaptureReScrubber:
                 changed += 1
         return changed
 
-    def verify_clean(self) -> list[Path]:
-        """Return capture files whose on-disk bytes are not a ``scrub`` fixed point.
+    def verify_staged_clean(self, staged: Mapping[str, str]) -> list[Path]:
+        """Return staged captures whose blob is not a ``scrub`` fixed point.
 
-        A non-empty result means a write race or a concurrent write left
-        un-rescrubbed bytes on disk; the caller aborts before the commit.  This
-        is an I/O-correctness guard, not proof of "no PII".
+        *staged* maps each staged ``session-*.md`` relpath to the blob text the
+        commit will ship (read from the git INDEX, not the working tree).  A
+        non-empty result means a write/re-stage race left un-rescrubbed bytes in
+        the index; the caller aborts before the commit.  Verifying the staged
+        blob — rather than the on-disk file — closes the gap where a silent
+        re-stage failure leaves the index unscrubbed while the disk reads clean.
+        This is an I/O-correctness guard, not proof of "no PII".
         """
-        offenders: list[Path] = []
-        for path in self._capture_files():
-            text = path.read_text(encoding="utf-8")
-            if self._scrubber.scrub(text)[0] != text:
-                offenders.append(path)
-        return offenders
+        return [
+            Path(rel)
+            for rel, text in staged.items()
+            if self._scrubber.scrub(text)[0] != text
+        ]
 
     def _capture_files(self) -> list[Path]:
         if not self._captures_dir.is_dir():
