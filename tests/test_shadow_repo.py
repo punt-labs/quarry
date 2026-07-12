@@ -230,6 +230,42 @@ class TestStagedCaptures:
         repo.bootstrap()
         assert repo.staged_captures() == {}
 
+    def test_staged_blob_is_byte_exact_not_stripped(self, tmp_path: Path) -> None:
+        # The commit-time fixed-point gate must verify the EXACT bytes a commit
+        # ships. A staged blob is read with strip=False, so trailing whitespace
+        # that git preserves verbatim in the blob reaches verify_staged_clean
+        # intact instead of being trimmed to a different byte string. Stripping
+        # here would let the gate verify content the commit does not actually
+        # ship. Under the old stripping behavior this blob would read
+        # "clean capture" (!= the committed bytes); byte-exact keeps it whole.
+        public = _public_repo(tmp_path)
+        repo = _repo(public)
+        repo.bootstrap()
+        content = "clean capture\n\n  \n"  # significant trailing whitespace
+        (repo.captures_dir / "session-a.md").write_text(content)
+        repo.stage()
+        staged = repo.staged_captures()
+        assert staged["session-a.md"] == content
+
+    def test_staged_blob_trailing_whitespace_reaches_verify(
+        self, tmp_path: Path
+    ) -> None:
+        # The exact bytes staged_captures returns are what verify_staged_clean
+        # checks: a scrubber fixed point differing from its stripped form only by
+        # trailing whitespace must be seen whole, so the guard verifies the
+        # committed bytes rather than a trimmed copy.
+        public = _public_repo(tmp_path)
+        repo = _repo(public)
+        repo.bootstrap()
+        content = "already scrubbed capture\n\n"
+        (repo.captures_dir / "session-a.md").write_text(content)
+        repo.stage()
+        rescrubber = CaptureReScrubber(repo.captures_dir)
+        staged = repo.staged_captures()
+        assert staged["session-a.md"] == content
+        # A whitespace-invariant scrub leaves the exact bytes a fixed point.
+        assert rescrubber.verify_staged_clean(staged) == []
+
 
 def _fail_git_show(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make every ``git show`` exit non-zero while other git/gh calls run for real.
@@ -239,10 +275,12 @@ def _fail_git_show(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     original = GitRunner.run
 
-    def fake_run(self: GitRunner, argv: list[str]) -> tuple[int, str]:
+    def fake_run(
+        self: GitRunner, argv: list[str], *, strip: bool = True
+    ) -> tuple[int, str]:
         if argv[:2] == ["git", "show"]:
             return 1, ""
-        return original(self, argv)
+        return original(self, argv, strip=strip)
 
     monkeypatch.setattr(GitRunner, "run", fake_run)
 
@@ -294,10 +332,12 @@ def _fail_ls_files(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     original = GitRunner.run
 
-    def fake_run(self: GitRunner, argv: list[str]) -> tuple[int, str]:
+    def fake_run(
+        self: GitRunner, argv: list[str], *, strip: bool = True
+    ) -> tuple[int, str]:
         if argv[:3] == ["git", "ls-files", "-z"]:
             return 1, ""
-        return original(self, argv)
+        return original(self, argv, strip=strip)
 
     monkeypatch.setattr(GitRunner, "run", fake_run)
 

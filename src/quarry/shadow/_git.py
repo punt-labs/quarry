@@ -32,8 +32,14 @@ class GitRunner:
         self._cwd = cwd
         return self
 
-    def run(self, argv: list[str]) -> tuple[int, str]:
-        """Return ``(returncode, stripped_stdout)``; ``(1, "")`` on any failure.
+    def run(self, argv: list[str], *, strip: bool = True) -> tuple[int, str]:
+        """Return ``(returncode, stdout)``; ``(1, "")`` on any failure.
+
+        ``strip`` (the default) trims surrounding whitespace so a parsing caller
+        (``ls-files``, ``rev-parse``, visibility) reads a clean token.  Pass
+        ``strip=False`` to read a blob byte-exact — the bytes a commit will
+        ship — so the commit-time fixed-point gate verifies the committed
+        content itself, not a whitespace-trimmed copy of it.
 
         A non-zero exit logs the command's ``stderr`` at debug level so a
         fail-open git/gh problem stays diagnosable instead of vanishing.
@@ -60,7 +66,7 @@ class GitRunner:
                 proc.returncode,
                 proc.stderr.strip(),
             )
-        return proc.returncode, proc.stdout.strip()
+        return proc.returncode, proc.stdout.strip() if strip else proc.stdout
 
     def ok(self, argv: list[str]) -> bool:
         """Return whether *argv* exited zero."""

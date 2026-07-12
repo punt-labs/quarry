@@ -222,10 +222,9 @@ class ShadowRepo:
         """Return ``{relpath: blob text}`` for every staged ``session-*.md``.
 
         Reads the git INDEX — exactly the bytes a commit will ship — not the
-        working tree, so the commit-time fixed-point guard covers what actually
-        leaves the machine.  ``GitRunner.run`` strips surrounding whitespace; the
-        scrubber never alters leading/trailing whitespace, so a fixed point
-        stays a fixed point and PII (never whitespace) stays detectable.
+        working tree, so the fixed-point guard covers what leaves the machine.
+        ``_staged_blob`` reads each blob byte-exact (``strip=False``) so the
+        guard verifies the committed content, not a whitespace-trimmed copy.
 
         A failed ``git ls-files`` fails closed via ``_ls_files`` so poisoned
         blobs are never read as an empty index.  A zero exit with empty output
@@ -249,7 +248,7 @@ class ShadowRepo:
         unverifiable blob so the commit-time re-scrub gate aborts before the
         commit, never shipping bytes the fixed-point guard never checked.
         """
-        code, content = self._repo_git.run(["git", "show", f":{rel}"])
+        code, content = self._repo_git.run(["git", "show", f":{rel}"], strip=False)
         if code != 0:
             msg = f"staged blob unreadable for {rel!r}: git show exited {code}"
             raise RuntimeError(msg)
