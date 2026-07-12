@@ -91,6 +91,16 @@ class TestAbortBeforeCommit:
         # rescrub ran (between the two stages) but the staged verify never did.
         rescrubber.verify_staged_clean.assert_not_called()
 
+    def test_restage_failure_reports_rescrubbed_count(self) -> None:
+        # The re-stage-failure abort must carry the real re-scrub count (the
+        # re-scrub already ran), not a placeholder zero.
+        sync, repo, rescrubber = _sync()
+        rescrubber.rescrub_all.return_value = 2
+        repo.stage.side_effect = [True, False]  # initial stage ok, re-stage fails
+        result = sync.run(fail_open=True)
+        assert result.aborted_reason == "stage-failed"
+        assert result.rescrubbed == 2
+
     def test_rescrub_raises_no_commit_no_push(self) -> None:
         sync, repo, rescrubber = _sync()
         rescrubber.rescrub_all.side_effect = OSError("disk full")

@@ -182,7 +182,15 @@ class CaptureSync:
         abort, rescrubbed = self._stage_and_verify()
         if abort is not None:
             return abort
+        return self._commit_and_push(rescrubbed)
 
+    def _commit_and_push(self, rescrubbed: int) -> ShadowSyncResult:
+        """Commit the verified index, gate on visibility, then push.
+
+        The index is already re-scrubbed and race-checked, so committing is
+        safe (local only); the visibility gate still blocks the push when the
+        remote is not verifiably private.
+        """
         committed = self._repo.commit()
         gate = self._visibility_gate()
         if gate is not None:
@@ -226,7 +234,10 @@ class CaptureSync:
         rescrubbed = self._rescrubber.rescrub_all()
         if not self._repo.stage():
             logger.warning("shadow: re-stage after re-scrub failed; aborting commit")
-            return ShadowSyncResult.aborted("stage-failed", rescrubbed=rescrubbed), 0
+            return (
+                ShadowSyncResult.aborted("stage-failed", rescrubbed=rescrubbed),
+                rescrubbed,
+            )
         return self._verify_staged(rescrubbed), rescrubbed
 
     def _verify_staged(self, rescrubbed: int) -> ShadowSyncResult | None:
