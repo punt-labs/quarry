@@ -68,14 +68,15 @@ class SyncFinalizer:
 
     @staticmethod
     def _warn_unpushed(results: dict[str, ShadowSyncResult]) -> None:
-        """Log each enabled shadow whose captures did not reach the remote."""
+        """Log each enabled shadow whose captures did not reach the remote.
+
+        The message reflects whether the run committed but could not push or
+        aborted before committing — the latter has nothing committed to push.
+        """
         for collection, result in results.items():
             if not result.pushed:
-                reason = result.aborted_reason or "push failed"
                 logger.warning(
-                    "sync: %s captures committed but not pushed to shadow (%s)",
-                    collection,
-                    reason,
+                    "sync: %s captures %s", collection, result.unpushed_detail()
                 )
 
     def _gc(self) -> None:

@@ -67,6 +67,18 @@ class ShadowSyncResult:
             "race_failures": [str(p) for p in self.race_failures],
         }
 
+    def unpushed_detail(self) -> str:
+        """Describe why captures are off the remote (call only when unpushed).
+
+        A committed run whose push failed is genuinely "committed but not
+        pushed"; a run that aborted before commit produced no commit at all, so
+        the committed-but-not-pushed phrasing would misreport it.
+        """
+        reason = self.aborted_reason or "push failed"
+        if self.committed:
+            return f"committed but not pushed ({reason})"
+        return f"aborted before commit ({reason})"
+
 
 @final
 class CaptureSync:
@@ -167,29 +179,28 @@ class CaptureSync:
             return ShadowSyncResult.aborted(
                 gate, rescrubbed=rescrubbed, committed=committed
             )
-        return ShadowSyncResult(
-            pushed=self._push_and_warn(),
+        result = ShadowSyncResult(
+            pushed=self._repo.push(),
             committed=committed,
             rescrubbed=rescrubbed,
             aborted_reason="",
             race_failures=(),
         )
+        self._warn_if_unpushed(result)
+        return result
 
-    def _push_and_warn(self) -> bool:
-        """Push and, on failure, log fail-open — captures stay off the remote.
+    def _warn_if_unpushed(self, result: ShadowSyncResult) -> None:
+        """Log fail-open when captures stayed off the remote — leak-relevant.
 
-        Returns whether the push succeeded.  A ``False`` is not an error (the
-        commit is safe locally) but IS leak-relevant, so it is logged rather
-        than swallowed silently.
+        A ``False`` push is not an error (the commit is safe locally) but IS
+        leak-relevant, so it is logged rather than swallowed silently.  The
+        message distinguishes a committed-but-unpushed run from one that made
+        no commit at all.
         """
-        pushed = self._repo.push()
-        if not pushed:
+        if not result.pushed:
             logger.warning(
-                "shadow: committed but push failed for %s (offline?); "
-                "captures remain unpushed",
-                self._directory,
+                "shadow: %s for %s", result.unpushed_detail(), self._directory
             )
-        return pushed
 
     def _stage_and_verify(self) -> tuple[ShadowSyncResult | None, int]:
         """Stage, re-scrub, re-stage, and verify the STAGED blobs.

@@ -48,6 +48,18 @@ class TestWarnUnpushed:
             SyncFinalizer._warn_unpushed({"proj": aborted})
         assert "public-remote" in caplog.text
 
+    def test_aborted_before_commit_not_reported_as_committed(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # A run that aborted before commit (committed=False) made no commit, so
+        # the committed-but-not-pushed phrasing would misreport it.
+        aborted = ShadowSyncResult.aborted("stage-failed")
+        with caplog.at_level(logging.WARNING):
+            SyncFinalizer._warn_unpushed({"proj": aborted})
+        assert "committed but not pushed" not in caplog.text
+        assert "aborted before commit" in caplog.text
+        assert "stage-failed" in caplog.text
+
 
 class TestPushShadowsFailOpen:
     def test_registry_error_does_not_propagate(
