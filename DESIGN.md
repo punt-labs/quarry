@@ -1384,3 +1384,57 @@ to a git remote on day one.
 5. **quarry auto-creating the private repo by default** — leak risk on a wrong
    owner or an accidental `--public`; configure-only by default, opt-in
    `--create` with `gh` private-verification.
+
+---
+
+## DES-040: Merge-Base OO/Coupling/Suppression Ratchet (adopt vox's tooling)
+
+**Status:** Accepted (2026-07-12) · **Bead:** quarry-05mb
+
+**Context.** quarry's ratchet was a 1,238-line `tools/oo_score.py` that compared
+touched files against the **in-tree** `.oo-baseline.json` (`git diff HEAD~1..HEAD`
+for the touched set). That model drifts and invites rebaseline-gaming: an author
+can hand-edit the baseline inside a PR to lower the comparison floor. The sibling
+repo `vox` rebuilt the ratchet as merge-base-scored packages, which closes that
+gap; the operator ruled vox authoritative and directed adoption before further
+DES-031 v2 work.
+
+**Decision.** Adopt vox's tooling **verbatim** — `tools/oo_ratchet/` (13 modules),
+`tools/coupling/` (17), `tools/suppression/` (9) — reducing the three old monoliths
+to thin shims. Scoring compares the working tree against the baseline **committed
+at `git merge-base origin/main HEAD`** (read via `git show <base>:<baseline>`), not
+the in-tree file. `check-coupling` and `check-suppressions` join `check-oo` in the
+`make check` chain; CI enforces with `--base-ref <merge-base> --require-base` and
+`fetch-depth: 0` on PRs plus a `HEAD~1` push tripwire. This is a **hybrid** model:
+the committed baselines stay (per-commit integrity lock + `--relax` audit anchor),
+but the comparison floor is the immutable base-commit blob, so gaming is blocked at
+every merge hop. Metric thresholds are unchanged (vox's tables were byte-identical
+to quarry's); `.oo-baseline.json` values are byte-identical after cutover (zero
+positional-only params in `src/quarry/`, so vox's PEP-570-aware `_avg_params`
+yields the same numbers).
+
+**The one quarry-origin divergence.** `tools/suppression/patterns.py` retains
+quarry's `tokenize`-based suppression counter instead of vox's regex + AST
+heuristic (which has documented blind spots: `# noqa` after `async def`, after
+`obj.attr =`, on tuple targets, and single-line docstrings containing `noqa`). It
+keeps vox's public interface so the rest of `tools/suppression/` stays verbatim.
+This fix is to be upstreamed back into vox (quarry-njmr).
+
+**Rejected / deferred.**
+1. **Keep quarry's monolith** — retains the drift/gaming problem the move is meant
+   to fix.
+2. **Full-delete / recompute-from-source baseline** — kills the per-commit
+   "commit `.oo-baseline.json`" chore, but it is an untested re-architecture that
+   drops the audit log and vox's fail-closed ladder; net ratchet-strength
+   regression. Operator ruled hybrid.
+3. **Carry forward quarry's four baseline-era features** (`--verify` phantom guard,
+   `--correct/--reason`, ratio-tolerance band, asymmetric `module_size` headroom) —
+   operator directed taking vox's stricter behavior verbatim; only the tokenize
+   suppression counter is retained.
+
+**Consequence.** In-flight branches (esp. `qyrm` and the rest of the DES-031 v2
+chain) must rebase onto post-adoption main and reseat their per-file baselines;
+once `check-coupling` is a gate, a branch whose base predates adoption fails coupling
+with "base commit predates baseline adoption — rebase onto current main" (correct
+fail-closed behavior). Vox's stricter gate (no ratio tolerance, no asymmetric
+`module_size` headroom) may block growth that previously passed.

@@ -71,16 +71,16 @@ See `docs/architecture.tex` for the full system description.
 
 **Known pyright debt:** 6 `reportUnknown*` checks are suppressed project-wide because lancedb, rapidocr, onnxruntime, fitz, and pyarrow ship no type stubs. This means pyright cannot catch unknown-type bugs in modules that don't import these libraries either. The suppressions should be narrowed as these libraries add stubs. Pyright's `executionEnvironments` scopes by directory, not by import, so the only current alternative is 591 inline `# pyright: ignore` comments.
 
-**OO ratchet:** `make check-oo` (part of `make check`) compares current OO scores against `.oo-baseline.json`. It passes only if no metric regressed on touched files and at least one metric improved. It fails if any metric got worse or nothing improved. This is how the codebase converges to the OO standard — every commit ratchets forward.
+**OO ratchet (merge-base scored — DES-040):** `make check-oo` (part of `make check`) scores the touched files in the working tree against the OO baseline **committed at the merge-base** (`git show <base>:.oo-baseline.json`), where `base` defaults to `git merge-base origin/main HEAD`. It passes only if no metric regressed on touched files and at least one metric improved; it fails otherwise. Because the comparison floor is the immutable base-commit blob, a regression cannot be laundered by hand-editing the in-tree baseline within a PR. The tooling lives in the `tools/oo_ratchet/`, `tools/coupling/`, and `tools/suppression/` packages (adopted from vox); the old `tools/oo_score.py` / `oo_coupling.py` / `suppression_ratchet.py` are thin shims. `make check` runs **three** merge-base ratchets — `check-oo`, `check-coupling`, `check-suppressions`.
 
 Workflow:
 
 1. Write code that improves OO quality on the files you touch.
-2. `make check` runs `check-oo --check` automatically. If it fails, fix the regression.
-3. After all checks pass, run `make update-oo` to write the new baseline.
-4. Stage `.oo-baseline.json` and `.oo-audit.jsonl` with your commit — they are committed files.
+2. `make check` runs the three ratchets automatically. If one fails, fix the regression.
+3. After all checks pass, run `make update-oo` (and `make update-coupling` / `make update-suppressions` if those changed) to re-record the touched files' baselines.
+4. Stage the regenerated baselines + audit logs with your commit: `.oo-baseline.json` + `.oo-audit.jsonl`, `.oo-coupling-baseline.json` + `.oo-coupling-audit.jsonl`, `.suppression-baseline.json` + `.suppression-audit.jsonl`. The in-tree baseline is a per-commit **integrity lock**: a touched file whose in-tree baseline ≠ its current score fails the gate until you update.
 
-Bootstrap (first time only): run `make update-oo` to create the initial baseline. After that, the ratchet is active.
+CI injects `--base-ref <merge-base> --require-base` (with `fetch-depth: 0`) on PRs and a `HEAD~1` tripwire on push to main; `make audit-oo` is the CI completeness guard (every scored file must be in the baseline). `--require-base` is mandatory so an unresolvable base fails **closed**, never open.
 
 **Do not negotiate with the ratchet.** Do not suppress `check-oo`. Do not argue a regression is "acceptable." If the ratchet fails, improve the code until it passes. The ratchet is the quality standard's enforcement — working around it defeats the purpose.
 
@@ -101,8 +101,9 @@ Bootstrap (first time only): run `make update-oo` to create the initial baseline
 - `make report` — full diagnostics including per-file OO breakdown (no fail-fast).
 - `make metrics` — ABC complexity analysis. Any module over magnitude 200 needs attention.
 - `make coverage` — test coverage with HTML report in `htmlcov/`.
-- `make check-coupling` — coupling/cohesion analysis (efferent coupling between modules, public API surface, circular import detection, LCOM class cohesion). Informational — not in the `check` chain yet.
+- `make check-coupling` — coupling/cohesion ratchet (efferent coupling, public API surface, circular imports, LCOM class cohesion), merge-base scoped. **In the `make check` chain** and CI-enforced (DES-040).
 - `make update-coupling` — update coupling baseline after improvements.
+- `make audit-oo` — CI completeness guard: every scored file must be in the baseline (fails closed on a phantom).
 
 ### Database facade convention
 
@@ -112,7 +113,7 @@ Functions in `src/quarry/ingestion/pipeline.py` and `src/quarry/ingestion/url_in
 
 ### Suppression ratchet uses `tokenize`, not regex/AST heuristic
 
-`tools/suppression_ratchet.py` counts suppressions by walking `tokenize` tokens. A line is "code" iff it carries any non-trivial token; a `COMMENT` token is the only real suppression source. Don't revert to the older AST + `_CODE_START_RE` heuristic — it had documented blind spots (`async def`, attribute assignments, tuple targets, triple-quoted single-line docstrings containing `# noqa` text). The tokenize version is the principled implementation that handles all of those correctly.
+`tools/suppression/patterns.py` counts suppressions by walking `tokenize` tokens (`tools/suppression_ratchet.py` is now a thin shim over the `tools/suppression/` package). A line is "code" iff it carries any non-trivial token; a `COMMENT` token is the only real suppression source. This is the **one** quarry-origin change on top of vox's otherwise-verbatim ratchet packages (DES-040): don't revert to vox's older regex + `_CODE_START_RE` heuristic — it has documented blind spots (`async def`, attribute assignments, tuple targets, triple-quoted single-line docstrings containing `# noqa` text). The tokenize version handles all of those correctly, and is being upstreamed to vox (quarry-njmr).
 
 ## Testing
 
