@@ -409,6 +409,22 @@ class TestGhTarget:
         ):
             assert repo.remote_visibility() is Visibility.PRIVATE
 
+    def test_view_argv_separates_flags_from_target(self, tmp_path: Path) -> None:
+        # The normalized target follows a ``--`` separator so a leading-dash
+        # host/owner/repo can never be parsed as a gh flag.
+        repo = _repo(tmp_path, remote="git@github.com:org/repo-quarry.git")
+        with patch(
+            "quarry.shadow._git.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                [], 0, stdout='{"visibility": "private"}', stderr=""
+            ),
+        ) as run:
+            repo.remote_visibility()
+        view_argv = run.call_args_list[0].args[0]
+        sep = view_argv.index("--")
+        assert view_argv[sep + 1] == "github.com/org/repo-quarry"
+        assert view_argv[:sep] == ["gh", "repo", "view", "--json", "visibility"]
+
 
 class TestCreateRemote:
     def test_unparseable_remote_refuses(
@@ -433,8 +449,35 @@ class TestCreateRemote:
         ) as run:
             assert repo.create_remote() is True
         create_argv = run.call_args_list[0].args[0]
-        assert create_argv[:3] == ["gh", "repo", "create"]
-        assert create_argv[3] == "org/repo-quarry"
+        # Flags precede a ``--`` separator so a leading-dash owner/repo can never
+        # be parsed as a flag (gh/cobra terminate flag parsing at ``--``).
+        assert create_argv == [
+            "gh",
+            "repo",
+            "create",
+            "--private",
+            "--",
+            "org/repo-quarry",
+        ]
+
+    def test_create_argv_separates_flags_from_dashy_target(
+        self, tmp_path: Path
+    ) -> None:
+        # A derived owner/repo starting with ``-`` must land after ``--`` so gh
+        # treats it as the repo name, never a flag.
+        repo = _repo(tmp_path, remote="git@github.com:-org/-repo-quarry.git")
+        create = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+        view = subprocess.CompletedProcess(
+            [], 0, stdout='{"visibility": "private"}', stderr=""
+        )
+        with patch(
+            "quarry.shadow._git.subprocess.run", side_effect=[create, view]
+        ) as run:
+            assert repo.create_remote() is True
+        create_argv = run.call_args_list[0].args[0]
+        sep = create_argv.index("--")
+        assert create_argv[sep + 1] == "-org/-repo-quarry"
+        assert all(arg != "-org/-repo-quarry" for arg in create_argv[:sep])
 
 
 def _unused(_it: Iterator[None]) -> None:  # pragma: no cover - typing anchor

@@ -83,3 +83,4 @@
 {"ts":"2026-07-12T06:27:29Z","commit":"329164b","files_scored":103,"files_improved":1,"files_regressed":0,"verdict":"pass","deltas":{"src/quarry/cli_runtime.py":{"module_size":[39.0,46.0]}}}
 {"ts":"2026-07-12T06:38:52Z","commit":"0b2cd90","files_scored":103,"files_improved":1,"files_regressed":1,"verdict":"fail","deltas":{"src/quarry/sync_finalize.py":{"module_size":[79.0,80.0]}}}
 {"ts":"2026-07-12T06:47:10Z","commit":"0b2cd90","files_scored":103,"files_improved":2,"files_regressed":0,"verdict":"pass","deltas":{"src/quarry/shadow/sync.py":{"module_size":[236.0,241.0]},"src/quarry/sync_finalize.py":{"module_size":[79.0,80.0]}}}
+{"ts":"2026-07-12T06:53:45Z","commit":"390e876","files_scored":103,"files_improved":1,"files_regressed":0,"verdict":"pass","deltas":{"src/quarry/shadow/repo.py":{"module_size":[296.0,298.0]}}}

@@ -259,8 +259,9 @@ class ShadowRepo:
         remote = self.resolved_remote()
         if not remote:
             return Visibility.UNKNOWN
+        target = self._gh_target(remote)
         code, out = self._parent_git.run(
-            ["gh", "repo", "view", self._gh_target(remote), "--json", "visibility"]
+            ["gh", "repo", "view", "--json", "visibility", "--", target]
         )
         if code != 0 or not out:
             return Visibility.UNKNOWN
@@ -304,9 +305,10 @@ class ShadowRepo:
         if owner_repo.count("/") != 1:
             logger.warning("shadow: cannot derive owner/repo; create it manually")
             return False
-        if not self._parent_git.ok(["gh", "repo", "create", owner_repo, "--private"]):
+        argv = ["gh", "repo", "create", "--private", "--", owner_repo]
+        if not self._parent_git.ok(argv):
             logger.warning(
-                "shadow: 'gh repo create %s --private' failed; install/auth gh "
+                "shadow: 'gh repo create --private -- %s' failed; install/auth gh "
                 "or create the repo manually",
                 owner_repo,
             )
