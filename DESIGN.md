@@ -1379,3 +1379,69 @@ score-based diagnostics.
    cosine is bounded by construction.
 2. **Dropping FTS-only rows that lack a vector score** — they are legitimate
    keyword hits; computing their true cosine keeps them and ranks them correctly.
+
+## DES-039: Private Capture Shadow-Repo Sync — `<repo>` → `<repo>-quarry`
+
+**Date:** 2026-07-11
+**Status:** SETTLED
+**Topic:** Move redacted captures off the public repo into a per-project private
+shadow; commit + push from `quarry sync`
+**Relates:** DES-030 (capture lifecycle), DES-036 (write-time PII redaction — the
+dependency this builds on)
+
+### Problem
+
+Redacted session captures land as `.md` files in the project's captures dir. The
+public repo gitignores that dir, but the files have no durable home — they live
+only on the operator's disk and are lost on a clean checkout. DES-036 redacts
+only *new* captures at write time; captures already on disk predate it and are
+un-redacted for PII. A naive "push whatever is there" first sync would leak PII
+to a git remote on day one.
+
+### Decision
+
+1. **Per-repo private shadow `<repo>-quarry`** (not one org-wide captures repo).
+   The gitignored captures dir is a standalone nested git working tree, never a
+   submodule of the public repo, with a fail-closed **allowlist** `.gitignore`
+   (`*` / `!.gitignore` / `!session-*.md`) so only quarry's own capture files can
+   be staged — a stray non-`.md` file can never bypass the `.md`-scoped
+   re-scrubber. Two fail-closed bootstrap gates: refuse if the captures dir is
+   not gitignored by the parent, and refuse if the parent public repo already
+   **tracks** any capture file (`git ls-files`). `.gitignore` does not untrack, so
+   already-committed captures must be `git rm --cached`'d first; and an
+   already-**pushed** capture additionally needs a history purge (`git
+   filter-repo`/BFG + force-push, coordinated with the repo owner) since
+   `rm --cached` does not rewrite history.
+2. **Opt-in `shadow:` block** in `.punt-labs/quarry/config.md` (default
+   `enabled: false`); remote derived as `<origin>-quarry` when unset.
+3. **Push runs at the end of `quarry sync`** (fail-open) and via explicit `quarry
+   captures push`; auth reuses the user's git credentials (no new secret storage).
+4. **SECURITY (re-scrub only + trust boundary):** before each **COMMIT** (not
+   just the push — `git push` ships all unpushed commits, so the gate is at
+   commit time), re-scrub the staged `.md` bytes with the DES-036 `Scrubber`
+   (idempotent: redacted files are no-ops; pre-fpc5 files get redacted), then run
+   an I/O-race guard asserting the staged bytes are a `scrub` fixed point and
+   ABORT-before-commit on any mismatch. `push` is never in a `finally`. The guard
+   is **not** an independent PII oracle — it shares the scrubber's rules, so it
+   catches stage/commit races, not scrubber blind spots. Residual PII classes the
+   scrubber cannot catch (IDN/unicode email, non-`/Users`/`/home` paths,
+   **cross-host** hostnames) are backstopped **solely** by the private-remote
+   trust boundary — so visibility enforcement is **load-bearing**: verifiably
+   public remotes are refused, and unverifiable visibility (no `gh`) requires an
+   explicit `acknowledge_unverified`.
+5. **Offline/failure:** git's local commit log is the durable, resumable queue;
+   the next sync pushes accumulated commits.
+
+### Rejected / deferred
+
+1. **One org-wide captures repo** — breaks per-repo access control.
+2. **Push on capture write** — chatty, risks blocking sessions; the push runs at
+   sync time instead.
+3. **A second, independent PII detector beyond the shared `Scrubber`** — it would
+   only reproduce the scrubber's blind spots at double maintenance cost; the
+   operator ruled re-scrub-only + trust boundary instead.
+4. **Gating the push instead of the commit** — a poisoned commit leaks on the
+   next push, so the gate must protect the commit.
+5. **quarry auto-creating the private repo by default** — leak risk on a wrong
+   owner or an accidental `--public`; configure-only by default, opt-in
+   `--create` with `gh` private-verification.

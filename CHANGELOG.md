@@ -14,6 +14,27 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Added
+
+- **captures (shadow repo)**: opt-in private capture shadow sync moves redacted
+  session captures off the public repo into a per-project private
+  `<repo>-quarry`. Enable via a `shadow:` block in `.punt-labs/quarry/config.md`
+  (default `enabled: false`; remote derived as `<origin>-quarry` when unset). The
+  gitignored captures dir becomes a standalone nested git repo with a fail-closed
+  allowlist `.gitignore` (only `session-*.md` can be staged). New CLI: `quarry
+  captures push` (re-scrub + push each enabled project's captures) and `quarry
+  captures init [--create]` (bootstrap the shadow; `--create` makes the private
+  remote via `gh` and verifies it is private). The push also runs automatically
+  at the end of `quarry sync` (fail-open — a push failure never blocks a
+  session), and via `POST /captures/push` on the daemon. Security: before every
+  commit the staged `.md` bytes are re-scrubbed with the DES-036 scrubber and an
+  I/O-race guard aborts the commit on any residual; a verifiably public remote is
+  refused and unverifiable visibility (no `gh`) requires an explicit
+  `acknowledge_unverified`. `quarry doctor` reports the shadow state (including a
+  required failure when the public repo already tracks captures, with the
+  `git rm --cached` + history-purge remediation). Auth reuses the user's existing
+  git credentials — no new secret storage (quarry-ow3k, DES-039).
+
 ### Security
 
 - **index (capture)**: session capture files and WebFetch DB ingest now redact

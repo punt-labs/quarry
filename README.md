@@ -163,6 +163,8 @@ quarry sync                                    # re-index registered dirs
 quarry use work                                # switch database
 quarry enable                                  # set up project collections + captures
 quarry disable                                 # remove project registration + data
+quarry captures init                           # bootstrap the private capture shadow repo
+quarry captures push                           # re-scrub + push captures to the shadow
 quarry status                                  # database dashboard
 quarry doctor                                  # health check
 quarry serve                                   # start daemon on :8420
@@ -210,6 +212,23 @@ All hooks are fail-open — failures are ignored and never block Claude Code. Ea
 
 Captures (session transcripts and auto-ingested web fetches) are redacted **at write time**, before anything touches disk or the `<name>-captures`/`web-captures` collection. A single write choke point scrubs, in order, secrets → filesystem paths (`/Users`/`/home/<user>/` → `~/`) → emails (→ `[REDACTED:email]`) → the local hostname (→ `[REDACTED:hostname]`) → profanity. Web-fetch captures also redact the source URL's userinfo, query, and fragment so a URL like `…/reset?email=…&token=…` cannot leak. Redaction is idempotent and fail-closed (on any scrub error, no capture is written). Deliberately-ingested content (`quarry ingest`, `remember`) is **not** scrubbed — only the automatic capture paths are, since those feed the shared/pushable collections. See [DES-036](DESIGN.md).
 
+### Private capture shadow repo (`<repo>` → `<repo>-quarry`)
+
+Redacted capture `.md` files live in the gitignored `.punt-labs/quarry/captures/` dir with no durable home. Enable the optional **shadow sync** to push them to a per-project **private** repo `<repo>-quarry` instead. Opt in by uncommenting the `shadow:` block in `.punt-labs/quarry/config.md`:
+
+```yaml
+shadow:
+  enabled: true                  # off by default — a network + security action
+  remote: ""                     # empty → derive <origin>-quarry from the public remote
+  acknowledge_unverified: false  # required to push when gh cannot confirm the remote is private
+```
+
+**Pre-create the private repo first.** quarry does not create it by default (a wrong owner or an accidental public repo would leak). Create `<repo>-quarry` as **private** and let the remote derive, or run `quarry captures init --create` to create it via `gh` (which verifies visibility is private before any push).
+
+Once enabled, the captures dir becomes a standalone nested git repo. `quarry captures push` — and the tail of every `quarry sync` — re-scrubs the staged captures with the same DES-036 scrubber, aborts the commit if any file is not clean, then commits and pushes. Auth reuses your existing git credentials; quarry stores no new secret. The push is fail-open: a network or auth failure never blocks a session.
+
+**Visibility is load-bearing.** The re-scrub cannot catch every residual (IDN emails, non-`/Users`/`/home` paths, a hostname from another machine), so those are backstopped **only** by the remote being private. quarry therefore **refuses to push to a verifiably public remote**, and requires `acknowledge_unverified: true` (or `quarry captures push --force`) when `gh` is absent and it cannot confirm the remote is private. `quarry doctor` reports the shadow state, and flags a **required** failure if the public repo already tracks capture files (which `git rm --cached` stops going forward, but an already-pushed capture needs a history purge — `git filter-repo`/BFG + force-push — coordinated with the repo owner). See [DES-039](DESIGN.md).
+
 ## How It Works
 
 Quarry runs as a daemon. Claude Code sessions connect through mcp-proxy:
@@ -248,7 +267,7 @@ make eval                      # retrieval-quality eval harness (MRR/success@k, 
 Direction tracks the [PR/FAQ](prfaq.tex). Current focus:
 
 - **Retrieval quality** — a `make eval` harness (per-bucket MRR/success@k + a metadata-pollution diagnostic) now baselines search on quarry's own data; embedding levers (contextual embeddings, late chunking) are measured against it before adoption. See [docs/eval-harness-design.md](docs/eval-harness-design.md).
-- **Private capture sync** — captures redact PII at write time (above); a planned per-project private shadow repo (`<repo>` → `<repo>-quarry`) will push the redacted captures off the public repo entirely.
+- **Private capture sync** — captures redact PII at write time, and the opt-in per-project private shadow repo (`<repo>` → `<repo>-quarry`, above) now pushes the redacted captures off the public repo entirely.
 
 ## License
 
