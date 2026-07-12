@@ -156,17 +156,18 @@ class CaptureSync:
         """Execute the commit-time gate and push, aborting on an expected failure.
 
         The flow's expected failures are ``OSError`` (mkdir/read/atomic-write
-        on the working tree) and the gate's ``RuntimeError`` (a staged blob or
-        an enumeration git cannot read).  ``GitRunner`` swallows its own
-        subprocess errors, so those never reach here.  Under ``fail_open`` an
-        expected failure aborts the run so a shadow problem never blocks a
-        session; under fail-closed it propagates.  A truly unexpected exception
-        (a programming error) is caught by neither branch — it surfaces in both
-        modes, as fail-fast demands.
+        on the working tree), the gate's ``RuntimeError`` (a staged blob or an
+        enumeration git cannot read), and ``UnicodeDecodeError`` (a corrupt or
+        externally tampered capture file whose bytes are not valid UTF-8 when
+        re-scrubbed).  ``GitRunner`` swallows its own subprocess errors, so
+        those never reach here.  Under ``fail_open`` an expected failure aborts
+        the run so a shadow problem never blocks a session; under fail-closed it
+        propagates.  A truly unexpected exception (a programming error) is caught
+        by neither branch — it surfaces in both modes, as fail-fast demands.
         """
         try:
             return self._execute()
-        except (OSError, RuntimeError):
+        except (OSError, RuntimeError, UnicodeDecodeError):
             logger.exception("shadow: capture sync failed for %s", self._directory)
             if not fail_open:
                 raise

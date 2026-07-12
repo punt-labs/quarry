@@ -197,6 +197,20 @@ class TestFailOpen:
         assert result.pushed is False
         assert result.committed is False
 
+    def test_corrupt_capture_decode_aborts_fail_open(self) -> None:
+        # A capture file with invalid UTF-8 bytes (a crash-truncated multibyte
+        # write or external tampering) makes rescrub's read_text raise
+        # UnicodeDecodeError. That untrusted-input fault must abort fail-open,
+        # not propagate and block the session/`quarry sync`.
+        sync, _, rescrubber = _sync()
+        rescrubber.rescrub_all.side_effect = UnicodeDecodeError(
+            "utf-8", b"\xff", 0, 1, "invalid start byte"
+        )
+        result = sync.run(fail_open=True)
+        assert result.aborted_reason == "exception"
+        assert result.pushed is False
+        assert result.committed is False
+
     def test_unexpected_exception_propagates_fail_open(self) -> None:
         # A truly unexpected exception (a programming error) is NOT an expected
         # shadow failure: it surfaces even under fail_open rather than being

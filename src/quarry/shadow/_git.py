@@ -37,6 +37,9 @@ class GitRunner:
 
         A non-zero exit logs the command's ``stderr`` at debug level so a
         fail-open git/gh problem stays diagnosable instead of vanishing.
+        ``text=True`` decodes stdout as strict UTF-8 inside the call, so git
+        output with invalid bytes raises ``UnicodeDecodeError`` from within
+        ``subprocess.run`` — caught here so the runner still never raises.
         """
         try:
             proc = subprocess.run(  # noqa: S603
@@ -47,7 +50,7 @@ class GitRunner:
                 check=False,
                 timeout=_GIT_TIMEOUT,
             )
-        except (OSError, subprocess.SubprocessError) as exc:
+        except (OSError, subprocess.SubprocessError, UnicodeDecodeError) as exc:
             logger.debug("shadow: %s failed to launch: %s", argv[0], exc)
             return 1, ""
         if proc.returncode != 0:

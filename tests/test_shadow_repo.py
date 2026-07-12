@@ -345,6 +345,17 @@ class TestRemoteVisibility:
             assert repo.remote_visibility() is Visibility.UNKNOWN
 
 
+class TestGitRunnerNeverRaises:
+    def test_invalid_utf8_output_returns_failure(self, tmp_path: Path) -> None:
+        # text=True decodes stdout as strict UTF-8 inside subprocess.run, so git
+        # output with invalid bytes raises UnicodeDecodeError from within the
+        # call. GitRunner promises never to raise: it must return (1, "").
+        runner = GitRunner(tmp_path)
+        decode_error = UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+        with patch("quarry.shadow._git.subprocess.run", side_effect=decode_error):
+            assert runner.run(["git", "log"]) == (1, "")
+
+
 class TestVisibilityEnum:
     def test_from_gh_mapping(self) -> None:
         assert Visibility.from_gh("PUBLIC") is Visibility.PUBLIC
