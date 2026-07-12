@@ -9,6 +9,7 @@ regression-only verdict end-to-end through a real git tree.
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 import pytest
@@ -116,6 +117,97 @@ class TestRegressionOnlyVerdict:
         )
         assert code == 1
         assert "unresolvable" in capsys.readouterr().out
+
+
+class TestBaselineBootstrap:
+    """The bootstrap verb must populate the baseline, never leave it empty.
+
+    ``--update`` is incremental (it banks improvements against an existing
+    baseline) so on a fresh tree it writes ``{}``. An empty base baseline then
+    trips ``_empty_baseline`` under ``--require-base`` on every future PR. The
+    full-tree ``--rebaseline`` verb writes real per-file metrics.
+    """
+
+    def test_rebaseline_populates_not_empty(
+        self, git_sandbox: GitSandbox, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(git_sandbox.root)
+        _seat_package(git_sandbox, "from . import a\n")  # uses --rebaseline
+        data = json.loads((git_sandbox.root / ".oo-coupling-baseline.json").read_text())
+        assert data  # non-empty — the bug produced {}
+        assert "src/pkg/hub.py" in data
+        assert data["src/pkg/hub.py"]["efferent_coupling"] == 1.0
+
+    def test_populated_base_unchanged_passes(
+        self,
+        git_sandbox: GitSandbox,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A populated base baseline + unchanged coupling passes the gate."""
+        monkeypatch.chdir(git_sandbox.root)
+        _seat_package(git_sandbox, "from . import a\n")
+        base = git_sandbox.commit("base")  # populated baseline committed
+        # Touch hub.py without changing any coupling metric.
+        git_sandbox.write("src/pkg/hub.py", "from . import a\n# note: unchanged\n")
+        code = tools.coupling.main(
+            ["src/pkg", "--check", "--base-ref", base, "--require-base"]
+        )
+        assert code == 0
+        assert "no regressions" in capsys.readouterr().out
+
+
+class TestPushTripwireAdoption:
+    """The push:[main] tripwire bootstrap-passes the one-time adoption merge.
+
+    Base ``HEAD~1`` predates the newly added coupling baseline; the merged tip
+    carries it. On the PR path that reads as a stale branch → "rebase onto
+    current main" (fail-closed, kept). On the push tripwire there is no branch
+    to rebase — it IS main — so it bootstrap-passes.
+    """
+
+    def _adoption_repo(self, sandbox: GitSandbox) -> str:
+        """Build a pre-adoption commit (no baseline) then the adoption commit.
+
+        Points ``refs/remotes/origin/main`` at the adoption tip so the PR-path
+        ``_absent_base_baseline`` sees a tip that carries the baseline. Returns
+        the pre-adoption sha (base with no coupling baseline).
+        """
+        sandbox.write("src/pkg/a.py", "x = 1\n")
+        sandbox.write("src/pkg/hub.py", "from . import a\n")
+        pre = sandbox.commit("pre-adoption (no coupling baseline)")
+        assert tools.coupling.main(["src/pkg", "--rebaseline", "--allow-ci-write"]) == 0
+        adoption = sandbox.commit("adoption (adds coupling baseline)")
+        sandbox.run_git("update-ref", "refs/remotes/origin/main", adoption)
+        return pre
+
+    def test_pr_path_fails_rebase(
+        self,
+        git_sandbox: GitSandbox,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.chdir(git_sandbox.root)
+        pre = self._adoption_repo(git_sandbox)
+        code = tools.coupling.main(
+            ["src/pkg", "--check", "--base-ref", pre, "--require-base"]
+        )
+        assert code == 1
+        assert "rebase onto current main" in capsys.readouterr().out
+
+    def test_push_tripwire_bootstrap_passes(
+        self,
+        git_sandbox: GitSandbox,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.chdir(git_sandbox.root)
+        pre = self._adoption_repo(git_sandbox)
+        code = tools.coupling.main(
+            ["src/pkg", "--check", "--base-ref", pre, "--require-base", "--tripwire"]
+        )
+        assert code == 0
+        assert "bootstrap pass" in capsys.readouterr().out
 
 
 class TestFailClosed:

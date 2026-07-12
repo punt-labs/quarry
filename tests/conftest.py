@@ -57,6 +57,15 @@ class GitSandbox:
         self._git("commit", "-q", "-m", message)
         return self._git("rev-parse", "HEAD").strip()
 
+    def run_git(self, *args: str) -> str:
+        """Run an arbitrary git command in the repo and return its stdout.
+
+        Lets a test seed refs the ratchets read — e.g. an
+        ``refs/remotes/origin/main`` pointer for the coupling adoption-tripwire
+        path — without a real remote.
+        """
+        return self._git(*args)
+
     def _git(self, *args: str) -> str:
         result = subprocess.run(
             ["git", *args],
