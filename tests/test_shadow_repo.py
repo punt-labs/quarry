@@ -12,7 +12,11 @@ from unittest.mock import patch
 
 import pytest
 
+from quarry.shadow._git import GitRunner
+from quarry.shadow.config import ShadowConfig
 from quarry.shadow.repo import PARENT_TRACKED_REMEDIATION, ShadowRepo, Visibility
+from quarry.shadow.rescrub import CaptureReScrubber
+from quarry.shadow.sync import CaptureSync
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -163,6 +167,60 @@ class TestStagedCaptures:
         repo = _repo(public)
         repo.bootstrap()
         assert repo.staged_captures() == {}
+
+
+def _fail_git_show(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make every ``git show`` exit non-zero while other git/gh calls run for real.
+
+    Simulates the git-level inconsistency where ``ls-files`` reports a staged
+    path but ``git show :<rel>`` then cannot read it.
+    """
+    original = GitRunner.run
+
+    def fake_run(self: GitRunner, argv: list[str]) -> tuple[int, str]:
+        if argv[:2] == ["git", "show"]:
+            return 1, ""
+        return original(self, argv)
+
+    monkeypatch.setattr(GitRunner, "run", fake_run)
+
+
+class TestStagedBlobFailClosed:
+    def test_staged_captures_raises_when_show_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # ls-files reports the file (it IS in the index); a failing git show is a
+        # git-level inconsistency, so staged_captures raises instead of silently
+        # dropping the path from the fixed-point check.
+        public = _public_repo(tmp_path)
+        repo = _repo(public)
+        repo.bootstrap()
+        (repo.captures_dir / "session-x.md").write_text("clean\n")
+        repo.stage()
+        _fail_git_show(monkeypatch)
+        with pytest.raises(RuntimeError):
+            repo.staged_captures()
+
+    def test_unreadable_staged_blob_aborts_capture_sync(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A staged blob git show cannot read must abort the gate fail-closed:
+        # no commit, no push — never a silent drop that ships an un-verified blob.
+        public = _public_repo(tmp_path)
+        repo = _repo(public)
+        repo.bootstrap()
+        (repo.captures_dir / "session-x.md").write_text("clean capture\n")
+        repo.stage()
+        _fail_git_show(monkeypatch)
+        config = ShadowConfig(
+            enabled=True,
+            remote="git@h:o/r-quarry.git",
+            acknowledge_unverified=True,
+        )
+        sync = CaptureSync(public, config, repo, CaptureReScrubber(repo.captures_dir))
+        result = sync.run(fail_open=True)
+        assert result.pushed is False
+        assert result.committed is False
 
 
 class TestHasUnpushedCommits:

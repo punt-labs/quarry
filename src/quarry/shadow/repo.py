@@ -1,12 +1,15 @@
 """Nested-git working-tree operations for a project's private capture shadow.
 
 ``ShadowRepo`` owns the captures directory as a standalone git repository whose
-``origin`` is the per-project private shadow ``<repo>-quarry``.  Every method is
+``origin`` is the per-project private shadow ``<repo>-quarry``.  Operation is
 fail-open at its boundary: a ``git``/``gh`` failure returns ``False``/``UNKNOWN``/
 an empty list rather than raising, so a push problem never blocks a session.  The
-security-load-bearing choices — the allowlist ``.gitignore``, the refusal of a
-parent-tracked or non-ignored captures dir, and visibility enforcement — live
-here; ``CaptureSync`` sequences them around the commit-time re-scrub gate.
+one fail-CLOSED exception is ``staged_captures``: a path ``git ls-files`` reports
+but ``git show`` cannot read raises, so the re-scrub gate aborts rather than
+committing a blob it never verified.  The security-load-bearing choices — the
+allowlist ``.gitignore``, the refusal of a parent-tracked or non-ignored captures
+dir, and visibility enforcement — live here; ``CaptureSync`` sequences them
+around the commit-time re-scrub gate.
 """
 
 from __future__ import annotations
@@ -193,29 +196,33 @@ class ShadowRepo:
 
         Reads the git INDEX — exactly the bytes a commit will ship — not the
         working tree, so the commit-time fixed-point guard covers what actually
-        leaves the machine.  ``_Git.run`` strips surrounding whitespace; the
+        leaves the machine.  ``GitRunner.run`` strips surrounding whitespace; the
         scrubber never alters leading/trailing whitespace, so a fixed point
         stays a fixed point and PII (never whitespace) stays detectable.
+
+        A failed ``git ls-files`` yields ``out == ""`` -> an empty mapping: an
+        empty index has nothing to verify, so an empty result is correct.  But a
+        path ``ls-files`` DOES report is in the index; ``_staged_blob`` raises
+        (fail-CLOSED) rather than dropping one ``git show`` cannot read, so the
+        re-scrub gate aborts before committing an un-verified blob.
         """
-        # A non-zero exit yields ``out == ""`` -> the filter is empty -> ``{}``,
-        # so no separate failure guard is needed.
         _, out = self._repo_git.run(["git", "ls-files", "-z", "--", "session-*.md"])
-        staged: dict[str, str] = {}
-        for rel in filter(None, out.split("\0")):
-            blob = self._staged_blob(rel)
-            if blob is not None:
-                staged[rel] = blob
-        return staged
+        return {rel: self._staged_blob(rel) for rel in filter(None, out.split("\0"))}
 
-    def _staged_blob(self, rel: str) -> str | None:
-        """Return the index blob text for *rel*, or None when git cannot read it.
+    def _staged_blob(self, rel: str) -> str:
+        """Return the index blob text for *rel*, raising when git cannot read it.
 
-        None is the documented "not in the index" outcome: a path ``git
-        ls-files`` reports but ``git show`` cannot read is not in the commit, so
-        the caller safely drops it from the fixed-point check.
+        Fail-CLOSED: ``git ls-files`` only reports paths that are in the index,
+        so a ``git show`` failure here is a git-level inconsistency, never a "not
+        staged" outcome.  Raising — rather than dropping the path — surfaces the
+        unverifiable blob so the commit-time re-scrub gate aborts before the
+        commit, never shipping bytes the fixed-point guard never checked.
         """
         code, content = self._repo_git.run(["git", "show", f":{rel}"])
-        return content if code == 0 else None
+        if code != 0:
+            msg = f"staged blob unreadable for {rel!r}: git show exited {code}"
+            raise RuntimeError(msg)
+        return content
 
     def commit(self) -> bool:
         """Commit the staged index; False when there is nothing to commit."""
