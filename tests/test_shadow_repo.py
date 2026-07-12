@@ -363,14 +363,78 @@ class TestVisibilityEnum:
         assert Visibility.from_gh("internal") is Visibility.UNKNOWN
 
 
-class TestOwnerRepo:
-    def test_ssh_and_https(self) -> None:
-        assert ShadowRepo._owner_repo("git@github.com:org/repo-quarry.git") == (
-            "org/repo-quarry"
+class TestGhTarget:
+    def test_scp_style_ssh_normalizes(self) -> None:
+        # The common punt-labs form; gh rejects this raw and reports UNKNOWN.
+        assert ShadowRepo._gh_target("git@github.com:org/repo.git") == (
+            "github.com/org/repo"
         )
-        assert ShadowRepo._owner_repo("https://github.com/org/repo-quarry.git") == (
-            "org/repo-quarry"
+        assert ShadowRepo._gh_target("git@github.com:org/repo") == (
+            "github.com/org/repo"
         )
+
+    def test_ssh_url_normalizes(self) -> None:
+        assert ShadowRepo._gh_target("ssh://git@github.com/org/repo.git") == (
+            "github.com/org/repo"
+        )
+        assert ShadowRepo._gh_target("ssh://git@github.com/org/repo") == (
+            "github.com/org/repo"
+        )
+
+    def test_https_normalizes(self) -> None:
+        assert ShadowRepo._gh_target("https://github.com/org/repo.git") == (
+            "github.com/org/repo"
+        )
+        assert ShadowRepo._gh_target("https://github.com/org/repo") == (
+            "github.com/org/repo"
+        )
+
+    def test_unparseable_passes_through(self) -> None:
+        # A URL that does not resolve to host/owner/repo is passed through
+        # unchanged: gh returns UNKNOWN, which the gate already refuses/acks.
+        assert ShadowRepo._gh_target("not-a-url") == "not-a-url"
+        assert ShadowRepo._gh_target("git@github.com:onlyowner") == (
+            "git@github.com:onlyowner"
+        )
+
+    def test_private_ssh_remote_detected_not_unknown(self, tmp_path: Path) -> None:
+        # A private repo behind an scp-style SSH remote must resolve to PRIVATE,
+        # not UNKNOWN — the whole point of normalizing before calling gh.
+        repo = _repo(tmp_path, remote="git@github.com:org/repo-quarry.git")
+        with patch(
+            "quarry.shadow._git.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                [], 0, stdout='{"visibility": "private"}', stderr=""
+            ),
+        ):
+            assert repo.remote_visibility() is Visibility.PRIVATE
+
+
+class TestCreateRemote:
+    def test_unparseable_remote_refuses(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # A remote that does not resolve to owner/repo cannot be auto-created.
+        repo = _repo(tmp_path, remote="not-a-url")
+        with caplog.at_level("WARNING"):
+            assert repo.create_remote() is False
+        assert "cannot derive owner/repo" in caplog.text
+
+    def test_scp_remote_creates_host_stripped_owner_repo(self, tmp_path: Path) -> None:
+        # scp-style SSH remote -> owner/repo derived (host dropped), created
+        # private, then verified private.
+        repo = _repo(tmp_path, remote="git@github.com:org/repo-quarry.git")
+        create = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+        view = subprocess.CompletedProcess(
+            [], 0, stdout='{"visibility": "private"}', stderr=""
+        )
+        with patch(
+            "quarry.shadow._git.subprocess.run", side_effect=[create, view]
+        ) as run:
+            assert repo.create_remote() is True
+        create_argv = run.call_args_list[0].args[0]
+        assert create_argv[:3] == ["gh", "repo", "create"]
+        assert create_argv[3] == "org/repo-quarry"
 
 
 def _unused(_it: Iterator[None]) -> None:  # pragma: no cover - typing anchor

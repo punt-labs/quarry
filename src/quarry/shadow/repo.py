@@ -127,7 +127,7 @@ class ShadowRepo:
         code, out = self._parent_git.run(
             ["git", "ls-files", "--", self._captures_rel()]
         )
-        if code != 0 or not out:
+        if code != 0:  # empty stdout already yields [] via the comprehension
             return []
         return [Path(line) for line in out.splitlines() if line]
 
@@ -260,11 +260,32 @@ class ShadowRepo:
         if not remote:
             return Visibility.UNKNOWN
         code, out = self._parent_git.run(
-            ["gh", "repo", "view", remote, "--json", "visibility"]
+            ["gh", "repo", "view", self._gh_target(remote), "--json", "visibility"]
         )
         if code != 0 or not out:
             return Visibility.UNKNOWN
         return self._parse_visibility(out)
+
+    @staticmethod
+    def _gh_target(remote: str) -> str:
+        """Normalize a git remote URL to ``host/owner/repo`` for ``gh repo view``.
+
+        ``gh repo view`` accepts ``HOST/OWNER/REPO`` or an https URL, but not an
+        scp-style SSH URL (``git@github.com:org/repo.git`` — the common punt-labs
+        form), which it reports as UNKNOWN.  That spuriously forces
+        ``acknowledge_unverified`` and guts the visibility gate for private SSH
+        remotes.  Handles scp-style SSH, ``ssh://`` URLs, and https, stripping a
+        trailing ``.git``.  A URL that does not parse to host/owner/repo passes
+        through unchanged (fail-safe -> UNKNOWN, which the gate refuses/acks).
+        """
+        _, _, body = remote.removesuffix(".git").rpartition("://")  # drop scheme
+        _, _, body = body.rpartition("@")  # drop any user@ prefix
+        # scp-style joins host to path with ``:``; normalizing it to ``/`` makes
+        # every form a plain ``host/owner/repo`` split.
+        parts = [seg for seg in body.replace(":", "/", 1).split("/") if seg]
+        if len(parts) < 3:
+            return remote
+        return "/".join(parts[-3:])
 
     @staticmethod
     def _parse_visibility(gh_json: str) -> Visibility:
@@ -277,8 +298,10 @@ class ShadowRepo:
 
     def create_remote(self) -> bool:
         """Create the shadow as a PRIVATE repo via ``gh`` and verify visibility."""
-        owner_repo = self._owner_repo(self.resolved_remote())
-        if not owner_repo:
+        # ``_gh_target`` yields ``host/owner/repo``; drop the host for the
+        # ``gh repo create OWNER/REPO`` form (create targets the authed host).
+        _, _, owner_repo = self._gh_target(self.resolved_remote()).partition("/")
+        if owner_repo.count("/") != 1:
             logger.warning("shadow: cannot derive owner/repo; create it manually")
             return False
         if not self._parent_git.ok(["gh", "repo", "create", owner_repo, "--private"]):
@@ -320,10 +343,3 @@ class ShadowRepo:
             return str(self._captures_dir.relative_to(self._parent))
         except ValueError:
             return str(self._captures_dir)
-
-    @staticmethod
-    def _owner_repo(remote: str) -> str:
-        """Extract ``owner/repo`` from an SSH or HTTPS git remote URL."""
-        core = remote.removesuffix(".git").replace(":", "/")
-        parts = [p for p in core.split("/") if p]
-        return "/".join(parts[-2:]) if len(parts) >= 2 else ""
