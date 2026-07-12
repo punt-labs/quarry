@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Generator
 from pathlib import Path
+from typing import Self
 from unittest.mock import patch
 
 import pytest
@@ -13,6 +15,64 @@ from quarry.db.storage import get_db
 from quarry.types import LanceDB
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+
+class GitSandbox:
+    """A throwaway git repository the ratchet tests drive end-to-end.
+
+    The merge-base ratchets (``tools/oo_ratchet``, ``tools/coupling``,
+    ``tools/suppression``) read the *base-commit* baseline blob via
+    ``git show <base>:<file>``, so they can only be exercised faithfully against
+    a real commit graph — a mocked ``GitRepo`` drifts from the code it stands in
+    for (the recurring remote/local-divergence bug class). This sandbox commits
+    real trees so the tests score against genuine base blobs.
+    """
+
+    _root: Path
+
+    def __new__(cls, root: Path) -> Self:
+        self = super().__new__(cls)
+        self._root = root
+        self._git("init", "-q")
+        self._git("config", "user.email", "ratchet@test.local")
+        self._git("config", "user.name", "Ratchet Test")
+        self._git("config", "commit.gpgsign", "false")
+        return self
+
+    @property
+    def root(self) -> Path:
+        """Return the repository root directory."""
+        return self._root
+
+    def write(self, relpath: str, text: str) -> Path:
+        """Write ``text`` to ``relpath`` under the repo, creating parents."""
+        path = self._root / relpath
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        return path
+
+    def commit(self, message: str) -> str:
+        """Stage everything and commit, returning the full commit hash."""
+        self._git("add", "-A")
+        self._git("commit", "-q", "-m", message)
+        return self._git("rev-parse", "HEAD").strip()
+
+    def _git(self, *args: str) -> str:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=self._root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout
+
+
+@pytest.fixture()
+def git_sandbox(tmp_path: Path) -> GitSandbox:
+    """Return a fresh :class:`GitSandbox` rooted at ``tmp_path``."""
+    return GitSandbox(tmp_path)
+
 
 # Environment variables that .envrc / shell may set and that pydantic-settings
 # would otherwise silently inject into Settings instances created in tests.

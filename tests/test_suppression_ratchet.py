@@ -1,280 +1,234 @@
-"""Tests for tools/suppression_ratchet.py."""
+"""Tests for the ported vox suppression ratchet (``tools/suppression``).
+
+The suppression package is vox-verbatim except ``patterns.py``, which swaps
+vox's regex+AST heuristic for a ``tokenize`` scan. These tests pin that swap
+(the four documented blind spots must now count correctly, and string-interior
+``noqa`` text must not), the per-file-ignores counter's fail-closed parsing, and
+the merge-base count delta driven end-to-end through a real git tree.
+"""
 
 from __future__ import annotations
 
-import importlib.util
-import json
-import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 import pytest
 
+import tools.suppression
+from tools.suppression import (
+    FileSuppressions,
+    GitError,
+    GitRepo,
+    PerFileIgnoresCounter,
+    SuppressionReport,
+)
+from tools.suppression.pyproject import PyprojectError
+
 if TYPE_CHECKING:
-    from types import ModuleType
+    from tests.conftest import GitSandbox
 
 
-def _load_ratchet() -> ModuleType:
-    """Import tools/suppression_ratchet.py as a module.
-
-    The tool lives outside src/quarry/, so it has no normal import path.
-    Using importlib.util keeps the test file independent of repo layout
-    changes in the tools/ directory.
-    """
-    root = Path(__file__).parent.parent
-    spec = importlib.util.spec_from_file_location(
-        "_ratchet", root / "tools" / "suppression_ratchet.py"
-    )
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["_ratchet"] = module
-    spec.loader.exec_module(module)
-    return module
+def test_module_is_importable_as_package() -> None:
+    """The package resolves as ``tools.suppression`` (regular-package path)."""
+    assert "FileSuppressions" in tools.suppression.__all__
 
 
-ratchet = _load_ratchet()
+class TestTokenizeScan:
+    """The tokenize scan counts real suppressions and ignores string interiors."""
 
-
-class TestFileSuppressionsCodeLineDetection:
     def test_noqa_on_code_line_counted(self) -> None:
-        source = "x = 1  # noqa: E501\n"
-        fs = ratchet.FileSuppressions("f.py", source)
-        assert fs.noqa == 1
-
-    def test_noqa_inside_string_not_counted(self) -> None:
-        source = '''
-"""Docstring containing the word noqa for whatever reason.
-
-This is a multi-line string with # noqa: E501 inside it.  The scanner
-must not count this — it is documentation, not a real suppression.
-"""
-
-x = 1
-'''
-        fs = ratchet.FileSuppressions("f.py", source)
-        assert fs.noqa == 0
-
-    def test_noqa_on_pure_comment_line_not_counted(self) -> None:
-        source = "# noqa: E501 — this is a standalone comment, no code\nx = 1\n"
-        fs = ratchet.FileSuppressions("f.py", source)
-        assert fs.noqa == 0
+        fs = FileSuppressions("f.py", "x = 1  # noqa: E501\n")
+        assert fs.count("noqa") == 1
 
     def test_type_ignore_counted(self) -> None:
-        source = "import x  # type: ignore[import-not-found]\n"
-        fs = ratchet.FileSuppressions("f.py", source)
-        assert fs.type_ignore == 1
+        fs = FileSuppressions("f.py", "import x  # type: ignore[import-not-found]\n")
+        assert fs.count("type_ignore") == 1
 
     def test_pyright_ignore_counted(self) -> None:
-        source = "y = z()  # pyright: ignore[reportUnknownVariableType]\n"
-        fs = ratchet.FileSuppressions("f.py", source)
-        assert fs.pyright_ignore == 1
+        fs = FileSuppressions("f.py", "y = z()  # pyright: ignore[reportUnknown]\n")
+        assert fs.count("pyright_ignore") == 1
 
     def test_pylint_disable_counted(self) -> None:
-        source = "x = 1  # pylint: disable=invalid-name\n"
-        fs = ratchet.FileSuppressions("f.py", source)
-        assert fs.pylint_disable == 1
+        fs = FileSuppressions("f.py", "x = 1  # pylint: disable=invalid-name\n")
+        assert fs.count("pylint_disable") == 1
+
+    def test_pure_comment_line_not_counted(self) -> None:
+        fs = FileSuppressions("f.py", "# noqa: E501 standalone comment\nx = 1\n")
+        assert fs.count("noqa") == 0
+
+    def test_noqa_inside_multiline_string_not_counted(self) -> None:
+        source = '"""line one\n# noqa: E501 inside a string\n"""\nx = 1\n'
+        fs = FileSuppressions("f.py", source)
+        assert fs.count("noqa") == 0
 
     def test_tokenize_error_returns_zero(self) -> None:
-        """Untokenizable source must not crash — returns zero counts."""
-        # Unterminated triple-quoted string raises tokenize.TokenizeError
-        # at the EOF.  Counting nothing is safer than counting incorrectly
-        # on broken input.
-        source = '"""open string never closes\nx = 1  # noqa: E501\n'
-        fs = ratchet.FileSuppressions("f.py", source)
-        assert fs.noqa == 0
+        """Untokenizable source must degrade to zero, not crash or miscount."""
+        fs = FileSuppressions("f.py", '"""open string never closes\nx = 1  # noqa\n')
+        assert fs.total == 0
 
-    def test_noqa_inside_single_line_docstring_not_counted(self) -> None:
-        """A triple-quoted string containing # noqa is string content,
+    # --- the four documented blind spots of the retired regex+AST heuristic ---
 
-        not a real suppression — must not be counted (the older AST+regex
-        path treated lines starting with triple-quote as code and would
-        incorrectly count this).
+    def test_blindspot_async_def_counted(self) -> None:
+        """``async def`` was missing from the old regex keyword list."""
+        fs = FileSuppressions("f.py", "async def f():  # noqa: D103\n    return 1\n")
+        assert fs.count("noqa") == 1
+
+    def test_blindspot_attribute_assignment_counted(self) -> None:
+        """``obj.attr =`` starts with identifier+dot, which the regex missed."""
+        fs = FileSuppressions("f.py", "c.x = 1  # noqa: D101\n")
+        assert fs.count("noqa") == 1
+
+    def test_blindspot_tuple_target_counted(self) -> None:
+        """``a, b = ...`` starts with identifier+comma, which the regex missed."""
+        fs = FileSuppressions("f.py", "a, b = 1, 2  # noqa: E501\n")
+        assert fs.count("noqa") == 1
+
+    def test_blindspot_single_line_docstring_with_noqa_not_counted(self) -> None:
+        """A one-line docstring containing ``noqa`` is string content, not code.
+
+        The retired heuristic treated a line starting with a triple quote as
+        code and would have counted this false positive.
         """
-        source = '"""docs # noqa: E501"""\nx = 1\n'
-        fs = ratchet.FileSuppressions("f.py", source)
-        assert fs.noqa == 0
+        fs = FileSuppressions("f.py", '"""docs # noqa: E501"""\nx = 1\n')
+        assert fs.count("noqa") == 0
 
-    def test_noqa_outside_closing_quotes_on_docstring_line_counted(self) -> None:
-        """A real comment after the closing quote on the same line IS a suppression."""
-        source = '"""docs"""  # noqa: E501\nx = 1\n'
-        fs = ratchet.FileSuppressions("f.py", source)
-        assert fs.noqa == 1
-
-    def test_async_def_with_noqa_counted(self) -> None:
-        """`async def` was missing from the older regex keyword list."""
-        source = "async def f():  # noqa: D103\n    return 1\n"
-        fs = ratchet.FileSuppressions("f.py", source)
-        assert fs.noqa == 1
-
-    def test_attribute_assignment_with_noqa_counted(self) -> None:
-        """`obj.attr = 1` starts with identifier+dot which the regex missed."""
-        source = "class C: pass\nc = C()\nc.x = 1  # noqa: D101\n"
-        fs = ratchet.FileSuppressions("f.py", source)
-        assert fs.noqa == 1
-
-    def test_tuple_assignment_with_noqa_counted(self) -> None:
-        """`a, b = ...` starts with identifier+comma which the regex missed."""
-        source = "a, b = 1, 2  # noqa: E501\n"
-        fs = ratchet.FileSuppressions("f.py", source)
-        assert fs.noqa == 1
+    def test_comment_after_closing_docstring_quote_counted(self) -> None:
+        """A real comment after the closing quote on the same line IS counted."""
+        fs = FileSuppressions("f.py", '"""docs"""  # noqa: E501\nx = 1\n')
+        assert fs.count("noqa") == 1
 
 
 class TestPerFileIgnoresCounter:
-    def test_missing_pyproject_returns_zero(self, tmp_path: Path) -> None:
-        counter = ratchet.PerFileIgnoresCounter(tmp_path / "nope.toml")
+    """Fail-closed parsing of ``[tool.ruff.lint.per-file-ignores]``."""
+
+    def test_missing_pyproject_is_zero(self, tmp_path: Path) -> None:
+        counter = PerFileIgnoresCounter(tmp_path / "nope.toml")
         assert counter.total == 0
         assert counter.breakdown == {}
 
-    def test_well_formed_pyproject_counts(self, tmp_path: Path) -> None:
+    def test_well_formed_counts(self, tmp_path: Path) -> None:
         pyproject = tmp_path / "pyproject.toml"
         pyproject.write_text(
             "[tool.ruff.lint.per-file-ignores]\n"
             '"tests/*" = ["S101", "PLR2004"]\n'
             '"docs/*" = ["E501"]\n'
         )
-        counter = ratchet.PerFileIgnoresCounter(pyproject)
+        counter = PerFileIgnoresCounter(pyproject)
         assert counter.total == 3
         assert counter.breakdown == {"tests/*": 2, "docs/*": 1}
+
+    def test_without_section_is_zero(self, tmp_path: Path) -> None:
+        pyproject = tmp_path / "pyproject.toml"
+        pyproject.write_text('[project]\nname = "x"\n')
+        assert PerFileIgnoresCounter(pyproject).total == 0
 
     def test_malformed_toml_raises(self, tmp_path: Path) -> None:
         """Silent miscounts would let suppressions slip past the ratchet."""
         pyproject = tmp_path / "pyproject.toml"
         pyproject.write_text("[tool.ruff.lint.per-file-ignores\n")  # missing ]
-        with pytest.raises(ValueError, match="cannot parse"):
-            ratchet.PerFileIgnoresCounter(pyproject)
+        with pytest.raises(PyprojectError, match="invalid TOML"):
+            PerFileIgnoresCounter(pyproject)
 
     def test_unreadable_existing_pyproject_raises(self, tmp_path: Path) -> None:
-        """A present-but-unreadable pyproject must surface the failure.
-
-        Otherwise a permission-denied or transient I/O error would
-        silently zero the count — the same silent-miscount the
-        malformed-TOML guard was added to prevent.
-        """
+        """A present-but-unreadable pyproject must surface the failure."""
         pyproject = tmp_path / "pyproject.toml"
         pyproject.write_text('[project]\nname = "x"\n')
         with (
             patch.object(Path, "read_text", side_effect=OSError("permission denied")),
-            pytest.raises(ValueError, match="cannot read"),
+            pytest.raises(PyprojectError, match="cannot read"),
         ):
-            ratchet.PerFileIgnoresCounter(pyproject)
-
-    def test_pyproject_without_per_file_ignores_is_zero(self, tmp_path: Path) -> None:
-        pyproject = tmp_path / "pyproject.toml"
-        pyproject.write_text('[project]\nname = "x"\n')
-        counter = ratchet.PerFileIgnoresCounter(pyproject)
-        assert counter.total == 0
+            PerFileIgnoresCounter(pyproject)
 
 
-class TestBaselineLoad:
-    def test_missing_baseline_returns_empty(self, tmp_path: Path) -> None:
-        baseline = ratchet.Baseline(tmp_path)
-        assert baseline.has_baseline is False
-        # _load_baseline is called by check() which guards on has_baseline first;
-        # but if called directly, returns {} per the implementation contract.
-        assert baseline._load_baseline() == {}
+class TestSuppressionReport:
+    """Aggregation across files plus the per-file-ignores config count."""
 
-    def test_malformed_json_exits_2(self, tmp_path: Path) -> None:
-        (tmp_path / ".suppression-baseline.json").write_text("{not json")
-        baseline = ratchet.Baseline(tmp_path)
-        with pytest.raises(SystemExit) as exc_info:
-            baseline._load_baseline()
-        assert exc_info.value.code == 2
+    def test_totals_across_files_and_config(self) -> None:
+        a = FileSuppressions("a.py", "x = 1  # noqa\n")
+        b = FileSuppressions("b.py", "y = 2  # type: ignore\n")
+        report = SuppressionReport([a, b], per_file_ignores_count=3)
+        assert report.total == 5
+        assert report.by_category["noqa"] == 1
+        assert report.by_category["type_ignore"] == 1
+        assert report.by_category["per_file_ignores"] == 3
 
-    def test_load_baseline_returns_dict(self, tmp_path: Path) -> None:
-        (tmp_path / ".suppression-baseline.json").write_text(
-            '{"total": 42, "by_category": {}, "by_file": {}}'
+
+_SRC = "x = 1  # noqa: E501\n"
+
+
+def _seat_and_commit(sandbox: GitSandbox, source: str) -> str:
+    """Write src/mod.py, seat the suppression baseline, and commit; return base."""
+    sandbox.write("src/mod.py", source)
+    assert tools.suppression.main(["src", "--update", "--allow-ci-write"]) == 0
+    return sandbox.commit("base")
+
+
+class TestMergeBaseCheck:
+    """--check compares the current count against the base-commit baseline."""
+
+    def test_unchanged_passes(
+        self, git_sandbox: GitSandbox, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(git_sandbox.root)
+        base = _seat_and_commit(git_sandbox, _SRC)
+        code = tools.suppression.main(
+            ["src", "--check", "--base-ref", base, "--require-base"]
         )
-        baseline = ratchet.Baseline(tmp_path)
-        loaded = baseline._load_baseline()
-        assert loaded["total"] == 42
+        assert code == 0
 
-
-class TestBaselineSaveAtomicity:
-    def test_save_writes_baseline(self, tmp_path: Path) -> None:
-        baseline = ratchet.Baseline(tmp_path)
-        report = ratchet.SuppressionReport(file_results=[], per_file_ignores_count=0)
-        baseline._save_baseline(report)
-        path = tmp_path / ".suppression-baseline.json"
-        assert path.exists()
-        data = json.loads(path.read_text())
-        assert data["total"] == 0
-
-    def test_save_failure_cleans_up_fd_and_temp_file(self, tmp_path: Path) -> None:
-        """When os.write raises, the fd must be closed and tmp file removed.
-
-        Bug class 1 (file I/O safety) — without explicit cleanup the
-        atomic-write pattern leaks fds and tmpfiles on failure.
-        """
-        baseline = ratchet.Baseline(tmp_path)
-        report = ratchet.SuppressionReport(file_results=[], per_file_ignores_count=0)
-        before = set(tmp_path.iterdir())
-        with (
-            patch.object(ratchet.os, "write", side_effect=OSError("disk full")),
-            pytest.raises(OSError, match="disk full"),
-        ):
-            baseline._save_baseline(report)
-        after = set(tmp_path.iterdir())
-        # No leaked tempfile in the baseline directory.
-        assert after == before
-
-
-class TestBaselineCheck:
-    def _baseline_with(self, tmp_path: Path, total: int) -> Path:
-        path = tmp_path / ".suppression-baseline.json"
-        path.write_text(json.dumps({"total": total, "by_category": {}, "by_file": {}}))
-        return path
-
-    def test_check_no_baseline_returns_1(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    def test_increase_fails(
+        self,
+        git_sandbox: GitSandbox,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
-        baseline = ratchet.Baseline(tmp_path)
-        report = ratchet.SuppressionReport(file_results=[], per_file_ignores_count=0)
-        assert baseline.check(report) == 1
-        assert "No baseline" in capsys.readouterr().err
-
-    def test_check_unchanged_returns_0(self, tmp_path: Path) -> None:
-        self._baseline_with(tmp_path, 0)
-        baseline = ratchet.Baseline(tmp_path)
-        report = ratchet.SuppressionReport(file_results=[], per_file_ignores_count=0)
-        assert baseline.check(report) == 0
-
-    def test_check_decreased_returns_0(self, tmp_path: Path) -> None:
-        self._baseline_with(tmp_path, 10)
-        baseline = ratchet.Baseline(tmp_path)
-        report = ratchet.SuppressionReport(file_results=[], per_file_ignores_count=0)
-        assert baseline.check(report) == 0
-
-    def test_check_increased_returns_1(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        self._baseline_with(tmp_path, 0)
-        baseline = ratchet.Baseline(tmp_path)
-        fs = ratchet.FileSuppressions("a.py", "x = 1  # noqa\n")
-        report = ratchet.SuppressionReport(file_results=[fs], per_file_ignores_count=0)
-        assert baseline.check(report) == 1
+        monkeypatch.chdir(git_sandbox.root)
+        base = _seat_and_commit(git_sandbox, _SRC)
+        # Add one more suppression on a code line — the count rises above base.
+        git_sandbox.write("src/mod.py", _SRC + "y = 2  # type: ignore\n")
+        code = tools.suppression.main(
+            ["src", "--check", "--base-ref", base, "--require-base"]
+        )
         out = capsys.readouterr().out
-        assert "FAIL" in out
-        assert "a.py" in out
+        assert code == 1
+        assert "increased by 1" in out
 
-
-class TestBaselineAppendAudit:
-    def test_append_audit_writes_jsonl_line(self, tmp_path: Path) -> None:
-        baseline = ratchet.Baseline(tmp_path)
-        report = ratchet.SuppressionReport(file_results=[], per_file_ignores_count=0)
-        baseline._append_audit(report)
-        audit = tmp_path / ".suppression-audit.jsonl"
-        assert audit.exists()
-        entry = json.loads(audit.read_text())
-        assert entry["total"] == 0
-
-    def test_append_audit_swallows_oserror(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    def test_decrease_passes(
+        self, git_sandbox: GitSandbox, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Audit failures must not block the ratchet update — log and continue."""
-        baseline = ratchet.Baseline(tmp_path)
-        report = ratchet.SuppressionReport(file_results=[], per_file_ignores_count=0)
-        with patch.object(Path, "open", side_effect=OSError("read-only")):
-            baseline._append_audit(report)  # must not raise
-        assert "WARNING" in capsys.readouterr().out
+        monkeypatch.chdir(git_sandbox.root)
+        base = _seat_and_commit(git_sandbox, _SRC + "y = 2  # type: ignore\n")
+        git_sandbox.write("src/mod.py", _SRC)  # one fewer suppression
+        code = tools.suppression.main(
+            ["src", "--check", "--base-ref", base, "--require-base"]
+        )
+        assert code == 0
+
+
+class TestFailClosed:
+    """A corrupt base baseline blob fails closed rather than fail-open."""
+
+    def test_non_dict_blob_raises_git_error(self, git_sandbox: GitSandbox) -> None:
+        git_sandbox.write("src/mod.py", _SRC)
+        git_sandbox.write(".suppression-baseline.json", "[]\n")
+        sha = git_sandbox.commit("corrupt baseline")
+        git = GitRepo(git_sandbox.root)
+        with pytest.raises(GitError, match="non-dict"):
+            git.show_baseline(sha)
+
+    def test_check_reports_nonzero_on_corrupt_blob(
+        self,
+        git_sandbox: GitSandbox,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.chdir(git_sandbox.root)
+        git_sandbox.write("src/mod.py", _SRC)
+        git_sandbox.write(".suppression-baseline.json", "[]\n")
+        sha = git_sandbox.commit("corrupt baseline")
+        code = tools.suppression.main(
+            ["src", "--check", "--base-ref", sha, "--require-base"]
+        )
+        assert code == 1
+        assert "FAIL" in capsys.readouterr().out
