@@ -208,7 +208,7 @@ serves them.
 Three layers, dependency arrow pointing inward (PL-MD-1, PY-IC-8). The boundary
 is enforced by **package membership**, not convention.
 
-```
+```text
   quarry/api/        ← LAYER 1: wire contract. Pydantic models + OpenAPI.
   (schemas, errors)    Zero engine imports. Zero heavy deps. Importable alone.
         ▲     ▲
@@ -528,7 +528,7 @@ calls for.
 
 **API surface (illustrative — final shape decided at implementation time).**
 
-```
+```python
 class QuarryClient:
     # constructed from a resolved config (loopback by default; remote via login)
     @classmethod
@@ -550,7 +550,7 @@ class QuarryClient:
 
 **Exception model (replaces `typer.Exit`/`SystemExit`).**
 
-```
+```text
 QuarryError(Exception)                       # base
 ├── QuarryConnectionError   # daemon unreachable after autostart nudge (was OSError→typer.Exit, remote_client.py:90-94)
 ├── QuarryAuthError         # 401 (was SystemExit at remote_client.py:229/237 for TLS/CA)
