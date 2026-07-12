@@ -1,15 +1,15 @@
 {
-  "total": 262,
+  "total": 263,
   "by_category": {
     "noqa": 215,
     "type_ignore": 10,
     "pylint_disable": 0,
     "pyright_ignore": 12,
-    "per_file_ignores": 25
+    "per_file_ignores": 26
   },
   "by_file": {
     "src/quarry/__main__.py": {
-      "noqa": 24,
+      "noqa": 22,
       "type_ignore": 2
     },
     "src/quarry/_hook_entry.py": {
@@ -17,6 +17,9 @@
     },
     "src/quarry/backfill.py": {
       "noqa": 1
+    },
+    "src/quarry/cli_captures.py": {
+      "noqa": 2
     },
     "src/quarry/cli_runtime.py": {
       "noqa": 3
@@ -97,7 +100,7 @@
     "src/quarry/remote.py": {
       "noqa": 2
     },
-    "src/quarry/shadow/repo.py": {
+    "src/quarry/shadow/_git.py": {
       "noqa": 1
     },
     "src/quarry/shadow/sync.py": {
@@ -114,5 +117,5 @@
       "noqa": 1
     }
   },
-  "updated_at": "2026-07-12T00:53:54Z"
+  "updated_at": "2026-07-12T03:55:18Z"
 }

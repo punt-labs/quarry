@@ -19,6 +19,7 @@ import typer.core
 from rich.console import Console
 from rich.progress import Progress
 
+from quarry.cli_captures import CapturesCli, CliPlumbing
 from quarry.cli_formatters import ResultFormatter
 from quarry.cli_runtime import CliRuntime
 from quarry.collections import CollectionName
@@ -478,57 +479,63 @@ def show_cmd(
 ) -> None:
     """Show document metadata or a specific page's text."""
     if page is not None and page < 1:
-        err_console.print(
-            f"Error: page number must be >= 1, got {page}",
-            style="red",
-        )
+        err_console.print(f"Error: page number must be >= 1, got {page}", style="red")
         raise typer.Exit(code=1)
-
     proxy_config = _safe_proxy_config().get("quarry", {})
     if isinstance(proxy_config, dict) and "url" in proxy_config:
-        params: dict[str, str] = {"document": document_name}
-        if page is not None:
-            params["page"] = str(page)
-        if collection:
-            params["collection"] = collection
-        qs = urllib.parse.urlencode(params)
-        try:
-            remote_resp = RemoteClient(proxy_config).get(f"/show?{qs}")
-        except RemoteError as exc:
-            err_console.print(f"Error: {exc}", style="red")
-            raise typer.Exit(code=1) from exc
-        # If page was requested, format as page text
-        if page is not None:
-            _emit(
-                remote_resp,
-                f"Document: {remote_resp.get('document_name', '')}\n"
-                f"Page: {remote_resp.get('page_number', '')}\n---\n"
-                f"{remote_resp.get('text', '')}",
-            )
-        else:
-            _emit(remote_resp, format_document_detail(remote_resp))
-        return
+        _show_remote(proxy_config, document_name, page, collection)
+    else:
+        _show_local(document_name, page, collection)
 
-    settings = _resolved_settings()
-    database = Database.connect(settings.lancedb_path)
 
+def _show_page_text(document_name: str, page: object, text: object) -> None:
+    """Emit a single page's text on both surfaces with identical field names."""
+    _emit(
+        {"document_name": document_name, "page_number": page, "text": text},
+        f"Document: {document_name}\nPage: {page}\n---\n{text}",
+    )
+
+
+def _show_remote(
+    proxy_config: dict[str, object],
+    document_name: str,
+    page: int | None,
+    collection: str,
+) -> None:
+    """Render ``quarry show`` from the remote HTTP ``/show`` endpoint."""
+    params: dict[str, str] = {"document": document_name}
     if page is not None:
-        text = database.catalog.get_page_text(
-            document_name, page, collection=collection or None
+        params["page"] = str(page)
+    if collection:
+        params["collection"] = collection
+    try:
+        resp = RemoteClient(proxy_config).get(f"/show?{urllib.parse.urlencode(params)}")
+    except RemoteError as exc:
+        err_console.print(f"Error: {exc}", style="red")
+        raise typer.Exit(code=1) from exc
+    if page is not None:
+        _show_page_text(
+            str(resp.get("document_name", "")),
+            resp.get("page_number", ""),
+            resp.get("text", ""),
         )
+    else:
+        _emit(resp, format_document_detail(resp))
+
+
+def _show_local(document_name: str, page: int | None, collection: str) -> None:
+    """Render ``quarry show`` from the local LanceDB catalog."""
+    catalog = Database.connect(_resolved_settings().lancedb_path).catalog
+    if page is not None:
+        text = catalog.get_page_text(document_name, page, collection=collection or None)
         if text is None:
             err_console.print(
-                f"No data found for {document_name!r} page {page}",
-                style="red",
+                f"No data found for {document_name!r} page {page}", style="red"
             )
             raise typer.Exit(code=1)
-        _emit(
-            {"document_name": document_name, "page_number": page, "text": text},
-            f"Document: {document_name}\nPage: {page}\n---\n{text}",
-        )
+        _show_page_text(document_name, page, text)
         return
-
-    docs = database.catalog.list_documents(collection_filter=collection or None)
+    docs = catalog.list_documents(collection_filter=collection or None)
     match = [d for d in docs if d["document_name"] == document_name]
     if not match:
         err_console.print(f"Document {document_name!r} not found", style="red")
@@ -1400,68 +1407,18 @@ def remote_list_cmd(
     _emit(data, text)
 
 
-captures_app = typer.Typer(
-    help="Manage the private capture shadow repo (<repo> -> <repo>-quarry).",
-    invoke_without_command=True,
-    rich_markup_mode=None,
-)
-app.add_typer(captures_app, name="captures")
-
-
-@captures_app.callback(invoke_without_command=True)
-def captures_callback(ctx: typer.Context) -> None:
-    """Manage the private capture shadow repo."""
-    if ctx.invoked_subcommand is None:
-        err_console.print("Error: specify a subcommand — push, init.", style="red")
-        raise typer.Exit(code=1)
-
-
-@captures_app.command(name="push")
-@_cli_errors
-def captures_push_cmd() -> None:
-    """Re-scrub and push redacted captures to each project's private shadow."""
-    from quarry.shadow import CaptureSync  # noqa: PLC0415
-
-    proxy_config = _safe_proxy_config().get("quarry", {})
-    if isinstance(proxy_config, dict) and "url" in proxy_config:
-        resp = RemoteClient(proxy_config).request("POST", "/captures/push", body={})
-        rendered = ResultFormatter.coerce_results(resp.get("results", resp))
-        _emit(resp, ResultFormatter.captures_push(rendered))
-        return
-
-    settings = _resolved_settings()
-    results = CaptureSync.push_registered(settings, fail_open=True)
-    data = {col: res.to_dict() for col, res in results.items()}
-    _emit({"results": data}, ResultFormatter.captures_push(data))
-    if ResultFormatter.has_failures(data):
-        raise typer.Exit(code=1)
-
-
-@captures_app.command(name="init")
-@_cli_errors
-def captures_init_cmd(
-    create: Annotated[
-        bool,
-        typer.Option("--create", help="Create the private remote via gh first"),
-    ] = False,
-) -> None:
-    """Bootstrap the current project's private capture shadow (no push)."""
-    from quarry.shadow import CaptureSync  # noqa: PLC0415
-
-    shadow = CaptureSync.from_directory(Path.cwd())
-    if shadow is None:
-        _emit(
-            {"error": "no shadow config"},
-            "no shadow: block in .punt-labs/quarry/config.md (run 'quarry enable')",
+app.add_typer(
+    CapturesCli(
+        CliPlumbing(
+            emit=_emit,
+            cli_errors=_cli_errors,
+            safe_proxy_config=_safe_proxy_config,
+            resolved_settings=_resolved_settings,
+            err_console=err_console,
         )
-        raise typer.Exit(code=1)
-    ok = shadow.bootstrap(create=create)
-    _emit(
-        {"bootstrapped": ok},
-        "shadow ready" if ok else "bootstrap refused — see the logged reason",
-    )
-    if not ok:
-        raise typer.Exit(code=1)
+    ).build(),
+    name="captures",
+)
 
 
 list_app = typer.Typer(
