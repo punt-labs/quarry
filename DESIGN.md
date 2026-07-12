@@ -894,129 +894,68 @@ The encoded project dir replaces `/` with `-` and preserves the leading dash (e.
 
 ---
 
-## DES-031: Engine-First Architecture with Thin Interfaces
+## DES-031: Daemon-First Architecture — One Engine, Formal Wire Protocol, Pure Clients
 
-**Date:** 2026-05-16
-**Status:** PROPOSED
-**Topic:** Separation of compute/storage engine from access interfaces (CLI, MCP, Library)
-**Qualifies:** DES-021 (Remote CLI Routing — No Split Horizon), Principle P1 (Library-first) in `docs/architecture.tex`
+**Date:** 2026-05-16 (v1 PROPOSED); revised and **ACCEPTED** 2026-07-12 (v2.1)
+**Status:** ACCEPTED
+**Topic:** Separation of the compute/storage engine from access interfaces (CLI, MCP, Library) behind a formal wire protocol
+**Supersedes:** the v1 "Engine-First Architecture with Thin Interfaces" framing (this entry replaces it). Full design + the 5-agent audit that grounds it: `docs/des-031v2-daemon-first.md`. Epic `quarry-ma6f`; PRs `quarry-p8dq` (v2-1) … `quarry-7ftj` (v2-6).
 
-### Context
+### Context (audited reality)
 
-Quarry has two independent axes that have been conflated in the as-built code:
+A 5-agent audit (2026-07-12) established ground truth and corrected the v1 framing:
 
-1. **Interface** — how a caller talks to quarry: CLI commands, MCP tool calls, Python library imports.
-2. **Engine** — what does the work: ONNX embedding model, LanceDB I/O, hybrid search, ingestion pipeline, sync registry.
+- **"Five engines per host" is a latent ceiling, not steady state.** The steady state is **one** resident engine — the `quarry serve` daemon (~1.6 GB RSS). `mcp-proxy` (~5 MB) and the menubar load no engine. The five ONNX-loading rows in the v1 table are per-invocation *possibilities*, not coexisting processes. The real driver is not duplication avoidance but **always-on incremental indexing**, which a per-invocation process cannot provide.
+- **The transition v1 named never happened** — only the v1 ADR shipped. The CLI still builds the engine in-process for 18 data commands (a routing seam to `RemoteClient` exists from DES-021, but the local-engine branch was never removed). The library's public names (`Database`, `get_db`, `ingest_*`) *are* the engine. `mcp_server.py`'s stdio path loads the engine; `RemoteClient` is a de-facto thin client but CLI-coupled (`typer.Exit`/`SystemExit`). The HTTP surface has ~20 routes, **zero** Pydantic schemas, and no endpoint for `optimize`/`backfill-sessions`.
+- **DES-037 already unified the *search* path** across surfaces via a shared `SearchService` library seam — bug-class-3 drift is closed for search, but every non-search command still has divergent dual paths. This design reuses `SearchService` as the daemon's internal `/v1/search` impl; it does not re-solve it. `mcp-proxy` (DES-021) already provides a thin MCP transport.
 
-The current architecture duplicates the engine into every interface. A single host can hold five engine instances simultaneously:
+### The three invariants (operator-set)
 
-| Interface | Loads ONNX? | Opens LanceDB? | Runs pipeline? |
-|-----------|------------|----------------|----------------|
-| CLI (local mode) | yes | yes | yes |
-| CLI (remote mode) | no | no | thin HTTPS client |
-| MCP stdio (`mcp_server.py`) | yes | yes | yes |
-| MCP WebSocket (via daemon) | no | no | thin client |
-| HTTP server (`http_server.py`) | yes | yes | yes |
-| Library import (`from quarry import …`) | yes | yes | yes |
-| Daemon (`quarry serve`) | yes (once) | yes | yes |
-
-P1 ("Library-first") in `docs/architecture.tex` describes this as-built reality, not the target. It was correct for the original CLI-only design from 2024. With a supervised daemon now installed on every host (`launchd` on macOS, `systemd` on Linux), the principle is stale: "the library does the work" is true only because the library is the engine.
-
-DES-021 added "no split horizon" for the remote case (logged-in users route every data command to the remote daemon). DES-031 completes that pattern: the daemon is always the engine, on every host, for every interface.
+- **I1 — Hard client/engine boundary.** CLI, MCP, and the library are **pure clients**; none may import or construct the engine (`Database`, `embeddings`, `ingestion.pipeline`, `retrieval`, `SyncRegistry`) in-process. The engine lives only in `quarry/daemon/`.
+- **I2 — Daemon assumed always present.** One supervised, always-on engine per machine; clients assume it is there. Rationale: the daemon is the **one resident indexing engine** every trigger reuses instead of cold-starting ~1.6 GB per run — the precondition for always-on incremental indexing.
+- **I3 — Well-specified wire protocol.** A formal, versioned REST contract is the single source of truth: shared Pydantic models generating an OpenAPI document, one `QuarryClient` conforming to it, used by CLI, MCP-thin, and library.
 
 ### Design
 
-**One engine, many interfaces.**
+**Boundary (I1).** Three layers, enforced by *package membership*, not convention: `quarry/api` (Pydantic models + errors; zero heavy deps) ← `quarry/client` (`QuarryClient` + typed errors) ← client processes (`__main__`, hooks); `quarry/daemon` holds the engine and is never imported by a client. Enforced by an **import-linter** CI contract plus a **runtime-sabotage test** (import the client packages with `lancedb`/`onnxruntime` poisoned; assert success). The two host-local commands that legitimately need the engine (`serve`; `mcp` until v2-4 drops it) pull it in via a **lazy in-body import**, guarded by the sabotage test rather than import-linter. `disable` is a *hybrid*: its hook-config removal is host-local, but its chunk purge becomes a daemon call.
 
-```text
-                              ┌─────────────────────────┐
-   CLI ──────────────────────►│                         │
-   MCP (stdio via mcp-proxy)  │  quarry serve (daemon)  │
-   MCP (WebSocket)            │      THE ENGINE         │
-   Library (QuarryClient)     │                         │
-                              └─────────────────────────┘
-```
+**Daemon-assumed (I2).** The daemon is the single engine, supervised (launchd `KeepAlive` / systemd `Restart=always`), loopback by default. It owns `SyncRegistry` and exposes `/v1/sync`; register/deregister/sync are thin mutations. `/health` reports `warming` vs `ready`. When the daemon is not running, the client **nudges the service manager** (kickstart / `systemctl --user restart`), polls `/health` under a ~30 s warm budget, then **fails fast** with a typed error distinguishing *not-installed* (→ `quarry install`) from *installed-but-down* (→ `quarry doctor`). There is **no in-process fallback** — a fallback engine would resurrect the dual-path drift I2 exists to remove. The always-on indexing *triggers* are decoupled to separate beads: interim scheduled sync (`quarry-tqdq`/`quarry-uae`) now, the event-driven watch/index loop with a serialized per-collection queue (`quarry-lxrk`) later.
 
-The daemon (`quarry serve`) owns the ONNX model, LanceDB, pipeline, sync registry. Every data operation runs there. Interfaces are thin clients.
+**Wire protocol (I3) — FastAPI.** The daemon adopts **FastAPI** (Starlette-compatible: the WS `/mcp` route, the asyncio task system, lifespan startup, and bearer-auth middleware pass through unchanged), so request validation *and* the OpenAPI document derive from the same Pydantic models — no hand-rolled emitter or route registry. `quarry/api` holds one request/response model per operation (drift → import-time type error, the structural kill of bug-class-3 for non-search commands) and a uniform `ErrorBody` envelope via a FastAPI exception handler. All engine operations move under **`/v1`** (health/openapi unversioned); `/health` advertises `api_version`; a major mismatch raises `QuarryVersionError`. Long operations return `202 + TaskAccepted`, polled at `/v1/tasks/{id}`. The two missing operations (`/v1/optimize`, `/v1/backfill-sessions`) are added, closing split-horizon. `IngestRequest` is dual-mode (daemon-local *path* vs uploaded *bytes*, chosen by transport) so remote ingest cannot silently diverge.
 
-**Interface responsibilities:**
+**QuarryClient (I3).** One library-safe client (`quarry/client`): typed `QuarryError` hierarchy, Pydantic responses, **no `typer`/`SystemExit`/console**. `RemoteClient` is deleted; the CLI re-adds exit/print via a single boundary decorator at `__main__`. quarry-menubar (`../quarry-menubar`) is prior-art proof: a Swift `QuarryClient` over `URLSession` with pinned-CA TLS, zero Python-engine coupling — the OpenAPI doc is the shared contract both the Python and Swift clients conform to.
 
-- **CLI** — Typer command parser → HTTPS request → response renderer. No `lancedb`, `onnxruntime`, `pyarrow`, or pipeline imports.
-- **MCP** — `mcp-proxy` (Go binary) bridges stdio ↔ daemon WebSocket. The Python `mcp_server.py` stdio path is dropped; the WebSocket `/mcp` endpoint on the daemon stays.
-- **Library** — `QuarryClient` Python class makes HTTPS calls to the daemon. No engine imports. Used by embedded callers (QuarryMenuBar, scripts, tests-via-fixture).
+**MCP.** The in-process `quarry mcp` engine path is **dropped**; MCP is served by the daemon over `/v1/mcp` via `mcp-proxy`, reusing the warmed `ctx.embedder`/`ctx.database` (fixing an incidental third-ONNX-session defect). `SearchService` (DES-037) stays as the daemon's internal `/v1/search` implementation.
 
-**Local-only commands (genuinely host-local, no engine dependency):**
+### Key decisions and rejected alternatives
 
-| Command | Purpose |
-|---------|---------|
-| `serve` | Is the engine |
-| `install` | Bootstrap: set up engine, daemon, TLS, plugin |
-| `login` / `logout` | Configure which daemon to talk to |
-| `doctor` | Diagnose host environment (model file, daemon health, MCP config) |
-| `uninstall` | Tear down install |
-| `version` | Static metadata |
+- **FastAPI over Starlette + a hand-rolled OpenAPI emitter** (operator ruling: correctness over migration-avoidance). FastAPI *is* Starlette underneath, so the "risky migration" premise was false; the hand-rolled registry/emitter were gold-plating.
+- **No in-process fallback** when the daemon is down — it would reintroduce bug-class-3.
+- **MCP via `mcp-proxy` → daemon**, not an embedded thin MCP server (reuse over rebuild).
+- **Watcher decoupled** from this epic into `quarry-lxrk`/`quarry-tqdq`.
+- Keeping dual paths, dropping the daemon, or keeping `RemoteClient` CLI-coupled were all rejected (see `docs/des-031v2-daemon-first.md` §4).
 
-**Everything else is a thin client:** `find`, `ingest`, `remember`, `delete`, `show`, `status`, `list`, `sync`, `register`, `deregister`, `use`, `optimize`, `backfill-sessions`.
+### Scope and sequencing (supersedes the v1 6-PR table)
 
-**Shared request/response schemas.** Pydantic models for every endpoint, imported by both the CLI client and the HTTP server handler. Param drift becomes a type error at the import site, not a silent omission.
+| PR | Bead | Scope |
+|----|------|-------|
+| v2-1 | `quarry-p8dq` | This ADR + `architecture.tex`/`CLAUDE.md`/README doc corrections (doc-only) |
+| v2-2 | `quarry-qyrm` | FastAPI + `quarry/api` contract: schemas, `/v1`, OpenAPI, `optimize`/`backfill` endpoints, alias-route removal, menubar lockstep |
+| v2-3a | `quarry-ufjt` | Supervised units + autostart-nudge helper (lands before v2-3) |
+| v2-3 | `quarry-veb0` | `QuarryClient` + typed errors; CLI thin-client (delete `RemoteClient` + engine branches); `disable` chunk-purge → daemon |
+| v2-4 | `quarry-ydz5` | MCP over `/v1/mcp`; drop `quarry mcp`; reuse warmed `ctx` |
+| v2-5 | `quarry-5e5t` | Library API = `QuarryClient` (pure in-repo removal of engine exports) |
+| v2-6 | `quarry-7ftj` | Install `/health` gate + in-process ASGI fixture + import-linter boundary + one real-loopback-TLS smoke test |
 
-### Why This Design
+The contract (v2-2) precedes clients dropping their engine paths; supervision (v2-3a) precedes fallback removal. No in-code shims (PL-PP-1): `RemoteClient`, `quarry mcp`, and the engine library exports are deleted, not aliased. The only cross-repo touch is the Swift client's `/v1` bump, coordinated in v2-2.
 
-1. **Eliminates Bug Class 3 by construction.** CLAUDE.md documents remote/local divergence as the recurring failure mode through 10 TLS review rounds: HTTP server forgetting params the CLI sends, response JSON dropping fields the CLI renders. With one path, the class disappears.
+### Risks (summary; full table in the design doc)
 
-2. **The daemon already exists, is supervised, and is the universal access point on every install.** Five engine copies on one host is not a feature; it is unmanaged duplication that DES-021 already started removing.
+Framework swap breaking the WS/task/auth path (mitigated: FastAPI inherits Starlette; the ASGI fixture exercises them); contract rewrite regressing a route (OpenAPI diff + structural equivalence); cold-start/wedged daemon (warm-budget poll + `restart` + typed not-installed-vs-down errors); remote-ingest divergence (dual-mode `IngestRequest`); the ASGI fixture not exercising TLS (one real-loopback-TLS smoke test rides the wheel gate). Default binding is loopback; remote is opt-in over the existing TLS + pinned-CA path; nothing weakens the trust model.
 
-3. **Matches the standard pattern for systems with shared state.** Docker has `dockerd` + thin `docker` CLI. Postgres has the server + `psql` client. Redis has `redis-server` + `redis-cli`. The "library" in all three is a client API, not the engine. Quarry's shared state (the LanceDB corpus, the loaded model) makes it the same shape.
+### Supersession
 
-4. **Reduces `__main__.py` substantially.** Every data command currently has a 30–60 line `if proxy_config: ... else: ...` dispatch. Thin-client form is ~5 lines per command. The Phase 4–7 OO refactoring on `oo/phase-4-services` becomes easier, not harder, because most of the file goes away.
-
-5. **Aligns with adopted principles.** P3 ("One daemon, many clients") and DES-021 ("No split horizon") both point in this direction. DES-031 names the target and finishes the transition.
-
-### Alternatives Considered
-
-1. **Keep dual paths, fix divergence with stricter testing.** Rejected. The testing rules in CLAUDE.md (CLI/HTTP equivalence tests for every param) are valuable but reactive — they catch drift after it happens. The drift keeps happening because the structure permits it. Eliminating the structure eliminates the class.
-
-2. **Drop the daemon, use direct library access everywhere (CLI-only).** Rejected. P3 (shared ONNX model across MCP sessions) requires a daemon. Five Claude Code tabs cannot each load 200 MB of model into RAM.
-
-3. **Hybrid: data ops daemon-mediated, admin ops local.** This is the design (see "Local-only commands" above). The split is principled — anything that touches documents goes through the engine; anything that configures the host stays local. The rejected version is per-command discretion ("`status` is cheap, run it locally") which is exactly the split horizon DES-021 forbade.
-
-4. **Make the library API the canonical surface and add a thin daemon for MCP.** Rejected. This is the current architecture inverted; it preserves "library = engine" and leaves every CLI invocation responsible for model loading and DB locking. The daemon already supervises both; making it canonical removes the duplicate engine code, not the daemon.
-
-### Scope and Sequencing
-
-Six PR-sized slices, each independently revertable. Implementation order matters because the HTTP API must be complete before any client can drop its local engine path.
-
-| PR | Scope |
-|----|-------|
-| 1  | DES-031 ADR + `docs/architecture.tex` revisions (P1, §Daemon Model, §CLI Independence, §Deployment, concurrency matrix) + README diagram |
-| 2  | HTTP API completeness: every CLI param has an endpoint; shared Pydantic schemas for requests and responses |
-| 3  | CLI refactor: every data command becomes a thin client; `__main__.py` dispatch removed |
-| 4  | `mcp_server.py` stdio path: collapse to thin proxy or drop in favor of `mcp-proxy` |
-| 5  | Library API: introduce `QuarryClient` (HTTPS client class); embedded callers migrate |
-| 6  | Install/test fixtures: install verifies daemon is up before exiting 0; pytest fixture starts an in-process daemon per session |
-
-PR 1 is doc-only and sets the contract. PRs 2–5 are implementation slices that can land in dependency order. PR 6 closes the loop on bootstrap and tests.
-
-### Risks and Mitigations
-
-| Risk | Mitigation |
-|------|-----------|
-| Test suite slows down from per-test daemon startup | Session-scoped pytest fixture: one daemon per test run, not per test |
-| Install bootstrap fails if daemon doesn't start | Install script verifies `quarry serve` is listening via `/health` before exiting 0 (already in scope for Phase 4.8–4.12 OO refactor) |
-| First-install commands need an engine before daemon exists | Only `install`, `serve`, `doctor`, `login`, `version` run pre-daemon; they don't need engine access |
-| Embedded callers (QuarryMenuBar) break | `QuarryClient` shipped in PR 5 before old library API is removed; deprecation cycle of one release |
-| Fly.io container ops that run without a daemon | Container entrypoint always starts the daemon; ops invoke the CLI which talks to the local daemon — same pattern as developer machines |
-
-### Documents Made Misleading by This Change
-
-- `docs/architecture.tex` §Overview P1 ("Library-first")
-- `docs/architecture.tex` §Daemon Model → §CLI Independence ("The CLI does not use the daemon")
-- `docs/architecture.tex` §Deployment Topology diagrams
-- `docs/architecture.tex` §Operation Concurrency Model (the "CLI (local)" column collapses)
-- `README.md` "How it works" section
-- `prfaq.tex` risk register (Bug Class 3 reduction)
-
-All revisions ship in PR 1.
+This ACCEPTED v2.1 replaces the v1 PROPOSED "Engine-First Architecture" ADR: it drops the "five engines" framing, names always-on indexing as the driver, reflects DES-037 and `mcp-proxy`, adopts FastAPI, decouples the watcher, and folds in the audited incidental defects (the `/mcp` third-ONNX-session, the stale `architecture.tex`/`CLAUDE.md` docs, the `/ca.crt` naming + task alias routes, the hardcoded `await_task` "Deregister failed" bug). Full design and audit: `docs/des-031v2-daemon-first.md`.
 
 ## DES-032: Daemon Resource Management — Thread Limits and OS Scheduling
 

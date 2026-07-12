@@ -231,15 +231,17 @@ Once enabled, the captures dir becomes a standalone nested git repo. `quarry cap
 
 ## How It Works
 
-Quarry runs as a daemon. Claude Code sessions connect through mcp-proxy:
+Quarry runs as a daemon — one `quarry serve` process per machine holds the engine (embedding model, LanceDB, pipeline, sync registry). Claude Code sessions reach it through mcp-proxy over WebSocket:
 
 ```text
                     stdio                       wss:// (TLS)
 Claude Code <-----------------> mcp-proxy <---------------------> quarry serve
-             MCP JSON-RPC       (~5 MB Go)      pinned CA cert    (one daemon)
+             MCP JSON-RPC       (~5 MB Go)      pinned CA cert    (one engine)
 ```
 
-Without the proxy, every session spawns a separate Python process, each loading the embedding model into ~200 MB of RAM. With it, startup is instant and state is shared across all sessions. All connections use TLS with a self-signed CA — even on localhost.
+One resident engine means the model loads once and MCP state is shared across sessions — no per-session ~200 MB reload. The mcp-proxy and remote connections use TLS with a self-signed, pinned CA — even on localhost.
+
+The **target** is that *every* interface — CLI, library, and MCP — is a thin client of that one daemon over a versioned REST/WebSocket contract; this daemon-first model is specified in [DES-031 v2](DESIGN.md) (ACCEPTED, in implementation). Today the CLI and library still load the engine in-process on local calls, and MCP can fall back to an in-process `quarry mcp` when mcp-proxy is absent; those local-engine paths are being removed.
 
 `quarry install` downloads mcp-proxy (SHA256-verified, correct platform) and configures MCP clients.
 
