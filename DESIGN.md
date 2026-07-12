@@ -1421,6 +1421,7 @@ keeps vox's public interface so the rest of `tools/suppression/` stays verbatim.
 This fix is to be upstreamed back into vox (quarry-njmr).
 
 **Rejected / deferred.**
+
 1. **Keep quarry's monolith** — retains the drift/gaming problem the move is meant
    to fix.
 2. **Full-delete / recompute-from-source baseline** — kills the per-commit
