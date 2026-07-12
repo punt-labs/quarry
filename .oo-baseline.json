@@ -519,6 +519,19 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/quarry/http_guards.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 2.5,
+    "max_complexity": 5.0,
+    "avg_complexity": 4.0,
+    "module_size": 56.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/quarry/http_resources.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
@@ -535,10 +548,10 @@
   "src/quarry/http_server.py": {
     "method_ratio": 0.115,
     "encapsulation_ratio": 0.167,
-    "avg_params": 1.77,
+    "avg_params": 1.72,
     "max_complexity": 16.0,
-    "avg_complexity": 4.11,
-    "module_size": 1259.0,
+    "avg_complexity": 4.05,
+    "module_size": 1237.0,
     "classes_per_module": 2.0,
     "class_to_func_ratio": 0.042,
     "init_violations": 1.0,

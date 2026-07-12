@@ -1865,45 +1865,45 @@ class TestCheckBodySize:
     """Unit tests for the _check_body_size helper."""
 
     def test_accepts_body_within_limit(self) -> None:
-        from quarry.http_server import _check_body_size
+        from quarry.http_guards import RequestGuards
 
         request = MagicMock()
         request.headers = {"content-length": "100"}
-        assert _check_body_size(request, 200) is None
+        assert RequestGuards.check_body_size(request, 200) is None
 
     def test_rejects_oversized(self) -> None:
-        from quarry.http_server import _check_body_size
+        from quarry.http_guards import RequestGuards
 
         request = MagicMock()
         request.headers = {"content-length": "300"}
-        resp = _check_body_size(request, 200)
+        resp = RequestGuards.check_body_size(request, 200)
         assert resp is not None
         assert resp.status_code == 413
 
     def test_rejects_missing_content_length(self) -> None:
-        from quarry.http_server import _check_body_size
+        from quarry.http_guards import RequestGuards
 
         request = MagicMock()
         request.headers = {}
-        resp = _check_body_size(request, 200)
+        resp = RequestGuards.check_body_size(request, 200)
         assert resp is not None
         assert resp.status_code == 411
 
     def test_rejects_non_numeric_content_length(self) -> None:
-        from quarry.http_server import _check_body_size
+        from quarry.http_guards import RequestGuards
 
         request = MagicMock()
         request.headers = {"content-length": "not-a-number"}
-        resp = _check_body_size(request, 200)
+        resp = RequestGuards.check_body_size(request, 200)
         assert resp is not None
         assert resp.status_code == 400
 
     def test_rejects_negative_content_length(self) -> None:
-        from quarry.http_server import _check_body_size
+        from quarry.http_guards import RequestGuards
 
         request = MagicMock()
         request.headers = {"content-length": "-10"}
-        resp = _check_body_size(request, 200)
+        resp = RequestGuards.check_body_size(request, 200)
         assert resp is not None
         assert resp.status_code == 400
 
