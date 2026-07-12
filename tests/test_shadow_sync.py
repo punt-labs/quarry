@@ -236,20 +236,22 @@ class TestOfflineRetry:
 
 
 class TestUnpushedDetail:
-    """unpushed_detail wording keys off aborted_reason, not committed alone."""
+    """unpushed_detail keys off committed first; aborted_reason labels the
+    not-committed case only."""
 
-    def test_aborted_reason_wins(self) -> None:
-        # A non-empty aborted_reason is the primary signal — the gate refused,
-        # the shadow was disabled, or an exception aborted the run.
+    def test_aborted_reason_when_not_committed(self) -> None:
+        # No commit + a non-empty aborted_reason: the gate refused, the shadow
+        # was disabled, or an exception aborted the run before committing.
         result = ShadowSyncResult.aborted("bootstrap-refused")
         assert result.unpushed_detail() == "aborted before commit (bootstrap-refused)"
 
-    def test_aborted_reason_wins_even_when_committed(self) -> None:
-        # The visibility gate can abort after a local commit; the reason still
-        # leads the message so the operator sees why nothing was pushed.
+    def test_committed_wins_even_with_aborted_reason(self) -> None:
+        # The visibility gate can abort AFTER a local commit; that run DID
+        # commit, so it must read "committed but not pushed", carrying the
+        # reason as the cause — never "aborted before commit".
         result = ShadowSyncResult.aborted("public-remote", committed=True)
         detail = result.unpushed_detail()
-        assert detail == "aborted before commit (public-remote)"
+        assert detail == "committed but not pushed (public-remote)"
 
     def test_committed_but_push_failed(self) -> None:
         result = ShadowSyncResult(
