@@ -1432,7 +1432,7 @@ def captures_push_cmd() -> None:
     settings = _resolved_settings()
     results = CaptureSync.push_registered(settings, fail_open=True)
     data = {col: res.to_dict() for col, res in results.items()}
-    _emit(data, ResultFormatter.captures_push(data))
+    _emit({"results": data}, ResultFormatter.captures_push(data))
     if ResultFormatter.has_failures(data):
         raise typer.Exit(code=1)
 

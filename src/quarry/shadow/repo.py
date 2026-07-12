@@ -137,8 +137,16 @@ class ShadowRepo:
         return ShadowConfig.derive_remote(origin) if code == 0 else ""
 
     def is_ignored_by_parent(self) -> bool:
-        """Return whether the parent repo gitignores the captures dir."""
-        return self._parent_git.ok(["git", "check-ignore", str(self._captures_dir)])
+        """Return whether the parent repo gitignores the captures dir.
+
+        Probes a repo-relative capture path *under* the dir rather than the dir
+        itself: ``git check-ignore`` resolves arguments against its working
+        directory, and a directory rule like ``captures/`` only matches a bare
+        directory argument when that directory exists on disk — probing a file
+        path under it matches the rule whether or not the dir yet exists.
+        """
+        probe = str(Path(self._captures_rel()) / "session-probe.md")
+        return self._parent_git.ok(["git", "check-ignore", probe])
 
     def parent_tracked_captures(self) -> list[Path]:
         """Return capture paths the parent public repo already TRACKS (B3).

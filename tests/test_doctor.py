@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -1399,3 +1399,89 @@ class TestCheckOrphanedCaptures:
         assert result.passed is False
         assert "corrupt lance table" in result.message
         assert result.message.startswith("check failed:")
+
+
+class TestCheckShadowRepo:
+    """States of CaptureDiagnostics.shadow_repo (the 'Shadow repo' doctor check)."""
+
+    def _run(self, tmp_path: Path, config: object, repo: object) -> CheckResult:
+        with (
+            patch(
+                "quarry.shadow.config.ShadowConfig.from_project", return_value=config
+            ),
+            patch("quarry.shadow.repo.ShadowRepo", return_value=repo),
+        ):
+            return CaptureDiagnostics.shadow_repo(str(tmp_path))
+
+    def test_not_configured_when_no_block(self, tmp_path: Path) -> None:
+        result = self._run(tmp_path, None, MagicMock())
+        assert result.name == "Shadow repo"
+        assert result.passed is True
+        assert result.required is False
+        assert "not configured" in result.message
+
+    def test_not_configured_when_disabled(self, tmp_path: Path) -> None:
+        config = MagicMock(enabled=False, remote="")
+        result = self._run(tmp_path, config, MagicMock())
+        assert result.passed is True
+        assert "not configured" in result.message
+
+    def test_parent_tracked_is_required_failure(self, tmp_path: Path) -> None:
+        config = MagicMock(enabled=True, remote="git@h:o/r-quarry.git")
+        repo = MagicMock()
+        repo.parent_tracked_captures.return_value = [Path("session-old.md")]
+        result = self._run(tmp_path, config, repo)
+        assert result.passed is False
+        assert result.required is True
+        assert "git rm --cached" in result.message
+        assert "filter-repo" in result.message
+
+    def test_public_remote_refusal(self, tmp_path: Path) -> None:
+        from quarry.shadow.repo import Visibility
+
+        config = MagicMock(enabled=True, remote="git@h:o/r-quarry.git")
+        repo = MagicMock()
+        repo.parent_tracked_captures.return_value = []
+        repo.remote_visibility.return_value = Visibility.PUBLIC
+        result = self._run(tmp_path, config, repo)
+        assert result.passed is False
+        assert result.required is False
+        assert "PUBLIC" in result.message
+
+    def test_not_bootstrapped(self, tmp_path: Path) -> None:
+        from quarry.shadow.repo import Visibility
+
+        config = MagicMock(enabled=True, remote="git@h:o/r-quarry.git")
+        repo = MagicMock()
+        repo.parent_tracked_captures.return_value = []
+        repo.remote_visibility.return_value = Visibility.PRIVATE
+        repo.is_initialized = False
+        result = self._run(tmp_path, config, repo)
+        assert result.passed is False
+        assert "bootstrapped" in result.message
+
+    def test_dirty_unpushed(self, tmp_path: Path) -> None:
+        from quarry.shadow.repo import Visibility
+
+        config = MagicMock(enabled=True, remote="git@h:o/r-quarry.git")
+        repo = MagicMock()
+        repo.parent_tracked_captures.return_value = []
+        repo.remote_visibility.return_value = Visibility.PRIVATE
+        repo.is_initialized = True
+        repo.has_unpushed_commits.return_value = True
+        result = self._run(tmp_path, config, repo)
+        assert result.passed is False
+        assert "unpushed" in result.message
+
+    def test_in_sync(self, tmp_path: Path) -> None:
+        from quarry.shadow.repo import Visibility
+
+        config = MagicMock(enabled=True, remote="git@h:o/r-quarry.git")
+        repo = MagicMock()
+        repo.parent_tracked_captures.return_value = []
+        repo.remote_visibility.return_value = Visibility.PRIVATE
+        repo.is_initialized = True
+        repo.has_unpushed_commits.return_value = False
+        result = self._run(tmp_path, config, repo)
+        assert result.passed is True
+        assert "in sync" in result.message
