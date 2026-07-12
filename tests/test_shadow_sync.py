@@ -149,6 +149,18 @@ class TestVisibilityGate:
         assert result.aborted_reason == "unverified-visibility"
         repo.push.assert_not_called()
 
+    def test_unknown_visibility_warning_names_real_override(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # The refusal must point users at the real override — the config key
+        # shadow.acknowledge_unverified — not a nonexistent --force flag.
+        sync, repo, _ = _sync(config=_config(ack=False))
+        repo.remote_visibility.return_value = Visibility.UNKNOWN
+        with caplog.at_level("WARNING"):
+            sync.run(fail_open=True)
+        assert "shadow.acknowledge_unverified" in caplog.text
+        assert "--force" not in caplog.text
+
     def test_unknown_visibility_with_ack_pushes(self) -> None:
         sync, repo, _ = _sync(config=_config(ack=True))
         repo.remote_visibility.return_value = Visibility.UNKNOWN

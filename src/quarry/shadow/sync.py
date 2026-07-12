@@ -278,7 +278,7 @@ class CaptureSync:
         if visibility is Visibility.UNKNOWN and not self._config.acknowledge_unverified:
             logger.warning(
                 "shadow: cannot verify the remote is private; set "
-                "shadow.acknowledge_unverified or pass --force",
+                "shadow.acknowledge_unverified in .punt-labs/quarry/config.md",
             )
             return "unverified-visibility"
         return None
