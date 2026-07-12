@@ -18,14 +18,22 @@ class CliRuntime:
 
     @staticmethod
     def auto_workers(settings: Settings) -> int:  # noqa: ARG004
-        """Return 4 for CUDA (GPU), 1 for CPU; fall back to 1 on error."""
+        """Return 4 for CUDA (GPU), 1 for CPU; fall back to 1 on probe failure.
+
+        The fallback covers the expected failure modes of provider detection: a
+        missing optional dependency (``ImportError`` from the lazy import or
+        onnxruntime) and a hardware/provider probe that fails (``OSError`` or
+        ``RuntimeError``).  A misconfigured ``QUARRY_PROVIDER`` (``ValueError``)
+        and any genuinely unexpected error surface rather than being masked by a
+        silent single-worker default.
+        """
         try:
             from quarry.ingestion.provider import ProviderSelection  # noqa: PLC0415
 
             prov = ProviderSelection.from_environment().provider
-            return 4 if prov == "CUDAExecutionProvider" else 1
-        except Exception:  # noqa: BLE001
+        except (ImportError, OSError, RuntimeError):
             return 1
+        return 4 if prov == "CUDAExecutionProvider" else 1
 
     @staticmethod
     def exit_on_ingest_failure(result: dict[str, object] | object) -> None:

@@ -1,7 +1,7 @@
 {
-  "total": 263,
+  "total": 262,
   "by_category": {
-    "noqa": 215,
+    "noqa": 214,
     "type_ignore": 10,
     "pylint_disable": 0,
     "pyright_ignore": 12,
@@ -22,7 +22,7 @@
       "noqa": 2
     },
     "src/quarry/cli_runtime.py": {
-      "noqa": 3
+      "noqa": 2
     },
     "src/quarry/collections.py": {
       "type_ignore": 1
@@ -117,5 +117,5 @@
       "noqa": 1
     }
   },
-  "updated_at": "2026-07-12T03:55:18Z"
+  "updated_at": "2026-07-12T06:27:30Z"
 }

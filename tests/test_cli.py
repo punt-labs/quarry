@@ -4,14 +4,11 @@ import ast
 import json
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+import pytest
 from typer.testing import CliRunner
-
-if TYPE_CHECKING:
-    import pytest
 
 import quarry.__main__ as cli_mod
 from quarry.__main__ import app
@@ -3552,6 +3549,33 @@ class TestAutoWorkers:
 
         with patch.dict(sys.modules, {"quarry.ingestion.provider": None}):
             assert CliRuntime.auto_workers(_mock_settings()) == 1
+
+    def test_returns_1_when_provider_probe_raises_oserror(self) -> None:
+        from quarry.cli_runtime import CliRuntime
+        from quarry.ingestion.provider import ProviderSelection
+
+        with patch.object(
+            ProviderSelection,
+            "from_environment",
+            side_effect=OSError("hardware probe failed"),
+        ):
+            assert CliRuntime.auto_workers(_mock_settings()) == 1
+
+    def test_unexpected_exception_surfaces(self) -> None:
+        # A misconfigured QUARRY_PROVIDER (ValueError) is not an expected probe
+        # failure and must surface, not be masked by the single-worker default.
+        from quarry.cli_runtime import CliRuntime
+        from quarry.ingestion.provider import ProviderSelection
+
+        with (
+            patch.object(
+                ProviderSelection,
+                "from_environment",
+                side_effect=ValueError("Unknown QUARRY_PROVIDER value"),
+            ),
+            pytest.raises(ValueError, match="QUARRY_PROVIDER"),
+        ):
+            CliRuntime.auto_workers(_mock_settings())
 
 
 class TestVersionCmd:
