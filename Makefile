@@ -1,4 +1,4 @@
-.PHONY: help test lint lint-docs type check check-full check-oo check-oo-integrity update-oo correct-oo check-coupling update-coupling check-suppressions update-suppressions report format install build test-wheel clean depot bench-cuda docs docs-clean metrics coverage eval eval-baseline
+.PHONY: help test lint lint-docs type check check-full check-oo audit-oo update-oo check-coupling update-coupling check-suppressions update-suppressions report format install build test-wheel clean depot bench-cuda docs docs-clean metrics coverage eval eval-baseline
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -17,34 +17,36 @@ type: ## Type check with mypy and pyright
 	uv run mypy src/ tests/
 	uv run pyright src/ tests/
 
-check: lint type test check-oo check-suppressions ## Run all quality gates
+# Base-comparison flags injected by CI (e.g. --base-ref <merge-base> --require-base).
+# Empty locally, where the tools default base to `git merge-base origin/main HEAD`.
+OO_BASE ?=
+COUPLING_BASE ?=
+SUPPRESSION_BASE ?=
 
-check-oo: ## OO ratchet — touched files must improve over baseline, never regress
-	uv run python tools/oo_score.py src/quarry/ --check
+check: lint type test check-oo check-coupling check-suppressions ## Run all quality gates
 
-# CI-only: --verify demands baseline == committed code, which holds only AFTER
-# update-oo runs. It cannot join the local `check` chain because the ratchet
-# requires each commit to *improve* a metric, so the improved value diverges
-# from the baseline until update-oo — verify would flag every improving commit
-# as a phantom. CI runs it on the committed, post-update-oo state where code
-# and baseline are in sync (see .github/workflows/lint.yml).
-check-oo-integrity: ## CI phantom guard — committed baseline must match committed code
-	uv run python tools/oo_score.py src/quarry/ --verify
+check-oo: ## OO ratchet — touched files must not regress vs the merge-base baseline
+	uv run python tools/oo_score.py src/quarry/ --check $(OO_BASE)
+
+# CI-only completeness guard: every scored file must be recorded in the committed
+# baseline. Runs in CI on the post-update-oo state (code and baseline in sync);
+# it cannot join the local `check` chain, which requires each commit to improve a
+# metric so the improved value diverges from the baseline until update-oo runs.
+# See .github/workflows/lint.yml.
+audit-oo: ## CI completeness guard — every scored file must be in the baseline
+	uv run python tools/oo_score.py src/quarry/ --audit-completeness
 
 update-oo: ## Update OO baseline after improvements (stage .oo-baseline.json and .oo-audit.jsonl)
-	uv run python tools/oo_score.py src/quarry/ --update
+	uv run python tools/oo_score.py src/quarry/ --update $(OO_BASE)
 
-correct-oo: ## Correct one phantom baseline entry (FILE=path REASON="why")
-	uv run python tools/oo_score.py src/quarry/ --correct "$(FILE)" --reason "$(REASON)"
+check-coupling: ## Coupling ratchet — merge-base scoped, touched files must not regress
+	uv run python tools/oo_coupling.py src/quarry/ --check $(COUPLING_BASE)
 
-check-coupling: ## Coupling/cohesion analysis (informational, not in check chain)
-	uv run python tools/oo_coupling.py src/quarry/ --check
+update-coupling: ## Update coupling baseline (stage .oo-coupling-baseline.json and .oo-coupling-audit.jsonl)
+	uv run python tools/oo_coupling.py src/quarry/ --update $(COUPLING_BASE)
 
-update-coupling: ## Update coupling baseline after improvements
-	uv run python tools/oo_coupling.py src/quarry/ --update
-
-check-suppressions: ## Suppression ratchet — count must not increase
-	uv run python tools/suppression_ratchet.py src/quarry/ --check
+check-suppressions: ## Suppression ratchet — base-commit scoped, count must not increase
+	uv run python tools/suppression_ratchet.py src/quarry/ --check $(SUPPRESSION_BASE)
 
 update-suppressions: ## Update suppression baseline after justified additions
 	uv run python tools/suppression_ratchet.py src/quarry/ --update

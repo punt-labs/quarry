@@ -2,7 +2,7 @@
   "ignores": [
     ".beads/",
     ".claude/",
-    ".punt-labs/ethos/agents/",
+    ".punt-labs/ethos/",
     ".punt-labs/quarry/captures/",
     ".venv/",
     ".tmp/",
