@@ -70,8 +70,9 @@ class SyncFinalizer:
     def _warn_unpushed(results: dict[str, ShadowSyncResult]) -> None:
         """Log each enabled shadow whose captures did not reach the remote.
 
-        The message reflects whether the run committed but could not push or
-        aborted before committing — the latter has nothing committed to push.
+        The message reflects the real state: a run that aborted, a run that
+        committed but could not push, or a run that neither committed nor
+        aborted (nothing to commit or a deferred offline push).
         """
         for collection, result in results.items():
             if not result.pushed:

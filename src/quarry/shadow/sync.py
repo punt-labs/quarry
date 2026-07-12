@@ -70,14 +70,19 @@ class ShadowSyncResult:
     def unpushed_detail(self) -> str:
         """Describe why captures are off the remote (call only when unpushed).
 
-        A committed run whose push failed is genuinely "committed but not
-        pushed"; a run that aborted before commit produced no commit at all, so
-        the committed-but-not-pushed phrasing would misreport it.
+        The wording keys off ``aborted_reason`` first: a non-empty reason means
+        the run stopped deliberately (the gate refused, the shadow was disabled,
+        bootstrap was refused, or an exception aborted it).  ``committed`` only
+        distinguishes the post-commit case — a run that made a local commit but
+        could not push.  A run that neither committed nor aborted simply did not
+        push (nothing to commit, or an offline push that was deferred); calling
+        that "aborted before commit" would misreport it.
         """
-        reason = self.aborted_reason or "push failed"
+        if self.aborted_reason:
+            return f"aborted before commit ({self.aborted_reason})"
         if self.committed:
-            return f"committed but not pushed ({reason})"
-        return f"aborted before commit ({reason})"
+            return "committed but not pushed (push failed)"
+        return "not pushed (nothing to commit or push deferred)"
 
 
 @final

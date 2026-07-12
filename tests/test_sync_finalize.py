@@ -60,6 +60,23 @@ class TestWarnUnpushed:
         assert "aborted before commit" in caplog.text
         assert "stage-failed" in caplog.text
 
+    def test_not_committed_not_aborted_is_not_reported_as_abort(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # A run that neither committed nor aborted (nothing to commit or a
+        # deferred offline push) must not be phrased as an abort.
+        deferred = ShadowSyncResult(
+            pushed=False,
+            committed=False,
+            rescrubbed=0,
+            aborted_reason="",
+            race_failures=(),
+        )
+        with caplog.at_level(logging.WARNING):
+            SyncFinalizer._warn_unpushed({"proj": deferred})
+        assert "aborted before commit" not in caplog.text
+        assert "not pushed" in caplog.text
+
 
 class TestPushShadowsFailOpen:
     def test_registry_error_does_not_propagate(
