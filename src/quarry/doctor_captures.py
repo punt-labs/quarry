@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, final
 
 from quarry.doctor import CheckResult
 from quarry.hooks import WEB_CAPTURES_FALLBACK
+from quarry.shadow.repo import PARENT_TRACKED_REMEDIATION
 
 if TYPE_CHECKING:
     from quarry.shadow.repo import ShadowRepo
@@ -58,15 +59,21 @@ class CaptureDiagnostics:
     def shadow_repo(cwd: str) -> CheckResult:
         """Report the state of the current project's private capture shadow.
 
-        States: not-configured / not-bootstrapped / public-remote-refusal /
-        parent-tracked-captures (an active leak — required on an enabled repo) /
-        dirty (unpushed) / in-sync.
+        States: parent-tracked-captures (an active leak — flagged even when the
+        shadow is not enabled, since a committed capture leaks regardless) /
+        not-configured / not-bootstrapped / public-remote-refusal / dirty
+        (unpushed) / in-sync.
         """
         from quarry.shadow.config import ShadowConfig  # noqa: PLC0415
         from quarry.shadow.repo import ShadowRepo  # noqa: PLC0415
 
         directory = Path(cwd)
+        captures_dir = directory / ".punt-labs" / "quarry" / "captures"
         config = ShadowConfig.from_project(directory)
+        repo = ShadowRepo(captures_dir, directory, config.remote if config else "")
+        leak = CaptureDiagnostics._parent_tracked_leak(repo)
+        if leak is not None:
+            return leak
         if config is None or not config.enabled:
             return CheckResult(
                 name="Shadow repo",
@@ -74,26 +81,31 @@ class CaptureDiagnostics:
                 message="not configured",
                 required=False,
             )
-        captures_dir = directory / ".punt-labs" / "quarry" / "captures"
-        repo = ShadowRepo(captures_dir, directory, config.remote)
         return CaptureDiagnostics._repo_state(repo)
+
+    @staticmethod
+    def _parent_tracked_leak(repo: ShadowRepo) -> CheckResult | None:
+        """Return a required-failure result if the PUBLIC repo tracks captures.
+
+        None means no leak.  This runs before the enable gate because an
+        already-committed capture in the public repo is a leak whether or not
+        the shadow is configured or enabled.
+        """
+        tracked = repo.parent_tracked_captures()
+        if not tracked:
+            return None
+        paths = ", ".join(str(p) for p in tracked)
+        message = f"public repo tracks captures ({paths}). {PARENT_TRACKED_REMEDIATION}"
+        return CheckResult(
+            name="Shadow repo", passed=False, required=True, message=message
+        )
 
     @staticmethod
     def _repo_state(repo: ShadowRepo) -> CheckResult:
         """Map a configured shadow repo's git/gh state to a doctor result."""
-        from quarry.shadow.repo import (  # noqa: PLC0415
-            PARENT_TRACKED_REMEDIATION,
-            Visibility,
-        )
+        from quarry.shadow.repo import Visibility  # noqa: PLC0415
 
         result = partial(CheckResult, name="Shadow repo", required=False)
-        tracked = repo.parent_tracked_captures()
-        if tracked:
-            paths = ", ".join(str(p) for p in tracked)
-            message = (
-                f"public repo tracks captures ({paths}). {PARENT_TRACKED_REMEDIATION}"
-            )
-            return result(passed=False, required=True, message=message)
         if repo.remote_visibility() is Visibility.PUBLIC:
             return result(passed=False, message="remote is PUBLIC — pushes refused")
         if not repo.is_initialized:

@@ -1414,7 +1414,9 @@ class TestCheckShadowRepo:
             return CaptureDiagnostics.shadow_repo(str(tmp_path))
 
     def test_not_configured_when_no_block(self, tmp_path: Path) -> None:
-        result = self._run(tmp_path, None, MagicMock())
+        repo = MagicMock()
+        repo.parent_tracked_captures.return_value = []
+        result = self._run(tmp_path, None, repo)
         assert result.name == "Shadow repo"
         assert result.passed is True
         assert result.required is False
@@ -1422,9 +1424,29 @@ class TestCheckShadowRepo:
 
     def test_not_configured_when_disabled(self, tmp_path: Path) -> None:
         config = MagicMock(enabled=False, remote="")
-        result = self._run(tmp_path, config, MagicMock())
+        repo = MagicMock()
+        repo.parent_tracked_captures.return_value = []
+        result = self._run(tmp_path, config, repo)
         assert result.passed is True
         assert "not configured" in result.message
+
+    def test_parent_tracked_flagged_even_when_disabled(self, tmp_path: Path) -> None:
+        # A capture committed to the PUBLIC repo is a leak regardless of whether
+        # the shadow is enabled; doctor must flag it before the enable gate.
+        config = MagicMock(enabled=False, remote="")
+        repo = MagicMock()
+        repo.parent_tracked_captures.return_value = [Path("session-old.md")]
+        result = self._run(tmp_path, config, repo)
+        assert result.passed is False
+        assert result.required is True
+        assert "git rm --cached" in result.message
+
+    def test_parent_tracked_flagged_with_no_config(self, tmp_path: Path) -> None:
+        repo = MagicMock()
+        repo.parent_tracked_captures.return_value = [Path("session-old.md")]
+        result = self._run(tmp_path, None, repo)
+        assert result.passed is False
+        assert result.required is True
 
     def test_parent_tracked_is_required_failure(self, tmp_path: Path) -> None:
         config = MagicMock(enabled=True, remote="git@h:o/r-quarry.git")
