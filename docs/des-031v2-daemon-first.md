@@ -57,7 +57,7 @@ host" table is now actively misleading.
 
 ### 1.1 "Five engines" is a latent ceiling, not steady state
 
-DESIGN.md:911-921 tabulates seven engine-loading contexts. In practice the
+The v1 ADR (now replaced by this rewrite) tabulated seven engine-loading contexts. In practice the
 **steady state is one resident engine** — the `quarry serve` daemon (~1.6 GB RSS
 with the ONNX model, LanceDB handles, and warmed caches). `mcp-proxy` (~5 MB Go
 binary) and the menubar load **no** engine. The remaining rows are engines that
@@ -165,10 +165,11 @@ optimize, backfill) still has two divergent code paths.
    `Database.connect(...)` (`mcp_server.py:84`) **fresh** per session — a second
    model load and DB handle inside the very process that already holds warmed
    ones.
-2. **`architecture.tex:449` still asserts "The CLI does not use the daemon"** —
-   false already (remote mode), and the exact opposite of the target.
-   `architecture.tex:70` ("Library-first … the core library does all work")
-   describes the as-built inversion this proposal removes.
+2. **`architecture.tex` §CLI-Independence asserted "The CLI does not use the
+   daemon"** — false already (remote mode), and the exact opposite of the
+   target; its §Design-Principles P1 ("Library-first … the core library does
+   all work") described the as-built inversion this proposal removes. (Both
+   corrected in v2-1.)
 3. **CLAUDE.md module table names `quarry-server`** — an entry point that does
    not exist.
 
@@ -716,7 +717,7 @@ its CHANGELOG entry and a real OO improvement on files it touches (ratchet).
 
 | PR | Scope (rollback-coherent unit) | Folds in |
 |----|--------------------------------|----------|
-| **v2-1 (docs/ADR)** | Write DES-031 v2 into DESIGN.md; correct `architecture.tex:70` (Library-first) and `:449` (CLI Independence → CLI-via-daemon); fix CLAUDE.md stale `quarry-server` module row; README "how it works" diagram. Doc-only. | §1.8-2, §1.8-3 |
+| **v2-1 (docs/ADR)** | Write DES-031 v2 into DESIGN.md; correct `architecture.tex` §Design-Principles P1 (Library-first → Daemon-first) and §CLI-Independence (CLI-via-daemon); fix CLAUDE.md stale `quarry-server` module row; README "how it works" diagram. Doc-only. | §1.8-2, §1.8-3 |
 | **v2-2 (contract + FastAPI)** | Adopt **FastAPI** for the daemon app (Starlette-compatible: WS `/mcp`, task system, lifespan, bearer-auth middleware unchanged); `quarry/api/` package: schemas + errors (no hand-rolled route registry, no hand-rolled OpenAPI emitter — FastAPI derives both from the models); rewrite every `http_server.py` handler to type its request/response models; add the `ErrorBody` exception handler (maps FastAPI 422 + typed errors); **add `/v1/optimize` + `/v1/backfill-sessions`**; add `/v1` prefix + `state`/version in `/health`; **remove the `/sync/{task_id}` + `/ingest/{task_id}` alias routes** (http_server.py:1313-1314); FastAPI serves `/openapi.json` + `make openapi` dumps `docs/openapi.json`. **Cross-repo (biff): coordinate with quarry-menubar** — when routes move to `/v1` with Pydantic responses, land the Swift `QuarryClient` base-path/schema update in lockstep (small; it already has a client abstraction and reads `/health`). Closes split-horizon at the daemon. | §1.5, §1.6 gaps, gvr framework/alias/menubar |
 | **v2-3a (supervision + autostart nudge)** | Ship supervised service units (launchd `KeepAlive` / systemd `Restart=always` user unit) and the autostart-nudge helper (kickstart on macOS, `systemctl --user restart` on Linux; warm-budget `/health` poll; not-installed vs down errors). **Lands before v2-3** so no PR ever ships an "assumed present" daemon that is neither supervised nor auto-started. | §3.2, gvr #1/#2 |
 | **v2-3 (QuarryClient + CLI)** | `quarry/client/` (QuarryClient + typed exceptions, using v2-3a's nudge on connection refusal); **delete `RemoteClient`**; remove the in-process engine `else:` branch from all 18 data commands in `__main__.py`; wire commands to QuarryClient; add the CLI-layer error→exit translator; add remote paths for `optimize` + `backfill-sessions`; move `disable`'s chunk purge to a daemon call (§3.1). `serve`/`mcp` keep engine access via a lazy in-body import (§3.1). Rollback unit = CLI behavior. | §1.2, §1.3 (RemoteClient), §3.1 disable, quarry-bxwd |
@@ -798,7 +799,7 @@ This proposal **supersedes DES-031**. It:
   shape, and the OpenAPI doc (§3.3) is the shared contract both clients conform
   to (a concrete payoff of I3);
 - **folds in the incidental defects** — the `/mcp` third-ONNX-session
-  (§1.8-1 → v2-4), the stale `architecture.tex:70/:449` + CLAUDE.md
+  (§1.8-1 → v2-4), the stale `architecture.tex` P1/CLI-Independence + CLAUDE.md
   `quarry-server` docs (§1.8-2/3 → v2-1), the `/ca.crt` route naming and the
   task-status alias routes (§1.6/§3.3 → v2-2), and the hardcoded "Deregister
   failed" `await_task` bug (§3.3, remote_client.py:179,185 → v2-3).

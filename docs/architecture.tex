@@ -64,7 +64,7 @@ implementation): a single \texttt{quarry serve} daemon holds the
 engine, and the CLI, MCP, and library are pure clients that reach it
 over a versioned wire protocol --- the daemon is the intermediary
 service layer.  The prior \emph{projection} strategy (a single core
-library that surfaces import directly, with no intermediary service
+library that the surfaces import directly, with no intermediary service
 layer) described the as-built state DES-031 v2 replaces; today the CLI
 and library still load the engine in-process on local calls, and that
 path is being removed.
@@ -447,7 +447,8 @@ The proxy:
 
 \begin{enumerate}
   \item Reads MCP JSON-RPC from stdin.
-  \item Forwards to \texttt{ws://localhost:8420/mcp} over WebSocket.
+  \item Forwards to \texttt{wss://localhost:8420/mcp} over WebSocket
+    (TLS, pinned CA --- even on localhost).
   \item Relays responses back to stdout.
 \end{enumerate}
 
