@@ -19,6 +19,8 @@ import typer.core
 from rich.console import Console
 from rich.progress import Progress
 
+from quarry.cli_formatters import ResultFormatter
+from quarry.cli_runtime import CliRuntime
 from quarry.collections import CollectionName
 from quarry.config import (
     DEFAULT_PORT,
@@ -77,6 +79,7 @@ _COMMAND_ORDER: list[str] = [
     "enable",
     "disable",
     "optimize",
+    "captures",
     "backfill-sessions",
     "login",
     "logout",
@@ -264,28 +267,6 @@ def _safe_proxy_config() -> dict[str, Any]:
         return {}
 
 
-def _exit_on_ingest_failure(result: dict[str, object] | object) -> None:
-    """Exit 1 if *result* reports errors and zero ingested chunks.
-
-    Both the local pipeline and the remote HTTP response use the same
-    ``{errors, chunks}`` shape.  A successful operation may report errors
-    alongside a positive chunk count (partial success); only the "all or
-    nothing" failure case is promoted to a non-zero exit code here.
-    """
-    if not isinstance(result, dict):
-        return
-    errors_raw = result.get("errors")
-    if not isinstance(errors_raw, list) or not errors_raw:
-        return
-    chunks_raw = result.get("chunks", 0)
-    try:
-        chunks = int(chunks_raw) if isinstance(chunks_raw, int | float | str) else 0
-    except (TypeError, ValueError):
-        chunks = 0
-    if chunks == 0:
-        raise typer.Exit(code=1)
-
-
 @app.command(name="find")
 @_cli_errors
 def find_cmd(
@@ -453,7 +434,7 @@ def ingest_cmd(
         errors: list[str] = result.get("errors", [])  # type: ignore[assignment]
         for err in errors:
             err_console.print(f"  {err}", style="red")
-        _exit_on_ingest_failure(result)
+        CliRuntime.exit_on_ingest_failure(result)
     else:
         file_path = Path(source).resolve()
         if file_path.is_dir():
@@ -479,7 +460,7 @@ def ingest_cmd(
             )
 
         _emit(result, json.dumps(result, indent=2))
-        _exit_on_ingest_failure(result)
+        CliRuntime.exit_on_ingest_failure(result)
 
 
 @app.command(name="show")
@@ -659,7 +640,7 @@ def remember(
     if isinstance(local_errors_raw, list):
         for err_msg in local_errors_raw:
             err_console.print(f"  {err_msg}", style="red")
-    _exit_on_ingest_failure(result)
+    CliRuntime.exit_on_ingest_failure(result)
 
 
 @app.command(name="status")
@@ -929,37 +910,6 @@ class _Deregistration:
         return DeregisterResult(self._collection, len(doc_names), deleted_chunks)
 
 
-def _auto_workers(settings: Settings) -> int:  # noqa: ARG001
-    """Return 4 for CUDA (GPU), 1 for CPU; falls back to 1 on error."""
-    try:
-        from quarry.ingestion.provider import ProviderSelection  # noqa: PLC0415
-
-        prov = ProviderSelection.from_environment().provider
-        return 4 if prov == "CUDAExecutionProvider" else 1
-    except Exception:  # noqa: BLE001
-        return 1
-
-
-def _format_sync_results(json_data: dict[str, dict[str, object]]) -> str:
-    """Format a ``{collection: result}`` mapping as a multi-line summary."""
-    lines: list[str] = []
-    for col, res in json_data.items():
-        ingested = res.get("ingested", 0)
-        refreshed = res.get("refreshed", 0)
-        deleted = res.get("deleted", 0)
-        skipped = res.get("skipped", 0)
-        failed = res.get("failed", 0)
-        line = (
-            f"{col}: {ingested} ingested, {refreshed} refreshed, "
-            f"{deleted} deleted, {skipped} unchanged, {failed} failed"
-        )
-        errors = res.get("errors")
-        if isinstance(errors, list) and errors:
-            line += "\n" + "\n".join(f"  error: {e}" for e in errors)
-        lines.append(line)
-    return "\n".join(lines)
-
-
 @app.command(name="sync")
 @_cli_errors
 def sync_cmd(
@@ -1020,7 +970,9 @@ def sync_cmd(
         return
 
     settings = _resolved_settings()
-    effective_workers = workers if workers is not None else _auto_workers(settings)
+    effective_workers = (
+        workers if workers is not None else CliRuntime.auto_workers(settings)
+    )
     logger.info("Using %d sync workers", effective_workers)
     database = Database.connect(settings.lancedb_path)
 
@@ -1043,7 +995,7 @@ def sync_cmd(
         }
         for col, res in results.items()
     }
-    _emit(json_data, _format_sync_results(json_data))
+    _emit(json_data, ResultFormatter.sync_results(json_data))
 
 
 @app.command(name="enable")
@@ -1448,6 +1400,70 @@ def remote_list_cmd(
     _emit(data, text)
 
 
+captures_app = typer.Typer(
+    help="Manage the private capture shadow repo (<repo> -> <repo>-quarry).",
+    invoke_without_command=True,
+    rich_markup_mode=None,
+)
+app.add_typer(captures_app, name="captures")
+
+
+@captures_app.callback(invoke_without_command=True)
+def captures_callback(ctx: typer.Context) -> None:
+    """Manage the private capture shadow repo."""
+    if ctx.invoked_subcommand is None:
+        err_console.print("Error: specify a subcommand — push, init.", style="red")
+        raise typer.Exit(code=1)
+
+
+@captures_app.command(name="push")
+@_cli_errors
+def captures_push_cmd() -> None:
+    """Re-scrub and push redacted captures to each project's private shadow."""
+    from quarry.shadow import CaptureSync  # noqa: PLC0415
+
+    proxy_config = _safe_proxy_config().get("quarry", {})
+    if isinstance(proxy_config, dict) and "url" in proxy_config:
+        resp = RemoteClient(proxy_config).request("POST", "/captures/push", body={})
+        rendered = ResultFormatter.coerce_results(resp.get("results", resp))
+        _emit(resp, ResultFormatter.captures_push(rendered))
+        return
+
+    settings = _resolved_settings()
+    results = CaptureSync.push_registered(settings, fail_open=True)
+    data = {col: res.to_dict() for col, res in results.items()}
+    _emit(data, ResultFormatter.captures_push(data))
+    if ResultFormatter.has_failures(data):
+        raise typer.Exit(code=1)
+
+
+@captures_app.command(name="init")
+@_cli_errors
+def captures_init_cmd(
+    create: Annotated[
+        bool,
+        typer.Option("--create", help="Create the private remote via gh first"),
+    ] = False,
+) -> None:
+    """Bootstrap the current project's private capture shadow (no push)."""
+    from quarry.shadow import CaptureSync  # noqa: PLC0415
+
+    shadow = CaptureSync.from_directory(Path.cwd())
+    if shadow is None:
+        _emit(
+            {"error": "no shadow config"},
+            "no shadow: block in .punt-labs/quarry/config.md (run 'quarry enable')",
+        )
+        raise typer.Exit(code=1)
+    ok = shadow.bootstrap(create=create)
+    _emit(
+        {"bootstrapped": ok},
+        "shadow ready" if ok else "bootstrap refused — see the logged reason",
+    )
+    if not ok:
+        raise typer.Exit(code=1)
+
+
 list_app = typer.Typer(
     help="List documents, collections, databases, or registrations.",
     invoke_without_command=True,
@@ -1530,14 +1546,6 @@ def list_collections_cmd() -> None:
     _emit(local_cols, format_collections(local_cols))
 
 
-def _format_registrations(regs: list[dict[str, object]]) -> str:
-    if not regs:
-        return "No registered directories."
-    return "\n".join(
-        f"{reg.get('collection', '')}: {reg.get('directory', '')}" for reg in regs
-    )
-
-
 @list_app.command(name="registrations")
 @_cli_errors
 def list_registrations_cmd() -> None:
@@ -1564,7 +1572,7 @@ def list_registrations_cmd() -> None:
             for entry in raw
             if isinstance(entry, dict)
         ]
-        _emit(remote_regs, _format_registrations(remote_regs))
+        _emit(remote_regs, ResultFormatter.registrations(remote_regs))
         return
 
     settings = _resolved_settings()
@@ -1582,17 +1590,7 @@ def list_registrations_cmd() -> None:
         }
         for reg in regs
     ]
-    _emit(json_data, _format_registrations(json_data))
-
-
-def _format_databases(databases: list[dict[str, object]]) -> str:
-    if not databases:
-        return "No databases found."
-    return "\n".join(
-        f"{db_info.get('name', '')}: {db_info.get('document_count', 0)} documents, "
-        f"{db_info.get('size_description', '')}"
-        for db_info in databases
-    )
+    _emit(json_data, ResultFormatter.registrations(json_data))
 
 
 @list_app.command(name="databases")
@@ -1620,13 +1618,13 @@ def list_databases_cmd() -> None:
         remote_dbs: list[dict[str, object]] = [
             dict(entry) for entry in raw if isinstance(entry, dict)
         ]
-        _emit(remote_dbs, _format_databases(remote_dbs))
+        _emit(remote_dbs, ResultFormatter.databases(remote_dbs))
         return
 
     settings = _resolved_settings()
     databases = discover_databases(settings.quarry_root)
     local_dbs: list[dict[str, object]] = [dict(db_info) for db_info in databases]
-    _emit(local_dbs, _format_databases(local_dbs))
+    _emit(local_dbs, ResultFormatter.databases(local_dbs))
 
 
 # ---------------------------------------------------------------------------

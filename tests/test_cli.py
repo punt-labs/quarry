@@ -1851,7 +1851,7 @@ class TestSyncCmd:
             patch("quarry.__main__._resolved_settings", return_value=settings),
             patch("quarry.db.facade.get_db"),
             patch("quarry.__main__.sync_all", return_value=mock_results) as mock_sync,
-            patch("quarry.__main__._auto_workers", return_value=1) as mock_aw,
+            patch("quarry.__main__.CliRuntime.auto_workers", return_value=1) as mock_aw,
         ):
             result = runner.invoke(app, ["sync"])
 
@@ -3513,7 +3513,7 @@ class TestDatabasesCmdSizeFormatting:
 
 class TestAutoWorkers:
     def test_returns_1_when_cpu_provider(self) -> None:
-        from quarry.__main__ import _auto_workers
+        from quarry.cli_runtime import CliRuntime
         from quarry.ingestion.provider import ProviderSelection
 
         with patch.object(
@@ -3521,10 +3521,10 @@ class TestAutoWorkers:
             "from_environment",
             return_value=ProviderSelection("CPUExecutionProvider", "model-cpu.onnx"),
         ):
-            assert _auto_workers(_mock_settings()) == 1
+            assert CliRuntime.auto_workers(_mock_settings()) == 1
 
     def test_returns_4_when_cuda_provider(self) -> None:
-        from quarry.__main__ import _auto_workers
+        from quarry.cli_runtime import CliRuntime
         from quarry.ingestion.provider import ProviderSelection
 
         with patch.object(
@@ -3532,10 +3532,10 @@ class TestAutoWorkers:
             "from_environment",
             return_value=ProviderSelection("CUDAExecutionProvider", "model-cuda.onnx"),
         ):
-            assert _auto_workers(_mock_settings()) == 4
+            assert CliRuntime.auto_workers(_mock_settings()) == 4
 
     def test_returns_1_when_from_environment_raises(self) -> None:
-        from quarry.__main__ import _auto_workers
+        from quarry.cli_runtime import CliRuntime
         from quarry.ingestion.provider import ProviderSelection
 
         with patch.object(
@@ -3543,15 +3543,15 @@ class TestAutoWorkers:
             "from_environment",
             side_effect=RuntimeError("onnxruntime broken"),
         ):
-            assert _auto_workers(_mock_settings()) == 1
+            assert CliRuntime.auto_workers(_mock_settings()) == 1
 
     def test_returns_1_when_onnxruntime_import_fails(self) -> None:
         import sys
 
-        from quarry.__main__ import _auto_workers
+        from quarry.cli_runtime import CliRuntime
 
         with patch.dict(sys.modules, {"quarry.ingestion.provider": None}):
-            assert _auto_workers(_mock_settings()) == 1
+            assert CliRuntime.auto_workers(_mock_settings()) == 1
 
 
 class TestVersionCmd:
