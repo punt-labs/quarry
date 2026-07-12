@@ -67,9 +67,13 @@ No intermediary service layer.
 \subsection{Design Principles}
 
 \begin{enumerate}[label=\textbf{P\arabic*}.]
-  \item \textbf{Library-first.}  The core library does all work.
-    CLI, MCP, HTTP, and plugin surfaces are thin wrappers that
-    resolve settings and delegate.
+  \item \textbf{Daemon-first.}  The \texttt{quarry serve} daemon is
+    the single engine (embedding model, LanceDB, pipeline, sync
+    registry); the CLI, MCP, and library are pure clients over a
+    versioned REST/WebSocket contract (DES-031 v2, ACCEPTED, in
+    implementation).  The prior \emph{library-first} principle --- the
+    core library did all work and the surfaces were thin wrappers ---
+    described the as-built state DES-031 v2 replaces.
   \item \textbf{Local by default.}  Everything runs on the user's
     machine.  No API keys, no cloud accounts.  The embedding model
     downloads once ($\sim$120\,MB, int8 quantized).
@@ -446,12 +450,15 @@ Each WebSocket connection gets its own asyncio Task with a
 \texttt{ContextVar} for database selection (\texttt{\_db\_name}),
 so \texttt{use("work")} in one session does not affect others.
 
-\subsection{CLI Independence}
+\subsection{CLI and the Daemon}
 
-The CLI does not use the daemon.  \texttt{quarry find "margins"}
-loads the embedding model in-process, queries LanceDB, prints
-results, and exits.  LanceDB handles concurrent reads safely, so
-CLI and daemon can access the same database simultaneously.
+Under DES-031 v2 (ACCEPTED, in implementation) the CLI is a thin
+client: it builds a request, calls the daemon over the wire protocol
+via \texttt{QuarryClient}, and renders the response --- it does not
+load the embedding model or open LanceDB in-process.  The prior design
+had \texttt{quarry find "margins"} load the model in-process and query
+LanceDB directly; that local-engine path is removed as the data
+commands migrate to \texttt{QuarryClient}.
 
 % ===================================================================
 \section{MCP Tool Surface}

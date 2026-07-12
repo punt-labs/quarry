@@ -15,7 +15,7 @@ Local semantic search for AI agents and humans. Indexes 20+ document formats, em
 
 - **Package**: `punt-quarry`
 - **CLI**: `quarry`
-- **MCP server**: `quarry-server`
+- **MCP server**: `quarry mcp` (stdio) or `mcp-proxy` → daemon (`/mcp` WebSocket); there is no `quarry-server` entry point
 - **Python**: 3.13+, managed with `uv`
 
 ## Architecture
