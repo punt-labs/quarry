@@ -231,16 +231,17 @@ Once enabled, the captures dir becomes a standalone nested git repo. `quarry cap
 
 ## How It Works
 
-Quarry runs as a daemon — one `quarry serve` process per machine holds the engine (embedding model, LanceDB, pipeline, sync registry). Every interface is a thin client of that daemon over a versioned REST/WebSocket contract:
+Quarry runs as a daemon — one `quarry serve` process per machine holds the engine (embedding model, LanceDB, pipeline, sync registry). Claude Code sessions reach it through mcp-proxy over WebSocket:
 
 ```text
-   CLI (quarry find/ingest/…)  ─┐
-   Library (QuarryClient)       ─┼─► quarry serve ──► ONNX model + LanceDB
-   MCP (Claude Code)            ─┘   (the one engine)   + pipeline + sync
-     via mcp-proxy (~5 MB Go)      loopback / wss:// TLS, pinned CA
+                    stdio                       wss:// (TLS)
+Claude Code <-----------------> mcp-proxy <---------------------> quarry serve
+             MCP JSON-RPC       (~5 MB Go)      pinned CA cert    (one engine)
 ```
 
-One resident engine means the model loads once and state is shared across every CLI call, MCP session, and library caller — no per-invocation ~200 MB reload. All connections use TLS with a self-signed, pinned CA — even on localhost. This daemon-first, thin-client model is specified in [DES-031 v2](DESIGN.md) (ACCEPTED, in implementation); today the CLI and library still load the engine in-process on local calls, and that path is being removed.
+One resident engine means the model loads once and MCP state is shared across sessions — no per-session ~200 MB reload. The mcp-proxy and remote connections use TLS with a self-signed, pinned CA — even on localhost.
+
+The **target** is that *every* interface — CLI, library, and MCP — is a thin client of that one daemon over a versioned REST/WebSocket contract; this daemon-first model is specified in [DES-031 v2](DESIGN.md) (ACCEPTED, in implementation). Today the CLI and library still load the engine in-process on local calls, and MCP can fall back to an in-process `quarry mcp` when mcp-proxy is absent; those local-engine paths are being removed.
 
 `quarry install` downloads mcp-proxy (SHA256-verified, correct platform) and configures MCP clients.
 

@@ -59,10 +59,15 @@ Quarry is a local semantic search engine.  It ingests documents in
 LanceDB, and serves semantic search to AI agents (Claude Code, Claude
 Desktop) and a macOS menu bar app.
 
-The system follows the Punt Labs projection strategy: a single core
-library projects outward through four thin adapter layers.  Each
-surface imports core functions and calls them with resolved arguments.
-No intermediary service layer.
+The system is \textbf{daemon-first} (DES-031 v2, ACCEPTED, in
+implementation): a single \texttt{quarry serve} daemon holds the
+engine, and the CLI, MCP, and library are pure clients that reach it
+over a versioned wire protocol --- the daemon is the intermediary
+service layer.  The prior \emph{projection} strategy (a single core
+library that surfaces import directly, with no intermediary service
+layer) described the as-built state DES-031 v2 replaces; today the CLI
+and library still load the engine in-process on local calls, and that
+path is being removed.
 
 \subsection{Design Principles}
 

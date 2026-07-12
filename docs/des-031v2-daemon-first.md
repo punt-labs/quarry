@@ -1,6 +1,6 @@
 # DES-031 v2 — Daemon-First Architecture: One Engine, Formal Wire Protocol, Pure Clients
 
-**Status:** PROPOSED (revises DES-031, DESIGN.md:897)
+**Status:** ACCEPTED 2026-07-12 (revises DES-031, DESIGN.md:897; not yet implemented — v2-2…v2-6 build it)
 **Date:** 2026-07-12
 **Author:** rmh
 **Supersedes:** DES-031 ("Engine-First Architecture with Thin Interfaces"). This
