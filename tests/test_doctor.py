@@ -1475,7 +1475,7 @@ class TestCheckShadowRepo:
         assert "cannot verify parent-tracked captures" in result.message
 
     def test_public_remote_refusal(self, tmp_path: Path) -> None:
-        from quarry.shadow.repo import Visibility
+        from quarry.shadow.visibility import Visibility
 
         config = MagicMock(enabled=True, remote="git@h:o/r-quarry.git")
         repo = MagicMock()
@@ -1487,7 +1487,7 @@ class TestCheckShadowRepo:
         assert "PUBLIC" in result.message
 
     def test_not_bootstrapped(self, tmp_path: Path) -> None:
-        from quarry.shadow.repo import Visibility
+        from quarry.shadow.visibility import Visibility
 
         config = MagicMock(enabled=True, remote="git@h:o/r-quarry.git")
         repo = MagicMock()
@@ -1499,7 +1499,7 @@ class TestCheckShadowRepo:
         assert "bootstrapped" in result.message
 
     def test_dirty_unpushed(self, tmp_path: Path) -> None:
-        from quarry.shadow.repo import Visibility
+        from quarry.shadow.visibility import Visibility
 
         config = MagicMock(enabled=True, remote="git@h:o/r-quarry.git")
         repo = MagicMock()
@@ -1512,7 +1512,7 @@ class TestCheckShadowRepo:
         assert "unpushed" in result.message
 
     def test_in_sync(self, tmp_path: Path) -> None:
-        from quarry.shadow.repo import Visibility
+        from quarry.shadow.visibility import Visibility
 
         config = MagicMock(enabled=True, remote="git@h:o/r-quarry.git")
         repo = MagicMock()
@@ -1523,3 +1523,17 @@ class TestCheckShadowRepo:
         result = self._run(tmp_path, config, repo)
         assert result.passed is True
         assert "in sync" in result.message
+
+    def test_not_in_git_repo_is_informational_not_required(
+        self, tmp_path: Path
+    ) -> None:
+        # Doctor run outside any git work tree: no parent repo a capture could
+        # leak into, so this is informational (passes), never a required
+        # failure — and the leak enumeration is never even attempted.
+        repo = MagicMock()
+        repo.parent_in_work_tree.return_value = False
+        result = self._run(tmp_path, None, repo)
+        assert result.passed is True
+        assert result.required is False
+        assert "not in a git repo" in result.message
+        repo.parent_tracked_captures.assert_not_called()

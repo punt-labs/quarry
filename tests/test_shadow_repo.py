@@ -14,9 +14,10 @@ import pytest
 
 from quarry.shadow._git import GitRunner
 from quarry.shadow.config import ShadowConfig
-from quarry.shadow.repo import PARENT_TRACKED_REMEDIATION, ShadowRepo, Visibility
+from quarry.shadow.repo import PARENT_TRACKED_REMEDIATION, ShadowRepo
 from quarry.shadow.rescrub import CaptureReScrubber
 from quarry.shadow.sync import CaptureSync
+from quarry.shadow.visibility import Visibility
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -98,15 +99,40 @@ class TestBootstrapGates:
     def test_parent_tracked_captures_raises_on_enumeration_failure(
         self, tmp_path: Path
     ) -> None:
-        # A non-zero git ls-files is an enumeration FAILURE, not "tracks none":
-        # parent_tracked_captures raises (fail-CLOSED) rather than returning [].
+        # INSIDE a work tree a non-zero git ls-files is an enumeration FAILURE,
+        # not "tracks none": parent_tracked_captures raises (fail-CLOSED) rather
+        # than returning []. rev-parse reports the work tree; ls-files fails.
         public = _public_repo(tmp_path)
         repo = _repo(public)
+
+        def fake_run(runner: GitRunner, argv: list[str]) -> tuple[int, str]:
+            if "rev-parse" in argv:
+                return 0, "true"
+            return 1, ""  # ls-files fails inside the work tree
+
         with (
-            patch.object(GitRunner, "run", return_value=(1, "")),
+            patch.object(GitRunner, "run", autospec=True, side_effect=fake_run),
             pytest.raises(RuntimeError, match="git ls-files exited 1"),
         ):
             repo.parent_tracked_captures()
+
+    def test_parent_tracked_captures_benign_outside_work_tree(
+        self, tmp_path: Path
+    ) -> None:
+        # Outside a git work tree there is no parent checkout that could track a
+        # capture, so enumeration is benign: return [] rather than raising, and
+        # never even reach ls-files. rev-parse reports "not a work tree"; the
+        # ls-files stub would report a capture if it were (wrongly) reached.
+        repo = _repo(tmp_path)
+
+        def fake_run(runner: GitRunner, argv: list[str]) -> tuple[int, str]:
+            if "rev-parse" in argv:
+                return 128, ""  # git: fatal: not a git repository
+            return 0, "session-x.md"  # ls-files must never be reached
+
+        with patch.object(GitRunner, "run", autospec=True, side_effect=fake_run):
+            assert repo.parent_in_work_tree() is False
+            assert repo.parent_tracked_captures() == []
 
     def test_bootstrap_refuses_on_enumeration_failure(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture

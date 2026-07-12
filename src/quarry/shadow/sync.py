@@ -18,8 +18,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.shadow.config import ShadowConfig
-from quarry.shadow.repo import ShadowRepo, Visibility
+from quarry.shadow.repo import ShadowRepo
 from quarry.shadow.rescrub import CaptureReScrubber
+from quarry.shadow.visibility import Visibility
 
 if TYPE_CHECKING:
     from quarry.config import Settings

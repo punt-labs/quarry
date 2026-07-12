@@ -18,14 +18,13 @@ around the commit-time re-scrub gate.
 
 from __future__ import annotations
 
-import json
 import logging
-from enum import Enum
 from pathlib import Path
 from typing import Self, final
 
 from quarry.shadow._git import GitRunner
 from quarry.shadow.config import ShadowConfig
+from quarry.shadow.visibility import Visibility
 
 logger = logging.getLogger(__name__)
 
@@ -46,24 +45,6 @@ PARENT_TRACKED_REMEDIATION = (
     "history purge (git filter-repo or BFG) plus a force-push, coordinated with "
     "the repo owner (force-push rewrites shared history)."
 )
-
-
-class Visibility(Enum):
-    """The verified visibility of the shadow remote."""
-
-    PRIVATE = "private"
-    PUBLIC = "public"
-    UNKNOWN = "unknown"
-
-    @classmethod
-    def from_gh(cls, value: str) -> Visibility:
-        """Map a ``gh repo view`` visibility string to an enum member."""
-        normalized = value.strip().lower()
-        if normalized == "public":
-            return cls.PUBLIC
-        if normalized == "private":
-            return cls.PRIVATE
-        return cls.UNKNOWN
 
 
 @final
@@ -121,25 +102,52 @@ class ShadowRepo:
         probe = str(Path(self._captures_rel()) / "session-probe.md")
         return self._parent_git.ok(["git", "check-ignore", "--", probe])
 
+    def parent_in_work_tree(self) -> bool:
+        """Return whether the parent path sits inside a git work tree.
+
+        Distinguishes a benign no-work-tree case (``quarry doctor`` run outside
+        any repo: no parent checkout can track a capture) from a git error
+        INSIDE a real work tree (fail-CLOSED: tracked captures could exist).
+        ``git rev-parse --is-inside-work-tree`` prints ``true`` only within a
+        work tree; a non-zero exit (no repo) or ``false`` (a bare repo or a
+        ``.git`` dir) both mean no parent checkout exists to leak into.
+        """
+        code, out = self._parent_git.run(["git", "rev-parse", "--is-inside-work-tree"])
+        return code == 0 and out == "true"
+
+    @staticmethod
+    def _ls_files(runner: GitRunner, argv: list[str], label: str) -> str:
+        """Return ``git ls-files`` stdout, raising (fail-CLOSED) on non-zero exit.
+
+        A non-zero exit is an enumeration FAILURE, not "nothing to report":
+        paths git could not enumerate may exist, so raising lets the leak gate
+        refuse rather than reading a blind empty result as verified-clean.
+        """
+        code, out = runner.run(argv)
+        if code != 0:
+            msg = f"{label} enumeration failed: git ls-files exited {code}"
+            raise RuntimeError(msg)
+        return out
+
     def parent_tracked_captures(self) -> list[Path]:
         """Return capture paths the parent public repo already TRACKS (B3).
 
         A non-empty result means already-committed captures live in the public
         repo's index/history; bootstrap refuses and doctor flags this.
 
-        A non-zero ``git ls-files`` exit is an enumeration FAILURE, not "the
-        parent tracks nothing": tracked captures may exist that git could not
-        report, so raising (fail-CLOSED) lets the bootstrap gate refuse and
-        doctor flag an unverifiable state rather than reading a blind
-        enumeration as clean and initializing a shadow atop leaked captures.  A
-        zero exit with empty output genuinely means the parent tracks none.
+        Outside a git work tree there is no parent checkout that could track a
+        capture, so enumeration is benign and returns ``[]``.  INSIDE a work
+        tree a failed ``git ls-files`` fails closed via ``_ls_files`` — a blind
+        enumeration is never read as "the parent tracks nothing".  A zero exit
+        with empty output genuinely means the parent tracks none.
         """
-        code, out = self._parent_git.run(
-            ["git", "ls-files", "--", self._captures_rel()]
+        if not self.parent_in_work_tree():
+            return []
+        out = self._ls_files(
+            self._parent_git,
+            ["git", "ls-files", "--", self._captures_rel()],
+            "parent capture",
         )
-        if code != 0:
-            msg = f"parent capture enumeration failed: git ls-files exited {code}"
-            raise RuntimeError(msg)
         return [Path(line) for line in out.splitlines() if line]
 
     def bootstrap(self) -> bool:
@@ -219,18 +227,17 @@ class ShadowRepo:
         scrubber never alters leading/trailing whitespace, so a fixed point
         stays a fixed point and PII (never whitespace) stays detectable.
 
-        A non-zero ``git ls-files`` exit is an enumeration FAILURE, not "no
-        captures": staged blobs may exist that git could not report, so raising
-        (fail-CLOSED) aborts the gate before commit rather than letting an empty
-        result pass verification vacuously while poisoned blobs sit staged.  A
-        zero exit with empty output genuinely means an empty index -> ``{}``.  A
-        path ``ls-files`` DOES report is in the index; ``_staged_blob`` likewise
-        raises rather than dropping one ``git show`` cannot read.
+        A failed ``git ls-files`` fails closed via ``_ls_files`` so poisoned
+        blobs are never read as an empty index.  A zero exit with empty output
+        genuinely means an empty index -> ``{}``; a path ``ls-files`` reports is
+        in the index, and ``_staged_blob`` likewise raises rather than dropping
+        one ``git show`` cannot read.
         """
-        code, out = self._repo_git.run(["git", "ls-files", "-z", "--", "session-*.md"])
-        if code != 0:
-            msg = f"staged capture enumeration failed: git ls-files exited {code}"
-            raise RuntimeError(msg)
+        out = self._ls_files(
+            self._repo_git,
+            ["git", "ls-files", "-z", "--", "session-*.md"],
+            "staged capture",
+        )
         return {rel: self._staged_blob(rel) for rel in filter(None, out.split("\0"))}
 
     def _staged_blob(self, rel: str) -> str:
@@ -283,7 +290,7 @@ class ShadowRepo:
         )
         if code != 0 or not out:
             return Visibility.UNKNOWN
-        return self._parse_visibility(out)
+        return Visibility.from_json(out)
 
     @staticmethod
     def _gh_target(remote: str) -> str:
@@ -305,15 +312,6 @@ class ShadowRepo:
         if len(parts) < 3:
             return remote
         return "/".join(parts[-3:])
-
-    @staticmethod
-    def _parse_visibility(gh_json: str) -> Visibility:
-        """Map a ``gh repo view --json visibility`` payload to a Visibility."""
-        try:
-            data = json.loads(gh_json)
-        except json.JSONDecodeError:
-            return Visibility.UNKNOWN
-        return Visibility.from_gh(str(data.get("visibility", "")))
 
     def create_remote(self) -> bool:
         """Create the shadow as a PRIVATE repo via ``gh`` and verify visibility."""

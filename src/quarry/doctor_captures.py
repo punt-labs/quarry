@@ -12,6 +12,7 @@ from quarry.hooks import WEB_CAPTURES_FALLBACK
 from quarry.shadow.repo import PARENT_TRACKED_REMEDIATION
 
 if TYPE_CHECKING:
+    from quarry.shadow.config import ShadowConfig
     from quarry.shadow.repo import ShadowRepo
 
 
@@ -59,8 +60,9 @@ class CaptureDiagnostics:
     def shadow_repo(cwd: str) -> CheckResult:
         """Report the state of the current project's private capture shadow.
 
-        States: parent-tracked-captures (an active leak — flagged even when the
-        shadow is not enabled, since a committed capture leaks regardless) /
+        States: not-in-a-git-repo (informational — no parent repo to leak into)
+        / parent-tracked-captures (an active leak — flagged even when the shadow
+        is not enabled, since a committed capture leaks regardless) /
         not-configured / not-bootstrapped / public-remote-refusal / dirty
         (unpushed) / in-sync.
         """
@@ -71,9 +73,33 @@ class CaptureDiagnostics:
         captures_dir = directory / ".punt-labs" / "quarry" / "captures"
         config = ShadowConfig.from_project(directory)
         repo = ShadowRepo(captures_dir, directory, config.remote if config else "")
+        if not repo.parent_in_work_tree():
+            return CaptureDiagnostics._not_in_repo()
         leak = CaptureDiagnostics._parent_tracked_leak(repo)
         if leak is not None:
             return leak
+        return CaptureDiagnostics._configured_state(repo, config)
+
+    @staticmethod
+    def _not_in_repo() -> CheckResult:
+        """Report the informational no-parent-repo state (never a leak).
+
+        Outside a git work tree there is no public repo a capture could leak
+        into, so the leak gate is vacuous: a failed ``git ls-files`` here means
+        "there is no repo", not an unverifiable tracked-capture state.  This is
+        informational and passes — never the required failure that an in-repo
+        enumeration error (where a leak COULD exist) must raise.
+        """
+        return CheckResult(
+            name="Shadow repo",
+            passed=True,
+            message="not in a git repo",
+            required=False,
+        )
+
+    @staticmethod
+    def _configured_state(repo: ShadowRepo, config: ShadowConfig | None) -> CheckResult:
+        """Map the enable gate to a result: not-configured, else the git/gh state."""
         if config is None or not config.enabled:
             return CheckResult(
                 name="Shadow repo",
@@ -117,7 +143,7 @@ class CaptureDiagnostics:
     @staticmethod
     def _repo_state(repo: ShadowRepo) -> CheckResult:
         """Map a configured shadow repo's git/gh state to a doctor result."""
-        from quarry.shadow.repo import Visibility  # noqa: PLC0415
+        from quarry.shadow.visibility import Visibility  # noqa: PLC0415
 
         result = partial(CheckResult, name="Shadow repo", required=False)
         if repo.remote_visibility() is Visibility.PUBLIC:

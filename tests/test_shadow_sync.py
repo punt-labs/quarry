@@ -10,8 +10,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from quarry.shadow.config import ShadowConfig
-from quarry.shadow.repo import Visibility
 from quarry.shadow.sync import CaptureSync, ShadowSyncResult
+from quarry.shadow.visibility import Visibility
 
 
 def _config(*, enabled: bool = True, ack: bool = False) -> ShadowConfig:
