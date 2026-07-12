@@ -14,7 +14,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # fetch-depth: 0 is load-bearing for the ratchets: the OO, coupling, and
+      # suppression checks all resolve a merge-base and read the base-commit
+      # baseline blob; a shallow clone has neither the base commit nor HEAD~1.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           enable-cache: true
@@ -25,8 +30,33 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy src/ tests/
-      # Phantom guard: the committed baseline must match the committed code.
-      # Runs only in CI (post-update-oo state), never in the local `check`
-      # chain — see the check-oo-integrity comment in the Makefile.
-      - name: OO baseline integrity
-        run: make check-oo-integrity
+      # Completeness guard: every scored file must be recorded in the committed
+      # baseline. Runs on the committed, post-update-oo state where code and
+      # baseline are in sync — see the audit-oo comment in the Makefile.
+      - name: OO baseline completeness
+        run: make audit-oo
+      # PR event: score code-at-HEAD against the baseline committed at the
+      # merge-base (the whole PR range). --require-base AND the explicit fetch are
+      # both mandatory — with either missing, an unfetched/unresolvable base would
+      # fail open and let a regression pass.
+      - name: Ratchets (PR — merge-base compare)
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags origin "${{ github.base_ref }}"
+          BASE="$(git merge-base "origin/${{ github.base_ref }}" HEAD)"
+          if [ -z "${BASE}" ]; then
+            echo "FATAL: cannot resolve merge-base with origin/${{ github.base_ref }}" >&2
+            exit 1
+          fi
+          make check-oo OO_BASE="--base-ref ${BASE} --require-base"
+          make check-coupling COUPLING_BASE="--base-ref ${BASE} --require-base"
+          make check-suppressions SUPPRESSION_BASE="--base-ref ${BASE} --require-base"
+      # push:[main] after a merge: HEAD~1 is the squash's merge-base, so the
+      # ratchets re-run on merged reality — the tripwire that catches a red main
+      # from a bad squash or a direct push.
+      - name: Ratchets (main — post-merge tripwire)
+        if: github.event_name == 'push'
+        run: |
+          make check-oo OO_BASE="--base-ref HEAD~1 --require-base"
+          make check-coupling COUPLING_BASE="--base-ref HEAD~1 --require-base"
+          make check-suppressions SUPPRESSION_BASE="--base-ref HEAD~1 --require-base"
