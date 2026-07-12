@@ -4,9 +4,10 @@
 ``origin`` is the per-project private shadow ``<repo>-quarry``.  Operation is
 fail-open at its boundary: a ``git``/``gh`` failure returns ``False``/``UNKNOWN``/
 an empty list rather than raising, so a push problem never blocks a session.  The
-one fail-CLOSED exception is ``staged_captures``: a path ``git ls-files`` reports
-but ``git show`` cannot read raises, so the re-scrub gate aborts rather than
-committing a blob it never verified.  The security-load-bearing choices — the
+one fail-CLOSED exception is ``staged_captures``: a failed ``git ls-files``
+enumeration, or a path it reports that ``git show`` cannot read, raises so the
+re-scrub gate aborts rather than committing a blob it never verified.  The
+security-load-bearing choices — the
 allowlist ``.gitignore``, the refusal of a parent-tracked or non-ignored captures
 dir, and visibility enforcement — live here; ``CaptureSync`` sequences them
 around the commit-time re-scrub gate.
@@ -200,13 +201,18 @@ class ShadowRepo:
         scrubber never alters leading/trailing whitespace, so a fixed point
         stays a fixed point and PII (never whitespace) stays detectable.
 
-        A failed ``git ls-files`` yields ``out == ""`` -> an empty mapping: an
-        empty index has nothing to verify, so an empty result is correct.  But a
-        path ``ls-files`` DOES report is in the index; ``_staged_blob`` raises
-        (fail-CLOSED) rather than dropping one ``git show`` cannot read, so the
-        re-scrub gate aborts before committing an un-verified blob.
+        A non-zero ``git ls-files`` exit is an enumeration FAILURE, not "no
+        captures": staged blobs may exist that git could not report, so raising
+        (fail-CLOSED) aborts the gate before commit rather than letting an empty
+        result pass verification vacuously while poisoned blobs sit staged.  A
+        zero exit with empty output genuinely means an empty index -> ``{}``.  A
+        path ``ls-files`` DOES report is in the index; ``_staged_blob`` likewise
+        raises rather than dropping one ``git show`` cannot read.
         """
-        _, out = self._repo_git.run(["git", "ls-files", "-z", "--", "session-*.md"])
+        code, out = self._repo_git.run(["git", "ls-files", "-z", "--", "session-*.md"])
+        if code != 0:
+            msg = f"staged capture enumeration failed: git ls-files exited {code}"
+            raise RuntimeError(msg)
         return {rel: self._staged_blob(rel) for rel in filter(None, out.split("\0"))}
 
     def _staged_blob(self, rel: str) -> str:

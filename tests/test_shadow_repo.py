@@ -223,6 +223,69 @@ class TestStagedBlobFailClosed:
         assert result.committed is False
 
 
+def _fail_ls_files(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the capture-enumerating ``git ls-files`` exit non-zero.
+
+    Simulates a git-level enumeration failure (repo corruption, transient
+    error) while every other git/gh call runs for real, so an enumeration
+    failure never masquerades as "no captures staged".
+    """
+    original = GitRunner.run
+
+    def fake_run(self: GitRunner, argv: list[str]) -> tuple[int, str]:
+        if argv[:3] == ["git", "ls-files", "-z"]:
+            return 1, ""
+        return original(self, argv)
+
+    monkeypatch.setattr(GitRunner, "run", fake_run)
+
+
+class TestStagedCapturesEnumerationFailClosed:
+    def test_staged_captures_raises_when_ls_files_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A failed enumeration is not "no captures": staged blobs may exist that
+        # git could not report, so staged_captures raises rather than returning
+        # an empty mapping that would pass verification vacuously.
+        public = _public_repo(tmp_path)
+        repo = _repo(public)
+        repo.bootstrap()
+        (repo.captures_dir / "session-x.md").write_text("clean\n")
+        repo.stage()
+        _fail_ls_files(monkeypatch)
+        with pytest.raises(RuntimeError):
+            repo.staged_captures()
+
+    def test_zero_capture_enumeration_returns_empty(self, tmp_path: Path) -> None:
+        # ls-files succeeding with no captures (exit 0, empty) is the safe case:
+        # an empty index has nothing to verify, so an empty mapping is correct.
+        public = _public_repo(tmp_path)
+        repo = _repo(public)
+        repo.bootstrap()
+        assert repo.staged_captures() == {}
+
+    def test_enumeration_failure_aborts_capture_sync(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A failed enumeration must abort the gate fail-closed: no commit, no
+        # push — never a vacuous pass that ships blobs the guard never checked.
+        public = _public_repo(tmp_path)
+        repo = _repo(public)
+        repo.bootstrap()
+        (repo.captures_dir / "session-x.md").write_text("clean capture\n")
+        repo.stage()
+        _fail_ls_files(monkeypatch)
+        config = ShadowConfig(
+            enabled=True,
+            remote="git@h:o/r-quarry.git",
+            acknowledge_unverified=True,
+        )
+        sync = CaptureSync(public, config, repo, CaptureReScrubber(repo.captures_dir))
+        result = sync.run(fail_open=True)
+        assert result.pushed is False
+        assert result.committed is False
+
+
 class TestHasUnpushedCommits:
     def test_local_commit_without_origin_main_is_unpushed(self, tmp_path: Path) -> None:
         # After bootstrap there is no origin/main (never pushed). A local commit
