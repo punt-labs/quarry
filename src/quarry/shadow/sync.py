@@ -77,14 +77,14 @@ class ShadowSyncResult:
         since it DID commit.  A non-empty ``aborted_reason`` WITHOUT a commit
         means the run stopped before committing (the gate refused, the shadow
         was disabled, bootstrap was refused, or an exception aborted it).  A run
-        that neither committed nor aborted simply did not push — nothing to
-        commit, or an offline push that was deferred.
+        that neither committed nor aborted reports only that captures are not
+        pushed; ShadowRepo.has_unpushed_commits() via ``quarry doctor`` owns it.
         """
         if self.committed:
             return f"committed but not pushed ({self.aborted_reason or 'push failed'})"
         if self.aborted_reason:
             return f"aborted before commit ({self.aborted_reason})"
-        return "not pushed (nothing to commit or push deferred)"
+        return "captures not pushed; run `quarry doctor` for shadow state"
 
 
 @final

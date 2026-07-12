@@ -274,7 +274,7 @@ class TestUnpushedDetail:
         )
         detail = result.unpushed_detail()
         assert "aborted before commit" not in detail
-        assert detail == "not pushed (nothing to commit or push deferred)"
+        assert detail == "captures not pushed; run `quarry doctor` for shadow state"
 
 
 class TestResultSerialization:
