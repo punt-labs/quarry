@@ -80,16 +80,22 @@ auto_capture:
   session_sync: true
   web_fetch: true
   compaction: true
+# shadow:                          # push redacted captures to a PRIVATE shadow repo
+#   enabled: false                 # opt-in network+security action, off by default
+#   remote: ""                     # empty -> derive <origin>-quarry from origin
+#   acknowledge_unverified: false  # push even when gh cannot confirm private
 ---
 
 # Quarry Project Configuration
 
-This file controls quarry's passive knowledge capture for this project.
-Set any field to `false` to disable that capture type.
+Controls quarry's passive knowledge capture. Set any field to `false` to disable
+that capture type; uncomment `shadow` to move redacted captures off the public
+repo into a per-project private shadow (`<repo>` -> `<repo>-quarry`).
 
 - `session_sync`: auto-index project files on session start
 - `web_fetch`: auto-ingest URLs fetched during research
 - `compaction`: capture session transcripts before context compaction
+- `shadow`: pre-create the private repo, then set `enabled: true`
 """
 
 
@@ -252,10 +258,8 @@ def _resolve_or_register(
 def _bootstrap_ethos_memory() -> tuple[list[str], list[str], list[str], bool]:
     """Create quarry.yaml ext files and write session_context.
 
-    Unconditionally reads the global identities directory. Repo-level
-    identities are read-only and must not be modified.
-
-    Returns (created, updated, already_set, skipped) where skipped is
+    Reads only the global identities directory (repo-level identities are
+    read-only). Returns (created, updated, already_set, skipped); skipped is
     True when the global identities directory does not exist.
     """
     from quarry.doctor import (  # noqa: PLC0415
@@ -268,13 +272,11 @@ def _bootstrap_ethos_memory() -> tuple[list[str], list[str], list[str], bool]:
     created: list[str] = []
     updated: list[str] = []
     already_set: list[str] = []
-
     for identity_file in sorted(_GLOBAL_IDENTITIES.glob("*.yaml")):
         handle = identity_file.stem
         ext_dir = _GLOBAL_IDENTITIES / f"{handle}.ext"
         ext_dir.mkdir(exist_ok=True)
         quarry_yaml = ext_dir / "quarry.yaml"
-
         if not quarry_yaml.exists():
             quarry_yaml.write_text(
                 f"memory_collection: memory-{handle}\n",
@@ -296,11 +298,7 @@ def _bootstrap_ethos_memory() -> tuple[list[str], list[str], list[str], bool]:
 
 
 def _write_project_config(directory: Path) -> str:
-    """Write .punt-labs/quarry/config.md atomically. Idempotent: no overwrite.
-
-    Uses O_CREAT | O_EXCL to avoid TOCTOU races.
-    Returns the config file path as a string.
-    """
+    """Write config.md atomically (O_CREAT|O_EXCL, no overwrite); return its path."""
     config_dir = directory / ".punt-labs" / "quarry"
     config_dir.mkdir(parents=True, exist_ok=True)
     config_path = config_dir / "config.md"

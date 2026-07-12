@@ -15,7 +15,6 @@ from quarry.doctor import (
     _check_fts_health,
     _check_imports,
     _check_local_ocr,
-    _check_orphaned_captures,
     _check_provider,
     _check_python_version,
     _check_storage,
@@ -30,6 +29,7 @@ from quarry.doctor import (
     check_environment,
     run_install,
 )
+from quarry.doctor_captures import CaptureDiagnostics
 from quarry.gpu_status import GpuStatus
 
 MP = pytest.MonkeyPatch
@@ -1346,7 +1346,7 @@ class TestCheckOrphanedCaptures:
             {"collection": name} for name in collections
         ]
         with patch.object(Database, "connect", return_value=facade):
-            return _check_orphaned_captures(registry_path, db_path)
+            return CaptureDiagnostics.orphaned(registry_path, db_path)
 
     def test_web_captures_fallback_not_flagged(self, tmp_path: Path) -> None:
         """web-captures is the base-less fallback bucket -- never orphaned."""
@@ -1394,7 +1394,7 @@ class TestCheckOrphanedCaptures:
 
         boom = RuntimeError("corrupt lance table")
         with patch.object(Database, "connect", side_effect=boom):
-            result = _check_orphaned_captures(registry_path, db_path)
+            result = CaptureDiagnostics.orphaned(registry_path, db_path)
 
         assert result.passed is False
         assert "corrupt lance table" in result.message
