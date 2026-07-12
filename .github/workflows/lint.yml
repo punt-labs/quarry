@@ -58,5 +58,5 @@ jobs:
         if: github.event_name == 'push'
         run: |
           make check-oo OO_BASE="--base-ref HEAD~1 --require-base"
-          make check-coupling COUPLING_BASE="--base-ref HEAD~1 --require-base"
+          make check-coupling COUPLING_BASE="--base-ref HEAD~1 --require-base --tripwire"
           make check-suppressions SUPPRESSION_BASE="--base-ref HEAD~1 --require-base"

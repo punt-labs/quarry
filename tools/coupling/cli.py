@@ -34,6 +34,7 @@ class Options:
     require_base: bool
     allow_ci_write: bool
     source: str | None
+    tripwire: bool
 
     @classmethod
     def parse(cls, argv: list[str] | None = None) -> Self:
@@ -53,6 +54,7 @@ class Options:
             require_base=bool(ns.require_base),
             allow_ci_write=bool(ns.allow_ci_write),
             source=ns.source,
+            tripwire=bool(ns.tripwire),
         )
 
     @staticmethod
@@ -81,6 +83,12 @@ class Options:
             "--allow-ci-write", action="store_true", help="permit writes under CI"
         )
         parser.add_argument("--source", metavar="REF", help="audit source (PR/bead)")
+        parser.add_argument(
+            "--tripwire",
+            action="store_true",
+            help="post-merge push:[main] mode: an absent base baseline is the "
+            "one-time adoption merge and bootstrap-passes",
+        )
         return parser
 
 
@@ -131,7 +139,10 @@ class Cli:
         writer = CouplingWriter(self._root, self._git)
         if opts.check:
             return ratchet.check(
-                scorer, base_ref=opts.base_ref, require_base=opts.require_base
+                scorer,
+                base_ref=opts.base_ref,
+                require_base=opts.require_base,
+                tripwire=opts.tripwire,
             )
         if opts.rebaseline:
             return writer.rebaseline(

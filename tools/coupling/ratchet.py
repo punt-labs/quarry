@@ -43,7 +43,12 @@ class CouplingRatchet:
         return self
 
     def check(
-        self, scorer: CouplingScorer, *, base_ref: str | None, require_base: bool
+        self,
+        scorer: CouplingScorer,
+        *,
+        base_ref: str | None,
+        require_base: bool,
+        tripwire: bool = False,
     ) -> Outcome:
         """Compare PR-touched files against the base-commit coupling baseline.
 
@@ -52,13 +57,20 @@ class CouplingRatchet:
         so a PR cannot launder a regression by hand-editing the in-tree baseline
         in the same change. The in-tree file is used only for the local,
         no-base-resolvable path (never under ``--require-base``).
+
+        ``tripwire`` marks the post-merge ``push:[main]`` run (base ``HEAD~1``):
+        on trusted main an absent base baseline is the one-time adoption merge
+        (the newly added baseline file first appears in this commit), not a
+        stale branch, so it bootstrap-passes instead of demanding a rebase that
+        has no branch to land on. The PR path leaves ``tripwire`` false and
+        keeps the stale-branch protection intact.
         """
         base = self._git.resolve_base(base_ref)
         if base is None:
             return self._no_base(require_base=require_base)
         base_baseline = self._git.show_baseline(base)
         if base_baseline is None:
-            return self._absent_base_baseline()
+            return self._absent_base_baseline(tripwire=tripwire)
         if not base_baseline and require_base:
             return self._empty_baseline()
         # An empty {} baseline without --require-base flows to _check_against:
@@ -87,7 +99,7 @@ class CouplingRatchet:
         touched = sorted(touched_py & scorer.files)
         if not touched:
             return Outcome.passed(
-                "No scored Python files touched (gate covers src/punt_vox/)"
+                "No scored Python files touched (gate covers src/quarry/)"
             )
         waivable = self._audit.relaxations_since(self._git.show_audit(base))
         reviews = self._build_reviews(
@@ -117,16 +129,30 @@ class CouplingRatchet:
             "with an in-tree baseline present; fetch origin/main or pass --base-ref"
         )
 
-    def _absent_base_baseline(self) -> Outcome:
+    def _absent_base_baseline(self, *, tripwire: bool = False) -> Outcome:
         """Decide the verdict when the base commit carries no baseline blob.
 
-        Matches the OO ratchet's ``_absent_base_baseline`` exactly (no
-        ``require_base`` param): genuine first-adoption requires the
-        ``origin/main`` tip to also lack a baseline. If the tip is unresolvable
-        with an in-tree baseline present, first-adoption cannot be confirmed --
-        fail closed unconditionally. If the tip carries a baseline, the branch
-        forked before adoption and would launder a regression -- fail closed.
+        On the PR path (``tripwire`` false) this matches the OO ratchet exactly:
+        genuine first-adoption requires the ``origin/main`` tip to also lack a
+        baseline. If the tip is unresolvable with an in-tree baseline present,
+        first-adoption cannot be confirmed -- fail closed. If the tip carries a
+        baseline, the branch forked before adoption and would launder a
+        regression -- fail closed ("rebase onto current main").
+
+        On the ``push:[main]`` post-merge tripwire (base ``HEAD~1``) there is no
+        branch to rebase -- the checkout IS main. When coupling's baseline file
+        is newly adopted it is absent at ``HEAD~1`` but present at the merged
+        tip, which on the PR path reads as "predates adoption". That is the
+        expected one-time adoption merge on trusted main, so under ``tripwire``
+        it bootstrap-passes rather than failing the post-merge gate. Subsequent
+        pushes have the baseline at ``HEAD~1`` and take the normal compare path,
+        so this only ever relaxes the single adoption commit.
         """
+        if tripwire:
+            return Outcome.passed(
+                "Base predates baseline adoption on push tripwire -- "
+                "one-time bootstrap pass"
+            )
         tip = self._git.resolve_ref("origin/main")
         if tip is None:
             if self._baseline.exists:
