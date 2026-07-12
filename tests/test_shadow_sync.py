@@ -176,6 +176,26 @@ class TestFailOpen:
         with pytest.raises(RuntimeError):
             sync.run(fail_open=False)
 
+    def test_expected_io_error_aborts_fail_open(self) -> None:
+        # An expected filesystem failure (OSError from the working-tree stage)
+        # must abort fail-open, not propagate: a shadow problem never blocks a
+        # session when fail_open=True.
+        sync, repo, _ = _sync()
+        repo.bootstrap.side_effect = OSError("mkdir: read-only filesystem")
+        result = sync.run(fail_open=True)
+        assert result.aborted_reason == "exception"
+        assert result.pushed is False
+        assert result.committed is False
+
+    def test_unexpected_exception_propagates_fail_open(self) -> None:
+        # A truly unexpected exception (a programming error) is NOT an expected
+        # shadow failure: it surfaces even under fail_open rather than being
+        # swallowed as an abort, so bugs fail fast instead of hiding.
+        sync, repo, _ = _sync()
+        repo.bootstrap.side_effect = ValueError("programming error")
+        with pytest.raises(ValueError):
+            sync.run(fail_open=True)
+
 
 class TestOfflineRetry:
     def test_push_failure_then_success(self) -> None:
