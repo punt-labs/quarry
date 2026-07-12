@@ -136,10 +136,11 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tools/*" = ["T20", "S603", "S607", "C901"]
 "tools/eval/**/*.py" = ["T20"]  # the eval CLI prints its report to stdout
-"tests/*" = ["S101", "S106", "S108", "T20", "SLF001", "ARG", "PLC0415", "A002"]
+"tests/*" = ["S101", "S106", "S108", "S603", "S607", "T20", "SLF001", "ARG", "PLC0415", "A002"]
 "benchmarks/*" = ["T20", "S311", "BLE001", "PLC0415", "SIM905"]
 "src/quarry/__main__.py" = ["T20", "FBT"]
 "src/quarry/mcp_server.py" = ["T20", "FBT"]
+"src/quarry/cli_captures.py" = ["FBT"]  # typer boolean CLI flags
 "src/quarry/hooks.py" = ["S603"]  # Popen calls use sys.executable — trusted
 
 [tool.ruff.format]

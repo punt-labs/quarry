@@ -12,10 +12,7 @@ import sys
 from collections.abc import Generator
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from functools import partial
 from pathlib import Path
-
-from quarry.hooks import WEB_CAPTURES_FALLBACK
 
 
 @dataclass(frozen=True)
@@ -436,42 +433,6 @@ def _check_enable_status(registry_path: Path, cwd: str) -> CheckResult:  # noqa:
         passed=config_exists,
         message=", ".join(parts),
         required=False,
-    )
-
-
-def _check_orphaned_captures(
-    registry_path: Path,
-    db_path: Path,
-) -> CheckResult:
-    """Report captures collections whose base has no registration."""
-    from quarry.db.facade import Database  # noqa: PLC0415
-    from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
-
-    result = partial(CheckResult, name="Orphaned captures", required=False)
-    if not db_path.exists() or not registry_path.exists():
-        return result(passed=True, message="no data yet")
-
-    try:
-        database = Database.connect(db_path)
-        collections = {c["collection"] for c in database.catalog.list_collections()}
-        # web-captures is the base-less web-fetch fallback bucket; its base "web"
-        # is never registered by design, so drop it before the orphan test.
-        col_names = collections - {WEB_CAPTURES_FALLBACK}
-        with contextlib.closing(SyncRegistry(registry_path)) as conn:
-            registered = {r.collection for r in conn.list_registrations()}
-    except Exception as exc:  # noqa: BLE001
-        return result(passed=False, message=f"check failed: {exc}")
-
-    orphans = sorted(
-        name
-        for name in col_names
-        if name.endswith("-captures")
-        and name.removesuffix("-captures") not in registered
-    )
-    return (
-        result(passed=False, message=f"orphaned: {', '.join(orphans)}")
-        if orphans
-        else result(passed=True, message="no orphaned captures collections")
     )
 
 
@@ -1095,8 +1056,10 @@ def check_environment(*, _skip_header: bool = False) -> int:
         print()  # noqa: T201
 
     from quarry.config import Settings  # noqa: PLC0415
+    from quarry.doctor_captures import CaptureDiagnostics  # noqa: PLC0415
 
     settings = Settings()
+    cwd = str(Path.cwd())
     with _quiet_logging():
         all_results: list[CheckResult | None] = [
             _check_python_version(),
@@ -1112,8 +1075,9 @@ def check_environment(*, _skip_header: bool = False) -> int:
             _check_fts_health(settings.lancedb_path),
             _check_sync_health(settings.registry_path),
             _check_sync_directories(settings.registry_path),
-            _check_enable_status(settings.registry_path, str(Path.cwd())),
-            _check_orphaned_captures(settings.registry_path, settings.lancedb_path),
+            _check_enable_status(settings.registry_path, cwd),
+            CaptureDiagnostics.orphaned(settings.registry_path, settings.lancedb_path),
+            CaptureDiagnostics.shadow_repo(cwd),
         ]
         checks: list[CheckResult] = [c for c in all_results if c is not None]
 

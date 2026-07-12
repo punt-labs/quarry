@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import gc
 import logging
 import os
 import time
@@ -12,9 +11,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from quarry.config import Settings
-from quarry.db import ChunkStore, TableOptimizer
+from quarry.db import ChunkStore
 from quarry.ingestion.pipeline import SUPPORTED_EXTENSIONS
 from quarry.sync_discovery import FileDiscovery
+from quarry.sync_finalize import SyncFinalizer
 from quarry.sync_ingest import CollectionIngestor
 from quarry.sync_registry import FileRecord, SyncRegistry
 from quarry.types import LanceDB
@@ -328,32 +328,11 @@ def sync_all(
                 max_workers=max_workers,
                 progress_callback=progress_callback,
             )
-        t0 = time.perf_counter()
-        opt = TableOptimizer(db)
-        opt.create_collection_index()
-        logger.info("sync: create_collection_index in %.2fs", time.perf_counter() - t0)
-        t0 = time.perf_counter()
-        opt.optimize()
-        logger.info("sync: optimize_table in %.2fs", time.perf_counter() - t0)
+        SyncFinalizer(db, settings).run()
         logger.info(
             "sync: all collections completed in %.2fs",
             time.perf_counter() - t_all_start,
         )
-
-        t_gc = time.perf_counter()
-        gc.collect(2)
-        gc_elapsed = time.perf_counter() - t_gc
-        rss_str = "unknown"
-        try:
-            with Path("/proc/self/status").open() as f:
-                for line in f:
-                    if line.startswith("VmRSS:"):
-                        rss_str = line.split(":")[1].strip()
-                        break
-        except OSError:
-            pass
-        logger.info("sync: post-sync GC in %.2fs, RSS: %s", gc_elapsed, rss_str)
-
         return results
     finally:
         conn.close()

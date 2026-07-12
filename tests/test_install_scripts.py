@@ -196,7 +196,7 @@ def _run_script(
     cmd = ["/bin/sh", str(script)]
     if args:
         cmd.extend(args)
-    return subprocess.run(  # noqa: S603 -- /bin/sh with a fixed script path
+    return subprocess.run(
         cmd,
         env=env,
         capture_output=True,
@@ -221,7 +221,7 @@ def _run_script_piped(
     if args:
         cmd.append("--")
         cmd.extend(args)
-    return subprocess.run(  # noqa: S603 -- /bin/sh with controlled stdin
+    return subprocess.run(
         cmd,
         input=script.read_text(),
         env=env,
@@ -641,7 +641,7 @@ def test_install_script_passes_shellcheck() -> None:
             "CI (apt-get install shellcheck) so this gate "
             "cannot be skipped."
         )
-    result = subprocess.run(  # noqa: S603 -- shellcheck resolved via shutil.which
+    result = subprocess.run(
         [shellcheck_bin, "-x", str(INSTALL_SH)],
         capture_output=True,
         text=True,

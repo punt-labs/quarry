@@ -1,37 +1,43 @@
 {
-  "total": 260,
+  "total": 262,
   "by_category": {
-    "noqa": 216,
+    "noqa": 214,
     "type_ignore": 10,
     "pylint_disable": 0,
     "pyright_ignore": 12,
-    "per_file_ignores": 22
+    "per_file_ignores": 26
   },
   "by_file": {
     "src/quarry/__main__.py": {
-      "noqa": 25,
+      "noqa": 22,
       "type_ignore": 2
     },
     "src/quarry/_hook_entry.py": {
-      "noqa": 10
+      "noqa": 8
     },
     "src/quarry/backfill.py": {
+      "noqa": 1
+    },
+    "src/quarry/cli_captures.py": {
+      "noqa": 2
+    },
+    "src/quarry/cli_runtime.py": {
       "noqa": 2
     },
     "src/quarry/collections.py": {
       "type_ignore": 1
-    },
-    "src/quarry/db/chunk_search.py": {
-      "noqa": 2
     },
     "src/quarry/db/storage.py": {
       "noqa": 7,
       "type_ignore": 1
     },
     "src/quarry/doctor.py": {
-      "noqa": 74,
+      "noqa": 72,
       "type_ignore": 1,
       "pyright_ignore": 2
+    },
+    "src/quarry/doctor_captures.py": {
+      "noqa": 6
     },
     "src/quarry/embeddings.py": {
       "noqa": 3
@@ -58,7 +64,7 @@
       "pyright_ignore": 3
     },
     "src/quarry/http_server.py": {
-      "noqa": 11,
+      "noqa": 12,
       "type_ignore": 2
     },
     "src/quarry/ingestion/backends.py": {
@@ -71,7 +77,7 @@
       "noqa": 1
     },
     "src/quarry/ingestion/pipeline.py": {
-      "noqa": 18
+      "noqa": 10
     },
     "src/quarry/ingestion/provider.py": {
       "noqa": 2
@@ -82,6 +88,9 @@
     "src/quarry/ingestion/url_ingester.py": {
       "noqa": 8
     },
+    "src/quarry/ingestion/web_fetch.py": {
+      "noqa": 2
+    },
     "src/quarry/onnx_session.py": {
       "noqa": 1
     },
@@ -91,13 +100,22 @@
     "src/quarry/remote.py": {
       "noqa": 2
     },
+    "src/quarry/shadow/_git.py": {
+      "noqa": 1
+    },
+    "src/quarry/shadow/sync.py": {
+      "noqa": 1
+    },
     "src/quarry/sitemap.py": {
       "noqa": 3,
       "type_ignore": 1
+    },
+    "src/quarry/sync_finalize.py": {
+      "noqa": 1
     },
     "src/quarry/sync_ingest.py": {
       "noqa": 1
     }
   },
-  "updated_at": "2026-07-04T01:58:36Z"
+  "updated_at": "2026-07-12T06:27:30Z"
 }

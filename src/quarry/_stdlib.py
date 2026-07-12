@@ -22,6 +22,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from quarry._frontmatter import Frontmatter
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -59,24 +61,7 @@ def load_hook_config(cwd: str) -> HookConfig:
     except (OSError, UnicodeDecodeError):
         return HookConfig()
 
-    # Parse YAML frontmatter between --- delimiter lines.
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return HookConfig()
-
-    end_index = None
-    for i, line in enumerate(lines[1:], start=1):
-        if line.strip() == "---":
-            end_index = i
-            break
-
-    if end_index is None:
-        return HookConfig()
-
-    frontmatter_lines = lines[1:end_index]
-
-    # Extract auto_capture block with stdlib-only parsing.
-    auto = _parse_auto_capture(frontmatter_lines)
+    auto = Frontmatter(text).block("auto_capture")
     if auto is None:
         return HookConfig()
 
@@ -85,37 +70,6 @@ def load_hook_config(cwd: str) -> HookConfig:
         web_fetch=_bool_field(auto, "web_fetch", default=True),
         compaction=_bool_field(auto, "compaction", default=True),
     )
-
-
-def _parse_auto_capture(lines: list[str]) -> dict[str, str] | None:
-    """Extract key-value pairs under ``auto_capture:`` from frontmatter lines.
-
-    Handles the simple nested YAML subset used by quarry config:
-    ``auto_capture:\\n  key: value``.  Strips inline comments (``# ...``).
-    Returns None if the block is absent.
-    """
-    result: dict[str, str] = {}
-    in_block = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped == "auto_capture:":
-            in_block = True
-            continue
-        if in_block:
-            # Skip blank / whitespace-only lines within the block.
-            if not stripped:
-                continue
-            # Non-indented, non-blank line ends the block.
-            if not line.startswith((" ", "\t")):
-                break
-            # Indented key: value lines are parsed; other indented lines
-            # (comments, list items) are ignored without ending the block.
-            if ":" in stripped:
-                key, _, val = stripped.partition(":")
-                # Strip inline YAML comments.
-                val = val.split("#")[0].strip()
-                result[key.strip()] = val
-    return result if in_block else None
 
 
 # YAML 1.1 boolean aliases (case-insensitive).

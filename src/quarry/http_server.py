@@ -43,6 +43,7 @@ from starlette.routing import Route, WebSocketRoute
 from quarry.config import DEFAULT_PORT, Settings
 from quarry.db import Database
 from quarry.db.storage import dir_size_bytes, format_size
+from quarry.http_guards import RequestGuards
 from quarry.http_resources import QuarryResources
 from quarry.ingestion.provider import ProviderSelection
 from quarry.results import SearchFilter
@@ -146,52 +147,6 @@ def _validate_ingest_url(url: str) -> str | None:
         if addr.version == 4 and addr in _CGNAT_NETWORK:
             return f"host {host!r} resolves to CGNAT address {addr}"
 
-    return None
-
-
-def _coerce_bool_field(
-    body: dict[str, object], field: str, *, default: bool
-) -> bool | JSONResponse:
-    """Return the bool value of ``body[field]`` or a 400 response.
-
-    Rejects any non-bool non-null value.  Python's ``bool()`` coerces the
-    strings ``"false"`` and ``"0"`` to ``True`` — use this helper instead to
-    preserve caller intent.
-    """
-    value = body.get(field)
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    return JSONResponse(
-        {"error": f"Field {field!r} must be a boolean"},
-        status_code=400,
-    )
-
-
-def _check_body_size(request: Request, limit: int) -> JSONResponse | None:
-    """Reject requests whose advertised body size exceeds *limit*.
-
-    Also rejects chunked-encoding requests with no ``Content-Length`` header
-    so the server cannot be forced to stream arbitrary bytes before noticing.
-    """
-    header = request.headers.get("content-length")
-    if header is None:
-        return JSONResponse(
-            {"error": "Content-Length header required"},
-            status_code=411,
-        )
-    try:
-        length = int(header)
-    except ValueError:
-        return JSONResponse({"error": "Invalid Content-Length header"}, status_code=400)
-    if length < 0:
-        return JSONResponse({"error": "Invalid Content-Length header"}, status_code=400)
-    if length > limit:
-        return JSONResponse(
-            {"error": f"Request body too large (max {limit} bytes)"},
-            status_code=413,
-        )
     return None
 
 
@@ -555,7 +510,7 @@ async def _remember_route(request: Request) -> JSONResponse:
     if auth_resp is not None:
         return auth_resp
 
-    size_err = _check_body_size(request, MAX_REMEMBER_BODY_BYTES)
+    size_err = RequestGuards.check_body_size(request, MAX_REMEMBER_BODY_BYTES)
     if size_err is not None:
         return size_err
 
@@ -577,7 +532,7 @@ async def _remember_route(request: Request) -> JSONResponse:
 
     collection = body.get("collection") or "default"
     format_hint = body.get("format_hint") or "auto"
-    overwrite = _coerce_bool_field(body, "overwrite", default=True)
+    overwrite = RequestGuards.coerce_bool_field(body, "overwrite", default=True)
     if isinstance(overwrite, JSONResponse):
         return overwrite
     agent_handle = body.get("agent_handle") or ""
@@ -667,7 +622,7 @@ async def _ingest_route(request: Request) -> JSONResponse:
     if auth_resp is not None:
         return auth_resp
 
-    size_err = _check_body_size(request, MAX_INGEST_BODY_BYTES)
+    size_err = RequestGuards.check_body_size(request, MAX_INGEST_BODY_BYTES)
     if size_err is not None:
         return size_err
 
@@ -693,7 +648,7 @@ async def _ingest_route(request: Request) -> JSONResponse:
             status_code=400,
         )
 
-    overwrite = _coerce_bool_field(body, "overwrite", default=False)
+    overwrite = RequestGuards.coerce_bool_field(body, "overwrite", default=False)
     if isinstance(overwrite, JSONResponse):
         return overwrite
     collection = body.get("collection") or ""
@@ -814,7 +769,7 @@ async def _sync_route(request: Request) -> JSONResponse:
     if auth_resp is not None:
         return auth_resp
 
-    size_err = _check_body_size(request, MAX_SYNC_BODY_BYTES)
+    size_err = RequestGuards.check_body_size(request, MAX_SYNC_BODY_BYTES)
     if size_err is not None:
         return size_err
 
@@ -856,6 +811,27 @@ async def _sync_route(request: Request) -> JSONResponse:
         {"task_id": state.task_id, "status": "accepted"},
         status_code=202,
     )
+
+
+def _run_captures_push(settings: Settings) -> dict[str, dict[str, object]]:
+    """Push every enabled project's redacted captures (identical to the CLI path)."""
+    from quarry.shadow import CaptureSync  # noqa: PLC0415
+
+    results = CaptureSync.push_registered(settings, fail_open=True)
+    return {col: res.to_dict() for col, res in results.items()}
+
+
+async def _captures_push_route(request: Request) -> JSONResponse:
+    """Re-scrub and push enabled capture shadows; mirrors ``quarry captures push``."""
+    auth_resp = _check_auth(request)
+    if auth_resp is not None:
+        return auth_resp
+    size_err = RequestGuards.check_body_size(request, MAX_SYNC_BODY_BYTES)
+    if size_err is not None:
+        return size_err
+    ctx = _ctx(request)
+    results = await run_in_threadpool(_run_captures_push, ctx.settings)
+    return JSONResponse({"results": results})
 
 
 def _task_status_route(request: Request) -> JSONResponse:
@@ -1040,7 +1016,7 @@ def _register_sync(
 
 async def _handle_add_registration(request: Request) -> JSONResponse:
     """Register a directory as an async 202 background task."""
-    size_err = _check_body_size(request, MAX_REGISTRATIONS_BODY_BYTES)
+    size_err = RequestGuards.check_body_size(request, MAX_REGISTRATIONS_BODY_BYTES)
     if size_err is not None:
         return size_err
 
@@ -1331,6 +1307,7 @@ def build_app(
         Route("/remember", _remember_route, methods=["POST"]),
         Route("/ingest", _ingest_route, methods=["POST"]),
         Route("/sync", _sync_route, methods=["POST"]),
+        Route("/captures/push", _captures_push_route, methods=["POST"]),
         # Unified task status endpoint with backwards-compatible aliases.
         Route("/tasks/{task_id}", _task_status_route, methods=["GET"]),
         Route("/sync/{task_id}", _task_status_route, methods=["GET"]),

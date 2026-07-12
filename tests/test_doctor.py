@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -15,7 +15,6 @@ from quarry.doctor import (
     _check_fts_health,
     _check_imports,
     _check_local_ocr,
-    _check_orphaned_captures,
     _check_provider,
     _check_python_version,
     _check_storage,
@@ -30,6 +29,7 @@ from quarry.doctor import (
     check_environment,
     run_install,
 )
+from quarry.doctor_captures import CaptureDiagnostics
 from quarry.gpu_status import GpuStatus
 
 MP = pytest.MonkeyPatch
@@ -1346,7 +1346,7 @@ class TestCheckOrphanedCaptures:
             {"collection": name} for name in collections
         ]
         with patch.object(Database, "connect", return_value=facade):
-            return _check_orphaned_captures(registry_path, db_path)
+            return CaptureDiagnostics.orphaned(registry_path, db_path)
 
     def test_web_captures_fallback_not_flagged(self, tmp_path: Path) -> None:
         """web-captures is the base-less fallback bucket -- never orphaned."""
@@ -1394,8 +1394,146 @@ class TestCheckOrphanedCaptures:
 
         boom = RuntimeError("corrupt lance table")
         with patch.object(Database, "connect", side_effect=boom):
-            result = _check_orphaned_captures(registry_path, db_path)
+            result = CaptureDiagnostics.orphaned(registry_path, db_path)
 
         assert result.passed is False
         assert "corrupt lance table" in result.message
         assert result.message.startswith("check failed:")
+
+
+class TestCheckShadowRepo:
+    """States of CaptureDiagnostics.shadow_repo (the 'Shadow repo' doctor check)."""
+
+    def _run(self, tmp_path: Path, config: object, repo: object) -> CheckResult:
+        with (
+            patch(
+                "quarry.shadow.config.ShadowConfig.from_project", return_value=config
+            ),
+            patch("quarry.shadow.repo.ShadowRepo", return_value=repo),
+        ):
+            return CaptureDiagnostics.shadow_repo(str(tmp_path))
+
+    def test_not_configured_when_no_block(self, tmp_path: Path) -> None:
+        repo = MagicMock()
+        repo.parent_tracked_captures.return_value = []
+        result = self._run(tmp_path, None, repo)
+        assert result.name == "Shadow repo"
+        assert result.passed is True
+        assert result.required is False
+        assert "not configured" in result.message
+
+    def test_not_configured_when_disabled(self, tmp_path: Path) -> None:
+        config = MagicMock(enabled=False, remote="")
+        repo = MagicMock()
+        repo.parent_tracked_captures.return_value = []
+        result = self._run(tmp_path, config, repo)
+        assert result.passed is True
+        assert "not configured" in result.message
+
+    def test_parent_tracked_flagged_even_when_disabled(self, tmp_path: Path) -> None:
+        # A capture committed to the PUBLIC repo is a leak regardless of whether
+        # the shadow is enabled; doctor must flag it before the enable gate.
+        config = MagicMock(enabled=False, remote="")
+        repo = MagicMock()
+        repo.parent_tracked_captures.return_value = [Path("session-old.md")]
+        result = self._run(tmp_path, config, repo)
+        assert result.passed is False
+        assert result.required is True
+        assert "git rm --cached" in result.message
+
+    def test_parent_tracked_flagged_with_no_config(self, tmp_path: Path) -> None:
+        repo = MagicMock()
+        repo.parent_tracked_captures.return_value = [Path("session-old.md")]
+        result = self._run(tmp_path, None, repo)
+        assert result.passed is False
+        assert result.required is True
+
+    def test_parent_tracked_is_required_failure(self, tmp_path: Path) -> None:
+        config = MagicMock(enabled=True, remote="git@h:o/r-quarry.git")
+        repo = MagicMock()
+        repo.parent_tracked_captures.return_value = [Path("session-old.md")]
+        result = self._run(tmp_path, config, repo)
+        assert result.passed is False
+        assert result.required is True
+        assert "git rm --cached" in result.message
+        assert "filter-repo" in result.message
+
+    def test_parent_tracked_enumeration_failure_is_required_failure(
+        self, tmp_path: Path
+    ) -> None:
+        # git ls-files failing is unverifiable, not "no leak": doctor must
+        # report a required failure (fail-CLOSED), never crash and never a
+        # green check that could mask a tracked-capture leak.
+        config = MagicMock(enabled=True, remote="git@h:o/r-quarry.git")
+        repo = MagicMock()
+        repo.parent_tracked_captures.side_effect = RuntimeError(
+            "parent capture enumeration failed: git ls-files exited 1"
+        )
+        result = self._run(tmp_path, config, repo)
+        assert result.passed is False
+        assert result.required is True
+        assert "cannot verify parent-tracked captures" in result.message
+
+    def test_public_remote_refusal(self, tmp_path: Path) -> None:
+        from quarry.shadow.visibility import Visibility
+
+        config = MagicMock(enabled=True, remote="git@h:o/r-quarry.git")
+        repo = MagicMock()
+        repo.parent_tracked_captures.return_value = []
+        repo.remote_visibility.return_value = Visibility.PUBLIC
+        result = self._run(tmp_path, config, repo)
+        assert result.passed is False
+        assert result.required is False
+        assert "PUBLIC" in result.message
+
+    def test_not_bootstrapped(self, tmp_path: Path) -> None:
+        from quarry.shadow.visibility import Visibility
+
+        config = MagicMock(enabled=True, remote="git@h:o/r-quarry.git")
+        repo = MagicMock()
+        repo.parent_tracked_captures.return_value = []
+        repo.remote_visibility.return_value = Visibility.PRIVATE
+        repo.is_initialized = False
+        result = self._run(tmp_path, config, repo)
+        assert result.passed is False
+        assert "bootstrapped" in result.message
+
+    def test_dirty_unpushed(self, tmp_path: Path) -> None:
+        from quarry.shadow.visibility import Visibility
+
+        config = MagicMock(enabled=True, remote="git@h:o/r-quarry.git")
+        repo = MagicMock()
+        repo.parent_tracked_captures.return_value = []
+        repo.remote_visibility.return_value = Visibility.PRIVATE
+        repo.is_initialized = True
+        repo.has_unpushed_commits.return_value = True
+        result = self._run(tmp_path, config, repo)
+        assert result.passed is False
+        assert "unpushed" in result.message
+
+    def test_in_sync(self, tmp_path: Path) -> None:
+        from quarry.shadow.visibility import Visibility
+
+        config = MagicMock(enabled=True, remote="git@h:o/r-quarry.git")
+        repo = MagicMock()
+        repo.parent_tracked_captures.return_value = []
+        repo.remote_visibility.return_value = Visibility.PRIVATE
+        repo.is_initialized = True
+        repo.has_unpushed_commits.return_value = False
+        result = self._run(tmp_path, config, repo)
+        assert result.passed is True
+        assert "in sync" in result.message
+
+    def test_not_in_git_repo_is_informational_not_required(
+        self, tmp_path: Path
+    ) -> None:
+        # Doctor run outside any git work tree: no parent repo a capture could
+        # leak into, so this is informational (passes), never a required
+        # failure — and the leak enumeration is never even attempted.
+        repo = MagicMock()
+        repo.parent_in_work_tree.return_value = False
+        result = self._run(tmp_path, None, repo)
+        assert result.passed is True
+        assert result.required is False
+        assert "not in a git repo" in result.message
+        repo.parent_tracked_captures.assert_not_called()
