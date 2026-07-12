@@ -90,8 +90,22 @@ class CaptureDiagnostics:
         None means no leak.  This runs before the enable gate because an
         already-committed capture in the public repo is a leak whether or not
         the shadow is configured or enabled.
+
+        A failed ``git ls-files`` enumeration raises ``RuntimeError``: an
+        unverifiable state is not "no leak".  Catch it and report a required
+        failure (fail-CLOSED) rather than crashing doctor or, worse, letting a
+        blind enumeration surface as a green check that masks a tracked-capture
+        leak.
         """
-        tracked = repo.parent_tracked_captures()
+        try:
+            tracked = repo.parent_tracked_captures()
+        except RuntimeError as exc:
+            return CheckResult(
+                name="Shadow repo",
+                passed=False,
+                required=True,
+                message=f"cannot verify parent-tracked captures (git error: {exc})",
+            )
         if not tracked:
             return None
         paths = ", ".join(str(p) for p in tracked)

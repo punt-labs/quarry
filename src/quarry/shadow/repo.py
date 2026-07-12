@@ -4,9 +4,12 @@
 ``origin`` is the per-project private shadow ``<repo>-quarry``.  Operation is
 fail-open at its boundary: a ``git``/``gh`` failure returns ``False``/``UNKNOWN``/
 an empty list rather than raising, so a push problem never blocks a session.  The
-one fail-CLOSED exception is ``staged_captures``: a failed ``git ls-files``
-enumeration, or a path it reports that ``git show`` cannot read, raises so the
-re-scrub gate aborts rather than committing a blob it never verified.  The
+fail-CLOSED exceptions are the two leak-gate enumerations.  ``staged_captures``:
+a failed ``git ls-files``, or a path it reports that ``git show`` cannot read,
+raises so the re-scrub gate aborts rather than committing a blob it never
+verified.  ``parent_tracked_captures``: a failed ``git ls-files`` raises so
+bootstrap refuses and doctor flags an unverifiable state rather than reading a
+blind enumeration as "the parent tracks nothing".  The
 security-load-bearing choices — the
 allowlist ``.gitignore``, the refusal of a parent-tracked or non-ignored captures
 dir, and visibility enforcement — live here; ``CaptureSync`` sequences them
@@ -123,12 +126,20 @@ class ShadowRepo:
 
         A non-empty result means already-committed captures live in the public
         repo's index/history; bootstrap refuses and doctor flags this.
+
+        A non-zero ``git ls-files`` exit is an enumeration FAILURE, not "the
+        parent tracks nothing": tracked captures may exist that git could not
+        report, so raising (fail-CLOSED) lets the bootstrap gate refuse and
+        doctor flag an unverifiable state rather than reading a blind
+        enumeration as clean and initializing a shadow atop leaked captures.  A
+        zero exit with empty output genuinely means the parent tracks none.
         """
         code, out = self._parent_git.run(
             ["git", "ls-files", "--", self._captures_rel()]
         )
-        if code != 0:  # empty stdout already yields [] via the comprehension
-            return []
+        if code != 0:
+            msg = f"parent capture enumeration failed: git ls-files exited {code}"
+            raise RuntimeError(msg)
         return [Path(line) for line in out.splitlines() if line]
 
     def bootstrap(self) -> bool:
@@ -159,11 +170,18 @@ class ShadowRepo:
         """Return why bootstrap must refuse (a leak risk), or None when safe.
 
         None is the "safe to proceed" state, not an error: the captures dir is
-        gitignored by the parent and the parent tracks no captures.
+        gitignored by the parent and the parent tracks no captures.  A failed
+        parent enumeration is unverifiable, not safe: catch its fail-CLOSED
+        ``RuntimeError`` and turn it into a refusal so bootstrap returns False
+        (no init) rather than crashing the caller — the shadow is never
+        initialized while a blind enumeration might hide already-tracked leaks.
         """
         if not self.is_ignored_by_parent():
             return f"{self._captures_dir} is not gitignored by the parent; refusing"
-        tracked = self.parent_tracked_captures()
+        try:
+            tracked = self.parent_tracked_captures()
+        except RuntimeError as exc:
+            return f"cannot verify parent-tracked captures ({exc}); refusing"
         if tracked:
             names = ", ".join(str(p) for p in tracked)
             return (

@@ -1458,6 +1458,22 @@ class TestCheckShadowRepo:
         assert "git rm --cached" in result.message
         assert "filter-repo" in result.message
 
+    def test_parent_tracked_enumeration_failure_is_required_failure(
+        self, tmp_path: Path
+    ) -> None:
+        # git ls-files failing is unverifiable, not "no leak": doctor must
+        # report a required failure (fail-CLOSED), never crash and never a
+        # green check that could mask a tracked-capture leak.
+        config = MagicMock(enabled=True, remote="git@h:o/r-quarry.git")
+        repo = MagicMock()
+        repo.parent_tracked_captures.side_effect = RuntimeError(
+            "parent capture enumeration failed: git ls-files exited 1"
+        )
+        result = self._run(tmp_path, config, repo)
+        assert result.passed is False
+        assert result.required is True
+        assert "cannot verify parent-tracked captures" in result.message
+
     def test_public_remote_refusal(self, tmp_path: Path) -> None:
         from quarry.shadow.repo import Visibility
 

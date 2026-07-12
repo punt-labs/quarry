@@ -95,6 +95,42 @@ class TestBootstrapGates:
         assert "filter-repo" in PARENT_TRACKED_REMEDIATION
         assert "force-push" in PARENT_TRACKED_REMEDIATION
 
+    def test_parent_tracked_captures_raises_on_enumeration_failure(
+        self, tmp_path: Path
+    ) -> None:
+        # A non-zero git ls-files is an enumeration FAILURE, not "tracks none":
+        # parent_tracked_captures raises (fail-CLOSED) rather than returning [].
+        public = _public_repo(tmp_path)
+        repo = _repo(public)
+        with (
+            patch.object(GitRunner, "run", return_value=(1, "")),
+            pytest.raises(RuntimeError, match="git ls-files exited 1"),
+        ):
+            repo.parent_tracked_captures()
+
+    def test_bootstrap_refuses_on_enumeration_failure(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # git ls-files failing while the captures dir IS gitignored must refuse
+        # (return False, never init) — a blind enumeration could hide an
+        # already-tracked leak, so bootstrap fails closed instead of crashing.
+        public = _public_repo(tmp_path)
+        repo = _repo(public)
+        real_run = GitRunner.run
+
+        def fake_run(runner: GitRunner, argv: list[str]) -> tuple[int, str]:
+            if "ls-files" in argv:
+                return 1, ""
+            return real_run(runner, argv)
+
+        with (
+            patch.object(GitRunner, "run", autospec=True, side_effect=fake_run),
+            caplog.at_level("WARNING"),
+        ):
+            assert repo.bootstrap() is False
+        assert not repo.captures_dir.joinpath(".git").exists()
+        assert "cannot verify parent-tracked captures" in caplog.text
+
     def test_refuses_when_no_remote(self, tmp_path: Path) -> None:
         public = _public_repo(tmp_path)
         repo = _repo(public, remote="")
