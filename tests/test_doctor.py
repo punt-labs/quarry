@@ -452,7 +452,7 @@ class TestCheckEnvironment:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         import quarry.doctor as doctor_mod
 
-        _ok = doctor_mod.CheckResult
+        _ok = CheckResult
         monkeypatch.setattr(
             doctor_mod,
             "_check_local_ocr",
@@ -1013,7 +1013,7 @@ def _mock_install_deps(monkeypatch: MP) -> None:
     """Stub out MCP config, proxy install, service registration, check_environment."""
     import quarry.doctor as doctor_mod
 
-    noop = lambda: doctor_mod.CheckResult(  # noqa: E731
+    noop = lambda: CheckResult(  # noqa: E731
         name="stub", passed=True, message="mocked"
     )
     monkeypatch.setattr(doctor_mod, "_configure_claude_code", noop)

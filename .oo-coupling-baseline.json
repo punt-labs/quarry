@@ -146,8 +146,15 @@
     "max_lcom": 1.0,
     "avg_lcom": 0.5
   },
+  "src/quarry/db/connection.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 3.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.2,
+    "avg_lcom": 0.1
+  },
   "src/quarry/db/facade.py": {
-    "efferent_coupling": 7.0,
+    "efferent_coupling": 8.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.714,
@@ -182,8 +189,8 @@
     "avg_lcom": 0.0
   },
   "src/quarry/doctor.py": {
-    "efferent_coupling": 1.0,
-    "public_names": 3.0,
+    "efferent_coupling": 4.0,
+    "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
@@ -194,6 +201,13 @@
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
+  },
+  "src/quarry/doctor_resources.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 1.0,
+    "avg_lcom": 1.0
   },
   "src/quarry/embeddings.py": {
     "efferent_coupling": 4.0,
@@ -505,7 +519,7 @@
   },
   "src/quarry/results.py": {
     "efferent_coupling": 2.0,
-    "public_names": 7.0,
+    "public_names": 8.0,
     "circular_imports": 0.0,
     "max_lcom": 1.0,
     "avg_lcom": 1.0
