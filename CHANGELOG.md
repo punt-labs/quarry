@@ -16,6 +16,16 @@ across `transform`, `index`, and `connector`).
 
 ### Added
 
+- **infra (daemon fd telemetry)**: the `quarry serve` daemon now logs its open
+  file-descriptor usage on a fixed cadence (every 5 minutes) so a climbing count
+  — the proven LanceDB deleted-index-handle leak — is visible in logs before it
+  reaches `RLIMIT_NOFILE`, returns EMFILE, and requests start failing with HTTP
+  500. Each sample logs `open_fds`, the soft `RLIMIT_NOFILE`, and `pct_used`
+  (numbered descriptors under `/dev/fd`, excluding mmap/txt regions), at INFO
+  normally and WARNING past 80% of the limit; an unlimited soft limit never
+  warns. The monitor task starts with the server lifespan and is cancelled on
+  shutdown. Observability only — the leak fix itself lands separately.
+
 - **captures (shadow repo)**: opt-in private capture shadow sync moves redacted
   session captures off the public repo into a per-project private
   `<repo>-quarry`. Enable via a `shadow:` block in `.punt-labs/quarry/config.md`
