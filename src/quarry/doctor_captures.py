@@ -7,8 +7,8 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, final
 
-from quarry.doctor import CheckResult
 from quarry.hooks import WEB_CAPTURES_FALLBACK
+from quarry.results import CheckResult
 from quarry.shadow.repo import PARENT_TRACKED_REMEDIATION
 
 if TYPE_CHECKING:

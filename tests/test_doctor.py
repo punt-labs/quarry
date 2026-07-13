@@ -7,7 +7,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from quarry.doctor import (
-    CheckResult,
     _check_claude_code_mcp,
     _check_claude_desktop_mcp,
     _check_data_directory,
@@ -31,6 +30,7 @@ from quarry.doctor import (
 )
 from quarry.doctor_captures import CaptureDiagnostics
 from quarry.gpu_status import GpuStatus
+from quarry.results import CheckResult
 
 MP = pytest.MonkeyPatch
 

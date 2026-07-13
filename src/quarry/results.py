@@ -181,6 +181,20 @@ class DatabaseSummary(TypedDict):
     size_description: str
 
 
+@dataclass(frozen=True, slots=True)
+class CheckResult:
+    """Outcome of a single ``quarry doctor`` health check.
+
+    ``required`` marks a check whose failure fails the overall run; advisory
+    checks (``required=False``) surface as warnings without failing the command.
+    """
+
+    name: str
+    passed: bool
+    message: str
+    required: bool = True
+
+
 # ---------------------------------------------------------------------------
 # Filter bundling for hybrid search predicates
 # ---------------------------------------------------------------------------
