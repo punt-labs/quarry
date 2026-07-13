@@ -22,7 +22,6 @@ periodically replaced.
 
 from __future__ import annotations
 
-import gc
 import logging
 import threading
 from typing import TYPE_CHECKING, Self
@@ -202,10 +201,19 @@ class LanceConnection:
     def _maybe_recycle(self) -> None:
         """Reopen the underlying connection when a recycle is armed.
 
-        Reassigning ``_inner`` drops the last strong reference to the old
-        connection; the collection releases its cached index-file descriptors.
-        A targeted ``gc.collect()`` makes the release deterministic even if the
-        Rust binding participates in a reference cycle.
+        Reassigning ``_inner`` drops the last *strong* reference to the old
+        connection. The lancedb binding holds it in a reference cycle, so plain
+        refcounting does not free it — only cyclic GC reclaims it and releases
+        its cached index-file descriptors (proven: the fd ceiling over 200
+        optimize cycles is ~53 with an explicit ``gc.collect()`` here and ~107
+        without, so refcounting alone is not doing the freeing).
+
+        No explicit ``gc.collect()`` is forced here: on the daemon, the recycle
+        fires during ``sync``'s optimize, and ``SyncFinalizer`` already runs
+        ``gc.collect(2)`` at the end of every sync (sync_finalize.py), so the
+        superseded connection is reclaimed on that pass. Elsewhere Python's
+        automatic gen-2 collection bounds it. A per-recycle full-heap collection
+        would be redundant work on the hot sync path.
         """
         with self._lock:
             if not self._recycle:
@@ -213,5 +221,4 @@ class LanceConnection:
             self._recycle = False
             self._rebuilds = 0
         self._inner = self._connect()
-        gc.collect()
         logger.debug("Recycled LanceDB connection to release cached fds")

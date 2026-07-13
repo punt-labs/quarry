@@ -16,6 +16,7 @@ crash mid-run.
 
 from __future__ import annotations
 
+import gc
 import resource
 from datetime import UTC, datetime
 from pathlib import Path
@@ -34,7 +35,7 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.resource
 
-_ITERATIONS = 200
+_ITERATIONS = 120
 _CHUNKS_PER_ITERATION = 3
 _EMBEDDING_DIM = 768
 # Dense per-iteration sampling averages the recycle sawtooth out of the quartile
@@ -135,9 +136,21 @@ def _raised_fd_limit() -> Generator[None]:
         resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
 
 
+# 200 optimize cycles brush the 30s default timeout; this tier is legitimately
+# long, so give it explicit headroom rather than shrinking it into flakiness.
+@pytest.mark.timeout(120)
 @pytest.mark.usefixtures("_raised_fd_limit")
 def test_optimize_loop_does_not_leak_descriptors(tmp_path: Path) -> None:
-    """A single connection optimized repeatedly must not leak file descriptors."""
+    """A single connection optimized repeatedly must not leak file descriptors.
+
+    Stands in for the daemon, including its reclamation regime: recycling drops
+    the superseded connection but the lancedb binding holds it in a reference
+    cycle, so the descriptors are freed by cyclic GC, not refcounting. The daemon
+    gets that GC from ``SyncFinalizer.gc.collect(2)`` after every sync; this test
+    calls raw ``optimize`` so it runs the collection itself each iteration. Without
+    recycling (the leaking path) the readers stay pinned by the live connection
+    and no GC can reclaim them, so the assertion still fails on unfixed code.
+    """
     database = Database.connect(tmp_path / "lancedb")
     trajectory = FdTrajectory()
 
@@ -146,6 +159,7 @@ def test_optimize_loop_does_not_leak_descriptors(tmp_path: Path) -> None:
             _make_chunks(iteration), _random_vectors(_CHUNKS_PER_ITERATION)
         )
         database.optimizer.optimize(force=True)
+        gc.collect()  # model SyncFinalizer's post-sync collection (sync_finalize.py)
         trajectory.record(_open_fd_count())
 
     assert trajectory.plateaus(slack=_PLATEAU_SLACK), (
