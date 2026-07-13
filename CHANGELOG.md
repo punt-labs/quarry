@@ -35,7 +35,25 @@ across `transform`, `index`, and `connector`).
   `git rm --cached` + history-purge remediation). Auth reuses the user's existing
   git credentials — no new secret storage (quarry-ow3k, DES-039).
 
-### Security
+### Fixed
+
+- **index (daemon)**: the `quarry serve` daemon no longer leaks a file
+  descriptor per index rebuild. The daemon holds a LanceDB connection for its
+  whole lifetime and rebuilds the FTS/scalar index on every sync;
+  `create_fts_index(replace=True)` supersedes an index generation and deletes the
+  old files, but LanceDB's Rust core keeps the deleted-file readers open. Over
+  many syncs the descriptors accumulated until the process hit `RLIMIT_NOFILE`
+  and `quarry find` began returning HTTP 500 (while short-lived CLI processes,
+  which connect once and exit, never noticed — so `quarry doctor` passed). A new
+  `Database.connect` now returns a self-recycling connection that reopens itself
+  after a bounded number of index rebuilds, dropping the Rust reader cache and
+  releasing the descriptors; recycling happens only at a table-open boundary so
+  the release is clean. Confirmed a bump to the latest lancedb (0.34.0) does not
+  fix the leak — it is a Rust-core reader-cache behavior present in every tested
+  version — so the fix is quarry-side. A resource-invariant test tier
+  (`tests/test_resource_invariants.py`) guards against regressions in CI, and
+  `quarry doctor` gained an "FD headroom" check that warns before descriptor
+  usage crosses 80% of the soft limit.
 
 - **index (capture)**: session capture files and WebFetch DB ingest now redact
   personally identifying information at write time, in addition to the existing

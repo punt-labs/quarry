@@ -37,15 +37,13 @@ class TableOptimizer:
         if TABLE_NAME not in self._db.list_tables().tables:
             return 0
         table = self._db.open_table(TABLE_NAME)
-        # LanceDB 0.30 does not expose fragment count via the Python API.
-        # The best proxy is counting subdirectories under the lance data/ dir.
+        # LanceDB does not expose fragment count via the Python API. The best
+        # proxy is counting subdirectories under the lance ``data/`` dir.
         try:
-            uri = str(getattr(table, "uri", "")) or str(getattr(table, "_uri", ""))
-            if uri:
-                data_dir = Path(uri) / "data"
-                if data_dir.is_dir():
-                    return sum(1 for _ in data_dir.iterdir())
-        except (OSError, TypeError):
+            data_dir = Path(table.uri) / "data"
+            if data_dir.is_dir():
+                return sum(1 for _ in data_dir.iterdir())
+        except OSError:
             pass
         return 0
 

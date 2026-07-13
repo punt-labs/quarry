@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 from typing import Self
 
 from quarry.db.chunk_catalog import ChunkCatalog
 from quarry.db.chunk_search import ChunkSearch
 from quarry.db.chunk_store import ChunkStore
+from quarry.db.connection import LanceConnection
 from quarry.db.optimizer import TableOptimizer
 from quarry.db.schema import SchemaManager
 from quarry.db.storage import get_db
@@ -72,5 +74,5 @@ class Database:
 
     @classmethod
     def connect(cls, path: Path) -> Database:
-        """Open a LanceDB connection and return a fully composed Database."""
-        return cls(get_db(path))
+        """Compose a Database over a self-recycling connection (see LanceConnection)."""
+        return cls(LanceConnection(partial(get_db, path)))
