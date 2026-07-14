@@ -183,6 +183,28 @@ def test_recycles_after_threshold_rebuilds(factory: ConnectionFactory) -> None:
     assert factory.open_count == 2, "next boundary must reopen the connection"
 
 
+def test_replace_false_does_not_advance_rebuild_counter(
+    factory: ConnectionFactory,
+) -> None:
+    """Idempotent ``replace=False`` builds create nothing to leak, so they must
+    not arm recycling — even well past the cap.
+    """
+    conn = LanceConnection(factory, recycle_after=1)
+    for _ in range(5):
+        conn.open_table("chunks").create_fts_index("text", replace=False)
+        conn.open_table("chunks").create_scalar_index("collection", replace=False)
+    conn.open_table("chunks")
+    assert factory.open_count == 1, "replace=False must never trigger a recycle"
+
+
+def test_replace_true_advances_rebuild_counter(factory: ConnectionFactory) -> None:
+    """A single ``replace=True`` rebuild at the cap arms the next-boundary recycle."""
+    conn = LanceConnection(factory, recycle_after=1)
+    conn.open_table("chunks").create_fts_index("text", replace=True)
+    conn.open_table("chunks")
+    assert factory.open_count == 2, "replace=True must advance the recycle counter"
+
+
 def test_does_not_recycle_below_threshold(factory: ConnectionFactory) -> None:
     conn = LanceConnection(factory, recycle_after=5)
     for _ in range(4):

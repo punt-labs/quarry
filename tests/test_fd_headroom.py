@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import resource
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,12 @@ class TestArithmetic:
         assert FdHeadroom(open_fds=8, soft_limit=10).utilization == pytest.approx(0.8)
 
     def test_utilization_zero_when_limit_unbounded(self) -> None:
+        # RLIM_INFINITY is the realistic "unlimited" value — a large positive
+        # int, not 0 — so it must yield 0.0, never a giant denominator.
+        headroom = FdHeadroom(open_fds=99, soft_limit=resource.RLIM_INFINITY)
+        assert headroom.utilization == 0.0
+
+    def test_utilization_zero_when_limit_nonpositive(self) -> None:
         assert FdHeadroom(open_fds=99, soft_limit=0).utilization == 0.0
 
     def test_is_low_above_threshold(self) -> None:

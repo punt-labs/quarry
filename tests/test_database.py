@@ -3,12 +3,14 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Self, cast
 
 import numpy as np
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
+
+    from quarry.types import LanceDB
 
 from quarry.db import (
     ChunkCatalog,
@@ -18,6 +20,7 @@ from quarry.db import (
     TableOptimizer,
     get_db,
 )
+from quarry.db.schema import TABLE_NAME
 from quarry.models import Chunk
 from quarry.retrieval import HybridRetriever, RetrievalConfig
 
@@ -662,6 +665,73 @@ class TestOptimizeTable:
     def test_noop_on_empty_db(self, tmp_path: Path):
         db = get_db(tmp_path / "db")
         TableOptimizer(db).optimize()  # No table, no error
+
+
+class _FakeTables:
+    """The ``.tables`` payload of a fake ``list_tables`` result."""
+
+    __slots__ = ("tables",)
+
+    tables: list[str]
+
+    def __new__(cls) -> Self:
+        self = super().__new__(cls)
+        self.tables = [TABLE_NAME]
+        return self
+
+
+class _RaisingUriTable:
+    """A table whose ``.uri`` access raises, as a surprising binding would."""
+
+    __slots__ = ()
+
+    @property
+    def uri(self) -> str:
+        msg = "uri unavailable"
+        raise AttributeError(msg)
+
+
+class _NonStrUriTable:
+    """A table whose ``.uri`` is unexpectedly non-str (``Path`` will reject it)."""
+
+    __slots__ = ()
+
+    @property
+    def uri(self) -> object:
+        return 12345
+
+
+class _FakeOptimizerDb:
+    """A minimal ``LanceDB`` stand-in serving one table for count_fragments."""
+
+    __slots__ = ("_table",)
+
+    _table: object
+
+    def __new__(cls, table: object) -> Self:
+        self = super().__new__(cls)
+        self._table = table
+        return self
+
+    def list_tables(self) -> _FakeTables:
+        """Report the single-table listing count_fragments checks first."""
+        return _FakeTables()
+
+    def open_table(self, name: str) -> object:
+        """Return the injected fake table regardless of name."""
+        return self._table
+
+
+class TestCountFragmentsBestEffort:
+    """A surprising ``table.uri`` must degrade to 0, not break optimize()."""
+
+    def test_raising_uri_yields_zero(self) -> None:
+        db = cast("LanceDB", _FakeOptimizerDb(_RaisingUriTable()))
+        assert TableOptimizer(db).count_fragments() == 0
+
+    def test_non_str_uri_yields_zero(self) -> None:
+        db = cast("LanceDB", _FakeOptimizerDb(_NonStrUriTable()))
+        assert TableOptimizer(db).count_fragments() == 0
 
 
 class TestConcurrentInsert:

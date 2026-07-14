@@ -62,7 +62,8 @@ class FdHeadroom:
     @property
     def utilization(self) -> float:
         """Fraction of the soft limit in use (``0.0`` when the limit is unbounded)."""
-        if self.soft_limit <= 0:
+        # RLIM_INFINITY is a large positive int, not 0, yet still means unbounded.
+        if self.soft_limit <= 0 or self.soft_limit == resource.RLIM_INFINITY:
             return 0.0
         return self.open_fds / self.soft_limit
 

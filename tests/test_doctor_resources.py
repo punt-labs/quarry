@@ -20,6 +20,8 @@ class TestFdHeadroomCheck:
         result = ResourceDiagnostics.fd_headroom()
         assert result.passed is False
         assert "over 80%" in result.message
+        # The headroom warning is errno-general, not EMFILE-specific.
+        assert "descriptor exhaustion" in result.message
         assert result.required is False
 
     def test_passes_when_healthy(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -42,6 +44,8 @@ class TestFdHeadroomCheck:
         result = ResourceDiagnostics.fd_headroom()
         assert result.passed is False
         assert "exhaustion" in result.message
+        # The message names the actual errno, not a hardcoded EMFILE.
+        assert "EMFILE" in result.message
 
     def test_enfile_reports_exhaustion_not_healthy(
         self, monkeypatch: pytest.MonkeyPatch
@@ -53,6 +57,8 @@ class TestFdHeadroomCheck:
         result = ResourceDiagnostics.fd_headroom()
         assert result.passed is False
         assert "exhaustion" in result.message
+        # ENFILE (system-wide) must report ENFILE, not the mislabelled EMFILE.
+        assert "ENFILE" in result.message
 
     def test_degrades_when_measurement_unavailable(
         self, monkeypatch: pytest.MonkeyPatch

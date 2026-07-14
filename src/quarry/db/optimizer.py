@@ -43,7 +43,9 @@ class TableOptimizer:
             data_dir = Path(table.uri) / "data"
             if data_dir.is_dir():
                 return sum(1 for _ in data_dir.iterdir())
-        except OSError:
+        except (OSError, TypeError, AttributeError):
+            # Best-effort: a missing dir or a surprising uri (non-str, absent)
+            # degrades to 0 rather than breaking optimize()'s fragment check.
             pass
         return 0
 

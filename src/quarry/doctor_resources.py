@@ -36,14 +36,16 @@ class ResourceDiagnostics:
             headroom = FdHeadroom.sample()
         except OSError as exc:
             if exc.errno in (errno.EMFILE, errno.ENFILE):
+                code = errno.errorcode.get(exc.errno, "?")
                 return result(
                     passed=False,
-                    message="descriptor exhaustion suspected (EMFILE)",
+                    message=f"descriptor exhaustion suspected ({code})",
                 )
             return result(passed=True, message=f"unavailable: {exc}")
         if headroom.is_low:
             return result(
                 passed=False,
-                message=f"{headroom.describe()} — over 80%, risk of EMFILE",
+                message=f"{headroom.describe()} — over 80%, "
+                "risk of descriptor exhaustion",
             )
         return result(passed=True, message=headroom.describe())

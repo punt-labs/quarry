@@ -110,14 +110,16 @@ class RecyclingTable:
         index_type: str = "BTREE",
         replace: bool = False,
     ) -> None:
-        """Build a scalar index, then report the rebuild to the connection."""
+        """Build a scalar index; report only ``replace=True``, which leaks fds."""
         self._table.create_scalar_index(column, index_type=index_type, replace=replace)
-        self._conn.note_index_rebuild()
+        if replace:
+            self._conn.note_index_rebuild()
 
     def create_fts_index(self, column: str, *, replace: bool = False) -> None:
-        """Build the full-text index, then report the rebuild to the connection."""
+        """Build the full-text index; report only ``replace=True``, which leaks fds."""
         self._table.create_fts_index(column, replace=replace)
-        self._conn.note_index_rebuild()
+        if replace:
+            self._conn.note_index_rebuild()
 
 
 class LanceConnection:
