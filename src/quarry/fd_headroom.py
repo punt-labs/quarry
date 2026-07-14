@@ -14,10 +14,23 @@ platform that simply lacks an fd directory to scan by inspecting ``errno``.
 
 from __future__ import annotations
 
-import resource
+import importlib
 from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType
 from typing import Self, final
+
+# ``resource`` is POSIX-only and absent on platforms without rlimits (e.g.
+# Windows). Import it optionally so ``import quarry`` never crashes there; when
+# it is missing the sampler degrades exactly like a missing fd directory —
+# ``sample`` raises an errno-less ``OSError`` (callers report "unavailable") and
+# ``describe`` treats the limit as unbounded — instead of poisoning the import
+# chain (fd_headroom is imported by doctor_resources and fd_telemetry).
+resource: ModuleType | None
+try:
+    resource = importlib.import_module("resource")
+except ImportError:
+    resource = None
 
 # Warn once the process crosses this fraction of its soft descriptor limit —
 # early enough to act before EMFILE, late enough to avoid nuisance warnings.
@@ -38,9 +51,15 @@ class FdHeadroom:
 
         Propagates ``OSError`` whose ``errno`` is ``EMFILE``/``ENFILE`` when
         descriptor exhaustion prevents the scan itself — that failure *is* the
-        signal callers must surface, never swallow as healthy.
+        signal callers must surface, never swallow as healthy. Raises the same
+        errno-less ``OSError`` used for a missing fd directory when the POSIX
+        ``resource`` module is unavailable, so callers report "unavailable".
         """
-        soft, _hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        rlimits = resource
+        if rlimits is None:
+            msg = "no resource module on this platform"
+            raise OSError(msg)
+        soft, _hard = rlimits.getrlimit(rlimits.RLIMIT_NOFILE)
         return cls(open_fds=cls._count_open_fds(), soft_limit=soft)
 
     @staticmethod
@@ -62,8 +81,13 @@ class FdHeadroom:
     @property
     def _is_bounded(self) -> bool:
         """Whether the soft limit is a real positive ceiling, not ``RLIM_INFINITY``."""
-        # RLIM_INFINITY is a large positive int, not 0, yet still means unbounded.
-        return self.soft_limit > 0 and self.soft_limit != resource.RLIM_INFINITY
+        # RLIM_INFINITY is a large positive int, not 0, yet still means unbounded;
+        # an absent ``resource`` module is treated as unbounded too (describe ->
+        # "unlimited", utilization -> 0.0).
+        rlimits = resource
+        if rlimits is None:
+            return False
+        return self.soft_limit > 0 and self.soft_limit != rlimits.RLIM_INFINITY
 
     @property
     def utilization(self) -> float:

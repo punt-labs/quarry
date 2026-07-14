@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from quarry import fd_headroom
 from quarry.fd_headroom import FdHeadroom
 
 
@@ -48,6 +49,21 @@ class TestArithmetic:
     def test_describe_renders_unlimited_when_limit_nonpositive(self) -> None:
         assert FdHeadroom(open_fds=99, soft_limit=0).describe() == "99/unlimited fds"
 
+    def test_describe_renders_unlimited_whenresource_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # On a platform without the POSIX resource module the limit is treated
+        # as unbounded, so describe() degrades to "unlimited" instead of trusting
+        # a soft_limit it can no longer interpret.
+        monkeypatch.setattr(fd_headroom, "resource", None)
+        assert FdHeadroom(open_fds=99, soft_limit=256).describe() == "99/unlimited fds"
+
+    def test_utilization_zero_whenresource_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(fd_headroom, "resource", None)
+        assert FdHeadroom(open_fds=99, soft_limit=256).utilization == 0.0
+
 
 class TestSample:
     def test_sample_measures_the_running_process(self) -> None:
@@ -61,6 +77,17 @@ class TestSample:
         # Neither /proc/self/fd nor /dev/fd exists: genuine platform absence,
         # signalled by an OSError whose errno is unset (not an exhaustion code).
         monkeypatch.setattr(Path, "is_dir", lambda _self: False)
+        with pytest.raises(OSError) as excinfo:
+            FdHeadroom.sample()
+        assert excinfo.value.errno is None
+
+    def test_absentresource_module_raises_errno_less_oserror(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # No POSIX resource module (e.g. Windows): sample() raises the same
+        # errno-less OSError as a missing fd directory, so callers report
+        # "unavailable" rather than crashing the import/health path.
+        monkeypatch.setattr(fd_headroom, "resource", None)
         with pytest.raises(OSError) as excinfo:
             FdHeadroom.sample()
         assert excinfo.value.errno is None
