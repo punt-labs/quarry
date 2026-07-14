@@ -239,7 +239,10 @@ addopts = "-ra -q -m 'not slow'"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 timeout = 30
-markers = ["slow: marks tests as slow (run with -m slow)"]
+markers = [
+    "slow: marks tests as slow (run with -m slow)",
+    "resource: long-lived-process resource-invariant tests (fd/memory leak guards)",
+]
 
 [tool.coverage.run]
 source = ["src"]

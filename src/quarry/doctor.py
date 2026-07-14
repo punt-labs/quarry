@@ -10,17 +10,12 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Generator
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-
-@dataclass(frozen=True)
-class CheckResult:
-    name: str
-    passed: bool
-    message: str
-    required: bool = True
+from quarry.doctor_captures import CaptureDiagnostics
+from quarry.doctor_resources import ResourceDiagnostics
+from quarry.results import CheckResult
 
 
 def _quarry_version() -> str:
@@ -305,48 +300,47 @@ def _check_sync_health(registry_path: Path) -> CheckResult:
             message="no registrations",
             required=False,
         )
-    conn = None
     try:
-        conn = SyncRegistry(registry_path)
-        regs = conn.list_registrations()
-        if not regs:
-            return CheckResult(
-                name="Sync",
-                passed=True,
-                message="no registrations",
-                required=False,
-            )
-        # Find the most recent ingested_at per collection from the files table
-        now = datetime.now(UTC)
-        count = len(regs)
-        oldest_age: float | None = None
-        never_synced: list[str] = []
-        for reg in regs:
-            row = conn.execute(
-                "SELECT MAX(ingested_at) FROM files WHERE collection = ?",
-                (reg.collection,),
-            ).fetchone()
-            last_ingested: str | None = row[0] if row else None
-            if last_ingested is None:
-                never_synced.append(reg.collection)
-            else:
-                age = now - datetime.fromisoformat(last_ingested)
-                age_seconds = age.total_seconds()
-                if oldest_age is None or age_seconds > oldest_age:
-                    oldest_age = age_seconds
-        if never_synced:
-            names = ", ".join(never_synced[:3])
-            msg = f"{count} collections, {len(never_synced)} never synced: {names}"
-            return CheckResult(
-                name="Sync",
-                passed=False,
-                message=msg,
-                required=False,
-            )
-        # All regs have files when never_synced is empty.
-        if oldest_age is None:  # pragma: no cover
-            oldest_age = 0.0
-        return _sync_age_result(count, oldest_age)
+        with contextlib.closing(SyncRegistry(registry_path)) as conn:
+            regs = conn.list_registrations()
+            if not regs:
+                return CheckResult(
+                    name="Sync",
+                    passed=True,
+                    message="no registrations",
+                    required=False,
+                )
+            # Find the most recent ingested_at per collection from the files table
+            now = datetime.now(UTC)
+            count = len(regs)
+            oldest_age: float | None = None
+            never_synced: list[str] = []
+            for reg in regs:
+                row = conn.execute(
+                    "SELECT MAX(ingested_at) FROM files WHERE collection = ?",
+                    (reg.collection,),
+                ).fetchone()
+                last_ingested: str | None = row[0] if row else None
+                if last_ingested is None:
+                    never_synced.append(reg.collection)
+                else:
+                    age = now - datetime.fromisoformat(last_ingested)
+                    age_seconds = age.total_seconds()
+                    if oldest_age is None or age_seconds > oldest_age:
+                        oldest_age = age_seconds
+            if never_synced:
+                names = ", ".join(never_synced[:3])
+                msg = f"{count} collections, {len(never_synced)} never synced: {names}"
+                return CheckResult(
+                    name="Sync",
+                    passed=False,
+                    message=msg,
+                    required=False,
+                )
+            # All regs have files when never_synced is empty.
+            if oldest_age is None:  # pragma: no cover
+                oldest_age = 0.0
+            return _sync_age_result(count, oldest_age)
     except Exception as exc:  # noqa: BLE001
         return CheckResult(
             name="Sync",
@@ -354,9 +348,6 @@ def _check_sync_health(registry_path: Path) -> CheckResult:
             message=f"registry error: {exc}",
             required=False,
         )
-    finally:
-        if conn is not None:
-            conn.close()
 
 
 def _check_sync_directories(registry_path: Path) -> CheckResult:
@@ -370,32 +361,33 @@ def _check_sync_directories(registry_path: Path) -> CheckResult:
             message="no registrations",
             required=False,
         )
-    conn = None
     try:
-        conn = SyncRegistry(registry_path)
-        regs = conn.list_registrations()
-        if not regs:
+        with contextlib.closing(SyncRegistry(registry_path)) as conn:
+            regs = conn.list_registrations()
+            if not regs:
+                return CheckResult(
+                    name="Sync directories",
+                    passed=True,
+                    message="no registrations",
+                    required=False,
+                )
+            missing = [
+                reg.collection for reg in regs if not Path(reg.directory).is_dir()
+            ]
+            if missing:
+                names = ", ".join(missing[:3])
+                return CheckResult(
+                    name="Sync directories",
+                    passed=False,
+                    message=f"{len(missing)} missing: {names}",
+                    required=False,
+                )
             return CheckResult(
                 name="Sync directories",
                 passed=True,
-                message="no registrations",
+                message=f"{len(regs)} directories OK",
                 required=False,
             )
-        missing = [reg.collection for reg in regs if not Path(reg.directory).is_dir()]
-        if missing:
-            names = ", ".join(missing[:3])
-            return CheckResult(
-                name="Sync directories",
-                passed=False,
-                message=f"{len(missing)} missing: {names}",
-                required=False,
-            )
-        return CheckResult(
-            name="Sync directories",
-            passed=True,
-            message=f"{len(regs)} directories OK",
-            required=False,
-        )
     except Exception as exc:  # noqa: BLE001
         return CheckResult(
             name="Sync directories",
@@ -403,9 +395,6 @@ def _check_sync_directories(registry_path: Path) -> CheckResult:
             message=f"registry error: {exc}",
             required=False,
         )
-    finally:
-        if conn is not None:
-            conn.close()
 
 
 def _check_enable_status(registry_path: Path, cwd: str) -> CheckResult:  # noqa: ARG001
@@ -1056,7 +1045,6 @@ def check_environment(*, _skip_header: bool = False) -> int:
         print()  # noqa: T201
 
     from quarry.config import Settings  # noqa: PLC0415
-    from quarry.doctor_captures import CaptureDiagnostics  # noqa: PLC0415
 
     settings = Settings()
     cwd = str(Path.cwd())
@@ -1072,6 +1060,7 @@ def check_environment(*, _skip_header: bool = False) -> int:
             _check_claude_code_mcp(),
             _check_claude_desktop_mcp(),
             _check_storage(),
+            ResourceDiagnostics.fd_headroom(),
             _check_fts_health(settings.lancedb_path),
             _check_sync_health(settings.registry_path),
             _check_sync_directories(settings.registry_path),

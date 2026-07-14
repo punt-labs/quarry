@@ -1,0 +1,108 @@
+"""Tests for the FdHeadroom file-descriptor value object."""
+
+from __future__ import annotations
+
+import errno
+import resource
+from pathlib import Path
+
+import pytest
+
+from quarry import fd_headroom
+from quarry.fd_headroom import FdHeadroom
+
+
+class TestArithmetic:
+    def test_utilization_is_used_over_limit(self) -> None:
+        assert FdHeadroom(open_fds=8, soft_limit=10).utilization == pytest.approx(0.8)
+
+    def test_utilization_zero_when_limit_unbounded(self) -> None:
+        # RLIM_INFINITY is the realistic "unlimited" value — a large positive
+        # int, not 0 — so it must yield 0.0, never a giant denominator.
+        headroom = FdHeadroom(open_fds=99, soft_limit=resource.RLIM_INFINITY)
+        assert headroom.utilization == 0.0
+
+    def test_utilization_zero_when_limit_nonpositive(self) -> None:
+        assert FdHeadroom(open_fds=99, soft_limit=0).utilization == 0.0
+
+    def test_is_low_above_threshold(self) -> None:
+        assert FdHeadroom(open_fds=9, soft_limit=10).is_low is True
+
+    def test_is_low_false_at_exactly_threshold(self) -> None:
+        # 80% is the warning boundary; the check fires strictly above it.
+        assert FdHeadroom(open_fds=8, soft_limit=10).is_low is False
+
+    def test_describe_reports_used_limit_and_percent(self) -> None:
+        assert (
+            FdHeadroom(open_fds=200, soft_limit=256).describe() == "200/256 fds (78%)"
+        )
+
+    def test_describe_renders_unlimited_when_unbounded(self) -> None:
+        # RLIM_INFINITY must render as "unlimited", never the giant raw int that
+        # would otherwise flood doctor output and telemetry logs.
+        described = FdHeadroom(
+            open_fds=99, soft_limit=resource.RLIM_INFINITY
+        ).describe()
+        assert described == "99/unlimited fds"
+        assert str(resource.RLIM_INFINITY) not in described
+
+    def test_describe_renders_unlimited_when_limit_nonpositive(self) -> None:
+        assert FdHeadroom(open_fds=99, soft_limit=0).describe() == "99/unlimited fds"
+
+    def test_describe_renders_unlimited_whenresource_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # On a platform without the POSIX resource module the limit is treated
+        # as unbounded, so describe() degrades to "unlimited" instead of trusting
+        # a soft_limit it can no longer interpret.
+        monkeypatch.setattr(fd_headroom, "resource", None)
+        assert FdHeadroom(open_fds=99, soft_limit=256).describe() == "99/unlimited fds"
+
+    def test_utilization_zero_whenresource_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(fd_headroom, "resource", None)
+        assert FdHeadroom(open_fds=99, soft_limit=256).utilization == 0.0
+
+
+class TestSample:
+    def test_sample_measures_the_running_process(self) -> None:
+        headroom = FdHeadroom.sample()
+        assert headroom.open_fds > 0
+        assert headroom.soft_limit > 0
+
+    def test_absent_fd_directory_raises_errno_less_oserror(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Neither /proc/self/fd nor /dev/fd exists: genuine platform absence,
+        # signalled by an OSError whose errno is unset (not an exhaustion code).
+        monkeypatch.setattr(Path, "is_dir", lambda _self: False)
+        with pytest.raises(OSError) as excinfo:
+            FdHeadroom.sample()
+        assert excinfo.value.errno is None
+
+    def test_absentresource_module_raises_errno_less_oserror(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # No POSIX resource module (e.g. Windows): sample() raises the same
+        # errno-less OSError as a missing fd directory, so callers report
+        # "unavailable" rather than crashing the import/health path.
+        monkeypatch.setattr(fd_headroom, "resource", None)
+        with pytest.raises(OSError) as excinfo:
+            FdHeadroom.sample()
+        assert excinfo.value.errno is None
+
+    def test_emfile_during_scan_propagates_unchanged(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # At real exhaustion the iterdir scan itself raises EMFILE; sample must
+        # let it propagate so callers can recognise exhaustion by errno rather
+        # than mistaking it for a healthy or absent measurement.
+        def _emfile(_self: Path) -> object:
+            raise OSError(errno.EMFILE, "Too many open files")
+
+        monkeypatch.setattr(Path, "is_dir", lambda _self: True)
+        monkeypatch.setattr(Path, "iterdir", _emfile)
+        with pytest.raises(OSError) as excinfo:
+            FdHeadroom.sample()
+        assert excinfo.value.errno == errno.EMFILE

@@ -16,6 +16,19 @@ across `transform`, `index`, and `connector`).
 
 ### Added
 
+- **infra (daemon fd telemetry)**: the `quarry serve` daemon now logs its open
+  file-descriptor usage on a fixed cadence (every 5 minutes) so a climbing count
+  — the proven LanceDB deleted-index-handle leak — is visible in logs before it
+  reaches `RLIMIT_NOFILE`, returns EMFILE, and requests start failing with HTTP
+  500. Each sample logs `open_fds`, the soft `RLIMIT_NOFILE`, and `pct_used`
+  (counted from `/proc/self/fd`, falling back to `/dev/fd`), at INFO normally and
+  WARNING past 80% of the limit; an unlimited soft limit never warns. The monitor
+  task starts with the server lifespan and is cancelled on shutdown; a sample
+  that raises — an EMFILE mid-scan at real exhaustion, or a container with no fd
+  directory — logs a single line (with the traceback) and keeps ticking rather
+  than silently killing telemetry for the daemon's remaining life. Observability
+  only — the leak fix itself lands separately.
+
 - **captures (shadow repo)**: opt-in private capture shadow sync moves redacted
   session captures off the public repo into a per-project private
   `<repo>-quarry`. Enable via a `shadow:` block in `.punt-labs/quarry/config.md`
@@ -35,7 +48,28 @@ across `transform`, `index`, and `connector`).
   `git rm --cached` + history-purge remediation). Auth reuses the user's existing
   git credentials — no new secret storage (quarry-ow3k, DES-039).
 
-### Security
+### Fixed
+
+- **index (daemon)**: the `quarry serve` daemon no longer leaks a file
+  descriptor per index rebuild. The daemon holds a LanceDB connection for its
+  whole lifetime and rebuilds the FTS/scalar index on every sync;
+  `create_fts_index(replace=True)` supersedes an index generation and deletes the
+  old files, but LanceDB's Rust core keeps the deleted-file readers open. Over
+  many syncs the descriptors accumulated until the process hit `RLIMIT_NOFILE`
+  and `quarry find` began returning HTTP 500 (while short-lived CLI processes,
+  which connect once and exit, never noticed — so `quarry doctor` passed). A new
+  `Database.connect` now returns a self-recycling connection that reopens itself
+  after a bounded number of index rebuilds, dropping the Rust reader cache and
+  releasing the descriptors; recycling happens only at a table-open boundary so
+  the release is clean. Confirmed a bump to the latest lancedb (0.34.0) does not
+  fix the leak — it is a Rust-core reader-cache behavior present in every tested
+  version — so the fix is quarry-side. A resource-invariant test tier
+  (`tests/test_resource_invariants.py`) guards against regressions in CI, and
+  `quarry doctor` gained an "FD headroom" check that warns before descriptor
+  usage crosses 80% of the soft limit — and reports descriptor exhaustion
+  (`EMFILE`/`ENFILE` raised while sampling) as a failure rather than a reassuring
+  "unavailable", so the one check meant to catch exhaustion no longer passes at
+  the moment it occurs.
 
 - **index (capture)**: session capture files and WebFetch DB ingest now redact
   personally identifying information at write time, in addition to the existing

@@ -23,8 +23,8 @@ import re
 import socket as socket_module
 import time
 import uuid
-from collections.abc import AsyncGenerator, Callable
-from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager, suppress
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
@@ -43,6 +43,7 @@ from starlette.routing import Route, WebSocketRoute
 from quarry.config import DEFAULT_PORT, Settings
 from quarry.db import Database
 from quarry.db.storage import dir_size_bytes, format_size
+from quarry.fd_telemetry import FdTelemetry
 from quarry.http_guards import RequestGuards
 from quarry.http_resources import QuarryResources
 from quarry.ingestion.provider import ProviderSelection
@@ -162,25 +163,42 @@ class TaskState:
     created_at: float = field(default_factory=time.monotonic)
 
 
-def _gc_tasks(ctx: _QuarryContext) -> None:
-    """Evict completed/failed tasks older than TASK_TTL_SECONDS."""
+@contextmanager
+def _task_terminal(state: TaskState) -> Iterator[None]:
+    """Record *state*'s terminal status when its background body exits.
+
+    Cancellation is recorded then re-raised so the event loop still observes
+    it; any other exception is logged and recorded as the failure reason; a
+    body that exits without setting a terminal status is marked failed so no
+    task is ever left stuck in ``running`` (a guard for future code paths).
+    """
+    try:
+        yield
+    except asyncio.CancelledError:
+        state.status = "failed"
+        state.error = "task was cancelled"
+        raise
+    except Exception as exc:
+        logger.exception("Background %s failed", state.kind)
+        state.status = "failed"
+        state.error = str(exc)
+    finally:
+        if state.status == "running":
+            state.status = "failed"
+            state.error = "task exited without setting terminal status"
+
+
+def _begin_task(ctx: _QuarryContext, kind: str) -> TaskState:
+    """Create a TaskState, evicting completed tasks older than the TTL first."""
     now = time.monotonic()
     expired = [
         tid
-        for tid, t in ctx.tasks.items()
-        if t.status != "running" and (now - t.created_at) > TASK_TTL_SECONDS
+        for tid, task in ctx.tasks.items()
+        if task.status != "running" and (now - task.created_at) > TASK_TTL_SECONDS
     ]
     for tid in expired:
         del ctx.tasks[tid]
         ctx.task_refs.pop(tid, None)
-
-
-def _begin_task(
-    ctx: _QuarryContext,
-    kind: str,
-) -> TaskState:
-    """Create a TaskState, register it, and run GC. Caller schedules the coro."""
-    _gc_tasks(ctx)
     task_id = f"{kind}-{uuid.uuid4().hex[:12]}"
     state = TaskState(task_id=task_id, kind=kind)
     ctx.tasks[task_id] = state
@@ -360,7 +378,10 @@ async def _documents_delete_route(request: Request) -> JSONResponse:
     collection = request.query_params.get("collection") or None
     ctx = _ctx(request)
     state = _begin_task(ctx, "delete")
-    task = asyncio.create_task(_run_delete_document_task(ctx, state, name, collection))
+    delete_call = partial(
+        ctx.database.store.delete_document, name, collection=collection
+    )
+    task = asyncio.create_task(_run_delete_task(state, delete_call, name, "document"))
     task.add_done_callback(partial(_on_task_done, ctx, state.task_id))
     ctx.task_refs[state.task_id] = task
 
@@ -370,31 +391,21 @@ async def _documents_delete_route(request: Request) -> JSONResponse:
     )
 
 
-async def _run_delete_document_task(
-    ctx: _QuarryContext,
+async def _run_delete_task(
     state: TaskState,
+    delete_call: Callable[[], int],
     name: str,
-    collection: str | None,
+    kind_label: str,
 ) -> None:
-    """Execute document deletion in background and update task state."""
-    try:
-        count = await run_in_threadpool(
-            ctx.database.store.delete_document, name, collection=collection
-        )
+    """Run *delete_call* in a worker thread and record the deleted count.
+
+    Shared by document and collection deletion, which differ only in the
+    store method invoked and the ``type`` label reported to the client.
+    """
+    with _task_terminal(state):
+        count = await run_in_threadpool(delete_call)
         state.status = "completed"
-        state.results = {"deleted": count, "name": name, "type": "document"}
-    except asyncio.CancelledError:
-        state.status = "failed"
-        state.error = "task was cancelled"
-        raise
-    except Exception as exc:
-        logger.exception("Background delete document failed")
-        state.status = "failed"
-        state.error = str(exc)
-    finally:
-        if state.status == "running":
-            state.status = "failed"
-            state.error = "task exited without setting terminal status"
+        state.results = {"deleted": count, "name": name, "type": kind_label}
 
 
 def _collections_route(request: Request) -> JSONResponse:
@@ -421,7 +432,8 @@ async def _collections_delete_route(request: Request) -> JSONResponse:
 
     ctx = _ctx(request)
     state = _begin_task(ctx, "delete")
-    task = asyncio.create_task(_run_delete_collection_task(ctx, state, name))
+    delete_call = partial(ctx.database.store.delete_collection, name)
+    task = asyncio.create_task(_run_delete_task(state, delete_call, name, "collection"))
     task.add_done_callback(partial(_on_task_done, ctx, state.task_id))
     ctx.task_refs[state.task_id] = task
 
@@ -429,30 +441,6 @@ async def _collections_delete_route(request: Request) -> JSONResponse:
         {"task_id": state.task_id, "status": "accepted"},
         status_code=202,
     )
-
-
-async def _run_delete_collection_task(
-    ctx: _QuarryContext,
-    state: TaskState,
-    name: str,
-) -> None:
-    """Execute collection deletion in background and update task state."""
-    try:
-        count = await run_in_threadpool(ctx.database.store.delete_collection, name)
-        state.status = "completed"
-        state.results = {"deleted": count, "name": name, "type": "collection"}
-    except asyncio.CancelledError:
-        state.status = "failed"
-        state.error = "task was cancelled"
-        raise
-    except Exception as exc:
-        logger.exception("Background delete collection failed")
-        state.status = "failed"
-        state.error = str(exc)
-    finally:
-        if state.status == "running":
-            state.status = "failed"
-            state.error = "task exited without setting terminal status"
 
 
 def _show_route(request: Request) -> JSONResponse:
@@ -580,7 +568,7 @@ async def _run_remember_task(
     """Execute ingest_content in a background thread and update task state."""
     from quarry.ingestion.pipeline import ingest_content  # noqa: PLC0415
 
-    try:
+    with _task_terminal(state):
         result = await run_in_threadpool(
             ingest_content,
             content,
@@ -596,18 +584,6 @@ async def _run_remember_task(
         )
         state.status = "completed"
         state.results = dict(result)
-    except asyncio.CancelledError:
-        state.status = "failed"
-        state.error = "task was cancelled"
-        raise
-    except Exception as exc:
-        logger.exception("Background remember failed")
-        state.status = "failed"
-        state.error = str(exc)
-    finally:
-        if state.status == "running":
-            state.status = "failed"
-            state.error = "task exited without setting terminal status"
 
 
 async def _ingest_route(request: Request) -> JSONResponse:
@@ -693,7 +669,7 @@ async def _run_ingest_task(
     """Execute ingest_auto in a background thread and update task state."""
     from quarry.ingestion.pipeline import ingest_auto  # noqa: PLC0415
 
-    try:
+    with _task_terminal(state):
         result = await run_in_threadpool(
             ingest_auto,
             source,
@@ -707,27 +683,13 @@ async def _run_ingest_task(
         )
         state.status = "completed"
         state.results = dict(result)
-    except asyncio.CancelledError:
-        state.status = "failed"
-        state.error = "task was cancelled"
-        raise
-    except Exception as exc:
-        logger.exception("Background ingest failed")
-        state.status = "failed"
-        state.error = str(exc)
-    finally:
-        # Belt-and-suspenders: if a future code path exits the try
-        # without setting a terminal status, mark it failed.
-        if state.status == "running":
-            state.status = "failed"
-            state.error = "task exited without setting terminal status"
 
 
 async def _run_sync_task(ctx: _QuarryContext, state: TaskState) -> None:
     """Execute sync_all in a background thread and update *state*."""
     from quarry.sync import sync_all  # noqa: PLC0415
 
-    try:
+    with _task_terminal(state):
         results = await run_in_threadpool(sync_all, ctx.database.db, ctx.settings)
         state.status = "completed"
         state.results = {
@@ -741,20 +703,6 @@ async def _run_sync_task(ctx: _QuarryContext, state: TaskState) -> None:
             }
             for collection, res in results.items()
         }
-    except asyncio.CancelledError:
-        state.status = "failed"
-        state.error = "task was cancelled"
-        raise
-    except Exception as exc:
-        logger.exception("Background sync failed")
-        state.status = "failed"
-        state.error = str(exc)
-    finally:
-        # Belt-and-suspenders: if a future code path exits the try
-        # without setting a terminal status, mark it failed.
-        if state.status == "running":
-            state.status = "failed"
-            state.error = "task exited without setting terminal status"
 
 
 async def _sync_route(request: Request) -> JSONResponse:
@@ -1167,28 +1115,16 @@ async def _run_purge_task(
     removed_docs: list[str],
 ) -> None:
     """Purge chunks for an already-deregistered collection; update task state."""
-    try:
 
-        def _purge() -> int:
-            store = ctx.database.store
-            return sum(
-                store.delete_document(d, collection=collection) for d in removed_docs
-            )
+    def _purge() -> int:
+        store = ctx.database.store
+        return sum(
+            store.delete_document(d, collection=collection) for d in removed_docs
+        )
 
+    with _task_terminal(state):
         state.results["deleted_chunks"] = await run_in_threadpool(_purge)
         state.status = "completed"
-    except asyncio.CancelledError:
-        state.status = "failed"
-        state.error = "task was cancelled"
-        raise
-    except Exception as exc:
-        logger.exception("Background chunk purge failed")
-        state.status = "failed"
-        state.error = str(exc)
-    finally:
-        if state.status == "running":
-            state.status = "failed"
-            state.error = "task exited without setting terminal status"
 
 
 def _status_route(request: Request) -> JSONResponse:
@@ -1386,6 +1322,10 @@ def _remove_port_file(port_path: Path) -> None:
 # Server entry point
 # ---------------------------------------------------------------------------
 
+# Sample the daemon's open-fd count every 5 minutes so a climbing trend — the
+# LanceDB deleted-index-handle leak — surfaces in logs before it reaches EMFILE.
+_FD_TELEMETRY_INTERVAL_SECONDS = 300.0
+
 
 def _validate_host_key(host: str, api_key: str | None) -> None:
     """Refuse to bind to non-loopback without an API key."""
@@ -1431,9 +1371,17 @@ def serve(
 
     @asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncGenerator[None]:
-        yield
-        # Shutdown
-        _remove_port_file(port_path)
+        # Runs for the daemon's lifetime; cancelled on shutdown below.
+        monitor = asyncio.create_task(FdTelemetry(_FD_TELEMETRY_INTERVAL_SECONDS).run())
+        try:
+            yield
+        finally:
+            # Shutdown. Remove the port file first so cleanup is guaranteed
+            # even if draining the monitor task surfaces an error.
+            monitor.cancel()
+            _remove_port_file(port_path)
+            with suppress(asyncio.CancelledError):
+                await monitor
 
     app = build_app(ctx, lifespan=lifespan)
 

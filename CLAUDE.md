@@ -122,6 +122,7 @@ Functions in `src/quarry/ingestion/pipeline.py` and `src/quarry/ingestion/url_in
 | Layer | Make target | Runs in CI | What it covers |
 |-------|-------------|------------|----------------|
 | Unit | `make test` | yes | DB, embedding, search, CLI, doctor, hooks, enable/disable, service, install scripts |
+| Resource-invariant | `make test` (marker `resource`) | yes | Long-lived-process leak guards: a single connection over many optimize cycles must not leak file descriptors (`tests/test_resource_invariants.py`). The daemon holds a connection for its whole lifetime; `create_fts_index(replace=True)` supersedes an index generation and LanceDB's Rust core never evicts the deleted-file readers, so a leak here is invisible to short-lived CLI tests and only surfaces as EMFILE → HTTP 500 in the daemon. |
 | Integration | `make test-integration` | no (needs real ONNX model) | Real filesystem + ONNX model end-to-end |
 | Shell scripts | `make test` (via pytest) | yes | Install script ordering, shellcheck |
 | HTTP API contract | `make test` | yes | Endpoint shape, params, response fields (growing) |
