@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [1.19.0] - 2026-07-14
+
 ### Added
 
 - **infra (daemon fd telemetry)**: the `quarry serve` daemon now logs its open
