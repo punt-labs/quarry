@@ -143,6 +143,7 @@ class LanceConnection:
         "_rebuilds",
         "_recycle",
         "_recycle_after",
+        "_recycling",
     )
 
     _connect: Callable[[], LanceDB]
@@ -150,6 +151,7 @@ class LanceConnection:
     _rebuilds: int
     _recycle_after: int
     _recycle: bool
+    _recycling: bool
     _lock: threading.Lock
 
     def __new__(
@@ -164,6 +166,7 @@ class LanceConnection:
         self._rebuilds = 0
         self._recycle_after = recycle_after
         self._recycle = False
+        self._recycling = False
         self._lock = threading.Lock()
         return self
 
@@ -203,6 +206,17 @@ class LanceConnection:
     def _maybe_recycle(self) -> None:
         """Reopen the underlying connection when a recycle is armed.
 
+        The reopen is *retry-safe*. A failing ``_connect()`` — most likely
+        exactly when descriptors are exhausted and a fresh open hits ``EMFILE``
+        — must not lose the pending recycle. So the armed ``_recycle`` flag and
+        the rebuild counter are cleared only *after* a successful reopen: if
+        ``_connect()`` raises, ``_recycle`` stays armed, the old ``_inner``
+        stays intact and usable, and the exception propagates. The next
+        ``open_table``/``list_tables`` boundary then retries the reopen. A
+        transient ``_recycling`` guard serialises the reopen so a concurrent
+        boundary serves the still-valid old connection rather than double-opening
+        a second one.
+
         Reassigning ``_inner`` drops the last *strong* reference to the old
         connection. The lancedb binding holds it in a reference cycle, so plain
         refcounting does not free it — only cyclic GC reclaims it and releases
@@ -218,9 +232,16 @@ class LanceConnection:
         would be redundant work on the hot sync path.
         """
         with self._lock:
-            if not self._recycle:
+            if not self._recycle or self._recycling:
                 return
+            self._recycling = True
+        try:
+            fresh = self._connect()
+        finally:
+            with self._lock:
+                self._recycling = False
+        with self._lock:
+            self._inner = fresh
             self._recycle = False
             self._rebuilds = 0
-        self._inner = self._connect()
         logger.debug("Recycled LanceDB connection to release cached fds")

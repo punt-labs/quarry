@@ -118,23 +118,27 @@ class ConnectionFactory:
         return cast("LanceDB", conn)
 
 
-class FailingRecycleFactory:
-    """Succeeds on the initial open, then raises on the recycle reopen.
+class FlakyRecycleFactory:
+    """Opens the first connection, fails the first reopen, then succeeds.
 
-    Models a reopen that fails (e.g. the storage path briefly unavailable): the
-    connection must keep serving the still-live original rather than dropping
-    into a half-open state.
+    Models a *transient* reopen failure — a momentary ``EMFILE`` exactly when
+    descriptors are exhausted: the first recycle attempt raises, but the pending
+    recycle must stay armed so a later boundary reopens cleanly onto a fresh
+    connection. Call 1 is the initial open, call 2 is the failing reopen, call 3
+    is the successful retry.
     """
 
-    __slots__ = ("_calls", "_first")
+    __slots__ = ("_calls", "_first", "_second")
 
     _calls: int
     _first: FakeConnection
+    _second: FakeConnection
 
     def __new__(cls) -> Self:
         self = super().__new__(cls)
         self._calls = 0
         self._first = FakeConnection()
+        self._second = FakeConnection()
         return self
 
     @property
@@ -147,12 +151,19 @@ class FailingRecycleFactory:
         """The original physical connection, still live after a failed recycle."""
         return self._first
 
+    @property
+    def second(self) -> FakeConnection:
+        """The replacement connection returned by the successful retry."""
+        return self._second
+
     def __call__(self) -> LanceDB:
         self._calls += 1
         if self._calls == 1:
             return cast("LanceDB", self._first)
-        msg = "reopen failed: storage unavailable"
-        raise OSError(msg)
+        if self._calls == 2:
+            msg = "reopen failed: storage unavailable"
+            raise OSError(msg)
+        return cast("LanceDB", self._second)
 
 
 @pytest.fixture()
@@ -228,20 +239,34 @@ def test_recycle_counter_resets_after_recycle(factory: ConnectionFactory) -> Non
     assert factory.open_count == 3
 
 
-def test_failed_recycle_keeps_old_connection_and_propagates() -> None:
-    """A reopen that raises leaves the original connection usable, not half-open."""
-    factory = FailingRecycleFactory()
-    conn = LanceConnection(factory, recycle_after=1)
-    conn.open_table("chunks").create_fts_index("text", replace=True)  # arms recycle
+def test_failed_recycle_keeps_old_connection_and_rearms() -> None:
+    """A reopen that raises stays armed: the old connection keeps serving until a
+    later boundary retries the reopen and swaps in a fresh connection.
+    """
+    factory = FlakyRecycleFactory()
+    conn = LanceConnection(factory, recycle_after=2)
 
+    # Hold a live table handle, then arm the recycle with two rebuilds. Writes
+    # through the handle bypass ``_maybe_recycle``, so they always hit whichever
+    # connection currently backs the wrapper.
+    table = conn.open_table("chunks")
+    table.create_fts_index("text", replace=True)
+    table.create_fts_index("text", replace=True)  # 2 rebuilds — recycle armed
+
+    # (b) The reopen raises and propagates rather than being swallowed.
     with pytest.raises(OSError, match="reopen failed"):
-        conn.open_table("chunks")  # recycle reopen raises — must propagate
+        conn.open_table("chunks")  # recycle reopen (call 2) raises
     assert factory.calls == 2, "the reopen was attempted"
 
-    # The original connection is untouched and still serving: the next access
-    # neither retries the now-disarmed recycle nor half-opens a broken one.
-    table = conn.open_table("chunks")
-    assert isinstance(table, RecyclingTable)
+    # (a) The old connection is intact, not half-open: the still-live handle
+    # keeps writing to it after the failed reopen.
     table.create_fts_index("text", replace=True)
-    assert factory.first.table.fts_rebuilds == 2, "old connection still writes"
-    assert factory.calls == 2, "no phantom reopen after the failure"
+    assert factory.first.table.fts_rebuilds == 3, "old connection still writes"
+
+    # (c) The recycle stayed armed, so the next boundary retries the reopen. This
+    # attempt (call 3) succeeds and swaps in the fresh connection.
+    fresh = conn.open_table("chunks")
+    assert factory.calls == 3, "recycle stayed armed and retried on next access"
+    assert isinstance(fresh, RecyclingTable)
+    fresh.create_fts_index("text", replace=True)
+    assert factory.second.table.fts_rebuilds == 1, "fresh connection now serves"
