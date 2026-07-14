@@ -239,6 +239,22 @@ def test_recycle_counter_resets_after_recycle(factory: ConnectionFactory) -> Non
     assert factory.open_count == 3
 
 
+def test_successful_recycle_leaves_no_armed_state(factory: ConnectionFactory) -> None:
+    """After a clean recycle, both the recycle flag and the in-progress guard are
+    cleared atomically: the very next boundary must not reopen again.
+    """
+    conn = LanceConnection(factory, recycle_after=1)
+    conn.open_table("chunks").create_fts_index("text", replace=True)
+    conn.open_table("chunks")  # crosses the cap — reopens once
+    assert factory.open_count == 2, "the armed recycle fired exactly once"
+
+    # No armed or in-progress state may linger: repeated boundaries are inert
+    # until a fresh rebuild re-arms the counter.
+    conn.open_table("chunks")
+    conn.open_table("chunks")
+    assert factory.open_count == 2, "a cleared recycle must not reopen again"
+
+
 def test_failed_recycle_keeps_old_connection_and_rearms() -> None:
     """A reopen that raises stays armed: the old connection keeps serving until a
     later boundary retries the reopen and swaps in a fresh connection.

@@ -60,10 +60,15 @@ class FdHeadroom:
         raise OSError(msg)
 
     @property
+    def _is_bounded(self) -> bool:
+        """Whether the soft limit is a real positive ceiling, not ``RLIM_INFINITY``."""
+        # RLIM_INFINITY is a large positive int, not 0, yet still means unbounded.
+        return self.soft_limit > 0 and self.soft_limit != resource.RLIM_INFINITY
+
+    @property
     def utilization(self) -> float:
         """Fraction of the soft limit in use (``0.0`` when the limit is unbounded)."""
-        # RLIM_INFINITY is a large positive int, not 0, yet still means unbounded.
-        if self.soft_limit <= 0 or self.soft_limit == resource.RLIM_INFINITY:
+        if not self._is_bounded:
             return 0.0
         return self.open_fds / self.soft_limit
 
@@ -73,7 +78,13 @@ class FdHeadroom:
         return self.utilization > _FD_WARN_RATIO
 
     def describe(self) -> str:
-        """Return a compact ``used/limit (pct%)`` summary."""
+        """Return a compact ``used/limit (pct%)`` summary.
+
+        Renders ``used/unlimited fds`` when the soft limit is unbounded, rather
+        than printing the giant ``RLIM_INFINITY`` sentinel and a meaningless 0%.
+        """
+        if not self._is_bounded:
+            return f"{self.open_fds}/unlimited fds"
         return (
             f"{self.open_fds}/{self.soft_limit} fds ({round(self.utilization * 100)}%)"
         )

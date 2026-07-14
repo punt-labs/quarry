@@ -36,6 +36,18 @@ class TestArithmetic:
             FdHeadroom(open_fds=200, soft_limit=256).describe() == "200/256 fds (78%)"
         )
 
+    def test_describe_renders_unlimited_when_unbounded(self) -> None:
+        # RLIM_INFINITY must render as "unlimited", never the giant raw int that
+        # would otherwise flood doctor output and telemetry logs.
+        described = FdHeadroom(
+            open_fds=99, soft_limit=resource.RLIM_INFINITY
+        ).describe()
+        assert described == "99/unlimited fds"
+        assert str(resource.RLIM_INFINITY) not in described
+
+    def test_describe_renders_unlimited_when_limit_nonpositive(self) -> None:
+        assert FdHeadroom(open_fds=99, soft_limit=0).describe() == "99/unlimited fds"
+
 
 class TestSample:
     def test_sample_measures_the_running_process(self) -> None:

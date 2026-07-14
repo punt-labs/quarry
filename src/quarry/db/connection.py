@@ -235,13 +235,23 @@ class LanceConnection:
             if not self._recycle or self._recycling:
                 return
             self._recycling = True
+        succeeded = False
         try:
             fresh = self._connect()
-        finally:
+            # Swap and disarm atomically under one lock: a concurrent boundary
+            # must never observe the recycle still armed with the guard already
+            # dropped, or it would open a second connection on top of this one.
             with self._lock:
+                self._inner = fresh
+                self._recycle = False
+                self._rebuilds = 0
                 self._recycling = False
-        with self._lock:
-            self._inner = fresh
-            self._recycle = False
-            self._rebuilds = 0
+            succeeded = True
+        finally:
+            if not succeeded:
+                # The reopen raised: drop only the in-progress guard, leaving
+                # _recycle armed so the next boundary retries onto the still-live
+                # old connection. The exception propagates to the caller.
+                with self._lock:
+                    self._recycling = False
         logger.debug("Recycled LanceDB connection to release cached fds")
