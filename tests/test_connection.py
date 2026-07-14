@@ -85,6 +85,16 @@ class FakeConnection:
         """Return the connection's table."""
         return self._table
 
+    def create_table(
+        self,
+        name: str,
+        *,
+        data: list[dict[str, object]],
+        schema: object,
+    ) -> FakeTable:
+        """Return the connection's table, ignoring the create arguments."""
+        return self._table
+
     def list_tables(self) -> FakeTables:
         """Return the fake table listing."""
         return FakeTables()
@@ -237,6 +247,19 @@ def test_recycle_counter_resets_after_recycle(factory: ConnectionFactory) -> Non
     conn.open_table("chunks").create_fts_index("text", replace=True)
     conn.open_table("chunks")  # second rebuild crosses cap — recycle #2
     assert factory.open_count == 3
+
+
+def test_create_table_fires_an_armed_recycle(factory: ConnectionFactory) -> None:
+    """``create_table`` is a connection boundary too: an armed recycle must fire
+    there, just as it does at ``open_table``/``list_tables``.
+    """
+    conn = LanceConnection(factory, recycle_after=1)
+    conn.open_table("chunks").create_fts_index("text", replace=True)  # arm recycle
+    assert factory.open_count == 1, "recycle defers past the live table handle"
+
+    table = conn.create_table("archive", data=[], schema=object())
+    assert factory.open_count == 2, "create_table must fire the armed recycle"
+    assert isinstance(table, RecyclingTable)
 
 
 def test_successful_recycle_leaves_no_armed_state(factory: ConnectionFactory) -> None:

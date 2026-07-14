@@ -187,7 +187,8 @@ class LanceConnection:
         data: list[dict[str, object]],
         schema: object,
     ) -> LanceTable:
-        """Create *name* and return it as a rebuild-reporting table."""
+        """Recycle if due, then create *name* as a rebuild-reporting table."""
+        self._maybe_recycle()
         table = self._inner.create_table(name, data=data, schema=schema)
         return RecyclingTable(table, self)
 
