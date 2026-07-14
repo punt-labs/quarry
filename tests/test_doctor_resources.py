@@ -2,34 +2,14 @@
 
 from __future__ import annotations
 
-import pytest
+import errno
+from typing import TYPE_CHECKING
 
-from quarry.doctor_resources import FdHeadroom, ResourceDiagnostics
+from quarry.doctor_resources import ResourceDiagnostics
+from quarry.fd_headroom import FdHeadroom
 
-
-class TestFdHeadroom:
-    def test_utilization_is_used_over_limit(self) -> None:
-        assert FdHeadroom(open_fds=8, soft_limit=10).utilization == pytest.approx(0.8)
-
-    def test_utilization_zero_when_limit_unbounded(self) -> None:
-        assert FdHeadroom(open_fds=99, soft_limit=0).utilization == 0.0
-
-    def test_is_low_above_threshold(self) -> None:
-        assert FdHeadroom(open_fds=9, soft_limit=10).is_low is True
-
-    def test_is_low_false_at_exactly_threshold(self) -> None:
-        # 80% is the warning boundary; the check fires strictly above it.
-        assert FdHeadroom(open_fds=8, soft_limit=10).is_low is False
-
-    def test_describe_reports_used_limit_and_percent(self) -> None:
-        assert (
-            FdHeadroom(open_fds=200, soft_limit=256).describe() == "200/256 fds (78%)"
-        )
-
-    def test_sample_measures_the_running_process(self) -> None:
-        headroom = FdHeadroom.sample()
-        assert headroom.open_fds > 0
-        assert headroom.soft_limit > 0
+if TYPE_CHECKING:
+    import pytest
 
 
 class TestFdHeadroomCheck:
@@ -50,9 +30,36 @@ class TestFdHeadroomCheck:
         assert result.passed is True
         assert "30/256" in result.message
 
+    def test_emfile_reports_exhaustion_not_healthy(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The check's whole purpose is to catch exhaustion; an EMFILE raised
+        # while sampling must fail the check, never masquerade as unavailable.
+        def _raise(cls: type[FdHeadroom]) -> FdHeadroom:
+            raise OSError(errno.EMFILE, "Too many open files")
+
+        monkeypatch.setattr(FdHeadroom, "sample", classmethod(_raise))
+        result = ResourceDiagnostics.fd_headroom()
+        assert result.passed is False
+        assert "exhaustion" in result.message
+
+    def test_enfile_reports_exhaustion_not_healthy(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def _raise(cls: type[FdHeadroom]) -> FdHeadroom:
+            raise OSError(errno.ENFILE, "Too many open files in system")
+
+        monkeypatch.setattr(FdHeadroom, "sample", classmethod(_raise))
+        result = ResourceDiagnostics.fd_headroom()
+        assert result.passed is False
+        assert "exhaustion" in result.message
+
     def test_degrades_when_measurement_unavailable(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # An errno-less OSError is genuine platform absence, not exhaustion:
+        # the check degrades to advisory-pass so it never blocks on a container
+        # that simply has no fd directory to scan.
         def _raise(cls: type[FdHeadroom]) -> FdHeadroom:
             msg = "no /proc/self/fd or /dev/fd on this platform"
             raise OSError(msg)

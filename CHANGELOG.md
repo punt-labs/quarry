@@ -21,10 +21,13 @@ across `transform`, `index`, and `connector`).
   — the proven LanceDB deleted-index-handle leak — is visible in logs before it
   reaches `RLIMIT_NOFILE`, returns EMFILE, and requests start failing with HTTP
   500. Each sample logs `open_fds`, the soft `RLIMIT_NOFILE`, and `pct_used`
-  (numbered descriptors under `/dev/fd`, excluding mmap/txt regions), at INFO
-  normally and WARNING past 80% of the limit; an unlimited soft limit never
-  warns. The monitor task starts with the server lifespan and is cancelled on
-  shutdown. Observability only — the leak fix itself lands separately.
+  (counted from `/proc/self/fd`, falling back to `/dev/fd`), at INFO normally and
+  WARNING past 80% of the limit; an unlimited soft limit never warns. The monitor
+  task starts with the server lifespan and is cancelled on shutdown; a sample
+  that raises — an EMFILE mid-scan at real exhaustion, or a container with no fd
+  directory — logs a single line (with the traceback) and keeps ticking rather
+  than silently killing telemetry for the daemon's remaining life. Observability
+  only — the leak fix itself lands separately.
 
 - **captures (shadow repo)**: opt-in private capture shadow sync moves redacted
   session captures off the public repo into a per-project private
@@ -63,7 +66,10 @@ across `transform`, `index`, and `connector`).
   version — so the fix is quarry-side. A resource-invariant test tier
   (`tests/test_resource_invariants.py`) guards against regressions in CI, and
   `quarry doctor` gained an "FD headroom" check that warns before descriptor
-  usage crosses 80% of the soft limit.
+  usage crosses 80% of the soft limit — and reports descriptor exhaustion
+  (`EMFILE`/`ENFILE` raised while sampling) as a failure rather than a reassuring
+  "unavailable", so the one check meant to catch exhaustion no longer passes at
+  the moment it occurs.
 
 - **index (capture)**: session capture files and WebFetch DB ingest now redact
   personally identifying information at write time, in addition to the existing

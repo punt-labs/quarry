@@ -118,6 +118,43 @@ class ConnectionFactory:
         return cast("LanceDB", conn)
 
 
+class FailingRecycleFactory:
+    """Succeeds on the initial open, then raises on the recycle reopen.
+
+    Models a reopen that fails (e.g. the storage path briefly unavailable): the
+    connection must keep serving the still-live original rather than dropping
+    into a half-open state.
+    """
+
+    __slots__ = ("_calls", "_first")
+
+    _calls: int
+    _first: FakeConnection
+
+    def __new__(cls) -> Self:
+        self = super().__new__(cls)
+        self._calls = 0
+        self._first = FakeConnection()
+        return self
+
+    @property
+    def calls(self) -> int:
+        """How many times the factory was invoked, including the failed reopen."""
+        return self._calls
+
+    @property
+    def first(self) -> FakeConnection:
+        """The original physical connection, still live after a failed recycle."""
+        return self._first
+
+    def __call__(self) -> LanceDB:
+        self._calls += 1
+        if self._calls == 1:
+            return cast("LanceDB", self._first)
+        msg = "reopen failed: storage unavailable"
+        raise OSError(msg)
+
+
 @pytest.fixture()
 def factory() -> ConnectionFactory:
     """Return a counting connection factory to inject into ``LanceConnection``."""
@@ -167,3 +204,22 @@ def test_recycle_counter_resets_after_recycle(factory: ConnectionFactory) -> Non
     conn.open_table("chunks").create_fts_index("text", replace=True)
     conn.open_table("chunks")  # second rebuild crosses cap — recycle #2
     assert factory.open_count == 3
+
+
+def test_failed_recycle_keeps_old_connection_and_propagates() -> None:
+    """A reopen that raises leaves the original connection usable, not half-open."""
+    factory = FailingRecycleFactory()
+    conn = LanceConnection(factory, recycle_after=1)
+    conn.open_table("chunks").create_fts_index("text", replace=True)  # arms recycle
+
+    with pytest.raises(OSError, match="reopen failed"):
+        conn.open_table("chunks")  # recycle reopen raises — must propagate
+    assert factory.calls == 2, "the reopen was attempted"
+
+    # The original connection is untouched and still serving: the next access
+    # neither retries the now-disarmed recycle nor half-opens a broken one.
+    table = conn.open_table("chunks")
+    assert isinstance(table, RecyclingTable)
+    table.create_fts_index("text", replace=True)
+    assert factory.first.table.fts_rebuilds == 2, "old connection still writes"
+    assert factory.calls == 2, "no phantom reopen after the failure"

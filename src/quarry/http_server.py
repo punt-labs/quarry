@@ -20,7 +20,6 @@ import logging
 import os
 import pwd
 import re
-import resource
 import socket as socket_module
 import time
 import uuid
@@ -44,6 +43,7 @@ from starlette.routing import Route, WebSocketRoute
 from quarry.config import DEFAULT_PORT, Settings
 from quarry.db import Database
 from quarry.db.storage import dir_size_bytes, format_size
+from quarry.fd_telemetry import FdTelemetry
 from quarry.http_guards import RequestGuards
 from quarry.http_resources import QuarryResources
 from quarry.ingestion.provider import ProviderSelection
@@ -1322,44 +1322,9 @@ def _remove_port_file(port_path: Path) -> None:
 # Server entry point
 # ---------------------------------------------------------------------------
 
-# The long-lived ``quarry serve`` daemon can leak file descriptors: open
-# handles to deleted LanceDB index files accumulate until the count reaches
-# RLIMIT_NOFILE, the kernel returns EMFILE, and requests start failing with
-# HTTP 500. Sampling the count on a fixed cadence makes a climbing trend
-# visible in the logs long before exhaustion. The leak fix lives elsewhere;
-# this is the observability side.
+# Sample the daemon's open-fd count every 5 minutes so a climbing trend — the
+# LanceDB deleted-index-handle leak — surfaces in logs before it reaches EMFILE.
 _FD_TELEMETRY_INTERVAL_SECONDS = 300.0
-_FD_WARN_PCT = 80.0
-
-
-def _log_fd_usage() -> None:
-    """Sample and log the daemon's open file-descriptor usage once.
-
-    Counts the numbered descriptors under ``/dev/fd`` (present on macOS and
-    Linux) — this excludes mmap/txt regions, unlike parsing ``/proc`` maps —
-    against the soft ``RLIMIT_NOFILE``. Logged at WARNING past ``_FD_WARN_PCT``
-    of the limit so a climbing count surfaces before it reaches EMFILE, at INFO
-    otherwise. ``pct_used`` is zero when the soft limit is unlimited so an
-    unbounded limit never trips the warning. The ``/dev/fd`` scan opens its own
-    transient descriptor, so the count is an upper bound accurate to within one.
-    """
-    open_fds = sum(1 for _ in Path("/dev/fd").iterdir())
-    soft_limit, _hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-    bounded = 0 < soft_limit != resource.RLIM_INFINITY
-    pct_used = round(100.0 * open_fds / soft_limit, 1) if bounded else 0.0
-    level = logging.WARNING if pct_used > _FD_WARN_PCT else logging.INFO
-    logger.log(
-        level,
-        "fd_usage open_fds=%d soft_limit=%d pct_used=%.1f",
-        open_fds,
-        soft_limit,
-        pct_used,
-        extra={
-            "open_fds": open_fds,
-            "fd_soft_limit": soft_limit,
-            "fd_pct_used": pct_used,
-        },
-    )
 
 
 def _validate_host_key(host: str, api_key: str | None) -> None:
@@ -1406,13 +1371,8 @@ def serve(
 
     @asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncGenerator[None]:
-        async def _fd_monitor() -> None:
-            # Runs for the daemon's lifetime; cancelled on shutdown below.
-            while True:
-                await asyncio.sleep(_FD_TELEMETRY_INTERVAL_SECONDS)
-                _log_fd_usage()
-
-        monitor = asyncio.create_task(_fd_monitor())
+        # Runs for the daemon's lifetime; cancelled on shutdown below.
+        monitor = asyncio.create_task(FdTelemetry(_FD_TELEMETRY_INTERVAL_SECONDS).run())
         try:
             yield
         finally:
