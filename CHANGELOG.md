@@ -14,6 +14,16 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Changed
+
+- **infra (dependencies)**: bumped runtime and tooling dependencies to their
+  current releases — runtime: `mcp` 1.26.0→1.28.1, `uvicorn` 0.40.0→0.51.0,
+  `pymupdf` 1.27.2.3→1.28.0, `soupsieve` 2.8.3→2.8.4; dev tooling: `ruff`
+  0.15.0→0.15.21, `pyright` 1.1.408→1.1.411; CI actions: `astral-sh/setup-uv`,
+  `actions/setup-python`, `actions/upload-artifact`, `codecov/codecov-action`,
+  and `DavidAnson/markdownlint-cli2-action`. No behavioral changes; every bump
+  passed the full `make check` gate before merge.
+
 ## [1.19.0] - 2026-07-14
 
 ### Added
