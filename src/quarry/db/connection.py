@@ -11,13 +11,16 @@ descriptors accumulate one generation at a time until the process hits its
 on ``quarry find``).
 
 ``LanceConnection`` wraps a raw connection and, after a bounded number of index
-rebuilds, drops and reopens the underlying connection. Dropping the last reference
-to the old connection releases the Rust session cache and, with it, the leaked
-descriptors. Recycling happens only at an ``open_table``/``list_tables`` boundary —
-never while a table handle from the old connection is live — so the release is
-clean rather than partial. The wrapper is a transparent drop-in for the ``LanceDB``
-protocol: callers neither know nor care that the connection underneath them is
-periodically replaced.
+rebuilds, swaps the underlying connection. Recycling is attempted at any
+connection boundary — ``open_table``, ``list_tables``, or ``create_table`` —
+which only avoids swapping mid-operation; the wrapper does *not* track live
+table handles or wait on them. Swapping ``_inner`` supersedes the old
+connection, but any ``RecyclingTable`` handles already handed out keep working
+against it; the old connection's cached descriptors are released only once all
+those handles are dropped *and* cyclic GC collects the reference cycle the
+lancedb binding holds it in — not immediately at the swap. The wrapper is a
+transparent drop-in for the ``LanceDB`` protocol: callers neither know nor care
+that the connection underneath them is periodically replaced.
 """
 
 from __future__ import annotations
@@ -195,9 +198,11 @@ class LanceConnection:
     def note_index_rebuild(self) -> None:
         """Record one ``replace=True`` index rebuild; arm recycling at the cap.
 
-        Recycling is deferred to the next :meth:`open_table`/:meth:`list_tables`
-        boundary so it never fires while a table handle from the current
-        connection is still live.
+        Recycling is deferred to the next connection boundary
+        (:meth:`open_table`, :meth:`list_tables`, or :meth:`create_table`) so it
+        never swaps mid-operation. The deferral does not gate on live table
+        handles: handles already handed out keep working against the old
+        connection after the swap.
         """
         with self._lock:
             self._rebuilds += 1
@@ -213,17 +218,19 @@ class LanceConnection:
         the rebuild counter are cleared only *after* a successful reopen: if
         ``_connect()`` raises, ``_recycle`` stays armed, the old ``_inner``
         stays intact and usable, and the exception propagates. The next
-        ``open_table``/``list_tables`` boundary then retries the reopen. A
-        transient ``_recycling`` guard serialises the reopen so a concurrent
-        boundary serves the still-valid old connection rather than double-opening
-        a second one.
+        connection boundary (``open_table``, ``list_tables``, or
+        ``create_table``) then retries the reopen. A transient ``_recycling``
+        guard serialises the reopen so a concurrent boundary serves the
+        still-valid old connection rather than double-opening a second one.
 
-        Reassigning ``_inner`` drops the last *strong* reference to the old
-        connection. The lancedb binding holds it in a reference cycle, so plain
-        refcounting does not free it — only cyclic GC reclaims it and releases
-        its cached index-file descriptors (proven: the fd ceiling over 200
-        optimize cycles is ~53 with an explicit ``gc.collect()`` here and ~107
-        without, so refcounting alone is not doing the freeing).
+        Reassigning ``_inner`` drops the *wrapper's* reference to the old
+        connection; once any still-live table handles referencing it are also
+        dropped, it is unreferenced except for the reference cycle the lancedb
+        binding holds it in. Plain refcounting does not free that cycle — only
+        cyclic GC reclaims it and releases its cached index-file descriptors
+        (proven: the fd ceiling over 200 optimize cycles is ~53 with an explicit
+        ``gc.collect()`` here and ~107 without, so refcounting alone is not doing
+        the freeing).
 
         No explicit ``gc.collect()`` is forced here: on the daemon, the recycle
         fires during ``sync``'s optimize, and ``SyncFinalizer`` already runs
