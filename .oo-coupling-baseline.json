@@ -147,7 +147,7 @@
     "avg_lcom": 1.0
   },
   "src/quarry/backfill.py": {
-    "efferent_coupling": 7.0,
+    "efferent_coupling": 8.0,
     "public_names": 11.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
@@ -288,7 +288,7 @@
   },
   "src/quarry/daemon/routes/maintenance.py": {
     "efferent_coupling": 3.0,
-    "public_names": 3.0,
+    "public_names": 4.0,
     "circular_imports": 0.0,
     "max_lcom": 1.0,
     "avg_lcom": 1.0

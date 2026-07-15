@@ -2367,13 +2367,83 @@ class TestMaintenance:
         resp = client.post("/v1/backfill-sessions", json={"limit": "lots"})
         assert resp.status_code == 400
 
+    @pytest.mark.parametrize(
+        ("json_body", "headers"),
+        [
+            (None, {"Content-Type": "application/json"}),
+            ({"limit": 0}, None),
+            ({"limit": -5}, None),
+        ],
+    )
+    def test_backfill_nonpositive_limit_is_bounded(
+        self,
+        tmp_path: Path,
+        json_body: dict[str, int] | None,
+        headers: dict[str, str] | None,
+    ) -> None:
+        """Empty / limit<=0 remote backfill is capped, never unbounded.
+
+        The wire default (``limit=0``) meant "all" locally; over the daemon that
+        is an unbounded scan-and-ingest, so the route clamps it to the bound.
+        """
+        from quarry.daemon.routes.maintenance import DEFAULT_REMOTE_BACKFILL_LIMIT
+
+        ctx = DaemonContext(_mock_settings(tmp_path))
+        _inject_mocks(ctx)
+        captured: dict[str, object] = {}
+
+        def _fake_backfill(
+            _settings: object,
+            *,
+            dry_run: bool,
+            collection_override: str,
+            project_filter: str,
+            limit: int,
+        ) -> BackfillStats:
+            captured["limit"] = limit
+            return BackfillStats()
+
+        with (
+            TestClient(build_app(ctx), raise_server_exceptions=False) as tc,
+            patch("quarry.backfill.backfill_sessions", _fake_backfill),
+        ):
+            resp = tc.post("/v1/backfill-sessions", json=json_body, headers=headers)
+            assert resp.status_code == 202
+            _poll_task_done(tc, resp.json()["task_id"])
+
+        assert captured["limit"] == DEFAULT_REMOTE_BACKFILL_LIMIT
+
     def test_optimize_accepts_empty_body(self, client: TestClient) -> None:
         """Empty body is accepted (its documented requestBody is optional)."""
-        assert client.post("/v1/optimize").status_code == 202
+        resp = client.post("/v1/optimize", headers={"Content-Type": "application/json"})
+        assert resp.status_code == 202
 
     def test_backfill_accepts_empty_body(self, client: TestClient) -> None:
         """Empty body is accepted (its documented requestBody is optional)."""
-        assert client.post("/v1/backfill-sessions").status_code == 202
+        resp = client.post(
+            "/v1/backfill-sessions", headers={"Content-Type": "application/json"}
+        )
+        assert resp.status_code == 202
+
+    def test_optimize_rejects_non_json_content_type(self, client: TestClient) -> None:
+        """A non-JSON Content-Type is rejected with 415 (CSRF simple-request guard)."""
+        resp = client.post(
+            "/v1/optimize", content=b"{}", headers={"Content-Type": "text/plain"}
+        )
+        assert resp.status_code == 415
+
+    def test_backfill_rejects_non_json_content_type(self, client: TestClient) -> None:
+        """A non-JSON Content-Type is rejected with 415 (CSRF simple-request guard)."""
+        resp = client.post(
+            "/v1/backfill-sessions",
+            content=b"{}",
+            headers={"Content-Type": "text/plain"},
+        )
+        assert resp.status_code == 415
+
+    def test_optimize_rejects_absent_content_type(self, client: TestClient) -> None:
+        """A bodyless POST with no Content-Type is rejected (simple-request CSRF)."""
+        assert client.post("/v1/optimize").status_code == 415
 
     def test_concurrent_optimize_returns_409(self, tmp_path: Path) -> None:
         """Second optimize while one runs returns 409 with the running task_id."""

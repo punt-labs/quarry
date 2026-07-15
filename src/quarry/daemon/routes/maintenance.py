@@ -22,6 +22,12 @@ from quarry.http_guards import RequestGuards
 # Both bodies carry only small option dicts.
 MAX_MAINTENANCE_BODY_BYTES = 16 * 1024
 
+# A remote backfill with no positive limit is capped here so an empty body ({})
+# cannot trigger an unbounded scan-and-ingest over the daemon.  The local CLI
+# path (``backfill_sessions(limit=0)``) keeps 0 == "all"; only this remote route
+# clamps, so the two paths stay independent.
+DEFAULT_REMOTE_BACKFILL_LIMIT = 500
+
 
 @dataclass(frozen=True, slots=True)
 class BackfillArgs:
@@ -46,6 +52,9 @@ class MaintenanceRoutes(RouteGroup):
         auth_resp = self.reject_unauthorized(request)
         if auth_resp is not None:
             return auth_resp
+        ctype_err = RequestGuards.require_json_content_type(request)
+        if ctype_err is not None:
+            return ctype_err
         size_err = RequestGuards.check_body_size(request, MAX_MAINTENANCE_BODY_BYTES)
         if size_err is not None:
             return size_err
@@ -71,6 +80,9 @@ class MaintenanceRoutes(RouteGroup):
         auth_resp = self.reject_unauthorized(request)
         if auth_resp is not None:
             return auth_resp
+        ctype_err = RequestGuards.require_json_content_type(request)
+        if ctype_err is not None:
+            return ctype_err
         size_err = RequestGuards.check_body_size(request, MAX_MAINTENANCE_BODY_BYTES)
         if size_err is not None:
             return size_err
@@ -138,9 +150,18 @@ class MaintenanceRoutes(RouteGroup):
         return RequestGuards.coerce_bool_field(body, key, default=default)
 
     async def _backfill_args(self, request: Request) -> BackfillArgs | JSONResponse:
-        """Validate a backfill request body into :class:`BackfillArgs`."""
+        """Validate a backfill request body into :class:`BackfillArgs`.
+
+        A missing or non-positive ``limit`` is bounded rather than treated as
+        "all", so an empty remote request cannot start an unbounded backfill.
+        """
         if int(request.headers.get("content-length", "0") or "0") <= 0:
-            return BackfillArgs(dry_run=False, collection="", project="", limit=0)
+            return BackfillArgs(
+                dry_run=False,
+                collection="",
+                project="",
+                limit=DEFAULT_REMOTE_BACKFILL_LIMIT,
+            )
         body = await self.json_object(request)
         if isinstance(body, JSONResponse):
             return body
@@ -155,5 +176,15 @@ class MaintenanceRoutes(RouteGroup):
             dry_run=dry_run,
             collection=str(body.get("collection") or ""),
             project=str(body.get("project") or ""),
-            limit=limit,
+            limit=self._bounded_limit(limit),
         )
+
+    @staticmethod
+    def _bounded_limit(limit: int) -> int:
+        """Clamp a non-positive remote ``limit`` to the safe default bound.
+
+        The remote path never runs unbounded: ``limit <= 0`` (the wire default)
+        becomes :data:`DEFAULT_REMOTE_BACKFILL_LIMIT`.  A positive limit is a
+        deliberate caller choice and passes through unchanged.
+        """
+        return limit if limit > 0 else DEFAULT_REMOTE_BACKFILL_LIMIT

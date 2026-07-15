@@ -444,6 +444,39 @@ class TestBackfillSessions:
         assert stats.ingested == 0
         assert stats.skipped_empty == 1
 
+    def test_ingested_text_is_scrubbed(self, tmp_path: Path) -> None:
+        """Transcript text is scrubbed before ingest — the DES-036 leak lock.
+
+        A secret token and an email in a transcript must never reach the
+        searchable LanceDB store (retrievable via /v1/search): backfill scrubs
+        through the same Scrubber the capture writer uses, so ingest_content
+        receives redacted text, not the raw transcript.
+        """
+        from quarry.backfill import backfill_sessions
+
+        fake_pat = "ghp_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8"
+        email = "leak.user@evil-example.com"
+        env = _make_env(tmp_path)
+        _make_transcript(
+            env["transcript"],
+            [_user_message(f"my token is {fake_pat} and my email is {email}")],
+        )
+        settings = _make_settings(env["db_path"], env["registry_path"])
+        _setup_registry(env["registry_path"], str(env["real_project"]), "myproject")
+
+        with (
+            patch("quarry.backfill.CLAUDE_PROJECTS_DIR", env["projects_dir"]),
+            patch("quarry.backfill.ingest_content") as mock_ingest,
+        ):
+            backfill_sessions(settings)
+
+        mock_ingest.assert_called_once()
+        ingested_text = mock_ingest.call_args.args[0]
+        assert fake_pat not in ingested_text
+        assert email not in ingested_text
+        assert "[REDACTED:gh-pat]" in ingested_text
+        assert "[REDACTED:email]" in ingested_text
+
 
 # ---------------------------------------------------------------------------
 # CLI surface
