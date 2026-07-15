@@ -257,9 +257,12 @@ class RemoteClient:
             if isinstance(headers_raw, dict)
             else {}
         )
+        # Always advertise JSON, even for a bodyless request: the daemon's
+        # content-type guard rejects a POST without it, so an argument-free
+        # POST must still carry the header rather than trip a 415.
+        headers["Content-Type"] = "application/json"
         if body is None:
             return None, headers
-        headers["Content-Type"] = "application/json"
         return json.dumps(body).encode("utf-8"), headers
 
     @staticmethod

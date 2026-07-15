@@ -52,9 +52,6 @@ class MaintenanceRoutes(RouteGroup):
         auth_resp = self.reject_unauthorized(request)
         if auth_resp is not None:
             return auth_resp
-        ctype_err = RequestGuards.require_json_content_type(request)
-        if ctype_err is not None:
-            return ctype_err
         size_err = RequestGuards.check_body_size(request, MAX_MAINTENANCE_BODY_BYTES)
         if size_err is not None:
             return size_err
@@ -80,9 +77,6 @@ class MaintenanceRoutes(RouteGroup):
         auth_resp = self.reject_unauthorized(request)
         if auth_resp is not None:
             return auth_resp
-        ctype_err = RequestGuards.require_json_content_type(request)
-        if ctype_err is not None:
-            return ctype_err
         size_err = RequestGuards.check_body_size(request, MAX_MAINTENANCE_BODY_BYTES)
         if size_err is not None:
             return size_err
@@ -181,10 +175,14 @@ class MaintenanceRoutes(RouteGroup):
 
     @staticmethod
     def _bounded_limit(limit: int) -> int:
-        """Clamp a non-positive remote ``limit`` to the safe default bound.
+        """Clamp a remote ``limit`` into ``1..DEFAULT_REMOTE_BACKFILL_LIMIT``.
 
         The remote path never runs unbounded: ``limit <= 0`` (the wire default)
-        becomes :data:`DEFAULT_REMOTE_BACKFILL_LIMIT`.  A positive limit is a
-        deliberate caller choice and passes through unchanged.
+        and any value above the cap both resolve to
+        :data:`DEFAULT_REMOTE_BACKFILL_LIMIT`, so neither an empty body nor a
+        single ``{"limit": 1_000_000_000}`` can full-scan the corpus.  A
+        positive limit within the cap passes through unchanged.
         """
-        return limit if limit > 0 else DEFAULT_REMOTE_BACKFILL_LIMIT
+        if limit <= 0:
+            return DEFAULT_REMOTE_BACKFILL_LIMIT
+        return min(limit, DEFAULT_REMOTE_BACKFILL_LIMIT)

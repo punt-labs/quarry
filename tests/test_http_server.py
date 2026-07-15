@@ -1451,7 +1451,7 @@ class TestSync:
             resp = tc.post(
                 "/v1/sync",
                 content=b"",
-                headers={"Content-Length": "0"},
+                headers={"Content-Length": "0", "Content-Type": "application/json"},
             )
         assert resp.status_code == 202
 
@@ -2373,18 +2373,20 @@ class TestMaintenance:
             (None, {"Content-Type": "application/json"}),
             ({"limit": 0}, None),
             ({"limit": -5}, None),
+            ({"limit": 1_000_000_000}, None),
         ],
     )
-    def test_backfill_nonpositive_limit_is_bounded(
+    def test_backfill_limit_is_clamped_to_bound(
         self,
         tmp_path: Path,
         json_body: dict[str, int] | None,
         headers: dict[str, str] | None,
     ) -> None:
-        """Empty / limit<=0 remote backfill is capped, never unbounded.
+        """Remote backfill limit is clamped into the safe bound on both ends.
 
         The wire default (``limit=0``) meant "all" locally; over the daemon that
-        is an unbounded scan-and-ingest, so the route clamps it to the bound.
+        is an unbounded scan-and-ingest. Empty / ``<=0`` and an absurdly large
+        limit both resolve to the cap, so neither can full-scan the corpus.
         """
         from quarry.daemon.routes.maintenance import DEFAULT_REMOTE_BACKFILL_LIMIT
 
@@ -2474,6 +2476,38 @@ class TestMaintenance:
         assert resp.status_code == 409
         assert resp.json()["task_id"] == "backfill-x"
         assert "already in progress" in resp.json()["error"].lower()
+
+
+class TestContentTypeChokePoint:
+    """Every mutating POST is rejected with 415 unless it advertises JSON.
+
+    The guard is app-level middleware, so it covers routes that read no body
+    (``/captures/push``) and routes that accept an empty one (sync, optimize,
+    backfill) alike — the fail-closed choke point, not a per-route check.
+    """
+
+    _MUTATING_POSTS = (
+        "/v1/remember",
+        "/v1/ingest",
+        "/v1/sync",
+        "/v1/registrations",
+        "/v1/captures/push",
+        "/v1/use",
+        "/v1/optimize",
+        "/v1/backfill-sessions",
+    )
+
+    @pytest.mark.parametrize("path", _MUTATING_POSTS)
+    def test_non_json_content_type_rejected(
+        self, client: TestClient, path: str
+    ) -> None:
+        resp = client.post(path, content=b"{}", headers={"Content-Type": "text/plain"})
+        assert resp.status_code == 415
+
+    @pytest.mark.parametrize("path", _MUTATING_POSTS)
+    def test_absent_content_type_rejected(self, client: TestClient, path: str) -> None:
+        """A bodyless cross-origin POST (no Content-Type) is a simple request."""
+        assert client.post(path).status_code == 415
 
 
 class TestResponseModelParity:

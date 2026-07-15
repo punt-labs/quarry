@@ -93,12 +93,19 @@ class TestRequestWrapper:
         assert json.loads(call[1]["body"]) == {"text": "hello"}
         assert call[1]["headers"]["Content-Type"] == "application/json"
 
-    def test_delete_no_body_omits_content_type(self) -> None:
+    def test_bodyless_request_still_advertises_json(self) -> None:
+        """A bodyless request carries the JSON Content-Type.
+
+        The daemon's content-type guard rejects a POST without it, so even an
+        argument-free request must advertise JSON; no body is sent regardless.
+        """
         conn = _mock_connection(200, b'{"deleted": 5}')
         with patch("http.client.HTTPConnection", return_value=conn):
             result = RemoteClient(_WS_CONFIG).request("DELETE", "/documents?name=foo")
         assert result == {"deleted": 5}
-        assert "Content-Type" not in conn.request.call_args[1]["headers"]
+        sent = conn.request.call_args[1]
+        assert sent["headers"]["Content-Type"] == "application/json"
+        assert sent["body"] is None
 
     def test_empty_body_returns_empty_dict(self) -> None:
         conn = _mock_connection(200, b"")

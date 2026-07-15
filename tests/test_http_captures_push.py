@@ -71,7 +71,10 @@ class TestCapturesPushRoute:
     def test_body_size_limit_enforced(self, client: TestClient) -> None:
         resp = client.post(
             "/v1/captures/push",
-            headers={"content-length": str(64 * 1024)},
+            headers={
+                "content-length": str(64 * 1024),
+                "Content-Type": "application/json",
+            },
             content=b"x" * (64 * 1024),
         )
         assert resp.status_code == 413

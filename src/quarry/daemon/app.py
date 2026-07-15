@@ -17,16 +17,18 @@ from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException
 from starlette.middleware.cors import CORSMiddleware
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from quarry.api import API_VERSION
 from quarry.daemon.route_table import RouteTable
+from quarry.http_guards import RequestGuards
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from contextlib import AbstractAsyncContextManager
 
-    from starlette.requests import Request
+    from starlette.types import ASGIApp, Receive, Scope, Send
 
     from quarry.daemon.context import DaemonContext
 
@@ -36,6 +38,43 @@ logger = logging.getLogger(__name__)
 _API_PREFIX = f"/v{API_VERSION}"
 
 type Lifespan = Callable[[FastAPI], AbstractAsyncContextManager[None]]
+
+
+@final
+class JsonContentTypeGuard:
+    """ASGI middleware: every ``POST`` must carry ``Content-Type: application/json``.
+
+    A fail-closed CSRF choke point for the no-auth loopback daemon.  A browser
+    can send the CORS "simple" content types (``text/plain``, the form types) or
+    none at all cross-origin without a preflight; requiring JSON forces a
+    preflight the daemon's CORS policy refuses.  Because it sits at request
+    admission it guards *every* POST — including routes that read no body
+    (``/captures/push``) or accept an empty one (optimize/backfill/sync) and any
+    future POST route — so no handler has to repeat the check.  ``GET``/``DELETE``
+    /``OPTIONS`` pass through: none is a CORS-simple state-changing request.
+    """
+
+    __slots__ = ("_app",)
+
+    _app: ASGIApp
+
+    def __new__(cls, app: ASGIApp) -> Self:
+        self = super().__new__(cls)
+        self._app = app
+        return self
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Reject a non-JSON POST with 415; otherwise defer to the wrapped app.
+
+        Only request headers are read (never the body), so ``receive`` is passed
+        through untouched and the downstream handler still parses the body.
+        """
+        if scope["type"] == "http" and scope["method"] == "POST":
+            guard = RequestGuards.require_json_content_type(Request(scope, receive))
+            if guard is not None:
+                await guard(scope, receive, send)
+                return
+        await self._app(scope, receive, send)
 
 
 @final
@@ -73,7 +112,13 @@ class AppBuilder:
         return app
 
     def _add_middleware(self, app: FastAPI) -> None:
-        """Attach the CORS middleware for the context's allowed origins."""
+        """Attach the JSON-content-type CSRF guard, then the CORS middleware.
+
+        ``add_middleware`` wraps outermost-last, so CORS ends up outside the
+        guard and still answers preflight ``OPTIONS`` requests; the guard only
+        acts on ``POST`` and passes everything else through.
+        """
+        app.add_middleware(JsonContentTypeGuard)
         app.add_middleware(
             CORSMiddleware,
             allow_origins=list(self._ctx.cors_origins),
