@@ -12,12 +12,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Self, final
 
+from starlette.responses import JSONResponse, PlainTextResponse
+
 from quarry.api import (
     CapturesPushResponse,
     CollectionList,
     DatabaseList,
     DeregisterAccepted,
     DocumentList,
+    ErrorBody,
     HealthResponse,
     IngestRequest,
     OptimizeRequest,
@@ -50,6 +53,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from pydantic import BaseModel
+    from starlette.responses import Response
 
     from quarry.daemon.context import DaemonContext
 
@@ -70,6 +74,10 @@ class RouteSpec:
     request_model: type[BaseModel] | None = None
     exclude_none: bool = False
     status_code: int = 200
+    # The response class FastAPI documents for the route; defaults to JSON but a
+    # plain-text route (``/ca.crt``) overrides it so the doc's content type is
+    # honest. Runtime is unaffected — handlers return their own Response.
+    response_class: type[Response] = JSONResponse
     versioned: bool = True
     # Whether the handler requires a non-empty JSON body; the maintenance
     # endpoints accept an empty body (Content-Length 0), so their documented
@@ -127,7 +135,13 @@ class RouteTable:
             RouteSpec(
                 "/health", meta.health, ("GET",), HealthResponse, versioned=False
             ),
-            RouteSpec("/ca.crt", meta.ca_cert, ("GET",), versioned=False),
+            RouteSpec(
+                "/ca.crt",
+                meta.ca_cert,
+                ("GET",),
+                versioned=False,
+                response_class=PlainTextResponse,
+            ),
             RouteSpec("/search", SearchRoutes(ctx).search, ("GET",), SearchResponse),
             RouteSpec("/show", ShowRoutes(ctx).show, ("GET",), ShowPageResponse),
             RouteSpec("/documents", docs.documents, ("GET",), DocumentList),
@@ -171,7 +185,9 @@ class RouteTable:
                 exclude_none=True,
             ),
             RouteSpec("/databases", db.databases, ("GET",), DatabaseList),
-            RouteSpec("/use", db.use, ("POST",)),
+            # /use is the daemon's one always-error route: it rejects client-side
+            # db selection with a 400, so the doc advertises 400 + ErrorBody.
+            RouteSpec("/use", db.use, ("POST",), ErrorBody, status_code=400),
             RouteSpec("/registrations", reg.registrations, ("GET",), RegistrationList),
             RouteSpec(
                 "/registrations",

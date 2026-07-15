@@ -209,6 +209,21 @@
         "title": "DocumentList",
         "type": "object"
       },
+      "ErrorBody": {
+        "additionalProperties": true,
+        "description": "The wire error shape: ``{\"error\": \"...\"}`` plus any endpoint extras.\n\n``extra=\"allow\"`` preserves the richer error payloads some routes emit \u2014\ne.g. the ``/sync`` 409 conflict adds ``status`` and ``task_id`` \u2014 so the\nenvelope stays a faithful superset of every current error response.",
+        "properties": {
+          "error": {
+            "title": "Error",
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "ErrorBody",
+        "type": "object"
+      },
       "HealthResponse": {
         "description": "The ``GET /health`` snapshot (unversioned; auth-exempt).\n\nMirrors the daemon's live ``/health`` body: liveness (``status``), process\nuptime, warm/ready ``state``, the wire ``api_version`` a client negotiates\nagainst, and the running ``quarry_version``.",
         "properties": {
@@ -536,8 +551,10 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
-                "schema": {}
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
               }
             },
             "description": "Successful Response"
@@ -1078,10 +1095,12 @@
         "description": "Reject database selection: the server is fixed to its own database.",
         "operationId": "use_v1_use_post",
         "responses": {
-          "200": {
+          "400": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
               }
             },
             "description": "Successful Response"

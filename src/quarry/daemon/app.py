@@ -91,6 +91,7 @@ class AppBuilder:
                 response_model=spec.response_model,
                 response_model_exclude_none=spec.exclude_none,
                 status_code=spec.status_code,
+                response_class=spec.response_class,
                 openapi_extra=spec.openapi_extra(),
             )
 

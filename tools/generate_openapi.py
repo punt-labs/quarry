@@ -23,26 +23,30 @@ _OUTPUT = Path("docs/openapi.json")
 class OpenApiDoc:
     """The daemon's rendered OpenAPI schema, built once from a fresh app."""
 
-    _schema: dict[str, Any]
+    _rendered: str
 
     def __new__(cls) -> Self:
         self = super().__new__(cls)
         # DaemonContext defers every engine resource, and ``openapi()`` only
         # introspects the route table, so no DB or ONNX model is loaded here.
-        self._schema = build_app(DaemonContext(Settings.load())).openapi()
+        schema: dict[str, Any] = build_app(DaemonContext(Settings.load())).openapi()
+        # Render once at construction: deterministic (sorted keys) and reused by
+        # both write() and is_current() so the two can never diverge.
+        self._rendered = json.dumps(schema, indent=2, sort_keys=True) + "\n"
         return self
 
     def rendered(self) -> str:
         """Return the schema as deterministic, newline-terminated JSON."""
-        return json.dumps(self._schema, indent=2, sort_keys=True) + "\n"
+        return self._rendered
 
     def write(self, path: Path) -> None:
-        """Write the rendered schema to *path*."""
-        path.write_text(self.rendered())
+        """Write the rendered schema to *path*, creating parent dirs as needed."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self._rendered, encoding="utf-8")
 
     def is_current(self, path: Path) -> bool:
         """Return whether *path* already holds the rendered schema."""
-        return path.exists() and path.read_text() == self.rendered()
+        return path.exists() and path.read_text(encoding="utf-8") == self._rendered
 
 
 def main(argv: list[str]) -> int:
