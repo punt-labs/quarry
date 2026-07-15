@@ -1,10 +1,11 @@
 """Quarry's daemon wire contract — Pydantic request/response/error models.
 
-One request and one response model per REST operation the daemon serves.
-This package is the single source of truth for the wire shape: the daemon
-imports it to type and validate its handlers, and ``QuarryClient`` will import
-the same models to build requests and parse responses, so a field added on one
-side but missing on the other becomes an import-time type error.
+One request/response model per daemon REST operation — most served today, a few
+(``OptimizeRequest``, ``BackfillRequest``) modelling endpoints defined ahead of
+being routed. This package is the single source of truth for the wire shape: the
+daemon imports it to type and validate its handlers, and ``QuarryClient`` will
+import the same models to build requests and parse responses, so a field added on
+one side but missing on the other becomes an import-time type error.
 
 The package has **zero engine imports** — it is importable with only pydantic
 present, so a pure client never pulls in lancedb/onnxruntime.
