@@ -23,6 +23,21 @@ across `transform`, `index`, and `connector`).
   `actions/setup-python`, `actions/upload-artifact`, `codecov/codecov-action`,
   and `DavidAnson/markdownlint-cli2-action`. No behavioral changes; every bump
   passed the full `make check` gate before merge.
+- **infra (CI)**: added `pyright` to the CI lint workflow alongside `mypy`, so a
+  type regression that passes one checker but breaks the other can no longer
+  merge green. This closes the gap that let the `mcp` 1.28.1 bump land while
+  `make check` was red locally on a `reportDeprecated` finding.
+
+### Removed
+
+- **tool (MCP transport)**: removed the daemon-side MCP WebSocket route
+  (`/mcp`) and its `run_mcp_session` handler. The daemon now serves the REST
+  API only. This is the first step of the DES-031 v2.2 MCP-as-client direction
+  (`docs/des-client-architecture.md`), and it clears the `reportDeprecated`
+  failure from the deprecated `mcp.server.websocket.websocket_server`, restoring
+  a green `make check`. The local `quarry mcp` stdio server is unchanged, so
+  Claude Code MCP over stdio continues to work; remote MCP-over-daemon returns
+  later in the refactor as a `QuarryClient` path.
 
 ## [1.19.0] - 2026-07-14
 
