@@ -21,7 +21,7 @@ import pwd
 import socket as socket_module
 import time
 import uuid
-from collections.abc import AsyncGenerator, Callable, Iterator
+from collections.abc import AsyncGenerator, Callable, Generator
 from contextlib import asynccontextmanager, contextmanager, suppress
 from dataclasses import dataclass, field
 from functools import partial
@@ -158,7 +158,7 @@ class TaskState:
 
 
 @contextmanager
-def _task_terminal(state: TaskState) -> Iterator[None]:
+def _task_terminal(state: TaskState) -> Generator[None]:
     """Record *state*'s terminal status when its background body exits.
 
     Cancellation is recorded then re-raised so the event loop still observes

@@ -55,7 +55,7 @@ class WebFetcher:
     @staticmethod
     def _decode_html(resp: HTTPResponse) -> str:
         """Validate the final URL and media type, then decode the body to text."""
-        final_url: str = resp.geturl()
+        final_url: str = resp.url
         if not final_url.startswith(("http://", "https://")):
             msg = f"Redirect left HTTP(S): {final_url}"
             raise ValueError(msg)

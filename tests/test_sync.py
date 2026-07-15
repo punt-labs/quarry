@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -144,7 +144,7 @@ def _settings(
 
 
 @contextmanager
-def _patched_embedder(embedder: _FakeEmbedder) -> Iterator[_FakeEmbedder]:
+def _patched_embedder(embedder: _FakeEmbedder) -> Generator[_FakeEmbedder]:
     with patch(
         "quarry.ingestion.streaming.get_embedding_backend", return_value=embedder
     ):
