@@ -934,6 +934,13 @@ otherwise stands; where they conflict, v2.2 governs.
   vox-style gateway Protocol and no biff-style commands layer) and §3.1 hook
   routing (hooks call `QuarryClient`, not `Database` — faster than the cold
   in-process load and I1-correct).
+- **Defers the richer error envelope.** The wire error stays `{"error": ...}` in
+  v2-2 (a faithful contract *extraction*, not a wire redesign — `ErrorBody` is a
+  superset via `extra="allow"`, preserving bug-class-3 parity). The
+  `{code, message, detail}` envelope from §3.3 is a **breaking** wire change,
+  deferred to land WITH `QuarryClient`'s typed `QuarryError` hierarchy in v2-4 so
+  the codes and the client that consumes them move together (`RemoteClient` is
+  already gone by then).
 
 Sequencing under v2.2 (epic `quarry-ynvs`): PR-1 (#356) removed daemon MCP and
 added pyright to CI; PR-2 introduces `quarry/api` + FastAPI + `/v1` (+ the missing
