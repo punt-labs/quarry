@@ -38,7 +38,7 @@ class ShowRoutes(RouteGroup):
 
     @staticmethod
     def _page(page_str: str | None) -> int | JSONResponse:
-        """Return the requested page number (0 = metadata), or a 400 response."""
+        """Return the requested page (>=1), 0 when ``page`` is omitted, else a 400."""
         if not page_str:
             return 0
         try:

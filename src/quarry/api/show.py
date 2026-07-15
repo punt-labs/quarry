@@ -8,14 +8,14 @@ from pydantic import BaseModel
 class ShowRequest(BaseModel):
     """Query parameters for ``GET /show``.
 
-    With ``page`` unset (or 0) the endpoint returns the document's catalog
-    metadata (a ``DocumentInfo``); with ``page >= 1`` it returns that page's
-    text (a ``ShowPageResponse``).
+    Omit ``page`` to get the document's catalog metadata (a ``DocumentInfo``);
+    send ``page >= 1`` for that page's text (a ``ShowPageResponse``). A present
+    ``page < 1`` is rejected with 400.
     """
 
     document: str
     collection: str = ""
-    page: int | None = None  # None/0 -> metadata; >=1 -> page text
+    page: int | None = None  # omit -> metadata; >=1 -> page text; <1 -> 400
 
 
 class ShowPageResponse(BaseModel):
