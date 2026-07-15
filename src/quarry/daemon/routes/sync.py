@@ -41,16 +41,9 @@ class SyncRoutes(RouteGroup):
             if isinstance(body, JSONResponse):
                 return body
 
-        running_sync = self.ctx.tasks.running_of_kind("sync")
-        if running_sync is not None:
-            return JSONResponse(
-                {
-                    "error": "Sync already in progress",
-                    "status": "running",
-                    "task_id": running_sync.task_id,
-                },
-                status_code=409,
-            )
+        conflict = self.reject_if_running("sync", "Sync")
+        if conflict is not None:
+            return conflict
 
         state = self.ctx.tasks.begin("sync")
         return self.accept(state, self._run_sync(state))

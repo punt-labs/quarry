@@ -35,10 +35,14 @@ class BackfillArgs:
 
 @final
 class MaintenanceRoutes(RouteGroup):
-    """Serve table optimization and session backfill as 202 tasks."""
+    """Serve table optimization and session backfill as singleton 202 tasks."""
 
     async def optimize(self, request: Request) -> JSONResponse:
-        """Compact the table and rebuild indexes as a background task."""
+        """Compact the table and rebuild indexes as a singleton background task.
+
+        A second optimize while one is in flight is rejected with 409 and the
+        running task's id, so concurrent runs never contend for the table lock.
+        """
         auth_resp = self.reject_unauthorized(request)
         if auth_resp is not None:
             return auth_resp
@@ -50,11 +54,20 @@ class MaintenanceRoutes(RouteGroup):
         if isinstance(force, JSONResponse):
             return force
 
+        conflict = self.reject_if_running("optimize", "Optimize")
+        if conflict is not None:
+            return conflict
+
         state = self.ctx.tasks.begin("optimize")
         return self.accept(state, self._run_optimize(state, force=force))
 
     async def backfill_sessions(self, request: Request) -> JSONResponse:
-        """Scan and ingest historical session transcripts as a background task."""
+        """Scan and ingest historical transcripts as a singleton background task.
+
+        A second backfill while one is in flight is rejected with 409 and the
+        running task's id; concurrent scans would double-ingest the same
+        sessions and write duplicate chunks.
+        """
         auth_resp = self.reject_unauthorized(request)
         if auth_resp is not None:
             return auth_resp
@@ -65,6 +78,10 @@ class MaintenanceRoutes(RouteGroup):
         args = await self._backfill_args(request)
         if isinstance(args, JSONResponse):
             return args
+
+        conflict = self.reject_if_running("backfill", "Backfill")
+        if conflict is not None:
+            return conflict
 
         state = self.ctx.tasks.begin("backfill")
         return self.accept(state, self._run_backfill(state, args))

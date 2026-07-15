@@ -2375,6 +2375,36 @@ class TestMaintenance:
         """Empty body is accepted (its documented requestBody is optional)."""
         assert client.post("/v1/backfill-sessions").status_code == 202
 
+    def test_concurrent_optimize_returns_409(self, tmp_path: Path) -> None:
+        """Second optimize while one runs returns 409 with the running task_id."""
+        ctx = DaemonContext(_mock_settings(tmp_path))
+        _inject_mocks(ctx)
+        ctx.tasks.seed(
+            TaskState(task_id="optimize-x", kind="optimize", status="running")
+        )
+        tc = TestClient(build_app(ctx), raise_server_exceptions=False)
+        resp = tc.post("/v1/optimize", json={})
+        assert resp.status_code == 409
+        assert resp.json()["task_id"] == "optimize-x"
+        assert "already in progress" in resp.json()["error"].lower()
+
+    def test_concurrent_backfill_returns_409(self, tmp_path: Path) -> None:
+        """Second backfill while one runs returns 409 with the running task_id.
+
+        A concurrent backfill would rescan and double-ingest the same sessions,
+        so the singleton guard is a correctness lock, not just a courtesy.
+        """
+        ctx = DaemonContext(_mock_settings(tmp_path))
+        _inject_mocks(ctx)
+        ctx.tasks.seed(
+            TaskState(task_id="backfill-x", kind="backfill", status="running")
+        )
+        tc = TestClient(build_app(ctx), raise_server_exceptions=False)
+        resp = tc.post("/v1/backfill-sessions", json={})
+        assert resp.status_code == 409
+        assert resp.json()["task_id"] == "backfill-x"
+        assert "already in progress" in resp.json()["error"].lower()
+
 
 class TestResponseModelParity:
     """Each response route's JSON keys match its api model — the wire contract.

@@ -584,7 +584,7 @@
     },
     "/v1/backfill-sessions": {
       "post": {
-        "description": "Scan and ingest historical session transcripts as a background task.",
+        "description": "Scan and ingest historical transcripts as a singleton background task.\n\nA second backfill while one is in flight is rejected with 409 and the\nrunning task's id; concurrent scans would double-ingest the same\nsessions and write duplicate chunks.",
         "operationId": "backfill_sessions_v1_backfill_sessions_post",
         "requestBody": {
           "content": {
@@ -809,7 +809,7 @@
     },
     "/v1/optimize": {
       "post": {
-        "description": "Compact the table and rebuild indexes as a background task.",
+        "description": "Compact the table and rebuild indexes as a singleton background task.\n\nA second optimize while one is in flight is rejected with 409 and the\nrunning task's id, so concurrent runs never contend for the table lock.",
         "operationId": "optimize_v1_optimize_post",
         "requestBody": {
           "content": {
