@@ -14,11 +14,9 @@ from __future__ import annotations
 
 import asyncio
 import hmac
-import ipaddress
 import logging
 import os
 import pwd
-import socket as socket_module
 import time
 import uuid
 from collections.abc import AsyncGenerator, Callable, Generator
@@ -28,7 +26,6 @@ from functools import partial
 from pathlib import Path
 from socket import socket
 from typing import TYPE_CHECKING
-from urllib.parse import urlsplit
 
 import uvicorn
 from starlette.applications import Starlette
@@ -39,6 +36,7 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
 
 from quarry.config import DEFAULT_PORT, Settings
+from quarry.daemon.url_safety import UrlSafetyCheck
 from quarry.db import Database
 from quarry.db.storage import dir_size_bytes, format_size
 from quarry.fd_telemetry import FdTelemetry
@@ -69,80 +67,8 @@ MAX_INGEST_BODY_BYTES = 1 * 1024 * 1024
 MAX_SYNC_BODY_BYTES = 16 * 1024
 MAX_REGISTRATIONS_BODY_BYTES = 16 * 1024
 
-# Hostnames that expose cloud instance metadata services.  Reject regardless
-# of DNS resolution to harden against DNS-rebinding and TOCTOU attacks.
-_METADATA_HOSTNAMES = frozenset(
-    {
-        "169.254.169.254",
-        "metadata.google.internal",
-        "metadata",
-        "instance-data.ec2.internal",
-    }
-)
-
-# RFC 6598 Shared Address Space (Carrier-Grade NAT).  Python's
-# ``ipaddress.ip_address().is_private`` predates RFC 6598 and does not cover
-# this range, so we check it explicitly.
-_CGNAT_NETWORK = ipaddress.ip_network("100.64.0.0/10")
-
 # Task GC: completed/failed tasks are evicted after this many seconds.
 TASK_TTL_SECONDS = 3600  # 1 hour
-
-
-def _validate_ingest_url(url: str) -> str | None:
-    """Return None if *url* is safe to fetch, else a human-readable reason.
-
-    Rejects URLs that resolve to private, loopback, link-local, reserved,
-    multicast, or CGNAT (RFC 6598) addresses, ``.local`` hostnames, and
-    well-known cloud metadata endpoints.  Scheme and hostname comparisons
-    are case-insensitive — ``urlsplit`` normalizes both per RFC 3986.
-
-    Note: This check has a known DNS rebinding race.  The DNS resolution
-    here and the one performed by the downstream fetcher are independent.
-    An attacker controlling DNS can return a safe public IP here and a
-    private or metadata IP during the actual fetch.  Mitigating this
-    requires pinning the resolved IP for the fetch, which is tracked as a
-    follow-up.  For now, POST /ingest is authenticated-only, so a
-    rebinding attack requires a compromised API key.
-    """
-    parsed = urlsplit(url)
-    scheme = parsed.scheme.lower()
-    if scheme not in {"http", "https"}:
-        return f"unsupported scheme {parsed.scheme!r}"
-    host = parsed.hostname
-    if not host:
-        return "missing hostname"
-
-    host_lower = host.lower()
-    if host_lower in _METADATA_HOSTNAMES:
-        return f"metadata hostname {host!r} is blocked"
-    if host_lower.endswith(".local"):
-        return f"'.local' hostname {host!r} is blocked"
-
-    try:
-        infos = socket_module.getaddrinfo(host, None)
-    except OSError as exc:
-        return f"cannot resolve hostname {host!r}: {exc}"
-
-    for info in infos:
-        sockaddr = info[4]
-        try:
-            addr = ipaddress.ip_address(sockaddr[0])
-        except ValueError:
-            return f"cannot parse resolved address for {host!r}"
-        if (
-            addr.is_private
-            or addr.is_loopback
-            or addr.is_link_local
-            or addr.is_reserved
-            or addr.is_multicast
-            or addr.is_unspecified
-        ):
-            return f"host {host!r} resolves to blocked address {addr}"
-        if addr.version == 4 and addr in _CGNAT_NETWORK:
-            return f"host {host!r} resolves to CGNAT address {addr}"
-
-    return None
 
 
 @dataclass
@@ -609,9 +535,9 @@ async def _ingest_route(request: Request) -> JSONResponse:
             {"error": "Missing required field: source"}, status_code=400
         )
 
-    # _validate_ingest_url owns all scheme validation.  It calls
+    # UrlSafetyCheck owns all scheme + address validation.  It calls
     # getaddrinfo(), which can block on DNS — run it in the threadpool.
-    reason = await run_in_threadpool(_validate_ingest_url, source)
+    reason = await run_in_threadpool(UrlSafetyCheck.reject_reason, source)
     if reason is not None:
         return JSONResponse(
             {"error": f"URL rejected: {reason}"},

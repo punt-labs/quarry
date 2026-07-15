@@ -1130,7 +1130,7 @@ class TestIngest:
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
             patch(
-                "quarry.http_server.socket_module.getaddrinfo",
+                "quarry.daemon.url_safety.socket_module.getaddrinfo",
                 side_effect=_fake_public_addrinfo,
             ),
             patch("quarry.ingestion.pipeline.ingest_auto", return_value=mock_result),
@@ -1171,7 +1171,7 @@ class TestIngest:
         app = build_app(ctx)
         with (
             patch(
-                "quarry.http_server.socket_module.getaddrinfo",
+                "quarry.daemon.url_safety.socket_module.getaddrinfo",
                 side_effect=_fake_public_addrinfo,
             ),
             patch(
@@ -1214,7 +1214,7 @@ class TestIngest:
             return [(None, None, None, "", ("192.168.1.1", 0))]
 
         with patch(
-            "quarry.http_server.socket_module.getaddrinfo",
+            "quarry.daemon.url_safety.socket_module.getaddrinfo",
             side_effect=fake_getaddrinfo,
         ):
             resp = client.post("/ingest", json={"source": "http://192.168.1.1/"})
@@ -1230,7 +1230,7 @@ class TestIngest:
             return [(None, None, None, "", ("127.0.0.1", 0))]
 
         with patch(
-            "quarry.http_server.socket_module.getaddrinfo",
+            "quarry.daemon.url_safety.socket_module.getaddrinfo",
             side_effect=fake_getaddrinfo,
         ):
             resp = client.post("/ingest", json={"source": "http://127.0.0.1/"})
@@ -1240,7 +1240,7 @@ class TestIngest:
     def test_rejects_metadata_ip(self, client: TestClient) -> None:
         """Cloud metadata endpoint must be blocked without even resolving."""
         with patch(
-            "quarry.http_server.socket_module.getaddrinfo",
+            "quarry.daemon.url_safety.socket_module.getaddrinfo",
         ) as mock_resolve:
             resp = client.post(
                 "/ingest",
@@ -1253,7 +1253,7 @@ class TestIngest:
     def test_rejects_dotlocal(self, client: TestClient) -> None:
         """mDNS .local hostnames must be blocked pre-resolution."""
         with patch(
-            "quarry.http_server.socket_module.getaddrinfo",
+            "quarry.daemon.url_safety.socket_module.getaddrinfo",
         ) as mock_resolve:
             resp = client.post("/ingest", json={"source": "http://myserver.local/"})
         assert resp.status_code == 400
@@ -1269,7 +1269,7 @@ class TestIngest:
             return [(None, None, None, "", ("169.254.10.5", 0))]
 
         with patch(
-            "quarry.http_server.socket_module.getaddrinfo",
+            "quarry.daemon.url_safety.socket_module.getaddrinfo",
             side_effect=fake_getaddrinfo,
         ):
             resp = client.post(
@@ -1287,7 +1287,7 @@ class TestIngest:
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
             patch(
-                "quarry.http_server.socket_module.getaddrinfo",
+                "quarry.daemon.url_safety.socket_module.getaddrinfo",
                 side_effect=_fake_public_addrinfo,
             ),
             patch(
@@ -1311,7 +1311,7 @@ class TestIngest:
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
             patch(
-                "quarry.http_server.socket_module.getaddrinfo",
+                "quarry.daemon.url_safety.socket_module.getaddrinfo",
                 side_effect=_fake_public_addrinfo,
             ),
             patch(
@@ -1366,7 +1366,7 @@ class TestIngest:
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
             patch(
-                "quarry.http_server.socket_module.getaddrinfo",
+                "quarry.daemon.url_safety.socket_module.getaddrinfo",
                 side_effect=_fake_public_addrinfo,
             ),
             patch("quarry.ingestion.pipeline.ingest_auto", return_value=mock_result),
@@ -1387,7 +1387,7 @@ class TestIngest:
             return [(None, None, None, "", ("100.64.1.1", 0))]
 
         with patch(
-            "quarry.http_server.socket_module.getaddrinfo",
+            "quarry.daemon.url_safety.socket_module.getaddrinfo",
             side_effect=fake_getaddrinfo,
         ):
             resp = client.post("/ingest", json={"source": "http://cgnat.example/"})
@@ -2089,7 +2089,7 @@ class TestSyncGenericFailure:
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
             patch(
-                "quarry.http_server.socket_module.getaddrinfo",
+                "quarry.daemon.url_safety.socket_module.getaddrinfo",
                 side_effect=_fake_public_addrinfo,
             ),
             patch(

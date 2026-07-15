@@ -560,7 +560,7 @@ class TestAsyncIngestEndpoint:
         client = _make_client(tmp_path)
         with (
             patch(
-                "quarry.http_server.socket_module.getaddrinfo",
+                "quarry.daemon.url_safety.socket_module.getaddrinfo",
                 side_effect=_fake_public_addrinfo,
             ),
             patch(
@@ -638,7 +638,7 @@ class TestAsyncIngestEndpoint:
         client = _make_client(tmp_path)
         with (
             patch(
-                "quarry.http_server.socket_module.getaddrinfo",
+                "quarry.daemon.url_safety.socket_module.getaddrinfo",
                 side_effect=_fake_public_addrinfo,
             ),
             patch(
