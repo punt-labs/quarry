@@ -8,6 +8,9 @@ from pydantic import BaseModel, ConfigDict, Field
 class SearchRequest(BaseModel):
     """Query parameters for ``GET /search`` (``q`` is the search text)."""
 
+    # populate_by_name: build by field name (query=...) yet keep the ``q`` wire alias.
+    model_config = ConfigDict(populate_by_name=True)
+
     query: str = Field(alias="q", min_length=1)
     limit: int = 10
     collection: str = ""

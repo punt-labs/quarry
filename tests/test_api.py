@@ -30,6 +30,13 @@ def test_search_request_reads_q_alias() -> None:
     assert req.limit == 5
 
 
+def test_search_request_builds_by_field_name_and_serializes_to_alias() -> None:
+    """A client may construct by field name; the wire form keeps the ``q`` alias."""
+    req = api.SearchRequest(query="hello")
+    assert req.query == "hello"
+    assert req.model_dump(by_alias=True)["q"] == "hello"
+
+
 def test_search_hit_preserves_unknown_fields() -> None:
     """A new engine column passes through untouched (field parity)."""
     row = {
