@@ -1,4 +1,4 @@
-"""The ``/v1/collections`` contract: listing and deletion."""
+"""The ``/collections`` contract: listing and deletion."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict
 
 
 class DeleteCollectionRequest(BaseModel):
-    """Query parameters for ``DELETE /v1/collections``."""
+    """Query parameters for ``DELETE /collections``."""
 
     name: str
 
@@ -25,7 +25,7 @@ class CollectionInfo(BaseModel):
 
 
 class CollectionList(BaseModel):
-    """The ``GET /v1/collections`` response envelope."""
+    """The ``GET /collections`` response envelope."""
 
     total_collections: int
     collections: list[CollectionInfo]

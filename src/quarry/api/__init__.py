@@ -34,8 +34,8 @@ from quarry.api.search import SearchHit, SearchRequest, SearchResponse
 from quarry.api.show import ShowPageResponse, ShowRequest
 from quarry.api.tasks import TaskAccepted, TaskStatus
 
-# The wire-protocol major version.  All engine operations live under ``/v1``;
-# ``/health`` advertises this so a client can detect a major mismatch.
+# The wire-protocol major version — reserved for a future versioned URL space
+# (``/v1/…``) and ``/health`` field; not yet on the wire, today's routes are bare.
 API_VERSION = "1"
 
 __all__ = [

@@ -1,4 +1,4 @@
-"""The ``/v1/registrations`` contract: register a directory and list registrations."""
+"""The ``/registrations`` contract: register a directory and list registrations."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict
 
 
 class RegisterRequest(BaseModel):
-    """Body for ``POST /v1/registrations`` — track a directory for sync.
+    """Body for ``POST /registrations`` — track a directory for sync.
 
     ``directory`` must resolve inside the daemon's home directory; the daemon
     rejects traversal and out-of-tree paths before registering.
@@ -30,7 +30,7 @@ class RegistrationInfo(BaseModel):
 
 
 class RegistrationList(BaseModel):
-    """The ``GET /v1/registrations`` response envelope."""
+    """The ``GET /registrations`` response envelope."""
 
     total_registrations: int
     registrations: list[RegistrationInfo]

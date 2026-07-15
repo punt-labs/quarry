@@ -1,4 +1,4 @@
-"""The ``/v1/search`` contract: query parameters, ranked hits, and response."""
+"""The ``/search`` contract: query parameters, ranked hits, and response."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class SearchRequest(BaseModel):
-    """Query parameters for ``GET /v1/search`` (``q`` is the search text)."""
+    """Query parameters for ``GET /search`` (``q`` is the search text)."""
 
     query: str = Field(alias="q", min_length=1)
     limit: int = 10
@@ -41,7 +41,7 @@ class SearchHit(BaseModel):
 
 
 class SearchResponse(BaseModel):
-    """The ``GET /v1/search`` response envelope."""
+    """The ``GET /search`` response envelope."""
 
     query: str
     total_results: int

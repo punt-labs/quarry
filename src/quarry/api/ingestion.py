@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 
 class RememberRequest(BaseModel):
-    """Body for ``POST /v1/remember`` — index inline text content."""
+    """Body for ``POST /remember`` — index inline text content."""
 
     name: str
     content: str
@@ -19,7 +19,7 @@ class RememberRequest(BaseModel):
 
 
 class IngestRequest(BaseModel):
-    """Body for ``POST /v1/ingest`` — fetch and index a URL.
+    """Body for ``POST /ingest`` — fetch and index a URL.
 
     ``source`` is an ``http(s)`` URL; the daemon validates it against the
     SSRF allowlist before fetching. File upload is not part of this contract.

@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 TASK_TTL_SECONDS = 3600  # 1 hour
 
 
-@dataclass
+@dataclass(slots=True)
 class TaskState:
     """Tracks the state of an in-progress or completed background task."""
 

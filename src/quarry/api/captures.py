@@ -1,4 +1,4 @@
-"""The ``/v1/captures/push`` contract: push redacted capture shadows."""
+"""The ``/captures/push`` contract: push redacted capture shadows."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 
 class CapturesPushResponse(BaseModel):
-    """The ``POST /v1/captures/push`` response.
+    """The ``POST /captures/push`` response.
 
     ``results`` maps each pushed collection to its per-collection push summary
     (``CaptureSync`` result dict) — a wire-boundary mapping the CLI renders,

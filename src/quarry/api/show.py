@@ -1,4 +1,4 @@
-"""The ``/v1/show`` contract: fetch document metadata or a single page's text."""
+"""The ``/show`` contract: fetch document metadata or a single page's text."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 
 class ShowRequest(BaseModel):
-    """Query parameters for ``GET /v1/show``.
+    """Query parameters for ``GET /show``.
 
     With ``page`` unset (or 0) the endpoint returns the document's catalog
     metadata (a ``DocumentInfo``); with ``page >= 1`` it returns that page's
