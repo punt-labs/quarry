@@ -59,11 +59,22 @@ _SHARED_DB = _mock_db()
 _SHARED_EMBEDDER = _mock_embedder()
 
 
+def _inject(ctx: DaemonContext) -> None:
+    """Seed test doubles into the real resource seam.
+
+    The routes read resources via ``ctx._resources`` (QuarryResources
+    cached_property ``database``/``query_database``/``embedder``), so the
+    doubles must be written into that instance ``__dict__`` — not ``ctx``'s.
+    """
+    ctx._resources.__dict__["database"] = _SHARED_DB
+    ctx._resources.__dict__["query_database"] = _SHARED_DB
+    ctx._resources.__dict__["embedder"] = _SHARED_EMBEDDER
+
+
 def _make_client(tmp_path: Path) -> TestClient:
     settings = _mock_settings(tmp_path)
     ctx = DaemonContext(settings)
-    ctx.__dict__["db"] = _SHARED_DB
-    ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+    _inject(ctx)
     return TestClient(build_app(ctx), raise_server_exceptions=False)
 
 
@@ -78,8 +89,7 @@ class TestSyncLock:
     def test_second_post_while_running_returns_409(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
         ctx = DaemonContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject(ctx)
 
         # Simulate a running sync task.
         ctx.tasks.seed(
@@ -98,8 +108,7 @@ class TestSyncLock:
     def test_post_allowed_after_previous_completed(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
         ctx = DaemonContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject(ctx)
 
         # Previous sync completed.
         ctx.tasks.seed(TaskState(task_id="sync-old", kind="sync", status="completed"))
@@ -114,8 +123,7 @@ class TestSyncLock:
     def test_post_allowed_after_previous_failed(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
         ctx = DaemonContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject(ctx)
 
         # Previous sync failed.
         ctx.tasks.seed(
@@ -135,8 +143,7 @@ class TestSyncLock:
         """After background task completes, the state is no longer 'running'."""
         settings = _mock_settings(tmp_path)
         ctx = DaemonContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject(ctx)
 
         ctx.tasks.seed(TaskState(task_id="sync-done", kind="sync", status="completed"))
 
@@ -473,8 +480,7 @@ class TestAsyncSyncEndpoint:
     def test_get_running_task(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
         ctx = DaemonContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject(ctx)
         ctx.tasks.seed(TaskState(task_id="sync-abc", kind="sync", status="running"))
 
         client = TestClient(build_app(ctx), raise_server_exceptions=False)
@@ -487,8 +493,7 @@ class TestAsyncSyncEndpoint:
     def test_get_completed_task_includes_results(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
         ctx = DaemonContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject(ctx)
         ctx.tasks.seed(
             TaskState(
                 task_id="sync-done",
@@ -507,8 +512,7 @@ class TestAsyncSyncEndpoint:
     def test_get_failed_task_includes_error(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
         ctx = DaemonContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject(ctx)
         ctx.tasks.seed(
             TaskState(
                 task_id="sync-bad",
@@ -528,8 +532,7 @@ class TestAsyncSyncEndpoint:
         """409 response includes the task_id of the running sync."""
         settings = _mock_settings(tmp_path)
         ctx = DaemonContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject(ctx)
         ctx.tasks.seed(TaskState(task_id="sync-running", kind="sync", status="running"))
 
         client = TestClient(build_app(ctx), raise_server_exceptions=False)
@@ -583,8 +586,7 @@ class TestAsyncIngestEndpoint:
     def test_get_running_task(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
         ctx = DaemonContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject(ctx)
         ctx.tasks.seed(TaskState(task_id="ingest-abc", kind="ingest", status="running"))
 
         client = TestClient(build_app(ctx), raise_server_exceptions=False)
@@ -597,8 +599,7 @@ class TestAsyncIngestEndpoint:
     def test_get_completed_task_includes_results(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
         ctx = DaemonContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject(ctx)
         ctx.tasks.seed(
             TaskState(
                 task_id="ingest-done",
@@ -618,8 +619,7 @@ class TestAsyncIngestEndpoint:
     def test_get_failed_task_includes_error(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
         ctx = DaemonContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        _inject(ctx)
         ctx.tasks.seed(
             TaskState(
                 task_id="ingest-bad",

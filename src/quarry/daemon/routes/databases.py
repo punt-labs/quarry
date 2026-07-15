@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING, final
 
 from starlette.responses import JSONResponse
@@ -12,8 +11,6 @@ from quarry.db.storage import dir_size_bytes, format_size
 
 if TYPE_CHECKING:
     from starlette.requests import Request
-
-logger = logging.getLogger(__name__)
 
 
 @final
@@ -44,17 +41,13 @@ class DatabaseRoutes(RouteGroup):
     def _document_count(self) -> int:
         """Return the catalog document count, treating a fresh DB as zero.
 
-        A fresh database has no ``chunks`` table yet; ``list_documents`` can
-        raise on that path.  Any failure is treated as "zero documents" so the
-        remote ``/databases`` endpoint keeps the ``discover_databases`` contract.
+        A fresh database (no ``chunks`` table yet) already yields ``[]`` from
+        ``list_documents``, so the count is naturally zero — a genuine catalog
+        error is left to surface as a 500 rather than being masked as "zero".
         """
         if not self.ctx.settings.lancedb_path.exists():
             return 0
-        try:
-            return len(self.ctx.database.catalog.list_documents())
-        except Exception:  # noqa: BLE001 — table may not exist yet
-            logger.debug("list_documents failed on fresh database", exc_info=True)
-            return 0
+        return len(self.ctx.database.catalog.list_documents())
 
     def use(self, request: Request) -> JSONResponse:
         """Reject database selection: the server is fixed to its own database."""

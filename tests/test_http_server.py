@@ -2031,18 +2031,21 @@ class TestRunPurgeTask:
 class TestDatabasesMissingTable:
     """Fresh databases (no chunks table) must still respond to /databases."""
 
-    def test_list_documents_failure_is_zero(self, client: TestClient) -> None:
-        """A raise from list_documents must degrade to document_count=0."""
+    def test_list_documents_error_surfaces_500(self, client: TestClient) -> None:
+        """A genuine list_documents error surfaces as 500, not masked to zero.
+
+        A fresh DB (absent chunks table) already yields ``[]`` from
+        list_documents, so document_count is naturally 0 with no masking; a
+        real catalog error is a server error, not "zero documents".
+        """
         with patch(
             "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
-            side_effect=ValueError("Table 'chunks' was not found"),
+            side_effect=RuntimeError("catalog exploded"),
         ):
             resp = client.get("/databases")
 
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["total_databases"] == 1
-        assert data["databases"][0]["document_count"] == 0
+        assert resp.status_code == 500
+        assert resp.json() == {"error": "Internal server error"}
 
 
 class TestSyncGenericFailure:
