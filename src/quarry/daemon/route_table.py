@@ -20,6 +20,7 @@ from quarry.api import (
     CollectionList,
     DatabaseList,
     DeregisterAccepted,
+    DocumentInfo,
     DocumentList,
     ErrorBody,
     HealthResponse,
@@ -51,6 +52,7 @@ from quarry.daemon.routes import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from types import UnionType
 
     from pydantic import BaseModel
     from starlette.responses import Response
@@ -70,7 +72,9 @@ class RouteSpec:
     path: str
     endpoint: Endpoint
     methods: tuple[str, ...]
-    response_model: type[BaseModel] | None = None
+    # A single model, or a union (``A | B``) for a route with two 200 shapes —
+    # ``/show`` returns page text or document metadata depending on ``page``.
+    response_model: type[BaseModel] | UnionType | None = None
     request_model: type[BaseModel] | None = None
     exclude_none: bool = False
     status_code: int = 200
@@ -150,7 +154,11 @@ class RouteTable:
                 response_class=PlainTextResponse,
             ),
             RouteSpec("/search", SearchRoutes(ctx).search, ("GET",), SearchResponse),
-            RouteSpec("/show", ShowRoutes(ctx).show, ("GET",), ShowPageResponse),
+            # /show returns page text (page>=1) or document metadata (page
+            # omitted), so it documents both 200 shapes as a union.
+            RouteSpec(
+                "/show", ShowRoutes(ctx).show, ("GET",), ShowPageResponse | DocumentInfo
+            ),
             RouteSpec("/documents", docs.documents, ("GET",), DocumentList),
             RouteSpec(
                 "/documents", docs.delete, ("DELETE",), TaskAccepted, status_code=202

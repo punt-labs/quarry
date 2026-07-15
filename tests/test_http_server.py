@@ -2574,3 +2574,19 @@ class TestResponseModelParity:
     def test_search_keys_match_model(self, client: TestClient) -> None:
         body = client.get("/v1/search?q=test").json()
         assert set(body) == set(SearchResponse.model_fields)
+
+    def test_show_documents_both_200_shapes(self, tmp_path: Path) -> None:
+        """/show returns page text OR document metadata — OpenAPI documents both.
+
+        The RouteSpec once advertised only ShowPageResponse, so the metadata
+        case (``page`` omitted -> DocumentInfo) was undocumented.
+        """
+        ctx = DaemonContext(_mock_settings(tmp_path))
+        _inject_mocks(ctx)
+        spec = build_app(ctx).openapi()
+        schema = spec["paths"]["/v1/show"]["get"]["responses"]["200"]["content"][
+            "application/json"
+        ]["schema"]
+        refs = {opt.get("$ref", "") for opt in schema.get("anyOf", [])}
+        assert any(r.endswith("/ShowPageResponse") for r in refs), refs
+        assert any(r.endswith("/DocumentInfo") for r in refs), refs

@@ -1035,7 +1035,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ShowPageResponse"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ShowPageResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/DocumentInfo"
+                    }
+                  ],
+                  "title": "Response Show V1 Show Get"
                 }
               }
             },
