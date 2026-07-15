@@ -1,7 +1,7 @@
 {
-  "total": 261,
+  "total": 259,
   "by_category": {
-    "noqa": 213,
+    "noqa": 211,
     "type_ignore": 10,
     "pylint_disable": 0,
     "pyright_ignore": 12,
@@ -64,7 +64,7 @@
       "pyright_ignore": 3
     },
     "src/quarry/http_server.py": {
-      "noqa": 12,
+      "noqa": 10,
       "type_ignore": 2
     },
     "src/quarry/ingestion/backends.py": {
@@ -117,5 +117,5 @@
       "noqa": 1
     }
   },
-  "updated_at": "2026-07-13T02:00:35Z"
+  "updated_at": "2026-07-15T01:46:00Z"
 }

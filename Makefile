@@ -13,9 +13,18 @@ lint: lint-docs ## Lint and format check
 lint-docs: ## Lint markdown files (matches CI docs job)
 	npx markdownlint-cli2 "**/*.md"
 
+# Pin the node-pyright binary to the uv.lock-pinned wrapper version so `make
+# type` catches exactly what CI catches. The pyright-python wrapper can reuse a
+# stale locally-cached node-pyright that is older — and laxer — than CI's pinned
+# one, so `make check` could PASS code that CI's pyright then REJECTS. That is
+# this PR's own incident: a cached 1.1.408 hid three reportDeprecated errors that
+# CI's 1.1.411 flagged.  Forcing the version keeps the local and CI checkers
+# identical.
+PYRIGHT_VERSION = $(shell uv run python -c "import importlib.metadata as m; print(m.version('pyright'))")
+
 type: ## Type check with mypy and pyright
 	uv run mypy src/ tests/
-	uv run pyright src/ tests/
+	PYRIGHT_PYTHON_FORCE_VERSION=$(PYRIGHT_VERSION) uv run pyright src/ tests/
 
 # Base-comparison flags injected by CI (e.g. --base-ref <merge-base> --require-base).
 # Empty locally, where the tools default base to `git merge-base origin/main HEAD`.
@@ -56,7 +65,7 @@ report: ## Full diagnostics (OO score + all checks, no fail-fast)
 	-uv run mypy src/ tests/
 	-uv run ruff format --check .
 	-uv run ruff check --preview --select PLR6301,PLR0913,UP035,UP040,UP007,N,I,SIM,C1901,S101 .
-	-uv run pyright src/ tests/
+	-PYRIGHT_PYTHON_FORCE_VERSION=$(PYRIGHT_VERSION) uv run pyright src/ tests/
 	-uv run pytest
 	@echo "Report complete."
 

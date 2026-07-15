@@ -941,7 +941,7 @@ class TestUseDatabase:
 class TestContextVarIsolation:
     """ContextVar must not leak between concurrent asyncio tasks.
 
-    Each MCP WebSocket session runs in its own asyncio Task.  If session A
+    Each MCP session runs in its own asyncio Task.  If session A
     calls use_database("work"), session B must still see the default.
     """
 

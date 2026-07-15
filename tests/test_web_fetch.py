@@ -55,7 +55,7 @@ class TestWebFetcher:
     @patch("urllib.request.urlopen")
     def test_rejects_redirect_to_non_http(self, mock_urlopen: MagicMock) -> None:
         mock_resp = _mock_response(b"", "text/html")
-        mock_resp.geturl.return_value = "ftp://evil.com/file"
+        mock_resp.url = "ftp://evil.com/file"
         mock_urlopen.return_value = mock_resp
         with pytest.raises(ValueError, match="Redirect left HTTP"):
             WebFetcher().fetch("https://example.com/redirect")
@@ -99,7 +99,9 @@ def _mock_response(
     mock_resp = MagicMock(spec=HTTPResponse)
     mock_resp.read.return_value = body
     mock_resp.headers = _make_headers(content_type)
-    mock_resp.geturl.return_value = final_url
+    # urllib sets ``.url`` on the response at runtime; it is not a class
+    # attribute, so a spec'd mock only exposes it once assigned explicitly.
+    mock_resp.url = final_url
     mock_resp.__enter__ = lambda s: s
     mock_resp.__exit__ = MagicMock(return_value=False)
     return mock_resp

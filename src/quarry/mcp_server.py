@@ -6,7 +6,6 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from mcp.server.fastmcp import FastMCP
 
@@ -36,13 +35,6 @@ from quarry.results import SearchFilter
 from quarry.retrieval import SearchService
 from quarry.sync import sync_all as engine_sync_all
 from quarry.sync_registry import SyncRegistry
-
-if TYPE_CHECKING:
-    from anyio.streams.memory import (
-        MemoryObjectReceiveStream,
-        MemoryObjectSendStream,
-    )
-    from mcp.shared.message import SessionMessage
 
 LoggingConfig.configure(stderr_level="INFO")
 logger = logging.getLogger(__name__)
@@ -523,29 +515,6 @@ def use_database(name: str) -> str:
     summary = format_switch_summary(previous, name, str(test_settings.lancedb_path))
     _db_name.set(new_name)
     return summary
-
-
-async def run_mcp_session(
-    read_stream: MemoryObjectReceiveStream[SessionMessage | Exception],
-    write_stream: MemoryObjectSendStream[SessionMessage],
-) -> None:
-    """Run an MCP session on the given streams (WebSocket, stdio, etc.).
-
-    This is the public entry point for non-stdio transports.  Each call
-    gets its own ``ServerSession`` with isolated ContextVar state.
-    """
-    server = getattr(mcp, "_mcp_server", None)
-    if server is None:
-        msg = (
-            f"FastMCP._mcp_server not found (mcp=={__import__('mcp').__version__}). "
-            "This private API may have changed; punt-quarry requires mcp<2.0.0."
-        )
-        raise RuntimeError(msg)
-    await server.run(
-        read_stream,
-        write_stream,
-        server.create_initialization_options(),
-    )
 
 
 def main(db_name: str | None = None) -> None:

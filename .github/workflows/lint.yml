@@ -30,6 +30,13 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy src/ tests/
+      # pyright is part of local `make type`/`make check` (PL-TC-3) but was
+      # absent from CI — that gap let a dependency bump merge green while
+      # breaking `make check` locally (reportDeprecated). Run both checkers in
+      # CI so a type regression cannot slip through on either one. Force the
+      # node-pyright binary to the uv.lock-pinned wrapper version — the same pin
+      # `make type` uses — so local and CI always run the identical checker.
+      - run: PYRIGHT_PYTHON_FORCE_VERSION=$(uv run python -c "import importlib.metadata as m; print(m.version('pyright'))") uv run pyright src/ tests/
       # Completeness guard: every scored file must be recorded in the committed
       # baseline. Runs on the committed, post-update-oo state where code and
       # baseline are in sync — see the audit-oo comment in the Makefile.
