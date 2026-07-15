@@ -37,7 +37,7 @@ class UrlFetcher:
         allowed_media_types = {"text/html", "application/xhtml+xml"}
         try:
             with urllib.request.urlopen(request, timeout=timeout) as resp:  # noqa: S310
-                final_url: str = resp.geturl()
+                final_url: str = resp.url
                 if not final_url.startswith(("http://", "https://")):
                     msg = f"Redirect left HTTP(S): {final_url}"
                     raise ValueError(msg)
