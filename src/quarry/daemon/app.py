@@ -32,8 +32,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# The version prefix every engine route carries; /health and /ca.crt are exempt.
-_API_PREFIX = "/v1"
+# Derived from the one wire version so daemon and clients never disagree on it.
+_API_PREFIX = f"/v{API_VERSION}"
 
 type Lifespan = Callable[[FastAPI], AbstractAsyncContextManager[None]]
 

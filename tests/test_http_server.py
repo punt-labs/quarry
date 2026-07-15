@@ -2335,6 +2335,14 @@ class TestMaintenance:
         resp = client.post("/v1/backfill-sessions", json={"limit": "lots"})
         assert resp.status_code == 400
 
+    def test_optimize_accepts_empty_body(self, client: TestClient) -> None:
+        """Empty body is accepted (its documented requestBody is optional)."""
+        assert client.post("/v1/optimize").status_code == 202
+
+    def test_backfill_accepts_empty_body(self, client: TestClient) -> None:
+        """Empty body is accepted (its documented requestBody is optional)."""
+        assert client.post("/v1/backfill-sessions").status_code == 202
+
 
 class TestResponseModelParity:
     """Each response route's JSON keys match its api model — the wire contract.

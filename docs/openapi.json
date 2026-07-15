@@ -601,7 +601,7 @@
               }
             }
           },
-          "required": true
+          "required": false
         },
         "responses": {
           "202": {
@@ -811,7 +811,7 @@
               }
             }
           },
-          "required": true
+          "required": false
         },
         "responses": {
           "202": {

@@ -71,6 +71,10 @@ class RouteSpec:
     exclude_none: bool = False
     status_code: int = 200
     versioned: bool = True
+    # Whether the handler requires a non-empty JSON body; the maintenance
+    # endpoints accept an empty body (Content-Length 0), so their documented
+    # requestBody must be optional to match what the parser actually accepts.
+    body_required: bool = True
 
     def full_path(self, prefix: str) -> str:
         """Return the route path, prefixing engine routes with the API version."""
@@ -87,7 +91,7 @@ class RouteSpec:
             return None
         return {
             "requestBody": {
-                "required": True,
+                "required": self.body_required,
                 "content": {
                     "application/json": {
                         "schema": self.request_model.model_json_schema()
@@ -192,6 +196,7 @@ class RouteTable:
                 TaskAccepted,
                 request_model=OptimizeRequest,
                 status_code=202,
+                body_required=False,
             ),
             RouteSpec(
                 "/backfill-sessions",
@@ -200,5 +205,6 @@ class RouteTable:
                 TaskAccepted,
                 request_model=BackfillRequest,
                 status_code=202,
+                body_required=False,
             ),
         )
