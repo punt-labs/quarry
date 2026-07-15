@@ -117,13 +117,11 @@ class RegistrationRoutes(RouteGroup):
         if not self.ctx.settings.registry_path.exists():
             return not_found
 
-        try:  # existence + registry mutation off-thread; unknown -> 404, error -> 500
-            found, removed_docs = await run_in_threadpool(
-                self._deregister_sync, self.ctx.settings.registry_path, collection
-            )
-        except Exception as exc:
-            logger.exception("Synchronous deregister failed")
-            return JSONResponse({"error": f"deregister failed: {exc}"}, status_code=500)
+        # Registry mutation off-thread; an unknown collection is a 404 below, and any
+        # unexpected error propagates to the global 500 handler (no raw text echoed).
+        found, removed_docs = await run_in_threadpool(
+            self._deregister_sync, self.ctx.settings.registry_path, collection
+        )
         if not found:
             return not_found
 
