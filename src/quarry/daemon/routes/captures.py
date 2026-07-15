@@ -1,4 +1,4 @@
-"""The ``/captures/push`` route: re-scrub and push enabled capture shadows."""
+"""The capture-push route: re-scrub and push enabled capture shadows."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ MAX_CAPTURES_BODY_BYTES = 16 * 1024
 
 @final
 class CaptureRoutes(RouteGroup):
-    """Serve ``POST /captures/push`` — mirrors ``quarry captures push``."""
+    """Serve capture push — mirrors ``quarry captures push``."""
 
     async def push(self, request: Request) -> JSONResponse:
         auth_resp = self.reject_unauthorized(request)

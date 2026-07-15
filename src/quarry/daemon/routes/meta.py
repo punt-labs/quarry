@@ -14,13 +14,13 @@ from quarry.db.storage import dir_size_bytes
 from quarry.ingestion.provider import ProviderSelection
 from quarry.sync_registry import SyncRegistry
 
-# The running package version, read once at import for the /health snapshot.
+# The running package version, read once at import for the health snapshot.
 _QUARRY_VERSION = version("punt-quarry")
 
 
 @final
 class MetaRoutes(RouteGroup):
-    """Liveness (``/health``), aggregate ``/status``, and ``/ca.crt`` bootstrap."""
+    """Liveness, aggregate status, and CA-cert bootstrap."""
 
     def health(self, _request: Request) -> JSONResponse:
         """Return liveness plus warm ``state`` and version negotiation fields."""

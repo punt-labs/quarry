@@ -1,4 +1,4 @@
-"""The maintenance routes: ``/optimize`` (compact) and ``/backfill-sessions``.
+"""The maintenance routes: optimize (compact) and backfill-sessions.
 
 Both run engine work off the event loop as tracked 202 background tasks, so a
 long compaction or transcript scan never blocks the daemon.  The backfill's four
@@ -25,7 +25,7 @@ MAX_MAINTENANCE_BODY_BYTES = 16 * 1024
 
 @dataclass(frozen=True, slots=True)
 class BackfillArgs:
-    """The validated ``/backfill-sessions`` options, bundled as one value."""
+    """The validated backfill options, bundled as one value."""
 
     dry_run: bool
     collection: str
@@ -35,7 +35,7 @@ class BackfillArgs:
 
 @final
 class MaintenanceRoutes(RouteGroup):
-    """Serve ``POST /optimize`` and ``POST /backfill-sessions`` as 202 tasks."""
+    """Serve table optimization and session backfill as 202 tasks."""
 
     async def optimize(self, request: Request) -> JSONResponse:
         """Compact the table and rebuild indexes as a background task."""
@@ -111,7 +111,7 @@ class MaintenanceRoutes(RouteGroup):
         """Parse an optional JSON body and coerce ``body[key]`` to a bool.
 
         An empty body is fine — the flag falls back to *default*; a malformed
-        body or a non-bool ``key`` is a 400, matching the ``/sync`` contract.
+        body or a non-bool ``key`` is a 400, matching the sync contract.
         """
         if int(request.headers.get("content-length", "0") or "0") <= 0:
             return default
@@ -121,7 +121,7 @@ class MaintenanceRoutes(RouteGroup):
         return RequestGuards.coerce_bool_field(body, key, default=default)
 
     async def _backfill_args(self, request: Request) -> BackfillArgs | JSONResponse:
-        """Validate a ``/backfill-sessions`` body into :class:`BackfillArgs`."""
+        """Validate a backfill request body into :class:`BackfillArgs`."""
         if int(request.headers.get("content-length", "0") or "0") <= 0:
             return BackfillArgs(dry_run=False, collection="", project="", limit=0)
         body = await self.json_object(request)
@@ -131,7 +131,7 @@ class MaintenanceRoutes(RouteGroup):
         dry_run = RequestGuards.coerce_bool_field(body, "dry_run", default=False)
         if isinstance(dry_run, JSONResponse):
             return dry_run
-        limit = self._int_field(body, "limit")
+        limit = RequestGuards.coerce_int_field(body, "limit", default=0)
         if isinstance(limit, JSONResponse):
             return limit
         return BackfillArgs(
@@ -140,11 +140,3 @@ class MaintenanceRoutes(RouteGroup):
             project=str(body.get("project") or ""),
             limit=limit,
         )
-
-    @staticmethod
-    def _int_field(body: dict[str, object], key: str) -> int | JSONResponse:
-        """Return ``body[key]`` as an int (default 0), or a 400 on a bad value."""
-        raw = body.get(key, 0)
-        if isinstance(raw, bool) or not isinstance(raw, int):
-            return JSONResponse({"error": f"{key} must be an integer"}, status_code=400)
-        return raw

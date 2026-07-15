@@ -2,7 +2,7 @@
   "components": {
     "schemas": {
       "CapturesPushResponse": {
-        "description": "The ``POST /captures/push`` response.\n\n``results`` maps each pushed collection to its per-collection push summary\n(``CaptureSync`` result dict) \u2014 a wire-boundary mapping the CLI renders,\nkept as ``dict`` so a summary-field addition never drops on the wire.",
+        "description": "The response for pushing redacted capture shadows.\n\n``results`` maps each pushed collection to its per-collection push summary\n(``CaptureSync`` result dict) \u2014 a wire-boundary mapping the CLI renders,\nkept as ``dict`` so a summary-field addition never drops on the wire.",
         "properties": {
           "results": {
             "additionalProperties": {
@@ -45,7 +45,7 @@
         "type": "object"
       },
       "CollectionList": {
-        "description": "The ``GET /collections`` response envelope.",
+        "description": "The collection-list response envelope.",
         "properties": {
           "collections": {
             "items": {
@@ -68,7 +68,7 @@
       },
       "DatabaseInfo": {
         "additionalProperties": true,
-        "description": "One named database's summary.\n\nThe daemon is fixed to a single database, so ``GET /databases`` returns\nexactly one entry.  ``extra=\"allow\"`` keeps parity with the local\n``discover_databases`` shape the CLI renders identically.",
+        "description": "One named database's summary.\n\nThe daemon is fixed to a single database, so the list returns exactly one\nentry.  ``extra=\"allow\"`` keeps parity with the local\n``discover_databases`` shape the CLI renders identically.",
         "properties": {
           "document_count": {
             "title": "Document Count",
@@ -97,7 +97,7 @@
         "type": "object"
       },
       "DatabaseList": {
-        "description": "The ``GET /databases`` response envelope.",
+        "description": "The database-list response envelope.",
         "properties": {
           "databases": {
             "items": {
@@ -188,7 +188,7 @@
         "type": "object"
       },
       "DocumentList": {
-        "description": "The ``GET /documents`` response envelope.",
+        "description": "The document-list response envelope.",
         "properties": {
           "documents": {
             "items": {
@@ -211,7 +211,7 @@
       },
       "ErrorBody": {
         "additionalProperties": true,
-        "description": "The wire error shape: ``{\"error\": \"...\"}`` plus any endpoint extras.\n\n``extra=\"allow\"`` preserves the richer error payloads some routes emit \u2014\ne.g. the ``/sync`` 409 conflict adds ``status`` and ``task_id`` \u2014 so the\nenvelope stays a faithful superset of every current error response.",
+        "description": "The wire error shape: ``{\"error\": \"...\"}`` plus any endpoint extras.\n\n``extra=\"allow\"`` preserves the richer error payloads some routes emit \u2014\ne.g. the sync-conflict 409 adds ``status`` and ``task_id`` \u2014 so the\nenvelope stays a faithful superset of every current error response.",
         "properties": {
           "error": {
             "title": "Error",
@@ -225,7 +225,7 @@
         "type": "object"
       },
       "HealthResponse": {
-        "description": "The ``GET /health`` snapshot (unversioned; auth-exempt).\n\nMirrors the daemon's live ``/health`` body: liveness (``status``), process\nuptime, warm/ready ``state``, the wire ``api_version`` a client negotiates\nagainst, and the running ``quarry_version``.",
+        "description": "The daemon's liveness and readiness snapshot (unversioned; auth-exempt).\n\nCarries liveness (``status``), process uptime, warm/ready ``state``, the wire\n``api_version`` a client negotiates against, and the running ``quarry_version``.",
         "properties": {
           "api_version": {
             "title": "Api Version",
@@ -284,7 +284,7 @@
         "type": "object"
       },
       "RegistrationList": {
-        "description": "The ``GET /registrations`` response envelope.",
+        "description": "The registration-list response envelope.",
         "properties": {
           "registrations": {
             "items": {
@@ -371,7 +371,7 @@
         "type": "object"
       },
       "SearchResponse": {
-        "description": "The ``GET /search`` response envelope.",
+        "description": "The search response envelope.",
         "properties": {
           "query": {
             "title": "Query",
@@ -422,7 +422,7 @@
         "type": "object"
       },
       "StatusResponse": {
-        "description": "The ``GET /status`` aggregate over the daemon's single database.",
+        "description": "The aggregate status over the daemon's single database.",
         "properties": {
           "chunk_count": {
             "title": "Chunk Count",
@@ -495,7 +495,7 @@
         "type": "object"
       },
       "TaskStatus": {
-        "description": "A task's pollable state from ``GET /tasks/{task_id}``.\n\n``results`` is populated only on ``completed`` and ``error`` only on\n``failed``; both are omitted otherwise (the route serializes with\n``exclude_none`` to match the daemon's conditional shape).",
+        "description": "A background task's pollable terminal state.\n\n``results`` is populated only on ``completed`` and ``error`` only on\n``failed``; both are omitted otherwise (the route serializes with\n``exclude_none`` to match the daemon's conditional shape).",
         "properties": {
           "error": {
             "anyOf": [
@@ -590,7 +590,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "description": "Body for ``POST /v1/backfill-sessions`` \u2014 ingest historical transcripts.\n\n``limit == 0`` means no limit; ``collection``/``project`` narrow the scan.",
+                "description": "Body for ingesting historical session transcripts.\n\n``limit == 0`` means no limit; ``collection``/``project`` narrow the scan.",
                 "properties": {
                   "collection": {
                     "default": "",
@@ -655,7 +655,7 @@
     },
     "/v1/collections": {
       "delete": {
-        "description": "Handle DELETE /collections as an async 202 background task.",
+        "description": "Delete a collection as an async 202 background task.",
         "operationId": "delete_v1_collections_delete",
         "responses": {
           "202": {
@@ -709,7 +709,7 @@
     },
     "/v1/documents": {
       "delete": {
-        "description": "Handle DELETE /documents as an async 202 background task.",
+        "description": "Delete a document as an async 202 background task.",
         "operationId": "delete_v1_documents_delete",
         "responses": {
           "202": {
@@ -744,13 +744,13 @@
     },
     "/v1/ingest": {
       "post": {
-        "description": "Ingest a URL as a background task.\n\nBody: {source, ...optional}. File upload not supported.\nReturns 202 Accepted immediately with a task_id; the actual ingest\nruns as an asyncio background task.  ``GET /tasks/<task_id>`` returns\nthe task status.  Unlike sync, multiple concurrent ingests are allowed.",
+        "description": "Ingest a URL as a background task.\n\nBody: {source, ...optional}. File upload not supported.\nReturns 202 Accepted immediately with a task_id; the actual ingest\nruns as an asyncio background task, polled by that task id.  Unlike\nsync, multiple concurrent ingests are allowed.",
         "operationId": "ingest_v1_ingest_post",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "description": "Body for ``POST /ingest`` \u2014 fetch and index a URL.\n\n``source`` is an ``http(s)`` URL; the daemon validates it against the\nSSRF allowlist before fetching. File upload is not part of this contract.",
+                "description": "Body for fetching and indexing a URL.\n\n``source`` is an ``http(s)`` URL; the daemon validates it against the\nSSRF allowlist before fetching. File upload is not part of this contract.",
                 "properties": {
                   "agent_handle": {
                     "default": "",
@@ -815,7 +815,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "description": "Body for ``POST /v1/optimize`` \u2014 compact the table and rebuild indexes.\n\n``force`` bypasses the fragment-count safety guard (manual recovery).",
+                "description": "Body for compacting the table and rebuilding indexes.\n\n``force`` bypasses the fragment-count safety guard (manual recovery).",
                 "properties": {
                   "force": {
                     "default": false,
@@ -847,7 +847,7 @@
     },
     "/v1/registrations": {
       "delete": {
-        "description": "Dispatch GET/POST/DELETE on /registrations to the right handler.",
+        "description": "Dispatch the GET/POST/DELETE request to the right handler.",
         "operationId": "registrations_v1_registrations_delete",
         "responses": {
           "202": {
@@ -864,7 +864,7 @@
         "summary": "Registrations"
       },
       "get": {
-        "description": "Dispatch GET/POST/DELETE on /registrations to the right handler.",
+        "description": "Dispatch the GET/POST/DELETE request to the right handler.",
         "operationId": "registrations_v1_registrations_get",
         "responses": {
           "200": {
@@ -881,13 +881,13 @@
         "summary": "Registrations"
       },
       "post": {
-        "description": "Dispatch GET/POST/DELETE on /registrations to the right handler.",
+        "description": "Dispatch the GET/POST/DELETE request to the right handler.",
         "operationId": "registrations_v1_registrations_post",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "description": "Body for ``POST /registrations`` \u2014 track a directory for sync.\n\n``directory`` must resolve inside the daemon's home directory; the daemon\nrejects traversal and out-of-tree paths before registering.",
+                "description": "Body for tracking a directory for sync.\n\n``directory`` must resolve inside the daemon's home directory; the daemon\nrejects traversal and out-of-tree paths before registering.",
                 "properties": {
                   "collection": {
                     "title": "Collection",
@@ -932,7 +932,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "description": "Body for ``POST /remember`` \u2014 index inline text content.",
+                "description": "Body for indexing inline text content.",
                 "properties": {
                   "agent_handle": {
                     "default": "",
@@ -1055,7 +1055,7 @@
     },
     "/v1/sync": {
       "post": {
-        "description": "Accept a sync request and run ``sync_all`` as a background task.\n\nUses a non-blocking check to reject concurrent requests with HTTP 409.\nReturns 202 Accepted immediately with a task_id; the actual sync runs\nas an asyncio background task.  ``GET /tasks/<task_id>`` returns the\ntask status.",
+        "description": "Accept a sync request and run ``sync_all`` as a background task.\n\nUses a non-blocking check to reject concurrent requests with HTTP 409.\nReturns 202 Accepted immediately with a task_id; the actual sync runs\nas an asyncio background task, polled by that task id.",
         "operationId": "sync_v1_sync_post",
         "responses": {
           "202": {

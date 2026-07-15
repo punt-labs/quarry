@@ -1,4 +1,4 @@
-"""The ``DELETE /registrations`` contract: deregister a collection."""
+"""The deregister contract: deregister a collection."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 
 class DeregisterRequest(BaseModel):
-    """Query parameters for ``DELETE /registrations``.
+    """Query parameters for deregistering a collection.
 
     ``keep_data`` retains indexed chunks; otherwise the deregistered
     collection's chunks are purged as a background task.

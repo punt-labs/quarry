@@ -65,3 +65,22 @@ class RequestGuards:
             {"error": f"Field {field!r} must be a boolean"},
             status_code=400,
         )
+
+    @staticmethod
+    def coerce_int_field(
+        body: dict[str, object], field: str, *, default: int
+    ) -> int | JSONResponse:
+        """Return the int value of ``body[field]`` or a 400 response.
+
+        Rejects bools (``True``/``False`` are ``int`` subclasses) and any other
+        non-int non-null value, mirroring :meth:`coerce_bool_field`.
+        """
+        value = body.get(field)
+        if value is None:
+            return default
+        if isinstance(value, bool) or not isinstance(value, int):
+            return JSONResponse(
+                {"error": f"Field {field!r} must be an integer"},
+                status_code=400,
+            )
+        return value

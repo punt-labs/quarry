@@ -1,4 +1,4 @@
-"""The ``/databases`` contract: the single database the daemon is fixed to."""
+"""The databases contract: the single database the daemon is fixed to."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from pydantic import BaseModel, ConfigDict
 class DatabaseInfo(BaseModel):
     """One named database's summary.
 
-    The daemon is fixed to a single database, so ``GET /databases`` returns
-    exactly one entry.  ``extra="allow"`` keeps parity with the local
+    The daemon is fixed to a single database, so the list returns exactly one
+    entry.  ``extra="allow"`` keeps parity with the local
     ``discover_databases`` shape the CLI renders identically.
     """
 
@@ -22,7 +22,7 @@ class DatabaseInfo(BaseModel):
 
 
 class DatabaseList(BaseModel):
-    """The ``GET /databases`` response envelope."""
+    """The database-list response envelope."""
 
     total_databases: int
     databases: list[DatabaseInfo]

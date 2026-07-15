@@ -1,4 +1,4 @@
-"""The content-ingestion routes: ``/remember`` (inline text) and ``/ingest`` (URL).
+"""The content-ingestion routes: inline-text (remember) and URL (ingest).
 
 Each request is validated into an immutable *job* value object that owns its own
 background execution, so the validated fields travel together instead of as a
@@ -22,14 +22,14 @@ from quarry.http_guards import RequestGuards
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
 
-# Maximum request body sizes.  /remember accepts content, /ingest only a URL.
+# Maximum request body sizes.  Remember accepts content, ingest only a URL.
 MAX_REMEMBER_BODY_BYTES = 50 * 1024 * 1024
 MAX_INGEST_BODY_BYTES = 1 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
 class RememberJob:
-    """A validated ``/remember`` request that indexes inline text content."""
+    """A validated remember request that indexes inline text content."""
 
     name: str
     content: str
@@ -64,7 +64,7 @@ class RememberJob:
 
 @dataclass(frozen=True, slots=True)
 class IngestJob:
-    """A validated ``/ingest`` request that fetches and indexes a URL."""
+    """A validated ingest request that fetches and indexes a URL."""
 
     source: str
     overwrite: bool
@@ -95,7 +95,7 @@ class IngestJob:
 
 @final
 class IngestionRoutes(RouteGroup):
-    """Serve ``POST /remember`` and ``POST /ingest`` as 202 background tasks."""
+    """Serve inline-text and URL ingestion as 202 background tasks."""
 
     async def remember(self, request: Request) -> JSONResponse:
         """Ingest inline text content as a background task.
@@ -124,8 +124,8 @@ class IngestionRoutes(RouteGroup):
 
         Body: {source, ...optional}. File upload not supported.
         Returns 202 Accepted immediately with a task_id; the actual ingest
-        runs as an asyncio background task.  ``GET /tasks/<task_id>`` returns
-        the task status.  Unlike sync, multiple concurrent ingests are allowed.
+        runs as an asyncio background task, polled by that task id.  Unlike
+        sync, multiple concurrent ingests are allowed.
         """
         auth_resp = self.reject_unauthorized(request)
         if auth_resp is not None:
@@ -162,7 +162,7 @@ class IngestionRoutes(RouteGroup):
         return str(body.get(key) or default)
 
     def _remember_job(self, body: dict[str, object]) -> RememberJob | JSONResponse:
-        """Validate a ``/remember`` body into a :class:`RememberJob` or a 400."""
+        """Validate a remember body into a :class:`RememberJob` or a 400."""
         name = body.get("name")
         if not isinstance(name, str) or not name.strip():
             return JSONResponse(
@@ -190,7 +190,7 @@ class IngestionRoutes(RouteGroup):
     def _ingest_job(
         self, body: dict[str, object], source: str
     ) -> IngestJob | JSONResponse:
-        """Validate an ``/ingest`` body into an :class:`IngestJob` or a 400."""
+        """Validate an ingest body into an :class:`IngestJob` or a 400."""
         overwrite = RequestGuards.coerce_bool_field(body, "overwrite", default=False)
         if isinstance(overwrite, JSONResponse):
             return overwrite

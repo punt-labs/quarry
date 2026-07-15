@@ -1,4 +1,4 @@
-"""The ``/databases`` and ``/use`` routes: the daemon's single fixed database."""
+"""The databases and use routes: the daemon's single fixed database."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from quarry.db.storage import dir_size_bytes, format_size
 
 @final
 class DatabaseRoutes(RouteGroup):
-    """Serve ``GET /databases`` (single entry) and ``POST /use`` (always 400)."""
+    """Serve database listing (single entry) and use (always 400)."""
 
     def databases(self, request: Request) -> JSONResponse:
         """Return a single-entry list describing the server's database.

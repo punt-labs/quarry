@@ -1,4 +1,4 @@
-"""The ``/show`` route: fetch document metadata or a single page's text."""
+"""The show route: fetch document metadata or a single page's text."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from quarry.daemon.routes.base import RouteGroup
 
 @final
 class ShowRoutes(RouteGroup):
-    """Serve ``GET /show`` — page text when ``page >= 1``, else metadata."""
+    """Serve document show — page text when ``page >= 1``, else metadata."""
 
     def show(self, request: Request) -> JSONResponse:
         auth_resp = self.reject_unauthorized(request)

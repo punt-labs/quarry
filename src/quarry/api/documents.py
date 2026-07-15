@@ -1,4 +1,4 @@
-"""The ``/documents`` contract: listing and deletion."""
+"""The documents contract: listing and deletion."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict
 
 
 class DeleteDocumentRequest(BaseModel):
-    """Query parameters for ``DELETE /documents``."""
+    """Query parameters for deleting a document."""
 
     name: str
     collection: str = ""
@@ -31,7 +31,7 @@ class DocumentInfo(BaseModel):
 
 
 class DocumentList(BaseModel):
-    """The ``GET /documents`` response envelope."""
+    """The document-list response envelope."""
 
     total_documents: int
     documents: list[DocumentInfo]

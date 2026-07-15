@@ -1,6 +1,6 @@
 """Quarry's daemon wire contract — Pydantic request/response/error models.
 
-One request/response model per daemon REST operation, each routed under ``/v1``.
+One request/response model per daemon REST operation under the versioned prefix.
 This package is the single source of truth for the wire shape: the daemon imports
 it to document its handlers, and ``QuarryClient`` will import the same models to
 build requests and parse responses, so a field added on one side but missing on
@@ -34,8 +34,8 @@ from quarry.api.search import SearchHit, SearchRequest, SearchResponse
 from quarry.api.show import ShowPageResponse, ShowRequest
 from quarry.api.tasks import TaskAccepted, TaskStatus
 
-# The wire-protocol major version: the ``/v1`` URL prefix on every engine route
-# and the ``api_version`` field a client negotiates against in ``/health``.
+# The wire-protocol major version: the source of the ``/v{N}`` URL prefix on
+# every engine route and the ``api_version`` a client negotiates against.
 API_VERSION = "1"
 
 __all__ = [

@@ -1937,6 +1937,38 @@ class TestCheckBodySize:
         assert resp.status_code == 400
 
 
+class TestCoerceIntField:
+    """Unit tests for the coerce_int_field guard."""
+
+    def test_absent_key_returns_default(self) -> None:
+        from quarry.http_guards import RequestGuards
+
+        assert RequestGuards.coerce_int_field({}, "limit", default=7) == 7
+
+    def test_valid_int_returned(self) -> None:
+        from quarry.http_guards import RequestGuards
+
+        assert RequestGuards.coerce_int_field({"limit": 5}, "limit", default=0) == 5
+
+    def test_bool_rejected_as_non_int(self) -> None:
+        from starlette.responses import JSONResponse
+
+        from quarry.http_guards import RequestGuards
+
+        resp = RequestGuards.coerce_int_field({"limit": True}, "limit", default=0)
+        assert isinstance(resp, JSONResponse)
+        assert resp.status_code == 400
+
+    def test_non_int_rejected(self) -> None:
+        from starlette.responses import JSONResponse
+
+        from quarry.http_guards import RequestGuards
+
+        resp = RequestGuards.coerce_int_field({"limit": "lots"}, "limit", default=0)
+        assert isinstance(resp, JSONResponse)
+        assert resp.status_code == 400
+
+
 class TestServerHomeResolution:
     """Server home is resolved via the passwd database, not ``$HOME``."""
 

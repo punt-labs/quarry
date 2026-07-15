@@ -1,4 +1,4 @@
-"""The ``/tasks/{task_id}`` route: poll a background task's terminal state."""
+"""The task-status route: poll a background task's terminal state."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from quarry.daemon.routes.base import RouteGroup
 
 @final
 class TaskStatusRoutes(RouteGroup):
-    """Serve ``GET /tasks/{task_id}`` — running, completed (+results), or failed."""
+    """Serve task status — running, completed (+results), or failed."""
 
     def status(self, request: Request) -> JSONResponse:
         auth_resp = self.reject_unauthorized(request)

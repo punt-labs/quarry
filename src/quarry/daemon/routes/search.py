@@ -1,4 +1,4 @@
-"""The ``/search`` route: hybrid search over the daemon's single database."""
+"""The search route: hybrid search over the daemon's single database."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 @final
 class SearchRoutes(RouteGroup):
-    """Serve ``GET /search`` — clamp the limit, build the filter, rank hits."""
+    """Serve search — clamp the limit, build the filter, rank hits."""
 
     def search(self, request: Request) -> JSONResponse:
         auth_resp = self.reject_unauthorized(request)
