@@ -14,9 +14,12 @@ lint-docs: ## Lint markdown files (matches CI docs job)
 	npx markdownlint-cli2 "**/*.md"
 
 # Pin the node-pyright binary to the uv.lock-pinned wrapper version so `make
-# type` catches exactly what CI catches. Without this, a stale locally-cached
-# node-pyright can silently run an older, laxer checker than CI's — the drift
-# that let an mcp deprecation merge green locally while CI would have failed.
+# type` catches exactly what CI catches. The pyright-python wrapper can reuse a
+# stale locally-cached node-pyright that is older — and laxer — than CI's pinned
+# one, so `make check` could PASS code that CI's pyright then REJECTS. That is
+# this PR's own incident: a cached 1.1.408 hid three reportDeprecated errors that
+# CI's 1.1.411 flagged.  Forcing the version keeps the local and CI checkers
+# identical.
 PYRIGHT_VERSION = $(shell uv run python -c "import importlib.metadata as m; print(m.version('pyright'))")
 
 type: ## Type check with mypy and pyright

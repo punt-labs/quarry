@@ -37,7 +37,12 @@ across `transform`, `index`, and `connector`).
   failure from the deprecated `mcp.server.websocket.websocket_server`, restoring
   a green `make check`. The local `quarry mcp` stdio server is unchanged, so
   Claude Code MCP over stdio continues to work; remote MCP-over-daemon returns
-  later in the refactor as a `QuarryClient` path.
+  later in the refactor as a `QuarryClient` path. **Mitigation:** if your Claude
+  Code plugin routes MCP through mcp-proxy to the daemon `/mcp` endpoint (the
+  config `quarry login` writes as `wss://…/mcp`, which `.claude-plugin/plugin.json`
+  prefers when present), that endpoint is gone in this interim — switch to the
+  local stdio `quarry mcp` server, or stay on the prior release, until the
+  remote `QuarryClient` MCP path lands.
 
 ## [1.19.0] - 2026-07-14
 
