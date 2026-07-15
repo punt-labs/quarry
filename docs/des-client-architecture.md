@@ -1,9 +1,9 @@
 # Client-Library Refactor — DES-031 v2.2 (MCP-as-client + `quarryd`)
 
-**Status:** DRAFT for operator approval. Amends the ACCEPTED DES-031 v2.1
-(`DESIGN.md:897`, `docs/des-031v2-daemon-first.md`). Folds in the operator's
-session rulings, which **reverse** v2.1's MCP decision and add a dedicated daemon
-binary.
+**Status:** ACCEPTED — operator-ratified 2026-07-14; backing design for the
+DES-031 v2.2 amendment. Amends the ACCEPTED DES-031 v2.1 (`DESIGN.md:897`,
+`docs/des-031v2-daemon-first.md`). Folds in the operator's session rulings, which
+**reverse** v2.1's MCP decision and add a dedicated daemon binary.
 **Date:** 2026-07-14
 **Author:** rmh
 **Model:** vox (`voxd` daemon + `vox mcp` FastMCP-as-client subcommand).

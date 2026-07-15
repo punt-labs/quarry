@@ -1,4 +1,4 @@
-"""ASGI HTTP server exposing the Quarry REST API over localhost.
+"""ASGI HTTP server exposing the Quarry REST API.
 
 Designed for the quarry-menubar macOS companion app and production
 deployment.  Uses Starlette with uvicorn for async request handling.
@@ -6,7 +6,7 @@ deployment.  Uses Starlette with uvicorn for async request handling.
 Lifecycle:
     1. ``quarry serve`` loads settings + embedding model (cold start)
     2. Writes port to ``~/.punt-labs/quarry/data/<db>/serve.port``
-    3. Serves the JSON REST endpoints on ``localhost:<port>``
+    3. Serves the REST endpoints on ``<host>:<port>`` (loopback default)
     4. Cleans up port file on shutdown
 """
 
@@ -1304,7 +1304,7 @@ def serve(
             ``Authorization: Bearer <key>``.
         cors_origins: Allowed CORS origins.  Defaults to ``http://localhost``.
         ssl_certfile: Path to TLS server certificate PEM.  When provided
-            (with ssl_keyfile), the server uses HTTPS/WSS.
+            (with ssl_keyfile), the server serves the REST API over HTTPS.
         ssl_keyfile: Path to TLS server private key PEM.
     """
     _validate_host_key(host, api_key)
