@@ -1,20 +1,18 @@
-"""The ``/tasks/{task_id}`` route: poll a background task's terminal state."""
+"""The task-status route: poll a background task's terminal state."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, final
+from typing import final
 
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from quarry.daemon.routes.base import RouteGroup
 
-if TYPE_CHECKING:
-    from starlette.requests import Request
-
 
 @final
 class TaskStatusRoutes(RouteGroup):
-    """Serve ``GET /tasks/{task_id}`` — running, completed (+results), or failed."""
+    """Serve task status — running, completed (+results), or failed."""
 
     def status(self, request: Request) -> JSONResponse:
         auth_resp = self.reject_unauthorized(request)

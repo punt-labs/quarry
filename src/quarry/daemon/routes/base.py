@@ -59,6 +59,27 @@ class RouteGroup:
             return JSONResponse({"error": "Unauthorized"}, status_code=401)
         return None
 
+    def reject_if_running(self, kind: str, label: str) -> JSONResponse | None:
+        """Return a 409 if a task of *kind* is already running, else ``None``.
+
+        The singleton guard shared by the sync, optimize, and backfill routes:
+        a second request while one is in flight is rejected with the running
+        task's id so the client polls the existing task instead of racing a
+        duplicate (a concurrent backfill would double-ingest the same sessions).
+        ``None`` means no task of that kind is active and the caller may begin.
+        """
+        running = self._ctx.tasks.running_of_kind(kind)
+        if running is None:
+            return None
+        return JSONResponse(
+            {
+                "error": f"{label} already in progress",
+                "status": "running",
+                "task_id": running.task_id,
+            },
+            status_code=409,
+        )
+
     def accept(self, state: TaskState, coro: Coroutine[Any, Any, None]) -> JSONResponse:
         """Schedule *coro* as a tracked background task, return 202 Accepted.
 

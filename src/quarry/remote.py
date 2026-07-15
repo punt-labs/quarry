@@ -13,6 +13,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from quarry.api import API_VERSION
+
 MCP_PROXY_CONFIG_PATH: Path = Path.home() / ".punt-labs" / "mcp-proxy" / "quarry.toml"
 CA_CERT_PATH: Path = Path.home() / ".punt-labs" / "mcp-proxy" / "quarry-ca.crt"
 
@@ -148,7 +150,7 @@ def validate_connection(
     scheme: str = "http",
     ca_cert_path: str | None = None,
 ) -> tuple[bool, str]:
-    """HTTP(S) GET /status with optional Bearer token. Return (ok, error_message).
+    """HTTP(S) GET /v1/status with optional Bearer token. Return (ok, error_message).
 
     Args:
         host: Server hostname or IP.
@@ -158,7 +160,7 @@ def validate_connection(
         ca_cert_path: Optional path to a CA certificate PEM.  When provided,
             TLS verification uses this CA instead of the system trust store.
     """
-    url = f"{scheme}://{host}:{port}/status"
+    url = f"{scheme}://{host}:{port}/v{API_VERSION}/status"
     auth_headers: dict[str, str] = (
         {"Authorization": f"Bearer {token}"} if token is not None else {}
     )

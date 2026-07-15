@@ -1,4 +1,4 @@
-"""The ``/registrations`` routes: list, register, and deregister sync directories.
+"""The registrations routes: list, register, and deregister sync directories.
 
 Registration resolves a client-supplied directory against the daemon's own home
 (from the passwd database, never ``$HOME``) so a remote caller cannot register
@@ -12,9 +12,10 @@ import logging
 import os
 import pwd
 from pathlib import Path
-from typing import TYPE_CHECKING, final
+from typing import final
 
 from starlette.concurrency import run_in_threadpool
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from quarry.daemon.routes.base import RouteGroup
@@ -22,21 +23,18 @@ from quarry.daemon.tasks import TaskState, task_terminal
 from quarry.http_guards import RequestGuards
 from quarry.sync_registry import DirectoryRegistration, SyncRegistry
 
-if TYPE_CHECKING:
-    from starlette.requests import Request
-
 logger = logging.getLogger(__name__)
 
-# The /registrations body carries only a small option dict.
+# The registrations body carries only a small option dict.
 MAX_REGISTRATIONS_BODY_BYTES = 16 * 1024
 
 
 @final
 class RegistrationRoutes(RouteGroup):
-    """Serve ``GET/POST/DELETE /registrations`` over the sync registry."""
+    """Serve listing, registration, and deregistration over the sync registry."""
 
     async def registrations(self, request: Request) -> JSONResponse:
-        """Dispatch GET/POST/DELETE on /registrations to the right handler."""
+        """Dispatch the GET/POST/DELETE request to the right handler."""
         auth_resp = self.reject_unauthorized(request)
         if auth_resp is not None:
             return auth_resp

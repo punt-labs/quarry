@@ -47,6 +47,24 @@ class RequestGuards:
         return None
 
     @staticmethod
+    def require_json_content_type(request: Request) -> JSONResponse | None:
+        """Reject a request whose media type is not ``application/json``.
+
+        A CSRF guard for the no-auth loopback daemon: a browser can send the
+        CORS "simple" content types (``text/plain``, the form types) or none at
+        all cross-origin *without* a preflight, but ``application/json`` forces a
+        preflight the daemon's CORS policy refuses for a disallowed origin.
+        ``None`` means the media type is acceptable and the caller may proceed.
+        """
+        media_type = request.headers.get("content-type", "").split(";", 1)[0].strip()
+        if media_type.lower() == "application/json":
+            return None
+        return JSONResponse(
+            {"error": "Content-Type must be application/json"},
+            status_code=415,
+        )
+
+    @staticmethod
     def coerce_bool_field(
         body: dict[str, object], field: str, *, default: bool
     ) -> bool | JSONResponse:
@@ -65,3 +83,22 @@ class RequestGuards:
             {"error": f"Field {field!r} must be a boolean"},
             status_code=400,
         )
+
+    @staticmethod
+    def coerce_int_field(
+        body: dict[str, object], field: str, *, default: int
+    ) -> int | JSONResponse:
+        """Return the int value of ``body[field]`` or a 400 response.
+
+        Rejects bools (``True``/``False`` are ``int`` subclasses) and any other
+        non-int non-null value, mirroring :meth:`coerce_bool_field`.
+        """
+        value = body.get(field)
+        if value is None:
+            return default
+        if isinstance(value, bool) or not isinstance(value, int):
+            return JSONResponse(
+                {"error": f"Field {field!r} must be an integer"},
+                status_code=400,
+            )
+        return value

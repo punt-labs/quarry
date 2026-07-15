@@ -182,9 +182,22 @@ class TestValidateConnection:
         assert ok is True
         assert reason == ""
 
+    def test_probes_versioned_status_path(self) -> None:
+        """The connectivity probe hits /v1/status, not the retired bare route."""
+        captured: dict[str, str] = {}
+
+        def _fake_urlopen(req: urllib.request.Request, **_kw: object) -> MagicMock:
+            captured["url"] = req.full_url
+            return MagicMock()
+
+        with patch("urllib.request.urlopen", _fake_urlopen):
+            ok, _ = validate_connection("localhost", 8420, None)
+        assert ok is True
+        assert captured["url"] == "http://localhost:8420/v1/status"
+
     def test_401_returns_false(self) -> None:
         exc = urllib.error.HTTPError(
-            url="http://localhost:8420/status",
+            url="http://localhost:8420/v1/status",
             code=401,
             msg="Unauthorized",
             hdrs=MagicMock(),
@@ -197,7 +210,7 @@ class TestValidateConnection:
 
     def test_500_returns_false(self) -> None:
         exc = urllib.error.HTTPError(
-            url="http://localhost:8420/status",
+            url="http://localhost:8420/v1/status",
             code=500,
             msg="Internal Server Error",
             hdrs=MagicMock(),

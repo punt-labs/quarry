@@ -656,15 +656,34 @@ class TestOptimizeTable:
         vectors = _random_vectors(5)
         ChunkStore(db).insert(chunks, vectors)
 
-        # Should not raise
-        TableOptimizer(db).optimize()
+        outcome = TableOptimizer(db).optimize()
 
+        assert outcome.optimized is True
         # Data still accessible
         assert ChunkStore(db).count() == 5
 
     def test_noop_on_empty_db(self, tmp_path: Path):
         db = get_db(tmp_path / "db")
-        TableOptimizer(db).optimize()  # No table, no error
+        outcome = TableOptimizer(db).optimize()  # No table, no error
+        assert outcome.optimized is False
+        assert outcome.reason  # explains the skip
+
+    def test_skips_above_threshold_without_force(self, tmp_path: Path):
+        """Above the fragment threshold optimize skips and says why — not a lie."""
+        from unittest.mock import patch
+
+        from quarry.db.optimizer import FRAGMENT_THRESHOLD
+
+        db = get_db(tmp_path / "db")
+        ChunkStore(db).insert([_make_chunk(chunk_index=0)], _random_vectors(1))
+        with patch(
+            "quarry.db.optimizer.TableOptimizer.count_fragments",
+            return_value=FRAGMENT_THRESHOLD + 1,
+        ):
+            outcome = TableOptimizer(db).optimize()
+        assert outcome.optimized is False
+        assert outcome.fragments == FRAGMENT_THRESHOLD + 1
+        assert "threshold" in outcome.reason.lower()
 
 
 class _FakeTables:

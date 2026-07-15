@@ -1,18 +1,17 @@
-"""The ``/captures/push`` route: re-scrub and push enabled capture shadows."""
+"""The capture-push route: re-scrub and push enabled capture shadows."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, final
 
 from starlette.concurrency import run_in_threadpool
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from quarry.daemon.routes.base import RouteGroup
 from quarry.http_guards import RequestGuards
 
 if TYPE_CHECKING:
-    from starlette.requests import Request
-
     from quarry.config import Settings
 
 # The push request carries no body of note; cap it like the other option posts.
@@ -21,7 +20,7 @@ MAX_CAPTURES_BODY_BYTES = 16 * 1024
 
 @final
 class CaptureRoutes(RouteGroup):
-    """Serve ``POST /captures/push`` — mirrors ``quarry captures push``."""
+    """Serve capture push — mirrors ``quarry captures push``."""
 
     async def push(self, request: Request) -> JSONResponse:
         auth_resp = self.reject_unauthorized(request)

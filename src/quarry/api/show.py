@@ -1,4 +1,4 @@
-"""The ``/show`` contract: fetch document metadata or a single page's text."""
+"""The show contract: fetch document metadata or a single page's text."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 
 class ShowRequest(BaseModel):
-    """Query parameters for ``GET /show``.
+    """Query parameters for a document show request.
 
     Omit ``page`` to get the document's catalog metadata (a ``DocumentInfo``);
     send ``page >= 1`` for that page's text (a ``ShowPageResponse``). A present

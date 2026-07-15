@@ -1,11 +1,11 @@
 {
-  "total": 258,
+  "total": 257,
   "by_category": {
-    "noqa": 210,
-    "type_ignore": 10,
+    "noqa": 209,
+    "type_ignore": 9,
     "pylint_disable": 0,
     "pyright_ignore": 12,
-    "per_file_ignores": 26
+    "per_file_ignores": 27
   },
   "by_file": {
     "src/quarry/__main__.py": {
@@ -27,15 +27,14 @@
     "src/quarry/collections.py": {
       "type_ignore": 1
     },
-    "src/quarry/daemon/app.py": {
-      "noqa": 2,
-      "type_ignore": 1
-    },
     "src/quarry/daemon/routes/captures.py": {
       "noqa": 1
     },
     "src/quarry/daemon/routes/ingestion.py": {
       "noqa": 2
+    },
+    "src/quarry/daemon/routes/maintenance.py": {
+      "noqa": 1
     },
     "src/quarry/daemon/routes/meta.py": {
       "noqa": 2
@@ -135,5 +134,5 @@
       "noqa": 1
     }
   },
-  "updated_at": "2026-07-15T05:16:17Z"
+  "updated_at": "2026-07-15T16:45:16Z"
 }

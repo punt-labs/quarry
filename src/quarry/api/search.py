@@ -1,4 +1,4 @@
-"""The ``/search`` contract: query parameters, ranked hits, and response."""
+"""The search contract: query parameters, ranked hits, and response."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 class SearchRequest(BaseModel):
-    """Query parameters for ``GET /search`` (``q`` is the search text)."""
+    """Query parameters for a search (``q`` is the search text)."""
 
     # A validation_alias (not a positional alias) leaves the constructor parameter
     # as the field name, so a client builds this as SearchRequest(query=...) and it
@@ -48,7 +48,7 @@ class SearchHit(BaseModel):
 
 
 class SearchResponse(BaseModel):
-    """The ``GET /search`` response envelope."""
+    """The search response envelope."""
 
     query: str
     total_results: int

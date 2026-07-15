@@ -1,20 +1,18 @@
-"""The ``/show`` route: fetch document metadata or a single page's text."""
+"""The show route: fetch document metadata or a single page's text."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, final
+from typing import final
 
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from quarry.daemon.routes.base import RouteGroup
 
-if TYPE_CHECKING:
-    from starlette.requests import Request
-
 
 @final
 class ShowRoutes(RouteGroup):
-    """Serve ``GET /show`` — page text when ``page >= 1``, else metadata."""
+    """Serve document show — page text when ``page >= 1``, else metadata."""
 
     def show(self, request: Request) -> JSONResponse:
         auth_resp = self.reject_unauthorized(request)

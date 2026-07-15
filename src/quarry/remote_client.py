@@ -13,6 +13,7 @@ from typing import final
 import typer
 from rich.console import Console
 
+from quarry.api import API_VERSION
 from quarry.remote import ws_to_http
 from quarry.results import WORST_CASE_DISTANCE
 
@@ -21,6 +22,10 @@ _err_console = Console(stderr=True)
 _DEFAULT_REMOTE_TIMEOUT = 15.0
 _POLL_INTERVAL_S = 0.5
 _POLL_TIMEOUT_S = 120.0
+
+# Every engine route the client reaches is versioned; /health and /ca.crt (the
+# only unversioned routes) are fetched by remote.py, never through this client.
+_API_PREFIX = f"/v{API_VERSION}"
 
 
 @final
@@ -63,8 +68,8 @@ class RemoteClient:
 
         Args:
             method: HTTP method (GET, POST, DELETE).
-            path: Request path including query string, e.g.
-                ``/search?q=foo&limit=10``.
+            path: Engine route path (version-prefixed here), including any query
+                string, e.g. ``/search?q=foo&limit=10`` → ``/v1/search?...``.
             body: Optional JSON-serialisable dict sent as the request body.
             timeout: Socket timeout in seconds.  Defaults to 15; long-running
                 operations like ``/sync`` should pass a larger value.
@@ -85,7 +90,9 @@ class RemoteClient:
         conn = self._open_connection(raw_url, host, port, timeout)
         encoded_body, headers = self._prepare_body(body)
         try:
-            conn.request(method, path, body=encoded_body, headers=headers)
+            conn.request(
+                method, f"{_API_PREFIX}{path}", body=encoded_body, headers=headers
+            )
             return self._read_response(conn.getresponse())
         except OSError as exc:
             raise RemoteError(
@@ -250,9 +257,12 @@ class RemoteClient:
             if isinstance(headers_raw, dict)
             else {}
         )
+        # Always advertise JSON, even for a bodyless request: the daemon's
+        # content-type guard rejects a POST without it, so an argument-free
+        # POST must still carry the header rather than trip a 415.
+        headers["Content-Type"] = "application/json"
         if body is None:
             return None, headers
-        headers["Content-Type"] = "application/json"
         return json.dumps(body).encode("utf-8"), headers
 
     @staticmethod

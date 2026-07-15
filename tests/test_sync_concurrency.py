@@ -99,7 +99,7 @@ class TestSyncLock:
         app = build_app(ctx)
         client = TestClient(app, raise_server_exceptions=False)
 
-        resp = client.post("/sync", json={})
+        resp = client.post("/v1/sync", json={})
         assert resp.status_code == 409
         data = resp.json()
         assert data["task_id"] == "sync-existing"
@@ -117,7 +117,7 @@ class TestSyncLock:
         client = TestClient(app, raise_server_exceptions=False)
 
         with patch("quarry.sync.sync_all", return_value={}):
-            resp = client.post("/sync", json={})
+            resp = client.post("/v1/sync", json={})
         assert resp.status_code == 202
 
     def test_post_allowed_after_previous_failed(self, tmp_path: Path) -> None:
@@ -136,7 +136,7 @@ class TestSyncLock:
         client = TestClient(app, raise_server_exceptions=False)
 
         with patch("quarry.sync.sync_all", return_value={}):
-            resp = client.post("/sync", json={})
+            resp = client.post("/v1/sync", json={})
         assert resp.status_code == 202
 
     def test_lock_released_after_sync_completes(self, tmp_path: Path) -> None:
@@ -151,7 +151,7 @@ class TestSyncLock:
         app = build_app(ctx)
         client = TestClient(app, raise_server_exceptions=False)
         with patch("quarry.sync.sync_all", return_value={}):
-            resp = client.post("/sync", json={})
+            resp = client.post("/v1/sync", json={})
         assert resp.status_code == 202
 
 
@@ -465,7 +465,7 @@ class TestAsyncSyncEndpoint:
     def test_post_returns_202_with_task_id(self, tmp_path: Path) -> None:
         client = _make_client(tmp_path)
         with patch("quarry.sync.sync_all", return_value={}):
-            resp = client.post("/sync", json={})
+            resp = client.post("/v1/sync", json={})
         assert resp.status_code == 202
         data = resp.json()
         assert "task_id" in data
@@ -474,7 +474,7 @@ class TestAsyncSyncEndpoint:
 
     def test_get_unknown_task_returns_404(self, tmp_path: Path) -> None:
         client = _make_client(tmp_path)
-        resp = client.get("/sync/nonexistent")
+        resp = client.get("/v1/tasks/nonexistent")
         assert resp.status_code == 404
 
     def test_get_running_task(self, tmp_path: Path) -> None:
@@ -484,7 +484,7 @@ class TestAsyncSyncEndpoint:
         ctx.tasks.seed(TaskState(task_id="sync-abc", kind="sync", status="running"))
 
         client = TestClient(build_app(ctx), raise_server_exceptions=False)
-        resp = client.get("/sync/sync-abc")
+        resp = client.get("/v1/tasks/sync-abc")
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "running"
@@ -504,7 +504,7 @@ class TestAsyncSyncEndpoint:
         )
 
         client = TestClient(build_app(ctx), raise_server_exceptions=False)
-        resp = client.get("/sync/sync-done")
+        resp = client.get("/v1/tasks/sync-done")
         data = resp.json()
         assert data["status"] == "completed"
         assert data["results"]["math"]["ingested"] == 5
@@ -523,7 +523,7 @@ class TestAsyncSyncEndpoint:
         )
 
         client = TestClient(build_app(ctx), raise_server_exceptions=False)
-        resp = client.get("/sync/sync-bad")
+        resp = client.get("/v1/tasks/sync-bad")
         data = resp.json()
         assert data["status"] == "failed"
         assert data["error"] == "disk full"
@@ -536,7 +536,7 @@ class TestAsyncSyncEndpoint:
         ctx.tasks.seed(TaskState(task_id="sync-running", kind="sync", status="running"))
 
         client = TestClient(build_app(ctx), raise_server_exceptions=False)
-        resp = client.post("/sync", json={})
+        resp = client.post("/v1/sync", json={})
         assert resp.status_code == 409
         data = resp.json()
         assert data["task_id"] == "sync-running"
@@ -571,7 +571,9 @@ class TestAsyncIngestEndpoint:
                 return_value={"document_name": "x", "chunks": 1},
             ),
         ):
-            resp = client.post("/ingest", json={"source": "https://example.com/docs"})
+            resp = client.post(
+                "/v1/ingest", json={"source": "https://example.com/docs"}
+            )
         assert resp.status_code == 202
         data = resp.json()
         assert "task_id" in data
@@ -580,7 +582,7 @@ class TestAsyncIngestEndpoint:
 
     def test_get_unknown_task_returns_404(self, tmp_path: Path) -> None:
         client = _make_client(tmp_path)
-        resp = client.get("/ingest/nonexistent")
+        resp = client.get("/v1/tasks/nonexistent")
         assert resp.status_code == 404
 
     def test_get_running_task(self, tmp_path: Path) -> None:
@@ -590,7 +592,7 @@ class TestAsyncIngestEndpoint:
         ctx.tasks.seed(TaskState(task_id="ingest-abc", kind="ingest", status="running"))
 
         client = TestClient(build_app(ctx), raise_server_exceptions=False)
-        resp = client.get("/ingest/ingest-abc")
+        resp = client.get("/v1/tasks/ingest-abc")
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "running"
@@ -610,7 +612,7 @@ class TestAsyncIngestEndpoint:
         )
 
         client = TestClient(build_app(ctx), raise_server_exceptions=False)
-        resp = client.get("/ingest/ingest-done")
+        resp = client.get("/v1/tasks/ingest-done")
         data = resp.json()
         assert data["status"] == "completed"
         assert data["results"]["document_name"] == "example.com"
@@ -630,7 +632,7 @@ class TestAsyncIngestEndpoint:
         )
 
         client = TestClient(build_app(ctx), raise_server_exceptions=False)
-        resp = client.get("/ingest/ingest-bad")
+        resp = client.get("/v1/tasks/ingest-bad")
         data = resp.json()
         assert data["status"] == "failed"
         assert data["error"] == "connection timed out"
@@ -648,8 +650,8 @@ class TestAsyncIngestEndpoint:
                 return_value={"document_name": "x", "chunks": 1},
             ),
         ):
-            resp1 = client.post("/ingest", json={"source": "https://example.com/a"})
-            resp2 = client.post("/ingest", json={"source": "https://example.com/b"})
+            resp1 = client.post("/v1/ingest", json={"source": "https://example.com/a"})
+            resp2 = client.post("/v1/ingest", json={"source": "https://example.com/b"})
         assert resp1.status_code == 202
         assert resp2.status_code == 202
         id1 = resp1.json()["task_id"]

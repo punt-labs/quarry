@@ -1,0 +1,1151 @@
+{
+  "components": {
+    "schemas": {
+      "CapturesPushResponse": {
+        "description": "The response for pushing redacted capture shadows.\n\n``results`` maps each pushed collection to its per-collection push summary\n(``CaptureSync`` result dict) \u2014 a wire-boundary mapping the CLI renders,\nkept as ``dict`` so a summary-field addition never drops on the wire.",
+        "properties": {
+          "results": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Results",
+            "type": "object"
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "title": "CapturesPushResponse",
+        "type": "object"
+      },
+      "CollectionInfo": {
+        "additionalProperties": true,
+        "description": "One collection's document and chunk counts.\n\n``extra=\"allow\"`` keeps the model a superset of the engine catalog row.",
+        "properties": {
+          "chunk_count": {
+            "title": "Chunk Count",
+            "type": "integer"
+          },
+          "collection": {
+            "title": "Collection",
+            "type": "string"
+          },
+          "document_count": {
+            "title": "Document Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "collection",
+          "document_count",
+          "chunk_count"
+        ],
+        "title": "CollectionInfo",
+        "type": "object"
+      },
+      "CollectionList": {
+        "description": "The collection-list response envelope.",
+        "properties": {
+          "collections": {
+            "items": {
+              "$ref": "#/components/schemas/CollectionInfo"
+            },
+            "title": "Collections",
+            "type": "array"
+          },
+          "total_collections": {
+            "title": "Total Collections",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total_collections",
+          "collections"
+        ],
+        "title": "CollectionList",
+        "type": "object"
+      },
+      "DatabaseInfo": {
+        "additionalProperties": true,
+        "description": "One named database's summary.\n\nThe daemon is fixed to a single database, so the list returns exactly one\nentry.  ``extra=\"allow\"`` keeps parity with the local\n``discover_databases`` shape the CLI renders identically.",
+        "properties": {
+          "document_count": {
+            "title": "Document Count",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "size_description": {
+            "title": "Size Description",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "document_count",
+          "size_bytes",
+          "size_description"
+        ],
+        "title": "DatabaseInfo",
+        "type": "object"
+      },
+      "DatabaseList": {
+        "description": "The database-list response envelope.",
+        "properties": {
+          "databases": {
+            "items": {
+              "$ref": "#/components/schemas/DatabaseInfo"
+            },
+            "title": "Databases",
+            "type": "array"
+          },
+          "total_databases": {
+            "title": "Total Databases",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total_databases",
+          "databases"
+        ],
+        "title": "DatabaseList",
+        "type": "object"
+      },
+      "DeregisterAccepted": {
+        "description": "The 202 body for a deregister \u2014 carries the removed-file count.\n\nDistinct from the plain ``TaskAccepted`` because deregister reports\n``removed`` synchronously (the registry rows are gone before the chunk\npurge task runs).",
+        "properties": {
+          "removed": {
+            "title": "Removed",
+            "type": "integer"
+          },
+          "status": {
+            "default": "accepted",
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "removed"
+        ],
+        "title": "DeregisterAccepted",
+        "type": "object"
+      },
+      "DocumentInfo": {
+        "additionalProperties": true,
+        "description": "One indexed document's catalog summary.\n\n``extra=\"allow\"`` mirrors the engine catalog row so a new summary field\npasses through untouched (bug-class-3 field parity).",
+        "properties": {
+          "chunk_count": {
+            "title": "Chunk Count",
+            "type": "integer"
+          },
+          "collection": {
+            "title": "Collection",
+            "type": "string"
+          },
+          "document_name": {
+            "title": "Document Name",
+            "type": "string"
+          },
+          "document_path": {
+            "title": "Document Path",
+            "type": "string"
+          },
+          "indexed_pages": {
+            "title": "Indexed Pages",
+            "type": "integer"
+          },
+          "ingestion_timestamp": {
+            "title": "Ingestion Timestamp",
+            "type": "string"
+          },
+          "total_pages": {
+            "title": "Total Pages",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "document_name",
+          "document_path",
+          "collection",
+          "total_pages",
+          "chunk_count",
+          "indexed_pages",
+          "ingestion_timestamp"
+        ],
+        "title": "DocumentInfo",
+        "type": "object"
+      },
+      "DocumentList": {
+        "description": "The document-list response envelope.",
+        "properties": {
+          "documents": {
+            "items": {
+              "$ref": "#/components/schemas/DocumentInfo"
+            },
+            "title": "Documents",
+            "type": "array"
+          },
+          "total_documents": {
+            "title": "Total Documents",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total_documents",
+          "documents"
+        ],
+        "title": "DocumentList",
+        "type": "object"
+      },
+      "ErrorBody": {
+        "additionalProperties": true,
+        "description": "The wire error shape: ``{\"error\": \"...\"}`` plus any endpoint extras.\n\n``extra=\"allow\"`` preserves the richer error payloads some routes emit \u2014\ne.g. the sync-conflict 409 adds ``status`` and ``task_id`` \u2014 so the\nenvelope stays a faithful superset of every current error response.",
+        "properties": {
+          "error": {
+            "title": "Error",
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "ErrorBody",
+        "type": "object"
+      },
+      "HealthResponse": {
+        "description": "The daemon's liveness and readiness snapshot (unversioned; auth-exempt).\n\nCarries liveness (``status``), process uptime, warm/ready ``state``, the wire\n``api_version`` a client negotiates against, and the running ``quarry_version``.",
+        "properties": {
+          "api_version": {
+            "title": "Api Version",
+            "type": "string"
+          },
+          "quarry_version": {
+            "title": "Quarry Version",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "uptime_seconds": {
+            "title": "Uptime Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "status",
+          "uptime_seconds",
+          "state",
+          "api_version",
+          "quarry_version"
+        ],
+        "title": "HealthResponse",
+        "type": "object"
+      },
+      "RegistrationInfo": {
+        "additionalProperties": true,
+        "description": "One directory registration.\n\n``extra=\"allow\"`` keeps the model a superset of the registry row shape.",
+        "properties": {
+          "collection": {
+            "title": "Collection",
+            "type": "string"
+          },
+          "directory": {
+            "title": "Directory",
+            "type": "string"
+          },
+          "registered_at": {
+            "title": "Registered At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "collection",
+          "directory",
+          "registered_at"
+        ],
+        "title": "RegistrationInfo",
+        "type": "object"
+      },
+      "RegistrationList": {
+        "description": "The registration-list response envelope.",
+        "properties": {
+          "registrations": {
+            "items": {
+              "$ref": "#/components/schemas/RegistrationInfo"
+            },
+            "title": "Registrations",
+            "type": "array"
+          },
+          "total_registrations": {
+            "title": "Total Registrations",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total_registrations",
+          "registrations"
+        ],
+        "title": "RegistrationList",
+        "type": "object"
+      },
+      "SearchHit": {
+        "additionalProperties": true,
+        "description": "One ranked result row \u2014 the ``SearchService`` projection (DES-037).\n\n``extra=\"allow\"`` keeps the model a faithful superset of the engine's\nrow projection so a new column can never be silently dropped on the wire.",
+        "properties": {
+          "agent_handle": {
+            "title": "Agent Handle",
+            "type": "string"
+          },
+          "chunk_index": {
+            "title": "Chunk Index",
+            "type": "integer"
+          },
+          "collection": {
+            "title": "Collection",
+            "type": "string"
+          },
+          "document_name": {
+            "title": "Document Name",
+            "type": "string"
+          },
+          "memory_type": {
+            "title": "Memory Type",
+            "type": "string"
+          },
+          "page_number": {
+            "title": "Page Number",
+            "type": "integer"
+          },
+          "page_type": {
+            "title": "Page Type",
+            "type": "string"
+          },
+          "similarity": {
+            "title": "Similarity",
+            "type": "number"
+          },
+          "source_format": {
+            "title": "Source Format",
+            "type": "string"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "document_name",
+          "collection",
+          "page_number",
+          "chunk_index",
+          "text",
+          "page_type",
+          "source_format",
+          "agent_handle",
+          "memory_type",
+          "summary",
+          "similarity"
+        ],
+        "title": "SearchHit",
+        "type": "object"
+      },
+      "SearchResponse": {
+        "description": "The search response envelope.",
+        "properties": {
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/SearchHit"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "total_results": {
+            "title": "Total Results",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "query",
+          "total_results",
+          "results"
+        ],
+        "title": "SearchResponse",
+        "type": "object"
+      },
+      "ShowPageResponse": {
+        "description": "A single page's text, returned when ``page >= 1``.",
+        "properties": {
+          "document_name": {
+            "title": "Document Name",
+            "type": "string"
+          },
+          "page_number": {
+            "title": "Page Number",
+            "type": "integer"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "document_name",
+          "page_number",
+          "text"
+        ],
+        "title": "ShowPageResponse",
+        "type": "object"
+      },
+      "StatusResponse": {
+        "description": "The aggregate status over the daemon's single database.",
+        "properties": {
+          "chunk_count": {
+            "title": "Chunk Count",
+            "type": "integer"
+          },
+          "collection_count": {
+            "title": "Collection Count",
+            "type": "integer"
+          },
+          "database_path": {
+            "title": "Database Path",
+            "type": "string"
+          },
+          "database_size_bytes": {
+            "title": "Database Size Bytes",
+            "type": "integer"
+          },
+          "document_count": {
+            "title": "Document Count",
+            "type": "integer"
+          },
+          "embedding_dimension": {
+            "title": "Embedding Dimension",
+            "type": "integer"
+          },
+          "embedding_model": {
+            "title": "Embedding Model",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "registered_directories": {
+            "title": "Registered Directories",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "document_count",
+          "collection_count",
+          "chunk_count",
+          "registered_directories",
+          "database_path",
+          "database_size_bytes",
+          "embedding_model",
+          "provider",
+          "embedding_dimension"
+        ],
+        "title": "StatusResponse",
+        "type": "object"
+      },
+      "TaskAccepted": {
+        "description": "The 202 body every long-running operation returns on acceptance.",
+        "properties": {
+          "status": {
+            "default": "accepted",
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "title": "TaskAccepted",
+        "type": "object"
+      },
+      "TaskStatus": {
+        "description": "A background task's pollable terminal state.\n\n``results`` is populated only on ``completed`` and ``error`` only on\n``failed``; both are omitted otherwise (the route serializes with\n``exclude_none`` to match the daemon's conditional shape).",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "results": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Results"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "status"
+        ],
+        "title": "TaskStatus",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "Quarry daemon",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/ca.crt": {
+      "get": {
+        "description": "Serve the CA certificate PEM for TOFU bootstrap.\n\nAuth-exempt so the client can fetch it before login.\nReturns 404 with JSON error if no cert file exists.",
+        "operationId": "ca_cert_ca_crt_get",
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Ca Cert"
+      }
+    },
+    "/health": {
+      "get": {
+        "description": "Return liveness plus warm ``state`` and version negotiation fields.",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health"
+      }
+    },
+    "/v1/backfill-sessions": {
+      "post": {
+        "description": "Scan and ingest historical transcripts as a singleton background task.\n\nA second backfill while one is in flight is rejected with 409 and the\nrunning task's id; concurrent scans would double-ingest the same\nsessions and write duplicate chunks.",
+        "operationId": "backfill_sessions_v1_backfill_sessions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "description": "Body for ingesting historical session transcripts.\n\nOver the daemon, ``limit`` is clamped into ``1..500``: a missing or\nnon-positive value and any value above the cap both resolve to 500, so a\nremote request can never trigger an unbounded scan.  (The local CLI still\ntreats ``0`` as \"all\".)  ``collection``/``project`` narrow the scan.",
+                "properties": {
+                  "collection": {
+                    "default": "",
+                    "title": "Collection",
+                    "type": "string"
+                  },
+                  "dry_run": {
+                    "default": false,
+                    "title": "Dry Run",
+                    "type": "boolean"
+                  },
+                  "limit": {
+                    "default": 0,
+                    "title": "Limit",
+                    "type": "integer"
+                  },
+                  "project": {
+                    "default": "",
+                    "title": "Project",
+                    "type": "string"
+                  }
+                },
+                "title": "BackfillRequest",
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Backfill Sessions"
+      }
+    },
+    "/v1/captures/push": {
+      "post": {
+        "operationId": "push_v1_captures_push_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapturesPushResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Push"
+      }
+    },
+    "/v1/collections": {
+      "delete": {
+        "description": "Delete a collection as an async 202 background task.",
+        "operationId": "delete_v1_collections_delete",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Delete"
+      },
+      "get": {
+        "operationId": "collections_v1_collections_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Collections"
+      }
+    },
+    "/v1/databases": {
+      "get": {
+        "description": "Return a single-entry list describing the server's database.\n\nThe server process is fixed to one database \u2014 selection is a\nclient-side concern.  The response shape matches ``discover_databases``\nso the CLI can format remote and local output identically.",
+        "operationId": "databases_v1_databases_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Databases"
+      }
+    },
+    "/v1/documents": {
+      "delete": {
+        "description": "Delete a document as an async 202 background task.",
+        "operationId": "delete_v1_documents_delete",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Delete"
+      },
+      "get": {
+        "operationId": "documents_v1_documents_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Documents"
+      }
+    },
+    "/v1/ingest": {
+      "post": {
+        "description": "Ingest a URL as a background task.\n\nBody: {source, ...optional}. File upload not supported.\nReturns 202 Accepted immediately with a task_id; the actual ingest\nruns as an asyncio background task, polled by that task id.  Unlike\nsync, multiple concurrent ingests are allowed.",
+        "operationId": "ingest_v1_ingest_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "description": "Body for fetching and indexing a URL.\n\n``source`` is an ``http(s)`` URL; the daemon validates it against the\nSSRF allowlist before fetching. File upload is not part of this contract.",
+                "properties": {
+                  "agent_handle": {
+                    "default": "",
+                    "title": "Agent Handle",
+                    "type": "string"
+                  },
+                  "collection": {
+                    "default": "",
+                    "title": "Collection",
+                    "type": "string"
+                  },
+                  "memory_type": {
+                    "default": "",
+                    "title": "Memory Type",
+                    "type": "string"
+                  },
+                  "overwrite": {
+                    "default": false,
+                    "title": "Overwrite",
+                    "type": "boolean"
+                  },
+                  "source": {
+                    "title": "Source",
+                    "type": "string"
+                  },
+                  "summary": {
+                    "default": "",
+                    "title": "Summary",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "source"
+                ],
+                "title": "IngestRequest",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Ingest"
+      }
+    },
+    "/v1/optimize": {
+      "post": {
+        "description": "Compact the table and rebuild indexes as a singleton background task.\n\nA second optimize while one is in flight is rejected with 409 and the\nrunning task's id, so concurrent runs never contend for the table lock.",
+        "operationId": "optimize_v1_optimize_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "description": "Body for compacting the table and rebuilding indexes.\n\n``force`` bypasses the fragment-count safety guard (manual recovery).",
+                "properties": {
+                  "force": {
+                    "default": false,
+                    "title": "Force",
+                    "type": "boolean"
+                  }
+                },
+                "title": "OptimizeRequest",
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Optimize"
+      }
+    },
+    "/v1/registrations": {
+      "delete": {
+        "description": "Dispatch the GET/POST/DELETE request to the right handler.",
+        "operationId": "registrations_v1_registrations_delete",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeregisterAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Registrations"
+      },
+      "get": {
+        "description": "Dispatch the GET/POST/DELETE request to the right handler.",
+        "operationId": "registrations_v1_registrations_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistrationList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Registrations"
+      },
+      "post": {
+        "description": "Dispatch the GET/POST/DELETE request to the right handler.",
+        "operationId": "registrations_v1_registrations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "description": "Body for tracking a directory for sync.\n\n``directory`` must resolve inside the daemon's home directory; the daemon\nrejects traversal and out-of-tree paths before registering.",
+                "properties": {
+                  "collection": {
+                    "title": "Collection",
+                    "type": "string"
+                  },
+                  "directory": {
+                    "title": "Directory",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "directory",
+                  "collection"
+                ],
+                "title": "RegisterRequest",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Registrations"
+      }
+    },
+    "/v1/remember": {
+      "post": {
+        "description": "Ingest inline text content as a background task.\n\nBody: {name, content, ...optional}. Returns 202 Accepted with a task_id.",
+        "operationId": "remember_v1_remember_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "description": "Body for indexing inline text content.",
+                "properties": {
+                  "agent_handle": {
+                    "default": "",
+                    "title": "Agent Handle",
+                    "type": "string"
+                  },
+                  "collection": {
+                    "default": "default",
+                    "title": "Collection",
+                    "type": "string"
+                  },
+                  "content": {
+                    "title": "Content",
+                    "type": "string"
+                  },
+                  "format_hint": {
+                    "default": "auto",
+                    "title": "Format Hint",
+                    "type": "string"
+                  },
+                  "memory_type": {
+                    "default": "",
+                    "title": "Memory Type",
+                    "type": "string"
+                  },
+                  "name": {
+                    "title": "Name",
+                    "type": "string"
+                  },
+                  "overwrite": {
+                    "default": true,
+                    "title": "Overwrite",
+                    "type": "boolean"
+                  },
+                  "summary": {
+                    "default": "",
+                    "title": "Summary",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "content"
+                ],
+                "title": "RememberRequest",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Remember"
+      }
+    },
+    "/v1/search": {
+      "get": {
+        "operationId": "search_v1_search_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Search"
+      }
+    },
+    "/v1/show": {
+      "get": {
+        "operationId": "show_v1_show_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ShowPageResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/DocumentInfo"
+                    }
+                  ],
+                  "title": "Response Show V1 Show Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Show"
+      }
+    },
+    "/v1/status": {
+      "get": {
+        "operationId": "status_v1_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Status"
+      }
+    },
+    "/v1/sync": {
+      "post": {
+        "description": "Accept a sync request and run ``sync_all`` as a background task.\n\nUses a non-blocking check to reject concurrent requests with HTTP 409.\nReturns 202 Accepted immediately with a task_id; the actual sync runs\nas an asyncio background task, polled by that task id.",
+        "operationId": "sync_v1_sync_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Sync"
+      }
+    },
+    "/v1/tasks/{task_id}": {
+      "get": {
+        "operationId": "status_v1_tasks__task_id__get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Status"
+      }
+    },
+    "/v1/use": {
+      "post": {
+        "description": "Reject database selection: the server is fixed to its own database.",
+        "operationId": "use_v1_use_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Use"
+      }
+    }
+  }
+}

@@ -1,21 +1,19 @@
-"""The ``/documents`` routes: list indexed documents and delete one."""
+"""The documents routes: list indexed documents and delete one."""
 
 from __future__ import annotations
 
 from functools import partial
-from typing import TYPE_CHECKING, final
+from typing import final
 
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from quarry.daemon.routes.base import RouteGroup
 
-if TYPE_CHECKING:
-    from starlette.requests import Request
-
 
 @final
 class DocumentRoutes(RouteGroup):
-    """Serve ``GET /documents`` (list) and ``DELETE /documents`` (async purge)."""
+    """Serve document listing and async deletion."""
 
     def documents(self, request: Request) -> JSONResponse:
         auth_resp = self.reject_unauthorized(request)
@@ -27,7 +25,7 @@ class DocumentRoutes(RouteGroup):
         return JSONResponse({"total_documents": len(docs), "documents": docs})
 
     async def delete(self, request: Request) -> JSONResponse:
-        """Handle DELETE /documents as an async 202 background task."""
+        """Delete a document as an async 202 background task."""
         auth_resp = self.reject_unauthorized(request)
         if auth_resp is not None:
             return auth_resp

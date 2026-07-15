@@ -139,6 +139,9 @@ ignore = [
 "tools/eval/**/*.py" = ["T20"]  # the eval CLI prints its report to stdout
 "tests/*" = ["S101", "S106", "S108", "S603", "S607", "T20", "SLF001", "ARG", "PLC0415", "A002"]
 "benchmarks/*" = ["T20", "S311", "BLE001", "PLC0415", "SIM905"]
+# FastAPI resolves handler annotations at runtime (get_type_hints), so the
+# route groups must import Request at runtime, not under TYPE_CHECKING (TC002).
+"src/quarry/daemon/routes/*.py" = ["TC002"]
 "src/quarry/__main__.py" = ["T20", "FBT"]
 "src/quarry/mcp_server.py" = ["T20", "FBT"]
 "src/quarry/cli_captures.py" = ["FBT"]  # typer boolean CLI flags

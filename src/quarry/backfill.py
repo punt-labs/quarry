@@ -15,6 +15,7 @@ from quarry.config import Settings
 from quarry.db.facade import Database
 from quarry.hooks import extract_transcript_text
 from quarry.ingestion.pipeline import ingest_content
+from quarry.scrub import scrub_and_log
 from quarry.sync_registry import DirectoryRegistration, SyncRegistry
 from quarry.transcript import Transcript
 
@@ -223,6 +224,12 @@ def _process_project(
         header = format_artifacts_header(artifacts)
         if header:
             text = header + "\n\n" + text
+
+        # Scrub before ingest so the searchable chunks honour the DES-036
+        # write-time scrub invariant.  The capture .md goes through CaptureWriter,
+        # but ingest_content does not scrub, so without this the raw transcript's
+        # secrets and PII would land in LanceDB and be retrievable via search.
+        text = scrub_and_log(text, "backfill")
 
         doc_name = document_name_for_transcript(transcript)
         try:

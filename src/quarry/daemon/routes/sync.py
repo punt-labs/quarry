@@ -1,34 +1,31 @@
-"""The ``/sync`` route: run ``sync_all`` as a singleton background task."""
+"""The sync route: run ``sync_all`` as a singleton background task."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, final
+from typing import final
 
 from starlette.concurrency import run_in_threadpool
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from quarry.daemon.routes.base import RouteGroup
 from quarry.daemon.tasks import TaskState, task_terminal
 from quarry.http_guards import RequestGuards
 
-if TYPE_CHECKING:
-    from starlette.requests import Request
-
-# The /sync body carries only small option dicts.
+# The sync body carries only small option dicts.
 MAX_SYNC_BODY_BYTES = 16 * 1024
 
 
 @final
 class SyncRoutes(RouteGroup):
-    """Serve ``POST /sync`` — reject concurrent syncs with 409, else 202."""
+    """Serve the sync request — reject concurrent syncs with 409, else 202."""
 
     async def sync(self, request: Request) -> JSONResponse:
         """Accept a sync request and run ``sync_all`` as a background task.
 
         Uses a non-blocking check to reject concurrent requests with HTTP 409.
         Returns 202 Accepted immediately with a task_id; the actual sync runs
-        as an asyncio background task.  ``GET /tasks/<task_id>`` returns the
-        task status.
+        as an asyncio background task, polled by that task id.
         """
         auth_resp = self.reject_unauthorized(request)
         if auth_resp is not None:
@@ -44,16 +41,9 @@ class SyncRoutes(RouteGroup):
             if isinstance(body, JSONResponse):
                 return body
 
-        running_sync = self.ctx.tasks.running_of_kind("sync")
-        if running_sync is not None:
-            return JSONResponse(
-                {
-                    "error": "Sync already in progress",
-                    "status": "running",
-                    "task_id": running_sync.task_id,
-                },
-                status_code=409,
-            )
+        conflict = self.reject_if_running("sync", "Sync")
+        if conflict is not None:
+            return conflict
 
         state = self.ctx.tasks.begin("sync")
         return self.accept(state, self._run_sync(state))

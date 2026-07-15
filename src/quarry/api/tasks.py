@@ -13,7 +13,7 @@ class TaskAccepted(BaseModel):
 
 
 class TaskStatus(BaseModel):
-    """A task's pollable state from ``GET /tasks/{task_id}``.
+    """A background task's pollable terminal state.
 
     ``results`` is populated only on ``completed`` and ``error`` only on
     ``failed``; both are omitted otherwise (the route serializes with

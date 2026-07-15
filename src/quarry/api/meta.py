@@ -6,17 +6,21 @@ from pydantic import BaseModel
 
 
 class HealthResponse(BaseModel):
-    """The ``GET /health`` snapshot (unversioned; auth-exempt).
+    """The daemon's liveness and readiness snapshot (unversioned; auth-exempt).
 
-    Mirrors the daemon's live ``/health`` body — liveness plus process uptime.
+    Carries liveness (``status``), process uptime, warm/ready ``state``, the wire
+    ``api_version`` a client negotiates against, and the running ``quarry_version``.
     """
 
     status: str
     uptime_seconds: float
+    state: str
+    api_version: str
+    quarry_version: str
 
 
 class StatusResponse(BaseModel):
-    """The ``GET /status`` aggregate over the daemon's single database."""
+    """The aggregate status over the daemon's single database."""
 
     document_count: int
     collection_count: int
