@@ -99,8 +99,8 @@ class TaskRegistry:
 
     def track(self, state: TaskState, task: asyncio.Task[None]) -> None:
         """Retain *task* until it reaches a terminal state, then drop the ref."""
-        task.add_done_callback(lambda _t: self._refs.pop(state.task_id, None))
         self._refs[state.task_id] = task
+        task.add_done_callback(lambda _t: self._refs.pop(state.task_id, None))
 
     def seed(self, state: TaskState) -> None:
         """Insert a pre-built *state* keyed by its ``task_id``.
