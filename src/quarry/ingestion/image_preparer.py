@@ -116,7 +116,7 @@ class ImagePreparer:
             if len(data) <= max_bytes:
                 return data
 
-        if max_bytes > 0 and len(data) > max_bytes:
+        if len(data) > max_bytes:  # max_bytes > 0 here — the <=0 case returned above
             logger.warning(
                 "%s still %d bytes after downscaling (limit %d)",
                 name,

@@ -9,7 +9,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from starlette.testclient import TestClient
 
-from quarry.http_server import _QuarryContext, build_app
+from quarry.daemon.app import build_app
+from quarry.daemon.context import DaemonContext
 from quarry.shadow.sync import ShadowSyncResult
 
 
@@ -23,7 +24,7 @@ def _mock_settings(tmp_path: Path) -> MagicMock:
 
 @pytest.fixture()
 def client(tmp_path: Path) -> TestClient:
-    ctx = _QuarryContext(_mock_settings(tmp_path))
+    ctx = DaemonContext(_mock_settings(tmp_path))
     return TestClient(build_app(ctx), raise_server_exceptions=False)
 
 
