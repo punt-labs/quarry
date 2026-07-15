@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 from typing import Self
@@ -13,6 +14,20 @@ from quarry.types import LanceDB
 logger = logging.getLogger(__name__)
 
 FRAGMENT_THRESHOLD: int = 10_000
+
+
+@dataclass(frozen=True, slots=True)
+class OptimizeOutcome:
+    """Whether a compaction actually ran, plus the fragment count and a reason.
+
+    ``optimized`` is ``False`` when the table is absent or the fragment count
+    exceeded the safety threshold without ``force``; ``reason`` then explains
+    the skip.  Callers report this instead of assuming success.
+    """
+
+    optimized: bool
+    fragments: int
+    reason: str = ""
 
 
 class TableOptimizer:
@@ -49,8 +64,8 @@ class TableOptimizer:
             pass
         return 0
 
-    def optimize(self, *, force: bool = False) -> None:
-        """Compact table data and rebuild the FTS index.
+    def optimize(self, *, force: bool = False) -> OptimizeOutcome:
+        """Compact table data and rebuild the FTS index; report what happened.
 
         Merges small data fragments for better query performance, then
         rebuilds the Tantivy full-text index so it references the new
@@ -65,21 +80,29 @@ class TableOptimizer:
         optimization is skipped to prevent a compaction death spiral -- unless
         *force* is True.  The operator should run ``quarry optimize --force``
         manually for degraded databases.
+
+        Returns an :class:`OptimizeOutcome`: ``optimized`` is ``False`` (with a
+        ``reason``) when the table is absent or the compaction was skipped, so a
+        caller never reports a skip as success.  The fragment count is taken
+        once here, so callers read it from the outcome rather than re-counting.
         """
         if TABLE_NAME not in self._db.list_tables().tables:
-            return
+            return OptimizeOutcome(optimized=False, fragments=0, reason="no table")
 
-        if not force:
-            fragments = self.count_fragments()
-            if fragments > FRAGMENT_THRESHOLD:
-                logger.warning(
-                    "LanceDB table has %d fragments (threshold: %d). "
-                    "Skipping optimization — manual compaction required. "
-                    "Run: quarry optimize --force",
-                    fragments,
-                    FRAGMENT_THRESHOLD,
-                )
-                return
+        fragments = self.count_fragments()
+        if not force and fragments > FRAGMENT_THRESHOLD:
+            logger.warning(
+                "LanceDB table has %d fragments (threshold: %d). "
+                "Skipping optimization — manual compaction required. "
+                "Run: quarry optimize --force",
+                fragments,
+                FRAGMENT_THRESHOLD,
+            )
+            reason = (
+                f"{fragments} fragments exceed threshold "
+                f"({FRAGMENT_THRESHOLD:,}); run with force to override"
+            )
+            return OptimizeOutcome(optimized=False, fragments=fragments, reason=reason)
 
         table = self._db.open_table(TABLE_NAME)
         table.optimize(cleanup_older_than=timedelta(hours=1))
@@ -98,6 +121,7 @@ class TableOptimizer:
                 "hybrid search may use vector-only until next sync",
                 exc_info=True,
             )
+        return OptimizeOutcome(optimized=True, fragments=fragments)
 
     def create_collection_index(self) -> None:
         """Create a BITMAP scalar index on the collection column.

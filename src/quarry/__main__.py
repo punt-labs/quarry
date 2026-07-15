@@ -1107,31 +1107,22 @@ def optimize_cmd(
     skipped by default to prevent a compaction death spiral. Use --force
     to bypass this safety guard for manual recovery.
     """
-    from quarry.db.optimizer import FRAGMENT_THRESHOLD  # noqa: PLC0415
-
     settings = _resolved_settings()
     database = Database.connect(settings.lancedb_path)
-    opt = database.optimizer
 
-    fragments = opt.count_fragments()
+    # The optimizer owns the threshold decision and counts fragments once,
+    # returning what it actually did — so the CLI neither re-counts nor
+    # duplicates the threshold constant.
+    outcome = database.optimizer.optimize(force=force)
+
     if not _quiet:
-        err_console.print(f"Fragment count: {fragments}")
-
-    if not force and fragments > FRAGMENT_THRESHOLD:
-        err_console.print(
-            f"Skipping: {fragments} fragments exceed threshold "
-            f"({FRAGMENT_THRESHOLD:,}). Use --force to override.",
-            style="yellow",
-        )
+        err_console.print(f"Fragment count: {outcome.fragments}")
+    if not outcome.optimized:
+        err_console.print(f"Skipping: {outcome.reason}.", style="yellow")
         raise typer.Exit(code=1)
 
-    if not _quiet:
-        err_console.print("Running optimization...")
-
-    opt.optimize(force=force)
-
     _emit(
-        {"optimized": True, "fragments_before": fragments, "force": force},
+        {"optimized": True, "fragments_before": outcome.fragments, "force": force},
         "Optimization complete.",
     )
 

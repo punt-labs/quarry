@@ -93,17 +93,24 @@ class MaintenanceRoutes(RouteGroup):
         return self.accept(state, self._run_backfill(state, args))
 
     async def _run_optimize(self, state: TaskState, *, force: bool) -> None:
-        """Count fragments, optimize, and record the before-count in *state*."""
+        """Compact as a background task, recording the *actual* outcome.
+
+        Reports ``optimized`` as whatever the optimizer did — a fragment-count
+        skip is ``False`` with a ``reason``, never a false success — and reads
+        the fragment count from the outcome so the table is scanned only once.
+        """
         with task_terminal(state):
             opt = self.ctx.database.optimizer
-            fragments = await run_in_threadpool(opt.count_fragments)
-            await run_in_threadpool(lambda: opt.optimize(force=force))
+            outcome = await run_in_threadpool(lambda: opt.optimize(force=force))
             state.status = "completed"
-            state.results = {
-                "optimized": True,
-                "fragments_before": fragments,
+            results: dict[str, object] = {
+                "optimized": outcome.optimized,
+                "fragments_before": outcome.fragments,
                 "force": force,
             }
+            if outcome.reason:
+                results["reason"] = outcome.reason
+            state.results = results
 
     async def _run_backfill(self, state: TaskState, args: BackfillArgs) -> None:
         """Run the transcript backfill in a worker thread and record its stats."""

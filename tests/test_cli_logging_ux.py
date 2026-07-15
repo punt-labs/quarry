@@ -784,19 +784,23 @@ class TestFatalErrorsUnderQuiet:
         assert "search index corrupt" in result.stderr
 
     def test_quiet_optimize_threshold_error_on_stderr(self) -> None:
-        """quarry --quiet optimize shows threshold error on stderr."""
+        """quarry --quiet optimize shows the skip reason and exits non-zero."""
+        from quarry.db.optimizer import OptimizeOutcome
+
         _reset_globals()
+        skip = OptimizeOutcome(
+            optimized=False,
+            fragments=20000,
+            reason="20,000 fragments exceed threshold (10,000); run with force",
+        )
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.db.facade.get_db"),
-            patch(
-                "quarry.db.optimizer.TableOptimizer.count_fragments", return_value=20000
-            ),
-            patch("quarry.db.optimizer.FRAGMENT_THRESHOLD", 10000),
+            patch("quarry.db.optimizer.TableOptimizer.optimize", return_value=skip),
         ):
             result = runner.invoke(app, ["--quiet", "optimize"])
         assert result.exit_code == 1
-        # The threshold error is always shown because it precedes a non-zero exit.
+        # The skip reason is always shown because it precedes a non-zero exit.
         assert "exceed" in result.stderr.lower() or "threshold" in result.stderr.lower()
 
 
@@ -955,14 +959,14 @@ class TestOptimizeQuietGuard:
 
     def test_optimize_quiet_no_fragment_count(self) -> None:
         """quarry --quiet optimize suppresses 'Fragment count:' on stderr."""
+        from quarry.db.optimizer import OptimizeOutcome
+
         _reset_globals()
+        ran = OptimizeOutcome(optimized=True, fragments=10)
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.db.facade.get_db"),
-            patch(
-                "quarry.db.optimizer.TableOptimizer.count_fragments", return_value=10
-            ),
-            patch("quarry.db.optimizer.TableOptimizer.optimize"),
+            patch("quarry.db.optimizer.TableOptimizer.optimize", return_value=ran),
         ):
             result = runner.invoke(app, ["--quiet", "optimize"])
         assert result.exit_code == 0
@@ -970,14 +974,14 @@ class TestOptimizeQuietGuard:
 
     def test_optimize_default_shows_fragment_count(self) -> None:
         """quarry optimize (default) shows 'Fragment count:' on stderr."""
+        from quarry.db.optimizer import OptimizeOutcome
+
         _reset_globals()
+        ran = OptimizeOutcome(optimized=True, fragments=42)
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.db.facade.get_db"),
-            patch(
-                "quarry.db.optimizer.TableOptimizer.count_fragments", return_value=42
-            ),
-            patch("quarry.db.optimizer.TableOptimizer.optimize"),
+            patch("quarry.db.optimizer.TableOptimizer.optimize", return_value=ran),
         ):
             result = runner.invoke(app, ["optimize"])
         assert result.exit_code == 0

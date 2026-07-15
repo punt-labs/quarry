@@ -590,7 +590,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "description": "Body for ingesting historical session transcripts.\n\n``limit == 0`` means no limit; ``collection``/``project`` narrow the scan.",
+                "description": "Body for ingesting historical session transcripts.\n\nOver the daemon, ``limit`` is clamped into ``1..500``: a missing or\nnon-positive value and any value above the cap both resolve to 500, so a\nremote request can never trigger an unbounded scan.  (The local CLI still\ntreats ``0`` as \"all\".)  ``collection``/``project`` narrow the scan.",
                 "properties": {
                   "collection": {
                     "default": "",
@@ -638,6 +638,16 @@
     "/v1/captures/push": {
       "post": {
         "operationId": "push_v1_captures_push_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
         "responses": {
           "200": {
             "content": {
@@ -1057,6 +1067,16 @@
       "post": {
         "description": "Accept a sync request and run ``sync_all`` as a background task.\n\nUses a non-blocking check to reject concurrent requests with HTTP 409.\nReturns 202 Accepted immediately with a task_id; the actual sync runs\nas an asyncio background task, polled by that task id.",
         "operationId": "sync_v1_sync_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
         "responses": {
           "202": {
             "content": {
@@ -1094,6 +1114,16 @@
       "post": {
         "description": "Reject database selection: the server is fixed to its own database.",
         "operationId": "use_v1_use_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
         "responses": {
           "400": {
             "content": {

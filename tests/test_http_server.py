@@ -2292,9 +2292,15 @@ class TestMaintenance:
     """POST /v1/optimize and /v1/backfill-sessions run as 202 background tasks."""
 
     def test_optimize_returns_202_and_completes(self, tmp_path: Path) -> None:
+        from quarry.db.optimizer import OptimizeOutcome
+
         ctx = DaemonContext(_mock_settings(tmp_path))
         _inject_mocks(ctx)
-        with TestClient(build_app(ctx), raise_server_exceptions=False) as tc:
+        ran = OptimizeOutcome(optimized=True, fragments=7)
+        with (
+            TestClient(build_app(ctx), raise_server_exceptions=False) as tc,
+            patch("quarry.db.optimizer.TableOptimizer.optimize", return_value=ran),
+        ):
             resp = tc.post("/v1/optimize", json={})
             assert resp.status_code == 202
             data = _poll_task_done(tc, resp.json()["task_id"])
@@ -2302,7 +2308,33 @@ class TestMaintenance:
         results = data["results"]
         assert results["optimized"] is True
         assert results["force"] is False
-        assert results["fragments_before"] == 0
+        assert results["fragments_before"] == 7
+        assert "reason" not in results
+
+    def test_optimize_reports_skip_not_success(self, tmp_path: Path) -> None:
+        """A skipped compaction reports optimized:False + reason, never a false True.
+
+        The bug: the handler hardcoded optimized:True, so a threshold skip (the
+        optimizer returning without compacting) was reported as success.
+        """
+        from quarry.db.optimizer import OptimizeOutcome
+
+        ctx = DaemonContext(_mock_settings(tmp_path))
+        _inject_mocks(ctx)
+        skip = OptimizeOutcome(
+            optimized=False, fragments=20000, reason="20,000 fragments exceed threshold"
+        )
+        with (
+            TestClient(build_app(ctx), raise_server_exceptions=False) as tc,
+            patch("quarry.db.optimizer.TableOptimizer.optimize", return_value=skip),
+        ):
+            resp = tc.post("/v1/optimize", json={})
+            assert resp.status_code == 202
+            data = _poll_task_done(tc, resp.json()["task_id"])
+        results = data["results"]
+        assert results["optimized"] is False
+        assert results["fragments_before"] == 20000
+        assert "threshold" in results["reason"].lower()
 
     def test_optimize_reads_force_param(self, tmp_path: Path) -> None:
         """The ``force`` flag reaches the engine (param -> server-reads-it)."""
@@ -2508,6 +2540,21 @@ class TestContentTypeChokePoint:
     def test_absent_content_type_rejected(self, client: TestClient, path: str) -> None:
         """A bodyless cross-origin POST (no Content-Type) is a simple request."""
         assert client.post(path).status_code == 415
+
+    def test_openapi_advertises_json_for_every_post(self, tmp_path: Path) -> None:
+        """The published contract matches the guard: every POST documents JSON.
+
+        Model-less POSTs (sync, captures/push, use) still advertise an
+        application/json requestBody so a client isn't told a bare POST is fine.
+        """
+        ctx = DaemonContext(_mock_settings(tmp_path))
+        _inject_mocks(ctx)
+        spec = build_app(ctx).openapi()
+        for path, ops in spec["paths"].items():
+            if "post" not in ops:
+                continue
+            content = ops["post"].get("requestBody", {}).get("content", {})
+            assert "application/json" in content, path
 
 
 class TestResponseModelParity:

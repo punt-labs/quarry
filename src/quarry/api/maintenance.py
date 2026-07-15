@@ -17,7 +17,10 @@ class OptimizeRequest(BaseModel):
 class BackfillRequest(BaseModel):
     """Body for ingesting historical session transcripts.
 
-    ``limit == 0`` means no limit; ``collection``/``project`` narrow the scan.
+    Over the daemon, ``limit`` is clamped into ``1..500``: a missing or
+    non-positive value and any value above the cap both resolve to 500, so a
+    remote request can never trigger an unbounded scan.  (The local CLI still
+    treats ``0`` as "all".)  ``collection``/``project`` narrow the scan.
     """
 
     dry_run: bool = False

@@ -89,22 +89,29 @@ class RouteSpec:
         return f"{prefix}{self.path}" if self.versioned else self.path
 
     def openapi_extra(self) -> dict[str, Any] | None:
-        """Return the OpenAPI ``requestBody`` for a POST body, else ``None``.
+        """Return the OpenAPI ``requestBody`` for a POST, else ``None``.
 
         The handlers parse the body themselves, so FastAPI is never handed the
         request model to validate; inlining the schema here documents the body
         shape without letting FastAPI's parsing displace the manual contract.
+
+        A POST with no request model still advertises an optional
+        ``application/json`` body, so the published contract matches the daemon's
+        content-type guard, which rejects any non-JSON POST.  GET/DELETE carry
+        no body and return ``None``.
         """
-        if self.request_model is None:
+        if "POST" not in self.methods:
             return None
+        if self.request_model is None:
+            schema: dict[str, Any] = {"type": "object"}
+            required = False
+        else:
+            schema = self.request_model.model_json_schema()
+            required = self.body_required
         return {
             "requestBody": {
-                "required": self.body_required,
-                "content": {
-                    "application/json": {
-                        "schema": self.request_model.model_json_schema()
-                    }
-                },
+                "required": required,
+                "content": {"application/json": {"schema": schema}},
             }
         }
 
