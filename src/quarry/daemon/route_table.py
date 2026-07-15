@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Self, final
 from starlette.responses import JSONResponse, PlainTextResponse
 
 from quarry.api import (
+    BackfillRequest,
     CapturesPushResponse,
     CollectionList,
     DatabaseList,
@@ -33,7 +34,6 @@ from quarry.api import (
     TaskAccepted,
     TaskStatus,
 )
-from quarry.api.maintenance import BackfillRequest
 from quarry.daemon.routes import (
     CaptureRoutes,
     CollectionRoutes,

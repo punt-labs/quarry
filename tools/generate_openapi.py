@@ -16,7 +16,9 @@ from quarry.config import Settings
 from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
 
-_OUTPUT = Path("docs/openapi.json")
+# Resolve relative to this file (repo_root/tools/generate_openapi.py) so the
+# target is the repo's docs/openapi.json regardless of the caller's CWD.
+_OUTPUT = Path(__file__).resolve().parent.parent / "docs" / "openapi.json"
 
 
 @final
