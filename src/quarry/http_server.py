@@ -1,13 +1,12 @@
-"""ASGI HTTP + WebSocket server exposing Quarry search and MCP over localhost.
+"""ASGI HTTP server exposing the Quarry REST API over localhost.
 
-Designed for the quarry-menubar macOS companion app, production deployment,
-and MCP-over-WebSocket for mcp-proxy.  Uses Starlette with uvicorn for
-async request handling and native WebSocket support.
+Designed for the quarry-menubar macOS companion app and production
+deployment.  Uses Starlette with uvicorn for async request handling.
 
 Lifecycle:
     1. ``quarry serve`` loads settings + embedding model (cold start)
     2. Writes port to ``~/.punt-labs/quarry/data/<db>/serve.port``
-    3. Serves JSON endpoints + ``/mcp`` WebSocket on ``localhost:<port>``
+    3. Serves the JSON REST endpoints on ``localhost:<port>``
     4. Cleans up port file on shutdown
 """
 
@@ -19,7 +18,6 @@ import ipaddress
 import logging
 import os
 import pwd
-import re
 import socket as socket_module
 import time
 import uuid
@@ -38,7 +36,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse, PlainTextResponse, Response
-from starlette.routing import Route, WebSocketRoute
+from starlette.routing import Route
 
 from quarry.config import DEFAULT_PORT, Settings
 from quarry.db import Database
@@ -55,7 +53,6 @@ if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
 
     from starlette.requests import Request
-    from starlette.websockets import WebSocket
 
     from quarry.types import EmbeddingBackend
 
@@ -64,9 +61,6 @@ logger = logging.getLogger(__name__)
 _DEFAULT_CORS_ORIGINS = frozenset({"http://localhost"})
 
 _AUTH_EXEMPT_PATHS = frozenset({"/health", "/ca.crt"})
-
-# Strip control characters from user-supplied log values (CWE-117).
-_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 # Maximum request body sizes.  /remember accepts content, /ingest only a URL.
 MAX_REMEMBER_BODY_BYTES = 50 * 1024 * 1024
@@ -1167,54 +1161,6 @@ def _status_route(request: Request) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
-# WebSocket MCP endpoint
-# ---------------------------------------------------------------------------
-
-
-async def _mcp_websocket_route(websocket: WebSocket) -> None:
-    """MCP JSON-RPC over WebSocket for mcp-proxy.
-
-    Each connection gets its own MCP session with isolated database state
-    via ContextVar.  Auth is checked before the WebSocket is accepted.
-    """
-    from mcp.server.websocket import websocket_server  # noqa: PLC0415
-
-    from quarry.mcp_server import run_mcp_session  # noqa: PLC0415
-
-    ctx: _QuarryContext = websocket.app.state.ctx
-
-    # Reject cross-site WebSocket hijacking (CSWSH).  Browsers always send
-    # an Origin header on WebSocket upgrades; non-browser clients (mcp-proxy)
-    # do not.  If an Origin is present it must match the allowed CORS origins.
-    origin = websocket.headers.get("Origin")
-    if origin is not None and origin not in ctx.cors_origins:
-        await websocket.close(code=1008)
-        return
-
-    # Auth before accept — reject unauthenticated connections immediately.
-    if ctx.api_key:
-        auth_header = websocket.headers.get("Authorization", "")
-        if not _check_bearer_auth(ctx.api_key, auth_header):
-            await websocket.close(code=1008)
-            return
-
-    # Sanitize user-controlled value before logging (CWE-117).
-    raw_key = websocket.query_params.get("session_key", "unknown")
-    session_key = _CONTROL_CHAR_RE.sub("", raw_key)[:64]
-    logger.info("MCP WebSocket connected: session_key=%s", session_key)
-
-    try:
-        async with websocket_server(
-            websocket.scope, websocket.receive, websocket.send
-        ) as (read_stream, write_stream):
-            await run_mcp_session(read_stream, write_stream)
-    except Exception:
-        logger.exception("MCP WebSocket error: session_key=%s", session_key)
-    finally:
-        logger.info("MCP WebSocket disconnected: session_key=%s", session_key)
-
-
-# ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
 
@@ -1256,7 +1202,6 @@ def build_app(
             methods=["GET", "POST", "DELETE"],
         ),
         Route("/status", _status_route, methods=["GET"]),
-        WebSocketRoute("/mcp", _mcp_websocket_route),
     ]
 
     middleware = [
@@ -1347,7 +1292,7 @@ def serve(
     ssl_certfile: str | None = None,
     ssl_keyfile: str | None = None,
 ) -> None:
-    """Start the HTTP + WebSocket server.  Blocks until shutdown signal.
+    """Start the HTTP server.  Blocks until shutdown signal.
 
     Args:
         settings: Resolved application settings.
