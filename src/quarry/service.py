@@ -409,7 +409,7 @@ def detect_platform() -> str:
 def install() -> str:
     """Install quarry as a system service.  Returns a status message."""
     # Validate that non-loopback binds have an API key — without one the daemon
-    # will crash-loop at runtime because http_server.serve() enforces this invariant.
+    # will crash-loop at runtime because DaemonServer enforces this invariant.
     serve_host = os.environ.get("QUARRY_SERVE_HOST", "").strip()
     api_key = os.environ.get("QUARRY_API_KEY", "").strip()
     if serve_host and serve_host != "127.0.0.1" and not api_key:

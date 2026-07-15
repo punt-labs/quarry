@@ -16,14 +16,10 @@ import numpy as np
 import pytest
 from starlette.testclient import TestClient
 
-from quarry.http_server import (
-    TASK_TTL_SECONDS,
-    TaskState,
-    _QuarryContext,
-    _validate_host_key,
-    _write_port_file,
-    build_app,
-)
+from quarry.daemon.app import build_app
+from quarry.daemon.context import DaemonContext
+from quarry.daemon.server import DaemonServer, PortFile
+from quarry.daemon.tasks import TASK_TTL_SECONDS, TaskState
 from quarry.results import SearchResult
 
 
@@ -61,7 +57,7 @@ def _mock_embedder() -> MagicMock:
 _SHARED_EMBEDDER = _mock_embedder()
 
 
-def _inject_mocks(ctx: _QuarryContext) -> None:
+def _inject_mocks(ctx: DaemonContext) -> None:
     """Replace the daemon's ONNX embedding session with a mock.
 
     ``embedder`` is a ``cached_property`` slot on ``ctx._resources``; writing
@@ -77,7 +73,7 @@ def _inject_mocks(ctx: _QuarryContext) -> None:
 def client(tmp_path: Path) -> TestClient:
     """Build a test app and return a TestClient."""
     settings = _mock_settings(tmp_path)
-    ctx = _QuarryContext(settings)
+    ctx = DaemonContext(settings)
     _inject_mocks(ctx)
 
     app = build_app(ctx)
@@ -121,7 +117,7 @@ class TestCaCertRoute:
     def test_auth_exempt_without_api_key_check(self, tmp_path: Path) -> None:
         """The /ca.crt route bypasses auth even when an API key is set."""
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings, api_key="secret-key")
+        ctx = DaemonContext(settings, api_key="secret-key")
         _inject_mocks(ctx)
         auth_client = TestClient(build_app(ctx), raise_server_exceptions=False)
 
@@ -160,7 +156,7 @@ class TestConcurrency:
         import httpx
 
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
 
@@ -471,7 +467,7 @@ class TestStatus:
         settings = _mock_settings(tmp_path)
         # Create the registry file so registry_path.exists() returns True.
         settings.registry_path.touch()
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         reg_client = TestClient(build_app(ctx), raise_server_exceptions=False)
 
@@ -481,7 +477,7 @@ class TestStatus:
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
             ),
-            patch("quarry.http_server.SyncRegistry") as mock_registry,
+            patch("quarry.daemon.routes.meta.SyncRegistry") as mock_registry,
         ):
             mock_registry.return_value.list_registrations.return_value = fake_regs
             data = reg_client.get("/status").json()
@@ -495,7 +491,7 @@ class TestStatus:
         settings = _mock_settings(tmp_path)
         # registry_path points to a non-existent file
         settings.registry_path = tmp_path / "no-registry.db"
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         no_reg_client = TestClient(build_app(ctx), raise_server_exceptions=False)
 
@@ -520,14 +516,14 @@ class TestNotFound:
 class TestPortFile:
     def test_write_port_file(self, tmp_path: Path) -> None:
         port_path = tmp_path / "subdir" / "serve.port"
-        _write_port_file(port_path, 12345)
+        PortFile(port_path).write(12345)
 
         assert port_path.exists()
         assert port_path.read_text() == "12345"
 
     def test_write_creates_parent_directories(self, tmp_path: Path) -> None:
         port_path = tmp_path / "a" / "b" / "serve.port"
-        _write_port_file(port_path, 8080)
+        PortFile(port_path).write(8080)
         assert port_path.exists()
 
 
@@ -536,10 +532,10 @@ class TestFailClosed:
 
     def test_non_loopback_without_key_refuses(self) -> None:
         with pytest.raises(SystemExit, match="Refusing to bind"):
-            _validate_host_key("0.0.0.0", None)  # noqa: S104
+            DaemonServer._validate_host_key("0.0.0.0", None)  # noqa: S104
 
     def test_loopback_without_key_allowed(self) -> None:
-        _validate_host_key("127.0.0.1", None)
+        DaemonServer._validate_host_key("127.0.0.1", None)
 
 
 class TestOptionsPreflightCors:
@@ -598,7 +594,7 @@ class TestCorsOrigins:
     @pytest.fixture()
     def cors_client(self, tmp_path: Path) -> TestClient:
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(
+        ctx = DaemonContext(
             settings,
             cors_origins=frozenset(
                 {
@@ -654,7 +650,7 @@ _TEST_API_KEY = "test-key-for-auth-testing"
 def auth_client(tmp_path: Path) -> TestClient:
     """Build a test app with API key auth enabled."""
     settings = _mock_settings(tmp_path)
-    ctx = _QuarryContext(settings, api_key=_TEST_API_KEY)
+    ctx = DaemonContext(settings, api_key=_TEST_API_KEY)
     _inject_mocks(ctx)
 
     app = build_app(ctx)
@@ -698,6 +694,11 @@ class TestApiKeyAuth:
             ).json()
         assert data["total_documents"] == 0
 
+    def test_status_rejected_without_key(self, auth_client: TestClient) -> None:
+        """/status is protected — it shares MetaRoutes with the exempt routes,
+        so lock the trust boundary: only /health and /ca.crt skip auth."""
+        assert auth_client.get("/status").status_code == 401
+
     def test_no_auth_required_when_key_not_configured(self, client: TestClient) -> None:
         """The default client fixture has no api_key -- all open."""
         with patch("quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]):
@@ -726,7 +727,7 @@ class TestEmptyApiKey:
     @pytest.fixture()
     def empty_key_client(self, tmp_path: Path) -> TestClient:
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings, api_key="")
+        ctx = DaemonContext(settings, api_key="")
         _inject_mocks(ctx)
 
         app = build_app(ctx)
@@ -839,7 +840,7 @@ class TestDeleteDocuments:
 
     def test_delete_document_returns_202(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
         with (
@@ -859,7 +860,7 @@ class TestDeleteDocuments:
 
     def test_delete_document_with_collection(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
         with (
@@ -883,7 +884,7 @@ class TestDeleteCollections:
 
     def test_delete_collection_returns_202(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
         with (
@@ -914,7 +915,7 @@ class TestRemember:
             "chunks": 3,
         }
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
         with (
@@ -968,7 +969,7 @@ class TestRemember:
     def test_pipeline_value_error_marks_task_failed(self, tmp_path: Path) -> None:
         """ingest_content raising ValueError marks the task as failed."""
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
         with (
@@ -991,7 +992,7 @@ class TestRemember:
     def test_pipeline_os_error_marks_task_failed(self, tmp_path: Path) -> None:
         """ingest_content raising OSError marks the task as failed."""
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
         with (
@@ -1013,7 +1014,7 @@ class TestRemember:
 
     def test_rejects_oversized_body(self, client: TestClient) -> None:
         """Remember body > 50 MB must be rejected with HTTP 413."""
-        from quarry.http_server import MAX_REMEMBER_BODY_BYTES
+        from quarry.daemon.routes.ingestion import MAX_REMEMBER_BODY_BYTES
 
         too_big = MAX_REMEMBER_BODY_BYTES + 1
         resp = client.post(
@@ -1029,7 +1030,7 @@ class TestRemember:
 
     def test_passes_all_params(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
         with (
@@ -1068,7 +1069,7 @@ class TestRemember:
 
     def test_overwrite_defaults_true(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
         with (
@@ -1124,13 +1125,13 @@ class TestIngest:
             "chunks": 5,
         }
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
             patch(
-                "quarry.http_server.socket_module.getaddrinfo",
+                "quarry.daemon.url_safety.socket_module.getaddrinfo",
                 side_effect=_fake_public_addrinfo,
             ),
             patch("quarry.ingestion.pipeline.ingest_auto", return_value=mock_result),
@@ -1166,12 +1167,12 @@ class TestIngest:
 
     def test_passes_all_params(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
         with (
             patch(
-                "quarry.http_server.socket_module.getaddrinfo",
+                "quarry.daemon.url_safety.socket_module.getaddrinfo",
                 side_effect=_fake_public_addrinfo,
             ),
             patch(
@@ -1214,7 +1215,7 @@ class TestIngest:
             return [(None, None, None, "", ("192.168.1.1", 0))]
 
         with patch(
-            "quarry.http_server.socket_module.getaddrinfo",
+            "quarry.daemon.url_safety.socket_module.getaddrinfo",
             side_effect=fake_getaddrinfo,
         ):
             resp = client.post("/ingest", json={"source": "http://192.168.1.1/"})
@@ -1230,7 +1231,7 @@ class TestIngest:
             return [(None, None, None, "", ("127.0.0.1", 0))]
 
         with patch(
-            "quarry.http_server.socket_module.getaddrinfo",
+            "quarry.daemon.url_safety.socket_module.getaddrinfo",
             side_effect=fake_getaddrinfo,
         ):
             resp = client.post("/ingest", json={"source": "http://127.0.0.1/"})
@@ -1240,7 +1241,7 @@ class TestIngest:
     def test_rejects_metadata_ip(self, client: TestClient) -> None:
         """Cloud metadata endpoint must be blocked without even resolving."""
         with patch(
-            "quarry.http_server.socket_module.getaddrinfo",
+            "quarry.daemon.url_safety.socket_module.getaddrinfo",
         ) as mock_resolve:
             resp = client.post(
                 "/ingest",
@@ -1253,7 +1254,7 @@ class TestIngest:
     def test_rejects_dotlocal(self, client: TestClient) -> None:
         """mDNS .local hostnames must be blocked pre-resolution."""
         with patch(
-            "quarry.http_server.socket_module.getaddrinfo",
+            "quarry.daemon.url_safety.socket_module.getaddrinfo",
         ) as mock_resolve:
             resp = client.post("/ingest", json={"source": "http://myserver.local/"})
         assert resp.status_code == 400
@@ -1269,7 +1270,7 @@ class TestIngest:
             return [(None, None, None, "", ("169.254.10.5", 0))]
 
         with patch(
-            "quarry.http_server.socket_module.getaddrinfo",
+            "quarry.daemon.url_safety.socket_module.getaddrinfo",
             side_effect=fake_getaddrinfo,
         ):
             resp = client.post(
@@ -1281,13 +1282,13 @@ class TestIngest:
     def test_pipeline_value_error_marks_task_failed(self, tmp_path: Path) -> None:
         """ingest_auto raising ValueError marks the task as failed."""
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
             patch(
-                "quarry.http_server.socket_module.getaddrinfo",
+                "quarry.daemon.url_safety.socket_module.getaddrinfo",
                 side_effect=_fake_public_addrinfo,
             ),
             patch(
@@ -1305,13 +1306,13 @@ class TestIngest:
     def test_pipeline_os_error_marks_task_failed(self, tmp_path: Path) -> None:
         """ingest_auto raising OSError marks the task as failed."""
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
             patch(
-                "quarry.http_server.socket_module.getaddrinfo",
+                "quarry.daemon.url_safety.socket_module.getaddrinfo",
                 side_effect=_fake_public_addrinfo,
             ),
             patch(
@@ -1328,7 +1329,7 @@ class TestIngest:
 
     def test_rejects_oversized_body(self, client: TestClient) -> None:
         """Ingest body > 1 MB must be rejected with HTTP 413."""
-        from quarry.http_server import MAX_INGEST_BODY_BYTES
+        from quarry.daemon.routes.ingestion import MAX_INGEST_BODY_BYTES
 
         too_big = MAX_INGEST_BODY_BYTES + 1
         resp = client.post(
@@ -1360,13 +1361,13 @@ class TestIngest:
             "chunks": 1,
         }
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
             patch(
-                "quarry.http_server.socket_module.getaddrinfo",
+                "quarry.daemon.url_safety.socket_module.getaddrinfo",
                 side_effect=_fake_public_addrinfo,
             ),
             patch("quarry.ingestion.pipeline.ingest_auto", return_value=mock_result),
@@ -1387,7 +1388,7 @@ class TestIngest:
             return [(None, None, None, "", ("100.64.1.1", 0))]
 
         with patch(
-            "quarry.http_server.socket_module.getaddrinfo",
+            "quarry.daemon.url_safety.socket_module.getaddrinfo",
             side_effect=fake_getaddrinfo,
         ):
             resp = client.post("/ingest", json={"source": "http://cgnat.example/"})
@@ -1401,7 +1402,7 @@ class TestSync:
     def test_returns_202_with_task_id(self, tmp_path: Path) -> None:
         """POST /sync returns 202 Accepted with a task_id."""
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
         with (
@@ -1417,7 +1418,7 @@ class TestSync:
 
     def test_empty_body_accepted(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
         with (
@@ -1457,7 +1458,7 @@ class TestSync:
         assert resp.status_code == 202
 
     def test_rejects_oversized_body(self, client: TestClient) -> None:
-        from quarry.http_server import MAX_SYNC_BODY_BYTES
+        from quarry.daemon.routes.sync import MAX_SYNC_BODY_BYTES
 
         too_big = MAX_SYNC_BODY_BYTES + 1
         resp = client.post(
@@ -1474,14 +1475,14 @@ class TestSync:
     def test_concurrent_sync_returns_409(self, tmp_path: Path) -> None:
         """Second POST while sync is running returns 409 with task_id."""
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
         sync_client = TestClient(app, raise_server_exceptions=False)
 
         # Simulate an in-progress sync task via the unified tasks dict.
         task_id = "sync-test123"
-        ctx.tasks[task_id] = TaskState(task_id=task_id, kind="sync", status="running")
+        ctx.tasks.seed(TaskState(task_id=task_id, kind="sync", status="running"))
 
         resp = sync_client.post("/sync", json={})
         assert resp.status_code == 409
@@ -1496,15 +1497,17 @@ class TestSync:
     def test_sync_status_completed(self, tmp_path: Path) -> None:
         """GET /sync/<task_id> returns completed state."""
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
 
         # Simulate a completed sync task.
-        ctx.tasks["sync-test-123"] = TaskState(
-            task_id="sync-test-123",
-            kind="sync",
-            status="completed",
-            results={"math": {"ingested": 3}},
+        ctx.tasks.seed(
+            TaskState(
+                task_id="sync-test-123",
+                kind="sync",
+                status="completed",
+                results={"math": {"ingested": 3}},
+            )
         )
 
         app = build_app(ctx)
@@ -1548,7 +1551,7 @@ class TestDatabases:
         work_dir = tmp_path / "work" / "lancedb"
         work_dir.mkdir(parents=True)
         settings.lancedb_path = work_dir
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
         client = TestClient(app, raise_server_exceptions=False)
@@ -1591,12 +1594,12 @@ class TestRegistrations:
         home.mkdir()
         settings = _mock_settings(tmp_path)
         settings.registry_path = home / "registry.db"
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
         resolved = tmp_path.resolve()
         monkeypatch.setattr(
-            "quarry.http_server._server_home",
+            "quarry.daemon.routes.registrations.RegistrationRoutes._server_home",
             lambda: (resolved, None),
         )
         return TestClient(app, raise_server_exceptions=False)
@@ -1619,7 +1622,7 @@ class TestRegistrations:
             )
         ]
         with (
-            patch("quarry.http_server.SyncRegistry") as mock_registry,
+            patch("quarry.daemon.routes.registrations.SyncRegistry") as mock_registry,
             patch(
                 "pathlib.Path.exists",
                 return_value=True,
@@ -1646,12 +1649,12 @@ class TestRegistrations:
         target.mkdir()
         settings = _mock_settings(tmp_path)
         settings.registry_path = home / "registry.db"
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
         resolved = tmp_path.resolve()
         monkeypatch.setattr(
-            "quarry.http_server._server_home",
+            "quarry.daemon.routes.registrations.RegistrationRoutes._server_home",
             lambda: (resolved, None),
         )
         monkeypatch.setenv("HOME", str(home))
@@ -1730,12 +1733,12 @@ class TestRegistrations:
         settings.registry_path = home / "registry.db"
         # Create registry so it exists.
         settings.registry_path.touch()
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
         resolved = tmp_path.resolve()
         monkeypatch.setattr(
-            "quarry.http_server._server_home",
+            "quarry.daemon.routes.registrations.RegistrationRoutes._server_home",
             lambda: (resolved, None),
         )
 
@@ -1743,7 +1746,7 @@ class TestRegistrations:
             TestClient(app, raise_server_exceptions=False) as tc,
             patch("quarry.db.chunk_store.ChunkStore.delete_document", return_value=0),
             patch(
-                "quarry.http_server._deregister_sync",
+                "quarry.daemon.routes.registrations.RegistrationRoutes._deregister_sync",
                 return_value=(True, ["a.pdf"]),
             ),
         ):
@@ -1759,28 +1762,31 @@ class TestRegistrations:
         settings = _mock_settings(tmp_path)
         settings.registry_path = tmp_path / "registry.db"
         settings.registry_path.touch()
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         with (
             TestClient(build_app(ctx), raise_server_exceptions=False) as tc,
-            patch("quarry.http_server._deregister_sync", return_value=(False, [])),
+            patch(
+                "quarry.daemon.routes.registrations.RegistrationRoutes._deregister_sync",
+                return_value=(False, []),
+            ),
         ):
             resp = tc.delete("/registrations?collection=docs")
         assert resp.status_code == 404
         assert resp.json()["error"] == "No registration found for 'docs'"
-        assert ctx.tasks == {}
+        assert len(ctx.tasks) == 0
 
     def test_delete_registry_failure_returns_500_no_task(self, tmp_path: Path) -> None:
         """A synchronous registry failure -> 500, never 202; no task to poll."""
         settings = _mock_settings(tmp_path)
         settings.registry_path = tmp_path / "registry.db"
         settings.registry_path.touch()
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         with (
             TestClient(build_app(ctx), raise_server_exceptions=False) as tc,
             patch(
-                "quarry.http_server._deregister_sync",
+                "quarry.daemon.routes.registrations.RegistrationRoutes._deregister_sync",
                 side_effect=sqlite3.OperationalError("database is locked"),
             ),
         ):
@@ -1788,19 +1794,19 @@ class TestRegistrations:
         assert resp.status_code == 500
         assert resp.json()["error"]
         assert resp.json().get("status") != "accepted"
-        assert ctx.tasks == {}
+        assert len(ctx.tasks) == 0
 
     def test_delete_keep_data_precompletes_task(self, tmp_path: Path) -> None:
         """keep_data=true -> 202 with a task already completed, zero chunks."""
         settings = _mock_settings(tmp_path)
         settings.registry_path = tmp_path / "registry.db"
         settings.registry_path.touch()
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         with (
             TestClient(build_app(ctx), raise_server_exceptions=False) as tc,
             patch(
-                "quarry.http_server._deregister_sync",
+                "quarry.daemon.routes.registrations.RegistrationRoutes._deregister_sync",
                 return_value=(True, ["a.pdf"]),
             ),
         ):
@@ -1847,7 +1853,7 @@ class TestRegistrations:
         assert auth_client.delete("/registrations?collection=c").status_code == 401
 
     def test_post_rejects_oversized_body(self, client: TestClient) -> None:
-        from quarry.http_server import MAX_REGISTRATIONS_BODY_BYTES
+        from quarry.daemon.routes.registrations import MAX_REGISTRATIONS_BODY_BYTES
 
         too_big = MAX_REGISTRATIONS_BODY_BYTES + 1
         resp = client.post(
@@ -1921,7 +1927,7 @@ class TestServerHomeResolution:
         home.mkdir()
         settings = _mock_settings(tmp_path)
         settings.registry_path = home / "registry.db"
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         test_client = TestClient(build_app(ctx), raise_server_exceptions=False)
 
@@ -1931,7 +1937,9 @@ class TestServerHomeResolution:
         def _boom(_uid: int) -> object:
             raise KeyError("uid not in passwd")
 
-        with patch("quarry.http_server.pwd.getpwuid", side_effect=_boom):
+        with patch(
+            "quarry.daemon.routes.registrations.pwd.getpwuid", side_effect=_boom
+        ):
             resp = test_client.post(
                 "/registrations",
                 json={"directory": "/etc", "collection": "evil"},
@@ -1953,7 +1961,7 @@ class TestServerHomeResolution:
 
         settings = _mock_settings(tmp_path)
         settings.registry_path = real_home / "registry.db"
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         test_client = TestClient(build_app(ctx), raise_server_exceptions=False)
 
@@ -1965,7 +1973,9 @@ class TestServerHomeResolution:
         # the env says HOME=fakehome.
         target = real_home / "docs"
         target.mkdir()
-        with patch("quarry.http_server.pwd.getpwuid", return_value=real_entry):
+        with patch(
+            "quarry.daemon.routes.registrations.pwd.getpwuid", return_value=real_entry
+        ):
             resp = test_client.post(
                 "/registrations",
                 json={"directory": str(target), "collection": "docs"},
@@ -1975,7 +1985,9 @@ class TestServerHomeResolution:
         # And registering outside pw_dir fails, even if HOME covers it.
         outside = fake_home / "docs"
         outside.mkdir()
-        with patch("quarry.http_server.pwd.getpwuid", return_value=real_entry):
+        with patch(
+            "quarry.daemon.routes.registrations.pwd.getpwuid", return_value=real_entry
+        ):
             resp = test_client.post(
                 "/registrations",
                 json={"directory": str(outside), "collection": "evil"},
@@ -1988,22 +2000,22 @@ class TestRunPurgeTask:
     """Direct coroutine tests for the async chunk-purge task."""
 
     def test_purge_success_sets_completed_with_count(self, tmp_path: Path) -> None:
-        from quarry.http_server import _run_purge_task
+        from quarry.daemon.routes.registrations import RegistrationRoutes
 
-        ctx = _QuarryContext(_mock_settings(tmp_path))
+        ctx = DaemonContext(_mock_settings(tmp_path))
         _inject_mocks(ctx)
         state = TaskState(task_id="deregister-x", kind="deregister")
         state.results = {"collection": "docs", "removed": 1, "deleted_chunks": 0}
         with patch("quarry.db.chunk_store.ChunkStore.delete_document", return_value=3):
-            asyncio.run(_run_purge_task(ctx, state, "docs", ["a.pdf"]))
+            asyncio.run(RegistrationRoutes(ctx)._run_purge(state, "docs", ["a.pdf"]))
         assert state.status == "completed"
         assert state.results["deleted_chunks"] == 3
         assert state.results["removed"] == 1
 
     def test_purge_failure_sets_failed(self, tmp_path: Path) -> None:
-        from quarry.http_server import _run_purge_task
+        from quarry.daemon.routes.registrations import RegistrationRoutes
 
-        ctx = _QuarryContext(_mock_settings(tmp_path))
+        ctx = DaemonContext(_mock_settings(tmp_path))
         _inject_mocks(ctx)
         state = TaskState(task_id="deregister-y", kind="deregister")
         state.results = {"collection": "docs", "removed": 1, "deleted_chunks": 0}
@@ -2011,7 +2023,7 @@ class TestRunPurgeTask:
             "quarry.db.chunk_store.ChunkStore.delete_document",
             side_effect=RuntimeError("purge boom"),
         ):
-            asyncio.run(_run_purge_task(ctx, state, "docs", ["a.pdf"]))
+            asyncio.run(RegistrationRoutes(ctx)._run_purge(state, "docs", ["a.pdf"]))
         assert state.status == "failed"
         assert "purge boom" in state.error
 
@@ -2019,18 +2031,21 @@ class TestRunPurgeTask:
 class TestDatabasesMissingTable:
     """Fresh databases (no chunks table) must still respond to /databases."""
 
-    def test_list_documents_failure_is_zero(self, client: TestClient) -> None:
-        """A raise from list_documents must degrade to document_count=0."""
+    def test_list_documents_error_surfaces_500(self, client: TestClient) -> None:
+        """A genuine list_documents error surfaces as 500, not masked to zero.
+
+        A fresh DB (absent chunks table) already yields ``[]`` from
+        list_documents, so document_count is naturally 0 with no masking; a
+        real catalog error is a server error, not "zero documents".
+        """
         with patch(
             "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
-            side_effect=ValueError("Table 'chunks' was not found"),
+            side_effect=RuntimeError("catalog exploded"),
         ):
             resp = client.get("/databases")
 
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["total_databases"] == 1
-        assert data["databases"][0]["document_count"] == 0
+        assert resp.status_code == 500
+        assert resp.json() == {"error": "Internal server error"}
 
 
 class TestSyncGenericFailure:
@@ -2039,15 +2054,17 @@ class TestSyncGenericFailure:
     def test_sync_failure_captured_in_task_state(self, tmp_path: Path) -> None:
         """GET /sync/<task_id> returns failed state with error message."""
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
 
         # Simulate a failed sync task.
-        ctx.tasks["sync-fail-456"] = TaskState(
-            task_id="sync-fail-456",
-            kind="sync",
-            status="failed",
-            error="embedder crashed",
+        ctx.tasks.seed(
+            TaskState(
+                task_id="sync-fail-456",
+                kind="sync",
+                status="failed",
+                error="embedder crashed",
+            )
         )
 
         app = build_app(ctx)
@@ -2061,7 +2078,7 @@ class TestSyncGenericFailure:
 
     def test_remember_runtime_error_marks_task_failed(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
         with (
@@ -2083,13 +2100,13 @@ class TestSyncGenericFailure:
 
     def test_ingest_runtime_error_marks_task_failed(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
             patch(
-                "quarry.http_server.socket_module.getaddrinfo",
+                "quarry.daemon.url_safety.socket_module.getaddrinfo",
                 side_effect=_fake_public_addrinfo,
             ),
             patch(
@@ -2114,20 +2131,24 @@ class TestUnifiedTaskPolling:
 
     def test_tasks_sync_ingest_aliases_identical(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
 
-        ctx.tasks["sync-abc"] = TaskState(
-            task_id="sync-abc",
-            kind="sync",
-            status="completed",
-            results={"math": {"ingested": 5}},
+        ctx.tasks.seed(
+            TaskState(
+                task_id="sync-abc",
+                kind="sync",
+                status="completed",
+                results={"math": {"ingested": 5}},
+            )
         )
-        ctx.tasks["ingest-xyz"] = TaskState(
-            task_id="ingest-xyz",
-            kind="ingest",
-            status="failed",
-            error="timeout",
+        ctx.tasks.seed(
+            TaskState(
+                task_id="ingest-xyz",
+                kind="ingest",
+                status="failed",
+                error="timeout",
+            )
         )
 
         app = build_app(ctx)
@@ -2162,28 +2183,34 @@ class TestTaskGC:
         import time
 
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
+        ctx = DaemonContext(settings)
         _inject_mocks(ctx)
 
         # Add an old completed task and an old running task.
         old_time = time.monotonic() - TASK_TTL_SECONDS - 100
-        ctx.tasks["old-completed"] = TaskState(
-            task_id="old-completed",
-            kind="ingest",
-            status="completed",
-            created_at=old_time,
+        ctx.tasks.seed(
+            TaskState(
+                task_id="old-completed",
+                kind="ingest",
+                status="completed",
+                created_at=old_time,
+            )
         )
-        ctx.tasks["old-running"] = TaskState(
-            task_id="old-running",
-            kind="sync",
-            status="running",
-            created_at=old_time,
+        ctx.tasks.seed(
+            TaskState(
+                task_id="old-running",
+                kind="sync",
+                status="running",
+                created_at=old_time,
+            )
         )
-        ctx.tasks["recent-failed"] = TaskState(
-            task_id="recent-failed",
-            kind="remember",
-            status="failed",
-            created_at=time.monotonic(),
+        ctx.tasks.seed(
+            TaskState(
+                task_id="recent-failed",
+                kind="remember",
+                status="failed",
+                created_at=time.monotonic(),
+            )
         )
 
         app = build_app(ctx)

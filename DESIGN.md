@@ -896,10 +896,57 @@ The encoded project dir replaces `/` with `-` and preserves the leading dash (e.
 
 ## DES-031: Daemon-First Architecture — One Engine, Formal Wire Protocol, Pure Clients
 
-**Date:** 2026-05-16 (v1 PROPOSED); revised and **ACCEPTED** 2026-07-12 (v2.1)
+**Date:** 2026-05-16 (v1 PROPOSED); revised and **ACCEPTED** 2026-07-12 (v2.1); amended 2026-07-14 (v2.2)
 **Status:** ACCEPTED
 **Topic:** Separation of the compute/storage engine from access interfaces (CLI, MCP, Library) behind a formal wire protocol
-**Supersedes:** the v1 "Engine-First Architecture with Thin Interfaces" framing (this entry replaces it). Full design + the 5-agent audit that grounds it: `docs/des-031v2-daemon-first.md`. Epic `quarry-ma6f`; PRs `quarry-p8dq` (v2-1) … `quarry-7ftj` (v2-6).
+**Supersedes:** the v1 "Engine-First Architecture with Thin Interfaces" framing (this entry replaces it). Full design + the 5-agent audit that grounds it: `docs/des-031v2-daemon-first.md`. The v2.2 amendment (below) is backed by `docs/des-client-architecture.md`. Epic `quarry-ma6f` / `quarry-ynvs`.
+
+### Revision v2.2 (2026-07-14) — MCP is a client concern; `quarryd` binary; loopback `serve.token`
+
+The operator ratified a reversal of two v2.1 decisions plus two additions.
+Backing design: `docs/des-client-architecture.md`. The v1/v2.1 body below
+otherwise stands; where they conflict, v2.2 governs.
+
+- **Reverses §3.5 + §4.2 (MCP served BY the daemon).** MCP is a **client**
+  concern, modeled on vox (`vox mcp` → `server.py` → `VoxClientSync`). The daemon
+  serves the **REST API only** — the in-daemon `/mcp` route is deleted (landed in
+  PR-1, #356). `quarry mcp` becomes a FastMCP **stdio subcommand** whose tools
+  reach the daemon through `QuarryClient`; the Claude Code plugin runs
+  `quarry mcp` directly. The "MCP via the daemon over `/v1/mcp`" wording in the
+  §3.3 table and §3.5/§3.6 no longer applies.
+- **DES-021 routing change (the tool is unaffected).** Quarry's plugin no longer
+  routes its MCP path through **mcp-proxy** (`plugin.json` runs `quarry mcp`
+  directly; the auth/reconnect the proxy handled for quarry moves into
+  `QuarryClient`). mcp-proxy itself remains a live, supported tool used by other
+  consumers — this is a change to quarry's own routing, not a supersession or
+  retirement of the tool.
+- **Adds `quarryd`** — a dedicated daemon entry point (like `voxd`/`luxd`) that is
+  the sole engine process. This makes I1 a hard **process** boundary and removes
+  the v2.1 §3.1 lazy-import carve-out for `serve`/`mcp`: no `quarry` /
+  `quarry mcp` / `quarry-hook` process imports the engine; only `quarryd` (via
+  `quarry/daemon/`) does.
+- **Adds loopback `serve.token`.** The daemon writes a mode-0600 token beside
+  `serve.port`; a `ClientConfig` resolves port+token (env → remote-login config →
+  loopback files), so loopback requests are authenticated — closing the
+  multi-user-host exposure §7 only aspired to. Vox-parity with `voxd`'s
+  `serve.port`/`serve.token`.
+- **Confirms** the §3.4 seam (`QuarryClient` + injectable REST transport; no
+  vox-style gateway Protocol and no biff-style commands layer) and §3.1 hook
+  routing (hooks call `QuarryClient`, not `Database` — faster than the cold
+  in-process load and I1-correct).
+- **Defers the richer error envelope.** The wire error stays `{"error": ...}` in
+  v2-2 (a faithful contract *extraction*, not a wire redesign — `ErrorBody` is a
+  superset via `extra="allow"`, preserving bug-class-3 parity). The
+  `{code, message, detail}` envelope from §3.3 is a **breaking** wire change,
+  deferred to land WITH `QuarryClient`'s typed `QuarryError` hierarchy in v2-4 so
+  the codes and the client that consumes them move together (`RemoteClient` is
+  already gone by then).
+
+Sequencing under v2.2 (epic `quarry-ynvs`): PR-1 (#356) removed daemon MCP and
+added pyright to CI; PR-2 introduces `quarry/api` + FastAPI + `/v1` (+ the missing
+`/v1/optimize`, `/v1/backfill-sessions`); later PRs add `quarryd` / supervision /
+`serve.token`, `QuarryClient` + the CLI thin-client (deleting `RemoteClient`), and
+`quarry mcp`-as-client.
 
 ### Context (audited reality)
 

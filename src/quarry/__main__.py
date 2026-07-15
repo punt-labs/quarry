@@ -1652,7 +1652,7 @@ def serve(
     ] = False,
 ) -> None:
     """Start the HTTP API server."""
-    from quarry.http_server import serve as http_serve  # noqa: PLC0415
+    from quarry.daemon.server import serve as http_serve  # noqa: PLC0415
 
     settings = _resolved_settings()
     origins = frozenset(cors_origin) if cors_origin else None

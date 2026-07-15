@@ -16,11 +16,13 @@ import numpy as np
 import pytest
 from starlette.testclient import TestClient
 
+from quarry.daemon.app import build_app
+from quarry.daemon.context import DaemonContext
+from quarry.daemon.tasks import TaskState
 from quarry.db import ChunkStore, TableOptimizer
 from quarry.db.chunk_table import ChunkTable
 from quarry.db.optimizer import FRAGMENT_THRESHOLD
 from quarry.db.schema import TABLE_NAME
-from quarry.http_server import TaskState, _QuarryContext, build_app
 from quarry.models import Chunk
 from quarry.sync_registry import SyncRegistry
 
@@ -57,11 +59,22 @@ _SHARED_DB = _mock_db()
 _SHARED_EMBEDDER = _mock_embedder()
 
 
+def _inject(ctx: DaemonContext) -> None:
+    """Seed test doubles into the real resource seam.
+
+    The routes read resources via ``ctx._resources`` (QuarryResources
+    cached_property ``database``/``query_database``/``embedder``), so the
+    doubles must be written into that instance ``__dict__`` — not ``ctx``'s.
+    """
+    ctx._resources.__dict__["database"] = _SHARED_DB
+    ctx._resources.__dict__["query_database"] = _SHARED_DB
+    ctx._resources.__dict__["embedder"] = _SHARED_EMBEDDER
+
+
 def _make_client(tmp_path: Path) -> TestClient:
     settings = _mock_settings(tmp_path)
-    ctx = _QuarryContext(settings)
-    ctx.__dict__["db"] = _SHARED_DB
-    ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+    ctx = DaemonContext(settings)
+    _inject(ctx)
     return TestClient(build_app(ctx), raise_server_exceptions=False)
 
 
@@ -75,13 +88,12 @@ class TestSyncLock:
 
     def test_second_post_while_running_returns_409(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        ctx = DaemonContext(settings)
+        _inject(ctx)
 
         # Simulate a running sync task.
-        ctx.tasks["sync-existing"] = TaskState(
-            task_id="sync-existing", kind="sync", status="running"
+        ctx.tasks.seed(
+            TaskState(task_id="sync-existing", kind="sync", status="running")
         )
 
         app = build_app(ctx)
@@ -95,14 +107,11 @@ class TestSyncLock:
 
     def test_post_allowed_after_previous_completed(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        ctx = DaemonContext(settings)
+        _inject(ctx)
 
         # Previous sync completed.
-        ctx.tasks["sync-old"] = TaskState(
-            task_id="sync-old", kind="sync", status="completed"
-        )
+        ctx.tasks.seed(TaskState(task_id="sync-old", kind="sync", status="completed"))
 
         app = build_app(ctx)
         client = TestClient(app, raise_server_exceptions=False)
@@ -113,13 +122,14 @@ class TestSyncLock:
 
     def test_post_allowed_after_previous_failed(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        ctx = DaemonContext(settings)
+        _inject(ctx)
 
         # Previous sync failed.
-        ctx.tasks["sync-bad"] = TaskState(
-            task_id="sync-bad", kind="sync", status="failed", error="disk full"
+        ctx.tasks.seed(
+            TaskState(
+                task_id="sync-bad", kind="sync", status="failed", error="disk full"
+            )
         )
 
         app = build_app(ctx)
@@ -132,13 +142,10 @@ class TestSyncLock:
     def test_lock_released_after_sync_completes(self, tmp_path: Path) -> None:
         """After background task completes, the state is no longer 'running'."""
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        ctx = DaemonContext(settings)
+        _inject(ctx)
 
-        ctx.tasks["sync-done"] = TaskState(
-            task_id="sync-done", kind="sync", status="completed"
-        )
+        ctx.tasks.seed(TaskState(task_id="sync-done", kind="sync", status="completed"))
 
         # A new POST should succeed, not 409.
         app = build_app(ctx)
@@ -472,12 +479,9 @@ class TestAsyncSyncEndpoint:
 
     def test_get_running_task(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
-        ctx.tasks["sync-abc"] = TaskState(
-            task_id="sync-abc", kind="sync", status="running"
-        )
+        ctx = DaemonContext(settings)
+        _inject(ctx)
+        ctx.tasks.seed(TaskState(task_id="sync-abc", kind="sync", status="running"))
 
         client = TestClient(build_app(ctx), raise_server_exceptions=False)
         resp = client.get("/sync/sync-abc")
@@ -488,14 +492,15 @@ class TestAsyncSyncEndpoint:
 
     def test_get_completed_task_includes_results(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
-        ctx.tasks["sync-done"] = TaskState(
-            task_id="sync-done",
-            kind="sync",
-            status="completed",
-            results={"math": {"ingested": 5}},
+        ctx = DaemonContext(settings)
+        _inject(ctx)
+        ctx.tasks.seed(
+            TaskState(
+                task_id="sync-done",
+                kind="sync",
+                status="completed",
+                results={"math": {"ingested": 5}},
+            )
         )
 
         client = TestClient(build_app(ctx), raise_server_exceptions=False)
@@ -506,14 +511,15 @@ class TestAsyncSyncEndpoint:
 
     def test_get_failed_task_includes_error(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
-        ctx.tasks["sync-bad"] = TaskState(
-            task_id="sync-bad",
-            kind="sync",
-            status="failed",
-            error="disk full",
+        ctx = DaemonContext(settings)
+        _inject(ctx)
+        ctx.tasks.seed(
+            TaskState(
+                task_id="sync-bad",
+                kind="sync",
+                status="failed",
+                error="disk full",
+            )
         )
 
         client = TestClient(build_app(ctx), raise_server_exceptions=False)
@@ -525,12 +531,9 @@ class TestAsyncSyncEndpoint:
     def test_409_includes_existing_task_id(self, tmp_path: Path) -> None:
         """409 response includes the task_id of the running sync."""
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
-        ctx.tasks["sync-running"] = TaskState(
-            task_id="sync-running", kind="sync", status="running"
-        )
+        ctx = DaemonContext(settings)
+        _inject(ctx)
+        ctx.tasks.seed(TaskState(task_id="sync-running", kind="sync", status="running"))
 
         client = TestClient(build_app(ctx), raise_server_exceptions=False)
         resp = client.post("/sync", json={})
@@ -560,7 +563,7 @@ class TestAsyncIngestEndpoint:
         client = _make_client(tmp_path)
         with (
             patch(
-                "quarry.http_server.socket_module.getaddrinfo",
+                "quarry.daemon.url_safety.socket_module.getaddrinfo",
                 side_effect=_fake_public_addrinfo,
             ),
             patch(
@@ -582,12 +585,9 @@ class TestAsyncIngestEndpoint:
 
     def test_get_running_task(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
-        ctx.tasks["ingest-abc"] = TaskState(
-            task_id="ingest-abc", kind="ingest", status="running"
-        )
+        ctx = DaemonContext(settings)
+        _inject(ctx)
+        ctx.tasks.seed(TaskState(task_id="ingest-abc", kind="ingest", status="running"))
 
         client = TestClient(build_app(ctx), raise_server_exceptions=False)
         resp = client.get("/ingest/ingest-abc")
@@ -598,14 +598,15 @@ class TestAsyncIngestEndpoint:
 
     def test_get_completed_task_includes_results(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
-        ctx.tasks["ingest-done"] = TaskState(
-            task_id="ingest-done",
-            kind="ingest",
-            status="completed",
-            results={"document_name": "example.com", "chunks": 5},
+        ctx = DaemonContext(settings)
+        _inject(ctx)
+        ctx.tasks.seed(
+            TaskState(
+                task_id="ingest-done",
+                kind="ingest",
+                status="completed",
+                results={"document_name": "example.com", "chunks": 5},
+            )
         )
 
         client = TestClient(build_app(ctx), raise_server_exceptions=False)
@@ -617,14 +618,15 @@ class TestAsyncIngestEndpoint:
 
     def test_get_failed_task_includes_error(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
-        ctx = _QuarryContext(settings)
-        ctx.__dict__["db"] = _SHARED_DB
-        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
-        ctx.tasks["ingest-bad"] = TaskState(
-            task_id="ingest-bad",
-            kind="ingest",
-            status="failed",
-            error="connection timed out",
+        ctx = DaemonContext(settings)
+        _inject(ctx)
+        ctx.tasks.seed(
+            TaskState(
+                task_id="ingest-bad",
+                kind="ingest",
+                status="failed",
+                error="connection timed out",
+            )
         )
 
         client = TestClient(build_app(ctx), raise_server_exceptions=False)
@@ -638,7 +640,7 @@ class TestAsyncIngestEndpoint:
         client = _make_client(tmp_path)
         with (
             patch(
-                "quarry.http_server.socket_module.getaddrinfo",
+                "quarry.daemon.url_safety.socket_module.getaddrinfo",
                 side_effect=_fake_public_addrinfo,
             ),
             patch(

@@ -4159,7 +4159,7 @@ class TestServeTlsFlag:
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.TLS_DIR", tls_dir),
-            patch("quarry.http_server.serve") as mock_serve,
+            patch("quarry.daemon.server.serve") as mock_serve,
         ):
             runner.invoke(app, ["serve", "--tls"])
 
@@ -4185,7 +4185,7 @@ class TestServeTlsFlag:
     def test_no_tls_flag_passes_none_ssl_args(self) -> None:
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.http_server.serve") as mock_serve,
+            patch("quarry.daemon.server.serve") as mock_serve,
         ):
             runner.invoke(app, ["serve"])
 
