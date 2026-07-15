@@ -1,4 +1,4 @@
-"""SSRF guard for daemon-fetched ingest URLs (``POST /v1/ingest``)."""
+"""SSRF guard for daemon-fetched ingest URLs (``POST /ingest``)."""
 
 from __future__ import annotations
 

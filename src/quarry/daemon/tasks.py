@@ -2,7 +2,7 @@
 
 Every long-running REST operation (sync, ingest, remember, delete, register,
 deregister) runs as an asyncio task and reports progress through a ``TaskState``
-that the client polls via ``GET /v1/tasks/{task_id}``.  ``TaskRegistry`` owns
+that the client polls via ``GET /tasks/{task_id}``.  ``TaskRegistry`` owns
 the live and completed states plus their asyncio task handles, evicting
 completed states after a TTL so a long-lived daemon does not leak them.
 """

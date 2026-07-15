@@ -8,19 +8,15 @@ from pydantic import BaseModel
 class HealthResponse(BaseModel):
     """The ``GET /health`` snapshot (unversioned; auth-exempt).
 
-    ``state`` is ``ready`` once the engine is warm; ``api_version`` lets a
-    client detect a major wire-protocol mismatch before issuing requests.
+    Mirrors the daemon's live ``/health`` body — liveness plus process uptime.
     """
 
     status: str
     uptime_seconds: float
-    state: str
-    api_version: str
-    quarry_version: str
 
 
 class StatusResponse(BaseModel):
-    """The ``GET /v1/status`` aggregate over the daemon's single database."""
+    """The ``GET /status`` aggregate over the daemon's single database."""
 
     document_count: int
     collection_count: int
