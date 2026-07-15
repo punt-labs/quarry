@@ -43,7 +43,7 @@ class TestCapturesPushRoute:
             "quarry.shadow.CaptureSync.push_registered", return_value=results
         ) as push:
             resp = client.post(
-                "/captures/push", headers={"content-length": "2"}, json={}
+                "/v1/captures/push", headers={"content-length": "2"}, json={}
             )
 
         assert resp.status_code == 200
@@ -63,14 +63,14 @@ class TestCapturesPushRoute:
     def test_empty_registrations_returns_empty(self, client: TestClient) -> None:
         with patch("quarry.shadow.CaptureSync.push_registered", return_value={}):
             resp = client.post(
-                "/captures/push", headers={"content-length": "2"}, json={}
+                "/v1/captures/push", headers={"content-length": "2"}, json={}
             )
         assert resp.status_code == 200
         assert resp.json() == {"results": {}}
 
     def test_body_size_limit_enforced(self, client: TestClient) -> None:
         resp = client.post(
-            "/captures/push",
+            "/v1/captures/push",
             headers={"content-length": str(64 * 1024)},
             content=b"x" * (64 * 1024),
         )

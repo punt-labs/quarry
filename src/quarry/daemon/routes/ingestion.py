@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, final
 
 from starlette.concurrency import run_in_threadpool
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from quarry.daemon.routes.base import RouteGroup
@@ -19,8 +20,6 @@ from quarry.daemon.url_safety import UrlSafetyCheck
 from quarry.http_guards import RequestGuards
 
 if TYPE_CHECKING:
-    from starlette.requests import Request
-
     from quarry.daemon.context import DaemonContext
 
 # Maximum request body sizes.  /remember accepts content, /ingest only a URL.

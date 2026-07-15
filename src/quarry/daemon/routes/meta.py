@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, final
+from importlib.metadata import version
+from typing import final
 
+from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse, Response
 
+from quarry.api import API_VERSION
 from quarry.daemon.routes.base import RouteGroup
 from quarry.db.storage import dir_size_bytes
 from quarry.ingestion.provider import ProviderSelection
 from quarry.sync_registry import SyncRegistry
 
-if TYPE_CHECKING:
-    from starlette.requests import Request
+# The running package version, read once at import for the /health snapshot.
+_QUARRY_VERSION = version("punt-quarry")
 
 
 @final
@@ -20,10 +23,14 @@ class MetaRoutes(RouteGroup):
     """Liveness (``/health``), aggregate ``/status``, and ``/ca.crt`` bootstrap."""
 
     def health(self, _request: Request) -> JSONResponse:
+        """Return liveness plus warm ``state`` and version negotiation fields."""
         return JSONResponse(
             {
                 "status": "ok",
                 "uptime_seconds": round(self.ctx.uptime_seconds, 1),
+                "state": self.ctx.state,
+                "api_version": API_VERSION,
+                "quarry_version": _QUARRY_VERSION,
             }
         )
 

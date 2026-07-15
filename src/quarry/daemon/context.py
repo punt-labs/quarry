@@ -31,6 +31,7 @@ class DaemonContext:
     _cors_origins: frozenset[str]
     _start_time: float
     _tasks: TaskRegistry
+    _ready: bool
 
     def __new__(
         cls,
@@ -45,6 +46,7 @@ class DaemonContext:
         self._cors_origins = cors_origins or DEFAULT_CORS_ORIGINS
         self._start_time = time.monotonic()
         self._tasks = TaskRegistry()
+        self._ready = False
         return self
 
     @property
@@ -65,6 +67,16 @@ class DaemonContext:
         return time.monotonic() - self._start_time
 
     @property
+    def state(self) -> str:
+        """Return ``"ready"`` once resources are warmed, else ``"starting"``.
+
+        The daemon warms single-threaded before it accepts traffic, so a
+        ``/health`` reporting ``"starting"`` means a request raced ahead of
+        ``warm()`` — the state a client polls on before probing readiness.
+        """
+        return "ready" if self._ready else "starting"
+
+    @property
     def database(self) -> Database:
         return self._resources.database
 
@@ -83,3 +95,4 @@ class DaemonContext:
     def warm(self) -> None:
         """Build cached resources single-threaded before serving (DES-032)."""
         self._resources.warm()
+        self._ready = True

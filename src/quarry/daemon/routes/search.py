@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, final
 
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from quarry.daemon.routes.base import RouteGroup
@@ -13,7 +14,6 @@ from quarry.retrieval import SearchService
 
 if TYPE_CHECKING:
     from starlette.datastructures import QueryParams
-    from starlette.requests import Request
 
 logger = logging.getLogger(__name__)
 

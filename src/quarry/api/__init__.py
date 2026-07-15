@@ -1,11 +1,10 @@
 """Quarry's daemon wire contract — Pydantic request/response/error models.
 
-One request/response model per daemon REST operation — most served today, a few
-(``OptimizeRequest``, ``BackfillRequest``) modelling endpoints defined ahead of
-being routed. This package is the single source of truth for the wire shape: the
-daemon imports it to type and validate its handlers, and ``QuarryClient`` will
-import the same models to build requests and parse responses, so a field added on
-one side but missing on the other becomes an import-time type error.
+One request/response model per daemon REST operation, each routed under ``/v1``.
+This package is the single source of truth for the wire shape: the daemon imports
+it to document its handlers, and ``QuarryClient`` will import the same models to
+build requests and parse responses, so a field added on one side but missing on
+the other becomes an import-time type error.
 
 The package has **zero engine imports** — it is importable with only pydantic
 present, so a pure client never pulls in lancedb/onnxruntime.
@@ -35,8 +34,8 @@ from quarry.api.search import SearchHit, SearchRequest, SearchResponse
 from quarry.api.show import ShowPageResponse, ShowRequest
 from quarry.api.tasks import TaskAccepted, TaskStatus
 
-# The wire-protocol major version — reserved for a future versioned URL space
-# (``/v1/…``) and ``/health`` field; not yet on the wire, today's routes are bare.
+# The wire-protocol major version: the ``/v1`` URL prefix on every engine route
+# and the ``api_version`` field a client negotiates against in ``/health``.
 API_VERSION = "1"
 
 __all__ = [

@@ -1,4 +1,4 @@
-.PHONY: help test lint lint-docs type check check-full check-oo audit-oo update-oo check-coupling update-coupling check-suppressions update-suppressions report format install build test-wheel clean depot bench-cuda docs docs-clean metrics coverage eval eval-baseline
+.PHONY: help test lint lint-docs type check check-full check-oo audit-oo update-oo check-coupling update-coupling check-suppressions update-suppressions check-openapi openapi report format install build test-wheel clean depot bench-cuda docs docs-clean metrics coverage eval eval-baseline
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -32,7 +32,13 @@ OO_BASE ?=
 COUPLING_BASE ?=
 SUPPRESSION_BASE ?=
 
-check: lint type test check-oo check-coupling check-suppressions ## Run all quality gates
+check: lint type test check-oo check-coupling check-suppressions check-openapi ## Run all quality gates
+
+openapi: ## Regenerate docs/openapi.json from the daemon FastAPI app
+	uv run python tools/generate_openapi.py
+
+check-openapi: ## Fail if docs/openapi.json is stale vs the daemon app
+	uv run python tools/generate_openapi.py --check
 
 check-oo: ## OO ratchet — touched files must not regress vs the merge-base baseline
 	uv run python tools/oo_score.py src/quarry/ --check $(OO_BASE)

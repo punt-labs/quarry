@@ -12,18 +12,16 @@ import logging
 import os
 import pwd
 from pathlib import Path
-from typing import TYPE_CHECKING, final
+from typing import final
 
 from starlette.concurrency import run_in_threadpool
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from quarry.daemon.routes.base import RouteGroup
 from quarry.daemon.tasks import TaskState, task_terminal
 from quarry.http_guards import RequestGuards
 from quarry.sync_registry import DirectoryRegistration, SyncRegistry
-
-if TYPE_CHECKING:
-    from starlette.requests import Request
 
 logger = logging.getLogger(__name__)
 

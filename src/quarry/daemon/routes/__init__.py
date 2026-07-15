@@ -7,6 +7,7 @@ from quarry.daemon.routes.collections import CollectionRoutes
 from quarry.daemon.routes.databases import DatabaseRoutes
 from quarry.daemon.routes.documents import DocumentRoutes
 from quarry.daemon.routes.ingestion import IngestionRoutes
+from quarry.daemon.routes.maintenance import MaintenanceRoutes
 from quarry.daemon.routes.meta import MetaRoutes
 from quarry.daemon.routes.registrations import RegistrationRoutes
 from quarry.daemon.routes.search import SearchRoutes
@@ -20,6 +21,7 @@ __all__ = [
     "DatabaseRoutes",
     "DocumentRoutes",
     "IngestionRoutes",
+    "MaintenanceRoutes",
     "MetaRoutes",
     "RegistrationRoutes",
     "SearchRoutes",

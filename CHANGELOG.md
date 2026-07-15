@@ -14,7 +14,36 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Added
+
+- **tool (daemon REST)**: two maintenance endpoints — `POST /v1/optimize`
+  (compact the LanceDB table and rebuild indexes; `force` bypasses the
+  fragment-count safety guard) and `POST /v1/backfill-sessions` (ingest
+  historical session transcripts; `dry_run`/`collection`/`project`/`limit`) —
+  each accepted as a `202` background task pollable at `/v1/tasks/{id}`. They
+  are the daemon counterparts of the `quarry optimize` and `quarry
+  backfill-sessions` CLI commands, returning the same result fields.
+- **infra (build)**: `make openapi` renders the daemon's OpenAPI contract to
+  `docs/openapi.json` from the live FastAPI app; `make check-openapi` (wired
+  into `make check`) fails if the committed schema drifts from the app, keeping
+  the published wire contract honest.
+
 ### Changed
+
+- **tool (daemon REST)**: the `quarry serve` daemon's REST API is now a FastAPI
+  app, and every engine route moved under a `/v1` version prefix (`/v1/search`,
+  `/v1/status`, `/v1/tasks/{id}`, …). `/health` and `/ca.crt` stay unversioned
+  so a client can probe liveness and bootstrap trust before it knows the wire
+  version. The handlers still parse the wire by hand, so every clamp, coercion,
+  and error shape is byte-identical to the prior Starlette handlers (search
+  `limit` clamped to `[1,50]`, `page>=1`, the body-size guards, the always-`400`
+  `/use`, the sync `409` conflict body); FastAPI supplies only the published
+  OpenAPI schema, the typed `response_model` docs, and the uniform
+  `{"error": …}` envelope for `422`/`HTTPException`/`500`. The CLI's remote path
+  (`RemoteClient` and the `quarry login` connectivity probe) version-prefixes
+  every engine route from the single `API_VERSION` source, so remote CLI parity
+  is preserved. `/health` now also reports `state` (`starting`|`ready`),
+  `api_version`, and `quarry_version`.
 
 - **infra (dependencies)**: bumped runtime and tooling dependencies to their
   current releases — runtime: `mcp` 1.26.0→1.28.1, `uvicorn` 0.40.0→0.51.0,
@@ -30,6 +59,9 @@ across `transform`, `index`, and `connector`).
 
 ### Removed
 
+- **tool (daemon REST)**: removed the `/sync/{task_id}` and `/ingest/{task_id}`
+  task-status alias routes; poll every background task through the canonical
+  `/v1/tasks/{task_id}` instead (the CLI already did).
 - **tool (MCP transport)**: removed the daemon-side MCP WebSocket route
   (`/mcp`) and its `run_mcp_session` handler. The daemon now serves the REST
   API only. This is the first step of the DES-031 v2.2 MCP-as-client direction

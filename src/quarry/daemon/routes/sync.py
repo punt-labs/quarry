@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, final
+from typing import final
 
 from starlette.concurrency import run_in_threadpool
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from quarry.daemon.routes.base import RouteGroup
 from quarry.daemon.tasks import TaskState, task_terminal
 from quarry.http_guards import RequestGuards
-
-if TYPE_CHECKING:
-    from starlette.requests import Request
 
 # The /sync body carries only small option dicts.
 MAX_SYNC_BODY_BYTES = 16 * 1024

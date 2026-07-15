@@ -1,4 +1,4 @@
-"""Request contracts for the optimize and backfill operations (not yet routed)."""
+"""Request contracts for the optimize and backfill maintenance operations."""
 
 from __future__ import annotations
 
@@ -6,20 +6,18 @@ from pydantic import BaseModel
 
 
 class OptimizeRequest(BaseModel):
-    """Body for the planned ``POST /optimize`` — not on the current wire.
+    """Body for ``POST /v1/optimize`` — compact the table and rebuild indexes.
 
-    Compacts the table and rebuilds indexes. ``force`` bypasses the
-    fragment-count safety guard (manual recovery).
+    ``force`` bypasses the fragment-count safety guard (manual recovery).
     """
 
     force: bool = False
 
 
 class BackfillRequest(BaseModel):
-    """Body for the planned ``POST /backfill-sessions`` — not on the current wire.
+    """Body for ``POST /v1/backfill-sessions`` — ingest historical transcripts.
 
-    Ingests historical transcripts. ``limit == 0`` means no limit;
-    ``collection``/``project`` narrow the scan.
+    ``limit == 0`` means no limit; ``collection``/``project`` narrow the scan.
     """
 
     dry_run: bool = False

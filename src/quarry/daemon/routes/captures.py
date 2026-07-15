@@ -5,14 +5,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, final
 
 from starlette.concurrency import run_in_threadpool
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from quarry.daemon.routes.base import RouteGroup
 from quarry.http_guards import RequestGuards
 
 if TYPE_CHECKING:
-    from starlette.requests import Request
-
     from quarry.config import Settings
 
 # The push request carries no body of note; cap it like the other option posts.

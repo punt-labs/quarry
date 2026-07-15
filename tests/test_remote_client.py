@@ -88,7 +88,8 @@ class TestRequestWrapper:
         assert result == {"ok": True}
         call = conn.request.call_args
         assert call[0][0] == "POST"
-        assert call[0][1] == "/remember"
+        # The client version-prefixes every engine route on the wire.
+        assert call[0][1] == "/v1/remember"
         assert json.loads(call[1]["body"]) == {"text": "hello"}
         assert call[1]["headers"]["Content-Type"] == "application/json"
 
@@ -284,3 +285,29 @@ class TestFind:
             )
         assert json_results == []
         assert text == ""
+
+
+class TestVersionPrefix:
+    """Every engine route the client sends is /v1-prefixed on the wire.
+
+    Locks the client half of the bug-class-3 contract: the daemon serves engine
+    routes only under /v1, so a client that dropped the prefix would 404.
+    """
+
+    @pytest.mark.parametrize(
+        ("method", "logical", "wire"),
+        [
+            ("GET", "/search?q=x", "/v1/search?q=x"),
+            ("GET", "/status", "/v1/status"),
+            ("GET", "/tasks/abc", "/v1/tasks/abc"),
+            ("POST", "/remember", "/v1/remember"),
+            ("DELETE", "/documents?name=foo", "/v1/documents?name=foo"),
+        ],
+    )
+    def test_request_version_prefixes_path(
+        self, method: str, logical: str, wire: str
+    ) -> None:
+        conn = _mock_connection(200, b"{}")
+        with patch("http.client.HTTPConnection", return_value=conn):
+            RemoteClient(_WS_CONFIG).request(method, logical)
+        assert conn.request.call_args[0][1] == wire

@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, final
+from typing import final
 
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from quarry.daemon.routes.base import RouteGroup
 from quarry.db.storage import dir_size_bytes, format_size
-
-if TYPE_CHECKING:
-    from starlette.requests import Request
 
 
 @final

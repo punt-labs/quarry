@@ -1,30 +1,26 @@
-"""The daemon ASGI app factory: wire the route groups onto a Starlette app."""
+"""The daemon ASGI app factory: wire the route table onto a FastAPI app.
+
+Engine routes live under the ``/v1`` prefix; ``/health`` and ``/ca.crt`` stay
+unversioned so a client can probe liveness and bootstrap trust before it knows
+the wire version.  Each route carries its ``api`` response model (and, for POST
+bodies, the request schema) purely for the published OpenAPI document — the
+handlers keep parsing the wire by hand so every clamp, coercion, and error shape
+stays byte-for-byte what the Starlette handlers returned (bug-class-3).
+"""
 
 from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING, Self, final
 
-from starlette.applications import Starlette
+from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException
-from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
-from starlette.routing import Route
 
-from quarry.daemon.routes import (
-    CaptureRoutes,
-    CollectionRoutes,
-    DatabaseRoutes,
-    DocumentRoutes,
-    IngestionRoutes,
-    MetaRoutes,
-    RegistrationRoutes,
-    SearchRoutes,
-    ShowRoutes,
-    SyncRoutes,
-    TaskStatusRoutes,
-)
+from quarry.api import API_VERSION
+from quarry.daemon.route_table import RouteTable
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -36,12 +32,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-type Lifespan = Callable[[Starlette], AbstractAsyncContextManager[None]]
+# The version prefix every engine route carries; /health and /ca.crt are exempt.
+_API_PREFIX = "/v1"
+
+type Lifespan = Callable[[FastAPI], AbstractAsyncContextManager[None]]
 
 
 @final
 class AppBuilder:
-    """Assemble the daemon's Starlette application around one context."""
+    """Assemble the daemon's FastAPI application around one context."""
 
     _ctx: DaemonContext
 
@@ -50,78 +49,68 @@ class AppBuilder:
         self._ctx = ctx
         return self
 
-    def build(self, *, lifespan: Lifespan | None = None) -> Starlette:
-        """Return the ASGI app; wrap with ``TestClient`` to exercise routes."""
-        app = Starlette(
-            routes=self._routes(),
-            middleware=self._middleware(),
+    def build(self, *, lifespan: Lifespan | None = None) -> FastAPI:
+        """Return the ASGI app; wrap with ``TestClient`` to exercise routes.
+
+        The interactive docs and ``/openapi.json`` HTTP routes are disabled so
+        the served surface is exactly the daemon's own routes; ``app.openapi()``
+        still renders the schema in-process for ``make openapi``.
+        """
+        app = FastAPI(
+            title="Quarry daemon",
+            version=API_VERSION,
             lifespan=lifespan,
-            exception_handlers={
-                HTTPException: self._http_error,  # type: ignore[dict-item]
-                Exception: self._server_error,
-            },
+            docs_url=None,
+            redoc_url=None,
+            openapi_url=None,
         )
+        self._add_middleware(app)
+        self._register_routes(app)
+        app.add_exception_handler(RequestValidationError, self._validation_error)
+        app.add_exception_handler(HTTPException, self._http_error)
+        app.add_exception_handler(Exception, self._server_error)
         app.state.ctx = self._ctx
         return app
 
-    def _routes(self) -> list[Route]:
-        ctx = self._ctx
-        meta = MetaRoutes(ctx)
-        docs = DocumentRoutes(ctx)
-        cols = CollectionRoutes(ctx)
-        ingestion = IngestionRoutes(ctx)
-        tasks = TaskStatusRoutes(ctx)
-        db = DatabaseRoutes(ctx)
-        return [
-            Route("/health", meta.health, methods=["GET"]),
-            Route("/ca.crt", meta.ca_cert, methods=["GET"]),
-            Route("/search", SearchRoutes(ctx).search, methods=["GET"]),
-            Route("/show", ShowRoutes(ctx).show, methods=["GET"]),
-            Route("/documents", docs.documents, methods=["GET"]),
-            Route("/documents", docs.delete, methods=["DELETE"]),
-            Route("/collections", cols.collections, methods=["GET"]),
-            Route("/collections", cols.delete, methods=["DELETE"]),
-            Route("/remember", ingestion.remember, methods=["POST"]),
-            Route("/ingest", ingestion.ingest, methods=["POST"]),
-            Route("/sync", SyncRoutes(ctx).sync, methods=["POST"]),
-            Route("/captures/push", CaptureRoutes(ctx).push, methods=["POST"]),
-            # Unified task status endpoint with backwards-compatible aliases.
-            Route("/tasks/{task_id}", tasks.status, methods=["GET"]),
-            Route("/sync/{task_id}", tasks.status, methods=["GET"]),
-            Route("/ingest/{task_id}", tasks.status, methods=["GET"]),
-            Route("/databases", db.databases, methods=["GET"]),
-            Route("/use", db.use, methods=["POST"]),
-            Route(
-                "/registrations",
-                RegistrationRoutes(ctx).registrations,
-                methods=["GET", "POST", "DELETE"],
-            ),
-            Route("/status", meta.status, methods=["GET"]),
-        ]
-
-    def _middleware(self) -> list[Middleware]:
-        return [
-            Middleware(
-                CORSMiddleware,
-                allow_origins=list(self._ctx.cors_origins),
-                allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-                allow_headers=["Authorization", "Content-Type"],
-            ),
-        ]
-
-    @staticmethod
-    async def _http_error(request: Request, exc: HTTPException) -> JSONResponse:  # noqa: ARG004
-        return JSONResponse(
-            {"error": exc.detail or "Error"},
-            status_code=exc.status_code,
+    def _add_middleware(self, app: FastAPI) -> None:
+        """Attach the CORS middleware for the context's allowed origins."""
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(self._ctx.cors_origins),
+            allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+            allow_headers=["Authorization", "Content-Type"],
         )
 
+    def _register_routes(self, app: FastAPI) -> None:
+        """Register every route table entry, versioning engine routes with /v1."""
+        for spec in RouteTable(self._ctx).specs():
+            app.add_api_route(
+                spec.full_path(_API_PREFIX),
+                spec.endpoint,
+                methods=list(spec.methods),
+                response_model=spec.response_model,
+                response_model_exclude_none=spec.exclude_none,
+                status_code=spec.status_code,
+                openapi_extra=spec.openapi_extra(),
+            )
+
     @staticmethod
-    async def _server_error(request: Request, exc: Exception) -> JSONResponse:  # noqa: ARG004
+    async def _validation_error(_request: Request, _exc: Exception) -> JSONResponse:
+        """Render FastAPI's 422 body validation into the ``{"error": ...}`` shape."""
+        return JSONResponse({"error": "Invalid request body"}, status_code=422)
+
+    @staticmethod
+    async def _http_error(_request: Request, exc: Exception) -> JSONResponse:
+        detail = exc.detail if isinstance(exc, HTTPException) else "Error"
+        status = exc.status_code if isinstance(exc, HTTPException) else 500
+        return JSONResponse({"error": detail or "Error"}, status_code=status)
+
+    @staticmethod
+    async def _server_error(request: Request, _exc: Exception) -> JSONResponse:
         logger.exception("Unhandled error on %s", request.url.path)
         return JSONResponse({"error": "Internal server error"}, status_code=500)
 
 
-def build_app(ctx: DaemonContext, *, lifespan: Lifespan | None = None) -> Starlette:
+def build_app(ctx: DaemonContext, *, lifespan: Lifespan | None = None) -> FastAPI:
     """Build the daemon ASGI application for *ctx* (thin ``AppBuilder`` entry)."""
     return AppBuilder(ctx).build(lifespan=lifespan)
