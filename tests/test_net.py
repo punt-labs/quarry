@@ -95,7 +95,26 @@ class TestCanonicalHost:
         "host", ["127.0.0.1", "::1", "gpu.example.com", "10.0.0.5"]
     )
     def test_literal_or_remote_host_unchanged(self, host: str) -> None:
+        # Already-normalized hosts pass through unchanged.
         assert LoopbackPolicy(host).canonical_host == host
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            (" 127.0.0.1 ", "127.0.0.1"),  # a literal loopback, whitespace stripped
+            (" gpu.example.com ", "gpu.example.com"),  # remote host, stripped
+            ("GPU.example.com", "gpu.example.com"),  # RFC 4343 case-insensitivity
+            ("gpu.example.com.", "gpu.example.com"),  # FQDN root label removed
+            (" 10.0.0.5 ", "10.0.0.5"),  # remote IP, stripped
+        ],
+    )
+    def test_non_loopback_host_returned_normalized_not_raw(
+        self, raw: str, expected: str
+    ) -> None:
+        # Returning the raw host would let ``login " 127.0.0.1 "`` store an
+        # invalid ``wss:// 127.0.0.1 :port`` URL — surrounding whitespace is
+        # insignificant everywhere else, so canonical_host must strip it too.
+        assert LoopbackPolicy(raw).canonical_host == expected
 
 
 class TestEnforceBindKey:

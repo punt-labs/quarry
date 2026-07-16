@@ -111,9 +111,15 @@ class TestLoopbackServeToken:
         assert config["headers"] == {"Authorization": "Bearer live-loopback-token"}
         assert config["ca_cert"] == "/ca.crt"
 
-    def test_find_does_not_inject_token_for_name_url(self, tmp_path: Path) -> None:
-        # A stale `localhost` NAME config (pre-canonicalization) must NOT present
-        # the live serve.token: a resolver could point the name at a co-tenant.
+    def test_find_migrates_stale_localhost_config_to_literal(
+        self, tmp_path: Path
+    ) -> None:
+        # HIGH regression: a config stored before the literal-IP flip holds the
+        # NAME ``localhost``.  On READ, ``find`` must auto-migrate it to the
+        # 127.0.0.1 literal — presenting the live serve.token (no re-login, no
+        # lockout) AND connecting to the un-hijackable literal.  The exfiltration
+        # stays closed: the target is 127.0.0.1, never the name a resolver could
+        # point at a co-tenant's ::1.
         (tmp_path / "serve.token").write_text("live-loopback-token")
         fake_settings = MagicMock()
         fake_settings.lancedb_path = tmp_path / "lancedb"
@@ -138,7 +144,11 @@ class TestLoopbackServeToken:
         assert result.exit_code == 0
         config = captured["config"]
         assert isinstance(config, dict)
-        assert "headers" not in config  # no Authorization for a NAME target
+        # Live token presented — the lockout is closed.
+        assert config["headers"] == {"Authorization": "Bearer live-loopback-token"}
+        # Target is the literal, never the raw name — exfiltration stays closed.
+        assert config["url"] == "wss://127.0.0.1:8420/mcp"
+        assert "localhost" not in str(config["url"])
 
     def test_find_fails_closed_when_serve_token_missing(self, tmp_path: Path) -> None:
         fake_settings = MagicMock()
@@ -5402,3 +5412,35 @@ class TestRemoteListPing:
         # stored bearer.
         assert mock_ping.call_args.args[1] is None
         assert "STALE-STORED-TOKEN" not in str(mock_ping.call_args)
+
+    def test_stored_localhost_ping_connects_to_literal_with_live_token(
+        self, tmp_path: Path
+    ) -> None:
+        # HIGH regression: a config stored before the literal-IP flip holds the
+        # NAME ``localhost``.  On --ping the live serve.token must be presented
+        # ONLY over a connection to the migrated literal 127.0.0.1 — never the
+        # raw name a resolver could redirect to a co-tenant's ::1.
+        (tmp_path / "serve.token").write_text("live-ping-token")
+        fake_settings = MagicMock()
+        fake_settings.lancedb_path = tmp_path / "lancedb"  # parent == tmp_path
+        proxy = {"quarry": {"url": "wss://localhost:8420/mcp", "ca_cert": "/ca.crt"}}
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy),
+            patch(
+                "quarry.__main__.validate_connection_from_ws_url",
+                return_value=(True, ""),
+            ) as mock_ping,
+            patch("quarry.client.config.Settings") as mock_settings,
+        ):
+            resolver = mock_settings.load.return_value.resolve_db_paths
+            resolver.return_value = fake_settings
+            mock_settings.read_default_db.return_value = None
+            mock_settings.active_db.return_value = None
+            result = runner.invoke(app, ["remote", "list", "--ping"])
+        _reset_globals()
+        assert result.exit_code == 0, result.output
+        # Connected to the migrated literal URL, not the ambiguous name.
+        assert mock_ping.call_args.args[0] == "wss://127.0.0.1:8420/mcp"
+        assert "localhost" not in str(mock_ping.call_args)
+        # The live serve.token is the probe token (auto-migration, no re-login).
+        assert mock_ping.call_args.args[1] == "live-ping-token"

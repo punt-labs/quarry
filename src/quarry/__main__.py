@@ -1415,17 +1415,22 @@ def remote_list_cmd(
         if url.startswith("wss://") and not ca_cert:
             ok, reason = False, "wss:// configured but no CA certificate pinned"
         else:
+            # Migrate a stored loopback NAME to the literal FIRST, then gate,
+            # token, and CONNECT all on the migrated URL.  A live serve.token is
+            # presented only over a connection to the un-hijackable 127.0.0.1 —
+            # never the raw name a resolver could redirect to a co-tenant's ::1.
             # A loopback target authenticates with the LIVE serve.token only
-            # (never a stored bearer): a missing token means the daemon is
-            # down, so probe tokenless and let it report unreachable rather
-            # than mask the failure with a stale stored token.  Only a remote
-            # target uses its stored bearer.
-            if ClientConfig.is_loopback_url(url):
-                probe_token = ClientConfig.loopback_token_for_url(url)
+            # (never a stored bearer): a missing token means the daemon is down,
+            # so probe tokenless and let it report unreachable rather than mask
+            # the failure with a stale stored token.  A remote URL is unchanged
+            # and uses its stored bearer.
+            probe_url = ClientConfig.canonical_url(url)
+            if ClientConfig.is_loopback_url(probe_url):
+                probe_token = ClientConfig.loopback_token_for_url(probe_url)
             else:
                 probe_token = token
             ok, reason = validate_connection_from_ws_url(
-                url,
+                probe_url,
                 probe_token,
                 ca_cert_path=str(ca_cert) if ca_cert is not None else None,
             )

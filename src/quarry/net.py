@@ -90,18 +90,22 @@ class LoopbackPolicy:
 
     @property
     def canonical_host(self) -> str:
-        """The IPv4 loopback literal for a loopback NAME, else the host unchanged.
+        """The IPv4 loopback literal for a loopback NAME, else the host normalized.
 
         The managed daemon binds ``127.0.0.1``; storing the ambiguous name
         ``localhost`` lets a dual-stack resolver send the client (and its live
         serve.token) to a co-tenant's ``::1``.  Canonicalizing the name to the
-        literal at write time pins the client to the address the daemon holds —
-        a deliberate policy mapping, NOT an OS-resolver lookup.  A literal IP or
-        a non-loopback host is returned unchanged.
+        literal pins the client to the address the daemon holds — a deliberate
+        policy mapping, NOT an OS-resolver lookup.  A literal IP or a
+        non-loopback host is returned NORMALIZED (via :attr:`_normalized`:
+        stripped, lowercased, de-trailing-dotted), never the raw host: returning
+        the raw host would let ``login " 127.0.0.1 "`` store an invalid
+        ``wss:// 127.0.0.1 :port`` URL, since ``_normalized`` treats surrounding
+        whitespace as insignificant everywhere else.
         """
         if self._normalized in _LOOPBACK_NAMES:
             return "127.0.0.1"
-        return self._host
+        return self._normalized
 
     def enforce_bind_key(self, api_key: str | None) -> None:
         """Refuse a non-loopback bind that has no explicit key.

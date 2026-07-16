@@ -77,16 +77,43 @@ class TestFromLoginLoopback:
         ):
             ClientConfig.from_login({"url": "wss://127.0.0.1:8420/mcp"})
 
-    def test_name_url_does_not_present_token(self, tmp_path: Path) -> None:
-        # HIGH: a `localhost` NAME must NOT trigger live-token presentation — a
-        # resolver could point it at a co-tenant's ::1, leaking the secret. The
-        # name resolves via the stored-bearer path (absent here) → token None,
-        # and serve.token is never read (no fail-closed raise either).
+    def test_stored_localhost_auto_migrates_to_literal(self, tmp_path: Path) -> None:
+        # HIGH regression: a config stored before the literal-IP flip holds the
+        # NAME ``localhost``.  On READ it must auto-migrate to 127.0.0.1 so the
+        # operator is not locked out — the live serve.token resolves AND the
+        # RemoteClient target is the literal, never the ambiguous name.
         (tmp_path / "serve.token").write_text("live-token")
         with _run_dir_at(tmp_path):
             cfg = ClientConfig.from_login({"url": "wss://localhost:8420/mcp"})
-        assert cfg.token is None
-        assert cfg.is_loopback is False  # a name is not a literal-loopback target
+        resolved = cfg.token
+        assert resolved == "live-token"  # (a) live token, no re-login
+        assert cfg.url == "wss://127.0.0.1:8420/mcp"  # (a) target is the literal
+        assert cfg.remote_mapping()["url"] == "wss://127.0.0.1:8420/mcp"
+        assert cfg.is_loopback is True
+
+    def test_stored_localhost_never_connects_to_raw_name(self, tmp_path: Path) -> None:
+        # (b) The exfiltration stays closed: the resolved target must be the
+        # literal 127.0.0.1, never a raw "localhost" a resolver could redirect
+        # to a co-tenant's ::1.  Assert the name appears nowhere in the target.
+        (tmp_path / "serve.token").write_text("live-token")
+        with _run_dir_at(tmp_path):
+            cfg = ClientConfig.from_login({"url": "wss://localhost:8420/mcp"})
+        assert "localhost" not in cfg.url
+        assert "localhost" not in str(cfg.remote_mapping()["url"])
+
+    def test_stored_localhost_ignores_stale_stored_bearer(self, tmp_path: Path) -> None:
+        # A migrated localhost target reads the LIVE serve.token, never the
+        # stale stored bearer (which rotates each daemon restart).
+        (tmp_path / "serve.token").write_text("live-token")
+        with _run_dir_at(tmp_path):
+            cfg = ClientConfig.from_login(
+                {
+                    "url": "wss://localhost:8420/mcp",
+                    "headers": {"Authorization": "Bearer stale-stored"},
+                }
+            )
+        resolved = cfg.token
+        assert resolved == "live-token"
 
     def test_loopback_empty_token_fails_closed(self, tmp_path: Path) -> None:
         # A present-but-empty/corrupt token is not a credential: fail closed
@@ -266,3 +293,64 @@ class TestActiveDbRunDir:
 
         resolved = cfg.token
         assert resolved == "default-db-token"
+
+
+class TestCanonicalUrl:
+    """READ-path migration: a stored loopback NAME URL rewrites to the literal."""
+
+    @pytest.mark.parametrize(
+        ("stored", "expected"),
+        [
+            ("wss://localhost:8420/mcp", "wss://127.0.0.1:8420/mcp"),
+            ("wss://LOCALHOST:8420/mcp", "wss://127.0.0.1:8420/mcp"),
+            ("wss://localhost.:8420/mcp", "wss://127.0.0.1:8420/mcp"),
+            ("ws://localhost:8420", "ws://127.0.0.1:8420"),
+            ("wss://localhost/mcp", "wss://127.0.0.1/mcp"),  # no port
+        ],
+    )
+    def test_loopback_name_migrates_to_literal(
+        self, stored: str, expected: str
+    ) -> None:
+        assert ClientConfig.canonical_url(stored) == expected
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "wss://127.0.0.1:8420/mcp",  # already the literal
+            "wss://[::1]:8420/mcp",  # already a literal loopback
+            "wss://quarry.example.com:8420/mcp",  # (c) remote unaffected
+            "wss://10.0.0.5:8420/mcp",  # remote IP unaffected
+        ],
+    )
+    def test_literal_or_remote_url_unchanged(self, url: str) -> None:
+        # (c) A genuine remote URL — and an already-literal loopback URL — is
+        # returned byte-for-byte: no host rewrite, so the operator's exact
+        # target and its stored bearer both stand.
+        assert ClientConfig.canonical_url(url) == url
+
+    def test_migrated_url_is_a_literal_loopback_target(self) -> None:
+        # The migrated URL classifies as a live-token target, and the raw name
+        # URL does too (because is_loopback_url migrates first) — but the token
+        # is only ever presented over canonical_url, which is the literal.
+        assert ClientConfig.is_loopback_url("wss://localhost:8420/mcp") is True
+        migrated = ClientConfig.canonical_url("wss://localhost:8420/mcp")
+        assert ClientConfig.is_loopback_url(migrated) is True
+        assert "localhost" not in migrated
+
+
+class TestFromLoginRemoteUnaffected:
+    def test_remote_url_not_canonicalized(self, tmp_path: Path) -> None:
+        # (c) A remote login is unaffected by read-path migration: its URL is
+        # unchanged and its stored bearer stands (no serve.token read).
+        (tmp_path / "serve.token").write_text("local-token")
+        with _run_dir_at(tmp_path):
+            cfg = ClientConfig.from_login(
+                {
+                    "url": "wss://gpu.example.com:8420/mcp",
+                    "headers": {"Authorization": "Bearer remote-key"},
+                }
+            )
+        assert cfg.url == "wss://gpu.example.com:8420/mcp"
+        resolved = cfg.token
+        assert resolved == "remote-key"
+        assert cfg.is_loopback is False

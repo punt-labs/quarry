@@ -9,9 +9,13 @@ config (which would go stale the moment the supervisor respawns the daemon).
 Presentation is gated on a LITERAL loopback IP, never a name: the client hands
 the live serve.token only to a literal loopback address (127.0.0.0/8, ::1), so a
 resolver cannot redirect the secret to a co-tenant's ``::1`` behind an ambiguous
-``localhost``.  The managed path canonicalizes ``localhost`` to ``127.0.0.1`` at
-login time (:meth:`canonical_host`) so it targets the exact literal the daemon
-binds.
+``localhost``.  ``login`` canonicalizes ``localhost`` to ``127.0.0.1`` at WRITE
+time (:meth:`canonical_host`); the READ path (:meth:`canonical_url`) repeats the
+same migration so a config stored *before* the literal-IP flip — every prior
+``wss://localhost:8420`` install — auto-migrates to ``wss://127.0.0.1:8420`` on
+read.  That both presents the live token AND connects to the un-hijackable
+literal, closing the lockout without reopening the exfiltration: the connection
+targets ``127.0.0.1``, never the name a resolver could redirect.
 
 Fail closed: a loopback target whose ``serve.token`` is unreadable raises rather
 than returning a tokenless config, so a down daemon surfaces a clear error
@@ -71,11 +75,13 @@ class ClientConfig:
     def is_loopback(self) -> bool:
         """Whether the target is an eligible live-token target: a LITERAL loopback IP.
 
-        Client-side "loopback" means a literal loopback address, never a name:
-        the secret serve.token is presented only to an IP a resolver cannot
-        redirect to a co-tenant.
+        Client-side "loopback" means a literal loopback address: the secret
+        serve.token is presented only to an IP a resolver cannot redirect to a
+        co-tenant.  A stored loopback NAME first migrates to the literal
+        (:meth:`_target_host`), so a ``wss://localhost`` config counts — its
+        connection is rewritten to ``127.0.0.1`` in lockstep (:meth:`from_login`).
         """
-        return LoopbackPolicy(self._host_of(self._url)).is_literal_loopback
+        return LoopbackPolicy(self._target_host(self._url)).is_literal_loopback
 
     def remote_mapping(self) -> dict[str, object]:
         """Return the ``{url, ca_cert?, headers?}`` config a REST client consumes.
@@ -94,16 +100,23 @@ class ClientConfig:
     def from_login(cls, login: Mapping[str, object]) -> Self:
         """Build a target from a stored login config, resolving the bearer.
 
-        For a LITERAL loopback-IP URL the bearer is read live from
-        ``serve.token`` (it rotates each daemon restart); for any other URL —
-        including an ambiguous NAME like ``localhost`` — the stored bearer is
-        used verbatim.  A name never triggers live-token presentation: a
-        resolver could point it at a co-tenant, leaking the secret in transit.
+        The stored URL is first migrated (:meth:`canonical_url`): a loopback
+        NAME like ``localhost`` becomes the ``127.0.0.1`` literal.  This runs
+        BEFORE both the token gate and the stored URL, so a config written by an
+        older client (``wss://localhost:8420``) resolves the LIVE ``serve.token``
+        AND connects to the un-hijackable literal — never the ambiguous name a
+        resolver could redirect to a co-tenant's ``::1``.  For a migrated literal
+        loopback URL the bearer is read live from ``serve.token`` (it rotates
+        each daemon restart); a genuine remote URL is left intact and keeps its
+        stored bearer verbatim.
         """
-        url = str(login["url"])
+        url = cls.canonical_url(str(login["url"]))
         raw_ca = login.get("ca_cert")
         ca_cert = str(raw_ca) if raw_ca else None
         token: str | None
+        # ``url`` is already migrated, so a stored ``localhost`` presents here as
+        # the literal and the stored URL below is the literal too — the gate and
+        # the connection target can never diverge.
         if LoopbackPolicy(cls._host_of(url)).is_literal_loopback:
             token = cls._serve_token()
         else:
@@ -142,8 +155,14 @@ class ClientConfig:
 
     @classmethod
     def loopback_token_for_url(cls, url: str) -> str | None:
-        """Return the live serve.token for a loopback ``ws(s)/http(s)`` URL."""
-        return cls.loopback_token(cls._host_of(url))
+        """Return the live serve.token for a loopback ``ws(s)/http(s)`` URL.
+
+        A stored loopback NAME migrates to the literal first (:meth:`_target_host`)
+        so a ``wss://localhost`` URL is a live-token target — but the CALLER MUST
+        connect to :meth:`canonical_url` of the same URL, or the live token would
+        be presented over a connection to the ambiguous name a resolver controls.
+        """
+        return cls.loopback_token(cls._target_host(url))
 
     @classmethod
     def is_loopback_url(cls, url: str) -> bool:
@@ -152,10 +171,12 @@ class ClientConfig:
         Lets a caller distinguish a live-token target (present the LIVE
         serve.token) from any other (stored bearer) --- ``loopback_token_for_url``
         alone cannot, since it returns None for both a remote URL and a
-        literal-loopback URL whose token is missing.  A NAME URL is NOT eligible:
-        a resolver could redirect it, so its stored bearer stands.
+        literal-loopback URL whose token is missing.  A stored loopback NAME URL
+        migrates to the literal first (:meth:`_target_host`), so ``wss://localhost``
+        IS eligible --- but a caller that presents the token on the strength of
+        this MUST connect to :meth:`canonical_url` of the URL, never the raw name.
         """
-        return LoopbackPolicy(cls._host_of(url)).is_literal_loopback
+        return LoopbackPolicy(cls._target_host(url)).is_literal_loopback
 
     @classmethod
     def is_loopback_host(cls, host: str) -> bool:
@@ -165,6 +186,43 @@ class ClientConfig:
         only to a literal loopback address a resolver cannot redirect.
         """
         return LoopbackPolicy(host).is_literal_loopback
+
+    @classmethod
+    def canonical_url(cls, url: str) -> str:
+        """Migrate a stored URL's loopback NAME host to the IPv4 literal.
+
+        A config stored before write-time canonicalization (``wss://localhost:8420``)
+        must migrate at READ time to ``wss://127.0.0.1:8420``: the client both
+        presents the live serve.token AND connects to the un-hijackable literal.
+        The ambiguous name a resolver could point at a co-tenant's ``::1`` is
+        never the connect target.  A literal-loopback or remote URL is returned
+        unchanged (its host, port, path, and stored bearer all stand).
+        """
+        host = cls._host_of(url)
+        policy = LoopbackPolicy(host)
+        # Only a loopback NAME migrates.  A literal loopback is already
+        # un-hijackable; a remote URL is left byte-for-byte, since the operator's
+        # exact target (and its stored bearer) is not ours to rewrite.
+        if policy.is_literal_loopback or not policy.is_loopback:
+            return url
+        split = urllib.parse.urlsplit(url)
+        netloc = policy.canonical_host
+        if split.port is not None:
+            netloc = f"{netloc}:{split.port}"
+        return urllib.parse.urlunsplit(
+            (split.scheme, netloc, split.path, split.query, split.fragment)
+        )
+
+    @classmethod
+    def _target_host(cls, url: str) -> str:
+        """The literal host a live serve.token would be presented to.
+
+        A stored loopback NAME is migrated to the IPv4 literal, so the token gate
+        (:meth:`is_loopback_url`, :attr:`is_loopback`) and the eventual
+        connection (:meth:`canonical_url`) agree on the un-hijackable target.  A
+        remote host is returned normalized and stays non-loopback.
+        """
+        return LoopbackPolicy(cls._host_of(url)).canonical_host
 
     @staticmethod
     def canonical_host(host: str) -> str:
