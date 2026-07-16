@@ -428,6 +428,19 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/quarry/daemon/launcher.py": {
+    "method_ratio": 0.857,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.0,
+    "max_complexity": 4.0,
+    "avg_complexity": 2.14,
+    "module_size": 122.0,
+    "classes_per_module": 2.0,
+    "class_to_func_ratio": 0.667,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/quarry/daemon/route_table.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
@@ -624,14 +637,14 @@
     "future_annotations": 1.0
   },
   "src/quarry/daemon/server.py": {
-    "method_ratio": 0.917,
+    "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 1.31,
+    "avg_params": 0.8,
     "max_complexity": 3.0,
-    "avg_complexity": 1.62,
-    "module_size": 165.0,
-    "classes_per_module": 3.0,
-    "class_to_func_ratio": 0.75,
+    "avg_complexity": 1.6,
+    "module_size": 138.0,
+    "classes_per_module": 2.0,
+    "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
@@ -1377,6 +1390,19 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/quarry/net.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.67,
+    "max_complexity": 5.0,
+    "avg_complexity": 3.0,
+    "module_size": 56.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/quarry/onnx_session.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
@@ -1528,6 +1554,19 @@
     "avg_complexity": 1.5,
     "module_size": 36.0,
     "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
+  "src/quarry/run_dir.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.38,
+    "max_complexity": 3.0,
+    "avg_complexity": 1.31,
+    "module_size": 124.0,
+    "classes_per_module": 3.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
     "public_attr_violations": 0.0,

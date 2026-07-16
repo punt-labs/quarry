@@ -78,6 +78,7 @@ eval = [
 
 [project.scripts]
 quarry = "quarry.__main__:app"
+quarryd = "quarry.daemon.launcher:entrypoint"
 quarry-hook = "quarry._hook_entry:main"
 
 [project.urls]
@@ -145,6 +146,7 @@ ignore = [
 "src/quarry/__main__.py" = ["T20", "FBT"]
 "src/quarry/mcp_server.py" = ["T20", "FBT"]
 "src/quarry/cli_captures.py" = ["FBT"]  # typer boolean CLI flags
+"src/quarry/daemon/launcher.py" = ["FBT"]  # typer boolean CLI flags
 "src/quarry/hooks.py" = ["S603"]  # Popen calls use sys.executable — trusted
 
 [tool.ruff.format]

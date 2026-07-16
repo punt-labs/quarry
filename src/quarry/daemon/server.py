@@ -20,10 +20,11 @@ from quarry.config import DEFAULT_PORT, Settings
 from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
 from quarry.fd_telemetry import FdTelemetry
+from quarry.net import LoopbackPolicy
+from quarry.run_dir import RunDir
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
-    from pathlib import Path
     from socket import socket
 
     from starlette.applications import Starlette
@@ -56,44 +57,30 @@ class ServeConfig:
 
 
 @final
-class PortFile:
-    """The ``serve.port`` sidecar: the daemon's actual bound port for callers."""
-
-    _path: Path
-
-    def __new__(cls, path: Path) -> Self:
-        self = super().__new__(cls)
-        self._path = path
-        return self
-
-    def write(self, port: int) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(str(port))
-        logger.info("Wrote port file: %s (port %d)", self._path, port)
-
-    def remove(self) -> None:
-        try:
-            self._path.unlink(missing_ok=True)
-            logger.info("Removed port file: %s", self._path)
-        except OSError:
-            logger.warning("Could not remove port file: %s", self._path)
-
-
-@final
 class DaemonServer:
     """Warm the engine and serve the REST API until a shutdown signal."""
 
     _settings: Settings
     _config: ServeConfig
-    _port_file: PortFile
+    _run_dir: RunDir
 
     def __new__(cls, settings: Settings, config: ServeConfig) -> Self:
-        cls._validate_host_key(config.host, config.api_key)
+        LoopbackPolicy(config.host).enforce_bind_key(config.api_key)
         self = super().__new__(cls)
         self._settings = settings
         self._config = config
-        self._port_file = PortFile(settings.lancedb_path.parent / "serve.port")
+        self._run_dir = RunDir(settings.lancedb_path.parent)
         return self
+
+    @classmethod
+    def serve(cls, settings: Settings, config: ServeConfig) -> None:
+        """Warm the engine and serve *config* until shutdown (process entry).
+
+        The bind options arrive already bundled in a :class:`ServeConfig`, so
+        the caller (the ``quarryd`` entry point) owns option parsing and this
+        method stays a two-argument seam rather than a wide parameter list.
+        """
+        cls(settings, config).run()
 
     def run(self) -> None:
         """Build the app, bind uvicorn, and block until shutdown."""
@@ -104,6 +91,7 @@ class DaemonServer:
         )
         ctx.warm()  # Build cached resources single-threaded before serving.
 
+        self._write_serve_token()
         app = build_app(ctx, lifespan=self._lifespan)
         server = uvicorn.Server(self._uvicorn_config(app))
         self._install_port_file_hook(server)
@@ -113,6 +101,17 @@ class DaemonServer:
         )
         server.run()
         logger.info("Server stopped")
+
+    def _write_serve_token(self) -> None:
+        """Persist the loopback bearer before the socket opens.
+
+        The daemon now requires this bearer on loopback, so it must be on
+        disk before the first request can race in.  A ``None`` key is the
+        interim unauthenticated path (no token, no gate) — retired once
+        every start goes through ``quarryd``, which always sets a key.
+        """
+        if self._config.api_key is not None:
+            self._run_dir.token_file.write(self._config.api_key)
 
     @asynccontextmanager
     async def _lifespan(self, _app: Starlette) -> AsyncGenerator[None]:
@@ -124,7 +123,8 @@ class DaemonServer:
             # Remove the port file first so cleanup is guaranteed even if
             # draining the monitor task surfaces an error.
             monitor.cancel()
-            self._port_file.remove()
+            self._run_dir.port_file.remove()
+            self._run_dir.token_file.remove()
             with suppress(asyncio.CancelledError):
                 await monitor
 
@@ -148,7 +148,7 @@ class DaemonServer:
         """
         original_startup = server.startup
         config = self._config
-        port_file = self._port_file
+        port_file = self._run_dir.port_file
 
         async def _startup_with_port_file(sockets: list[socket] | None = None) -> None:
             await original_startup(sockets=sockets)
@@ -167,35 +167,3 @@ class DaemonServer:
                 )
 
         server.startup = _startup_with_port_file  # type: ignore[method-assign]
-
-    @staticmethod
-    def _validate_host_key(host: str, api_key: str | None) -> None:
-        """Refuse to bind to non-loopback without an API key."""
-        if host != "127.0.0.1" and not api_key:
-            msg = (
-                "Refusing to bind to %s without --api-key. "
-                "Non-loopback hosts require authentication."
-            )
-            raise SystemExit(msg % host)
-
-
-def serve(
-    settings: Settings,
-    port: int = DEFAULT_PORT,
-    *,
-    host: str = "127.0.0.1",
-    api_key: str | None = None,
-    cors_origins: frozenset[str] | None = None,
-    ssl_certfile: str | None = None,
-    ssl_keyfile: str | None = None,
-) -> None:
-    """Start the daemon HTTP server.  Blocks until shutdown (CLI entry point)."""
-    config = ServeConfig(
-        host=host,
-        port=port,
-        api_key=api_key,
-        cors_origins=cors_origins,
-        ssl_certfile=ssl_certfile,
-        ssl_keyfile=ssl_keyfile,
-    )
-    DaemonServer(settings, config).run()

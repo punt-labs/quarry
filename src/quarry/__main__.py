@@ -1643,7 +1643,7 @@ def serve(
     ] = False,
 ) -> None:
     """Start the HTTP API server."""
-    from quarry.daemon.server import serve as http_serve  # noqa: PLC0415
+    from quarry.daemon.server import DaemonServer, ServeConfig  # noqa: PLC0415
 
     settings = _resolved_settings()
     origins = frozenset(cors_origin) if cors_origin else None
@@ -1663,15 +1663,15 @@ def serve(
         ssl_certfile = str(cert_path)
         ssl_keyfile = str(key_path)
 
-    http_serve(
-        settings,
-        port=port,
+    config = ServeConfig(
         host=host,
+        port=port,
         api_key=api_key,
         cors_origins=origins,
         ssl_certfile=ssl_certfile,
         ssl_keyfile=ssl_keyfile,
     )
+    DaemonServer.serve(settings, config)
 
 
 @app.command()

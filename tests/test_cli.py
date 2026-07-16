@@ -4159,14 +4159,14 @@ class TestServeTlsFlag:
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
             patch("quarry.__main__.TLS_DIR", tls_dir),
-            patch("quarry.daemon.server.serve") as mock_serve,
+            patch("quarry.daemon.server.DaemonServer.serve") as mock_serve,
         ):
             runner.invoke(app, ["serve", "--tls"])
 
         _reset_globals()
-        call_kwargs = mock_serve.call_args[1]
-        assert call_kwargs["ssl_certfile"] == str(cert_path)
-        assert call_kwargs["ssl_keyfile"] == str(key_path)
+        config = mock_serve.call_args[0][1]
+        assert config.ssl_certfile == str(cert_path)
+        assert config.ssl_keyfile == str(key_path)
 
     def test_tls_flag_missing_certs_exits(self, tmp_path: Path) -> None:
         tls_dir = tmp_path / "tls"
@@ -4185,14 +4185,14 @@ class TestServeTlsFlag:
     def test_no_tls_flag_passes_none_ssl_args(self) -> None:
         with (
             patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.daemon.server.serve") as mock_serve,
+            patch("quarry.daemon.server.DaemonServer.serve") as mock_serve,
         ):
             runner.invoke(app, ["serve"])
 
         _reset_globals()
-        call_kwargs = mock_serve.call_args[1]
-        assert call_kwargs["ssl_certfile"] is None
-        assert call_kwargs["ssl_keyfile"] is None
+        config = mock_serve.call_args[0][1]
+        assert config.ssl_certfile is None
+        assert config.ssl_keyfile is None
 
 
 _FAKE_CA_PEM = b"-----BEGIN CERTIFICATE-----\nfakecertdata\n-----END CERTIFICATE-----\n"

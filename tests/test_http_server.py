@@ -20,7 +20,7 @@ from quarry.api import HealthResponse, SearchResponse, StatusResponse
 from quarry.backfill import BackfillStats
 from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
-from quarry.daemon.server import DaemonServer, PortFile
+from quarry.daemon.server import DaemonServer, ServeConfig
 from quarry.daemon.tasks import TASK_TTL_SECONDS, TaskState
 from quarry.results import SearchResult
 
@@ -527,36 +527,36 @@ class TestStatus:
         assert data["registered_directories"] == 0
 
 
+class TestServeToken:
+    """DaemonServer persists the loopback bearer so clients can authenticate."""
+
+    def _server(self, tmp_path: Path, api_key: str | None) -> DaemonServer:
+        settings = MagicMock()
+        settings.lancedb_path = tmp_path / "default" / "lancedb"
+        config = ServeConfig(host="127.0.0.1", port=8420, api_key=api_key)
+        return DaemonServer(settings, config)
+
+    def test_writes_token_mode_0600(self, tmp_path: Path) -> None:
+        import stat
+
+        server = self._server(tmp_path, "the-bearer")
+        server._write_serve_token()
+        token_path = tmp_path / "default" / "serve.token"
+        assert token_path.read_text() == "the-bearer"
+        assert stat.S_IMODE(token_path.stat().st_mode) == 0o600
+
+    def test_none_key_writes_no_token(self, tmp_path: Path) -> None:
+        # Interim unauthenticated path: no key, no token file, no gate.
+        server = self._server(tmp_path, None)
+        server._write_serve_token()
+        assert not (tmp_path / "default" / "serve.token").exists()
+
+
 class TestNotFound:
     def test_unknown_path_returns_404(self, client: TestClient) -> None:
         resp = client.get("/unknown")
         assert resp.status_code == 404
         assert resp.json()["error"] == "Not Found"
-
-
-class TestPortFile:
-    def test_write_port_file(self, tmp_path: Path) -> None:
-        port_path = tmp_path / "subdir" / "serve.port"
-        PortFile(port_path).write(12345)
-
-        assert port_path.exists()
-        assert port_path.read_text() == "12345"
-
-    def test_write_creates_parent_directories(self, tmp_path: Path) -> None:
-        port_path = tmp_path / "a" / "b" / "serve.port"
-        PortFile(port_path).write(8080)
-        assert port_path.exists()
-
-
-class TestFailClosed:
-    """Non-loopback hosts require --api-key."""
-
-    def test_non_loopback_without_key_refuses(self) -> None:
-        with pytest.raises(SystemExit, match="Refusing to bind"):
-            DaemonServer._validate_host_key("0.0.0.0", None)  # noqa: S104
-
-    def test_loopback_without_key_allowed(self) -> None:
-        DaemonServer._validate_host_key("127.0.0.1", None)
 
 
 class TestOptionsPreflightCors:
