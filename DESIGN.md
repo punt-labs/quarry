@@ -984,7 +984,14 @@ PR-3a implements the daemon/supervision/loopback-auth half of v2.2. What shipped
   `serve.token`; for a remote target the stored bearer is kept. It fails closed
   (`OSError` → typed `ClientConfigError`) rather than sending an empty bearer.
   The 13 `RemoteClient` construction sites route through `ClientConfig`, so any
-  loopback CLI session now presents the token.
+  loopback CLI session now presents the token. `ClientConfig` resolves the
+  token from the run dir of the process's **active database** (a
+  `Settings.active_db` the CLI records from `--db`, else the persistent
+  default), since `serve.token` lives under the daemon's startup-db run dir.
+  **Limitation:** a loopback client cannot learn a non-default daemon's
+  database from the URL, so loopback `--db` auth requires the operator to run
+  a matching `--db` on both `quarry` and `quarryd`; the default,
+  service-managed case (default database) is unaffected.
 - **install `/health` gate** requires `state=="ready"`, not a bare HTTP 200 (a
   warming daemon returns 200 with `state=="starting"`).
 
