@@ -77,6 +77,31 @@ class TestFromLoginLoopback:
         ):
             ClientConfig.from_login({"url": "wss://127.0.0.1:8420/mcp"})
 
+    def test_corrupt_default_db_config_fails_closed(self, tmp_path: Path) -> None:
+        # Exception-boundary breadth: resolve_db_paths() raises ValueError on a
+        # default-db name with a path separator (e.g. a corrupt
+        # default.database="../evil").  That resolution now runs INSIDE the try,
+        # so from_login fails closed with ClientConfigError, not a raw ValueError.
+        with (
+            patch("quarry.client.config.Settings") as mock_settings,
+            pytest.raises(ClientConfigError, match="could not be read"),
+        ):
+            mock_settings.active_db.return_value = "../evil"
+            mock_settings.load.return_value.resolve_db_paths.side_effect = ValueError(
+                "db name contains a path separator"
+            )
+            ClientConfig.from_login({"url": "wss://127.0.0.1:8420/mcp"})
+
+    def test_unreadable_default_db_config_fails_closed(self, tmp_path: Path) -> None:
+        # active_db() can raise OSError on an unreadable default-db config; it too
+        # runs inside the try, so from_login fails closed, not a raw OSError.
+        with (
+            patch("quarry.client.config.Settings") as mock_settings,
+            pytest.raises(ClientConfigError, match="could not be read"),
+        ):
+            mock_settings.active_db.side_effect = OSError("default-db unreadable")
+            ClientConfig.from_login({"url": "wss://127.0.0.1:8420/mcp"})
+
     def test_stored_localhost_auto_migrates_to_literal(self, tmp_path: Path) -> None:
         # HIGH regression: a config stored before the literal-IP flip holds the
         # NAME ``localhost``.  On READ it must auto-migrate to 127.0.0.1 so the
@@ -274,6 +299,23 @@ class TestLoopbackTokenProbe:
         with _run_dir_at(tmp_path):
             token = ClientConfig.loopback_token_for_url("wss://h.example.com:8420")
         assert token is None
+
+    def test_corrupt_default_db_config_returns_none(self) -> None:
+        # Non-raising contract: a corrupt default-db config (resolve_db_paths
+        # raises ValueError) must make the probe return None, not propagate a
+        # raw ValueError — the resolution runs inside _serve_token's try.
+        with patch("quarry.client.config.Settings") as mock_settings:
+            mock_settings.active_db.return_value = "../evil"
+            mock_settings.load.return_value.resolve_db_paths.side_effect = ValueError(
+                "db name contains a path separator"
+            )
+            assert ClientConfig.loopback_token("127.0.0.1") is None
+
+    def test_unreadable_default_db_config_returns_none(self) -> None:
+        # active_db() raising OSError must also yield None, not propagate.
+        with patch("quarry.client.config.Settings") as mock_settings:
+            mock_settings.active_db.side_effect = OSError("config unreadable")
+            assert ClientConfig.loopback_token("127.0.0.1") is None
 
 
 class TestActiveDbRunDir:

@@ -7,6 +7,7 @@ Each test class gets its own app instance via fixtures.
 from __future__ import annotations
 
 import asyncio
+import os
 import sqlite3
 import stat
 from pathlib import Path
@@ -753,6 +754,31 @@ class TestRunDirLock:
         second._acquire_run_dir_lock()  # succeeds now that #1 released
         assert second._lock_fd >= 0
         second._release_run_dir_lock()
+
+    def test_flock_failure_closes_fd_and_propagates(self, tmp_path: Path) -> None:
+        # File-I/O hygiene: a NON-BlockingIOError flock failure (permission /
+        # filesystem) must close the fd — never leak a descriptor (EMFILE
+        # history) — and propagate.  _lock_fd stays unset so release is a no-op.
+        server = self._server(tmp_path, "k")
+        closed: list[int] = []
+        real_close = os.close
+
+        def _spy_close(fd: int) -> None:
+            closed.append(fd)
+            real_close(fd)
+
+        with (
+            patch(
+                "quarry.daemon.server.fcntl.flock",
+                side_effect=PermissionError("denied"),
+            ),
+            patch("quarry.daemon.server.os.close", side_effect=_spy_close),
+            pytest.raises(PermissionError, match="denied"),
+        ):
+            server._acquire_run_dir_lock()
+
+        assert len(closed) == 1  # the lock fd was closed exactly once (no leak)
+        assert server._lock_fd < 0  # never recorded a live fd on failure
 
 
 class TestNotFound:

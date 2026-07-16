@@ -162,6 +162,11 @@ class DaemonServer:
         lock_path = self._run_dir.lock_path
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+        # Close the fd on EVERY flock failure — contention OR any other OSError
+        # (permission, filesystem) — so a failed acquire never leaks a
+        # descriptor (this daemon has EMFILE history).  _lock_fd is set only
+        # AFTER the lock is held, so the release path never touches an fd whose
+        # flock failed.
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
@@ -171,6 +176,9 @@ class DaemonServer:
                 f"({lock_path.parent})"
             )
             raise SystemExit(msg) from exc
+        except BaseException:
+            os.close(fd)
+            raise
         self._lock_fd = fd
 
     def _release_run_dir_lock(self) -> None:

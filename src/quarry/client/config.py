@@ -249,15 +249,22 @@ class ClientConfig:
         # serve.token lives under the daemon's startup-db run dir; resolve the
         # ACTIVE database (the CLI's --db override, else the default) so a
         # loopback client against a --db daemon reads the matching token, not
-        # the hardcoded default database's.
-        settings = Settings.load().resolve_db_paths(Settings.active_db() or None)
+        # the hardcoded default database's.  The resolution runs INSIDE the try:
+        # active_db() can raise OSError on an unreadable default-db config, and
+        # resolve_db_paths() raises ValueError on a default-db name containing a
+        # path separator.  Both must surface as ClientConfigError so loopback_token
+        # keeps its non-raising contract (returns None) rather than leaking a raw
+        # OSError/ValueError to a caller expecting a fail-closed probe.
         try:
+            settings = Settings.load().resolve_db_paths(Settings.active_db() or None)
             token = RunDir(settings.lancedb_path.parent).token_file.read()
-        except OSError as exc:
-            # OSError (not just FileNotFoundError): a PermissionError on the
-            # 0600 token — e.g. another UID owns the run dir — must surface an
-            # actionable error, never a raw OSError.  Do not assert a single
-            # cause: the daemon may be down, OR up with an unreadable token.
+        except (OSError, ValueError) as exc:
+            # OSError (not just FileNotFoundError): a PermissionError on the 0600
+            # token — e.g. another UID owns the run dir — must surface an
+            # actionable error.  ValueError: a corrupt default-db config (a
+            # path-separator name) must not escape as a raw crash.  Do not assert a
+            # single cause: the daemon may be down, up with an unreadable token, or
+            # the default-db config may be corrupt.
             msg = (
                 "serve.token could not be read — quarryd is not running, or "
                 "its serve.token is unreadable by this user. Run 'quarry doctor'."
