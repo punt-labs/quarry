@@ -63,6 +63,29 @@ class TestFromLoginLoopback:
         ):
             ClientConfig.from_login({"url": "wss://localhost:8420/mcp"})
 
+    def test_loopback_unreadable_token_fails_closed(self, tmp_path: Path) -> None:
+        # OSError breadth: a PermissionError on another UID's 0600 token must
+        # surface ClientConfigError, not a raw OSError from deep in the call.
+        with (
+            _run_dir_at(tmp_path),
+            patch(
+                "quarry.run_dir.ServeTokenFile.read",
+                side_effect=PermissionError("denied"),
+            ),
+            pytest.raises(ClientConfigError, match="could not be read"),
+        ):
+            ClientConfig.from_login({"url": "wss://localhost:8420/mcp"})
+
+    def test_loopback_empty_token_fails_closed(self, tmp_path: Path) -> None:
+        # A present-but-empty/corrupt token is not a credential: fail closed
+        # rather than send an empty ``Authorization: Bearer``.
+        (tmp_path / "serve.token").write_text("")
+        with (
+            _run_dir_at(tmp_path),
+            pytest.raises(ClientConfigError, match="empty"),
+        ):
+            ClientConfig.from_login({"url": "wss://localhost:8420/mcp"})
+
 
 class TestFromLoginRemote:
     def test_remote_keeps_stored_bearer(self) -> None:

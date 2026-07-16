@@ -141,7 +141,7 @@ class ClientConfig:
         """
         settings = Settings.load().resolve_db_paths(Settings.read_default_db() or None)
         try:
-            return RunDir(settings.lancedb_path.parent).token_file.read()
+            token = RunDir(settings.lancedb_path.parent).token_file.read()
         except OSError as exc:
             # OSError (not just FileNotFoundError): a PermissionError on the
             # 0600 token — e.g. another UID owns the run dir — must surface the
@@ -151,6 +151,16 @@ class ClientConfig:
                 "read — quarryd is not running. Run 'quarry doctor'."
             )
             raise ClientConfigError(msg) from exc
+        # An empty/whitespace token is a corrupt file, not a credential:
+        # fail closed rather than emit an empty ``Authorization: Bearer``.
+        # Unreachable via the atomic writer today, but make the "never an
+        # empty bearer" invariant structural, not just incidental.
+        if not token:
+            raise ClientConfigError(
+                "serve.token is empty — quarryd wrote a corrupt token file. "
+                "Run 'quarry doctor'."
+            )
+        return token
 
     @staticmethod
     def _login_bearer(login: Mapping[str, object]) -> str | None:
