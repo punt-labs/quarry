@@ -526,6 +526,42 @@ class TestInstallHostKeyGuard:
     @patch.object(platform, "system", return_value="Darwin")
     @patch("quarry.service.write_tls_files")
     @patch("quarry.service.cert_fingerprint", return_value="")
+    def test_localhost_name_is_loopback_no_api_key_needed(
+        self,
+        _fp: MagicMock,
+        _tls: MagicMock,
+        _sys: MagicMock,
+        mock_run: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """QUARRY_SERVE_HOST=localhost is loopback (LoopbackPolicy), no key needed.
+
+        Regression: the install gate previously matched only the literal
+        127.0.0.1, so localhost/::1 were wrongly refused without a key even
+        though quarryd would accept them as loopback.
+        """
+        monkeypatch.setenv("QUARRY_SERVE_HOST", "localhost")
+        monkeypatch.delenv("QUARRY_API_KEY", raising=False)
+        _make_local_bin_quarryd(tmp_path)
+        plist_path = tmp_path / "com.punt-labs.quarry.plist"
+        with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
+            patch("quarry.service._LAUNCHD_DIR", tmp_path),
+            patch("quarry.service._LAUNCHD_PLIST", plist_path),
+        ):
+            mock_run.side_effect = [
+                MagicMock(returncode=113),
+                MagicMock(returncode=0),
+                MagicMock(returncode=0),
+            ]
+            msg = install()  # must NOT raise SystemExit
+        assert "running" in msg
+
+    @patch("quarry.service.subprocess.run")
+    @patch.object(platform, "system", return_value="Darwin")
+    @patch("quarry.service.write_tls_files")
+    @patch("quarry.service.cert_fingerprint", return_value="")
     def test_non_loopback_host_with_api_key_succeeds(
         self,
         _fp: MagicMock,

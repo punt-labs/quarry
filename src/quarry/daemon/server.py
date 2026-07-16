@@ -149,9 +149,19 @@ class DaemonServer:
             await original_startup(sockets=sockets)
             if server.servers and server.servers[0].sockets:
                 actual_port = server.servers[0].sockets[0].getsockname()[1]
-                self._run_dir.port_file.write(actual_port)
-                if self._config.api_key is not None:
-                    self._run_dir.token_file.write(self._config.api_key)
+                # Write the sidecar pair all-or-nothing: if either write fails
+                # (disk full, permission), remove both so startup never leaves
+                # a lone port file (which a client reads as "daemon up") or an
+                # orphan token.  Token first, then port; _bound is set only
+                # after BOTH succeed, so the shutdown cleanup stays consistent.
+                try:
+                    if self._config.api_key is not None:
+                        self._run_dir.token_file.write(self._config.api_key)
+                    self._run_dir.port_file.write(actual_port)
+                except OSError:
+                    self._run_dir.token_file.remove()
+                    self._run_dir.port_file.remove()
+                    raise
                 self._bound = True
                 logger.info(
                     "Quarry server listening on %s://%s:%d",

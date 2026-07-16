@@ -620,6 +620,31 @@ class TestServeToken:
         assert not token.exists()  # removed on clean shutdown
         assert not port.exists()
 
+    def test_sidecar_write_failure_leaves_no_partial_pair(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed sidecar write removes BOTH — no lone port file, no orphan token.
+
+        The pair is written all-or-nothing (token first, then port); if the
+        second write fails, the first is removed so startup never leaves a
+        partial sidecar a client would read as "daemon up".
+        """
+        server = self._server(tmp_path, "the-bearer")
+        uv = self._bound_server_mock()
+        server._install_startup_hook(uv)
+
+        def _boom(*_args: object, **_kwargs: object) -> None:
+            raise OSError("disk full")
+
+        # Token write succeeds; the port write fails after it.
+        monkeypatch.setattr("quarry.run_dir.PortFile.write", _boom)
+        with pytest.raises(OSError, match="disk full"):
+            asyncio.run(uv.startup())
+
+        assert not (tmp_path / "default" / "serve.token").exists()
+        assert not (tmp_path / "default" / "serve.port").exists()
+        assert server._bound is False  # not set until both writes succeed
+
 
 class TestNotFound:
     def test_unknown_path_returns_404(self, client: TestClient) -> None:

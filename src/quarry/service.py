@@ -22,6 +22,7 @@ from typing import Protocol, runtime_checkable
 from xml.sax.saxutils import escape as _xml_escape
 
 from quarry.config import DEFAULT_PORT
+from quarry.net import LoopbackPolicy
 from quarry.tls import TLS_DIR, cert_fingerprint, write_tls_files
 
 
@@ -95,7 +96,7 @@ def _quarryd_exec_args() -> list[str]:
 
     Resolution order:
 
-    1. ``~/.local/bin/quarry`` (uv tool install symlink) -- resolved to absolute.
+    1. ``~/.local/bin/quarryd`` (uv tool install symlink) -- resolved to absolute.
     2. Refuse to register -- raise ``RuntimeError`` instead of silently using
        ``sys.executable`` or ``shutil.which()``, either of which may resolve
        to a dev venv binary.
@@ -412,7 +413,7 @@ def install() -> str:
     # will crash-loop at runtime because DaemonServer enforces this invariant.
     serve_host = os.environ.get("QUARRY_SERVE_HOST", "").strip()
     api_key = os.environ.get("QUARRY_API_KEY", "").strip()
-    if serve_host and serve_host != "127.0.0.1" and not api_key:
+    if serve_host and not LoopbackPolicy(serve_host).is_loopback and not api_key:
         msg = (
             f"QUARRY_SERVE_HOST is set to {serve_host!r} but QUARRY_API_KEY is empty. "
             "Non-loopback hosts require an API key. "
