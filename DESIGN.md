@@ -961,9 +961,15 @@ PR-3a implements the daemon/supervision/loopback-auth half of v2.2. What shipped
   imports the engine, the v2.1 §3.1 lazy-import carve-out for `serve`/`mcp`
   is gone: I1 is now a hard **process** boundary, not a within-process rule.
 - **`serve.token` (mode-0600).** `DaemonServer` writes the token beside
-  `serve.port` (shared `RunDir`) before the socket opens and removes it on
-  shutdown. The write is atomic (`os.open(0o600)` + tmp-rename) so no
-  world-readable or partial-file window exists. The token is written whenever
+  `serve.port` (shared `RunDir`) **after a successful bind** and removes only
+  what this instance wrote (guarded by a bound flag). Writing post-bind is
+  what keeps a second `quarryd` that fails to bind (port in use) from
+  clobbering a running peer's live token on the shared per-db path — a failed
+  bind never writes or removes it. The token lands microseconds after the
+  serve loop starts accepting; a client that races that window fails closed
+  and retries, an acceptable trade for not nuking a live daemon. The write is
+  atomic (`os.open(0o600)` + tmp-rename) so no world-readable or partial-file
+  window exists. The token is written whenever
   the daemon has an effective key — **including** when the operator sets
   `--api-key` (the file holds that key), so a local client on a `--network`
   server can authenticate on loopback without re-typing it. This closes the

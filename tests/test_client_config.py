@@ -181,3 +181,46 @@ class TestLoopbackTokenProbe:
         with _run_dir_at(tmp_path):
             token = ClientConfig.loopback_token_for_url("wss://h.example.com:8420")
         assert token is None
+
+
+class TestActiveDbRunDir:
+    """serve.token resolves from the process's ACTIVE database's run dir."""
+
+    def test_serve_token_uses_active_db_not_default(self, tmp_path: Path) -> None:
+        (tmp_path / "work").mkdir()
+        (tmp_path / "work" / "serve.token").write_text("work-db-token")
+        (tmp_path / "default").mkdir()
+        (tmp_path / "default" / "serve.token").write_text("default-db-token")
+
+        def resolve(db: str | None) -> MagicMock:
+            name = db or "default"
+            fake = MagicMock()
+            fake.lancedb_path = tmp_path / name / "lancedb"  # parent == tmp_path/name
+            return fake
+
+        with patch("quarry.client.config.Settings") as mock_settings:
+            mock_settings.load.return_value.resolve_db_paths.side_effect = resolve
+            mock_settings.active_db.return_value = "work"  # quarryd --db work
+            cfg = ClientConfig.from_login({"url": "wss://localhost:8420/mcp"})
+
+        # Reads the --db daemon's token, NOT the default database's.
+        resolved = cfg.token
+        assert resolved == "work-db-token"
+
+    def test_serve_token_falls_back_to_default_db(self, tmp_path: Path) -> None:
+        (tmp_path / "default").mkdir()
+        (tmp_path / "default" / "serve.token").write_text("default-db-token")
+
+        def resolve(db: str | None) -> MagicMock:
+            name = db or "default"
+            fake = MagicMock()
+            fake.lancedb_path = tmp_path / name / "lancedb"
+            return fake
+
+        with patch("quarry.client.config.Settings") as mock_settings:
+            mock_settings.load.return_value.resolve_db_paths.side_effect = resolve
+            mock_settings.active_db.return_value = None  # no --db override
+            cfg = ClientConfig.from_login({"url": "wss://127.0.0.1:8420/mcp"})
+
+        resolved = cfg.token
+        assert resolved == "default-db-token"

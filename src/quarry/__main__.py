@@ -178,6 +178,10 @@ def main_callback(
     _verbose = verbose
     _quiet = quiet
     _global_db = database
+    # Record --db process-wide so the client tier resolves the daemon's
+    # startup-db run dir (serve.token/serve.port) the same way — client and
+    # daemon agree on the database by a matching --db.
+    Settings.set_active_db(database)
     # Determine stderr log level from flags.
     if _verbose:
         stderr_level = "INFO"

@@ -139,16 +139,21 @@ class ClientConfig:
         dir, so raise a clear error rather than return an empty bearer that
         would be rejected far from its cause.
         """
-        settings = Settings.load().resolve_db_paths(Settings.read_default_db() or None)
+        # serve.token lives under the daemon's startup-db run dir; resolve the
+        # ACTIVE database (the CLI's --db override, else the default) so a
+        # loopback client against a --db daemon reads the matching token, not
+        # the hardcoded default database's.
+        settings = Settings.load().resolve_db_paths(Settings.active_db() or None)
         try:
             token = RunDir(settings.lancedb_path.parent).token_file.read()
         except OSError as exc:
             # OSError (not just FileNotFoundError): a PermissionError on the
-            # 0600 token — e.g. another UID owns the run dir — must surface the
-            # same actionable error, never a raw OSError from deep in the call.
+            # 0600 token — e.g. another UID owns the run dir — must surface an
+            # actionable error, never a raw OSError.  Do not assert a single
+            # cause: the daemon may be down, OR up with an unreadable token.
             msg = (
-                "Loopback daemon requires a token but serve.token could not be "
-                "read — quarryd is not running. Run 'quarry doctor'."
+                "serve.token could not be read — quarryd is not running, or "
+                "its serve.token is unreadable by this user. Run 'quarry doctor'."
             )
             raise ClientConfigError(msg) from exc
         # An empty/whitespace token is a corrupt file, not a credential:

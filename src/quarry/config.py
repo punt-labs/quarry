@@ -37,6 +37,12 @@ class Settings(BaseSettings):
 
     _CONFIG_PATH: ClassVar[Path] = Path.home() / ".punt-labs" / "quarry" / "config.toml"
 
+    # The current process's --db override, recorded by the CLI so the client
+    # tier resolves the daemon's startup-db run dir (where serve.token lives)
+    # the same way the CLI resolves its own data — client and daemon agree on
+    # the database by a matching --db.
+    _active_db: ClassVar[str] = ""
+
     def resolve_db_paths(self, db_name: str | None = None) -> Settings:
         """Return a copy with lancedb_path and registry_path resolved.
 
@@ -83,6 +89,16 @@ class Settings(BaseSettings):
         cls._CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         content = f'[default]\ndatabase = "{name}"\n'
         cls._CONFIG_PATH.write_text(content)
+
+    @classmethod
+    def set_active_db(cls, name: str) -> None:
+        """Record this process's ``--db`` override for db resolution."""
+        cls._active_db = name
+
+    @classmethod
+    def active_db(cls) -> str | None:
+        """Return the effective database: ``--db`` override, else the default."""
+        return cls._active_db or cls.read_default_db()
 
     @classmethod
     def load(cls) -> Settings:
