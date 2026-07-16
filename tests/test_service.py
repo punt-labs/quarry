@@ -79,7 +79,7 @@ class TestDetectPlatform:
             detect_platform()
 
 
-class TestQuarryExecArgs:
+class TestQuarrydExecArgs:
     def test_prefers_uv_tool_binary(self, tmp_path: Path) -> None:
         fake_bin = tmp_path / "quarryd"
         fake_bin.write_text("#!/bin/sh\n")

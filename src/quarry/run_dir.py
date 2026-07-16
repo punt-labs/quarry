@@ -46,8 +46,20 @@ class PortFile:
         return self._path
 
     def write(self, port: int) -> None:
+        """Write the bound port atomically (tmp + rename).
+
+        Atomic so a failed write leaves no partial file at the destination:
+        the daemon's startup-cleanup removes only sidecars it fully wrote, so
+        a half-written port must not linger to be mistaken for a live daemon.
+        """
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(str(port))
+        tmp = self._path.with_suffix(".tmp")
+        try:
+            tmp.write_text(str(port))
+            tmp.replace(self._path)
+        except OSError:
+            tmp.unlink(missing_ok=True)
+            raise
         logger.info("Wrote port file: %s (port %d)", self._path, port)
 
     def read(self) -> int:

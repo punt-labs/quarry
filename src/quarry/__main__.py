@@ -1287,11 +1287,15 @@ def login_cmd(  # noqa: C901
         except BaseException:
             tmp_path.unlink(missing_ok=True)
             raise
-        # On the default (token-gated loopback) install, no --api-key is set;
-        # present the daemon's live serve.token so login validation is not
-        # 401'd against its own /v1/status.  A remote host resolves to None
-        # here, so its explicit key stands.
-        bearer = api_key or ClientConfig.loopback_token(host)
+        # For a loopback target the daemon's LIVE serve.token is the only
+        # valid credential — the daemon writes whatever key it uses (operator
+        # --api-key OR auto-minted) into serve.token, so a set/stale env key
+        # must NOT win over it (that would 401 against the daemon's own
+        # /v1/status).  --api-key applies to a REMOTE target only.
+        if ClientConfig.is_loopback_host(host):
+            bearer = ClientConfig.loopback_token(host)
+        else:
+            bearer = api_key
         ok, reason = validate_connection(
             host, port, bearer, scheme="https", ca_cert_path=tmp_path_str
         )

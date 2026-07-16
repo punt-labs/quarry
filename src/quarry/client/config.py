@@ -142,6 +142,11 @@ class ClientConfig:
         """
         return LoopbackPolicy(cls._host_of(url)).is_loopback
 
+    @classmethod
+    def is_loopback_host(cls, host: str) -> bool:
+        """Return whether a bare hostname targets a loopback host."""
+        return LoopbackPolicy(host).is_loopback
+
     @staticmethod
     def _serve_token() -> str:
         """Read the daemon's live loopback bearer, or raise if it is down.

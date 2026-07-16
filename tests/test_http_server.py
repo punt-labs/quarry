@@ -645,6 +645,33 @@ class TestServeToken:
         assert not (tmp_path / "default" / "serve.port").exists()
         assert server._bound is False  # not set until both writes succeed
 
+    def test_keyless_failed_startup_leaves_peer_token_intact(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A no-api_key instance whose startup fails must NOT delete a peer's token.
+
+        Regression guard: the all-or-nothing cleanup removes ONLY what this
+        instance wrote.  With api_key=None it writes no token, so a failed port
+        write must leave a running peer's serve.token on the shared path intact.
+        """
+        (tmp_path / "default").mkdir(parents=True)
+        peer_token = tmp_path / "default" / "serve.token"
+        peer_token.write_text("peer-live-token")
+
+        server = self._server(tmp_path, None)  # no api_key -> writes no token
+        uv = self._bound_server_mock()
+        server._install_startup_hook(uv)
+
+        def _boom(*_args: object, **_kwargs: object) -> None:
+            raise OSError("disk full")
+
+        monkeypatch.setattr("quarry.run_dir.PortFile.write", _boom)
+        with pytest.raises(OSError, match="disk full"):
+            asyncio.run(uv.startup())
+
+        assert peer_token.read_text() == "peer-live-token"  # untouched
+        assert server._bound is False
+
 
 class TestNotFound:
     def test_unknown_path_returns_404(self, client: TestClient) -> None:

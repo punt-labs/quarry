@@ -83,7 +83,7 @@ No special flag needed --- the default install runs a local daemon on localhost.
 
 - **20+ formats** --- PDFs (with OCR for scanned pages), source code (AST-aware splitting), spreadsheets, presentations, HTML, Markdown, LaTeX, DOCX, images
 - **Semantic search** --- retrieval is by meaning, not keyword. A query about "margins" finds passages about profitability even if they never use that word
-- **Daemon architecture** --- one `quarryd` process loads the embedding model once and serves all Claude Code sessions via [mcp-proxy](https://github.com/punt-labs/mcp-proxy) over WebSocket
+- **Daemon architecture** --- one `quarryd` process loads the embedding model once and serves the CLI and hooks over a versioned REST API (`/v1`); Claude Code connects through the stdio `quarry mcp` server
 - **Passive knowledge capture** --- `quarry enable` sets up three scoped collections per project: file sync, passive captures (web fetches + session transcripts), and per-agent memory. Captures are separated from the code index so research doesn't pollute code search
 - **Named databases** --- isolated LanceDB directories with independent sync registries. Switch with `use` for work/personal separation
 - **Research agent** --- `researcher` subagent combines quarry local search with web research, auto-ingests valuable findings
@@ -231,15 +231,17 @@ Once enabled, the captures dir becomes a standalone nested git repo. `quarry cap
 
 ## How It Works
 
-Quarry runs as a daemon — one `quarryd` process per machine holds the engine (embedding model, LanceDB, pipeline, sync registry). Claude Code sessions reach it through mcp-proxy over WebSocket:
+Quarry runs as a daemon — one `quarryd` process per machine holds the engine (embedding model, LanceDB, pipeline, sync registry) and serves a versioned REST API under `/v1`. The CLI and Claude Code hooks reach it over HTTP; Claude Code's MCP tools run through the stdio `quarry mcp` server.
 
 ```text
-                    stdio                       wss:// (TLS)
-Claude Code <-----------------> mcp-proxy <---------------------> quarryd
-             MCP JSON-RPC       (~5 MB Go)      pinned CA cert    (one engine)
+                       HTTP /v1 (TLS, pinned CA)
+CLI + hooks  <--------------------------------------->  quarryd
+                                                        (one engine)
+                       stdio, MCP JSON-RPC
+Claude Code  <--------------------------------------->  quarry mcp
 ```
 
-One resident engine means the model loads once and MCP state is shared across sessions — no per-session ~200 MB reload. The mcp-proxy and remote connections use TLS with a self-signed, pinned CA — even on localhost.
+One resident engine means the CLI and hooks reuse the daemon's loaded model instead of a per-invocation ~200 MB reload. Remote and loopback REST connections use TLS with a self-signed, pinned CA — even on localhost.
 
 The **target** is that *every* interface — CLI, library, and MCP — is a thin client of that one daemon over a versioned REST/WebSocket contract; this daemon-first model is specified in [DES-031 v2](DESIGN.md) (ACCEPTED, in implementation). Today the CLI and library still load the engine in-process on local calls, and MCP can fall back to an in-process `quarry mcp` when mcp-proxy is absent; those local-engine paths are being removed.
 

@@ -149,20 +149,7 @@ class DaemonServer:
             await original_startup(sockets=sockets)
             if server.servers and server.servers[0].sockets:
                 actual_port = server.servers[0].sockets[0].getsockname()[1]
-                # Write the sidecar pair all-or-nothing: if either write fails
-                # (disk full, permission), remove both so startup never leaves
-                # a lone port file (which a client reads as "daemon up") or an
-                # orphan token.  Token first, then port; _bound is set only
-                # after BOTH succeed, so the shutdown cleanup stays consistent.
-                try:
-                    if self._config.api_key is not None:
-                        self._run_dir.token_file.write(self._config.api_key)
-                    self._run_dir.port_file.write(actual_port)
-                except OSError:
-                    self._run_dir.token_file.remove()
-                    self._run_dir.port_file.remove()
-                    raise
-                self._bound = True
+                self._write_sidecars(actual_port)
                 logger.info(
                     "Quarry server listening on %s://%s:%d",
                     self._config.scheme,
@@ -175,3 +162,29 @@ class DaemonServer:
                 )
 
         server.startup = _startup_with_sidecars  # type: ignore[method-assign]
+
+    def _write_sidecars(self, actual_port: int) -> None:
+        """Write serve.token + serve.port all-or-nothing after a successful bind.
+
+        On any write failure, remove ONLY the sidecars THIS instance wrote —
+        never a peer's on the shared per-db path.  An instance with no api_key
+        writes no token, so its failed port write must not delete a running
+        peer's serve.token.  Both writes are atomic (a failed write leaves
+        nothing), so the flags record only completed writes.  ``_bound`` is set
+        only after both succeed, keeping the shutdown cleanup consistent.
+        """
+        wrote_token = False
+        wrote_port = False
+        try:
+            if self._config.api_key is not None:
+                self._run_dir.token_file.write(self._config.api_key)
+                wrote_token = True
+            self._run_dir.port_file.write(actual_port)
+            wrote_port = True
+        except OSError:
+            if wrote_token:
+                self._run_dir.token_file.remove()
+            if wrote_port:
+                self._run_dir.port_file.remove()
+            raise
+        self._bound = True
