@@ -287,18 +287,21 @@ class ClientConfig:
         auth = headers.get("Authorization")
         if not isinstance(auth, str):
             return None
-        # Parse "<scheme> <token>" and match the scheme case-insensitively: the
-        # daemon compares ``parts[0].lower() == "bearer"``, so a stored
-        # "bearer <tok>" must resolve to <tok>, not be dropped client-side and
-        # sent as a tokenless (401) request.
-        scheme, _, token = auth.partition(" ")
-        if scheme.lower() != "bearer":
+        # Mirror the daemon's parser (``reject_unauthorized`` in
+        # daemon/routes/base.py): split on ANY whitespace and require EXACTLY
+        # two parts (scheme, token).  ``partition(" ")`` diverged on the two
+        # cases the daemon rejects — a tab-separated header (``partition`` left
+        # the scheme glued to the token, dropping a valid credential) and a
+        # token containing whitespace (the daemon 401s a >2-part header, so the
+        # client must not present one).  Scheme compared case-insensitively: a
+        # stored "bearer <tok>" must resolve, not be sent tokenless (401).
+        parts = auth.split()
+        if len(parts) != 2 or parts[0].lower() != "bearer":
             return None
-        # An empty/whitespace token (a bare "Bearer ") is absent, not a
-        # credential: return None so remote_mapping emits NO Authorization
-        # header rather than an empty one that 401s downstream.  Mirrors the
-        # loopback empty-serve.token fail-closed on the stored-header path.
-        return token.strip() or None
+        # ``split()`` never yields empty parts, so ``parts[1]`` is a non-empty
+        # token — a bare "Bearer " (empty credential) fails the length check and
+        # returns None, emitting NO Authorization header rather than a 401 one.
+        return parts[1]
 
     @staticmethod
     def _host_of(url: str) -> str:

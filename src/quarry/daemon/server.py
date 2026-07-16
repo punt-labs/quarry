@@ -12,7 +12,9 @@ clients present to authenticate).
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import logging
+import os
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Self, cast, final
@@ -66,6 +68,7 @@ class DaemonServer:
     _config: ServeConfig
     _run_dir: RunDir
     _bound: bool
+    _lock_fd: int
 
     def __new__(cls, settings: Settings, config: ServeConfig) -> Self:
         config = cls._authenticated(config)
@@ -74,6 +77,7 @@ class DaemonServer:
         self._config = config
         self._run_dir = RunDir(settings.lancedb_path.parent)
         self._bound = False
+        self._lock_fd = -1  # -1 = lock not held; a real fd once acquired.
         return self
 
     @staticmethod
@@ -115,22 +119,71 @@ class DaemonServer:
         cls(settings, config).run()
 
     def run(self) -> None:
-        """Build the app, bind uvicorn, and block until shutdown."""
-        ctx = DaemonContext(
-            self._settings,
-            api_key=self._config.api_key,
-            cors_origins=self._config.cors_origins,
-        )
-        ctx.warm()  # Build cached resources single-threaded before serving.
+        """Build the app, bind uvicorn, and block until shutdown.
 
-        app = build_app(ctx, lifespan=self._lifespan)
-        server = uvicorn.Server(self._uvicorn_config(app))
-        self._install_startup_hook(server)
-        logger.info(
-            "Starting Quarry server on %s:%d", self._config.host, self._config.port
-        )
-        server.run()
-        logger.info("Server stopped")
+        Acquire the run-dir lock FIRST so a second daemon on the same database
+        fails closed here — before warming the engine or writing any shared
+        sidecar — and release it on every exit path in the ``finally``.
+        """
+        self._acquire_run_dir_lock()
+        try:
+            ctx = DaemonContext(
+                self._settings,
+                api_key=self._config.api_key,
+                cors_origins=self._config.cors_origins,
+            )
+            ctx.warm()  # Build cached resources single-threaded before serving.
+
+            app = build_app(ctx, lifespan=self._lifespan)
+            server = uvicorn.Server(self._uvicorn_config(app))
+            self._install_startup_hook(server)
+            logger.info(
+                "Starting Quarry server on %s:%d",
+                self._config.host,
+                self._config.port,
+            )
+            server.run()
+            logger.info("Server stopped")
+        finally:
+            self._release_run_dir_lock()
+
+    def _acquire_run_dir_lock(self) -> None:
+        """Take an exclusive advisory lock so ONE daemon owns this run dir.
+
+        serve.token / serve.port are shared per-database sidecars.  A SECOND
+        quarryd on the same database — even on a different port, so the bind
+        never conflicts — would overwrite the first's serve.token (the first's
+        clients then 401) and, on its own exit, delete the first's sidecars
+        (locking everyone out).  An exclusive ``flock`` held for the process
+        lifetime makes the lock-holder the ONLY writer: it closes that clobber
+        AND the token-writer's temp-retry race (no concurrent writer can exist).
+        Fails closed: a second daemon exits rather than corrupt the shared token.
+        """
+        lock_path = self._run_dir.lock_path
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            os.close(fd)
+            msg = (
+                "another quarryd already owns this database's run dir "
+                f"({lock_path.parent})"
+            )
+            raise SystemExit(msg) from exc
+        self._lock_fd = fd
+
+    def _release_run_dir_lock(self) -> None:
+        """Release the run-dir lock and close its fd (idempotent).
+
+        ``flock`` also releases when the fd closes on process exit, so a crashed
+        daemon frees the lock for the next start; this is the graceful path.
+        """
+        if self._lock_fd < 0:
+            return
+        fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+        os.close(self._lock_fd)
+        self._lock_fd = -1
 
     @asynccontextmanager
     async def _lifespan(self, _app: Starlette) -> AsyncGenerator[None]:
@@ -196,11 +249,14 @@ class DaemonServer:
     def _write_sidecars(self, actual_port: int) -> None:
         """Write serve.token + serve.port all-or-nothing after a successful bind.
 
-        On any write failure, remove ONLY the sidecars THIS instance wrote —
-        never a peer's on the shared per-db path.  Both writes are atomic (a
-        failed write leaves nothing), so the flags record only completed writes.
-        ``_bound`` is set only after both succeed, keeping the shutdown cleanup
-        consistent.
+        On any failure — an OSError OR an interrupt (KeyboardInterrupt / SIGINT)
+        landing between the two writes — remove ONLY the sidecars THIS instance
+        wrote, never a peer's on the shared per-db path, then re-raise.  Catching
+        BaseException matters: a SIGINT after serve.token but before serve.port
+        would otherwise leave a lone serve.token that loopback clients read as a
+        false "daemon up".  Both writes are atomic (a failed write leaves
+        nothing), so the flags record only completed writes.  ``_bound`` is set
+        only after both succeed, keeping the shutdown cleanup consistent.
         """
         wrote_token = False
         wrote_port = False
@@ -211,7 +267,7 @@ class DaemonServer:
             wrote_token = True
             self._run_dir.port_file.write(actual_port)
             wrote_port = True
-        except OSError:
+        except BaseException:
             if wrote_token:
                 self._run_dir.token_file.remove()
             if wrote_port:

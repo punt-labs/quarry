@@ -688,6 +688,72 @@ class TestServeToken:
         assert peer_port.read_text() == "9999"  # untouched — token write failed first
         assert server._bound is False
 
+    def test_base_exception_between_writes_leaves_no_lone_sidecar(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A SIGINT/KeyboardInterrupt landing AFTER serve.token but BEFORE
+        serve.port must not leave a lone serve.token — a false "daemon up"
+        signal to loopback clients.  The cleanup catches BaseException, removes
+        only what this instance wrote, and re-raises."""
+        server = self._server(tmp_path, "the-bearer")
+        uv = self._bound_server_mock()
+        server._install_startup_hook(uv)
+
+        def _interrupt(*_args: object, **_kwargs: object) -> None:
+            raise KeyboardInterrupt
+
+        # Token write succeeds; the port write is interrupted (not an OSError).
+        monkeypatch.setattr("quarry.run_dir.PortFile.write", _interrupt)
+        with pytest.raises(KeyboardInterrupt):
+            asyncio.run(uv.startup())
+
+        assert not (tmp_path / "default" / "serve.token").exists()  # no lone token
+        assert not (tmp_path / "default" / "serve.port").exists()
+        assert server._bound is False
+
+
+class TestRunDirLock:
+    """Exactly one daemon may own a run dir — an exclusive advisory flock closes
+    the shared-run-dir clobber (a second daemon on a different port overwriting
+    the first's serve.token) and the token-writer's temp-retry race."""
+
+    def _server(self, tmp_path: Path, api_key: str) -> DaemonServer:
+        settings = MagicMock()
+        settings.lancedb_path = tmp_path / "default" / "lancedb"  # parent runs dir
+        config = ServeConfig(host="127.0.0.1", port=8420, api_key=api_key)
+        return DaemonServer(settings, config)
+
+    def test_second_daemon_refused_and_first_token_untouched(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "default").mkdir(parents=True)
+        peer_token = tmp_path / "default" / "serve.token"
+        peer_token.write_text("first-daemon-token")  # daemon #1's live token
+
+        first = self._server(tmp_path, "first")
+        first._acquire_run_dir_lock()
+        try:
+            second = self._server(tmp_path, "second")
+            with pytest.raises(SystemExit, match="already owns this database"):
+                second._acquire_run_dir_lock()
+            # #2 was refused BEFORE writing anything — #1's token is intact.
+            assert peer_token.read_text() == "first-daemon-token"
+            assert second._lock_fd < 0  # #2 never took the lock
+        finally:
+            first._release_run_dir_lock()
+
+    def test_lock_released_allows_reacquire(self, tmp_path: Path) -> None:
+        # The lock releases on exit, so a restart (or a distinct daemon after
+        # the first exits) can re-acquire the same run dir.
+        first = self._server(tmp_path, "first")
+        first._acquire_run_dir_lock()
+        first._release_run_dir_lock()
+
+        second = self._server(tmp_path, "second")
+        second._acquire_run_dir_lock()  # succeeds now that #1 released
+        assert second._lock_fd >= 0
+        second._release_run_dir_lock()
+
 
 class TestNotFound:
     def test_unknown_path_returns_404(self, client: TestClient) -> None:

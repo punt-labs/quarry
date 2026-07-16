@@ -218,6 +218,30 @@ class TestBearerExtraction:
         ).token
         assert resolved == "tok"
 
+    def test_tab_separated_bearer_resolves(self) -> None:
+        # The daemon parses Authorization with split() (any whitespace); a
+        # tab-separated "Bearer\ttok" must resolve to the token, not be dropped
+        # client-side (partition(" ") left the scheme glued to the token).
+        resolved = ClientConfig.from_login(
+            {
+                "url": "wss://x.example.com:1",
+                "headers": {"Authorization": "Bearer\ttok"},
+            }
+        ).token
+        assert resolved == "tok"
+
+    def test_more_than_two_parts_is_rejected(self) -> None:
+        # The daemon 401s a >2-part header (len(parts) != 2), so the client must
+        # not present one: a token with an embedded space is not a valid bearer.
+        cfg = ClientConfig.from_login(
+            {
+                "url": "wss://x.example.com:1",
+                "headers": {"Authorization": "Bearer tok extra"},
+            }
+        )
+        assert cfg.token is None
+        assert "headers" not in cfg.remote_mapping()
+
 
 class TestLoopbackTokenProbe:
     """The non-raising probe helpers used by login validation and `--ping`."""

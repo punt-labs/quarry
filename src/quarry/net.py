@@ -41,14 +41,21 @@ class LoopbackPolicy:
 
     @property
     def _normalized(self) -> str:
-        """The host lowercased, whitespace-stripped, and de-trailing-dotted.
+        """The host lowercased, de-bracketed, whitespace-stripped, de-dotted.
 
         Hostnames are case-insensitive (RFC 4343); a single trailing dot is the
         DNS root label (``localhost.`` == ``localhost``); surrounding whitespace
-        is never significant.  Harmless for IP literals — ``ip_address`` still
-        parses the normalized form.
+        is never significant.  Surrounding brackets are stripped too: a URL wraps
+        an IPv6 literal as ``[::1]`` (RFC 3986), but ``ipaddress.ip_address``
+        rejects the brackets — so ``[::1]`` must normalize to ``::1`` to classify
+        as loopback (else a loopback IPv6 login is treated as remote and the bind
+        gate wrongly demands a key).  Harmless for names and IPv4 literals: they
+        carry no surrounding brackets to strip.
         """
-        return self._host.strip().lower().removesuffix(".")
+        host = self._host.strip().lower().removesuffix(".")
+        if host.startswith("[") and host.endswith("]"):
+            host = host[1:-1]
+        return host
 
     @property
     def is_loopback(self) -> bool:

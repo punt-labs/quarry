@@ -140,3 +140,39 @@ class TestEnforceBindKey:
         # Fail closed: an unresolved name is treated as remote.
         with pytest.raises(SystemExit, match="Refusing to bind"):
             LoopbackPolicy("some-host.internal").enforce_bind_key(None)
+
+
+class TestBracketedIPv6:
+    """A URL wraps an IPv6 literal as ``[::1]`` (RFC 3986); LoopbackPolicy must
+    strip the brackets so ipaddress parses it and both gates classify it."""
+
+    @pytest.mark.parametrize(
+        "host", ["[::1]", "[::ffff:127.0.0.1]", "[0:0:0:0:0:0:0:1]"]
+    )
+    def test_bracketed_loopback_classifies_as_loopback(self, host: str) -> None:
+        policy = LoopbackPolicy(host)
+        assert policy.is_loopback is True
+        assert policy.is_literal_loopback is True
+
+    def test_bracketed_remote_ipv6_is_not_loopback(self) -> None:
+        policy = LoopbackPolicy("[2001:db8::5]")
+        assert policy.is_loopback is False
+        assert policy.is_literal_loopback is False
+
+    @pytest.mark.parametrize(
+        ("host", "expected"),
+        [
+            ("[::1]", "::1"),  # brackets stripped for the policy mapping
+            ("[::ffff:127.0.0.1]", "::ffff:127.0.0.1"),
+            (" [::1] ", "::1"),  # whitespace + brackets both stripped
+        ],
+    )
+    def test_bracketed_host_canonicalizes_de_bracketed(
+        self, host: str, expected: str
+    ) -> None:
+        assert LoopbackPolicy(host).canonical_host == expected
+
+    def test_bracketed_loopback_bind_not_key_gated(self) -> None:
+        # A loopback IPv6 bind (host arrives bracketed from a URL) must not be
+        # forced to carry an operator key — the launcher mints its token.
+        LoopbackPolicy("[::1]").enforce_bind_key(None)

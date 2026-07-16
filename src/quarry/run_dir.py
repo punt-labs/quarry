@@ -195,3 +195,16 @@ class RunDir:
     @property
     def token_file(self) -> ServeTokenFile:
         return ServeTokenFile(self._data_dir / "serve.token")
+
+    @property
+    def lock_path(self) -> Path:
+        """Path to ``serve.lock`` — the daemon's exclusive-ownership advisory lock.
+
+        NOT a client-read sidecar: clients never open it.  The daemon holds an
+        exclusive ``flock`` on it for its whole lifetime so exactly one daemon
+        owns a run dir, making that daemon the SOLE writer of serve.token /
+        serve.port.  That structurally closes the shared-run-dir clobber (a
+        second daemon on a different port overwriting the first's token) and the
+        token-writer's temp-retry race (no concurrent writer can exist).
+        """
+        return self._data_dir / "serve.lock"
