@@ -191,7 +191,11 @@ class ClientConfig:
         auth = headers.get("Authorization")
         if not isinstance(auth, str) or not auth.startswith("Bearer "):
             return None
-        return auth.removeprefix("Bearer ")
+        # An empty/whitespace bearer (a bare "Bearer ") is absent, not a
+        # credential: return None so remote_mapping emits NO Authorization
+        # header rather than an empty one that 401s downstream.  Mirrors the
+        # loopback empty-serve.token fail-closed on the stored-header path.
+        return auth.removeprefix("Bearer ").strip() or None
 
     @staticmethod
     def _host_of(url: str) -> str:

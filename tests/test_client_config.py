@@ -149,6 +149,21 @@ class TestBearerExtraction:
         )
         assert cfg.token is None
 
+    def test_empty_bearer_is_none_and_emits_no_header(self) -> None:
+        # A bare "Bearer " (empty/whitespace credential) is absent, not a token:
+        # no Authorization header is emitted, mirroring the loopback fail-closed.
+        cfg = ClientConfig.from_login(
+            {"url": "wss://x.example.com:1", "headers": {"Authorization": "Bearer "}}
+        )
+        assert cfg.token is None
+        assert "headers" not in cfg.remote_mapping()
+
+    def test_whitespace_bearer_is_none(self) -> None:
+        cfg = ClientConfig.from_login(
+            {"url": "wss://x.example.com:1", "headers": {"Authorization": "Bearer    "}}
+        )
+        assert cfg.token is None
+
 
 class TestLoopbackTokenProbe:
     """The non-raising probe helpers used by login validation and `--ping`."""
