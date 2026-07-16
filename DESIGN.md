@@ -1008,6 +1008,19 @@ PR-3a implements the daemon/supervision/loopback-auth half of v2.2. What shipped
   service-managed case (default database) is unaffected.
 - **install `/health` gate** requires `state=="ready"`, not a bare HTTP 200 (a
   warming daemon returns 200 with `state=="starting"`).
+- **Deferred (PR-4) — install success misconfigures the plugin's MCP transport
+  (`quarry-lejv`, P1).** PR-1 removed the daemon's `/mcp` WebSocket, so the
+  interim MCP transport is stdio `quarry mcp`, which loads the engine in-process
+  until PR-4's mcp-as-client lands. But `install.sh`'s successful `quarry login`
+  still writes `quarry.toml`, and `plugin.json` prefers `mcp-proxy` →
+  `wss://…/mcp` — a now-dead route — so a fresh or re-install misconfigures
+  Claude Code's MCP on the **success** path (a *failed* login instead leaves the
+  working stdio `quarry mcp` fallback in place). PR-3a's loopback login also
+  stores no bearer. Repointing the install MCP transport is PR-4's domain
+  (mcp-as-client; `mcp-proxy` out of quarry's path), so it is deferred here
+  rather than fixed in PR-3a, tracked as `quarry-lejv`. **Re-install guard until
+  PR-4:** after re-installing, keep (or point) the Claude Code plugin at stdio
+  `quarry mcp`; do **not** rely on the written `mcp-proxy` `quarry.toml` config.
 
 **Rejected alternatives (operator/leader rulings):**
 
