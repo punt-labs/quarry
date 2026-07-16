@@ -948,6 +948,53 @@ added pyright to CI; PR-2 introduces `quarry/api` + FastAPI + `/v1` (+ the missi
 `serve.token`, `QuarryClient` + the CLI thin-client (deleting `RemoteClient`), and
 `quarry mcp`-as-client.
 
+#### PR-3a as landed (`quarryd` + `serve.token` + `ClientConfig`)
+
+PR-3a implements the daemon/supervision/loopback-auth half of v2.2. What shipped:
+
+- **`quarryd` entry point** (`quarry.daemon.launcher:entrypoint`) — the sole
+  engine process. A `DaemonLauncher` refuses a remote-reachable bind that has no
+  operator key, mints a 256-bit loopback token when none is given, and hands a
+  `ServeConfig` to `DaemonServer`. The `quarry serve` subcommand is **deleted**
+  (PL-PP-1, no shim); the supervised unit execs `quarryd` (launchd `KeepAlive` /
+  systemd `Restart=always`).
+- **`serve.token` (mode-0600).** `DaemonServer` writes the token beside
+  `serve.port` (shared `RunDir`) before the socket opens and removes it on
+  shutdown. The write is atomic (`os.open(0o600)` + tmp-rename) so no
+  world-readable or partial-file window exists. This closes the multi-user-host
+  exposure: before it, any local UID could reach the unauthenticated daemon on
+  `127.0.0.1`.
+- **`LoopbackPolicy`** (shared by the daemon bind gate and the client resolver)
+  replaces the `127.0.0.1`-literal check with an `ipaddress`-based classifier:
+  `localhost`/`::1`/`127.0.0.0/8`/`::ffff:127.x` are loopback; `0.0.0.0`/`::` and
+  any unresolved name are treated as remote (fail closed — require a key).
+- **`ClientConfig`** (`quarry/client`) resolves a login config into (URL, pinned
+  CA, bearer). For a loopback target the bearer is read **live** from
+  `serve.token`; for a remote target the stored bearer is kept. It fails closed
+  (`OSError` → typed `ClientConfigError`) rather than sending an empty bearer.
+  The 13 `RemoteClient` construction sites route through `ClientConfig`, so any
+  loopback CLI session now presents the token.
+- **install `/health` gate** requires `state=="ready"`, not a bare HTTP 200 (a
+  warming daemon returns 200 with `state=="starting"`).
+
+**Rejected alternatives (operator/leader rulings):**
+
+- **Route the local in-process CLI onto the daemon now** — rejected. It would
+  break CLI usage when no daemon is running; that cutover (and its daemon-down
+  nudge/fallback handling) belongs to `QuarryClient` in v2-3. PR-3a re-sources
+  only sessions already in remote mode; the no-login local path is unchanged.
+- **Trust a stored token for a loopback target** — rejected. `quarryd` mints a
+  fresh token every restart (respawned under KeepAlive/`Restart=always`), so a
+  stored token is stale immediately; loopback bearers are read live.
+- **Auto-generate a token for a non-loopback bind** — rejected as false
+  security: an auto-token in a local 0600 file is unreadable by the remote
+  clients that need it. A non-loopback bind still requires an operator-set key.
+- **Place the token-injecting construction seam in `__main__` (a free helper) or
+  on `RemoteClient` (a classmethod)** — rejected: the first regresses the CLI
+  god module, the second grows `remote_client.py` (deleted in v2-3). The seam
+  lives in the new, absolute-gated `client` tier (`ClientConfig.remote_client`)
+  so each CLI change is a call-site swap.
+
 ### Context (audited reality)
 
 A 5-agent audit (2026-07-12) established ground truth and corrected the v1 framing:
@@ -988,7 +1035,7 @@ A 5-agent audit (2026-07-12) established ground truth and corrected the v1 frami
 |----|------|-------|
 | v2-1 | `quarry-p8dq` | This ADR + `architecture.tex`/`CLAUDE.md`/README doc corrections (doc-only) |
 | v2-2 | `quarry-qyrm` | FastAPI + `quarry/api` contract: schemas, `/v1`, OpenAPI, `optimize`/`backfill` endpoints, alias-route removal, menubar lockstep |
-| v2-3a | `quarry-ufjt` | Supervised units + autostart-nudge helper (lands before v2-3) |
+| v2-3a | `quarry-ufjt` | `quarryd` entry point + `DaemonLauncher`; `serve.token` (mode-0600) + `LoopbackPolicy` detection fix; `ClientConfig` loopback-token resolver + re-source the `RemoteClient` sites; supervised units exec `quarryd` (`Restart=always`); delete `quarry serve`; install `/health` `state==ready` gate |
 | v2-3 | `quarry-veb0` | `QuarryClient` + typed errors; CLI thin-client (delete `RemoteClient` + engine branches); `disable` chunk-purge → daemon |
 | v2-4 | `quarry-ydz5` | MCP over `/v1/mcp`; drop `quarry mcp`; reuse warmed `ctx` |
 | v2-5 | `quarry-5e5t` | Library API = `QuarryClient` (pure in-repo removal of engine exports) |

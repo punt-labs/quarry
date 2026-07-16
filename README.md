@@ -83,7 +83,7 @@ No special flag needed --- the default install runs a local daemon on localhost.
 
 - **20+ formats** --- PDFs (with OCR for scanned pages), source code (AST-aware splitting), spreadsheets, presentations, HTML, Markdown, LaTeX, DOCX, images
 - **Semantic search** --- retrieval is by meaning, not keyword. A query about "margins" finds passages about profitability even if they never use that word
-- **Daemon architecture** --- one `quarry serve` process loads the embedding model once and serves all Claude Code sessions via [mcp-proxy](https://github.com/punt-labs/mcp-proxy) over WebSocket
+- **Daemon architecture** --- one `quarryd` process loads the embedding model once and serves all Claude Code sessions via [mcp-proxy](https://github.com/punt-labs/mcp-proxy) over WebSocket
 - **Passive knowledge capture** --- `quarry enable` sets up three scoped collections per project: file sync, passive captures (web fetches + session transcripts), and per-agent memory. Captures are separated from the code index so research doesn't pollute code search
 - **Named databases** --- isolated LanceDB directories with independent sync registries. Switch with `use` for work/personal separation
 - **Research agent** --- `researcher` subagent combines quarry local search with web research, auto-ingests valuable findings
@@ -167,7 +167,7 @@ quarry captures init                           # bootstrap the private capture s
 quarry captures push                           # re-scrub + push captures to the shadow
 quarry status                                  # database dashboard
 quarry doctor                                  # health check
-quarry serve                                   # start daemon on :8420
+quarryd                                        # start the engine daemon on :8420
 quarry install                                 # set up daemon, TLS certs, mcp-proxy
 
 # Remote connections
@@ -189,7 +189,7 @@ Quarry works with zero configuration. These environment variables are available 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `QUARRY_PROVIDER` | *(auto)* | ONNX execution provider: `cpu`, `cuda`, or unset (auto-detect) |
-| `QUARRY_API_KEY` | *(none)* | Bearer token for `quarry serve` |
+| `QUARRY_API_KEY` | *(none)* | Bearer token for `quarryd` (required for a non-loopback bind) |
 | `QUARRY_ROOT` | `~/.punt-labs/quarry/data` | Base directory for all databases |
 | `CHUNK_MAX_CHARS` | `1800` | Max characters per chunk (~450 tokens) |
 | `CHUNK_OVERLAP_CHARS` | `200` | Overlap between consecutive chunks |
@@ -231,11 +231,11 @@ Once enabled, the captures dir becomes a standalone nested git repo. `quarry cap
 
 ## How It Works
 
-Quarry runs as a daemon — one `quarry serve` process per machine holds the engine (embedding model, LanceDB, pipeline, sync registry). Claude Code sessions reach it through mcp-proxy over WebSocket:
+Quarry runs as a daemon — one `quarryd` process per machine holds the engine (embedding model, LanceDB, pipeline, sync registry). Claude Code sessions reach it through mcp-proxy over WebSocket:
 
 ```text
                     stdio                       wss:// (TLS)
-Claude Code <-----------------> mcp-proxy <---------------------> quarry serve
+Claude Code <-----------------> mcp-proxy <---------------------> quarryd
              MCP JSON-RPC       (~5 MB Go)      pinned CA cert    (one engine)
 ```
 

@@ -59,23 +59,25 @@ Quarry is a local semantic search engine.  It ingests documents in
 LanceDB, and serves semantic search to AI agents (Claude Code, Claude
 Desktop) and a macOS menu bar app.
 
-The system is \textbf{daemon-first} (DES-031 v2, ACCEPTED, in
-implementation): a single \texttt{quarry serve} daemon holds the
-engine, and the CLI, MCP, and library are pure clients that reach it
-over a versioned wire protocol --- the daemon is the intermediary
-service layer.  The prior \emph{projection} strategy (a single core
-library that the surfaces import directly, with no intermediary service
-layer) described the as-built state DES-031 v2 replaces; today the CLI
-and library still load the engine in-process on local calls, and that
-path is being removed.
+The system is \textbf{daemon-first} (DES-031 v2.2, ACCEPTED, in
+implementation): a single \texttt{quarryd} process holds the engine,
+and the CLI, MCP, and library are clients that reach it over a versioned
+wire protocol --- the daemon is the intermediary service layer.  As of
+v2-3a the engine runs only in \texttt{quarryd} (the \texttt{quarry
+serve} subcommand is retired), loopback requests are authenticated with a
+mode-0600 \texttt{serve.token}, and the CLI remote paths resolve that
+token through \texttt{ClientConfig}.  The full client tier
+(\texttt{QuarryClient}) and \texttt{quarry mcp}-as-client are in flight
+(v2-3/v2-4); until they land, the local-mode CLI and \texttt{quarry mcp}
+still load the engine in-process.
 
 \subsection{Design Principles}
 
 \begin{enumerate}[label=\textbf{P\arabic*}.]
-  \item \textbf{Daemon-first.}  The \texttt{quarry serve} daemon is
+  \item \textbf{Daemon-first.}  The \texttt{quarryd} process is
     the single engine (embedding model, LanceDB, pipeline, sync
-    registry); the CLI, MCP, and library are pure clients over a
-    versioned REST/WebSocket contract (DES-031 v2, ACCEPTED, in
+    registry); the CLI, MCP, and library are clients over a
+    versioned REST contract (DES-031 v2.2, ACCEPTED, in
     implementation).  The prior \emph{library-first} principle --- the
     core library did all work and the surfaces were thin wrappers ---
     described the as-built state DES-031 v2 replaces.
@@ -83,9 +85,9 @@ path is being removed.
     machine.  No API keys, no cloud accounts.  The embedding model
     downloads once ($\sim$120\,MB, int8 quantized).
   \item \textbf{One daemon, many clients.}  A single
-    \texttt{quarry serve} process loads the embedding model once
-    and serves all sessions over WebSocket.  Clients connect via
-    \texttt{mcp-proxy}.
+    \texttt{quarryd} process loads the embedding model once and
+    serves all sessions over the REST wire; supervised by launchd
+    \texttt{KeepAlive} / systemd \texttt{Restart=always}.
   \item \textbf{Fire-and-forget I/O.}  Side-effect MCP tools return
     immediately and process in a bounded thread pool.  Search is
     synchronous.
@@ -434,10 +436,37 @@ MCP's stdio transport model spawns a new process per session.  Without
 a daemon, five Claude Code tabs means five copies of the model in
 memory and five cold starts.
 
-\texttt{quarry serve} loads the model once and keeps it resident.
-The \texttt{mcp-proxy} binary ($\sim$5\,MB Go binary, $<$10\,ms
-startup) bridges each session's MCP stdio to the daemon over
-WebSocket.
+\texttt{quarryd} loads the model once and keeps it resident, respawned
+by launchd \texttt{KeepAlive} / systemd \texttt{Restart=always}.
+
+\subsection{Process Boundary and Loopback Authentication (v2.2)}
+
+\texttt{quarryd} (\modpath{daemon/launcher.py}) is a dedicated entry
+point --- the sole engine process, making the client/engine boundary a
+hard \emph{process} split.  Only \modpath{daemon/} imports the engine;
+the \texttt{quarry serve} subcommand is deleted.
+
+At startup \texttt{quarryd} refuses a remote-reachable bind that carries
+no operator key (an auto-generated token would be false security --- it is
+unreadable by the remote clients that need it), and for a loopback bind
+mints a 256-bit \texttt{serve.token} when none is supplied.  The daemon
+writes that token mode-0600 beside \texttt{serve.port} (shared
+\modpath{run\_dir.py}) via an atomic \texttt{os.open(0o600)} +
+tmp-rename, and requires it on every request --- closing the
+multi-user-host exposure where any local UID could reach the
+unauthenticated daemon on \texttt{127.0.0.1}.  Loopback classification
+(\modpath{net.py}, \texttt{LoopbackPolicy}) is \texttt{ipaddress}-based:
+\texttt{localhost}/\texttt{::1}/\texttt{127.0.0.0/8} are loopback,
+\texttt{0.0.0.0} and unresolved names fail closed.
+
+Clients resolve the target through \texttt{ClientConfig}
+(\modpath{client/config.py}): for a loopback URL the bearer is read
+\emph{live} from \texttt{serve.token} (it rotates every daemon restart,
+so a stored token is never trusted); for a remote URL the stored bearer
+is kept.  A missing loopback token fails closed with an actionable error
+rather than a bare 401.  \texttt{ClientConfig} is the client tier's first
+piece; the full \texttt{QuarryClient} and \texttt{quarry
+mcp}-as-client land in v2-3/v2-4.
 
 \subsection{mcp-proxy Architecture}
 

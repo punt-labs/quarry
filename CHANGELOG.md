@@ -27,6 +27,18 @@ across `transform`, `index`, and `connector`).
   `docs/openapi.json` from the live FastAPI app; `make check-openapi` (wired
   into `make check`) fails if the committed schema drifts from the app, keeping
   the published wire contract honest.
+- **tool (daemon)**: new `quarryd` engine binary — the sole process that
+  loads the engine (embedding model, LanceDB, ingestion, retrieval). It
+  refuses a non-loopback bind without an operator key, and mints a 256-bit
+  loopback `serve.token` when none is supplied. Supervised units exec
+  `quarryd` directly.
+- **infra (security)**: loopback `serve.token` (mode-0600, atomic write) —
+  the daemon now requires a bearer on every request including `127.0.0.1`,
+  closing the exposure where any local user on a multi-user host could reach
+  the unauthenticated daemon. `ClientConfig` (`quarry/client`) resolves it:
+  a loopback target reads the token live (it rotates each daemon restart, so
+  a stored token is never trusted), a remote target keeps its stored bearer,
+  and a missing loopback token fails closed with an actionable error.
 
 ### Changed
 
@@ -56,6 +68,14 @@ across `transform`, `index`, and `connector`).
   type regression that passes one checker but breaks the other can no longer
   merge green. This closes the gap that let the `mcp` 1.28.1 bump land while
   `make check` was red locally on a `reportDeprecated` finding.
+- **infra (service)**: the launchd/systemd unit now execs `quarryd` instead
+  of `quarry serve`, and systemd uses `Restart=always` (launchd already
+  `KeepAlive`) so the engine respawns on any exit. Re-run `quarry install`
+  to regenerate the unit.
+- **infra (install)**: the install `/health` gate now requires
+  `state == "ready"`, not a bare HTTP 200 — a warming daemon returns 200
+  with `state == "starting"`, so a bare 200 could green-light an unready
+  daemon.
 
 ### Removed
 
@@ -75,6 +95,17 @@ across `transform`, `index`, and `connector`).
   prefers when present), that endpoint is gone in this interim — switch to the
   local stdio `quarry mcp` server, or stay on the prior release, until the
   remote `QuarryClient` MCP path lands.
+- **tool (CLI)**: removed the `quarry serve` subcommand (no shim, PL-PP-1) —
+  start the engine with `quarryd` (the supervised unit does this for you).
+
+### Security
+
+- **infra (loopback auth)**: the daemon no longer serves unauthenticated
+  loopback requests. It writes a mode-0600 `serve.token` and requires it on
+  every request, and the loopback classifier is fixed to recognize
+  `localhost`/`::1`/`127.0.0.0/8` (the old `127.0.0.1`-literal check
+  misclassified them) while treating `0.0.0.0` and unresolved names as
+  remote (fail closed — an operator key is required).
 
 ## [1.19.0] - 2026-07-14
 
