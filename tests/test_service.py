@@ -80,7 +80,12 @@ class TestDetectPlatform:
 
 
 class TestQuarrydExecArgs:
-    def test_prefers_uv_tool_binary(self, tmp_path: Path) -> None:
+    def test_prefers_uv_tool_binary(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Hermetic: a runner that exports QUARRY_SERVE_HOST would append --host
+        # and break the trailing-args assertion below.
+        monkeypatch.delenv("QUARRY_SERVE_HOST", raising=False)
         fake_bin = tmp_path / "quarryd"
         fake_bin.write_text("#!/bin/sh\n")
         fake_bin.chmod(0o755)

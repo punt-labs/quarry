@@ -65,6 +65,31 @@ class TestLaunch:
             launcher.launch()
         assert mock_serve.call_args[0][1].api_key == "k"
 
+    def test_whitespace_key_loopback_mints(self) -> None:
+        """A whitespace-only key is absent: a loopback bind MINTS and starts
+        (does not exit at the daemon boundary)."""
+        launcher = DaemonLauncher(_options(host="127.0.0.1", api_key="   "))
+        with (
+            patch("quarry.daemon.launcher.DaemonServer.serve") as mock_serve,
+            patch("quarry.daemon.launcher.Settings"),
+        ):
+            launcher.launch()
+        config = mock_serve.call_args[0][1]
+        assert config.api_key and config.api_key.strip()  # a real minted token
+        assert len(config.api_key) >= 32
+
+    def test_whitespace_key_non_loopback_refuses_at_gate(self) -> None:
+        """A whitespace-only key is absent: a network bind is refused AT the bind
+        gate (enforce_bind_key), not later at the daemon boundary."""
+        launcher = DaemonLauncher(_options(host="0.0.0.0", api_key="   "))  # noqa: S104
+        with (
+            patch("quarry.daemon.launcher.DaemonServer.serve") as mock_serve,
+            patch("quarry.daemon.launcher.Settings"),
+            pytest.raises(SystemExit, match="Refusing to bind"),
+        ):
+            launcher.launch()
+        mock_serve.assert_not_called()
+
     def test_minted_tokens_differ_between_launches(self) -> None:
         with (
             patch("quarry.daemon.launcher.DaemonServer.serve") as mock_serve,

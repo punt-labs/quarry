@@ -4503,6 +4503,51 @@ class TestLoginCmd:
         assert result.exit_code == 0, result.output
         assert mock_write.call_args[0][0] == "wss://127.0.0.1:8420/mcp"
 
+    def test_loopback_login_does_not_store_api_key(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """R4 live-only: a loopback login persists NO bearer — ClientConfig
+        resolves the live serve.token; a stale env key must not be saved."""
+        monkeypatch.setenv("QUARRY_API_KEY", "STALE-ENV-KEY")
+        (tmp_path / "serve.token").write_text("live-daemon-token")
+        fake_settings = MagicMock()
+        fake_settings.lancedb_path = tmp_path / "lancedb"  # parent == tmp_path
+        with (
+            patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
+            patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
+            patch("quarry.__main__.store_ca_cert"),
+            patch("quarry.__main__.validate_connection", return_value=(True, "")),
+            patch("quarry.__main__.write_proxy_config") as mock_write,
+            patch("quarry.__main__.CA_CERT_PATH", Path("/fake/quarry-ca.crt")),
+            patch("quarry.client.config.Settings") as mock_settings,
+        ):
+            resolver = mock_settings.load.return_value.resolve_db_paths
+            resolver.return_value = fake_settings
+            mock_settings.active_db.return_value = None
+            result = runner.invoke(app, ["login", "127.0.0.1", "--yes"])
+        _reset_globals()
+        assert result.exit_code == 0, result.output
+        # arg 1 is the persisted bearer — a loopback login stores None.
+        assert mock_write.call_args[0][1] is None
+        assert "STALE-ENV-KEY" not in str(mock_write.call_args)
+
+    def test_remote_login_stores_its_api_key(self) -> None:
+        """A REMOTE login still persists its operator key (only loopback omits it)."""
+        with (
+            patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
+            patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
+            patch("quarry.__main__.store_ca_cert"),
+            patch("quarry.__main__.validate_connection", return_value=(True, "")),
+            patch("quarry.__main__.write_proxy_config") as mock_write,
+            patch("quarry.__main__.CA_CERT_PATH", Path("/fake/quarry-ca.crt")),
+        ):
+            result = runner.invoke(
+                app, ["login", "gpu.example.com", "--api-key", "sk-remote", "--yes"]
+            )
+        _reset_globals()
+        assert result.exit_code == 0, result.output
+        assert mock_write.call_args[0][1] == "sk-remote"
+
     def test_always_uses_wss(self) -> None:
         """Even for localhost, the new flow writes wss:// (TOFU is uniform)."""
         with (

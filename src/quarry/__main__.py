@@ -1299,10 +1299,8 @@ def login_cmd(  # noqa: C901
         # --api-key OR auto-minted) into serve.token, so a set/stale env key
         # must NOT win over it (that would 401 against the daemon's own
         # /v1/status).  --api-key applies to a REMOTE target only.
-        if ClientConfig.is_loopback_host(host):
-            bearer = ClientConfig.loopback_token(host)
-        else:
-            bearer = api_key
+        is_loopback_target = ClientConfig.is_loopback_host(host)
+        bearer = ClientConfig.loopback_token(host) if is_loopback_target else api_key
         ok, reason = validate_connection(
             host, port, bearer, scheme="https", ca_cert_path=tmp_path_str
         )
@@ -1316,8 +1314,14 @@ def login_cmd(  # noqa: C901
     # This order ensures that if the CA cert write fails, we can roll back
     # the config — the reverse order has no recovery path (Fix 2).
     ws_url = f"wss://{host}:{port}/mcp"
+    # R4 live-only: a loopback target's bearer is the LIVE serve.token, resolved
+    # fresh by ClientConfig on every call — NEVER persist it.  A stored key would
+    # go stale each daemon restart and would mislead any reader of the stored
+    # headers with a credential that is never used for auth.  Only a REMOTE login
+    # persists its operator key.
+    stored_key = None if is_loopback_target else api_key
     try:
-        write_proxy_config(ws_url, api_key, str(CA_CERT_PATH))
+        write_proxy_config(ws_url, stored_key, str(CA_CERT_PATH))
     except PermissionWarning as exc:
         err_console.print(f"Warning: {exc}", style="yellow")
     except OSError as exc:

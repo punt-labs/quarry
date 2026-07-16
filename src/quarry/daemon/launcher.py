@@ -11,7 +11,7 @@ list, and the CLI surface is a static command so the module stays class-first.
 from __future__ import annotations
 
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Annotated, Self, final
 
 import typer
@@ -46,8 +46,21 @@ class DaemonLauncher:
 
     def __new__(cls, options: BindOptions) -> Self:
         self = super().__new__(cls)
-        self._options = options
+        self._options = cls._normalized(options)
         return self
+
+    @staticmethod
+    def _normalized(options: BindOptions) -> BindOptions:
+        """Strip the api_key and map empty/whitespace -> None once, at the single
+        launcher boundary, so ``enforce_bind_key``, ``_effective_key``, and
+        ``DaemonServer`` all see the same value.  Without this a whitespace-only
+        ``QUARRY_API_KEY`` is truthy at the gate: a loopback bind would fail to
+        mint and then exit at the daemon boundary (won't start), and a network
+        bind would pass the gate only to fail inconsistently later.  Normalized
+        here, a whitespace key is absent everywhere — loopback mints, network is
+        refused AT the bind gate.
+        """
+        return replace(options, api_key=(options.api_key or "").strip() or None)
 
     def launch(self) -> None:
         """Refuse an unsafe bind, mint the loopback token, and serve."""
