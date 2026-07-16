@@ -6,6 +6,13 @@ that token — and because the daemon mints a fresh token on every restart, the
 token is read *live* from the run dir, never trusted from the stored login
 config (which would go stale the moment the supervisor respawns the daemon).
 
+Presentation is gated on a LITERAL loopback IP, never a name: the client hands
+the live serve.token only to a literal loopback address (127.0.0.0/8, ::1), so a
+resolver cannot redirect the secret to a co-tenant's ``::1`` behind an ambiguous
+``localhost``.  The managed path canonicalizes ``localhost`` to ``127.0.0.1`` at
+login time (:meth:`canonical_host`) so it targets the exact literal the daemon
+binds.
+
 Fail closed: a loopback target whose ``serve.token`` is unreadable raises rather
 than returning a tokenless config, so a down daemon surfaces a clear error
 instead of a bare 401 far from its cause.
@@ -62,8 +69,13 @@ class ClientConfig:
 
     @property
     def is_loopback(self) -> bool:
-        """Return whether the target URL names only this host."""
-        return LoopbackPolicy(self._host_of(self._url)).is_loopback
+        """Whether the target is an eligible live-token target: a LITERAL loopback IP.
+
+        Client-side "loopback" means a literal loopback address, never a name:
+        the secret serve.token is presented only to an IP a resolver cannot
+        redirect to a co-tenant.
+        """
+        return LoopbackPolicy(self._host_of(self._url)).is_literal_loopback
 
     def remote_mapping(self) -> dict[str, object]:
         """Return the ``{url, ca_cert?, headers?}`` config a REST client consumes.
@@ -82,15 +94,17 @@ class ClientConfig:
     def from_login(cls, login: Mapping[str, object]) -> Self:
         """Build a target from a stored login config, resolving the bearer.
 
-        For a loopback URL the bearer is read live from ``serve.token`` (it
-        rotates each daemon restart); for a genuine remote URL the stored
-        bearer is used verbatim (the server operator set a stable key).
+        For a LITERAL loopback-IP URL the bearer is read live from
+        ``serve.token`` (it rotates each daemon restart); for any other URL —
+        including an ambiguous NAME like ``localhost`` — the stored bearer is
+        used verbatim.  A name never triggers live-token presentation: a
+        resolver could point it at a co-tenant, leaking the secret in transit.
         """
         url = str(login["url"])
         raw_ca = login.get("ca_cert")
         ca_cert = str(raw_ca) if raw_ca else None
         token: str | None
-        if LoopbackPolicy(cls._host_of(url)).is_loopback:
+        if LoopbackPolicy(cls._host_of(url)).is_literal_loopback:
             token = cls._serve_token()
         else:
             token = cls._login_bearer(login)
@@ -119,7 +133,7 @@ class ClientConfig:
         DOES fail closed. Returns None for a non-loopback host (its stored
         bearer stands).
         """
-        if not LoopbackPolicy(host).is_loopback:
+        if not LoopbackPolicy(host).is_literal_loopback:
             return None
         try:
             return cls._serve_token()
@@ -133,19 +147,35 @@ class ClientConfig:
 
     @classmethod
     def is_loopback_url(cls, url: str) -> bool:
-        """Return whether a ``ws(s)/http(s)`` URL targets a loopback host.
+        """Whether a URL is an eligible live-token target: a LITERAL loopback IP.
 
-        Lets a caller distinguish a loopback target (bearer must be the LIVE
-        serve.token, never a stored one) from a remote target (stored bearer)
-        --- ``loopback_token_for_url`` alone cannot, since it returns None for
-        both a remote URL and a loopback URL whose token is missing.
+        Lets a caller distinguish a live-token target (present the LIVE
+        serve.token) from any other (stored bearer) --- ``loopback_token_for_url``
+        alone cannot, since it returns None for both a remote URL and a
+        literal-loopback URL whose token is missing.  A NAME URL is NOT eligible:
+        a resolver could redirect it, so its stored bearer stands.
         """
-        return LoopbackPolicy(cls._host_of(url)).is_loopback
+        return LoopbackPolicy(cls._host_of(url)).is_literal_loopback
 
     @classmethod
     def is_loopback_host(cls, host: str) -> bool:
-        """Return whether a bare hostname targets a loopback host."""
-        return LoopbackPolicy(host).is_loopback
+        """Whether a bare host is an eligible live-token target: a LITERAL loopback IP.
+
+        A NAME (``localhost``) returns False: the secret serve.token is presented
+        only to a literal loopback address a resolver cannot redirect.
+        """
+        return LoopbackPolicy(host).is_literal_loopback
+
+    @staticmethod
+    def canonical_host(host: str) -> str:
+        """Canonicalize a loopback NAME to the IPv4 loopback literal for storage.
+
+        ``quarry login localhost`` stores ``127.0.0.1`` so the managed path
+        presents the serve.token to the exact literal the daemon binds --- a
+        name is never stored (a resolver could later point it at a co-tenant).
+        A literal IP or a remote host is returned unchanged.
+        """
+        return LoopbackPolicy(host).canonical_host
 
     @staticmethod
     def _serve_token() -> str:

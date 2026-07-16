@@ -1249,6 +1249,13 @@ def login_cmd(  # noqa: C901
     confirmation, then validates the connection over HTTPS/WSS and writes
     the mcp-proxy config.
     """
+    # Step 0: Canonicalize a loopback NAME to the IPv4 literal the managed daemon
+    # binds, so the stored config presents the serve.token to 127.0.0.1 — not
+    # the ambiguous "localhost", which a dual-stack resolver could point at a
+    # co-tenant's ::1.  A deliberate policy mapping, not an OS-resolver lookup;
+    # a literal IP or a remote host is unchanged.
+    host = ClientConfig.canonical_host(host)
+
     # Step 1: Fetch CA cert over HTTPS with SSL verification disabled (TOFU bootstrap).
     try:
         ca_cert_pem = fetch_ca_cert(host, port)

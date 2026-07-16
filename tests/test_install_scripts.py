@@ -315,15 +315,18 @@ def test_default_mode_runs_plugin_install_with_claude(env: dict[str, str]) -> No
 
 
 def test_default_mode_runs_quarry_login(env: dict[str, str]) -> None:
-    """Default mode runs ``quarry login localhost``."""
+    """Default mode runs ``quarry login 127.0.0.1`` — the literal the daemon
+    binds, never the ambiguous ``localhost`` name (HIGH: token-presentation is
+    gated on a literal loopback IP)."""
     result = _run_script(INSTALL_SH, env)
     assert result.returncode == 0, (
         f"install.sh failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
 
     log = _read_log(env)
-    assert _any_line_contains(log, "quarry login"), (
-        "Default mode must run quarry login localhost"
+    assert _any_line_contains(log, "login 127.0.0.1"), (
+        "Default mode must run `quarry login 127.0.0.1` (the literal loopback IP), "
+        "not the ambiguous localhost name"
     )
 
 

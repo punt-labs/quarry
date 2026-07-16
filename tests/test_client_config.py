@@ -1,9 +1,10 @@
 """Tests for ClientConfig — daemon-target resolution and the loopback bearer.
 
-The security-critical properties: a loopback target reads serve.token LIVE (not
-the stale stored token), a remote target keeps its stored bearer, and a missing
-loopback token fails closed with a typed error rather than a silent tokenless
-config.
+The security-critical properties: a LITERAL-loopback-IP target reads serve.token
+LIVE (not the stale stored token); an ambiguous NAME (``localhost``) is NOT a
+presentation target (a resolver could redirect it to a co-tenant), so its stored
+bearer stands; a remote target keeps its stored bearer; and a missing loopback
+token fails closed with a typed error rather than a silent tokenless config.
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ class TestFromLoginLoopback:
         (tmp_path / "serve.token").write_text("live-token")
         with _run_dir_at(tmp_path):
             cfg = ClientConfig.from_login(
-                {"url": "wss://localhost:8420/mcp", "ca_cert": "/ca.crt"}
+                {"url": "wss://127.0.0.1:8420/mcp", "ca_cert": "/ca.crt"}
             )
         resolved = cfg.token
         assert resolved == "live-token"
@@ -61,7 +62,7 @@ class TestFromLoginLoopback:
             _run_dir_at(tmp_path),
             pytest.raises(ClientConfigError, match="quarryd is not running"),
         ):
-            ClientConfig.from_login({"url": "wss://localhost:8420/mcp"})
+            ClientConfig.from_login({"url": "wss://127.0.0.1:8420/mcp"})
 
     def test_loopback_unreadable_token_fails_closed(self, tmp_path: Path) -> None:
         # OSError breadth: a PermissionError on another UID's 0600 token must
@@ -74,7 +75,18 @@ class TestFromLoginLoopback:
             ),
             pytest.raises(ClientConfigError, match="could not be read"),
         ):
-            ClientConfig.from_login({"url": "wss://localhost:8420/mcp"})
+            ClientConfig.from_login({"url": "wss://127.0.0.1:8420/mcp"})
+
+    def test_name_url_does_not_present_token(self, tmp_path: Path) -> None:
+        # HIGH: a `localhost` NAME must NOT trigger live-token presentation — a
+        # resolver could point it at a co-tenant's ::1, leaking the secret. The
+        # name resolves via the stored-bearer path (absent here) → token None,
+        # and serve.token is never read (no fail-closed raise either).
+        (tmp_path / "serve.token").write_text("live-token")
+        with _run_dir_at(tmp_path):
+            cfg = ClientConfig.from_login({"url": "wss://localhost:8420/mcp"})
+        assert cfg.token is None
+        assert cfg.is_loopback is False  # a name is not a literal-loopback target
 
     def test_loopback_empty_token_fails_closed(self, tmp_path: Path) -> None:
         # A present-but-empty/corrupt token is not a credential: fail closed
@@ -84,7 +96,7 @@ class TestFromLoginLoopback:
             _run_dir_at(tmp_path),
             pytest.raises(ClientConfigError, match="empty"),
         ):
-            ClientConfig.from_login({"url": "wss://localhost:8420/mcp"})
+            ClientConfig.from_login({"url": "wss://127.0.0.1:8420/mcp"})
 
 
 class TestFromLoginRemote:
@@ -186,7 +198,7 @@ class TestLoopbackTokenProbe:
     def test_loopback_host_returns_live_token(self, tmp_path: Path) -> None:
         (tmp_path / "serve.token").write_text("live-probe-token")
         with _run_dir_at(tmp_path):
-            resolved = ClientConfig.loopback_token("localhost")
+            resolved = ClientConfig.loopback_token("127.0.0.1")
         assert resolved == "live-probe-token"
 
     def test_loopback_host_missing_token_returns_none(self, tmp_path: Path) -> None:
@@ -203,7 +215,7 @@ class TestLoopbackTokenProbe:
     def test_for_url_resolves_loopback(self, tmp_path: Path) -> None:
         (tmp_path / "serve.token").write_text("live-probe-token")
         with _run_dir_at(tmp_path):
-            resolved = ClientConfig.loopback_token_for_url("wss://localhost:8420/mcp")
+            resolved = ClientConfig.loopback_token_for_url("wss://127.0.0.1:8420/mcp")
         assert resolved == "live-probe-token"
 
     def test_for_url_non_loopback_returns_none(self, tmp_path: Path) -> None:
@@ -231,7 +243,7 @@ class TestActiveDbRunDir:
         with patch("quarry.client.config.Settings") as mock_settings:
             mock_settings.load.return_value.resolve_db_paths.side_effect = resolve
             mock_settings.active_db.return_value = "work"  # quarryd --db work
-            cfg = ClientConfig.from_login({"url": "wss://localhost:8420/mcp"})
+            cfg = ClientConfig.from_login({"url": "wss://127.0.0.1:8420/mcp"})
 
         # Reads the --db daemon's token, NOT the default database's.
         resolved = cfg.token

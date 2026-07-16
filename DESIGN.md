@@ -975,14 +975,28 @@ PR-3a implements the daemon/supervision/loopback-auth half of v2.2. What shipped
   server can authenticate on loopback without re-typing it. This closes the
   multi-user-host exposure: before it, any local UID could reach the
   unauthenticated daemon on `127.0.0.1`.
-- **`LoopbackPolicy`** (shared by the daemon bind gate and the client resolver)
-  replaces the `127.0.0.1`-literal check with an `ipaddress`-based classifier:
+- **`LoopbackPolicy`** classifies a host with `ipaddress`, and splits into two
+  gates so one predicate never governs both a bind and a secret. **Bind gate**
+  (`is_loopback`, daemon/installer): name-tolerant —
   `localhost`/`::1`/`127.0.0.0/8`/`::ffff:127.x` are loopback; `0.0.0.0`/`::` and
-  any unresolved name are treated as remote (fail closed — require a key).
+  any unresolved name are remote (fail closed — require a key). **Token-
+  presentation gate** (`is_literal_loopback`, client): a LITERAL loopback IP
+  only — a NAME is never a presentation target (see `ClientConfig`).
 - **`ClientConfig`** (`quarry/client`) resolves a login config into (URL, pinned
-  CA, bearer). For a loopback target the bearer is read **live** from
-  `serve.token`; for a remote target the stored bearer is kept. It fails closed
-  (`OSError` → typed `ClientConfigError`) rather than sending an empty bearer.
+  CA, bearer). The live `serve.token` is presented **only to a LITERAL loopback
+  IP** (`is_literal_loopback`), never to a name: a name like `localhost` is
+  resolver-controlled and on a dual-stack host can resolve to a co-tenant's
+  `::1`, so presenting the secret to it would leak the token in transit. The
+  managed path canonicalizes `quarry login localhost` → `127.0.0.1` at write
+  time (a policy mapping to the IPv4 literal the daemon binds, not an OS-resolver
+  lookup), so the normal case pins the un-hijackable `127.0.0.1:8420`. For a
+  remote target the stored bearer is kept. It fails closed (`OSError` → typed
+  `ClientConfigError`) rather than sending an empty bearer. **Residual:** a
+  manual `quarry login ::1` while a co-tenant squats `[::1]:8420` and the real
+  daemon is IPv4-only could still present the token to the squatter — non-default
+  and operator-initiated; the managed install never stores `::1`. An
+  endpoint-bound token (record the bind host beside `serve.port`, present on
+  exact match) would erase it and is held pending an operator decision.
   The 13 `RemoteClient` construction sites route through `ClientConfig`, so any
   loopback CLI session now presents the token. `ClientConfig` resolves the
   token from the run dir of the process's **active database** (a

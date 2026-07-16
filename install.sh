@@ -314,11 +314,11 @@ fi
 
 info "Configuring local TLS connection..."
 printf '\n'
-if QUARRY_API_KEY="${QUARRY_API_KEY:-}" "$BINARY" login localhost --yes 2>/dev/null; then
-  ok "Local TLS connection configured -- plugin will use wss://localhost:8420/mcp"
+if QUARRY_API_KEY="${QUARRY_API_KEY:-}" "$BINARY" login 127.0.0.1 --yes 2>/dev/null; then
+  ok "Local TLS connection configured -- plugin will use wss://127.0.0.1:8420/mcp"
 else
-  warn "quarry login localhost failed -- plugin will use local stdio fallback (quarry mcp)"
-  warn "To configure TLS later: quarry login localhost --yes"
+  warn "quarry login 127.0.0.1 failed -- plugin will use local stdio fallback (quarry mcp)"
+  warn "To configure TLS later: quarry login 127.0.0.1 --yes"
 fi
 printf '\n'
 

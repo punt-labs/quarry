@@ -49,6 +49,55 @@ class TestIsLoopback:
         assert LoopbackPolicy(host).is_loopback is False
 
 
+class TestIsLiteralLoopback:
+    """Token-presentation gate: literal loopback IP only, never a name."""
+
+    @pytest.mark.parametrize(
+        "host",
+        ["127.0.0.1", "127.0.0.5", "127.255.255.254", "::1", "::ffff:127.0.0.1"],
+    )
+    def test_literal_loopback_ips(self, host: str) -> None:
+        assert LoopbackPolicy(host).is_literal_loopback is True
+
+    @pytest.mark.parametrize(
+        "host",
+        [
+            "localhost",  # a NAME is never a literal loopback (resolver-controlled)
+            "Localhost",
+            "localhost.",
+            " localhost ",
+            "0.0.0.0",  # noqa: S104 — bind-all is remote-reachable
+            "::",
+            "10.0.0.1",
+            "example.com",
+            "",
+        ],
+    )
+    def test_names_and_remote_are_not_literal_loopback(self, host: str) -> None:
+        assert LoopbackPolicy(host).is_literal_loopback is False
+
+    def test_localhost_is_bind_loopback_but_not_literal_loopback(self) -> None:
+        # The split: the NAME classifies loopback for the bind gate, but is NOT
+        # a literal-loopback token-presentation target.
+        policy = LoopbackPolicy("localhost")
+        assert policy.is_loopback is True
+        assert policy.is_literal_loopback is False
+
+
+class TestCanonicalHost:
+    @pytest.mark.parametrize(
+        "name", ["localhost", "Localhost", "LOCALHOST", "localhost.", " localhost "]
+    )
+    def test_loopback_name_canonicalizes_to_ipv4_literal(self, name: str) -> None:
+        assert LoopbackPolicy(name).canonical_host == "127.0.0.1"
+
+    @pytest.mark.parametrize(
+        "host", ["127.0.0.1", "::1", "gpu.example.com", "10.0.0.5"]
+    )
+    def test_literal_or_remote_host_unchanged(self, host: str) -> None:
+        assert LoopbackPolicy(host).canonical_host == host
+
+
 class TestEnforceBindKey:
     def test_non_loopback_without_key_refuses(self) -> None:
         with pytest.raises(SystemExit, match="Refusing to bind"):
