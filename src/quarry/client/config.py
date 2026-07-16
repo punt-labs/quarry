@@ -225,12 +225,16 @@ class ClientConfig:
     def _target_host(cls, url: str) -> str:
         """The literal host a live serve.token would be presented to.
 
-        A stored loopback NAME is migrated to the IPv4 literal, so the token gate
-        (:meth:`is_loopback_url`, :attr:`is_loopback`) and the eventual
-        connection (:meth:`canonical_url`) agree on the un-hijackable target.  A
-        remote host is returned normalized and stays non-loopback.
+        Derived from the MIGRATED url (:meth:`canonical_url`), NOT from
+        canonicalizing the raw host — so the token gate (:meth:`is_loopback_url`,
+        :attr:`is_loopback`) keys off exactly what the connection will target and
+        the two can never diverge.  ``canonical_url`` fails closed (returns the
+        url unchanged) for a malformed URL like ``wss://localhost:bad``: its host
+        then stays the NAME, is NOT a literal loopback, and no live token is
+        resolved.  A well-formed loopback-name URL migrates to 127.0.0.1 (a
+        literal) and does resolve the token; a remote host stays non-loopback.
         """
-        return LoopbackPolicy(cls._host_of(url)).canonical_host
+        return cls._host_of(cls.canonical_url(url))
 
     @staticmethod
     def canonical_host(host: str) -> str:

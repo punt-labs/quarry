@@ -17,6 +17,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from quarry.client import ClientConfig, ClientConfigError
+from quarry.net import LoopbackPolicy
 
 
 @contextmanager
@@ -299,6 +300,65 @@ class TestLoopbackTokenProbe:
         with _run_dir_at(tmp_path):
             token = ClientConfig.loopback_token_for_url("wss://h.example.com:8420")
         assert token is None
+
+    def test_malformed_url_returns_none_without_reading_token(
+        self, tmp_path: Path
+    ) -> None:
+        # Gate/connect agreement: canonical_url fails closed on a malformed URL
+        # (wss://localhost:bad) — returns it unchanged with the NAME host.  The
+        # gate derives the target from canonical_url, so it is NOT a literal
+        # loopback: no live serve.token is read (assert token_file.read is never
+        # called), and no token is presented to a resolver-controlled name.
+        (tmp_path / "serve.token").write_text("live-token")
+        with (
+            _run_dir_at(tmp_path),
+            patch(
+                "quarry.run_dir.ServeTokenFile.read", return_value="live-token"
+            ) as mock_read,
+        ):
+            token = ClientConfig.loopback_token_for_url("wss://localhost:bad/mcp")
+        assert token is None
+        assert mock_read.call_count == 0  # serve.token never touched
+
+    def test_malformed_url_is_not_loopback_url(self) -> None:
+        assert ClientConfig.is_loopback_url("wss://localhost:bad") is False
+
+    def test_well_formed_loopback_name_reads_live_token(self, tmp_path: Path) -> None:
+        # The fail-closed gate must not suppress the normal resolution: a
+        # well-formed loopback-name URL migrates to 127.0.0.1 and reads the token.
+        (tmp_path / "serve.token").write_text("live-token")
+        with _run_dir_at(tmp_path):
+            resolved = ClientConfig.loopback_token_for_url("wss://localhost:8420/mcp")
+            eligible = ClientConfig.is_loopback_url("wss://localhost:8420/mcp")
+        assert resolved == "live-token"
+        assert eligible is True
+
+    @pytest.mark.parametrize(
+        "url",
+        ["wss://127.0.0.1:8420/mcp", "wss://[::1]:8420/mcp"],
+    )
+    def test_literal_loopback_url_is_eligible(self, url: str) -> None:
+        assert ClientConfig.is_loopback_url(url) is True
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "wss://localhost:8420/mcp",
+            "wss://127.0.0.1:8420/mcp",
+            "wss://[::1]:8420/mcp",
+            "ws://localhost/mcp",
+            "wss://localhost:bad/mcp",
+            "wss://gpu.example.com:8420/mcp",
+        ],
+    )
+    def test_gate_and_connect_agree(self, url: str) -> None:
+        # Invariant: whenever is_loopback_url says "eligible" (present the live
+        # token), the host the connection actually targets — the host of
+        # canonical_url(url) — IS a literal loopback IP.  Gate and connect can
+        # never diverge, so the token is never presented to an ambiguous name.
+        if ClientConfig.is_loopback_url(url):
+            connect_host = ClientConfig._host_of(ClientConfig.canonical_url(url))
+            assert LoopbackPolicy(connect_host).is_literal_loopback is True
 
     def test_corrupt_default_db_config_returns_none(self) -> None:
         # Non-raising contract: a corrupt default-db config (resolve_db_paths
