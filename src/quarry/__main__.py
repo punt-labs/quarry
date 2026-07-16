@@ -22,6 +22,7 @@ from rich.progress import Progress
 from quarry.cli_captures import CapturesCli, CliPlumbing
 from quarry.cli_formatters import ResultFormatter
 from quarry.cli_runtime import CliRuntime
+from quarry.client import ClientConfig
 from quarry.collections import CollectionName
 from quarry.config import (
     DEFAULT_PORT,
@@ -56,7 +57,7 @@ from quarry.remote import (
     validate_connection_from_ws_url,
     write_proxy_config,
 )
-from quarry.remote_client import RemoteClient, RemoteError
+from quarry.remote_client import RemoteError
 from quarry.results import SearchFilter
 from quarry.retrieval import SearchService
 from quarry.sync import sync_all
@@ -301,7 +302,7 @@ def find_cmd(
     """Search indexed documents."""
     proxy_config = _safe_proxy_config().get("quarry", {})
     if isinstance(proxy_config, dict) and "url" in proxy_config:
-        json_results, text = RemoteClient(proxy_config).find(
+        json_results, text = ClientConfig.remote_client(proxy_config).find(
             query=query,
             limit=limit,
             collection=collection,
@@ -400,7 +401,7 @@ def ingest_cmd(
         # Fire-and-forget: POST /ingest returns 202 with task_id.
         # The CLI prints the task_id and exits immediately.
         try:
-            remote_resp = RemoteClient(proxy_config).request(
+            remote_resp = ClientConfig.remote_client(proxy_config).request(
                 "POST", "/ingest", body=body
             )
         except RemoteError as exc:
@@ -509,7 +510,8 @@ def _show_remote(
     if collection:
         params["collection"] = collection
     try:
-        resp = RemoteClient(proxy_config).get(f"/show?{urllib.parse.urlencode(params)}")
+        query = urllib.parse.urlencode(params)
+        resp = ClientConfig.remote_client(proxy_config).get(f"/show?{query}")
     except RemoteError as exc:
         err_console.print(f"Error: {exc}", style="red")
         raise typer.Exit(code=1) from exc
@@ -613,7 +615,7 @@ def remember(
         }
         # Fire-and-forget: POST /remember returns 202 with task_id.
         try:
-            remote_resp = RemoteClient(proxy_config).request(
+            remote_resp = ClientConfig.remote_client(proxy_config).request(
                 "POST", "/remember", body=body
             )
         except RemoteError as exc:
@@ -657,7 +659,7 @@ def status_cmd() -> None:
     proxy_config = _safe_proxy_config().get("quarry", {})
     if isinstance(proxy_config, dict) and "url" in proxy_config:
         try:
-            remote_data = RemoteClient(proxy_config).get("/status")
+            remote_data = ClientConfig.remote_client(proxy_config).get("/status")
         except RemoteError as exc:
             err_console.print(f"Error: {exc}", style="red")
             raise typer.Exit(code=1) from exc
@@ -760,7 +762,8 @@ def delete_cmd(
             raise typer.Exit(code=1)
         # Fire-and-forget: DELETE returns 202 with task_id.
         try:
-            remote_resp = RemoteClient(proxy_config).request("DELETE", path)
+            client = ClientConfig.remote_client(proxy_config)
+            remote_resp = client.request("DELETE", path)
         except RemoteError as exc:
             err_console.print(f"Error: {exc}", style="red")
             raise typer.Exit(code=1) from exc
@@ -813,7 +816,7 @@ def register(
         body: dict[str, object] = {"directory": resolved_str, "collection": col}
         # Fire-and-forget: POST /registrations returns 202 with task_id.
         try:
-            remote_resp = RemoteClient(proxy_config).request(
+            remote_resp = ClientConfig.remote_client(proxy_config).request(
                 "POST", "/registrations", body=body
             )
         except RemoteError as exc:
@@ -881,7 +884,7 @@ class _Deregistration:
             "keep_data": str(self._keep_data).lower(),
         }
         path = f"/registrations?{urllib.parse.urlencode(params)}"
-        client = RemoteClient(config)
+        client = ClientConfig.remote_client(config)
         try:
             accepted = client.request("DELETE", path)
         except RemoteError as exc:
@@ -941,7 +944,7 @@ def sync_cmd(
         # Fire-and-forget: POST /sync returns 202 with task_id.
         # The CLI prints the task_id and exits immediately.
         try:
-            remote_resp = RemoteClient(proxy_config).request(
+            remote_resp = ClientConfig.remote_client(proxy_config).request(
                 "POST",
                 "/sync",
                 body={},
@@ -1447,7 +1450,8 @@ def list_documents_cmd(
             params["collection"] = collection
         qs = f"?{urllib.parse.urlencode(params)}" if params else ""
         try:
-            remote_resp = RemoteClient(proxy_config).get(f"/documents{qs}")
+            client = ClientConfig.remote_client(proxy_config)
+            remote_resp = client.get(f"/documents{qs}")
         except RemoteError as exc:
             err_console.print(f"Error: {exc}", style="red")
             raise typer.Exit(code=1) from exc
@@ -1474,7 +1478,7 @@ def list_collections_cmd() -> None:
     proxy_config = _safe_proxy_config().get("quarry", {})
     if isinstance(proxy_config, dict) and "url" in proxy_config:
         try:
-            remote_resp = RemoteClient(proxy_config).get("/collections")
+            remote_resp = ClientConfig.remote_client(proxy_config).get("/collections")
         except RemoteError as exc:
             err_console.print(f"Error: {exc}", style="red")
             raise typer.Exit(code=1) from exc
@@ -1501,7 +1505,7 @@ def list_registrations_cmd() -> None:
     proxy_config = _safe_proxy_config().get("quarry", {})
     if isinstance(proxy_config, dict) and "url" in proxy_config:
         try:
-            remote_resp = RemoteClient(proxy_config).get("/registrations")
+            remote_resp = ClientConfig.remote_client(proxy_config).get("/registrations")
         except RemoteError as exc:
             err_console.print(f"Error: {exc}", style="red")
             raise typer.Exit(code=1) from exc
@@ -1553,7 +1557,7 @@ def list_databases_cmd() -> None:
     proxy_config = _safe_proxy_config().get("quarry", {})
     if isinstance(proxy_config, dict) and "url" in proxy_config:
         try:
-            remote_resp = RemoteClient(proxy_config).get("/databases")
+            remote_resp = ClientConfig.remote_client(proxy_config).get("/databases")
         except RemoteError as exc:
             err_console.print(f"Error: {exc}", style="red")
             raise typer.Exit(code=1) from exc

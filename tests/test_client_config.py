@@ -1,0 +1,127 @@
+"""Tests for ClientConfig — daemon-target resolution and the loopback bearer.
+
+The security-critical properties: a loopback target reads serve.token LIVE (not
+the stale stored token), a remote target keeps its stored bearer, and a missing
+loopback token fails closed with a typed error rather than a silent tokenless
+config.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Generator
+from contextlib import contextmanager
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from quarry.client import ClientConfig, ClientConfigError
+
+
+@contextmanager
+def _run_dir_at(tmp_path: Path) -> Generator[None]:
+    """Patch Settings so the run dir (serve.token home) is ``tmp_path``."""
+    fake_settings = MagicMock()
+    fake_settings.lancedb_path = tmp_path / "lancedb"  # parent == tmp_path
+    with patch("quarry.client.config.Settings") as started:
+        started.load.return_value.resolve_db_paths.return_value = fake_settings
+        started.read_default_db.return_value = None
+        yield
+
+
+class TestFromLoginLoopback:
+    def test_loopback_reads_live_serve_token(self, tmp_path: Path) -> None:
+        (tmp_path / "serve.token").write_text("live-token")
+        with _run_dir_at(tmp_path):
+            cfg = ClientConfig.from_login(
+                {"url": "wss://localhost:8420/mcp", "ca_cert": "/ca.crt"}
+            )
+        resolved = cfg.token
+        assert resolved == "live-token"
+        assert cfg.ca_cert == "/ca.crt"
+        assert cfg.is_loopback is True
+
+    def test_loopback_ignores_stale_stored_bearer(self, tmp_path: Path) -> None:
+        # A stored bearer for a loopback target must be ignored — serve.token
+        # rotates each restart, so only the live file is trusted.
+        (tmp_path / "serve.token").write_text("live-token")
+        with _run_dir_at(tmp_path):
+            cfg = ClientConfig.from_login(
+                {
+                    "url": "wss://127.0.0.1:8420/mcp",
+                    "headers": {"Authorization": "Bearer stale-stored"},
+                }
+            )
+        resolved = cfg.token
+        assert resolved == "live-token"
+
+    def test_loopback_missing_token_fails_closed(self, tmp_path: Path) -> None:
+        # No serve.token -> raise, never a tokenless config that 401s downstream.
+        with (
+            _run_dir_at(tmp_path),
+            pytest.raises(ClientConfigError, match="quarryd is not running"),
+        ):
+            ClientConfig.from_login({"url": "wss://localhost:8420/mcp"})
+
+
+class TestFromLoginRemote:
+    def test_remote_keeps_stored_bearer(self) -> None:
+        cfg = ClientConfig.from_login(
+            {
+                "url": "wss://quarry.example.com:8420/mcp",
+                "ca_cert": "/ca.crt",
+                "headers": {"Authorization": "Bearer remote-key"},
+            }
+        )
+        resolved = cfg.token
+        assert resolved == "remote-key"
+        assert cfg.is_loopback is False
+
+    def test_remote_without_headers_has_no_token(self) -> None:
+        cfg = ClientConfig.from_login({"url": "wss://quarry.example.com:8420/mcp"})
+        assert cfg.token is None
+
+    def test_remote_does_not_read_serve_token(self, tmp_path: Path) -> None:
+        # A remote target must never touch the local run dir.
+        (tmp_path / "serve.token").write_text("local-token")
+        with _run_dir_at(tmp_path):
+            cfg = ClientConfig.from_login(
+                {
+                    "url": "wss://10.0.0.5:8420/mcp",
+                    "headers": {"Authorization": "Bearer remote-key"},
+                }
+            )
+        resolved = cfg.token
+        assert resolved == "remote-key"
+
+
+class TestRemoteMapping:
+    def test_url_only(self) -> None:
+        mapping = ClientConfig("ws://x:1", None, None).remote_mapping()
+        assert mapping == {"url": "ws://x:1"}
+
+    def test_url_and_ca(self) -> None:
+        mapping = ClientConfig("wss://x:1", "/ca.crt", None).remote_mapping()
+        assert mapping == {"url": "wss://x:1", "ca_cert": "/ca.crt"}
+
+    def test_url_ca_and_bearer(self) -> None:
+        mapping = ClientConfig("wss://x:1", "/ca.crt", "tok").remote_mapping()
+        assert mapping == {
+            "url": "wss://x:1",
+            "ca_cert": "/ca.crt",
+            "headers": {"Authorization": "Bearer tok"},
+        }
+
+
+class TestBearerExtraction:
+    def test_malformed_authorization_is_none(self) -> None:
+        cfg = ClientConfig.from_login(
+            {"url": "wss://x.example.com:1", "headers": {"Authorization": "Basic z"}}
+        )
+        assert cfg.token is None
+
+    def test_non_mapping_headers_is_none(self) -> None:
+        cfg = ClientConfig.from_login(
+            {"url": "wss://x.example.com:1", "headers": "not-a-dict"}
+        )
+        assert cfg.token is None

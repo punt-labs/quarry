@@ -61,7 +61,7 @@ class TestPushExitCode:
         # bug class 3: the remote branch must exit non-zero on a refused push,
         # matching the local branch (it previously always returned 0).
         aborted = ShadowSyncResult.aborted("public-remote")
-        with patch("quarry.cli_captures.RemoteClient") as remote_client:
+        with patch("quarry.client.config.RemoteClient") as remote_client:
             remote_client.return_value.request.return_value = {
                 "results": {"proj": aborted.to_dict()}
             }
@@ -88,7 +88,7 @@ class TestPushEquivalence:
             runner.invoke(_app(proxy={}, recorder=local), ["push"])
 
         remote: list[object] = []
-        with patch("quarry.cli_captures.RemoteClient") as remote_client:
+        with patch("quarry.client.config.RemoteClient") as remote_client:
             remote_client.return_value.request.return_value = {
                 "results": {"proj": _PUSHED.to_dict()}
             }

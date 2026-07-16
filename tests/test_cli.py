@@ -13,7 +13,7 @@ from typer.testing import CliRunner
 import quarry.__main__ as cli_mod
 from quarry.__main__ import app
 from quarry.config import Settings
-from quarry.remote_client import RemoteError
+from quarry.remote_client import RemoteClient, RemoteError
 from quarry.results import SearchResult
 
 runner = CliRunner()
@@ -77,6 +77,56 @@ class TestColorDeterminism:
         assert result.exit_code == 1
         assert "\x1b" not in result.output
         assert "Cannot connect to remote quarry server" in result.output
+
+
+class TestLoopbackServeToken:
+    """A loopback login session must present the daemon's live serve.token (R4)."""
+
+    def test_find_injects_serve_token_for_loopback(self, tmp_path: Path) -> None:
+        (tmp_path / "serve.token").write_text("live-loopback-token")
+        fake_settings = MagicMock()
+        fake_settings.lancedb_path = tmp_path / "lancedb"  # parent == tmp_path
+        proxy = {"quarry": {"url": "wss://localhost:8420/mcp", "ca_cert": "/ca.crt"}}
+        captured: dict[str, object] = {}
+
+        def fake_get(inner_self: object, _path: str) -> dict[str, object]:
+            # _remote_client built a real client — capture the config it carries.
+            captured["config"] = inner_self._config  # type: ignore[attr-defined]
+            return {"results": []}
+
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy),
+            patch("quarry.client.config.Settings") as mock_settings,
+            patch.object(RemoteClient, "get", fake_get),
+        ):
+            resolver = mock_settings.load.return_value.resolve_db_paths
+            resolver.return_value = fake_settings
+            mock_settings.read_default_db.return_value = None
+            result = runner.invoke(app, ["find", "q"])
+
+        _reset_globals()
+        assert result.exit_code == 0
+        config = captured["config"]
+        assert isinstance(config, dict)
+        assert config["headers"] == {"Authorization": "Bearer live-loopback-token"}
+        assert config["ca_cert"] == "/ca.crt"
+
+    def test_find_fails_closed_when_serve_token_missing(self, tmp_path: Path) -> None:
+        fake_settings = MagicMock()
+        fake_settings.lancedb_path = tmp_path / "lancedb"  # no serve.token present
+        proxy = {"quarry": {"url": "wss://127.0.0.1:8420/mcp"}}
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy),
+            patch("quarry.client.config.Settings") as mock_settings,
+        ):
+            resolver = mock_settings.load.return_value.resolve_db_paths
+            resolver.return_value = fake_settings
+            mock_settings.read_default_db.return_value = None
+            result = runner.invoke(app, ["find", "q"])
+
+        _reset_globals()
+        assert result.exit_code == 1
+        assert "quarryd is not running" in result.output
 
 
 class TestListDocumentsCmd:

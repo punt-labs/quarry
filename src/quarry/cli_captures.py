@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Annotated, Self, final
 import typer
 
 from quarry.cli_formatters import ResultFormatter
-from quarry.remote_client import RemoteClient
+from quarry.client import ClientConfig
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -75,7 +75,8 @@ class CapturesCli:
 
         proxy_config = self._p.safe_proxy_config().get("quarry", {})
         if isinstance(proxy_config, dict) and "url" in proxy_config:
-            resp = RemoteClient(proxy_config).request("POST", "/captures/push", body={})
+            client = ClientConfig.remote_client(proxy_config)
+            resp = client.request("POST", "/captures/push", body={})
             rendered = ResultFormatter.coerce_results(resp.get("results", resp))
             self._p.emit(resp, ResultFormatter.captures_push(rendered))
         else:
