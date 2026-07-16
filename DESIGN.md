@@ -957,13 +957,18 @@ PR-3a implements the daemon/supervision/loopback-auth half of v2.2. What shipped
   operator key, mints a 256-bit loopback token when none is given, and hands a
   `ServeConfig` to `DaemonServer`. The `quarry serve` subcommand is **deleted**
   (PL-PP-1, no shim); the supervised unit execs `quarryd` (launchd `KeepAlive` /
-  systemd `Restart=always`).
+  systemd `Restart=always`). Because only `quarryd` (via `quarry/daemon/`)
+  imports the engine, the v2.1 §3.1 lazy-import carve-out for `serve`/`mcp`
+  is gone: I1 is now a hard **process** boundary, not a within-process rule.
 - **`serve.token` (mode-0600).** `DaemonServer` writes the token beside
   `serve.port` (shared `RunDir`) before the socket opens and removes it on
   shutdown. The write is atomic (`os.open(0o600)` + tmp-rename) so no
-  world-readable or partial-file window exists. This closes the multi-user-host
-  exposure: before it, any local UID could reach the unauthenticated daemon on
-  `127.0.0.1`.
+  world-readable or partial-file window exists. The token is written whenever
+  the daemon has an effective key — **including** when the operator sets
+  `--api-key` (the file holds that key), so a local client on a `--network`
+  server can authenticate on loopback without re-typing it. This closes the
+  multi-user-host exposure: before it, any local UID could reach the
+  unauthenticated daemon on `127.0.0.1`.
 - **`LoopbackPolicy`** (shared by the daemon bind gate and the client resolver)
   replaces the `127.0.0.1`-literal check with an `ipaddress`-based classifier:
   `localhost`/`::1`/`127.0.0.0/8`/`::ffff:127.x` are loopback; `0.0.0.0`/`::` and
@@ -994,6 +999,15 @@ PR-3a implements the daemon/supervision/loopback-auth half of v2.2. What shipped
   god module, the second grows `remote_client.py` (deleted in v2-3). The seam
   lives in the new, absolute-gated `client` tier (`ClientConfig.remote_client`)
   so each CLI change is a call-site swap.
+- **Defer the loopback gate-flip to a later PR** (keep loopback unauthenticated
+  for now) — rejected. The gate flips in v2-3a; the interim `ClientConfig`
+  wiring keeps every loopback client (the only clients that hit the daemon
+  today) authenticated, so nothing is locked out and the exposure closes now
+  rather than one PR later.
+- **Write `serve.token` only when the token is auto-generated** (skip the file
+  when `--api-key` is set) — rejected. Then a local client on a `--network`
+  server would have no token to read on loopback and would fail closed even
+  though a valid key exists. The file always holds the effective key.
 
 ### Context (audited reality)
 

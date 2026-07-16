@@ -468,6 +468,15 @@ rather than a bare 401.  \texttt{ClientConfig} is the client tier's first
 piece; the full \texttt{QuarryClient} and \texttt{quarry
 mcp}-as-client land in v2-3/v2-4.
 
+The daemon serves the \textbf{REST API only} under \texttt{/v1} (the
+in-daemon MCP route was removed in PR-1); its request-admission trust model
+combines the \texttt{JsonContentTypeGuard} --- an ASGI CSRF choke point
+that rejects any \texttt{POST} without \texttt{Content-Type:
+application/json} (a browser cannot send that cross-origin without a
+preflight the CORS policy refuses) --- with the \texttt{serve.token} bearer
+above.  The guard blocks a forged cross-origin write; the token blocks an
+unauthorized local reader.
+
 \subsection{mcp-proxy Architecture}
 
 \texttt{quarry install} downloads \texttt{mcp-proxy} (SHA256-verified,
