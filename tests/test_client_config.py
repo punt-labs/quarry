@@ -125,3 +125,36 @@ class TestBearerExtraction:
             {"url": "wss://x.example.com:1", "headers": "not-a-dict"}
         )
         assert cfg.token is None
+
+
+class TestLoopbackTokenProbe:
+    """The non-raising probe helpers used by login validation and `--ping`."""
+
+    def test_loopback_host_returns_live_token(self, tmp_path: Path) -> None:
+        (tmp_path / "serve.token").write_text("live-probe-token")
+        with _run_dir_at(tmp_path):
+            resolved = ClientConfig.loopback_token("localhost")
+        assert resolved == "live-probe-token"
+
+    def test_loopback_host_missing_token_returns_none(self, tmp_path: Path) -> None:
+        # Non-raising: a down daemon (no token) makes the probe report
+        # unreachable from the connection, not fail closed here.
+        with _run_dir_at(tmp_path):
+            assert ClientConfig.loopback_token("127.0.0.1") is None
+
+    def test_non_loopback_host_returns_none(self, tmp_path: Path) -> None:
+        (tmp_path / "serve.token").write_text("local-token")
+        with _run_dir_at(tmp_path):
+            assert ClientConfig.loopback_token("quarry.example.com") is None
+
+    def test_for_url_resolves_loopback(self, tmp_path: Path) -> None:
+        (tmp_path / "serve.token").write_text("live-probe-token")
+        with _run_dir_at(tmp_path):
+            resolved = ClientConfig.loopback_token_for_url("wss://localhost:8420/mcp")
+        assert resolved == "live-probe-token"
+
+    def test_for_url_non_loopback_returns_none(self, tmp_path: Path) -> None:
+        (tmp_path / "serve.token").write_text("local-token")
+        with _run_dir_at(tmp_path):
+            token = ClientConfig.loopback_token_for_url("wss://h.example.com:8420")
+        assert token is None

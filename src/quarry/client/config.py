@@ -107,6 +107,30 @@ class ClientConfig:
         """
         return RemoteClient(cls.from_login(login).remote_mapping())
 
+    @classmethod
+    def loopback_token(cls, host: str) -> str | None:
+        """Return the live serve.token for a loopback host, else None.
+
+        Non-raising: the probe paths (login validation, ``remote --ping``)
+        must present the live loopback bearer when the daemon is up, but a
+        missing token means the daemon is down --- those paths report
+        "unreachable" from the connection itself, so this returns None rather
+        than fail closed. The construction path uses ``from_login``, which
+        DOES fail closed. Returns None for a non-loopback host (its stored
+        bearer stands).
+        """
+        if not LoopbackPolicy(host).is_loopback:
+            return None
+        try:
+            return cls._serve_token()
+        except ClientConfigError:
+            return None
+
+    @classmethod
+    def loopback_token_for_url(cls, url: str) -> str | None:
+        """Return the live serve.token for a loopback ``ws(s)/http(s)`` URL."""
+        return cls.loopback_token(cls._host_of(url))
+
     @staticmethod
     def _serve_token() -> str:
         """Read the daemon's live loopback bearer, or raise if it is down.

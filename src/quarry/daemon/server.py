@@ -92,14 +92,23 @@ class DaemonServer:
         ctx.warm()  # Build cached resources single-threaded before serving.
 
         self._write_serve_token()
-        app = build_app(ctx, lifespan=self._lifespan)
-        server = uvicorn.Server(self._uvicorn_config(app))
-        self._install_port_file_hook(server)
-
-        logger.info(
-            "Starting Quarry server on %s:%d", self._config.host, self._config.port
-        )
-        server.run()
+        try:
+            app = build_app(ctx, lifespan=self._lifespan)
+            server = uvicorn.Server(self._uvicorn_config(app))
+            self._install_port_file_hook(server)
+            logger.info(
+                "Starting Quarry server on %s:%d",
+                self._config.host,
+                self._config.port,
+            )
+            server.run()
+        finally:
+            # Remove the token on ANY exit.  It is written BEFORE the socket
+            # binds (so a client racing the first request can read it), so a
+            # bind/startup failure after the write would otherwise leave a
+            # stale token — defeating the client's missing-file fail-closed
+            # check, making a DOWN daemon look like it holds a credential.
+            self._run_dir.token_file.remove()
         logger.info("Server stopped")
 
     def _write_serve_token(self) -> None:

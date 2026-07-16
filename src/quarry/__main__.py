@@ -1283,8 +1283,13 @@ def login_cmd(  # noqa: C901
         except BaseException:
             tmp_path.unlink(missing_ok=True)
             raise
+        # On the default (token-gated loopback) install, no --api-key is set;
+        # present the daemon's live serve.token so login validation is not
+        # 401'd against its own /v1/status.  A remote host resolves to None
+        # here, so its explicit key stands.
+        bearer = api_key or ClientConfig.loopback_token(host)
         ok, reason = validate_connection(
-            host, port, api_key, scheme="https", ca_cert_path=tmp_path_str
+            host, port, bearer, scheme="https", ca_cert_path=tmp_path_str
         )
         if not ok:
             err_console.print(f"Error: {reason}", style="red")
@@ -1391,8 +1396,11 @@ def remote_list_cmd(
         if url.startswith("wss://") and not ca_cert:
             ok, reason = False, "wss:// configured but no CA certificate pinned"
         else:
+            probe_token = ClientConfig.loopback_token_for_url(url) or token
             ok, reason = validate_connection_from_ws_url(
-                url, token, ca_cert_path=str(ca_cert) if ca_cert is not None else None
+                url,
+                probe_token,
+                ca_cert_path=str(ca_cert) if ca_cert is not None else None,
             )
         status = "healthy" if ok else f"unreachable ({reason})"
         text += f"\nHealth: {status}"

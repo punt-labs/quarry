@@ -551,6 +551,25 @@ class TestServeToken:
         server._write_serve_token()
         assert not (tmp_path / "default" / "serve.token").exists()
 
+    def test_bind_failure_removes_serve_token(self, tmp_path: Path) -> None:
+        """A startup/bind failure must not leave a stale token behind.
+
+        The token is written before the socket binds; if bind fails after that
+        write, a leftover token would defeat the client's missing-file
+        fail-closed check, making a DOWN daemon look like it holds a credential.
+        """
+        server = self._server(tmp_path, "the-bearer")
+        with (
+            patch("quarry.daemon.server.DaemonContext"),
+            patch("quarry.daemon.server.build_app"),
+            patch("quarry.daemon.server.uvicorn.Server") as mock_uv,
+        ):
+            mock_uv.return_value.run.side_effect = OSError("address already in use")
+            with pytest.raises(OSError, match="address already in use"):
+                server.run()
+        # The token was written (api_key set) then removed by run()'s finally.
+        assert not (tmp_path / "default" / "serve.token").exists()
+
 
 class TestNotFound:
     def test_unknown_path_returns_404(self, client: TestClient) -> None:

@@ -4387,6 +4387,39 @@ class TestLoginCmd:
             "wss://okinos.example.com:8420/mcp", None, "/fake/quarry-ca.crt"
         )
 
+    def test_loopback_login_presents_live_serve_token(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """On the token-gated default install, loopback login authenticates with
+        the daemon's live serve.token — otherwise it 401s against /v1/status."""
+        monkeypatch.delenv("QUARRY_API_KEY", raising=False)
+        (tmp_path / "serve.token").write_text("live-daemon-token")
+        fake_settings = MagicMock()
+        fake_settings.lancedb_path = tmp_path / "lancedb"  # parent == tmp_path
+        with (
+            patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
+            patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
+            patch("quarry.__main__.store_ca_cert"),
+            patch(
+                "quarry.__main__.validate_connection", return_value=(True, "")
+            ) as mock_validate,
+            patch("quarry.__main__.write_proxy_config"),
+            patch("quarry.__main__.CA_CERT_PATH", Path("/fake/quarry-ca.crt")),
+            patch("quarry.client.config.Settings") as mock_settings,
+        ):
+            resolver = mock_settings.load.return_value.resolve_db_paths
+            resolver.return_value = fake_settings
+            mock_settings.read_default_db.return_value = None
+            result = runner.invoke(app, ["login", "localhost", "--yes"])
+        _reset_globals()
+        assert result.exit_code == 0, result.output
+        # The live serve.token (not the absent --api-key) is the validation bearer.
+        assert mock_validate.call_args.args[:3] == (
+            "localhost",
+            8420,
+            "live-daemon-token",
+        )
+
     def test_always_uses_wss(self) -> None:
         """Even for localhost, the new flow writes wss:// (TOFU is uniform)."""
         with (
@@ -5183,3 +5216,29 @@ def test_verbose_help_text_describes_stderr() -> None:
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
     assert "INFO" in result.output or "stderr" in result.output
+
+
+class TestRemoteListPing:
+    """`remote list --ping` on a loopback config presents the live serve.token."""
+
+    def test_loopback_ping_presents_live_serve_token(self, tmp_path: Path) -> None:
+        (tmp_path / "serve.token").write_text("live-ping-token")
+        fake_settings = MagicMock()
+        fake_settings.lancedb_path = tmp_path / "lancedb"  # parent == tmp_path
+        proxy = {"quarry": {"url": "wss://localhost:8420/mcp", "ca_cert": "/ca.crt"}}
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy),
+            patch(
+                "quarry.__main__.validate_connection_from_ws_url",
+                return_value=(True, ""),
+            ) as mock_ping,
+            patch("quarry.client.config.Settings") as mock_settings,
+        ):
+            resolver = mock_settings.load.return_value.resolve_db_paths
+            resolver.return_value = fake_settings
+            mock_settings.read_default_db.return_value = None
+            result = runner.invoke(app, ["remote", "list", "--ping"])
+        _reset_globals()
+        assert result.exit_code == 0, result.output
+        # The live serve.token, not the absent stored bearer, is the probe token.
+        assert mock_ping.call_args.args[1] == "live-ping-token"
