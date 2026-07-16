@@ -1,4 +1,4 @@
-"""Tests for the quarry HTTP server (quarry serve).
+"""Tests for the quarry HTTP server (quarryd).
 
 Uses Starlette's TestClient with mocked database and embedding backends.
 Each test class gets its own app instance via fixtures.
@@ -561,13 +561,29 @@ class TestServeToken:
         assert stat.S_IMODE(token_path.stat().st_mode) == 0o600
         assert server._bound is True
 
-    def test_startup_hook_none_key_writes_no_token(self, tmp_path: Path) -> None:
-        server = self._server(tmp_path, None)
+    @pytest.mark.parametrize("api_key", [None, "", "   ", "\n"])
+    def test_refuses_bind_without_key(
+        self, tmp_path: Path, api_key: str | None
+    ) -> None:
+        """A loopback bind with no (or whitespace-only) key is refused (R4).
+
+        Auth can never silently disable: the launcher mints a loopback token,
+        and a caller that passes none is refused rather than run open.
+        """
+        with pytest.raises(SystemExit, match="without an API key"):
+            self._server(tmp_path, api_key)
+
+    def test_strips_operator_key_whitespace(self, tmp_path: Path) -> None:
+        """An operator key with a trailing newline is stripped once at the
+        daemon boundary, so serve.token matches what the stripping client reads.
+        """
+        server = self._server(tmp_path, "the-bearer\n")
         uv = self._bound_server_mock()
         server._install_startup_hook(uv)
         asyncio.run(uv.startup())
-        assert not (tmp_path / "default" / "serve.token").exists()
-        assert server._bound is True  # bound (port written), just no token
+        # serve.token holds the stripped value — the loopback client reads and
+        # strips serve.token, so the daemon's auth value must be stripped too.
+        assert (tmp_path / "default" / "serve.token").read_text() == "the-bearer"
 
     def test_failed_bind_leaves_peer_token_intact(self, tmp_path: Path) -> None:
         """A second quarryd failing to bind must not clobber a running peer.
@@ -645,31 +661,31 @@ class TestServeToken:
         assert not (tmp_path / "default" / "serve.port").exists()
         assert server._bound is False  # not set until both writes succeed
 
-    def test_keyless_failed_startup_leaves_peer_token_intact(
+    def test_token_write_failure_removes_nothing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A no-api_key instance whose startup fails must NOT delete a peer's token.
+        """If the token write itself fails, no sidecar is removed (wrote_token=False).
 
-        Regression guard: the all-or-nothing cleanup removes ONLY what this
-        instance wrote.  With api_key=None it writes no token, so a failed port
-        write must leave a running peer's serve.token on the shared path intact.
+        Peer-safety guard: the all-or-nothing cleanup removes ONLY what this
+        instance wrote.  A keyed instance whose FIRST write (token) fails wrote
+        nothing, so a peer's serve.port on the shared per-db path stays intact.
         """
         (tmp_path / "default").mkdir(parents=True)
-        peer_token = tmp_path / "default" / "serve.token"
-        peer_token.write_text("peer-live-token")
+        peer_port = tmp_path / "default" / "serve.port"
+        peer_port.write_text("9999")  # a peer's port file on the shared path
 
-        server = self._server(tmp_path, None)  # no api_key -> writes no token
+        server = self._server(tmp_path, "the-bearer")
         uv = self._bound_server_mock()
         server._install_startup_hook(uv)
 
         def _boom(*_args: object, **_kwargs: object) -> None:
             raise OSError("disk full")
 
-        monkeypatch.setattr("quarry.run_dir.PortFile.write", _boom)
+        monkeypatch.setattr("quarry.run_dir.ServeTokenFile.write", _boom)
         with pytest.raises(OSError, match="disk full"):
             asyncio.run(uv.startup())
 
-        assert peer_token.read_text() == "peer-live-token"  # untouched
+        assert peer_port.read_text() == "9999"  # untouched — token write failed first
         assert server._bound is False
 
 

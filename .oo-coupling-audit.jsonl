@@ -41,3 +41,4 @@
 {"ts":"2026-07-16T03:15:44Z","commit":"0289852","source":null,"files_scored":147,"files_improved":0,"files_regressed":0,"verdict":"pass","reason":null,"deltas":{}}
 {"ts":"2026-07-16T04:13:29Z","commit":"c2f170d","source":null,"files_scored":147,"files_improved":0,"files_regressed":1,"verdict":"relaxed","reason":"security fix (cursor): +1 efferent edge to quarry.net for LoopbackPolicy \u2014 the single loopback classifier the daemon bind gate also uses","deltas":{"src/quarry/service.py":{"efferent_coupling":[2.0,3.0]}}}
 {"ts":"2026-07-16T04:13:30Z","commit":"c2f170d","source":null,"files_scored":147,"files_improved":0,"files_regressed":0,"verdict":"pass","reason":null,"deltas":{}}
+{"ts":"2026-07-16T12:55:25Z","commit":"ed1a764","source":null,"files_scored":147,"files_improved":1,"files_regressed":0,"verdict":"pass","reason":null,"deltas":{"src/quarry/daemon/server.py":{"efferent_coupling":[6.0,5.0]}}}

@@ -44,10 +44,13 @@ class LoopbackPolicy:
         A bind-all address (``0.0.0.0``/``::``) is remote-reachable and so is
         never loopback.
         """
-        # Hostnames are case-insensitive (RFC 4343): normalize before the
-        # name match so ``Localhost``/``LOCALHOST`` are not misread as remote
-        # and wrongly key-gated.  Lowercasing is harmless for IP literals.
-        host = self._host.lower()
+        # Normalize before matching.  Hostnames are case-insensitive
+        # (RFC 4343); a single trailing dot is the DNS root label
+        # (``localhost.`` == ``localhost``); surrounding whitespace is never
+        # significant.  Without this a ``localhost.`` / `` localhost `` is
+        # misread as remote and wrongly key-gated.  All three are harmless for
+        # IP literals (``ip_address`` still parses the normalized form).
+        host = self._host.strip().lower().removesuffix(".")
         if host in _LOOPBACK_NAMES:
             return True
         try:

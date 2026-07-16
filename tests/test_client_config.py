@@ -164,6 +164,21 @@ class TestBearerExtraction:
         )
         assert cfg.token is None
 
+    def test_lowercase_bearer_scheme_is_accepted(self) -> None:
+        # The daemon compares the scheme case-insensitively (parts[0].lower()
+        # == "bearer"); a stored "bearer <tok>" must resolve to the token, not
+        # be dropped client-side and sent tokenless (401).
+        resolved = ClientConfig.from_login(
+            {"url": "wss://x.example.com:1", "headers": {"Authorization": "bearer tok"}}
+        ).token
+        assert resolved == "tok"
+
+    def test_uppercase_bearer_scheme_is_accepted(self) -> None:
+        resolved = ClientConfig.from_login(
+            {"url": "wss://x.example.com:1", "headers": {"Authorization": "BEARER tok"}}
+        ).token
+        assert resolved == "tok"
+
 
 class TestLoopbackTokenProbe:
     """The non-raising probe helpers used by login validation and `--ping`."""

@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Self, final
 
 import uvicorn
@@ -20,7 +20,6 @@ from quarry.config import DEFAULT_PORT, Settings
 from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
 from quarry.fd_telemetry import FdTelemetry
-from quarry.net import LoopbackPolicy
 from quarry.run_dir import RunDir
 
 if TYPE_CHECKING:
@@ -66,13 +65,41 @@ class DaemonServer:
     _bound: bool
 
     def __new__(cls, settings: Settings, config: ServeConfig) -> Self:
-        LoopbackPolicy(config.host).enforce_bind_key(config.api_key)
+        config = cls._authenticated(config)
         self = super().__new__(cls)
         self._settings = settings
         self._config = config
         self._run_dir = RunDir(settings.lancedb_path.parent)
         self._bound = False
         return self
+
+    @staticmethod
+    def _authenticated(config: ServeConfig) -> ServeConfig:
+        """Normalize the API key and refuse to serve without one (R4).
+
+        Two guarantees at the single daemon boundary every caller passes through:
+
+        - Strip the key once so ``serve.token``, the auth comparison, and the
+          loopback client all use the same value.  An operator key with a
+          trailing newline (``QUARRY_API_KEY=$(cat keyfile)``) would otherwise
+          authenticate the raw value while the loopback client presents the
+          stripped ``serve.token`` --- a 401 on the operator's own machine.
+        - Fail closed: EVERY bind, loopback included, must carry a key (R4:
+          loopback => token-required).  The ``quarryd`` launcher mints a
+          loopback token, but a caller who passes none is refused here rather
+          than run open --- auth can never silently disable, regardless of
+          caller.  A non-loopback bind with no operator key is already refused
+          earlier by the launcher (before a token is minted), so an
+          auto-minted token can never satisfy a network bind.
+        """
+        key = (config.api_key or "").strip() or None
+        if key is None:
+            msg = (
+                "Refusing to serve without an API key. Every bind must be "
+                "authenticated (the quarryd launcher mints a loopback token)."
+            )
+            raise SystemExit(msg)
+        return replace(config, api_key=key)
 
     @classmethod
     def serve(cls, settings: Settings, config: ServeConfig) -> None:

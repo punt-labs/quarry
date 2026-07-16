@@ -194,13 +194,20 @@ class ClientConfig:
         if not isinstance(headers, Mapping):
             return None
         auth = headers.get("Authorization")
-        if not isinstance(auth, str) or not auth.startswith("Bearer "):
+        if not isinstance(auth, str):
             return None
-        # An empty/whitespace bearer (a bare "Bearer ") is absent, not a
+        # Parse "<scheme> <token>" and match the scheme case-insensitively: the
+        # daemon compares ``parts[0].lower() == "bearer"``, so a stored
+        # "bearer <tok>" must resolve to <tok>, not be dropped client-side and
+        # sent as a tokenless (401) request.
+        scheme, _, token = auth.partition(" ")
+        if scheme.lower() != "bearer":
+            return None
+        # An empty/whitespace token (a bare "Bearer ") is absent, not a
         # credential: return None so remote_mapping emits NO Authorization
         # header rather than an empty one that 401s downstream.  Mirrors the
         # loopback empty-serve.token fail-closed on the stored-header path.
-        return auth.removeprefix("Bearer ").strip() or None
+        return token.strip() or None
 
     @staticmethod
     def _host_of(url: str) -> str:

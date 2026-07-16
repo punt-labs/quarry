@@ -25,6 +25,8 @@ class TestIsLoopback:
             "localhost",
             "Localhost",  # hostnames are case-insensitive (RFC 4343)
             "LOCALHOST",
+            "localhost.",  # FQDN root label — the same host
+            " localhost ",  # surrounding whitespace is never significant
         ],
     )
     def test_loopback_hosts(self, host: str) -> None:
