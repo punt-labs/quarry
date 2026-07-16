@@ -593,6 +593,33 @@ class TestServeToken:
         assert peer_token.read_text() == "peer-1-live-token"  # untouched
         assert server._bound is False  # #2 never bound, so it wrote/removed nothing
 
+    def test_clean_shutdown_removes_bound_instance_sidecars(
+        self, tmp_path: Path
+    ) -> None:
+        """A bound instance removes its own serve.token + port file on clean exit.
+
+        Covers the ``if self._bound:`` TRUE branch of the lifespan finally — the
+        normal graceful-shutdown cleanup, distinct from the clobber-safety guard.
+        """
+        (tmp_path / "default").mkdir(parents=True)
+        token = tmp_path / "default" / "serve.token"
+        port = tmp_path / "default" / "serve.port"
+        token.write_text("live-token")
+        port.write_text("8420")
+
+        server = self._server(tmp_path, "live-token")
+        server._bound = True  # this instance bound successfully
+
+        async def _drive() -> None:
+            async with server._lifespan(MagicMock()):
+                assert token.exists()  # present while serving
+                assert port.exists()
+
+        asyncio.run(_drive())
+
+        assert not token.exists()  # removed on clean shutdown
+        assert not port.exists()
+
 
 class TestNotFound:
     def test_unknown_path_returns_404(self, client: TestClient) -> None:
