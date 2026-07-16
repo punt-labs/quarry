@@ -63,6 +63,7 @@ class DaemonServer:
     _settings: Settings
     _config: ServeConfig
     _run_dir: RunDir
+    _bound: bool
 
     def __new__(cls, settings: Settings, config: ServeConfig) -> Self:
         LoopbackPolicy(config.host).enforce_bind_key(config.api_key)
@@ -70,6 +71,7 @@ class DaemonServer:
         self._settings = settings
         self._config = config
         self._run_dir = RunDir(settings.lancedb_path.parent)
+        self._bound = False
         return self
 
     @classmethod
@@ -91,36 +93,14 @@ class DaemonServer:
         )
         ctx.warm()  # Build cached resources single-threaded before serving.
 
-        self._write_serve_token()
-        try:
-            app = build_app(ctx, lifespan=self._lifespan)
-            server = uvicorn.Server(self._uvicorn_config(app))
-            self._install_port_file_hook(server)
-            logger.info(
-                "Starting Quarry server on %s:%d",
-                self._config.host,
-                self._config.port,
-            )
-            server.run()
-        finally:
-            # Remove the token on ANY exit.  It is written BEFORE the socket
-            # binds (so a client racing the first request can read it), so a
-            # bind/startup failure after the write would otherwise leave a
-            # stale token — defeating the client's missing-file fail-closed
-            # check, making a DOWN daemon look like it holds a credential.
-            self._run_dir.token_file.remove()
+        app = build_app(ctx, lifespan=self._lifespan)
+        server = uvicorn.Server(self._uvicorn_config(app))
+        self._install_startup_hook(server)
+        logger.info(
+            "Starting Quarry server on %s:%d", self._config.host, self._config.port
+        )
+        server.run()
         logger.info("Server stopped")
-
-    def _write_serve_token(self) -> None:
-        """Persist the loopback bearer before the socket opens.
-
-        The daemon now requires this bearer on loopback, so it must be on
-        disk before the first request can race in.  A ``None`` key is the
-        interim unauthenticated path (no token, no gate) — retired once
-        every start goes through ``quarryd``, which always sets a key.
-        """
-        if self._config.api_key is not None:
-            self._run_dir.token_file.write(self._config.api_key)
 
     @asynccontextmanager
     async def _lifespan(self, _app: Starlette) -> AsyncGenerator[None]:
@@ -129,11 +109,14 @@ class DaemonServer:
         try:
             yield
         finally:
-            # Remove the port file first so cleanup is guaranteed even if
-            # draining the monitor task surfaces an error.
             monitor.cancel()
-            self._run_dir.port_file.remove()
-            self._run_dir.token_file.remove()
+            # Remove ONLY the sidecars this instance wrote after its own
+            # successful bind.  A second quarryd that fails to bind (port in
+            # use) must not delete a running peer's live serve.token / port
+            # file on the shared path on its way out.
+            if self._bound:
+                self._run_dir.port_file.remove()
+                self._run_dir.token_file.remove()
             with suppress(asyncio.CancelledError):
                 await monitor
 
@@ -149,30 +132,36 @@ class DaemonServer:
             ssl_keyfile=self._config.ssl_keyfile,
         )
 
-    def _install_port_file_hook(self, server: uvicorn.Server) -> None:
-        """Wrap uvicorn startup to write the actual bound port after binding.
+    def _install_startup_hook(self, server: uvicorn.Server) -> None:
+        """Wrap uvicorn startup to write the sidecars AFTER a successful bind.
 
-        Writing after bind is what lets ``port=0`` callers discover the
-        OS-assigned ephemeral port.
+        Both ``serve.port`` (which also lets ``port=0`` callers discover the
+        OS-assigned port) and ``serve.token`` are written only once the
+        socket has bound.  A failed bind therefore never writes them, so a
+        second instance racing an already-bound port cannot clobber a running
+        peer's live token.  The write lands microseconds after the serve loop
+        starts accepting; a client that races that window fails closed and
+        retries --- an acceptable trade for not nuking a live peer.
         """
         original_startup = server.startup
-        config = self._config
-        port_file = self._run_dir.port_file
 
-        async def _startup_with_port_file(sockets: list[socket] | None = None) -> None:
+        async def _startup_with_sidecars(sockets: list[socket] | None = None) -> None:
             await original_startup(sockets=sockets)
             if server.servers and server.servers[0].sockets:
                 actual_port = server.servers[0].sockets[0].getsockname()[1]
-                port_file.write(actual_port)
+                self._run_dir.port_file.write(actual_port)
+                if self._config.api_key is not None:
+                    self._run_dir.token_file.write(self._config.api_key)
+                self._bound = True
                 logger.info(
                     "Quarry server listening on %s://%s:%d",
-                    config.scheme,
-                    config.host,
+                    self._config.scheme,
+                    self._config.host,
                     actual_port,
                 )
             else:
                 logger.error(
-                    "Server started but no bound sockets; port file not written"
+                    "Server started but no bound sockets; sidecars not written"
                 )
 
-        server.startup = _startup_with_port_file  # type: ignore[method-assign]
+        server.startup = _startup_with_sidecars  # type: ignore[method-assign]

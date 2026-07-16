@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+import stat
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -536,29 +537,50 @@ class TestServeToken:
         config = ServeConfig(host="127.0.0.1", port=8420, api_key=api_key)
         return DaemonServer(settings, config)
 
-    def test_writes_token_mode_0600(self, tmp_path: Path) -> None:
-        import stat
+    @staticmethod
+    def _bound_server_mock() -> MagicMock:
+        """A uvicorn.Server mock whose startup succeeds and reports a bound port."""
+        server = MagicMock()
 
+        async def _startup(sockets: object = None) -> None:
+            return None
+
+        server.startup = _startup
+        sock = MagicMock()
+        sock.getsockname.return_value = ("127.0.0.1", 8420)
+        server.servers = [MagicMock(sockets=[sock])]
+        return server
+
+    def test_startup_hook_writes_token_after_bind(self, tmp_path: Path) -> None:
         server = self._server(tmp_path, "the-bearer")
-        server._write_serve_token()
+        uv = self._bound_server_mock()
+        server._install_startup_hook(uv)
+        asyncio.run(uv.startup())
         token_path = tmp_path / "default" / "serve.token"
         assert token_path.read_text() == "the-bearer"
         assert stat.S_IMODE(token_path.stat().st_mode) == 0o600
+        assert server._bound is True
 
-    def test_none_key_writes_no_token(self, tmp_path: Path) -> None:
-        # Interim unauthenticated path: no key, no token file, no gate.
+    def test_startup_hook_none_key_writes_no_token(self, tmp_path: Path) -> None:
         server = self._server(tmp_path, None)
-        server._write_serve_token()
+        uv = self._bound_server_mock()
+        server._install_startup_hook(uv)
+        asyncio.run(uv.startup())
         assert not (tmp_path / "default" / "serve.token").exists()
+        assert server._bound is True  # bound (port written), just no token
 
-    def test_bind_failure_removes_serve_token(self, tmp_path: Path) -> None:
-        """A startup/bind failure must not leave a stale token behind.
+    def test_failed_bind_leaves_peer_token_intact(self, tmp_path: Path) -> None:
+        """A second quarryd failing to bind must not clobber a running peer.
 
-        The token is written before the socket binds; if bind fails after that
-        write, a leftover token would defeat the client's missing-file
-        fail-closed check, making a DOWN daemon look like it holds a credential.
+        The token is written only AFTER a successful bind, so instance #2 (which
+        fails to bind) never writes it — and its cleanup, guarded by ``_bound``,
+        never removes the shared serve.token that a running instance #1 owns.
         """
-        server = self._server(tmp_path, "the-bearer")
+        (tmp_path / "default").mkdir(parents=True)
+        peer_token = tmp_path / "default" / "serve.token"
+        peer_token.write_text("peer-1-live-token")  # instance #1's live token
+
+        server = self._server(tmp_path, "instance-2-token")
         with (
             patch("quarry.daemon.server.DaemonContext"),
             patch("quarry.daemon.server.build_app"),
@@ -567,8 +589,9 @@ class TestServeToken:
             mock_uv.return_value.run.side_effect = OSError("address already in use")
             with pytest.raises(OSError, match="address already in use"):
                 server.run()
-        # The token was written (api_key set) then removed by run()'s finally.
-        assert not (tmp_path / "default" / "serve.token").exists()
+
+        assert peer_token.read_text() == "peer-1-live-token"  # untouched
+        assert server._bound is False  # #2 never bound, so it wrote/removed nothing
 
 
 class TestNotFound:

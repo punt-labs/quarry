@@ -23,6 +23,8 @@ class TestIsLoopback:
             "::1",
             "::ffff:127.0.0.1",  # IPv4-mapped IPv6 loopback
             "localhost",
+            "Localhost",  # hostnames are case-insensitive (RFC 4343)
+            "LOCALHOST",
         ],
     )
     def test_loopback_hosts(self, host: str) -> None:

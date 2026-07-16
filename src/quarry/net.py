@@ -44,10 +44,14 @@ class LoopbackPolicy:
         A bind-all address (``0.0.0.0``/``::``) is remote-reachable and so is
         never loopback.
         """
-        if self._host in _LOOPBACK_NAMES:
+        # Hostnames are case-insensitive (RFC 4343): normalize before the
+        # name match so ``Localhost``/``LOCALHOST`` are not misread as remote
+        # and wrongly key-gated.  Lowercasing is harmless for IP literals.
+        host = self._host.lower()
+        if host in _LOOPBACK_NAMES:
             return True
         try:
-            addr = ipaddress.ip_address(self._host)
+            addr = ipaddress.ip_address(host)
         except ValueError:
             return False
         # An IPv4-mapped IPv6 address (``::ffff:127.0.0.1``) is loopback iff its
