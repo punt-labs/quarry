@@ -1,9 +1,12 @@
-"""The daemon process entry point: warm the engine, then serve over uvicorn.
+"""The daemon process: warm the engine, then serve over uvicorn.
 
-``serve`` is the public entry the CLI calls; it bundles the bind options into a
-:class:`ServeConfig` and drives a :class:`DaemonServer`, which warms the engine
-single-threaded (DES-032) before accepting traffic and writes the actual bound
-port to a file so ephemeral-port (``port=0``) callers can discover it.
+The daemon is started via the ``quarryd`` entry point / :class:`DaemonLauncher`,
+which bundles the bind options into a :class:`ServeConfig` and drives a
+:class:`DaemonServer`.  The server warms the engine single-threaded (DES-032)
+before accepting traffic, then --- only after a successful bind --- writes both
+sidecars beside the data dir: ``serve.port`` (so ephemeral-port ``port=0``
+callers can discover the bound port) and ``serve.token`` (the loopback bearer
+clients present to authenticate).
 """
 
 from __future__ import annotations
@@ -12,7 +15,7 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Self, final
+from typing import TYPE_CHECKING, Self, cast, final
 
 import uvicorn
 
@@ -194,18 +197,18 @@ class DaemonServer:
         """Write serve.token + serve.port all-or-nothing after a successful bind.
 
         On any write failure, remove ONLY the sidecars THIS instance wrote —
-        never a peer's on the shared per-db path.  An instance with no api_key
-        writes no token, so its failed port write must not delete a running
-        peer's serve.token.  Both writes are atomic (a failed write leaves
-        nothing), so the flags record only completed writes.  ``_bound`` is set
-        only after both succeed, keeping the shutdown cleanup consistent.
+        never a peer's on the shared per-db path.  Both writes are atomic (a
+        failed write leaves nothing), so the flags record only completed writes.
+        ``_bound`` is set only after both succeed, keeping the shutdown cleanup
+        consistent.
         """
         wrote_token = False
         wrote_port = False
         try:
-            if self._config.api_key is not None:
-                self._run_dir.token_file.write(self._config.api_key)
-                wrote_token = True
+            # _authenticated guarantees a non-empty key on every instance, so the
+            # token is always written; the cast records that boundary invariant.
+            self._run_dir.token_file.write(cast("str", self._config.api_key))
+            wrote_token = True
             self._run_dir.port_file.write(actual_port)
             wrote_port = True
         except OSError:

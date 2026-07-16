@@ -231,7 +231,10 @@ class ClientConfig:
         ``quarry login localhost`` stores ``127.0.0.1`` so the managed path
         presents the serve.token to the exact literal the daemon binds --- a
         name is never stored (a resolver could later point it at a co-tenant).
-        A literal IP or a remote host is returned unchanged.
+        Every other host is returned NORMALIZED (stripped, lowercased,
+        de-trailing-dotted) by :attr:`LoopbackPolicy.canonical_host`, not
+        byte-for-byte unchanged --- so ``login " 127.0.0.1 "`` cannot store an
+        invalid whitespaced host in the URL.
         """
         return LoopbackPolicy(host).canonical_host
 
