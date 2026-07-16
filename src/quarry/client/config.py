@@ -131,6 +131,17 @@ class ClientConfig:
         """Return the live serve.token for a loopback ``ws(s)/http(s)`` URL."""
         return cls.loopback_token(cls._host_of(url))
 
+    @classmethod
+    def is_loopback_url(cls, url: str) -> bool:
+        """Return whether a ``ws(s)/http(s)`` URL targets a loopback host.
+
+        Lets a caller distinguish a loopback target (bearer must be the LIVE
+        serve.token, never a stored one) from a remote target (stored bearer)
+        --- ``loopback_token_for_url`` alone cannot, since it returns None for
+        both a remote URL and a loopback URL whose token is missing.
+        """
+        return LoopbackPolicy(cls._host_of(url)).is_loopback
+
     @staticmethod
     def _serve_token() -> str:
         """Read the daemon's live loopback bearer, or raise if it is down.

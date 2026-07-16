@@ -1400,7 +1400,15 @@ def remote_list_cmd(
         if url.startswith("wss://") and not ca_cert:
             ok, reason = False, "wss:// configured but no CA certificate pinned"
         else:
-            probe_token = ClientConfig.loopback_token_for_url(url) or token
+            # A loopback target authenticates with the LIVE serve.token only
+            # (never a stored bearer): a missing token means the daemon is
+            # down, so probe tokenless and let it report unreachable rather
+            # than mask the failure with a stale stored token.  Only a remote
+            # target uses its stored bearer.
+            if ClientConfig.is_loopback_url(url):
+                probe_token = ClientConfig.loopback_token_for_url(url)
+            else:
+                probe_token = token
             ok, reason = validate_connection_from_ws_url(
                 url,
                 probe_token,

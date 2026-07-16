@@ -5242,3 +5242,35 @@ class TestRemoteListPing:
         assert result.exit_code == 0, result.output
         # The live serve.token, not the absent stored bearer, is the probe token.
         assert mock_ping.call_args.args[1] == "live-ping-token"
+
+    def test_loopback_ping_missing_token_never_uses_stored_bearer(
+        self, tmp_path: Path
+    ) -> None:
+        """A loopback --ping with no live serve.token must NOT send the stored
+        bearer (live-only contract); it probes tokenless and reports unreachable."""
+        fake_settings = MagicMock()
+        fake_settings.lancedb_path = tmp_path / "lancedb"  # no serve.token present
+        proxy = {
+            "quarry": {
+                "url": "wss://localhost:8420/mcp",
+                "ca_cert": "/ca.crt",
+                "headers": {"Authorization": "Bearer STALE-STORED-TOKEN"},
+            }
+        }
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy),
+            patch(
+                "quarry.__main__.validate_connection_from_ws_url",
+                return_value=(False, "unreachable"),
+            ) as mock_ping,
+            patch("quarry.client.config.Settings") as mock_settings,
+        ):
+            resolver = mock_settings.load.return_value.resolve_db_paths
+            resolver.return_value = fake_settings
+            mock_settings.active_db.return_value = None
+            runner.invoke(app, ["remote", "list", "--ping"])
+        _reset_globals()
+        # The daemon is down (no live token) -> probe tokenless, never the stale
+        # stored bearer.
+        assert mock_ping.call_args.args[1] is None
+        assert "STALE-STORED-TOKEN" not in str(mock_ping.call_args)
