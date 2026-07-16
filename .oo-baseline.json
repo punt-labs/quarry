@@ -1588,10 +1588,10 @@
   "src/quarry/run_dir.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 0.38,
+    "avg_params": 0.43,
     "max_complexity": 3.0,
-    "avg_complexity": 1.38,
-    "module_size": 135.0,
+    "avg_complexity": 1.43,
+    "module_size": 160.0,
     "classes_per_module": 3.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,

@@ -106,7 +106,9 @@ class TestServeTokenFile:
 
         assert opened, "os.open was never called"
         assert opened[0] in closed, "leaked fd — os.close was not called on it"
-        assert not token_path.with_suffix(".tmp").exists(), "temp file left behind"
+        assert not token_path.with_name("serve.token.tmp").exists(), (
+            "temp file left behind"
+        )
         assert not token_path.exists(), "destination should not exist on failure"
 
     def test_write_failure_removes_tmp_and_leaves_no_partial(
@@ -130,7 +132,7 @@ class TestServeTokenFile:
         with pytest.raises(OSError, match="disk full"):
             ServeTokenFile(token_path).write("token")
 
-        assert not token_path.with_suffix(".tmp").exists()
+        assert not token_path.with_name("serve.token.tmp").exists()
         assert not token_path.exists()
 
     def test_overwrite_replaces_atomically(self, tmp_path: Path) -> None:
@@ -139,6 +141,39 @@ class TestServeTokenFile:
         tf.write("new-token")
         assert tf.read() == "new-token"
         assert stat.S_IMODE(tf.path.stat().st_mode) == 0o600
+
+    def test_token_temp_0600_despite_world_readable_leftover(
+        self, tmp_path: Path
+    ) -> None:
+        """A stale, world-readable temp must not leak the token's mode.
+
+        ``O_EXCL`` refuses to reuse the leftover; the writer unlinks it and
+        recreates 0600, so the secret is never written into a 0644 file.
+        """
+        token_path = tmp_path / "serve.token"
+        stale = token_path.with_name("serve.token.tmp")
+        stale.write_text("junk")
+        stale.chmod(0o644)
+        ServeTokenFile(token_path).write("token")
+        assert token_path.read_text() == "token"
+        assert stat.S_IMODE(token_path.stat().st_mode) == 0o600
+        assert not stale.exists(), "stale temp not consumed by the atomic rename"
+
+    def test_port_write_leaves_token_temp_untouched(self, tmp_path: Path) -> None:
+        """Distinct temp paths: the port writer never touches the token's temp.
+
+        Both sidecars once collapsed to a shared ``serve.tmp`` via
+        ``with_suffix(".tmp")``; a port write would then clobber a token temp
+        (and leave the token's temp world-readable for the next token write to
+        inherit).  Each now stages through its own name, so a token-temp
+        leftover survives a port write untouched.
+        """
+        token_temp = (tmp_path / "serve.token").with_name("serve.token.tmp")
+        token_temp.write_text("leftover")
+        token_temp.chmod(0o644)
+        PortFile(tmp_path / "serve.port").write(8420)
+        assert token_temp.exists(), "port write used the token's temp path"
+        assert stat.S_IMODE(token_temp.stat().st_mode) == 0o644
 
 
 class TestRunDir:

@@ -5,9 +5,12 @@ daemon's bound port and present its loopback bearer.  ``serve.token`` is the
 credential that closes the loopback-authentication gap (DES-031 v2.2 R4): before
 it, any local UID could reach the unauthenticated daemon on ``127.0.0.1`` and
 read, poison, or delete the whole index.  The token is written mode-0600 *from
-creation* via an atomic ``os.open`` + tmp-rename, so neither a world-readable
-window (a create-then-chmod race) nor a partial-file window (a crash mid-write)
-can ever expose or corrupt it.
+creation* via an atomic ``os.open`` (``O_EXCL``) + tmp-rename, so neither a
+world-readable window (a create-then-chmod race, or reusing a stale temp whose
+mode we do not control) nor a partial-file window (a crash mid-write) can ever
+expose or corrupt it.  Each sidecar stages through its *own* temp name
+(``serve.port.tmp`` / ``serve.token.tmp``) so the port writer can never leave a
+world-readable temp that the token writer would inherit.
 
 The module is deliberately engine-free: both the daemon (writer) and the client
 tier (reader) import it, so it must not pull in ``quarry.db`` or embeddings.
@@ -53,7 +56,9 @@ class PortFile:
         a half-written port must not linger to be mistaken for a live daemon.
         """
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._path.with_suffix(".tmp")
+        # Own temp name (serve.port.tmp) — never the token's, so a leftover
+        # port temp can never be inherited by the 0600 token writer.
+        tmp = self._path.with_name(self._path.name + ".tmp")
         try:
             tmp.write_text(str(port))
             tmp.replace(self._path)
@@ -103,11 +108,18 @@ class ServeTokenFile:
         return self._path
 
     def write(self, token: str) -> None:
-        """Write *token* mode-0600, atomically (create 0600 → write → rename)."""
+        """Write *token* mode-0600, atomically (create 0600 → write → rename).
+
+        The temp is created ``O_EXCL`` so the token is never written into a
+        pre-existing file whose mode we do not control: ``O_TRUNC`` would reuse
+        a stale temp (a crashed write's leftover, or another sidecar's
+        world-readable temp) and reset only its *contents*, not its mode,
+        briefly exposing the secret.  Its temp name is its own (serve.token.tmp)
+        so it can never collide with the port sidecar's temp.
+        """
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._path.with_suffix(".tmp")
-        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-        fd = os.open(str(tmp), flags, 0o600)
+        tmp = self._path.with_name(self._path.name + ".tmp")
+        fd = self._create_0600(tmp)
         # If fdopen fails it has NOT taken ownership of the fd, so we must close
         # it ourselves and clear the temp file — otherwise both leak.
         try:
@@ -126,6 +138,22 @@ class ServeTokenFile:
             tmp.unlink(missing_ok=True)
             raise
         logger.info("Wrote serve token file: %s", self._path)
+
+    @staticmethod
+    def _create_0600(tmp: Path) -> int:
+        """Create *tmp* 0600 with ``O_EXCL``; unlink a stale leftover and retry once.
+
+        ``O_EXCL`` guarantees a fresh 0600 file — the token is never written into
+        an existing temp whose mode we do not control.  A leftover from a crashed
+        write is unlinked and the create retried once; a second ``FileExistsError``
+        (a racing writer) propagates, failing closed rather than reusing the file.
+        """
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        try:
+            return os.open(str(tmp), flags, 0o600)
+        except FileExistsError:
+            tmp.unlink(missing_ok=True)
+            return os.open(str(tmp), flags, 0o600)
 
     def read(self) -> str:
         """Return the token; raise ``FileNotFoundError`` if the daemon is down.
