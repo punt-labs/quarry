@@ -780,6 +780,42 @@ class TestRunDirLock:
         assert len(closed) == 1  # the lock fd was closed exactly once (no leak)
         assert server._lock_fd < 0  # never recorded a live fd on failure
 
+    def test_release_closes_fd_even_if_unlock_raises(self, tmp_path: Path) -> None:
+        # fd hygiene: if LOCK_UN raises (EINTR/OSError), release must STILL close
+        # the fd — never leak — and clear _lock_fd, mirroring the acquire side.
+        server = self._server(tmp_path, "k")
+        server._acquire_run_dir_lock()
+        held_fd = server._lock_fd
+        closed: list[int] = []
+        real_close = os.close
+
+        def _spy_close(fd: int) -> None:
+            closed.append(fd)
+            real_close(fd)
+
+        with (
+            patch("quarry.daemon.server.fcntl.flock", side_effect=OSError("EINTR")),
+            patch("quarry.daemon.server.os.close", side_effect=_spy_close),
+            pytest.raises(OSError, match="EINTR"),
+        ):
+            server._release_run_dir_lock()
+
+        assert held_fd in closed  # closed despite the LOCK_UN failure
+        assert server._lock_fd < 0  # cleared even though unlock raised
+
+    def test_acquire_fails_closed_when_fcntl_unavailable(self, tmp_path: Path) -> None:
+        # Portability: fcntl is POSIX-only, imported optionally (None on a
+        # non-POSIX platform).  A daemon start there must fail closed with a
+        # clear message — never a silent no-op that reopens the clobber race,
+        # never a raw AttributeError from dereferencing None.
+        server = self._server(tmp_path, "k")
+        with (
+            patch("quarry.daemon.server.fcntl", None),
+            pytest.raises(SystemExit, match="POSIX"),
+        ):
+            server._acquire_run_dir_lock()
+        assert server._lock_fd < 0  # no fd opened when the lock is unavailable
+
 
 class TestNotFound:
     def test_unknown_path_returns_404(self, client: TestClient) -> None:

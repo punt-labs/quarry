@@ -12,11 +12,12 @@ clients present to authenticate).
 from __future__ import annotations
 
 import asyncio
-import fcntl
+import importlib
 import logging
 import os
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, replace
+from types import ModuleType
 from typing import TYPE_CHECKING, Self, cast, final
 
 import uvicorn
@@ -34,6 +35,18 @@ if TYPE_CHECKING:
     from starlette.applications import Starlette
 
 logger = logging.getLogger(__name__)
+
+# ``fcntl`` is POSIX-only and absent on non-POSIX platforms (e.g. Windows).
+# Import it optionally so ``import quarry.daemon.server`` (and the ``quarryd``
+# console script) never crashes at import there for callers that never start the
+# daemon.  ``None`` = platform without fcntl; a daemon start on such a platform
+# fails closed with a clear message because the run-dir lock — the daemon's
+# exclusive-ownership guarantee — cannot be provided without it.
+fcntl: ModuleType | None
+try:
+    fcntl = importlib.import_module("fcntl")
+except ImportError:  # pragma: no cover - POSIX-only; non-POSIX import must not fail
+    fcntl = None
 
 # Sample the daemon's open-fd count every 5 minutes so a climbing trend — the
 # LanceDB deleted-index-handle leak — surfaces in logs before it reaches EMFILE.
@@ -159,6 +172,12 @@ class DaemonServer:
         AND the token-writer's temp-retry race (no concurrent writer can exist).
         Fails closed: a second daemon exits rather than corrupt the shared token.
         """
+        # fcntl is POSIX-only: on a platform without it the run-dir lock cannot
+        # be provided, so fail closed at daemon start (never a silent no-op that
+        # would reopen the clobber race) — and never at import (see the guard).
+        if fcntl is None:
+            msg = "quarryd requires a POSIX platform (fcntl is unavailable)."
+            raise SystemExit(msg)
         lock_path = self._run_dir.lock_path
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
@@ -184,14 +203,23 @@ class DaemonServer:
     def _release_run_dir_lock(self) -> None:
         """Release the run-dir lock and close its fd (idempotent).
 
-        ``flock`` also releases when the fd closes on process exit, so a crashed
-        daemon frees the lock for the next start; this is the graceful path.
+        Close the fd in a ``finally`` so a failing ``LOCK_UN`` (EINTR / OSError)
+        still frees the descriptor — release must never leak, mirroring the
+        acquire-side close-on-all-paths.  ``_lock_fd`` is cleared first so a
+        second call is a no-op.  ``flock`` also releases when the fd closes on
+        process exit, so a crashed daemon frees the lock for the next start.
         """
         if self._lock_fd < 0:
             return
-        fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
-        os.close(self._lock_fd)
+        fd = self._lock_fd
         self._lock_fd = -1
+        try:
+            # fcntl held the lock, so it was available at acquire; guard anyway
+            # to satisfy the optional-import type and never deref None.
+            if fcntl is not None:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
 
     @asynccontextmanager
     async def _lifespan(self, _app: Starlette) -> AsyncGenerator[None]:

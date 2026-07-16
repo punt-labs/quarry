@@ -152,6 +152,42 @@ class TestQuarrydExecArgs:
         host_idx = args.index("--host")
         assert args[host_idx + 1] == bind_addr
 
+    def test_loopback_name_serve_host_canonicalized_to_literal(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """QUARRY_SERVE_HOST=localhost must bind the literal 127.0.0.1.
+
+        The install probe and login target both use 127.0.0.1; on an
+        IPv6-preferring host, binding the NAME "localhost" would land on ::1
+        while the client checks 127.0.0.1 (false timeout + 401).  The daemon
+        bind must agree with them on the literal.
+        """
+        monkeypatch.setenv("QUARRY_SERVE_HOST", "localhost")
+        _make_local_bin_quarryd(tmp_path)
+        with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
+            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+        ):
+            args = _quarryd_exec_args()
+        host_idx = args.index("--host")
+        assert args[host_idx + 1] == "127.0.0.1"  # not "localhost"
+
+    @pytest.mark.parametrize("bind_addr", ["127.0.0.1", "::1", "0.0.0.0"])  # noqa: S104
+    def test_explicit_literal_serve_host_unchanged(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bind_addr: str
+    ) -> None:
+        """An explicit literal (loopback ::1 or non-loopback 0.0.0.0) is left as
+        the operator set it — only the loopback NAME is rewritten."""
+        monkeypatch.setenv("QUARRY_SERVE_HOST", bind_addr)
+        _make_local_bin_quarryd(tmp_path)
+        with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
+            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+        ):
+            args = _quarryd_exec_args()
+        host_idx = args.index("--host")
+        assert args[host_idx + 1] == bind_addr
+
     def test_quarry_serve_host_unset_no_host_flag(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

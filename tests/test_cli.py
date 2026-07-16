@@ -27,11 +27,34 @@ def _mock_settings() -> MagicMock:
 
 
 def _reset_globals() -> None:
-    """Reset CLI globals between tests."""
+    """Reset CLI globals between tests.
+
+    Includes the process-wide active database (``Settings._active_db``): the
+    main callback records ``--db X`` via ``Settings.set_active_db(X)``, which is
+    class-level state that survives across ``runner.invoke`` calls.  Without this
+    reset a ``quarry --db work ...`` test leaks ``work`` into later tests, making
+    the suite order-dependent.
+    """
     cli_mod._json_output = False
     cli_mod._verbose = False
     cli_mod._quiet = False
     cli_mod._global_db = ""
+    Settings.set_active_db("")
+
+
+def test_reset_globals_clears_active_db_leak() -> None:
+    """A ``--db work`` run must not leak the active db into a later default run.
+
+    ``main_callback`` records ``--db work`` via ``Settings.set_active_db``; that
+    class-level state persists across invocations, so ``_reset_globals`` must
+    clear it or the next default-db command resolves ``work`` and fails
+    order-dependently.
+    """
+    Settings.set_active_db("work")
+    assert Settings.active_db() == "work"  # the leak the reset must clear
+    _reset_globals()
+    # After the reset the active db no longer resolves to "work".
+    assert Settings.active_db() != "work"
 
 
 class TestColorDeterminism:
