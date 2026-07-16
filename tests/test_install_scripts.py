@@ -674,6 +674,24 @@ def test_install_health_gate_requires_ready_state() -> None:
     )
 
 
+def test_install_health_gate_probes_literal_loopback_not_localhost() -> None:
+    """The health gate must probe the literal 127.0.0.1, not "localhost".
+
+    The daemon binds IPv4 loopback and login pins 127.0.0.1; on an IPv6-preferring
+    host "localhost" resolves ::1 first, so a localhost health probe would miss
+    the ready IPv4 daemon (false timeout) and reopen the dual-stack ambiguity the
+    literal-IP pinning closed.  Both health loops (network + default) must target
+    127.0.0.1:8420/health, and no daemon probe may hit localhost:8420.
+    """
+    script = INSTALL_SH.read_text()
+    assert script.count("https://127.0.0.1:8420/health") == 2, (
+        "both health loops must probe the literal 127.0.0.1, not localhost"
+    )
+    assert "localhost:8420" not in script, (
+        "no daemon probe may target the dual-stack-ambiguous localhost:8420"
+    )
+
+
 def test_install_health_gate_discriminates_ready_from_starting() -> None:
     """The gate's grep matches a ready body and rejects a starting one."""
     pattern = '"state"[[:space:]]*:[[:space:]]*"ready"'

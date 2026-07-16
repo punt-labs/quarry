@@ -210,7 +210,11 @@ if [ "$NETWORK" = "1" ]; then
   info "Waiting for daemon to be ready..."
   printf '\n'
 
-  HEALTH_URL="https://localhost:8420/health"
+  # Probe the literal 127.0.0.1, not "localhost": the daemon binds IPv4 loopback
+  # and login pins 127.0.0.1, so on an IPv6-preferring host "localhost" resolves
+  # ::1 first and the gate would miss the ready IPv4 daemon (false timeout).  The
+  # server cert carries 127.0.0.1 as an IP SAN, so strict --cacert still verifies.
+  HEALTH_URL="https://127.0.0.1:8420/health"
   CA_CERT="${HOME}/.punt-labs/quarry/tls/ca.crt"
   MAX_TRIES=10
   _i=0
@@ -233,7 +237,9 @@ else
   info "Waiting for quarry daemon to be ready..."
   _i=0
   while [ $_i -lt 15 ]; do
-    if curl -fsk "https://localhost:8420/health" 2>/dev/null | grep -q '"state"[[:space:]]*:[[:space:]]*"ready"'; then
+    # Probe 127.0.0.1 (the IPv4 bind / login target), not the dual-stack-ambiguous
+    # "localhost", so an IPv6-preferring resolver can't miss the ready daemon.
+    if curl -fsk "https://127.0.0.1:8420/health" 2>/dev/null | grep -q '"state"[[:space:]]*:[[:space:]]*"ready"'; then
       ok "Daemon is ready"
       break
     fi
