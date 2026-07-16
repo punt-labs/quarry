@@ -126,9 +126,13 @@ def mock_bin(tmp_path: Path) -> Path:
         quarry_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
     )
 
-    # curl -- used for health checks.  Succeed so the health-check loop
-    # terminates fast.
-    _write_mock(bin_dir / "curl", log_header + "exit 0\n")
+    # curl -- used for health checks.  Emit the ready health body so the
+    # install gate (which now requires state=="ready", not a bare 200)
+    # matches and the loop terminates fast.
+    _write_mock(
+        bin_dir / "curl",
+        log_header + 'printf \'{"state":"ready"}\\n\'\nexit 0\n',
+    )
 
     # ssh -- the script tests SSH to github.com for HTTPS fallback.
     # Return a success banner so the HTTPS rewrite is skipped.
@@ -650,3 +654,36 @@ def test_install_script_passes_shellcheck() -> None:
     assert result.returncode == 0, (
         f"shellcheck failed on install.sh:\n{result.stdout}\n{result.stderr}"
     )
+
+
+def test_install_health_gate_requires_ready_state() -> None:
+    """Per CLAUDE.md Class 5: the health gate must check state=="ready".
+
+    A warming daemon returns HTTP 200 with state=="starting", so gating on a
+    bare 200 (``curl ... >/dev/null``) would green-light an unready daemon.
+    Both health-check loops (network + default) must grep the ready state.
+    """
+    script = INSTALL_SH.read_text()
+    ready_gate = '"state"[[:space:]]*:[[:space:]]*"ready"'
+    assert script.count(ready_gate) == 2, "both health loops must gate on state==ready"
+    assert '/health" >/dev/null 2>&1; then' not in script, (
+        "health check must not gate on a bare HTTP 200"
+    )
+
+
+def test_install_health_gate_discriminates_ready_from_starting() -> None:
+    """The gate's grep matches a ready body and rejects a starting one."""
+    pattern = '"state"[[:space:]]*:[[:space:]]*"ready"'
+
+    def _matches(body: str) -> bool:
+        return (
+            subprocess.run(
+                ["grep", "-q", pattern], input=body, text=True, check=False
+            ).returncode
+            == 0
+        )
+
+    assert _matches('{"state":"ready"}')
+    assert _matches('{"state": "ready", "version": "1.19.0"}')
+    assert not _matches('{"state":"starting"}')
+    assert not _matches('{"status":"ok"}')

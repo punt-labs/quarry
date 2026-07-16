@@ -4195,56 +4195,6 @@ class TestCliStandards:
             )
 
 
-class TestServeTlsFlag:
-    """Tests for the --tls flag on the serve command."""
-
-    def test_tls_flag_passes_ssl_args_to_http_serve(self, tmp_path: Path) -> None:
-        tls_dir = tmp_path / "tls"
-        tls_dir.mkdir()
-        cert_path = tls_dir / "server.crt"
-        key_path = tls_dir / "server.key"
-        cert_path.write_text("FAKE CERT")
-        key_path.write_text("FAKE KEY")
-
-        with (
-            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.TLS_DIR", tls_dir),
-            patch("quarry.daemon.server.DaemonServer.serve") as mock_serve,
-        ):
-            runner.invoke(app, ["serve", "--tls"])
-
-        _reset_globals()
-        config = mock_serve.call_args[0][1]
-        assert config.ssl_certfile == str(cert_path)
-        assert config.ssl_keyfile == str(key_path)
-
-    def test_tls_flag_missing_certs_exits(self, tmp_path: Path) -> None:
-        tls_dir = tmp_path / "tls"
-        # Do not create the cert files.
-
-        with (
-            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.TLS_DIR", tls_dir),
-        ):
-            result = runner.invoke(app, ["serve", "--tls"])
-
-        _reset_globals()
-        assert result.exit_code == 1
-        assert "quarry install" in " ".join(result.output.split())
-
-    def test_no_tls_flag_passes_none_ssl_args(self) -> None:
-        with (
-            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.daemon.server.DaemonServer.serve") as mock_serve,
-        ):
-            runner.invoke(app, ["serve"])
-
-        _reset_globals()
-        config = mock_serve.call_args[0][1]
-        assert config.ssl_certfile is None
-        assert config.ssl_keyfile is None
-
-
 _FAKE_CA_PEM = b"-----BEGIN CERTIFICATE-----\nfakecertdata\n-----END CERTIFICATE-----\n"
 _FAKE_FINGERPRINT = "SHA256:" + "a" * 64
 

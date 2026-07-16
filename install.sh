@@ -216,8 +216,10 @@ if [ "$NETWORK" = "1" ]; then
   _i=0
   while [ "$_i" -lt "$MAX_TRIES" ]; do
     _i=$((_i + 1))
-    if curl -fsS --cacert "$CA_CERT" "$HEALTH_URL" >/dev/null 2>&1; then
-      ok "Quarry daemon is healthy (attempt $_i/$MAX_TRIES)"
+    # Gate on state=="ready": a warming daemon returns HTTP 200 with
+    # state=="starting", so a bare 200 is not readiness.
+    if curl -fsS --cacert "$CA_CERT" "$HEALTH_URL" 2>/dev/null | grep -q '"state"[[:space:]]*:[[:space:]]*"ready"'; then
+      ok "Quarry daemon is ready (attempt $_i/$MAX_TRIES)"
       break
     fi
     if [ "$_i" -eq "$MAX_TRIES" ]; then
@@ -231,7 +233,7 @@ else
   info "Waiting for quarry daemon to be ready..."
   _i=0
   while [ $_i -lt 15 ]; do
-    if curl -fsk "https://localhost:8420/health" >/dev/null 2>&1; then
+    if curl -fsk "https://localhost:8420/health" 2>/dev/null | grep -q '"state"[[:space:]]*:[[:space:]]*"ready"'; then
       ok "Daemon is ready"
       break
     fi

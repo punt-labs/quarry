@@ -62,7 +62,7 @@ from quarry.results import SearchFilter
 from quarry.retrieval import SearchService
 from quarry.sync import sync_all
 from quarry.sync_registry import SyncRegistry
-from quarry.tls import TLS_DIR, cert_fingerprint
+from quarry.tls import cert_fingerprint
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +90,6 @@ _COMMAND_ORDER: list[str] = [
     # Admin commands
     "install",
     "doctor",
-    "serve",
     "mcp",
     "version",
     "uninstall",
@@ -1600,82 +1599,6 @@ def doctor() -> None:
 
     exit_code = check_environment()
     raise typer.Exit(code=exit_code)
-
-
-@app.command()
-@_cli_errors
-def serve(
-    port: Annotated[
-        int,
-        typer.Option(
-            "--port",
-            "-p",
-            help=f"Port to bind (default: {DEFAULT_PORT}, 0 = OS-assigned).",
-        ),
-    ] = DEFAULT_PORT,
-    host: Annotated[
-        str,
-        typer.Option(
-            "--host",
-            help="Address to bind. 127.0.0.1 (default) or 0.0.0.0 for containers.",
-        ),
-    ] = "127.0.0.1",
-    api_key: Annotated[
-        str | None,
-        typer.Option(
-            "--api-key",
-            envvar="QUARRY_API_KEY",
-            help="Require Bearer token auth on all endpoints except /health.",
-        ),
-    ] = None,
-    cors_origin: Annotated[
-        list[str] | None,
-        typer.Option(
-            "--cors-origin",
-            help="Allowed CORS origin (repeatable). Default: http://localhost.",
-        ),
-    ] = None,
-    tls: Annotated[
-        bool,
-        typer.Option(
-            "--tls",
-            help=(
-                "Enable TLS using certificates from ~/.punt-labs/quarry/tls/. "
-                "Run 'quarry install' first to generate certificates."
-            ),
-        ),
-    ] = False,
-) -> None:
-    """Start the HTTP API server."""
-    from quarry.daemon.server import DaemonServer, ServeConfig  # noqa: PLC0415
-
-    settings = _resolved_settings()
-    origins = frozenset(cors_origin) if cors_origin else None
-
-    ssl_certfile: str | None = None
-    ssl_keyfile: str | None = None
-    if tls:
-        cert_path = TLS_DIR / "server.crt"
-        key_path = TLS_DIR / "server.key"
-        if not cert_path.exists() or not key_path.exists():
-            err_console.print(
-                "Error: TLS certificate files not found in "
-                f"{TLS_DIR}. Run 'quarry install' first.",
-                style="red",
-            )
-            raise typer.Exit(code=1)
-        ssl_certfile = str(cert_path)
-        ssl_keyfile = str(key_path)
-
-    config = ServeConfig(
-        host=host,
-        port=port,
-        api_key=api_key,
-        cors_origins=origins,
-        ssl_certfile=ssl_certfile,
-        ssl_keyfile=ssl_keyfile,
-    )
-    DaemonServer.serve(settings, config)
 
 
 @app.command()

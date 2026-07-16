@@ -1,11 +1,11 @@
 # ruff: noqa: S603, S607 — all subprocess calls invoke system binaries (launchctl, systemctl, loginctl)
-"""Daemon lifecycle management for ``quarry serve``.
+"""Daemon lifecycle management for the ``quarryd`` engine process.
 
 Provides ``install`` and ``uninstall`` commands that register quarry as a
 system service (launchd on macOS, systemd on Linux) so the daemon starts
 at login and restarts on crash.
 
-The service runs ``quarry serve --port 8420`` using the installed ``quarry``
+The service runs ``quarryd --port 8420`` using the installed ``quarryd``
 binary (from ``uv tool install``), never ``sys.executable``.
 """
 
@@ -90,8 +90,8 @@ def _write_env_file(api_key: str = "") -> None:
         raise
 
 
-def _quarry_exec_args() -> list[str]:
-    """Return the command to invoke ``quarry serve``.
+def _quarryd_exec_args() -> list[str]:
+    """Return the command to invoke the ``quarryd`` engine daemon.
 
     Resolution order:
 
@@ -118,14 +118,14 @@ def _quarry_exec_args() -> list[str]:
     Appends ``--tls`` when TLS certificates are present in TLS_DIR.
     """
     # 1. Preferred: uv tool install symlink.
-    local_bin = Path.home() / ".local" / "bin" / "quarry"
+    local_bin = Path.home() / ".local" / "bin" / "quarryd"
     if local_bin.exists():
         resolved = local_bin.resolve()
         logger.info("Service binary: %s (uv tool)", resolved)
-        base = [str(resolved), "serve", "--port", str(DEFAULT_PORT)]
+        base = [str(resolved), "--port", str(DEFAULT_PORT)]
     else:
         msg = (
-            "Cannot find quarry binary at ~/.local/bin/quarry. "
+            "Cannot find quarryd binary at ~/.local/bin/quarryd. "
             "Install quarry first: uv tool install punt-quarry"
         )
         raise RuntimeError(msg)
@@ -157,7 +157,7 @@ _LAUNCHD_PLIST = _LAUNCHD_DIR / f"{_LABEL}.plist"
 
 
 def _launchd_plist_content() -> str:
-    args = _quarry_exec_args()
+    args = _quarryd_exec_args()
     program_args = "\n".join(f"        <string>{_xml_escape(a)}</string>" for a in args)
     log_dir = Path.home() / ".punt-labs" / "quarry" / "logs"
     # launchd does not support EnvironmentFile — embed environment variables
@@ -306,7 +306,7 @@ def _systemd_escape(arg: str) -> str:
 
 
 def _systemd_unit_content() -> str:
-    args = _quarry_exec_args()
+    args = _quarryd_exec_args()
     exec_start = " ".join(_systemd_escape(a) for a in args)
     env_file_path = str(_ENV_FILE)
     return textwrap.dedent(f"""\
@@ -317,7 +317,7 @@ def _systemd_unit_content() -> str:
         [Service]
         ExecStart={exec_start}
         EnvironmentFile=-{env_file_path}
-        Restart=on-failure
+        Restart=always
         RestartSec=5
         Nice=-5
 
@@ -436,7 +436,7 @@ def install() -> str:
     ca_crt = TLS_DIR / "ca.crt"
     fingerprint = cert_fingerprint(ca_crt.read_bytes()) if ca_crt.exists() else ""
 
-    args = _quarry_exec_args()
+    args = _quarryd_exec_args()
 
     if plat == "macos":
         _launchd_install()
