@@ -205,10 +205,18 @@ class ClientConfig:
         # exact target (and its stored bearer) is not ours to rewrite.
         if policy.is_literal_loopback or not policy.is_loopback:
             return url
-        split = urllib.parse.urlsplit(url)
-        # to_netloc brackets an IPv6 literal (and preserves an absent port) so the
-        # reassembled URL always parses back to the same host.
-        netloc = to_netloc(policy.canonical_host, split.port)
+        # ``urlparse`` yields a hostname for a URL whose PORT is malformed
+        # (``wss://localhost:bad``), so the migrate branch runs but
+        # ``urlsplit(...).port`` raises ValueError.  Fail closed: return the URL
+        # unchanged and let the connection layer reject it, rather than crash the
+        # CLI path with a raw ValueError far from its cause.
+        try:
+            split = urllib.parse.urlsplit(url)
+            # to_netloc brackets an IPv6 literal (and preserves an absent port) so
+            # the reassembled URL always parses back to the same host.
+            netloc = to_netloc(policy.canonical_host, split.port)
+        except ValueError:
+            return url
         return urllib.parse.urlunsplit(
             (split.scheme, netloc, split.path, split.query, split.fragment)
         )

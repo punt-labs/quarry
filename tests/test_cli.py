@@ -50,11 +50,15 @@ def test_reset_globals_clears_active_db_leak() -> None:
     clear it or the next default-db command resolves ``work`` and fails
     order-dependently.
     """
-    Settings.set_active_db("work")
-    assert Settings.active_db() == "work"  # the leak the reset must clear
-    _reset_globals()
-    # After the reset the active db no longer resolves to "work".
-    assert Settings.active_db() != "work"
+    # Hermetic: pin read_default_db so the post-reset fallback is a KNOWN value,
+    # not the developer/CI machine's real ~/.punt-labs/quarry/config.toml (whose
+    # default could itself be "work" and mask the reset).
+    with patch.object(Settings, "read_default_db", return_value=None):
+        Settings.set_active_db("work")
+        assert Settings.active_db() == "work"  # the leak the reset must clear
+        _reset_globals()
+        # After the reset the active db resolves to the pinned default, not "work".
+        assert Settings.active_db() is None
 
 
 class TestColorDeterminism:

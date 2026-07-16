@@ -419,6 +419,22 @@ class TestCanonicalUrl:
         assert ClientConfig.canonical_url(url) == url
         assert ClientConfig.is_loopback_url(url) is False
 
+    def test_malformed_port_returns_url_unchanged(self) -> None:
+        # Exception boundary: urlparse still yields hostname "localhost" for a
+        # non-numeric port, so the migrate branch runs, but urlsplit(...).port
+        # raises ValueError.  canonical_url must fail closed (return the URL
+        # unchanged for the connection layer to reject), never crash with a raw
+        # ValueError.
+        url = "wss://localhost:bad/mcp"
+        assert ClientConfig.canonical_url(url) == url  # no raise, unchanged
+
+    def test_well_formed_url_still_canonicalizes_after_guard(self) -> None:
+        # The fail-closed guard must not suppress the normal migration.
+        assert (
+            ClientConfig.canonical_url("wss://localhost:8420/mcp")
+            == "wss://127.0.0.1:8420/mcp"
+        )
+
 
 class TestFromLoginRemoteUnaffected:
     def test_remote_url_not_canonicalized(self, tmp_path: Path) -> None:
