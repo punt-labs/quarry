@@ -4577,6 +4577,50 @@ class TestLoginCmd:
         url_arg = mock_write.call_args[0][0]
         assert url_arg.startswith("wss://"), f"Expected wss:// but got: {url_arg}"
 
+    def test_ipv6_loopback_login_brackets_url(self, tmp_path: Path) -> None:
+        """An IPv6 loopback literal must be bracketed so the stored URL parses:
+        `quarry login ::1` writes wss://[::1]:8420/mcp, not the invalid
+        wss://::1:8420/mcp that urlparse cannot read back."""
+        (tmp_path / "serve.token").write_text("live-daemon-token")
+        fake_settings = MagicMock()
+        fake_settings.lancedb_path = tmp_path / "lancedb"  # parent == tmp_path
+        with (
+            patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
+            patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
+            patch("quarry.__main__.store_ca_cert"),
+            patch("quarry.__main__.validate_connection", return_value=(True, "")),
+            patch("quarry.__main__.write_proxy_config") as mock_write,
+            patch("quarry.__main__.CA_CERT_PATH", Path("/fake/quarry-ca.crt")),
+            patch("quarry.client.config.Settings") as mock_settings,
+        ):
+            resolver = mock_settings.load.return_value.resolve_db_paths
+            resolver.return_value = fake_settings
+            mock_settings.active_db.return_value = None
+            result = runner.invoke(app, ["login", "::1", "--yes"])
+        _reset_globals()
+        assert result.exit_code == 0, result.output
+        url_arg = mock_write.call_args[0][0]
+        assert url_arg == "wss://[::1]:8420/mcp", url_arg
+
+    def test_ipv6_remote_login_brackets_url(self) -> None:
+        """A remote IPv6 literal is bracketed too: `login 2001:db8::5` writes a
+        valid wss://[2001:db8::5]:8420/mcp."""
+        with (
+            patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
+            patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
+            patch("quarry.__main__.store_ca_cert"),
+            patch("quarry.__main__.validate_connection", return_value=(True, "")),
+            patch("quarry.__main__.write_proxy_config") as mock_write,
+            patch("quarry.__main__.CA_CERT_PATH", Path("/fake/quarry-ca.crt")),
+        ):
+            result = runner.invoke(
+                app, ["login", "2001:db8::5", "--api-key", "sk-remote", "--yes"]
+            )
+        _reset_globals()
+        assert result.exit_code == 0, result.output
+        url_arg = mock_write.call_args[0][0]
+        assert url_arg == "wss://[2001:db8::5]:8420/mcp", url_arg
+
     def test_proxy_config_oserror_exits_without_writing_ca_cert(self) -> None:
         """OSError from write_proxy_config exits before CA cert is stored.
 

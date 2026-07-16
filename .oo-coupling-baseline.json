@@ -785,7 +785,7 @@
   },
   "src/quarry/remote.py": {
     "efferent_coupling": 1.0,
-    "public_names": 10.0,
+    "public_names": 11.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0

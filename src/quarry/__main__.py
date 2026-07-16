@@ -53,6 +53,7 @@ from quarry.remote import (
     mask_token,
     read_proxy_config,
     store_ca_cert,
+    to_netloc,
     validate_connection,
     validate_connection_from_ws_url,
     write_proxy_config,
@@ -1313,7 +1314,9 @@ def login_cmd(  # noqa: C901
     # Step 5: Write mcp-proxy config first, then store the CA cert.
     # This order ensures that if the CA cert write fails, we can roll back
     # the config — the reverse order has no recovery path (Fix 2).
-    ws_url = f"wss://{host}:{port}/mcp"
+    # to_netloc brackets an IPv6 literal host ([::1]) so the stored URL parses;
+    # a hostname or IPv4 literal is unchanged.
+    ws_url = f"wss://{to_netloc(host, port)}/mcp"
     # R4 live-only: a loopback target's bearer is the LIVE serve.token, resolved
     # fresh by ClientConfig on every call — NEVER persist it.  A stored key would
     # go stale each daemon restart and would mislead any reader of the stored

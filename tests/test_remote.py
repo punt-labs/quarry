@@ -8,6 +8,7 @@ import ssl
 import stat
 import tomllib
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -21,6 +22,7 @@ from quarry.remote import (
     mask_token,
     read_proxy_config,
     store_ca_cert,
+    to_netloc,
     validate_connection,
     validate_connection_from_ws_url,
     write_proxy_config,
@@ -741,3 +743,39 @@ class TestValidateConnectionWithCaCert:
         assert "Could not connect" not in reason, (
             f"Must not say 'Could not connect' for a CA cert problem; got: {reason!r}"
         )
+
+
+class TestToNetloc:
+    """to_netloc brackets IPv6 literals so host:port URLs parse (RFC 3986)."""
+
+    @pytest.mark.parametrize(
+        ("host", "port", "expected"),
+        [
+            ("::1", 8420, "[::1]:8420"),  # IPv6 loopback literal → bracketed
+            ("2001:db8::5", 443, "[2001:db8::5]:443"),  # full IPv6 → bracketed
+            ("::ffff:127.0.0.1", 80, "[::ffff:127.0.0.1]:80"),  # IPv4-mapped IPv6
+            ("127.0.0.1", 8420, "127.0.0.1:8420"),  # IPv4 → unchanged
+            ("gpu.example.com", 8420, "gpu.example.com:8420"),  # hostname → unchanged
+            ("[::1]", 8420, "[::1]:8420"),  # already bracketed → not doubled
+        ],
+    )
+    def test_netloc(self, host: str, port: int, expected: str) -> None:
+        assert to_netloc(host, port) == expected
+
+    @pytest.mark.parametrize(
+        ("host", "expected"),
+        [("::1", "[::1]"), ("127.0.0.1", "127.0.0.1"), ("[::1]", "[::1]")],
+    )
+    def test_none_port_returns_bracketed_host_only(
+        self, host: str, expected: str
+    ) -> None:
+        # A URL that omits the port (scheme default applies) yields host only —
+        # still bracketed for IPv6 so urlparse reads the host, not a phantom port.
+        assert to_netloc(host, None) == expected
+
+    def test_ipv6_netloc_round_trips_through_urlparse(self) -> None:
+        # The bug: f"wss://{host}:{port}" for host="::1" yields wss://::1:8420,
+        # which urlparse CANNOT read back as host ::1.  Bracketing fixes it.
+        url = f"https://{to_netloc('::1', 8420)}/status"
+        assert urllib.parse.urlparse(url).hostname == "::1"
+        assert urllib.parse.urlparse(url).port == 8420

@@ -30,7 +30,7 @@ from typing import Self, final
 
 from quarry.config import Settings
 from quarry.net import LoopbackPolicy
-from quarry.remote import ws_to_http
+from quarry.remote import to_netloc, ws_to_http
 from quarry.remote_client import RemoteClient
 from quarry.run_dir import RunDir
 
@@ -206,9 +206,9 @@ class ClientConfig:
         if policy.is_literal_loopback or not policy.is_loopback:
             return url
         split = urllib.parse.urlsplit(url)
-        netloc = policy.canonical_host
-        if split.port is not None:
-            netloc = f"{netloc}:{split.port}"
+        # to_netloc brackets an IPv6 literal (and preserves an absent port) so the
+        # reassembled URL always parses back to the same host.
+        netloc = to_netloc(policy.canonical_host, split.port)
         return urllib.parse.urlunsplit(
             (split.scheme, netloc, split.path, split.query, split.fragment)
         )

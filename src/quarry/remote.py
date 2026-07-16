@@ -143,6 +143,23 @@ def ws_to_http(url: str) -> str:
     return url
 
 
+def to_netloc(host: str, port: int | None) -> str:  # None port: URL omits it
+    """Return ``host:port``, bracketing an IPv6 literal so the URL parses.
+
+    An IPv6 literal contains colons that collide with the ``host:port``
+    separator: ``::1`` must render as ``[::1]:8420``, else ``urlparse`` reads
+    ``::1:8420`` as a bare hostname with no port (or rejects it), breaking every
+    downstream connection.  A hostname or IPv4 literal has no colon and is
+    returned unchanged; an already-bracketed host is not double-bracketed.  A
+    ``None`` port means the URL omits it (the scheme default applies), so only
+    the (bracketed) host is returned.
+    """
+    bracketed = f"[{host}]" if ":" in host and not host.startswith("[") else host
+    if port is None:
+        return bracketed
+    return f"{bracketed}:{port}"
+
+
 def validate_connection(
     host: str,
     port: int,
@@ -160,7 +177,7 @@ def validate_connection(
         ca_cert_path: Optional path to a CA certificate PEM.  When provided,
             TLS verification uses this CA instead of the system trust store.
     """
-    url = f"{scheme}://{host}:{port}/v{API_VERSION}/status"
+    url = f"{scheme}://{to_netloc(host, port)}/v{API_VERSION}/status"
     auth_headers: dict[str, str] = (
         {"Authorization": f"Bearer {token}"} if token is not None else {}
     )

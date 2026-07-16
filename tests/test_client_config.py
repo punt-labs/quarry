@@ -337,6 +337,22 @@ class TestCanonicalUrl:
         assert ClientConfig.is_loopback_url(migrated) is True
         assert "localhost" not in migrated
 
+    def test_ipv6_bracketed_loopback_round_trips(self) -> None:
+        # A stored bracketed IPv6 loopback URL is a literal-loopback target and
+        # survives canonical_url unchanged (early return) — the brackets that
+        # make it a valid URL must not be stripped or doubled.
+        url = "wss://[::1]:8420/mcp"
+        assert ClientConfig.canonical_url(url) == url
+        assert ClientConfig._host_of(url) == "::1"
+        assert ClientConfig.is_loopback_url(url) is True
+
+    def test_ipv6_remote_url_unchanged(self) -> None:
+        # A remote IPv6 URL is returned byte-for-byte and is not a live-token
+        # target (its stored bearer stands).
+        url = "wss://[2001:db8::5]:8420/mcp"
+        assert ClientConfig.canonical_url(url) == url
+        assert ClientConfig.is_loopback_url(url) is False
+
 
 class TestFromLoginRemoteUnaffected:
     def test_remote_url_not_canonicalized(self, tmp_path: Path) -> None:
