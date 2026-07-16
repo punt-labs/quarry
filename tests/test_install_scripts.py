@@ -29,6 +29,7 @@ Ordering invariants asserted per CLAUDE.md Class 5:
 
 from __future__ import annotations
 
+import re
 import shutil
 import stat
 import subprocess
@@ -693,16 +694,13 @@ def test_install_health_gate_probes_literal_loopback_not_localhost() -> None:
 
 
 def test_install_health_gate_discriminates_ready_from_starting() -> None:
-    """The gate's grep matches a ready body and rejects a starting one."""
-    pattern = '"state"[[:space:]]*:[[:space:]]*"ready"'
+    """The gate's ready-state pattern matches a ready body and rejects a starting
+    one.  Expressed in Python `re` (no external `grep` on PATH): the install
+    script's POSIX ``[[:space:]]`` becomes ``\\s``, semantics unchanged."""
+    pattern = r'"state"\s*:\s*"ready"'
 
     def _matches(body: str) -> bool:
-        return (
-            subprocess.run(
-                ["grep", "-q", pattern], input=body, text=True, check=False
-            ).returncode
-            == 0
-        )
+        return re.search(pattern, body) is not None
 
     assert _matches('{"state":"ready"}')
     assert _matches('{"state": "ready", "version": "1.19.0"}')
