@@ -45,6 +45,47 @@ class TestLaunch:
             launcher.launch()
         assert mock_serve.call_args[0][1].api_key == "operator-set-key"
 
+    def test_loopback_name_host_canonicalized_to_literal(self) -> None:
+        """`quarryd --host localhost` must bind the literal 127.0.0.1.
+
+        The launcher is the actual bind point, so a DIRECT invocation (not only
+        the managed service unit) agrees with the install probe and login target,
+        which use 127.0.0.1.  Binding the NAME would land on ::1 on an
+        IPv6-preferring host while the client checks 127.0.0.1 (false timeout + 401).
+        """
+        launcher = DaemonLauncher(_options(host="localhost", api_key=None))
+        with (
+            patch("quarry.daemon.launcher.DaemonServer.serve") as mock_serve,
+            patch("quarry.daemon.launcher.Settings"),
+        ):
+            launcher.launch()
+        config = mock_serve.call_args[0][1]
+        assert config.host == "127.0.0.1"  # not "localhost"
+        # The key gate ran on the canonical host: localhost is loopback, so a
+        # loopback token was minted and no operator key was demanded.
+        assert config.api_key  # minted, not refused
+
+    @pytest.mark.parametrize("host", ["127.0.0.1", "::1"])
+    def test_literal_loopback_host_unchanged(self, host: str) -> None:
+        """An explicit loopback literal is left as the operator set it."""
+        launcher = DaemonLauncher(_options(host=host, api_key=None))
+        with (
+            patch("quarry.daemon.launcher.DaemonServer.serve") as mock_serve,
+            patch("quarry.daemon.launcher.Settings"),
+        ):
+            launcher.launch()
+        assert mock_serve.call_args[0][1].host == host
+
+    def test_non_loopback_host_unchanged(self) -> None:
+        """A non-loopback 0.0.0.0 is left unchanged (and still key-gated)."""
+        launcher = DaemonLauncher(_options(host="0.0.0.0", api_key="k"))  # noqa: S104
+        with (
+            patch("quarry.daemon.launcher.DaemonServer.serve") as mock_serve,
+            patch("quarry.daemon.launcher.Settings"),
+        ):
+            launcher.launch()
+        assert mock_serve.call_args[0][1].host == "0.0.0.0"  # noqa: S104
+
     def test_non_loopback_without_key_refuses(self) -> None:
         """A network bind on an auto-token is false security — refuse to bind."""
         launcher = DaemonLauncher(_options(host="0.0.0.0", api_key=None))  # noqa: S104

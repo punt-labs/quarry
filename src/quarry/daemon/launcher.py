@@ -51,16 +51,32 @@ class DaemonLauncher:
 
     @staticmethod
     def _normalized(options: BindOptions) -> BindOptions:
-        """Strip the api_key and map empty/whitespace -> None once, at the single
-        launcher boundary, so ``enforce_bind_key``, ``_effective_key``, and
-        ``DaemonServer`` all see the same value.  Without this a whitespace-only
-        ``QUARRY_API_KEY`` is truthy at the gate: a loopback bind would fail to
-        mint and then exit at the daemon boundary (won't start), and a network
-        bind would pass the gate only to fail inconsistently later.  Normalized
-        here, a whitespace key is absent everywhere — loopback mints, network is
-        refused AT the bind gate.
+        """Normalize the bind options once, at the single launcher boundary — the
+        actual bind point — so the bind, the key gate, and the client all agree.
+
+        Two normalizations:
+
+        - Strip the api_key and map empty/whitespace -> None so
+          ``enforce_bind_key``, ``_effective_key``, and ``DaemonServer`` all see
+          the same value.  Without this a whitespace-only ``QUARRY_API_KEY`` is
+          truthy at the gate: a loopback bind would fail to mint and then exit at
+          the daemon boundary (won't start), and a network bind would pass the
+          gate only to fail inconsistently later.  Normalized here, a whitespace
+          key is absent everywhere — loopback mints, network is refused AT the
+          gate.
+        - Canonicalize a loopback-NAME host to the IPv4 literal (localhost ->
+          127.0.0.1).  Both a managed service-unit start AND a direct ``quarryd
+          --host localhost`` pass through here, so the bind agrees with the
+          install probe and ``quarry login``, which use 127.0.0.1.  Binding the
+          name would land on ``::1`` on an IPv6-preferring host while the client
+          checks 127.0.0.1 (false timeout + 401).  An explicit ``::1`` or a
+          non-loopback ``0.0.0.0`` is left as the operator set it; the key gate
+          (:meth:`launch`) then runs on the canonical host, so ``localhost`` is
+          correctly loopback and needs no operator key.
         """
-        return replace(options, api_key=(options.api_key or "").strip() or None)
+        api_key = (options.api_key or "").strip() or None
+        host = LoopbackPolicy(options.host).canonical_host
+        return replace(options, api_key=api_key, host=host)
 
     def launch(self) -> None:
         """Refuse an unsafe bind, mint the loopback token, and serve."""

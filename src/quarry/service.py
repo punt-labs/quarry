@@ -133,13 +133,11 @@ def _quarryd_exec_args() -> list[str]:
 
     serve_host = os.environ.get("QUARRY_SERVE_HOST", "").strip()
     if serve_host:
-        # Canonicalize a loopback NAME (localhost) to 127.0.0.1 so the daemon
-        # bind agrees with the install health probe and the login target, which
-        # both use the literal.  On an IPv6-preferring host, binding "localhost"
-        # lands on ::1 while the client checks 127.0.0.1 -> false timeout + 401.
-        # An explicit ::1 or a non-loopback 0.0.0.0 is left as the operator set
-        # it (canonical_host only rewrites the loopback name).
-        base.extend(["--host", LoopbackPolicy(serve_host).canonical_host])
+        # Forward the host raw: the launcher (DaemonLauncher._normalized) is the
+        # bind point and canonicalizes a loopback NAME to 127.0.0.1, so both this
+        # managed path and a direct ``quarryd --host`` agree — canonicalizing
+        # here too would duplicate that single source of truth.
+        base.extend(["--host", serve_host])
 
     cert_path = TLS_DIR / "server.crt"
     key_path = TLS_DIR / "server.key"
