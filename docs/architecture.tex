@@ -105,7 +105,7 @@ still load the engine in-process.
 \textbf{Single machine (localhost TLS):}
 \begin{lstlisting}
                     stdio                      wss:// (TLS)
-Claude Code <------------------> mcp-proxy <-------------------> quarry serve
+Claude Code <------------------> mcp-proxy <-------------------> quarryd
              MCP JSON-RPC        (~5 MB Go)   pinned CA cert     (one daemon)
 \end{lstlisting}
 
@@ -113,10 +113,10 @@ Claude Code <------------------> mcp-proxy <-------------------> quarry serve
 \begin{lstlisting}
 Mac (client)                                   Linux (server)
                     stdio                       wss:// (TLS)
-Claude Code <------------------> mcp-proxy <---------------------> quarry serve
+Claude Code <------------------> mcp-proxy <---------------------> quarryd
              MCP JSON-RPC        (~5 MB Go)     pinned CA cert     (GPU daemon)
 
-CLI -----> HTTPS GET/POST ---------> quarry serve
+CLI -----> HTTPS GET/POST ---------> quarryd
            Bearer + pinned CA
 \end{lstlisting}
 
@@ -387,7 +387,7 @@ Remote      & \modpath{remote.py}       & Remote server config:
 Remote client & \modpath{remote\_client.py} & \texttt{RemoteClient} ---
               authenticated HTTP client the CLI uses to route data
               commands to a remote daemon over pinned-CA HTTPS. \\
-Daemon      & \modpath{service.py}      & \texttt{quarry serve} lifecycle
+Daemon      & \modpath{service.py}      & \texttt{quarryd} lifecycle
               via \texttt{launchd}/\texttt{systemd}. \\
 \bottomrule
 \end{tabular}
@@ -932,7 +932,7 @@ unless a caller needs to distinguish failure modes programmatically.
 
 \subsection{Bearer Token Authentication}
 
-\texttt{quarry serve -{}-api-key} (or \texttt{QUARRY\_API\_KEY} env var)
+\texttt{quarryd -{}-api-key} (or \texttt{QUARRY\_API\_KEY} env var)
 gates all HTTP endpoints except \texttt{/health} behind
 \texttt{Authorization: Bearer <key>}.
 
@@ -1104,10 +1104,10 @@ No special flag needed.  Default install runs a local daemon on
 localhost.  \texttt{quarry login} redirects queries to the remote
 server via TOFU certificate pinning and writes the mcp-proxy config.
 
-\subsection{Daemon (\texttt{quarry serve})}
+\subsection{Daemon (\texttt{quarryd})}
 
 \begin{lstlisting}
-QUARRY_API_KEY=<token> quarry serve --port 8420 --host 0.0.0.0 --tls
+QUARRY_API_KEY=<token> quarryd --port 8420 --host 0.0.0.0 --tls
 \end{lstlisting}
 
 Non-loopback hosts require an API key (the server refuses to start

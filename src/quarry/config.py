@@ -106,4 +106,4 @@ class Settings(BaseSettings):
         return cls()
 
 
-DEFAULT_PORT = 8420  # well-known port for ``quarry serve`` + mcp-proxy configs
+DEFAULT_PORT = 8420  # well-known port for ``quarryd`` + mcp-proxy configs
