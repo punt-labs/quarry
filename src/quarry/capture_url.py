@@ -6,6 +6,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import urlsplit, urlunsplit
 
+from quarry.remote import to_netloc
+
 
 @dataclass(frozen=True, slots=True)
 class CaptureUrl:
@@ -22,20 +24,13 @@ class CaptureUrl:
     _raw: str
 
     def redacted(self, scrubber: Callable[[str], str]) -> str:
-        """Return the metadata URL: userinfo/query/fragment stripped, then scrubbed."""
+        """Return the metadata URL: userinfo/query/fragment stripped, then scrubbed.
+
+        ``to_netloc`` re-brackets an IPv6 literal that ``urlsplit(...).hostname``
+        stripped (``2001:db8::1`` -> ``[2001:db8::1]``), so the reassembled netloc
+        is a valid, unambiguous URL — one shared bracketing primitive, no local copy.
+        """
         parts = urlsplit(self._raw)
-        host = self._bracketed(parts.hostname or "")
-        netloc = f"{host}:{parts.port}" if parts.port else host
+        netloc = to_netloc(parts.hostname or "", parts.port)
         bare = urlunsplit((parts.scheme, netloc, parts.path, "", ""))
         return scrubber(bare)
-
-    @staticmethod
-    def _bracketed(host: str) -> str:
-        """Wrap an IPv6 literal in ``[]`` so its colons aren't read as a port.
-
-        ``urlsplit(...).hostname`` strips the RFC 3986 brackets from IPv6 hosts,
-        so ``[2001:db8::1]`` returns as ``2001:db8::1``.  Reassembling a netloc
-        from the bare literal yields an ambiguous, invalid URL; restore the
-        brackets whenever the host carries the tell-tale colon.
-        """
-        return f"[{host}]" if ":" in host else host

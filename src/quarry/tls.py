@@ -2,7 +2,7 @@
 
 Generates a self-signed CA and server certificate using EC P-256 keys.
 Certificates are stored in ~/.punt-labs/quarry/tls/ and used by the
-quarry serve --tls command and the quarry login TOFU flow.
+quarryd --tls command and the quarry login TOFU flow.
 """
 
 from __future__ import annotations

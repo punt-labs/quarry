@@ -1,4 +1,4 @@
-"""Periodic open-file-descriptor telemetry for the ``quarry serve`` daemon.
+"""Periodic open-file-descriptor telemetry for the ``quarryd`` daemon.
 
 The long-lived daemon can leak descriptors: handles to deleted LanceDB index
 files accumulate until the count reaches ``RLIMIT_NOFILE``, the kernel returns

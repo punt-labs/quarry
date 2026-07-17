@@ -1,18 +1,24 @@
-"""The daemon process entry point: warm the engine, then serve over uvicorn.
+"""The daemon process: warm the engine, then serve over uvicorn.
 
-``serve`` is the public entry the CLI calls; it bundles the bind options into a
-:class:`ServeConfig` and drives a :class:`DaemonServer`, which warms the engine
-single-threaded (DES-032) before accepting traffic and writes the actual bound
-port to a file so ephemeral-port (``port=0``) callers can discover it.
+The daemon is started via the ``quarryd`` entry point / :class:`DaemonLauncher`,
+which bundles the bind options into a :class:`ServeConfig` and drives a
+:class:`DaemonServer`.  The server warms the engine single-threaded (DES-032)
+before accepting traffic, then --- only after a successful bind --- writes both
+sidecars beside the data dir: ``serve.port`` (so ephemeral-port ``port=0``
+callers can discover the bound port) and ``serve.token`` (the loopback bearer
+clients present to authenticate).
 """
 
 from __future__ import annotations
 
 import asyncio
+import importlib
 import logging
+import os
 from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Self, final
+from dataclasses import dataclass, replace
+from types import ModuleType
+from typing import TYPE_CHECKING, Self, cast, final
 
 import uvicorn
 
@@ -20,15 +26,28 @@ from quarry.config import DEFAULT_PORT, Settings
 from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
 from quarry.fd_telemetry import FdTelemetry
+from quarry.remote import to_netloc
+from quarry.run_dir import RunDir
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
-    from pathlib import Path
     from socket import socket
 
     from starlette.applications import Starlette
 
 logger = logging.getLogger(__name__)
+
+# ``fcntl`` is POSIX-only and absent on non-POSIX platforms (e.g. Windows).
+# Import it optionally so ``import quarry.daemon.server`` (and the ``quarryd``
+# console script) never crashes at import there for callers that never start the
+# daemon.  ``None`` = platform without fcntl; a daemon start on such a platform
+# fails closed with a clear message because the run-dir lock — the daemon's
+# exclusive-ownership guarantee — cannot be provided without it.
+fcntl: ModuleType | None
+try:
+    fcntl = importlib.import_module("fcntl")
+except ImportError:  # pragma: no cover - POSIX-only; non-POSIX import must not fail
+    fcntl = None
 
 # Sample the daemon's open-fd count every 5 minutes so a climbing trend — the
 # LanceDB deleted-index-handle leak — surfaces in logs before it reaches EMFILE.
@@ -56,63 +75,176 @@ class ServeConfig:
 
 
 @final
-class PortFile:
-    """The ``serve.port`` sidecar: the daemon's actual bound port for callers."""
-
-    _path: Path
-
-    def __new__(cls, path: Path) -> Self:
-        self = super().__new__(cls)
-        self._path = path
-        return self
-
-    def write(self, port: int) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(str(port))
-        logger.info("Wrote port file: %s (port %d)", self._path, port)
-
-    def remove(self) -> None:
-        try:
-            self._path.unlink(missing_ok=True)
-            logger.info("Removed port file: %s", self._path)
-        except OSError:
-            logger.warning("Could not remove port file: %s", self._path)
-
-
-@final
 class DaemonServer:
     """Warm the engine and serve the REST API until a shutdown signal."""
 
     _settings: Settings
     _config: ServeConfig
-    _port_file: PortFile
+    _run_dir: RunDir
+    _bound: bool
+    _lock_fd: int
 
     def __new__(cls, settings: Settings, config: ServeConfig) -> Self:
-        cls._validate_host_key(config.host, config.api_key)
+        config = cls._authenticated(config)
         self = super().__new__(cls)
         self._settings = settings
         self._config = config
-        self._port_file = PortFile(settings.lancedb_path.parent / "serve.port")
+        self._run_dir = RunDir(settings.lancedb_path.parent)
+        self._bound = False
+        self._lock_fd = -1  # -1 = lock not held; a real fd once acquired.
         return self
 
+    @staticmethod
+    def _authenticated(config: ServeConfig) -> ServeConfig:
+        """Normalize the API key and refuse to serve without one (R4).
+
+        Two guarantees at the single daemon boundary every caller passes through:
+
+        - Strip the key once so ``serve.token``, the auth comparison, and the
+          loopback client all use the same value.  An operator key with a
+          trailing newline (``QUARRY_API_KEY=$(cat keyfile)``) would otherwise
+          authenticate the raw value while the loopback client presents the
+          stripped ``serve.token`` --- a 401 on the operator's own machine.
+        - Fail closed: EVERY bind, loopback included, must carry a key (R4:
+          loopback => token-required).  The ``quarryd`` launcher mints a
+          loopback token, but a caller who passes none is refused here rather
+          than run open --- auth can never silently disable, regardless of
+          caller.  A non-loopback bind with no operator key is already refused
+          earlier by the launcher (before a token is minted), so an
+          auto-minted token can never satisfy a network bind.
+        """
+        key = (config.api_key or "").strip() or None
+        if key is None:
+            msg = (
+                "Refusing to serve without an API key. Every bind must be "
+                "authenticated (the quarryd launcher mints a loopback token)."
+            )
+            raise SystemExit(msg)
+        return replace(config, api_key=key)
+
+    @classmethod
+    def serve(cls, settings: Settings, config: ServeConfig) -> None:
+        """Warm the engine and serve *config* until shutdown (process entry).
+
+        The bind options arrive already bundled in a :class:`ServeConfig`, so
+        the caller (the ``quarryd`` entry point) owns option parsing and this
+        method stays a two-argument seam rather than a wide parameter list.
+        """
+        cls(settings, config).run()
+
     def run(self) -> None:
-        """Build the app, bind uvicorn, and block until shutdown."""
-        ctx = DaemonContext(
-            self._settings,
-            api_key=self._config.api_key,
-            cors_origins=self._config.cors_origins,
-        )
-        ctx.warm()  # Build cached resources single-threaded before serving.
+        """Build the app, bind uvicorn, and block until shutdown.
 
-        app = build_app(ctx, lifespan=self._lifespan)
-        server = uvicorn.Server(self._uvicorn_config(app))
-        self._install_port_file_hook(server)
+        Acquire the run-dir lock FIRST so a second daemon on the same database
+        fails closed here — before warming the engine or writing any shared
+        sidecar — and release it on every exit path in the ``finally``.
+        """
+        self._acquire_run_dir_lock()
+        try:
+            ctx = DaemonContext(
+                self._settings,
+                api_key=self._config.api_key,
+                cors_origins=self._config.cors_origins,
+            )
+            ctx.warm()  # Build cached resources single-threaded before serving.
 
-        logger.info(
-            "Starting Quarry server on %s:%d", self._config.host, self._config.port
-        )
-        server.run()
-        logger.info("Server stopped")
+            app = build_app(ctx, lifespan=self._lifespan)
+            server = uvicorn.Server(self._uvicorn_config(app))
+            self._install_startup_hook(server)
+            logger.info(
+                # Bracket an IPv6 literal for the log so it renders a valid
+                # host:port (starting on [::1]:8420, not ::1:8420); bind unchanged.
+                "Starting Quarry server on %s",
+                to_netloc(self._config.host, self._config.port),
+            )
+            server.run()
+            logger.info("Server stopped")
+        finally:
+            self._release_run_dir_lock()
+
+    def _acquire_run_dir_lock(self) -> None:
+        """Take an exclusive advisory lock so ONE daemon owns this run dir.
+
+        serve.token / serve.port are shared per-database sidecars.  A SECOND
+        quarryd on the same database — even on a different port, so the bind
+        never conflicts — would overwrite the first's serve.token (the first's
+        clients then 401) and, on its own exit, delete the first's sidecars
+        (locking everyone out).  An exclusive ``flock`` held for the process
+        lifetime makes the lock-holder the ONLY writer: it closes that clobber
+        AND the token-writer's temp-retry race (no concurrent writer can exist).
+        Fails closed: a second daemon exits rather than corrupt the shared token.
+        """
+        # fcntl is POSIX-only: on a platform without it the run-dir lock cannot
+        # be provided, so fail closed at daemon start (never a silent no-op that
+        # would reopen the clobber race) — and never at import (see the guard).
+        if fcntl is None:
+            msg = "quarryd requires a POSIX platform (fcntl is unavailable)."
+            raise SystemExit(msg)
+        lock_path = self._run_dir.lock_path
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        # O_CLOEXEC: the lock fd must not leak into subprocesses the daemon
+        # spawns (directly or via deps), which would retain the lock across exec.
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR | os.O_CLOEXEC, 0o600)
+        # Close the fd on EVERY flock failure — contention OR any other OSError
+        # (permission, filesystem) — so a failed acquire never leaks a
+        # descriptor (this daemon has EMFILE history).  _lock_fd is set only
+        # AFTER the lock is held, so the release path never touches an fd whose
+        # flock failed.
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            os.close(fd)
+            msg = (
+                "another quarryd already owns this database's run dir "
+                f"({lock_path.parent})"
+            )
+            raise SystemExit(msg) from exc
+        except BaseException:
+            os.close(fd)
+            raise
+        self._lock_fd = fd
+
+    def _release_run_dir_lock(self) -> None:
+        """Release the run-dir lock and close its fd (idempotent, best-effort).
+
+        Runs in ``run()``'s ``finally``, so it must NEVER raise — a raise here
+        would mask the real shutdown/failure reason.  A failing ``LOCK_UN``
+        (EINTR / OSError) is harmless because closing the fd releases the lock
+        anyway, so it is logged and swallowed; the fd is then closed in the
+        ``finally``.  ``_lock_fd`` is cleared first so a second call is a no-op.
+        ``flock`` also releases when the fd closes on process exit, so a crashed
+        daemon frees the lock for the next start.
+        """
+        if self._lock_fd < 0:
+            return
+        fd = self._lock_fd
+        self._lock_fd = -1
+        try:
+            # fcntl held the lock, so it was available at acquire; guard anyway
+            # to satisfy the optional-import type and never deref None.
+            if fcntl is not None:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError as exc:
+            # Best-effort: the fd close below releases the lock regardless, so a
+            # failing unlock is harmless — log and continue, never re-raise.
+            logger.warning(
+                "serve.lock unlock failed (harmless, fd close releases it): %s", exc
+            )
+        try:
+            os.close(fd)
+        except OSError as exc:
+            # Swallow (never retry) a failing close, for two reasons:
+            #   1) Non-masking — release runs in run()'s shutdown ``finally``, so
+            #      raising here would hide the real shutdown/failure reason.
+            #   2) NEVER retry close on EINTR.  Per close(2) + PEP 475, on the
+            #      supported platforms (systemd=Linux, launchd=macOS) the fd IS
+            #      released even when close returns EINTR — Python 3.5+
+            #      deliberately does not auto-retry close, because a retry could
+            #      close an UNRELATED fd another thread reused in the interim.
+            # The advisory lock is already gone regardless: LOCK_UN above freed
+            # it, closing the fd frees it again, and process exit (this is the
+            # shutdown path) frees any flock the OS still holds.
+            logger.warning("serve.lock fd close failed: %s", exc)
 
     @asynccontextmanager
     async def _lifespan(self, _app: Starlette) -> AsyncGenerator[None]:
@@ -121,10 +253,14 @@ class DaemonServer:
         try:
             yield
         finally:
-            # Remove the port file first so cleanup is guaranteed even if
-            # draining the monitor task surfaces an error.
             monitor.cancel()
-            self._port_file.remove()
+            # Remove ONLY the sidecars this instance wrote after its own
+            # successful bind.  A second quarryd that fails to bind (port in
+            # use) must not delete a running peer's live serve.token / port
+            # file on the shared path on its way out.
+            if self._bound:
+                self._run_dir.port_file.remove()
+                self._run_dir.token_file.remove()
             with suppress(asyncio.CancelledError):
                 await monitor
 
@@ -140,62 +276,64 @@ class DaemonServer:
             ssl_keyfile=self._config.ssl_keyfile,
         )
 
-    def _install_port_file_hook(self, server: uvicorn.Server) -> None:
-        """Wrap uvicorn startup to write the actual bound port after binding.
+    def _install_startup_hook(self, server: uvicorn.Server) -> None:
+        """Wrap uvicorn startup to write the sidecars AFTER a successful bind.
 
-        Writing after bind is what lets ``port=0`` callers discover the
-        OS-assigned ephemeral port.
+        Both ``serve.port`` (which also lets ``port=0`` callers discover the
+        OS-assigned port) and ``serve.token`` are written only once the
+        socket has bound.  A failed bind therefore never writes them, so a
+        second instance racing an already-bound port cannot clobber a running
+        peer's live token.  The write lands microseconds after the serve loop
+        starts accepting; a client that races that window fails closed and
+        retries --- an acceptable trade for not nuking a live peer.
         """
         original_startup = server.startup
-        config = self._config
-        port_file = self._port_file
 
-        async def _startup_with_port_file(sockets: list[socket] | None = None) -> None:
+        async def _startup_with_sidecars(sockets: list[socket] | None = None) -> None:
             await original_startup(sockets=sockets)
             if server.servers and server.servers[0].sockets:
                 actual_port = server.servers[0].sockets[0].getsockname()[1]
-                port_file.write(actual_port)
+                self._write_sidecars(actual_port)
                 logger.info(
-                    "Quarry server listening on %s://%s:%d",
-                    config.scheme,
-                    config.host,
-                    actual_port,
+                    "Quarry server listening on %s://%s",
+                    self._config.scheme,
+                    # Bracket an IPv6 literal for the log so it renders a valid
+                    # URL (https://[::1]:8420, not the ambiguous ::1:8420); the
+                    # bind host is unchanged.
+                    to_netloc(self._config.host, actual_port),
                 )
             else:
                 logger.error(
-                    "Server started but no bound sockets; port file not written"
+                    "Server started but no bound sockets; sidecars not written"
                 )
 
-        server.startup = _startup_with_port_file  # type: ignore[method-assign]
+        server.startup = _startup_with_sidecars  # type: ignore[method-assign]
 
-    @staticmethod
-    def _validate_host_key(host: str, api_key: str | None) -> None:
-        """Refuse to bind to non-loopback without an API key."""
-        if host != "127.0.0.1" and not api_key:
-            msg = (
-                "Refusing to bind to %s without --api-key. "
-                "Non-loopback hosts require authentication."
-            )
-            raise SystemExit(msg % host)
+    def _write_sidecars(self, actual_port: int) -> None:
+        """Write serve.token + serve.port all-or-nothing after a successful bind.
 
-
-def serve(
-    settings: Settings,
-    port: int = DEFAULT_PORT,
-    *,
-    host: str = "127.0.0.1",
-    api_key: str | None = None,
-    cors_origins: frozenset[str] | None = None,
-    ssl_certfile: str | None = None,
-    ssl_keyfile: str | None = None,
-) -> None:
-    """Start the daemon HTTP server.  Blocks until shutdown (CLI entry point)."""
-    config = ServeConfig(
-        host=host,
-        port=port,
-        api_key=api_key,
-        cors_origins=cors_origins,
-        ssl_certfile=ssl_certfile,
-        ssl_keyfile=ssl_keyfile,
-    )
-    DaemonServer(settings, config).run()
+        On any failure — an OSError OR an interrupt (KeyboardInterrupt / SIGINT)
+        landing between the two writes — remove ONLY the sidecars THIS instance
+        wrote, never a peer's on the shared per-db path, then re-raise.  Catching
+        BaseException matters: a SIGINT after serve.token but before serve.port
+        would otherwise leave a lone serve.token that loopback clients read as a
+        false "daemon up".  Both writes are atomic (a failed write leaves
+        nothing), so the flags record only completed writes.  ``_bound`` is set
+        only after both succeed, keeping the shutdown cleanup consistent.
+        """
+        wrote_token = False
+        wrote_port = False
+        try:
+            # _authenticated guarantees a non-empty key on every instance, so the
+            # token is always written; the cast records that boundary invariant.
+            self._run_dir.token_file.write(cast("str", self._config.api_key))
+            wrote_token = True
+            self._run_dir.port_file.write(actual_port)
+            wrote_port = True
+        except BaseException:
+            if wrote_token:
+                self._run_dir.token_file.remove()
+            if wrote_port:
+                self._run_dir.port_file.remove()
+            raise
+        self._bound = True

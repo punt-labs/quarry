@@ -1,4 +1,4 @@
-"""Tests for the quarry HTTP server (quarry serve).
+"""Tests for the quarry HTTP server (quarryd).
 
 Uses Starlette's TestClient with mocked database and embedding backends.
 Each test class gets its own app instance via fixtures.
@@ -7,7 +7,11 @@ Each test class gets its own app instance via fixtures.
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
 import sqlite3
+import stat
+import sys
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -20,7 +24,7 @@ from quarry.api import HealthResponse, SearchResponse, StatusResponse
 from quarry.backfill import BackfillStats
 from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
-from quarry.daemon.server import DaemonServer, PortFile
+from quarry.daemon.server import DaemonServer, ServeConfig
 from quarry.daemon.tasks import TASK_TTL_SECONDS, TaskState
 from quarry.results import SearchResult
 
@@ -527,36 +531,402 @@ class TestStatus:
         assert data["registered_directories"] == 0
 
 
+class TestServeToken:
+    """DaemonServer persists the loopback bearer so clients can authenticate."""
+
+    def _server(self, tmp_path: Path, api_key: str | None) -> DaemonServer:
+        settings = MagicMock()
+        settings.lancedb_path = tmp_path / "default" / "lancedb"
+        config = ServeConfig(host="127.0.0.1", port=8420, api_key=api_key)
+        return DaemonServer(settings, config)
+
+    @staticmethod
+    def _bound_server_mock() -> MagicMock:
+        """A uvicorn.Server mock whose startup succeeds and reports a bound port."""
+        server = MagicMock()
+
+        async def _startup(sockets: object = None) -> None:
+            return None
+
+        server.startup = _startup
+        sock = MagicMock()
+        sock.getsockname.return_value = ("127.0.0.1", 8420)
+        server.servers = [MagicMock(sockets=[sock])]
+        return server
+
+    def test_startup_hook_writes_token_after_bind(self, tmp_path: Path) -> None:
+        server = self._server(tmp_path, "the-bearer")
+        uv = self._bound_server_mock()
+        server._install_startup_hook(uv)
+        asyncio.run(uv.startup())
+        token_path = tmp_path / "default" / "serve.token"
+        assert token_path.read_text() == "the-bearer"
+        assert stat.S_IMODE(token_path.stat().st_mode) == 0o600
+        assert server._bound is True
+
+    def test_ipv6_start_log_brackets_host(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # The run()-start log must also render a valid host:port for an IPv6 bind
+        # ([::1]:8420), not the ambiguous ::1:8420. Display only; bind unchanged.
+        settings = MagicMock()
+        settings.lancedb_path = tmp_path / "default" / "lancedb"
+        server = DaemonServer(settings, ServeConfig(host="::1", port=8420, api_key="k"))
+        with (
+            patch("quarry.daemon.server.DaemonContext"),
+            patch("quarry.daemon.server.build_app"),
+            patch("quarry.daemon.server.uvicorn.Server"),
+            caplog.at_level(logging.INFO, logger="quarry.daemon.server"),
+        ):
+            server.run()
+        starting = [
+            r.getMessage()
+            for r in caplog.records
+            if "Starting Quarry server" in r.getMessage()
+        ]
+        assert starting, "no start log emitted"
+        assert "[::1]:8420" in starting[0]
+        assert " on ::1:8420" not in starting[0]  # never the ambiguous bare form
+
+    def test_ipv6_listening_log_brackets_host(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # The startup log must render a valid URL for an IPv6 bind — [::1]:8420,
+        # never the ambiguous bare ::1:8420 — via to_netloc. Display only; the
+        # bind host is unchanged.
+        settings = MagicMock()
+        settings.lancedb_path = tmp_path / "default" / "lancedb"
+        server = DaemonServer(settings, ServeConfig(host="::1", port=8420, api_key="k"))
+        uv = self._bound_server_mock()
+        server._install_startup_hook(uv)
+        with caplog.at_level(logging.INFO, logger="quarry.daemon.server"):
+            asyncio.run(uv.startup())
+        listening = [
+            r.getMessage() for r in caplog.records if "listening on" in r.getMessage()
+        ]
+        assert listening, "no listening log emitted"
+        assert "[::1]:8420" in listening[0]
+        assert "://::1:8420" not in listening[0]  # never the ambiguous bare form
+
+    @pytest.mark.parametrize("api_key", [None, "", "   ", "\n"])
+    def test_refuses_bind_without_key(
+        self, tmp_path: Path, api_key: str | None
+    ) -> None:
+        """A loopback bind with no (or whitespace-only) key is refused (R4).
+
+        Auth can never silently disable: the launcher mints a loopback token,
+        and a caller that passes none is refused rather than run open.
+        """
+        with pytest.raises(SystemExit, match="without an API key"):
+            self._server(tmp_path, api_key)
+
+    def test_strips_operator_key_whitespace(self, tmp_path: Path) -> None:
+        """An operator key with a trailing newline is stripped once at the
+        daemon boundary, so serve.token matches what the stripping client reads.
+        """
+        server = self._server(tmp_path, "the-bearer\n")
+        uv = self._bound_server_mock()
+        server._install_startup_hook(uv)
+        asyncio.run(uv.startup())
+        # serve.token holds the stripped value — the loopback client reads and
+        # strips serve.token, so the daemon's auth value must be stripped too.
+        assert (tmp_path / "default" / "serve.token").read_text() == "the-bearer"
+
+    def test_failed_bind_leaves_peer_token_intact(self, tmp_path: Path) -> None:
+        """A second quarryd failing to bind must not clobber a running peer.
+
+        The token is written only AFTER a successful bind, so instance #2 (which
+        fails to bind) never writes it — and its cleanup, guarded by ``_bound``,
+        never removes the shared serve.token that a running instance #1 owns.
+        """
+        (tmp_path / "default").mkdir(parents=True)
+        peer_token = tmp_path / "default" / "serve.token"
+        peer_token.write_text("peer-1-live-token")  # instance #1's live token
+
+        server = self._server(tmp_path, "instance-2-token")
+        with (
+            patch("quarry.daemon.server.DaemonContext"),
+            patch("quarry.daemon.server.build_app"),
+            patch("quarry.daemon.server.uvicorn.Server") as mock_uv,
+        ):
+            mock_uv.return_value.run.side_effect = OSError("address already in use")
+            with pytest.raises(OSError, match="address already in use"):
+                server.run()
+
+        assert peer_token.read_text() == "peer-1-live-token"  # untouched
+        assert server._bound is False  # #2 never bound, so it wrote/removed nothing
+
+    def test_clean_shutdown_removes_bound_instance_sidecars(
+        self, tmp_path: Path
+    ) -> None:
+        """A bound instance removes its own serve.token + port file on clean exit.
+
+        Covers the ``if self._bound:`` TRUE branch of the lifespan finally — the
+        normal graceful-shutdown cleanup, distinct from the clobber-safety guard.
+        """
+        (tmp_path / "default").mkdir(parents=True)
+        token = tmp_path / "default" / "serve.token"
+        port = tmp_path / "default" / "serve.port"
+        token.write_text("live-token")
+        port.write_text("8420")
+
+        server = self._server(tmp_path, "live-token")
+        server._bound = True  # this instance bound successfully
+
+        async def _drive() -> None:
+            async with server._lifespan(MagicMock()):
+                assert token.exists()  # present while serving
+                assert port.exists()
+
+        asyncio.run(_drive())
+
+        assert not token.exists()  # removed on clean shutdown
+        assert not port.exists()
+
+    def test_sidecar_write_failure_leaves_no_partial_pair(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed sidecar write removes BOTH — no lone port file, no orphan token.
+
+        The pair is written all-or-nothing (token first, then port); if the
+        second write fails, the first is removed so startup never leaves a
+        partial sidecar a client would read as "daemon up".
+        """
+        server = self._server(tmp_path, "the-bearer")
+        uv = self._bound_server_mock()
+        server._install_startup_hook(uv)
+
+        def _boom(*_args: object, **_kwargs: object) -> None:
+            raise OSError("disk full")
+
+        # Token write succeeds; the port write fails after it.
+        monkeypatch.setattr("quarry.run_dir.PortFile.write", _boom)
+        with pytest.raises(OSError, match="disk full"):
+            asyncio.run(uv.startup())
+
+        assert not (tmp_path / "default" / "serve.token").exists()
+        assert not (tmp_path / "default" / "serve.port").exists()
+        assert server._bound is False  # not set until both writes succeed
+
+    def test_token_write_failure_removes_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If the token write itself fails, no sidecar is removed (wrote_token=False).
+
+        Peer-safety guard: the all-or-nothing cleanup removes ONLY what this
+        instance wrote.  A keyed instance whose FIRST write (token) fails wrote
+        nothing, so a peer's serve.port on the shared per-db path stays intact.
+        """
+        (tmp_path / "default").mkdir(parents=True)
+        peer_port = tmp_path / "default" / "serve.port"
+        peer_port.write_text("9999")  # a peer's port file on the shared path
+
+        server = self._server(tmp_path, "the-bearer")
+        uv = self._bound_server_mock()
+        server._install_startup_hook(uv)
+
+        def _boom(*_args: object, **_kwargs: object) -> None:
+            raise OSError("disk full")
+
+        monkeypatch.setattr("quarry.run_dir.ServeTokenFile.write", _boom)
+        with pytest.raises(OSError, match="disk full"):
+            asyncio.run(uv.startup())
+
+        assert peer_port.read_text() == "9999"  # untouched — token write failed first
+        assert server._bound is False
+
+    def test_base_exception_between_writes_leaves_no_lone_sidecar(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A SIGINT/KeyboardInterrupt landing AFTER serve.token but BEFORE
+        serve.port must not leave a lone serve.token — a false "daemon up"
+        signal to loopback clients.  The cleanup catches BaseException, removes
+        only what this instance wrote, and re-raises."""
+        server = self._server(tmp_path, "the-bearer")
+        uv = self._bound_server_mock()
+        server._install_startup_hook(uv)
+
+        def _interrupt(*_args: object, **_kwargs: object) -> None:
+            raise KeyboardInterrupt
+
+        # Token write succeeds; the port write is interrupted (not an OSError).
+        monkeypatch.setattr("quarry.run_dir.PortFile.write", _interrupt)
+        with pytest.raises(KeyboardInterrupt):
+            asyncio.run(uv.startup())
+
+        assert not (tmp_path / "default" / "serve.token").exists()  # no lone token
+        assert not (tmp_path / "default" / "serve.port").exists()
+        assert server._bound is False
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="the run-dir lock is POSIX-only (fcntl is unavailable on Windows)",
+)
+class TestRunDirLock:
+    """Exactly one daemon may own a run dir — an exclusive advisory flock closes
+    the shared-run-dir clobber (a second daemon on a different port overwriting
+    the first's serve.token) and the token-writer's temp-retry race.
+
+    POSIX-only: the whole class is skipped where ``fcntl`` is unavailable."""
+
+    def _server(self, tmp_path: Path, api_key: str) -> DaemonServer:
+        settings = MagicMock()
+        settings.lancedb_path = tmp_path / "default" / "lancedb"  # parent runs dir
+        config = ServeConfig(host="127.0.0.1", port=8420, api_key=api_key)
+        return DaemonServer(settings, config)
+
+    def test_second_daemon_refused_and_first_token_untouched(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "default").mkdir(parents=True)
+        peer_token = tmp_path / "default" / "serve.token"
+        peer_token.write_text("first-daemon-token")  # daemon #1's live token
+
+        first = self._server(tmp_path, "first")
+        first._acquire_run_dir_lock()
+        try:
+            second = self._server(tmp_path, "second")
+            with pytest.raises(SystemExit, match="already owns this database"):
+                second._acquire_run_dir_lock()
+            # #2 was refused BEFORE writing anything — #1's token is intact.
+            assert peer_token.read_text() == "first-daemon-token"
+            assert second._lock_fd < 0  # #2 never took the lock
+        finally:
+            first._release_run_dir_lock()
+
+    def test_lock_released_allows_reacquire(self, tmp_path: Path) -> None:
+        # The lock releases on exit, so a restart (or a distinct daemon after
+        # the first exits) can re-acquire the same run dir.
+        first = self._server(tmp_path, "first")
+        first._acquire_run_dir_lock()
+        first._release_run_dir_lock()
+
+        second = self._server(tmp_path, "second")
+        second._acquire_run_dir_lock()  # succeeds now that #1 released
+        assert second._lock_fd >= 0
+        second._release_run_dir_lock()
+
+    def test_flock_failure_closes_fd_and_propagates(self, tmp_path: Path) -> None:
+        # File-I/O hygiene: a NON-BlockingIOError flock failure (permission /
+        # filesystem) must close the fd — never leak a descriptor (EMFILE
+        # history) — and propagate.  _lock_fd stays unset so release is a no-op.
+        server = self._server(tmp_path, "k")
+        closed: list[int] = []
+        real_close = os.close
+
+        def _spy_close(fd: int) -> None:
+            closed.append(fd)
+            real_close(fd)
+
+        with (
+            patch(
+                "quarry.daemon.server.fcntl.flock",
+                side_effect=PermissionError("denied"),
+            ),
+            patch("quarry.daemon.server.os.close", side_effect=_spy_close),
+            pytest.raises(PermissionError, match="denied"),
+        ):
+            server._acquire_run_dir_lock()
+
+        assert len(closed) == 1  # the lock fd was closed exactly once (no leak)
+        assert server._lock_fd < 0  # never recorded a live fd on failure
+
+    def test_lock_fd_is_cloexec(self, tmp_path: Path) -> None:
+        # The serve.lock fd must be O_CLOEXEC so it is not leaked into (and does
+        # not retain the lock across) subprocesses the daemon spawns.
+        import fcntl  # POSIX-only; the class is skipped where it is absent
+
+        server = self._server(tmp_path, "k")
+        server._acquire_run_dir_lock()
+        try:
+            flags = fcntl.fcntl(server._lock_fd, fcntl.F_GETFD)
+            assert flags & fcntl.FD_CLOEXEC
+        finally:
+            server._release_run_dir_lock()
+
+    def test_release_is_best_effort_and_never_raises(self, tmp_path: Path) -> None:
+        # release() runs in run()'s finally: a failing LOCK_UN must be swallowed
+        # (logged), never re-raised — else it would MASK the real shutdown
+        # reason. The fd is still closed (fd close releases the lock anyway).
+        server = self._server(tmp_path, "k")
+        server._acquire_run_dir_lock()
+        held_fd = server._lock_fd
+        closed: list[int] = []
+        real_close = os.close
+
+        def _spy_close(fd: int) -> None:
+            closed.append(fd)
+            real_close(fd)
+
+        with (
+            patch("quarry.daemon.server.fcntl.flock", side_effect=OSError("EINTR")),
+            patch("quarry.daemon.server.os.close", side_effect=_spy_close),
+        ):
+            server._release_run_dir_lock()  # must NOT raise
+
+        assert held_fd in closed  # fd closed despite the LOCK_UN failure
+        assert server._lock_fd < 0  # cleared
+
+    def test_release_does_not_mask_an_in_flight_exception(self, tmp_path: Path) -> None:
+        # Simulate run()'s finally: an exception is already in flight when
+        # release() is called and LOCK_UN also fails. The original exception
+        # must propagate, not the harmless unlock error.
+        server = self._server(tmp_path, "k")
+        server._acquire_run_dir_lock()
+        with (
+            patch("quarry.daemon.server.fcntl.flock", side_effect=OSError("EINTR")),
+            pytest.raises(RuntimeError, match="original shutdown failure"),
+        ):
+            try:
+                raise RuntimeError("original shutdown failure")
+            finally:
+                server._release_run_dir_lock()
+
+    def test_release_swallows_a_failing_os_close(self, tmp_path: Path) -> None:
+        # os.close can ALSO raise (EBADF/EINTR); release must swallow+log it so
+        # the method truly never raises. _lock_fd is still cleared.
+        server = self._server(tmp_path, "k")
+        server._acquire_run_dir_lock()
+        with patch("quarry.daemon.server.os.close", side_effect=OSError("EBADF")):
+            server._release_run_dir_lock()  # must NOT raise
+        assert server._lock_fd < 0
+
+    def test_failing_os_close_does_not_mask_in_flight_exception(
+        self, tmp_path: Path
+    ) -> None:
+        # Even when os.close raises in release (called from run()'s finally), the
+        # original shutdown exception must propagate, not the close error.
+        server = self._server(tmp_path, "k")
+        server._acquire_run_dir_lock()
+        with (
+            patch("quarry.daemon.server.os.close", side_effect=OSError("EBADF")),
+            pytest.raises(RuntimeError, match="original shutdown failure"),
+        ):
+            try:
+                raise RuntimeError("original shutdown failure")
+            finally:
+                server._release_run_dir_lock()
+
+    def test_acquire_fails_closed_when_fcntl_unavailable(self, tmp_path: Path) -> None:
+        # Portability: fcntl is POSIX-only, imported optionally (None on a
+        # non-POSIX platform).  A daemon start there must fail closed with a
+        # clear message — never a silent no-op that reopens the clobber race,
+        # never a raw AttributeError from dereferencing None.
+        server = self._server(tmp_path, "k")
+        with (
+            patch("quarry.daemon.server.fcntl", None),
+            pytest.raises(SystemExit, match="POSIX"),
+        ):
+            server._acquire_run_dir_lock()
+        assert server._lock_fd < 0  # no fd opened when the lock is unavailable
+
+
 class TestNotFound:
     def test_unknown_path_returns_404(self, client: TestClient) -> None:
         resp = client.get("/unknown")
         assert resp.status_code == 404
         assert resp.json()["error"] == "Not Found"
-
-
-class TestPortFile:
-    def test_write_port_file(self, tmp_path: Path) -> None:
-        port_path = tmp_path / "subdir" / "serve.port"
-        PortFile(port_path).write(12345)
-
-        assert port_path.exists()
-        assert port_path.read_text() == "12345"
-
-    def test_write_creates_parent_directories(self, tmp_path: Path) -> None:
-        port_path = tmp_path / "a" / "b" / "serve.port"
-        PortFile(port_path).write(8080)
-        assert port_path.exists()
-
-
-class TestFailClosed:
-    """Non-loopback hosts require --api-key."""
-
-    def test_non_loopback_without_key_refuses(self) -> None:
-        with pytest.raises(SystemExit, match="Refusing to bind"):
-            DaemonServer._validate_host_key("0.0.0.0", None)  # noqa: S104
-
-    def test_loopback_without_key_allowed(self) -> None:
-        DaemonServer._validate_host_key("127.0.0.1", None)
 
 
 class TestOptionsPreflightCors:

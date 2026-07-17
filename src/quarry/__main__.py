@@ -22,6 +22,7 @@ from rich.progress import Progress
 from quarry.cli_captures import CapturesCli, CliPlumbing
 from quarry.cli_formatters import ResultFormatter
 from quarry.cli_runtime import CliRuntime
+from quarry.client import ClientConfig
 from quarry.collections import CollectionName
 from quarry.config import (
     DEFAULT_PORT,
@@ -52,16 +53,17 @@ from quarry.remote import (
     mask_token,
     read_proxy_config,
     store_ca_cert,
+    to_netloc,
     validate_connection,
     validate_connection_from_ws_url,
     write_proxy_config,
 )
-from quarry.remote_client import RemoteClient, RemoteError
+from quarry.remote_client import RemoteError
 from quarry.results import SearchFilter
 from quarry.retrieval import SearchService
 from quarry.sync import sync_all
 from quarry.sync_registry import SyncRegistry
-from quarry.tls import TLS_DIR, cert_fingerprint
+from quarry.tls import cert_fingerprint
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +91,6 @@ _COMMAND_ORDER: list[str] = [
     # Admin commands
     "install",
     "doctor",
-    "serve",
     "mcp",
     "version",
     "uninstall",
@@ -178,6 +179,10 @@ def main_callback(
     _verbose = verbose
     _quiet = quiet
     _global_db = database
+    # Record --db process-wide so the client tier resolves the daemon's
+    # startup-db run dir (serve.token/serve.port) the same way — client and
+    # daemon agree on the database by a matching --db.
+    Settings.set_active_db(database)
     # Determine stderr log level from flags.
     if _verbose:
         stderr_level = "INFO"
@@ -301,7 +306,7 @@ def find_cmd(
     """Search indexed documents."""
     proxy_config = _safe_proxy_config().get("quarry", {})
     if isinstance(proxy_config, dict) and "url" in proxy_config:
-        json_results, text = RemoteClient(proxy_config).find(
+        json_results, text = ClientConfig.remote_client(proxy_config).find(
             query=query,
             limit=limit,
             collection=collection,
@@ -400,7 +405,7 @@ def ingest_cmd(
         # Fire-and-forget: POST /ingest returns 202 with task_id.
         # The CLI prints the task_id and exits immediately.
         try:
-            remote_resp = RemoteClient(proxy_config).request(
+            remote_resp = ClientConfig.remote_client(proxy_config).request(
                 "POST", "/ingest", body=body
             )
         except RemoteError as exc:
@@ -509,7 +514,8 @@ def _show_remote(
     if collection:
         params["collection"] = collection
     try:
-        resp = RemoteClient(proxy_config).get(f"/show?{urllib.parse.urlencode(params)}")
+        query = urllib.parse.urlencode(params)
+        resp = ClientConfig.remote_client(proxy_config).get(f"/show?{query}")
     except RemoteError as exc:
         err_console.print(f"Error: {exc}", style="red")
         raise typer.Exit(code=1) from exc
@@ -613,7 +619,7 @@ def remember(
         }
         # Fire-and-forget: POST /remember returns 202 with task_id.
         try:
-            remote_resp = RemoteClient(proxy_config).request(
+            remote_resp = ClientConfig.remote_client(proxy_config).request(
                 "POST", "/remember", body=body
             )
         except RemoteError as exc:
@@ -657,7 +663,7 @@ def status_cmd() -> None:
     proxy_config = _safe_proxy_config().get("quarry", {})
     if isinstance(proxy_config, dict) and "url" in proxy_config:
         try:
-            remote_data = RemoteClient(proxy_config).get("/status")
+            remote_data = ClientConfig.remote_client(proxy_config).get("/status")
         except RemoteError as exc:
             err_console.print(f"Error: {exc}", style="red")
             raise typer.Exit(code=1) from exc
@@ -760,7 +766,8 @@ def delete_cmd(
             raise typer.Exit(code=1)
         # Fire-and-forget: DELETE returns 202 with task_id.
         try:
-            remote_resp = RemoteClient(proxy_config).request("DELETE", path)
+            client = ClientConfig.remote_client(proxy_config)
+            remote_resp = client.request("DELETE", path)
         except RemoteError as exc:
             err_console.print(f"Error: {exc}", style="red")
             raise typer.Exit(code=1) from exc
@@ -813,7 +820,7 @@ def register(
         body: dict[str, object] = {"directory": resolved_str, "collection": col}
         # Fire-and-forget: POST /registrations returns 202 with task_id.
         try:
-            remote_resp = RemoteClient(proxy_config).request(
+            remote_resp = ClientConfig.remote_client(proxy_config).request(
                 "POST", "/registrations", body=body
             )
         except RemoteError as exc:
@@ -881,7 +888,7 @@ class _Deregistration:
             "keep_data": str(self._keep_data).lower(),
         }
         path = f"/registrations?{urllib.parse.urlencode(params)}"
-        client = RemoteClient(config)
+        client = ClientConfig.remote_client(config)
         try:
             accepted = client.request("DELETE", path)
         except RemoteError as exc:
@@ -941,7 +948,7 @@ def sync_cmd(
         # Fire-and-forget: POST /sync returns 202 with task_id.
         # The CLI prints the task_id and exits immediately.
         try:
-            remote_resp = RemoteClient(proxy_config).request(
+            remote_resp = ClientConfig.remote_client(proxy_config).request(
                 "POST",
                 "/sync",
                 body={},
@@ -1243,6 +1250,18 @@ def login_cmd(  # noqa: C901
     confirmation, then validates the connection over HTTPS/WSS and writes
     the mcp-proxy config.
     """
+    # Step 0: Canonicalize a loopback NAME to the IPv4 literal the managed daemon
+    # binds, so the stored config presents the serve.token to 127.0.0.1 — not
+    # the ambiguous "localhost", which a dual-stack resolver could point at a
+    # co-tenant's ::1.  A deliberate policy mapping, not an OS-resolver lookup;
+    # a literal IP or a remote host is unchanged.
+    host = ClientConfig.canonical_host(host)
+    # Strip the operator key exactly as the daemon does (DaemonServer._authenticated):
+    # a trailing newline from `--api-key "$(cat key)"` would otherwise be stored
+    # verbatim and presented UNstripped, 401ing against the daemon that compares
+    # the stripped value.  Whitespace-only -> None (no bearer stored).
+    api_key = (api_key or "").strip() or None
+
     # Step 1: Fetch CA cert over HTTPS with SSL verification disabled (TOFU bootstrap).
     try:
         ca_cert_pem = fetch_ca_cert(host, port)
@@ -1281,8 +1300,15 @@ def login_cmd(  # noqa: C901
         except BaseException:
             tmp_path.unlink(missing_ok=True)
             raise
+        # For a loopback target the daemon's LIVE serve.token is the only
+        # valid credential — the daemon writes whatever key it uses (operator
+        # --api-key OR auto-minted) into serve.token, so a set/stale env key
+        # must NOT win over it (that would 401 against the daemon's own
+        # /v1/status).  --api-key applies to a REMOTE target only.
+        is_loopback_target = ClientConfig.is_loopback_host(host)
+        bearer = ClientConfig.loopback_token(host) if is_loopback_target else api_key
         ok, reason = validate_connection(
-            host, port, api_key, scheme="https", ca_cert_path=tmp_path_str
+            host, port, bearer, scheme="https", ca_cert_path=tmp_path_str
         )
         if not ok:
             err_console.print(f"Error: {reason}", style="red")
@@ -1293,9 +1319,17 @@ def login_cmd(  # noqa: C901
     # Step 5: Write mcp-proxy config first, then store the CA cert.
     # This order ensures that if the CA cert write fails, we can roll back
     # the config — the reverse order has no recovery path (Fix 2).
-    ws_url = f"wss://{host}:{port}/mcp"
+    # to_netloc brackets an IPv6 literal host ([::1]) so the stored URL parses;
+    # a hostname or IPv4 literal is unchanged.
+    ws_url = f"wss://{to_netloc(host, port)}/mcp"
+    # R4 live-only: a loopback target's bearer is the LIVE serve.token, resolved
+    # fresh by ClientConfig on every call — NEVER persist it.  A stored key would
+    # go stale each daemon restart and would mislead any reader of the stored
+    # headers with a credential that is never used for auth.  Only a REMOTE login
+    # persists its operator key.
+    stored_key = None if is_loopback_target else api_key
     try:
-        write_proxy_config(ws_url, api_key, str(CA_CERT_PATH))
+        write_proxy_config(ws_url, stored_key, str(CA_CERT_PATH))
     except PermissionWarning as exc:
         err_console.print(f"Warning: {exc}", style="yellow")
     except OSError as exc:
@@ -1389,8 +1423,24 @@ def remote_list_cmd(
         if url.startswith("wss://") and not ca_cert:
             ok, reason = False, "wss:// configured but no CA certificate pinned"
         else:
+            # Migrate a stored loopback NAME to the literal FIRST, then gate,
+            # token, and CONNECT all on the migrated URL.  A live serve.token is
+            # presented only over a connection to the un-hijackable 127.0.0.1 —
+            # never the raw name a resolver could redirect to a co-tenant's ::1.
+            # A loopback target authenticates with the LIVE serve.token only
+            # (never a stored bearer): a missing token means the daemon is down,
+            # so probe tokenless and let it report unreachable rather than mask
+            # the failure with a stale stored token.  A remote URL is unchanged
+            # and uses its stored bearer.
+            probe_url = ClientConfig.canonical_url(url)
+            if ClientConfig.is_loopback_url(probe_url):
+                probe_token = ClientConfig.loopback_token_for_url(probe_url)
+            else:
+                probe_token = token
             ok, reason = validate_connection_from_ws_url(
-                url, token, ca_cert_path=str(ca_cert) if ca_cert is not None else None
+                probe_url,
+                probe_token,
+                ca_cert_path=str(ca_cert) if ca_cert is not None else None,
             )
         status = "healthy" if ok else f"unreachable ({reason})"
         text += f"\nHealth: {status}"
@@ -1447,7 +1497,8 @@ def list_documents_cmd(
             params["collection"] = collection
         qs = f"?{urllib.parse.urlencode(params)}" if params else ""
         try:
-            remote_resp = RemoteClient(proxy_config).get(f"/documents{qs}")
+            client = ClientConfig.remote_client(proxy_config)
+            remote_resp = client.get(f"/documents{qs}")
         except RemoteError as exc:
             err_console.print(f"Error: {exc}", style="red")
             raise typer.Exit(code=1) from exc
@@ -1474,7 +1525,7 @@ def list_collections_cmd() -> None:
     proxy_config = _safe_proxy_config().get("quarry", {})
     if isinstance(proxy_config, dict) and "url" in proxy_config:
         try:
-            remote_resp = RemoteClient(proxy_config).get("/collections")
+            remote_resp = ClientConfig.remote_client(proxy_config).get("/collections")
         except RemoteError as exc:
             err_console.print(f"Error: {exc}", style="red")
             raise typer.Exit(code=1) from exc
@@ -1501,7 +1552,7 @@ def list_registrations_cmd() -> None:
     proxy_config = _safe_proxy_config().get("quarry", {})
     if isinstance(proxy_config, dict) and "url" in proxy_config:
         try:
-            remote_resp = RemoteClient(proxy_config).get("/registrations")
+            remote_resp = ClientConfig.remote_client(proxy_config).get("/registrations")
         except RemoteError as exc:
             err_console.print(f"Error: {exc}", style="red")
             raise typer.Exit(code=1) from exc
@@ -1553,7 +1604,7 @@ def list_databases_cmd() -> None:
     proxy_config = _safe_proxy_config().get("quarry", {})
     if isinstance(proxy_config, dict) and "url" in proxy_config:
         try:
-            remote_resp = RemoteClient(proxy_config).get("/databases")
+            remote_resp = ClientConfig.remote_client(proxy_config).get("/databases")
         except RemoteError as exc:
             err_console.print(f"Error: {exc}", style="red")
             raise typer.Exit(code=1) from exc
@@ -1596,82 +1647,6 @@ def doctor() -> None:
 
     exit_code = check_environment()
     raise typer.Exit(code=exit_code)
-
-
-@app.command()
-@_cli_errors
-def serve(
-    port: Annotated[
-        int,
-        typer.Option(
-            "--port",
-            "-p",
-            help=f"Port to bind (default: {DEFAULT_PORT}, 0 = OS-assigned).",
-        ),
-    ] = DEFAULT_PORT,
-    host: Annotated[
-        str,
-        typer.Option(
-            "--host",
-            help="Address to bind. 127.0.0.1 (default) or 0.0.0.0 for containers.",
-        ),
-    ] = "127.0.0.1",
-    api_key: Annotated[
-        str | None,
-        typer.Option(
-            "--api-key",
-            envvar="QUARRY_API_KEY",
-            help="Require Bearer token auth on all endpoints except /health.",
-        ),
-    ] = None,
-    cors_origin: Annotated[
-        list[str] | None,
-        typer.Option(
-            "--cors-origin",
-            help="Allowed CORS origin (repeatable). Default: http://localhost.",
-        ),
-    ] = None,
-    tls: Annotated[
-        bool,
-        typer.Option(
-            "--tls",
-            help=(
-                "Enable TLS using certificates from ~/.punt-labs/quarry/tls/. "
-                "Run 'quarry install' first to generate certificates."
-            ),
-        ),
-    ] = False,
-) -> None:
-    """Start the HTTP API server."""
-    from quarry.daemon.server import serve as http_serve  # noqa: PLC0415
-
-    settings = _resolved_settings()
-    origins = frozenset(cors_origin) if cors_origin else None
-
-    ssl_certfile: str | None = None
-    ssl_keyfile: str | None = None
-    if tls:
-        cert_path = TLS_DIR / "server.crt"
-        key_path = TLS_DIR / "server.key"
-        if not cert_path.exists() or not key_path.exists():
-            err_console.print(
-                "Error: TLS certificate files not found in "
-                f"{TLS_DIR}. Run 'quarry install' first.",
-                style="red",
-            )
-            raise typer.Exit(code=1)
-        ssl_certfile = str(cert_path)
-        ssl_keyfile = str(key_path)
-
-    http_serve(
-        settings,
-        port=port,
-        host=host,
-        api_key=api_key,
-        cors_origins=origins,
-        ssl_certfile=ssl_certfile,
-        ssl_keyfile=ssl_keyfile,
-    )
 
 
 @app.command()

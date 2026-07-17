@@ -13,7 +13,7 @@ from typer.testing import CliRunner
 import quarry.__main__ as cli_mod
 from quarry.__main__ import app
 from quarry.config import Settings
-from quarry.remote_client import RemoteError
+from quarry.remote_client import RemoteClient, RemoteError
 from quarry.results import SearchResult
 
 runner = CliRunner()
@@ -27,11 +27,38 @@ def _mock_settings() -> MagicMock:
 
 
 def _reset_globals() -> None:
-    """Reset CLI globals between tests."""
+    """Reset CLI globals between tests.
+
+    Includes the process-wide active database (``Settings._active_db``): the
+    main callback records ``--db X`` via ``Settings.set_active_db(X)``, which is
+    class-level state that survives across ``runner.invoke`` calls.  Without this
+    reset a ``quarry --db work ...`` test leaks ``work`` into later tests, making
+    the suite order-dependent.
+    """
     cli_mod._json_output = False
     cli_mod._verbose = False
     cli_mod._quiet = False
     cli_mod._global_db = ""
+    Settings.set_active_db("")
+
+
+def test_reset_globals_clears_active_db_leak() -> None:
+    """A ``--db work`` run must not leak the active db into a later default run.
+
+    ``main_callback`` records ``--db work`` via ``Settings.set_active_db``; that
+    class-level state persists across invocations, so ``_reset_globals`` must
+    clear it or the next default-db command resolves ``work`` and fails
+    order-dependently.
+    """
+    # Hermetic: pin read_default_db so the post-reset fallback is a KNOWN value,
+    # not the developer/CI machine's real ~/.punt-labs/quarry/config.toml (whose
+    # default could itself be "work" and mask the reset).
+    with patch.object(Settings, "read_default_db", return_value=None):
+        Settings.set_active_db("work")
+        assert Settings.active_db() == "work"  # the leak the reset must clear
+        _reset_globals()
+        # After the reset the active db resolves to the pinned default, not "work".
+        assert Settings.active_db() is None
 
 
 class TestColorDeterminism:
@@ -77,6 +104,95 @@ class TestColorDeterminism:
         assert result.exit_code == 1
         assert "\x1b" not in result.output
         assert "Cannot connect to remote quarry server" in result.output
+
+
+class TestLoopbackServeToken:
+    """A loopback login session must present the daemon's live serve.token (R4)."""
+
+    def test_find_injects_serve_token_for_loopback(self, tmp_path: Path) -> None:
+        (tmp_path / "serve.token").write_text("live-loopback-token")
+        fake_settings = MagicMock()
+        fake_settings.lancedb_path = tmp_path / "lancedb"  # parent == tmp_path
+        proxy = {"quarry": {"url": "wss://127.0.0.1:8420/mcp", "ca_cert": "/ca.crt"}}
+        captured: dict[str, object] = {}
+
+        def fake_get(inner_self: object, _path: str) -> dict[str, object]:
+            # _remote_client built a real client — capture the config it carries.
+            captured["config"] = inner_self._config  # type: ignore[attr-defined]
+            return {"results": []}
+
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy),
+            patch("quarry.client.config.Settings") as mock_settings,
+            patch.object(RemoteClient, "get", fake_get),
+        ):
+            resolver = mock_settings.load.return_value.resolve_db_paths
+            resolver.return_value = fake_settings
+            mock_settings.read_default_db.return_value = None
+            result = runner.invoke(app, ["find", "q"])
+
+        _reset_globals()
+        assert result.exit_code == 0
+        config = captured["config"]
+        assert isinstance(config, dict)
+        assert config["headers"] == {"Authorization": "Bearer live-loopback-token"}
+        assert config["ca_cert"] == "/ca.crt"
+
+    def test_find_migrates_stale_localhost_config_to_literal(
+        self, tmp_path: Path
+    ) -> None:
+        # HIGH regression: a config stored before the literal-IP flip holds the
+        # NAME ``localhost``.  On READ, ``find`` must auto-migrate it to the
+        # 127.0.0.1 literal — presenting the live serve.token (no re-login, no
+        # lockout) AND connecting to the un-hijackable literal.  The exfiltration
+        # stays closed: the target is 127.0.0.1, never the name a resolver could
+        # point at a co-tenant's ::1.
+        (tmp_path / "serve.token").write_text("live-loopback-token")
+        fake_settings = MagicMock()
+        fake_settings.lancedb_path = tmp_path / "lancedb"
+        proxy = {"quarry": {"url": "wss://localhost:8420/mcp", "ca_cert": "/ca.crt"}}
+        captured: dict[str, object] = {}
+
+        def fake_get(inner_self: object, _path: str) -> dict[str, object]:
+            captured["config"] = inner_self._config  # type: ignore[attr-defined]
+            return {"results": []}
+
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy),
+            patch("quarry.client.config.Settings") as mock_settings,
+            patch.object(RemoteClient, "get", fake_get),
+        ):
+            resolver = mock_settings.load.return_value.resolve_db_paths
+            resolver.return_value = fake_settings
+            mock_settings.read_default_db.return_value = None
+            result = runner.invoke(app, ["find", "q"])
+
+        _reset_globals()
+        assert result.exit_code == 0
+        config = captured["config"]
+        assert isinstance(config, dict)
+        # Live token presented — the lockout is closed.
+        assert config["headers"] == {"Authorization": "Bearer live-loopback-token"}
+        # Target is the literal, never the raw name — exfiltration stays closed.
+        assert config["url"] == "wss://127.0.0.1:8420/mcp"
+        assert "localhost" not in str(config["url"])
+
+    def test_find_fails_closed_when_serve_token_missing(self, tmp_path: Path) -> None:
+        fake_settings = MagicMock()
+        fake_settings.lancedb_path = tmp_path / "lancedb"  # no serve.token present
+        proxy = {"quarry": {"url": "wss://127.0.0.1:8420/mcp"}}
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy),
+            patch("quarry.client.config.Settings") as mock_settings,
+        ):
+            resolver = mock_settings.load.return_value.resolve_db_paths
+            resolver.return_value = fake_settings
+            mock_settings.read_default_db.return_value = None
+            result = runner.invoke(app, ["find", "q"])
+
+        _reset_globals()
+        assert result.exit_code == 1
+        assert "quarryd is not running" in result.output
 
 
 class TestListDocumentsCmd:
@@ -4145,56 +4261,6 @@ class TestCliStandards:
             )
 
 
-class TestServeTlsFlag:
-    """Tests for the --tls flag on the serve command."""
-
-    def test_tls_flag_passes_ssl_args_to_http_serve(self, tmp_path: Path) -> None:
-        tls_dir = tmp_path / "tls"
-        tls_dir.mkdir()
-        cert_path = tls_dir / "server.crt"
-        key_path = tls_dir / "server.key"
-        cert_path.write_text("FAKE CERT")
-        key_path.write_text("FAKE KEY")
-
-        with (
-            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.TLS_DIR", tls_dir),
-            patch("quarry.daemon.server.serve") as mock_serve,
-        ):
-            runner.invoke(app, ["serve", "--tls"])
-
-        _reset_globals()
-        call_kwargs = mock_serve.call_args[1]
-        assert call_kwargs["ssl_certfile"] == str(cert_path)
-        assert call_kwargs["ssl_keyfile"] == str(key_path)
-
-    def test_tls_flag_missing_certs_exits(self, tmp_path: Path) -> None:
-        tls_dir = tmp_path / "tls"
-        # Do not create the cert files.
-
-        with (
-            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.TLS_DIR", tls_dir),
-        ):
-            result = runner.invoke(app, ["serve", "--tls"])
-
-        _reset_globals()
-        assert result.exit_code == 1
-        assert "quarry install" in " ".join(result.output.split())
-
-    def test_no_tls_flag_passes_none_ssl_args(self) -> None:
-        with (
-            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.daemon.server.serve") as mock_serve,
-        ):
-            runner.invoke(app, ["serve"])
-
-        _reset_globals()
-        call_kwargs = mock_serve.call_args[1]
-        assert call_kwargs["ssl_certfile"] is None
-        assert call_kwargs["ssl_keyfile"] is None
-
-
 _FAKE_CA_PEM = b"-----BEGIN CERTIFICATE-----\nfakecertdata\n-----END CERTIFICATE-----\n"
 _FAKE_FINGERPRINT = "SHA256:" + "a" * 64
 
@@ -4387,6 +4453,175 @@ class TestLoginCmd:
             "wss://okinos.example.com:8420/mcp", None, "/fake/quarry-ca.crt"
         )
 
+    def test_loopback_login_presents_live_serve_token(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """On the token-gated default install, loopback login authenticates with
+        the daemon's live serve.token — otherwise it 401s against /v1/status."""
+        monkeypatch.delenv("QUARRY_API_KEY", raising=False)
+        (tmp_path / "serve.token").write_text("live-daemon-token")
+        fake_settings = MagicMock()
+        fake_settings.lancedb_path = tmp_path / "lancedb"  # parent == tmp_path
+        with (
+            patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
+            patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
+            patch("quarry.__main__.store_ca_cert"),
+            patch(
+                "quarry.__main__.validate_connection", return_value=(True, "")
+            ) as mock_validate,
+            patch("quarry.__main__.write_proxy_config"),
+            patch("quarry.__main__.CA_CERT_PATH", Path("/fake/quarry-ca.crt")),
+            patch("quarry.client.config.Settings") as mock_settings,
+        ):
+            resolver = mock_settings.load.return_value.resolve_db_paths
+            resolver.return_value = fake_settings
+            mock_settings.read_default_db.return_value = None
+            result = runner.invoke(app, ["login", "localhost", "--yes"])
+        _reset_globals()
+        assert result.exit_code == 0, result.output
+        # The live serve.token (not the absent --api-key) is the validation bearer.
+        assert mock_validate.call_args.args[:3] == (
+            "127.0.0.1",  # login localhost canonicalized to the IPv4 literal
+            8420,
+            "live-daemon-token",
+        )
+
+    def test_loopback_login_ignores_env_key_uses_live_token(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A loopback login uses the live serve.token even when QUARRY_API_KEY is
+        set — the daemon writes its actual key into serve.token, so a stale env
+        key must not mask it (that would 401 against the daemon's own status)."""
+        monkeypatch.setenv("QUARRY_API_KEY", "STALE-ENV-KEY")
+        (tmp_path / "serve.token").write_text("live-daemon-token")
+        fake_settings = MagicMock()
+        fake_settings.lancedb_path = tmp_path / "lancedb"  # parent == tmp_path
+        with (
+            patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
+            patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
+            patch("quarry.__main__.store_ca_cert"),
+            patch(
+                "quarry.__main__.validate_connection", return_value=(True, "")
+            ) as mock_validate,
+            patch("quarry.__main__.write_proxy_config"),
+            patch("quarry.__main__.CA_CERT_PATH", Path("/fake/quarry-ca.crt")),
+            patch("quarry.client.config.Settings") as mock_settings,
+        ):
+            resolver = mock_settings.load.return_value.resolve_db_paths
+            resolver.return_value = fake_settings
+            mock_settings.active_db.return_value = None
+            result = runner.invoke(app, ["login", "localhost", "--yes"])
+        _reset_globals()
+        assert result.exit_code == 0, result.output
+        # The live serve.token, NOT the stale env key, is the validation bearer.
+        assert mock_validate.call_args.args[:3] == (
+            "127.0.0.1",  # login localhost canonicalized to the IPv4 literal
+            8420,
+            "live-daemon-token",
+        )
+        assert "STALE-ENV-KEY" not in str(mock_validate.call_args)
+
+    def test_localhost_canonicalizes_to_ipv4_literal(self) -> None:
+        """`quarry login localhost` stores wss://127.0.0.1 — the literal the
+        managed daemon binds — never the ambiguous name (HIGH)."""
+        with (
+            patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
+            patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
+            patch("quarry.__main__.store_ca_cert"),
+            patch("quarry.__main__.validate_connection", return_value=(True, "")),
+            patch("quarry.__main__.write_proxy_config") as mock_write,
+            patch("quarry.__main__.CA_CERT_PATH", Path("/fake/quarry-ca.crt")),
+            patch("quarry.client.config.Settings") as mock_settings,
+        ):
+            mock_settings.load.return_value.resolve_db_paths.return_value = MagicMock()
+            mock_settings.read_default_db.return_value = None
+            result = runner.invoke(app, ["login", "localhost", "--yes"])
+        _reset_globals()
+        assert result.exit_code == 0, result.output
+        assert mock_write.call_args[0][0] == "wss://127.0.0.1:8420/mcp"
+
+    def test_loopback_login_does_not_store_api_key(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """R4 live-only: a loopback login persists NO bearer — ClientConfig
+        resolves the live serve.token; a stale env key must not be saved."""
+        monkeypatch.setenv("QUARRY_API_KEY", "STALE-ENV-KEY")
+        (tmp_path / "serve.token").write_text("live-daemon-token")
+        fake_settings = MagicMock()
+        fake_settings.lancedb_path = tmp_path / "lancedb"  # parent == tmp_path
+        with (
+            patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
+            patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
+            patch("quarry.__main__.store_ca_cert"),
+            patch("quarry.__main__.validate_connection", return_value=(True, "")),
+            patch("quarry.__main__.write_proxy_config") as mock_write,
+            patch("quarry.__main__.CA_CERT_PATH", Path("/fake/quarry-ca.crt")),
+            patch("quarry.client.config.Settings") as mock_settings,
+        ):
+            resolver = mock_settings.load.return_value.resolve_db_paths
+            resolver.return_value = fake_settings
+            mock_settings.active_db.return_value = None
+            result = runner.invoke(app, ["login", "127.0.0.1", "--yes"])
+        _reset_globals()
+        assert result.exit_code == 0, result.output
+        # arg 1 is the persisted bearer — a loopback login stores None.
+        assert mock_write.call_args[0][1] is None
+        assert "STALE-ENV-KEY" not in str(mock_write.call_args)
+
+    def test_remote_login_stores_its_api_key(self) -> None:
+        """A REMOTE login still persists its operator key (only loopback omits it)."""
+        with (
+            patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
+            patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
+            patch("quarry.__main__.store_ca_cert"),
+            patch("quarry.__main__.validate_connection", return_value=(True, "")),
+            patch("quarry.__main__.write_proxy_config") as mock_write,
+            patch("quarry.__main__.CA_CERT_PATH", Path("/fake/quarry-ca.crt")),
+        ):
+            result = runner.invoke(
+                app, ["login", "gpu.example.com", "--api-key", "sk-remote", "--yes"]
+            )
+        _reset_globals()
+        assert result.exit_code == 0, result.output
+        assert mock_write.call_args[0][1] == "sk-remote"
+
+    def test_remote_login_strips_api_key_whitespace(self) -> None:
+        # A key with a trailing newline (`--api-key "$(cat key)"`) must be stored
+        # STRIPPED, matching the daemon's DaemonServer._authenticated — else the
+        # client presents the unstripped value and 401s against the daemon.
+        with (
+            patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
+            patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
+            patch("quarry.__main__.store_ca_cert"),
+            patch("quarry.__main__.validate_connection", return_value=(True, "")),
+            patch("quarry.__main__.write_proxy_config") as mock_write,
+            patch("quarry.__main__.CA_CERT_PATH", Path("/fake/quarry-ca.crt")),
+        ):
+            result = runner.invoke(
+                app,
+                ["login", "gpu.example.com", "--api-key", "sk-remote\n", "--yes"],
+            )
+        _reset_globals()
+        assert result.exit_code == 0, result.output
+        assert mock_write.call_args[0][1] == "sk-remote"  # stripped, daemon-matching
+
+    def test_remote_login_whitespace_only_key_stores_none(self) -> None:
+        # A whitespace-only key is absent, not a credential: stored bearer is None.
+        with (
+            patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
+            patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
+            patch("quarry.__main__.store_ca_cert"),
+            patch("quarry.__main__.validate_connection", return_value=(True, "")),
+            patch("quarry.__main__.write_proxy_config") as mock_write,
+            patch("quarry.__main__.CA_CERT_PATH", Path("/fake/quarry-ca.crt")),
+        ):
+            result = runner.invoke(
+                app, ["login", "gpu.example.com", "--api-key", "   ", "--yes"]
+            )
+        _reset_globals()
+        assert result.exit_code == 0, result.output
+        assert mock_write.call_args[0][1] is None
+
     def test_always_uses_wss(self) -> None:
         """Even for localhost, the new flow writes wss:// (TOFU is uniform)."""
         with (
@@ -4405,6 +4640,50 @@ class TestLoginCmd:
         assert result.exit_code == 0
         url_arg = mock_write.call_args[0][0]
         assert url_arg.startswith("wss://"), f"Expected wss:// but got: {url_arg}"
+
+    def test_ipv6_loopback_login_brackets_url(self, tmp_path: Path) -> None:
+        """An IPv6 loopback literal must be bracketed so the stored URL parses:
+        `quarry login ::1` writes wss://[::1]:8420/mcp, not the invalid
+        wss://::1:8420/mcp that urlparse cannot read back."""
+        (tmp_path / "serve.token").write_text("live-daemon-token")
+        fake_settings = MagicMock()
+        fake_settings.lancedb_path = tmp_path / "lancedb"  # parent == tmp_path
+        with (
+            patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
+            patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
+            patch("quarry.__main__.store_ca_cert"),
+            patch("quarry.__main__.validate_connection", return_value=(True, "")),
+            patch("quarry.__main__.write_proxy_config") as mock_write,
+            patch("quarry.__main__.CA_CERT_PATH", Path("/fake/quarry-ca.crt")),
+            patch("quarry.client.config.Settings") as mock_settings,
+        ):
+            resolver = mock_settings.load.return_value.resolve_db_paths
+            resolver.return_value = fake_settings
+            mock_settings.active_db.return_value = None
+            result = runner.invoke(app, ["login", "::1", "--yes"])
+        _reset_globals()
+        assert result.exit_code == 0, result.output
+        url_arg = mock_write.call_args[0][0]
+        assert url_arg == "wss://[::1]:8420/mcp", url_arg
+
+    def test_ipv6_remote_login_brackets_url(self) -> None:
+        """A remote IPv6 literal is bracketed too: `login 2001:db8::5` writes a
+        valid wss://[2001:db8::5]:8420/mcp."""
+        with (
+            patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
+            patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
+            patch("quarry.__main__.store_ca_cert"),
+            patch("quarry.__main__.validate_connection", return_value=(True, "")),
+            patch("quarry.__main__.write_proxy_config") as mock_write,
+            patch("quarry.__main__.CA_CERT_PATH", Path("/fake/quarry-ca.crt")),
+        ):
+            result = runner.invoke(
+                app, ["login", "2001:db8::5", "--api-key", "sk-remote", "--yes"]
+            )
+        _reset_globals()
+        assert result.exit_code == 0, result.output
+        url_arg = mock_write.call_args[0][0]
+        assert url_arg == "wss://[2001:db8::5]:8420/mcp", url_arg
 
     def test_proxy_config_oserror_exits_without_writing_ca_cert(self) -> None:
         """OSError from write_proxy_config exits before CA cert is stored.
@@ -5183,3 +5462,93 @@ def test_verbose_help_text_describes_stderr() -> None:
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
     assert "INFO" in result.output or "stderr" in result.output
+
+
+class TestRemoteListPing:
+    """`remote list --ping` on a loopback config presents the live serve.token."""
+
+    def test_loopback_ping_presents_live_serve_token(self, tmp_path: Path) -> None:
+        (tmp_path / "serve.token").write_text("live-ping-token")
+        fake_settings = MagicMock()
+        fake_settings.lancedb_path = tmp_path / "lancedb"  # parent == tmp_path
+        proxy = {"quarry": {"url": "wss://127.0.0.1:8420/mcp", "ca_cert": "/ca.crt"}}
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy),
+            patch(
+                "quarry.__main__.validate_connection_from_ws_url",
+                return_value=(True, ""),
+            ) as mock_ping,
+            patch("quarry.client.config.Settings") as mock_settings,
+        ):
+            resolver = mock_settings.load.return_value.resolve_db_paths
+            resolver.return_value = fake_settings
+            mock_settings.read_default_db.return_value = None
+            result = runner.invoke(app, ["remote", "list", "--ping"])
+        _reset_globals()
+        assert result.exit_code == 0, result.output
+        # The live serve.token, not the absent stored bearer, is the probe token.
+        assert mock_ping.call_args.args[1] == "live-ping-token"
+
+    def test_loopback_ping_missing_token_never_uses_stored_bearer(
+        self, tmp_path: Path
+    ) -> None:
+        """A loopback --ping with no live serve.token must NOT send the stored
+        bearer (live-only contract); it probes tokenless and reports unreachable."""
+        fake_settings = MagicMock()
+        fake_settings.lancedb_path = tmp_path / "lancedb"  # no serve.token present
+        proxy = {
+            "quarry": {
+                "url": "wss://127.0.0.1:8420/mcp",
+                "ca_cert": "/ca.crt",
+                "headers": {"Authorization": "Bearer STALE-STORED-TOKEN"},
+            }
+        }
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy),
+            patch(
+                "quarry.__main__.validate_connection_from_ws_url",
+                return_value=(False, "unreachable"),
+            ) as mock_ping,
+            patch("quarry.client.config.Settings") as mock_settings,
+        ):
+            resolver = mock_settings.load.return_value.resolve_db_paths
+            resolver.return_value = fake_settings
+            mock_settings.active_db.return_value = None
+            runner.invoke(app, ["remote", "list", "--ping"])
+        _reset_globals()
+        # The daemon is down (no live token) -> probe tokenless, never the stale
+        # stored bearer.
+        assert mock_ping.call_args.args[1] is None
+        assert "STALE-STORED-TOKEN" not in str(mock_ping.call_args)
+
+    def test_stored_localhost_ping_connects_to_literal_with_live_token(
+        self, tmp_path: Path
+    ) -> None:
+        # HIGH regression: a config stored before the literal-IP flip holds the
+        # NAME ``localhost``.  On --ping the live serve.token must be presented
+        # ONLY over a connection to the migrated literal 127.0.0.1 — never the
+        # raw name a resolver could redirect to a co-tenant's ::1.
+        (tmp_path / "serve.token").write_text("live-ping-token")
+        fake_settings = MagicMock()
+        fake_settings.lancedb_path = tmp_path / "lancedb"  # parent == tmp_path
+        proxy = {"quarry": {"url": "wss://localhost:8420/mcp", "ca_cert": "/ca.crt"}}
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy),
+            patch(
+                "quarry.__main__.validate_connection_from_ws_url",
+                return_value=(True, ""),
+            ) as mock_ping,
+            patch("quarry.client.config.Settings") as mock_settings,
+        ):
+            resolver = mock_settings.load.return_value.resolve_db_paths
+            resolver.return_value = fake_settings
+            mock_settings.read_default_db.return_value = None
+            mock_settings.active_db.return_value = None
+            result = runner.invoke(app, ["remote", "list", "--ping"])
+        _reset_globals()
+        assert result.exit_code == 0, result.output
+        # Connected to the migrated literal URL, not the ambiguous name.
+        assert mock_ping.call_args.args[0] == "wss://127.0.0.1:8420/mcp"
+        assert "localhost" not in str(mock_ping.call_args)
+        # The live serve.token is the probe token (auto-migration, no re-login).
+        assert mock_ping.call_args.args[1] == "live-ping-token"

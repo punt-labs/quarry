@@ -29,6 +29,7 @@ Ordering invariants asserted per CLAUDE.md Class 5:
 
 from __future__ import annotations
 
+import re
 import shutil
 import stat
 import subprocess
@@ -126,9 +127,13 @@ def mock_bin(tmp_path: Path) -> Path:
         quarry_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
     )
 
-    # curl -- used for health checks.  Succeed so the health-check loop
-    # terminates fast.
-    _write_mock(bin_dir / "curl", log_header + "exit 0\n")
+    # curl -- used for health checks.  Emit the ready health body so the
+    # install gate (which now requires state=="ready", not a bare 200)
+    # matches and the loop terminates fast.
+    _write_mock(
+        bin_dir / "curl",
+        log_header + 'printf \'{"state":"ready"}\\n\'\nexit 0\n',
+    )
 
     # ssh -- the script tests SSH to github.com for HTTPS fallback.
     # Return a success banner so the HTTPS rewrite is skipped.
@@ -311,15 +316,18 @@ def test_default_mode_runs_plugin_install_with_claude(env: dict[str, str]) -> No
 
 
 def test_default_mode_runs_quarry_login(env: dict[str, str]) -> None:
-    """Default mode runs ``quarry login localhost``."""
+    """Default mode runs ``quarry login 127.0.0.1`` — the literal the daemon
+    binds, never the ambiguous ``localhost`` name (HIGH: token-presentation is
+    gated on a literal loopback IP)."""
     result = _run_script(INSTALL_SH, env)
     assert result.returncode == 0, (
         f"install.sh failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
 
     log = _read_log(env)
-    assert _any_line_contains(log, "quarry login"), (
-        "Default mode must run quarry login localhost"
+    assert _any_line_contains(log, "login 127.0.0.1"), (
+        "Default mode must run `quarry login 127.0.0.1` (the literal loopback IP), "
+        "not the ambiguous localhost name"
     )
 
 
@@ -650,3 +658,51 @@ def test_install_script_passes_shellcheck() -> None:
     assert result.returncode == 0, (
         f"shellcheck failed on install.sh:\n{result.stdout}\n{result.stderr}"
     )
+
+
+def test_install_health_gate_requires_ready_state() -> None:
+    """Per CLAUDE.md Class 5: the health gate must check state=="ready".
+
+    A warming daemon returns HTTP 200 with state=="starting", so gating on a
+    bare 200 (``curl ... >/dev/null``) would green-light an unready daemon.
+    Both health-check loops (network + default) must grep the ready state.
+    """
+    script = INSTALL_SH.read_text()
+    ready_gate = '"state"[[:space:]]*:[[:space:]]*"ready"'
+    assert script.count(ready_gate) == 2, "both health loops must gate on state==ready"
+    assert '/health" >/dev/null 2>&1; then' not in script, (
+        "health check must not gate on a bare HTTP 200"
+    )
+
+
+def test_install_health_gate_probes_literal_loopback_not_localhost() -> None:
+    """The health gate must probe the literal 127.0.0.1, not "localhost".
+
+    The daemon binds IPv4 loopback and login pins 127.0.0.1; on an IPv6-preferring
+    host "localhost" resolves ::1 first, so a localhost health probe would miss
+    the ready IPv4 daemon (false timeout) and reopen the dual-stack ambiguity the
+    literal-IP pinning closed.  Both health loops (network + default) must target
+    127.0.0.1:8420/health, and no daemon probe may hit localhost:8420.
+    """
+    script = INSTALL_SH.read_text()
+    assert script.count("https://127.0.0.1:8420/health") == 2, (
+        "both health loops must probe the literal 127.0.0.1, not localhost"
+    )
+    assert "localhost:8420" not in script, (
+        "no daemon probe may target the dual-stack-ambiguous localhost:8420"
+    )
+
+
+def test_install_health_gate_discriminates_ready_from_starting() -> None:
+    """The gate's ready-state pattern matches a ready body and rejects a starting
+    one.  Expressed in Python `re` (no external `grep` on PATH): the install
+    script's POSIX ``[[:space:]]`` becomes ``\\s``, semantics unchanged."""
+    pattern = r'"state"\s*:\s*"ready"'
+
+    def _matches(body: str) -> bool:
+        return re.search(pattern, body) is not None
+
+    assert _matches('{"state":"ready"}')
+    assert _matches('{"state": "ready", "version": "1.19.0"}')
+    assert not _matches('{"state":"starting"}')
+    assert not _matches('{"status":"ok"}')

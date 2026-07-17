@@ -948,6 +948,107 @@ added pyright to CI; PR-2 introduces `quarry/api` + FastAPI + `/v1` (+ the missi
 `serve.token`, `QuarryClient` + the CLI thin-client (deleting `RemoteClient`), and
 `quarry mcp`-as-client.
 
+#### PR-3a as landed (`quarryd` + `serve.token` + `ClientConfig`)
+
+PR-3a implements the daemon/supervision/loopback-auth half of v2.2. What shipped:
+
+- **`quarryd` entry point** (`quarry.daemon.launcher:entrypoint`) — the sole
+  engine process. A `DaemonLauncher` refuses a remote-reachable bind that has no
+  operator key, mints a 256-bit loopback token when none is given, and hands a
+  `ServeConfig` to `DaemonServer`. The `quarry serve` subcommand is **deleted**
+  (PL-PP-1, no shim); the supervised unit execs `quarryd` (launchd `KeepAlive` /
+  systemd `Restart=always`). Because only `quarryd` (via `quarry/daemon/`)
+  imports the engine, the v2.1 §3.1 lazy-import carve-out for `serve`/`mcp`
+  is gone: I1 is now a hard **process** boundary, not a within-process rule.
+- **`serve.token` (mode-0600).** `DaemonServer` writes the token beside
+  `serve.port` (shared `RunDir`) **after a successful bind** and removes only
+  what this instance wrote (guarded by a bound flag). Writing post-bind is
+  what keeps a second `quarryd` that fails to bind (port in use) from
+  clobbering a running peer's live token on the shared per-db path — a failed
+  bind never writes or removes it. The token lands microseconds after the
+  serve loop starts accepting; a client that races that window fails closed
+  and retries, an acceptable trade for not nuking a live daemon. The write is
+  atomic (`os.open(0o600)` + tmp-rename) so no world-readable or partial-file
+  window exists. The token is written whenever
+  the daemon has an effective key — **including** when the operator sets
+  `--api-key` (the file holds that key), so a local client on a `--network`
+  server can authenticate on loopback without re-typing it. This closes the
+  multi-user-host exposure: before it, any local UID could reach the
+  unauthenticated daemon on `127.0.0.1`.
+- **`LoopbackPolicy`** classifies a host with `ipaddress`, and splits into two
+  gates so one predicate never governs both a bind and a secret. **Bind gate**
+  (`is_loopback`, daemon/installer): name-tolerant —
+  `localhost`/`::1`/`127.0.0.0/8`/`::ffff:127.x` are loopback; `0.0.0.0`/`::` and
+  any unresolved name are remote (fail closed — require a key). **Token-
+  presentation gate** (`is_literal_loopback`, client): a LITERAL loopback IP
+  only — a NAME is never a presentation target (see `ClientConfig`).
+- **`ClientConfig`** (`quarry/client`) resolves a login config into (URL, pinned
+  CA, bearer). The live `serve.token` is presented **only to a LITERAL loopback
+  IP** (`is_literal_loopback`), never to a name: a name like `localhost` is
+  resolver-controlled and on a dual-stack host can resolve to a co-tenant's
+  `::1`, so presenting the secret to it would leak the token in transit. The
+  managed path canonicalizes `quarry login localhost` → `127.0.0.1` at write
+  time (a policy mapping to the IPv4 literal the daemon binds, not an OS-resolver
+  lookup), so the normal case pins the un-hijackable `127.0.0.1:8420`. For a
+  remote target the stored bearer is kept. It fails closed (`OSError` → typed
+  `ClientConfigError`) rather than sending an empty bearer. **Residual:** a
+  manual `quarry login ::1` while a co-tenant squats `[::1]:8420` and the real
+  daemon is IPv4-only could still present the token to the squatter — non-default
+  and operator-initiated; the managed install never stores `::1`. An
+  endpoint-bound token (record the bind host beside `serve.port`, present on
+  exact match) would erase it and is held pending an operator decision.
+  The 13 `RemoteClient` construction sites route through `ClientConfig`, so any
+  loopback CLI session now presents the token. `ClientConfig` resolves the
+  token from the run dir of the process's **active database** (a
+  `Settings.active_db` the CLI records from `--db`, else the persistent
+  default), since `serve.token` lives under the daemon's startup-db run dir.
+  **Limitation:** a loopback client cannot learn a non-default daemon's
+  database from the URL, so loopback `--db` auth requires the operator to run
+  a matching `--db` on both `quarry` and `quarryd`; the default,
+  service-managed case (default database) is unaffected.
+- **install `/health` gate** requires `state=="ready"`, not a bare HTTP 200 (a
+  warming daemon returns 200 with `state=="starting"`).
+- **Deferred (PR-4) — install success misconfigures the plugin's MCP transport
+  (`quarry-lejv`, P1).** PR-1 removed the daemon's `/mcp` WebSocket, so the
+  interim MCP transport is stdio `quarry mcp`, which loads the engine in-process
+  until PR-4's mcp-as-client lands. But `install.sh`'s successful `quarry login`
+  still writes `quarry.toml`, and `plugin.json` prefers `mcp-proxy` →
+  `wss://…/mcp` — a now-dead route — so a fresh or re-install misconfigures
+  Claude Code's MCP on the **success** path (a *failed* login instead leaves the
+  working stdio `quarry mcp` fallback in place). PR-3a's loopback login also
+  stores no bearer. Repointing the install MCP transport is PR-4's domain
+  (mcp-as-client; `mcp-proxy` out of quarry's path), so it is deferred here
+  rather than fixed in PR-3a, tracked as `quarry-lejv`. **Re-install guard until
+  PR-4:** after re-installing, keep (or point) the Claude Code plugin at stdio
+  `quarry mcp`; do **not** rely on the written `mcp-proxy` `quarry.toml` config.
+
+**Rejected alternatives (operator/leader rulings):**
+
+- **Route the local in-process CLI onto the daemon now** — rejected. It would
+  break CLI usage when no daemon is running; that cutover (and its daemon-down
+  nudge/fallback handling) belongs to `QuarryClient` in v2-3. PR-3a re-sources
+  only sessions already in remote mode; the no-login local path is unchanged.
+- **Trust a stored token for a loopback target** — rejected. `quarryd` mints a
+  fresh token every restart (respawned under KeepAlive/`Restart=always`), so a
+  stored token is stale immediately; loopback bearers are read live.
+- **Auto-generate a token for a non-loopback bind** — rejected as false
+  security: an auto-token in a local 0600 file is unreadable by the remote
+  clients that need it. A non-loopback bind still requires an operator-set key.
+- **Place the token-injecting construction seam in `__main__` (a free helper) or
+  on `RemoteClient` (a classmethod)** — rejected: the first regresses the CLI
+  god module, the second grows `remote_client.py` (deleted in v2-3). The seam
+  lives in the new, absolute-gated `client` tier (`ClientConfig.remote_client`)
+  so each CLI change is a call-site swap.
+- **Defer the loopback gate-flip to a later PR** (keep loopback unauthenticated
+  for now) — rejected. The gate flips in v2-3a; the interim `ClientConfig`
+  wiring keeps every loopback client (the only clients that hit the daemon
+  today) authenticated, so nothing is locked out and the exposure closes now
+  rather than one PR later.
+- **Write `serve.token` only when the token is auto-generated** (skip the file
+  when `--api-key` is set) — rejected. Then a local client on a `--network`
+  server would have no token to read on loopback and would fail closed even
+  though a valid key exists. The file always holds the effective key.
+
 ### Context (audited reality)
 
 A 5-agent audit (2026-07-12) established ground truth and corrected the v1 framing:
@@ -988,7 +1089,7 @@ A 5-agent audit (2026-07-12) established ground truth and corrected the v1 frami
 |----|------|-------|
 | v2-1 | `quarry-p8dq` | This ADR + `architecture.tex`/`CLAUDE.md`/README doc corrections (doc-only) |
 | v2-2 | `quarry-qyrm` | FastAPI + `quarry/api` contract: schemas, `/v1`, OpenAPI, `optimize`/`backfill` endpoints, alias-route removal, menubar lockstep |
-| v2-3a | `quarry-ufjt` | Supervised units + autostart-nudge helper (lands before v2-3) |
+| v2-3a | `quarry-ufjt` | `quarryd` entry point + `DaemonLauncher`; `serve.token` (mode-0600) + `LoopbackPolicy` detection fix; `ClientConfig` loopback-token resolver + re-source the `RemoteClient` sites; supervised units exec `quarryd` (`Restart=always`); delete `quarry serve`; install `/health` `state==ready` gate |
 | v2-3 | `quarry-veb0` | `QuarryClient` + typed errors; CLI thin-client (delete `RemoteClient` + engine branches); `disable` chunk-purge → daemon |
 | v2-4 | `quarry-ydz5` | MCP over `/v1/mcp`; drop `quarry mcp`; reuse warmed `ctx` |
 | v2-5 | `quarry-5e5t` | Library API = `QuarryClient` (pure in-repo removal of engine exports) |

@@ -1,6 +1,6 @@
 """Daemon connection and embedding-session lifecycle for the HTTP server.
 
-The ``quarry serve`` daemon runs queries concurrently with a background sync
+The ``quarryd`` daemon runs queries concurrently with a background sync
 worker.  A shared LanceDB connection (sync write locks block readers) and a
 shared ONNX session (``session.run()`` serialises callers via an internal mutex)
 both cause head-of-line blocking.  This module isolates the query path with its

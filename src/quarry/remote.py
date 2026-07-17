@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from quarry.api import API_VERSION
+from quarry.net import LoopbackPolicy
 
 MCP_PROXY_CONFIG_PATH: Path = Path.home() / ".punt-labs" / "mcp-proxy" / "quarry.toml"
 CA_CERT_PATH: Path = Path.home() / ".punt-labs" / "mcp-proxy" / "quarry-ca.crt"
@@ -143,6 +144,23 @@ def ws_to_http(url: str) -> str:
     return url
 
 
+def to_netloc(host: str, port: int | None) -> str:  # None port: URL omits it
+    """Return ``host:port``, bracketing an IPv6 literal so the URL parses.
+
+    An IPv6 literal contains colons that collide with the ``host:port``
+    separator: ``::1`` must render as ``[::1]:8420``, else ``urlparse`` reads
+    ``::1:8420`` as a bare hostname with no port (or rejects it), breaking every
+    downstream connection.  A hostname or IPv4 literal has no colon and is
+    returned unchanged; an already-bracketed host is not double-bracketed.  A
+    ``None`` port means the URL omits it (the scheme default applies), so only
+    the (bracketed) host is returned.
+    """
+    bracketed = f"[{host}]" if ":" in host and not host.startswith("[") else host
+    if port is None:
+        return bracketed
+    return f"{bracketed}:{port}"
+
+
 def validate_connection(
     host: str,
     port: int,
@@ -160,7 +178,7 @@ def validate_connection(
         ca_cert_path: Optional path to a CA certificate PEM.  When provided,
             TLS verification uses this CA instead of the system trust store.
     """
-    url = f"{scheme}://{host}:{port}/v{API_VERSION}/status"
+    url = f"{scheme}://{to_netloc(host, port)}/v{API_VERSION}/status"
     auth_headers: dict[str, str] = (
         {"Authorization": f"Bearer {token}"} if token is not None else {}
     )
@@ -177,11 +195,20 @@ def validate_connection(
             return True, ""
     except urllib.error.HTTPError as exc:
         if exc.code == 401:
+            # A LOOPBACK target authenticates with the daemon's live serve.token,
+            # NOT --api-key (loopback ignores it), so point a 401 at the real
+            # cause — the serve.token — not the operator's key. quarry doctor
+            # now checks quarryd reachability + serve.token, so it is actionable.
+            if LoopbackPolicy(host).is_literal_loopback:
+                return False, (
+                    "Loopback authentication failed — the daemon's serve.token "
+                    "is unreadable or stale. Run 'quarry doctor'."
+                )
             return False, "Authentication failed — check --api-key."
         return False, f"Server returned {exc.code}."
     except (urllib.error.URLError, OSError) as exc:
         reason: object = exc.reason if isinstance(exc, urllib.error.URLError) else exc
-        return False, f"Could not connect to {host}:{port} — {reason}."
+        return False, f"Could not connect to {to_netloc(host, port)} — {reason}."
 
 
 def validate_connection_from_ws_url(

@@ -142,3 +142,31 @@ class TestPersistentDb:
         with patch.object(Settings, "_CONFIG_PATH", config_file):
             Settings.write_default_db("coding")
             assert config_file.exists()
+
+
+class TestActiveDb:
+    """The process-scoped --db override the client tier reads for run dirs."""
+
+    def test_no_override_uses_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        Settings.set_active_db("")
+        monkeypatch.setattr(Settings, "read_default_db", classmethod(lambda _cls: None))
+        assert Settings.active_db() is None
+
+    def test_override_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            Settings, "read_default_db", classmethod(lambda _cls: "persisted")
+        )
+        Settings.set_active_db("work")
+        try:
+            assert Settings.active_db() == "work"
+        finally:
+            Settings.set_active_db("")
+
+    def test_empty_override_falls_back_to_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            Settings, "read_default_db", classmethod(lambda _cls: "persisted")
+        )
+        Settings.set_active_db("")
+        assert Settings.active_db() == "persisted"

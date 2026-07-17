@@ -1,11 +1,11 @@
 # ruff: noqa: S603, S607 — all subprocess calls invoke system binaries (launchctl, systemctl, loginctl)
-"""Daemon lifecycle management for ``quarry serve``.
+"""Daemon lifecycle management for the ``quarryd`` engine process.
 
 Provides ``install`` and ``uninstall`` commands that register quarry as a
 system service (launchd on macOS, systemd on Linux) so the daemon starts
 at login and restarts on crash.
 
-The service runs ``quarry serve --port 8420`` using the installed ``quarry``
+The service runs ``quarryd --port 8420`` using the installed ``quarryd``
 binary (from ``uv tool install``), never ``sys.executable``.
 """
 
@@ -22,6 +22,7 @@ from typing import Protocol, runtime_checkable
 from xml.sax.saxutils import escape as _xml_escape
 
 from quarry.config import DEFAULT_PORT
+from quarry.net import LoopbackPolicy
 from quarry.tls import TLS_DIR, cert_fingerprint, write_tls_files
 
 
@@ -90,12 +91,12 @@ def _write_env_file(api_key: str = "") -> None:
         raise
 
 
-def _quarry_exec_args() -> list[str]:
-    """Return the command to invoke ``quarry serve``.
+def _quarryd_exec_args() -> list[str]:
+    """Return the command to invoke the ``quarryd`` engine daemon.
 
     Resolution order:
 
-    1. ``~/.local/bin/quarry`` (uv tool install symlink) -- resolved to absolute.
+    1. ``~/.local/bin/quarryd`` (uv tool install symlink) -- resolved to absolute.
     2. Refuse to register -- raise ``RuntimeError`` instead of silently using
        ``sys.executable`` or ``shutil.which()``, either of which may resolve
        to a dev venv binary.
@@ -118,20 +119,24 @@ def _quarry_exec_args() -> list[str]:
     Appends ``--tls`` when TLS certificates are present in TLS_DIR.
     """
     # 1. Preferred: uv tool install symlink.
-    local_bin = Path.home() / ".local" / "bin" / "quarry"
+    local_bin = Path.home() / ".local" / "bin" / "quarryd"
     if local_bin.exists():
         resolved = local_bin.resolve()
         logger.info("Service binary: %s (uv tool)", resolved)
-        base = [str(resolved), "serve", "--port", str(DEFAULT_PORT)]
+        base = [str(resolved), "--port", str(DEFAULT_PORT)]
     else:
         msg = (
-            "Cannot find quarry binary at ~/.local/bin/quarry. "
+            "Cannot find quarryd binary at ~/.local/bin/quarryd. "
             "Install quarry first: uv tool install punt-quarry"
         )
         raise RuntimeError(msg)
 
     serve_host = os.environ.get("QUARRY_SERVE_HOST", "").strip()
     if serve_host:
+        # Forward the host raw: the launcher (DaemonLauncher._normalized) is the
+        # bind point and canonicalizes a loopback NAME to 127.0.0.1, so both this
+        # managed path and a direct ``quarryd --host`` agree — canonicalizing
+        # here too would duplicate that single source of truth.
         base.extend(["--host", serve_host])
 
     cert_path = TLS_DIR / "server.crt"
@@ -157,7 +162,7 @@ _LAUNCHD_PLIST = _LAUNCHD_DIR / f"{_LABEL}.plist"
 
 
 def _launchd_plist_content() -> str:
-    args = _quarry_exec_args()
+    args = _quarryd_exec_args()
     program_args = "\n".join(f"        <string>{_xml_escape(a)}</string>" for a in args)
     log_dir = Path.home() / ".punt-labs" / "quarry" / "logs"
     # launchd does not support EnvironmentFile — embed environment variables
@@ -306,7 +311,7 @@ def _systemd_escape(arg: str) -> str:
 
 
 def _systemd_unit_content() -> str:
-    args = _quarry_exec_args()
+    args = _quarryd_exec_args()
     exec_start = " ".join(_systemd_escape(a) for a in args)
     env_file_path = str(_ENV_FILE)
     return textwrap.dedent(f"""\
@@ -317,7 +322,7 @@ def _systemd_unit_content() -> str:
         [Service]
         ExecStart={exec_start}
         EnvironmentFile=-{env_file_path}
-        Restart=on-failure
+        Restart=always
         RestartSec=5
         Nice=-5
 
@@ -412,7 +417,7 @@ def install() -> str:
     # will crash-loop at runtime because DaemonServer enforces this invariant.
     serve_host = os.environ.get("QUARRY_SERVE_HOST", "").strip()
     api_key = os.environ.get("QUARRY_API_KEY", "").strip()
-    if serve_host and serve_host != "127.0.0.1" and not api_key:
+    if serve_host and not LoopbackPolicy(serve_host).is_loopback and not api_key:
         msg = (
             f"QUARRY_SERVE_HOST is set to {serve_host!r} but QUARRY_API_KEY is empty. "
             "Non-loopback hosts require an API key. "
@@ -436,7 +441,7 @@ def install() -> str:
     ca_crt = TLS_DIR / "ca.crt"
     fingerprint = cert_fingerprint(ca_crt.read_bytes()) if ca_crt.exists() else ""
 
-    args = _quarry_exec_args()
+    args = _quarryd_exec_args()
 
     if plat == "macos":
         _launchd_install()
