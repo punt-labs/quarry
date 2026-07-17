@@ -7,11 +7,11 @@ Each test class gets its own app instance via fixtures.
 from __future__ import annotations
 
 import asyncio
-import fcntl
 import logging
 import os
 import sqlite3
 import stat
+import sys
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -735,10 +735,16 @@ class TestServeToken:
         assert server._bound is False
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="the run-dir lock is POSIX-only (fcntl is unavailable on Windows)",
+)
 class TestRunDirLock:
     """Exactly one daemon may own a run dir — an exclusive advisory flock closes
     the shared-run-dir clobber (a second daemon on a different port overwriting
-    the first's serve.token) and the token-writer's temp-retry race."""
+    the first's serve.token) and the token-writer's temp-retry race.
+
+    POSIX-only: the whole class is skipped where ``fcntl`` is unavailable."""
 
     def _server(self, tmp_path: Path, api_key: str) -> DaemonServer:
         settings = MagicMock()
@@ -805,6 +811,8 @@ class TestRunDirLock:
     def test_lock_fd_is_cloexec(self, tmp_path: Path) -> None:
         # The serve.lock fd must be O_CLOEXEC so it is not leaked into (and does
         # not retain the lock across) subprocesses the daemon spawns.
+        import fcntl  # POSIX-only; the class is skipped where it is absent
+
         server = self._server(tmp_path, "k")
         server._acquire_run_dir_lock()
         try:
