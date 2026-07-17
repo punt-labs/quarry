@@ -45,6 +45,39 @@ class TestLaunch:
             launcher.launch()
         assert mock_serve.call_args[0][1].api_key == "operator-set-key"
 
+    @pytest.mark.parametrize("bad_key", ["abc def", "a\tb", "sk\nx", "a b c"])
+    def test_internal_whitespace_key_refused_at_start(self, bad_key: str) -> None:
+        """A key with INTERNAL whitespace makes "Bearer <key>" split into 3+ parts,
+        so no client can ever authenticate — fail closed at start, not a silently
+        401-forever daemon.  Rejected during construction (the _normalized seam)."""
+        with pytest.raises(SystemExit, match="must not contain whitespace"):
+            DaemonLauncher(_options(api_key=bad_key))
+
+    def test_leading_trailing_whitespace_key_round_trips(self) -> None:
+        """Outer whitespace is stripped (matching the daemon), so a clean key with
+        a trailing newline still boots with the stripped value — only INTERNAL
+        whitespace is fatal."""
+        launcher = DaemonLauncher(_options(api_key="  sk-abc123  "))
+        with (
+            patch("quarry.daemon.launcher.DaemonServer.serve") as mock_serve,
+            patch("quarry.daemon.launcher.Settings"),
+        ):
+            launcher.launch()
+        assert mock_serve.call_args[0][1].api_key == "sk-abc123"
+
+    def test_whitespace_only_key_still_mints_on_loopback(self) -> None:
+        """A whitespace-only key is absent (-> None), NOT internal-whitespace: a
+        loopback bind still mints its token rather than being refused."""
+        launcher = DaemonLauncher(_options(host="127.0.0.1", api_key="   "))
+        with (
+            patch("quarry.daemon.launcher.DaemonServer.serve") as mock_serve,
+            patch("quarry.daemon.launcher.Settings"),
+        ):
+            launcher.launch()
+        config = mock_serve.call_args[0][1]
+        assert config.api_key and config.api_key.strip()  # a minted token
+        assert len(config.api_key) >= 32
+
     def test_loopback_name_host_canonicalized_to_literal(self) -> None:
         """`quarryd --host localhost` must bind the literal 127.0.0.1.
 

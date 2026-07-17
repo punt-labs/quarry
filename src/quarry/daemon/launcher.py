@@ -54,7 +54,7 @@ class DaemonLauncher:
         """Normalize the bind options once, at the single launcher boundary — the
         actual bind point — so the bind, the key gate, and the client all agree.
 
-        Two normalizations:
+        Three normalizations:
 
         - Strip the api_key and map empty/whitespace -> None so
           ``enforce_bind_key``, ``_effective_key``, and ``DaemonServer`` all see
@@ -64,6 +64,14 @@ class DaemonLauncher:
           gate only to fail inconsistently later.  Normalized here, a whitespace
           key is absent everywhere — loopback mints, network is refused AT the
           gate.
+        - Fail CLOSED on an api_key with INTERNAL whitespace.  The bearer scheme
+          parses ``Authorization`` with ``.split()`` and requires EXACTLY two
+          parts (``daemon/routes/base.py``), so ``Bearer abc def`` splits into
+          three parts and NO client can ever authenticate — quarryd would boot
+          but 401 every request, a silently-unreachable daemon from one bad env
+          var.  Reject it loudly at start (all binds) instead.  Leading/trailing
+          whitespace is already stripped above, so any remaining space is
+          internal.
         - Canonicalize a loopback-NAME host to the IPv4 literal (localhost ->
           127.0.0.1).  Both a managed service-unit start AND a direct ``quarryd
           --host localhost`` pass through here, so the bind agrees with the
@@ -75,6 +83,14 @@ class DaemonLauncher:
           correctly loopback and needs no operator key.
         """
         api_key = (options.api_key or "").strip() or None
+        if api_key is not None and any(c.isspace() for c in api_key):
+            msg = (
+                "QUARRY_API_KEY must not contain whitespace — the HTTP bearer "
+                "scheme splits the Authorization header on whitespace, so an "
+                "embedded space would make the daemon permanently "
+                "unauthenticatable."
+            )
+            raise SystemExit(msg)
         host = LoopbackPolicy(options.host).canonical_host
         return replace(options, api_key=api_key, host=host)
 
