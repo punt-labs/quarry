@@ -4585,6 +4585,43 @@ class TestLoginCmd:
         assert result.exit_code == 0, result.output
         assert mock_write.call_args[0][1] == "sk-remote"
 
+    def test_remote_login_strips_api_key_whitespace(self) -> None:
+        # A key with a trailing newline (`--api-key "$(cat key)"`) must be stored
+        # STRIPPED, matching the daemon's DaemonServer._authenticated — else the
+        # client presents the unstripped value and 401s against the daemon.
+        with (
+            patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
+            patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
+            patch("quarry.__main__.store_ca_cert"),
+            patch("quarry.__main__.validate_connection", return_value=(True, "")),
+            patch("quarry.__main__.write_proxy_config") as mock_write,
+            patch("quarry.__main__.CA_CERT_PATH", Path("/fake/quarry-ca.crt")),
+        ):
+            result = runner.invoke(
+                app,
+                ["login", "gpu.example.com", "--api-key", "sk-remote\n", "--yes"],
+            )
+        _reset_globals()
+        assert result.exit_code == 0, result.output
+        assert mock_write.call_args[0][1] == "sk-remote"  # stripped, daemon-matching
+
+    def test_remote_login_whitespace_only_key_stores_none(self) -> None:
+        # A whitespace-only key is absent, not a credential: stored bearer is None.
+        with (
+            patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
+            patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
+            patch("quarry.__main__.store_ca_cert"),
+            patch("quarry.__main__.validate_connection", return_value=(True, "")),
+            patch("quarry.__main__.write_proxy_config") as mock_write,
+            patch("quarry.__main__.CA_CERT_PATH", Path("/fake/quarry-ca.crt")),
+        ):
+            result = runner.invoke(
+                app, ["login", "gpu.example.com", "--api-key", "   ", "--yes"]
+            )
+        _reset_globals()
+        assert result.exit_code == 0, result.output
+        assert mock_write.call_args[0][1] is None
+
     def test_always_uses_wss(self) -> None:
         """Even for localhost, the new flow writes wss:// (TOFU is uniform)."""
         with (

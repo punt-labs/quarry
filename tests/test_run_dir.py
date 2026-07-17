@@ -9,9 +9,9 @@ window.
 
 from __future__ import annotations
 
-import fcntl
 import os
 import stat
+import sys
 from pathlib import Path
 from typing import Literal
 
@@ -56,9 +56,14 @@ class TestServeTokenFile:
         mode = stat.S_IMODE(tf.path.stat().st_mode)
         assert mode == 0o600
 
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="FD_CLOEXEC/fcntl is POSIX-only"
+    )
     def test_temp_fd_is_cloexec(self, tmp_path: Path) -> None:
         # The secret-write handle must be O_CLOEXEC so it is not inherited into a
         # subprocess spawned during error handling (matches the serve.lock fd).
+        import fcntl  # POSIX-only; the test is skipped where it is absent
+
         fd = ServeTokenFile._create_0600(tmp_path / "serve.token.tmp")
         try:
             flags = fcntl.fcntl(fd, fcntl.F_GETFD)

@@ -1256,6 +1256,11 @@ def login_cmd(  # noqa: C901
     # co-tenant's ::1.  A deliberate policy mapping, not an OS-resolver lookup;
     # a literal IP or a remote host is unchanged.
     host = ClientConfig.canonical_host(host)
+    # Strip the operator key exactly as the daemon does (DaemonServer._authenticated):
+    # a trailing newline from `--api-key "$(cat key)"` would otherwise be stored
+    # verbatim and presented UNstripped, 401ing against the daemon that compares
+    # the stripped value.  Whitespace-only -> None (no bearer stored).
+    api_key = (api_key or "").strip() or None
 
     # Step 1: Fetch CA cert over HTTPS with SSL verification disabled (TOFU bootstrap).
     try:
