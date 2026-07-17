@@ -12,31 +12,23 @@ from __future__ import annotations
 from quarry.client.client import QuarryClient
 from quarry.client.config import ClientConfig, ClientConfigError
 from quarry.client.errors import (
-    AuthError,
-    BadRequestError,
-    NotFoundError,
-    ProtocolError,
+    HttpError,
     QuarryConnectionError,
     QuarryError,
-    ServerError,
 )
 from quarry.client.resolver import TargetResolver
 from quarry.client.task import TaskOutcome
 from quarry.client.transport import HttpxTransport, Response, Transport
 
 __all__ = [
-    "AuthError",
-    "BadRequestError",
     "ClientConfig",
     "ClientConfigError",
+    "HttpError",
     "HttpxTransport",
-    "NotFoundError",
-    "ProtocolError",
     "QuarryClient",
     "QuarryConnectionError",
     "QuarryError",
     "Response",
-    "ServerError",
     "TargetResolver",
     "TaskOutcome",
     "Transport",

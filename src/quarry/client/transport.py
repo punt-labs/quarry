@@ -20,7 +20,7 @@ from typing import Protocol, Self, final
 
 import httpx
 
-from quarry.client.errors import ProtocolError, QuarryConnectionError, QuarryError
+from quarry.client.errors import QuarryConnectionError, QuarryError
 from quarry.remote import to_netloc, ws_to_http
 
 _DEFAULT_TIMEOUT = 15.0
@@ -148,7 +148,7 @@ class HttpxTransport:
             if not raw:
                 return Response(status, {})
             preview = raw[:_PREVIEW_BYTES].decode("utf-8", "replace")
-            raise ProtocolError(
+            raise QuarryError(
                 f"Malformed response from remote server: expected JSON, got {preview!r}"
             )
         return Response(status, body)

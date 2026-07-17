@@ -43,7 +43,7 @@ from quarry.api import (
     TaskAccepted,
     TaskStatus,
 )
-from quarry.client.errors import ProtocolError, QuarryConnectionError
+from quarry.client.errors import QuarryConnectionError, QuarryError
 from quarry.client.task import TaskOutcome
 from quarry.client.transport import HttpxTransport, Response, Transport
 
@@ -236,16 +236,14 @@ class QuarryClient:
         """Validate the response body into *model*, or raise :class:`ProtocolError`."""
         body = resp.json_body
         if not isinstance(body, Mapping):
-            raise ProtocolError(
+            raise QuarryError(
                 f"Malformed response from remote server: expected a JSON object, "
                 f"got {type(body).__name__}"
             )
         try:
             return model.model_validate(dict(body))
         except ValidationError as exc:
-            raise ProtocolError(
-                f"Malformed response from remote server: {exc}"
-            ) from exc
+            raise QuarryError(f"Malformed response from remote server: {exc}") from exc
 
     @staticmethod
     def _query_params(req: SearchRequest) -> dict[str, str]:

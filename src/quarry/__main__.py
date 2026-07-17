@@ -20,7 +20,7 @@ from quarry.cli_remote import RemoteCli
 from quarry.cli_search import SearchCli
 from quarry.cli_sync import SyncCli
 from quarry.client import (
-    BadRequestError,
+    HttpError,
     QuarryConnectionError,
     QuarryError,
     TargetResolver,
@@ -200,7 +200,7 @@ def _cli_errors(fn: Callable[..., None]) -> Callable[..., None]:
             err_console.print(f"Error: {exc.message}", style="red")
             err_console.print(_AUTOSTART_HINT, style="yellow")
             raise typer.Exit(code=1) from exc
-        except BadRequestError as exc:
+        except HttpError as exc:
             if exc.status == CONFLICT_STATUS:
                 if not _quiet:
                     err_console.print(

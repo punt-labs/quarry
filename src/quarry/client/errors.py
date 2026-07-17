@@ -2,10 +2,17 @@
 
 Layer 2 (client transport) never imports presentation: these errors carry the
 structured fields the command layer needs to render a message and pick an exit
-code, but they never touch ``typer`` or ``rich``.  A single classifier
-(:meth:`QuarryError.from_response`) turns a non-2xx wire status into the right
-leaf; a socket failure surfaces as :class:`QuarryConnectionError` before any
-status exists.
+code, but they never touch ``typer`` or ``rich``.  Three cohesive types cover
+every failure the CLI dispatches on — a connection failure (autostart nudge), an
+HTTP-status failure (the ``status`` selects the exit code; 409 is
+"already in progress"), and the base error for a malformed/unparseable response.
+The single classifier :meth:`QuarryError.from_response` turns a non-2xx status
+into an :class:`HttpError`.
+
+These are ``@dataclass(eq=False)`` rather than ``frozen``: an exception must let
+the interpreter set ``__traceback__``/``__cause__`` as it propagates (a frozen
+``__setattr__`` blocks that), so identity equality — not frozen value semantics —
+is the right contract for an error.
 """
 
 from __future__ import annotations
@@ -14,21 +21,17 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import final
 
-_AUTH_STATUS = 401
-_NOT_FOUND_STATUS = 404
-# The 409 sync-conflict carries a ``task_id`` the CLI polls; it is a
-# BadRequestError the command layer maps to exit 0 ("already in progress").
+# The 409 conflict carries a ``task_id`` the CLI polls; the command layer maps it
+# to exit 0 ("already in progress").
 CONFLICT_STATUS = 409
-_CLIENT_ERROR_FLOOR = 400
-_SERVER_ERROR_FLOOR = 500
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(eq=False)
 class QuarryError(Exception):
-    """Base for every client-side failure — never raised directly.
+    """Base client failure — also the concrete error for a malformed response.
 
-    Carries the human-readable ``message`` the command layer renders; leaves add
-    a wire ``status`` or a connection ``target`` where relevant.
+    Carries the human-readable ``message`` the command layer renders; the
+    connection and HTTP subclasses add a ``target`` or wire ``status``.
     """
 
     _message: str
@@ -37,25 +40,24 @@ class QuarryError(Exception):
     def message(self) -> str:
         return self._message
 
+    @property
+    def status(self) -> int:
+        # 0 = no HTTP status (a connection or protocol failure); :class:`HttpError`
+        # overrides this with the real wire status.
+        return 0
+
     def __str__(self) -> str:
         return self._message
 
     @classmethod
-    def from_response(cls, status: int, body: object) -> QuarryError:
-        """Return the error leaf for a non-2xx *status* and its parsed *body*.
+    def from_response(cls, status: int, body: object) -> HttpError:
+        """Return the :class:`HttpError` for a non-2xx *status* and parsed *body*.
 
         ``body`` is a wire boundary — a decoded ``{"error": ...}`` mapping when
         the server emitted one, else any JSON value or ``None``.  The 409
-        conflict's ``task_id`` is carried through on :class:`BadRequestError`.
+        conflict's ``task_id`` is carried through for the CLI's poll hint.
         """
-        detail = cls._detail(status, body)
-        if status == _AUTH_STATUS:
-            return AuthError(detail)
-        if status == _NOT_FOUND_STATUS:
-            return NotFoundError(detail, status)
-        if _CLIENT_ERROR_FLOOR <= status < _SERVER_ERROR_FLOOR:
-            return BadRequestError(detail, status, cls._conflict_task_id(body))
-        return ServerError(detail, status)
+        return HttpError(cls._detail(status, body), status, cls._conflict_task_id(body))
 
     @staticmethod
     def _detail(status: int, body: object) -> str:
@@ -77,7 +79,7 @@ class QuarryError(Exception):
 
 
 @final
-@dataclass(frozen=True, slots=True)
+@dataclass(eq=False)
 class QuarryConnectionError(QuarryError):
     """The socket refused, DNS failed, or the TLS handshake could not complete.
 
@@ -95,34 +97,19 @@ class QuarryConnectionError(QuarryError):
 
 
 @final
-@dataclass(frozen=True, slots=True)
-class AuthError(QuarryError):
-    """HTTP 401 — the presented bearer token was missing, stale, or rejected."""
+@dataclass(eq=False)
+class HttpError(QuarryError):
+    """A non-2xx HTTP response — ``status`` selects the CLI exit code.
 
-
-@final
-@dataclass(frozen=True, slots=True)
-class NotFoundError(QuarryError):
-    """HTTP 404 — the requested document, collection, or registration is absent."""
-
-    _status: int
-
-    @property
-    def status(self) -> int:
-        return self._status
-
-
-@final
-@dataclass(frozen=True, slots=True)
-class BadRequestError(QuarryError):
-    """HTTP 400/409/413/415/422 — the request was rejected as malformed or in conflict.
-
-    A 409 sync/optimize/backfill conflict carries the running task's ``task_id``
-    so the command layer can tell the user which task to poll.
+    401/404/413/415/422/5xx all render ``Error: {message}`` and exit 1; a 409
+    conflict exits 0 ("already in progress") and carries the running ``task_id``.
+    The named-per-status distinction is intentionally not modeled as separate
+    classes: the CLI dispatches on ``status``, and the daemon's own message
+    already states the specific cause (e.g. "No registration found for …").
     """
 
     _status: int
-    _task_id: str = ""
+    _task_id: str
 
     @property
     def status(self) -> int:
@@ -132,21 +119,3 @@ class BadRequestError(QuarryError):
     def task_id(self) -> str:
         # Empty unless the server returned a 409 conflict naming a running task.
         return self._task_id
-
-
-@final
-@dataclass(frozen=True, slots=True)
-class ServerError(QuarryError):
-    """HTTP 5xx (or any other unexpected status) — the daemon failed internally."""
-
-    _status: int
-
-    @property
-    def status(self) -> int:
-        return self._status
-
-
-@final
-@dataclass(frozen=True, slots=True)
-class ProtocolError(QuarryError):
-    """The response body was not JSON, not an object, or failed model validation."""

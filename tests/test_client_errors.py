@@ -1,9 +1,12 @@
 """Class-2 boundary tests: every non-2xx status and malformed body raises a typed
-:class:`QuarryError`, never a raw httpx/JSON exception or ``SystemExit``.
+error, never a raw httpx/JSON exception or ``SystemExit``.
 
 Drives the real :class:`HttpxTransport` parse/classify path through
-``httpx.MockTransport`` so the wire-status → error-leaf mapping is exercised
-end-to-end, not stubbed.
+``httpx.MockTransport`` so the wire-status → error mapping is exercised
+end-to-end.  A non-2xx status becomes an :class:`HttpError` carrying the wire
+``status`` (the CLI dispatches on that, and 409 carries the running ``task_id``);
+a socket failure becomes :class:`QuarryConnectionError`; a malformed 2xx body
+becomes a base :class:`QuarryError`.
 """
 
 from __future__ import annotations
@@ -15,13 +18,9 @@ import httpx
 import pytest
 
 from quarry.client.errors import (
-    AuthError,
-    BadRequestError,
-    NotFoundError,
-    ProtocolError,
+    HttpError,
     QuarryConnectionError,
     QuarryError,
-    ServerError,
 )
 from quarry.client.transport import HttpxTransport
 
@@ -43,42 +42,45 @@ def _responds(status: int, body: object) -> _Handler:
 
 
 class TestStatusClassification:
-    def test_401_raises_auth_error(self) -> None:
-        with pytest.raises(AuthError) as info:
+    def test_401_raises_http_error_with_status(self) -> None:
+        with pytest.raises(HttpError) as info:
             _transport(_responds(401, {"error": "unauthorized"})).request("GET", "/x")
+        assert info.value.status == 401
         assert info.value.message == "unauthorized"
 
-    def test_404_raises_not_found_with_status(self) -> None:
-        with pytest.raises(NotFoundError) as info:
+    def test_404_raises_http_error_with_status(self) -> None:
+        with pytest.raises(HttpError) as info:
             _transport(_responds(404, {"error": "missing"})).request("GET", "/x")
         assert info.value.status == 404
         assert info.value.message == "missing"
 
-    def test_409_raises_bad_request_carrying_task_id(self) -> None:
+    def test_409_carries_task_id(self) -> None:
         body = {"error": "Sync already in progress", "task_id": "T42"}
-        with pytest.raises(BadRequestError) as info:
+        with pytest.raises(HttpError) as info:
             _transport(_responds(409, body)).request("GET", "/x")
         assert info.value.status == 409
         assert info.value.task_id == "T42"
 
-    def test_500_raises_server_error(self) -> None:
-        with pytest.raises(ServerError) as info:
+    def test_500_raises_http_error_with_status(self) -> None:
+        with pytest.raises(HttpError) as info:
             _transport(_responds(500, {"error": "boom"})).request("GET", "/x")
         assert info.value.status == 500
 
     def test_error_body_without_error_key_gets_generic_message(self) -> None:
-        with pytest.raises(ServerError) as info:
+        with pytest.raises(HttpError) as info:
             _transport(_responds(503, {"detail": "x"})).request("GET", "/x")
         assert info.value.message == "HTTP 503"
 
 
 class TestMalformedBody:
-    def test_non_json_2xx_raises_protocol_error(self) -> None:
+    def test_non_json_2xx_raises_quarry_error(self) -> None:
         def handler(_request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, content=b"<html>not json</html>")
 
-        with pytest.raises(ProtocolError):
+        with pytest.raises(QuarryError) as info:
             _transport(handler).request("GET", "/x")
+        # A malformed 2xx is a base error, not an HTTP-status error.
+        assert not isinstance(info.value, HttpError)
 
     def test_empty_2xx_body_is_empty_object(self) -> None:
         def handler(_request: httpx.Request) -> httpx.Response:
@@ -91,8 +93,9 @@ class TestMalformedBody:
         def handler(_request: httpx.Request) -> httpx.Response:
             return httpx.Response(404, content=b"plain text")
 
-        with pytest.raises(NotFoundError):
+        with pytest.raises(HttpError) as info:
             _transport(handler).request("GET", "/x")
+        assert info.value.status == 404
 
 
 class TestConnectionFailures:
@@ -129,9 +132,9 @@ class TestConnectionFailures:
 
 
 class TestFromResponseUnit:
-    def test_base_never_returned_directly(self) -> None:
-        # Every classified result is a concrete leaf, never the base class.
+    def test_always_returns_http_error_leaf(self) -> None:
         for status in (400, 401, 404, 409, 413, 415, 422, 500, 503):
             err = QuarryError.from_response(status, {"error": "x"})
-            assert type(err) is not QuarryError
-            assert err.message
+            assert isinstance(err, HttpError)
+            assert err.status == status
+            assert err.message == "x"
