@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from quarry.client import ClientConfig, TargetResolver
+from quarry.client.config import ClientConfigError
 from quarry.client.errors import QuarryConnectionError
 
 
@@ -26,6 +27,7 @@ def _run_dir(port: int) -> MagicMock:
 def _no_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("QUARRY_URL", raising=False)
     monkeypatch.delenv("QUARRY_TOKEN", raising=False)
+    monkeypatch.delenv("QUARRY_CA_CERT", raising=False)
 
 
 class TestTier1Env:
@@ -38,7 +40,9 @@ class TestTier1Env:
         assert bearer == "env-token"
 
     def test_env_token_is_stripped(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("QUARRY_URL", "ws://remote.example:9000")
+        # Loopback host: plaintext + token is same-machine and allowed, so this
+        # exercises stripping without tripping the cleartext guard.
+        monkeypatch.setenv("QUARRY_URL", "ws://127.0.0.1:9000")
         monkeypatch.setenv("QUARRY_TOKEN", "  tok\n")
         bearer = TargetResolver.resolve().token
         assert bearer == "tok"
@@ -67,6 +71,62 @@ class TestTier1Env:
         login = {"quarry": {"url": "wss://stored.example:8420"}}
         with patch("quarry.client.resolver.read_proxy_config", return_value=login):
             assert TargetResolver.resolve().url == "ws://env.example:9000"
+
+
+class TestTier1EnvSecurity:
+    """The MED djb finding: never transmit a bearer in cleartext to a remote."""
+
+    def test_cleartext_token_to_remote_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("QUARRY_CA_CERT", raising=False)
+        monkeypatch.setenv("QUARRY_URL", "ws://remote.example:9000")
+        monkeypatch.setenv("QUARRY_TOKEN", "supersecret")
+        with pytest.raises(ClientConfigError) as info:
+            TargetResolver.resolve()
+        # The token is refused (never built into a config, so never transmitted)
+        # and its value is not leaked in the error message.
+        assert "supersecret" not in str(info.value)
+
+    def test_loopback_plaintext_with_token_is_allowed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Same-machine plaintext is fine, like tier 3.
+        monkeypatch.delenv("QUARRY_CA_CERT", raising=False)
+        monkeypatch.setenv("QUARRY_URL", "ws://127.0.0.1:9000")
+        monkeypatch.setenv("QUARRY_TOKEN", "tok")
+        cfg = TargetResolver.resolve()
+        bearer = cfg.token
+        assert bearer == "tok"
+        assert cfg.ca_cert is None
+
+    def test_wss_remote_with_ca_cert_pins_it(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # The sanctioned secure remote-env path: wss + QUARRY_CA_CERT + token.
+        ca = tmp_path / "remote-ca.crt"
+        ca.write_text("x")
+        monkeypatch.setenv("QUARRY_URL", "wss://remote.example:9000")
+        monkeypatch.setenv("QUARRY_CA_CERT", str(ca))
+        monkeypatch.setenv("QUARRY_TOKEN", "tok")
+        cfg = TargetResolver.resolve()
+        assert cfg.ca_cert == str(ca)
+        bearer = cfg.token
+        assert bearer == "tok"
+
+    def test_wss_remote_without_ca_cert_never_pins_local_ca(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # A remote wss with no QUARRY_CA_CERT must NOT silently pin the LOCAL
+        # daemon CA (wrong CA for a remote host); it fails closed with no pin.
+        local_ca = tmp_path / "ca.crt"
+        local_ca.write_text("x")
+        monkeypatch.delenv("QUARRY_CA_CERT", raising=False)
+        monkeypatch.setenv("QUARRY_URL", "wss://remote.example:9000")
+        monkeypatch.setenv("QUARRY_TOKEN", "tok")
+        with patch("quarry.client.resolver._DAEMON_CA_PATH", local_ca):
+            cfg = TargetResolver.resolve()
+        assert cfg.ca_cert is None
 
 
 class TestTier2StoredLogin:
@@ -104,6 +164,27 @@ class TestTier2StoredLogin:
         ):
             cfg = TargetResolver.resolve()
         assert cfg.url == "wss://127.0.0.1:8420"
+
+    def test_loopback_login_daemon_down_raises_connection_error_with_nudge(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The LOW djb finding: a stored loopback login whose quarryd is down must
+        # surface the same typed QuarryConnectionError + autostart nudge as
+        # tier 3, not a raw ClientConfigError with no guidance.
+        _no_env(monkeypatch)
+        login = {"quarry": {"url": "wss://127.0.0.1:8420"}}
+        with (
+            patch("quarry.client.resolver.read_proxy_config", return_value=login),
+            patch.object(
+                ClientConfig,
+                "_serve_token",
+                side_effect=ClientConfigError("serve.token unreadable"),
+            ),
+            pytest.raises(QuarryConnectionError) as info,
+        ):
+            TargetResolver.resolve()
+        assert "quarryd is not running" in info.value.message
+        assert info.value.target == "127.0.0.1"
 
 
 class TestTier3Loopback:

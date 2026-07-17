@@ -16,8 +16,9 @@ from pathlib import Path
 from typing import Self, final
 
 from quarry.client.client import QuarryClient
-from quarry.client.config import ClientConfig
+from quarry.client.config import ClientConfig, ClientConfigError
 from quarry.client.errors import QuarryConnectionError
+from quarry.net import LoopbackPolicy
 from quarry.remote import read_proxy_config, ws_to_http
 
 # The daemon's pinned CA (written by ``quarry install``); a managed daemon serves
@@ -64,16 +65,71 @@ class TargetResolver:
             return cls._from_env(env_url)
         login = cls._stored_login()
         if login is not None:
-            return ClientConfig.from_login(login)
+            return cls._from_stored_login(login)
         return cls._loopback_default()
 
     @classmethod
+    def _from_stored_login(cls, login: Mapping[str, object]) -> ClientConfig:
+        """Build from a stored login; surface a down loopback daemon uniformly.
+
+        A stored literal-loopback login whose quarryd is down raises
+        :class:`ClientConfigError` from the live serve.token read.  Re-raise it as
+        the same typed :class:`QuarryConnectionError` + autostart nudge tier 3
+        uses, so every loopback-down path guides the operator identically instead
+        of one path leaking a raw RuntimeError with no nudge.
+        """
+        try:
+            return ClientConfig.from_login(login)
+        except ClientConfigError as exc:
+            if ClientConfig.is_loopback_url(str(login.get("url", ""))):
+                raise QuarryConnectionError(
+                    cls._down_message(), _LOOPBACK_HOST
+                ) from exc
+            raise
+
+    @classmethod
     def _from_env(cls, url: str) -> ClientConfig:
-        """Build a target from ``QUARRY_URL``/``QUARRY_TOKEN`` (tier 1)."""
+        """Build a target from ``QUARRY_URL``/``QUARRY_TOKEN``/``QUARRY_CA_CERT``.
+
+        Fail closed rather than transmit a bearer in cleartext to a host that is
+        not same-machine: a passive eavesdropper on the wire would capture it.
+        Plaintext to a loopback host is same-machine (like tier 3) and stays
+        allowed.  The secure remote path is ``wss://`` + ``QUARRY_CA_CERT``.
+        """
         # Strip as the daemon does, so a trailing newline from `$(cat key)` is
         # not presented verbatim and 401'd; whitespace-only ⇒ no bearer.
         token = (os.environ.get("QUARRY_TOKEN") or "").strip() or None
-        return ClientConfig(url, cls._pinned_ca(url), token)
+        parsed = urllib.parse.urlparse(ws_to_http(url))
+        scheme = parsed.scheme or "http"
+        host = parsed.hostname or ""
+        cleartext = scheme == "http" and not LoopbackPolicy(host).is_loopback
+        if token is not None and cleartext:
+            raise ClientConfigError(
+                "refusing to send QUARRY_TOKEN in cleartext to non-loopback "
+                f"host {host!r}: use a wss:// URL with QUARRY_CA_CERT, or unset it."
+            )
+        return ClientConfig(url, cls._env_ca(scheme, host), token)
+
+    @staticmethod
+    def _env_ca(scheme: str, host: str) -> str | None:
+        """Return the CA to pin for a TLS env target, else None.
+
+        An explicit ``QUARRY_CA_CERT`` pins any TLS target — the sanctioned
+        secure remote-env path.  Absent it, the LOCAL daemon CA is pinned only
+        for a loopback TLS target; it is the wrong CA for a remote host, so a
+        remote ``wss://`` with no ``QUARRY_CA_CERT`` gets no pin and the transport
+        fails closed rather than trusting the wrong CA.  None = a plaintext
+        target, or a TLS target with no applicable CA (a documented transport
+        state, not an unresolved value).
+        """
+        if scheme != "https":
+            return None
+        ca_env = (os.environ.get("QUARRY_CA_CERT") or "").strip()
+        if ca_env:
+            return ca_env
+        if LoopbackPolicy(host).is_loopback and _DAEMON_CA_PATH.exists():
+            return str(_DAEMON_CA_PATH)
+        return None
 
     @classmethod
     def _loopback_default(cls) -> ClientConfig:
