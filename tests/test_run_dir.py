@@ -14,6 +14,7 @@ import stat
 import sys
 from pathlib import Path
 from typing import Literal
+from unittest.mock import patch
 
 import pytest
 
@@ -31,6 +32,24 @@ class TestPortFile:
         pf = PortFile(tmp_path / "a" / "b" / "serve.port")
         pf.write(8080)
         assert pf.path.exists()
+
+    def test_write_removes_temp_on_base_exception(self, tmp_path: Path) -> None:
+        # An interrupt (KeyboardInterrupt/SystemExit) during the write must not
+        # leave a stale serve.port.tmp — the temp is a pure implementation detail.
+        pf = PortFile(tmp_path / "serve.port")
+        with (
+            patch.object(Path, "replace", side_effect=KeyboardInterrupt),
+            pytest.raises(KeyboardInterrupt),
+        ):
+            pf.write(8420)
+        assert not (tmp_path / "serve.port.tmp").exists()  # no orphan temp
+        assert not pf.path.exists()  # no partial destination file
+
+    def test_write_success_leaves_no_temp(self, tmp_path: Path) -> None:
+        pf = PortFile(tmp_path / "serve.port")
+        pf.write(8420)
+        assert pf.read() == 8420
+        assert not (tmp_path / "serve.port.tmp").exists()
 
     def test_read_missing_raises(self, tmp_path: Path) -> None:
         with pytest.raises(FileNotFoundError):

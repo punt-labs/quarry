@@ -62,7 +62,10 @@ class PortFile:
         try:
             tmp.write_text(str(port))
             tmp.replace(self._path)
-        except OSError:
+        except BaseException:
+            # Remove the temp on ANY interruption (KeyboardInterrupt/SystemExit
+            # too), not just OSError — the temp is a pure implementation detail
+            # and must never linger.  Mirrors ServeTokenFile.write's cleanup.
             tmp.unlink(missing_ok=True)
             raise
         logger.info("Wrote port file: %s (port %d)", self._path, port)
