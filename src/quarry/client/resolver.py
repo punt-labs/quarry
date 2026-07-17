@@ -102,10 +102,18 @@ class TargetResolver:
         # Strip as the daemon does, so a trailing newline from `$(cat key)` is
         # not presented verbatim and 401'd; whitespace-only ⇒ no bearer.
         token = (os.environ.get("QUARRY_TOKEN") or "").strip() or None
+        # Migrate a loopback NAME (localhost) to the 127.0.0.1 literal BEFORE
+        # gating and building, so a bearer is never presented to a name a
+        # dual-stack resolver could redirect to a co-tenant's ::1 — mirrors
+        # ClientConfig.from_login's canonicalization.
+        url = ClientConfig.canonical_url(url)
         parsed = urllib.parse.urlparse(ws_to_http(url))
         scheme = parsed.scheme or "http"
         host = parsed.hostname or ""
-        cleartext = scheme == "http" and not LoopbackPolicy(host).is_loopback
+        # Plaintext + bearer is allowed ONLY to a LITERAL loopback IP (same
+        # machine); a name or a remote host must never receive the token in
+        # cleartext.
+        cleartext = scheme == "http" and not LoopbackPolicy(host).is_literal_loopback
         if token is not None and cleartext:
             raise ClientConfigError(
                 "refusing to send QUARRY_TOKEN in cleartext to non-loopback "
@@ -119,18 +127,18 @@ class TargetResolver:
 
         An explicit ``QUARRY_CA_CERT`` pins any TLS target — the sanctioned
         secure remote-env path.  Absent it, the LOCAL daemon CA is pinned only
-        for a loopback TLS target; it is the wrong CA for a remote host, so a
-        remote ``wss://`` with no ``QUARRY_CA_CERT`` gets no pin and the transport
-        fails closed rather than trusting the wrong CA.  None = a plaintext
-        target, or a TLS target with no applicable CA (a documented transport
-        state, not an unresolved value).
+        for a LITERAL loopback TLS target; it is the wrong CA for a remote host,
+        so a remote ``wss://`` with no ``QUARRY_CA_CERT`` gets no pin and the
+        transport fails closed rather than trusting the wrong CA.  None = a
+        plaintext target, or a TLS target with no applicable CA (a documented
+        transport state, not an unresolved value).
         """
         if scheme != "https":
             return None
         ca_env = (os.environ.get("QUARRY_CA_CERT") or "").strip()
         if ca_env:
             return ca_env
-        if LoopbackPolicy(host).is_loopback and _DAEMON_CA_PATH.exists():
+        if LoopbackPolicy(host).is_literal_loopback and _DAEMON_CA_PATH.exists():
             return str(_DAEMON_CA_PATH)
         return None
 

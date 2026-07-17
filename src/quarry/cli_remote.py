@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Annotated, Self, final
 
 import typer
 
-from quarry.client import ClientConfig
+from quarry.client import ClientConfig, QuarryConnectionError, TargetResolver
 from quarry.config import DEFAULT_PORT
 from quarry.remote import (
     CA_CERT_PATH,
@@ -27,7 +27,6 @@ from quarry.remote import (
     delete_proxy_config,
     fetch_ca_cert,
     mask_token,
-    read_proxy_config,
     store_ca_cert,
     to_netloc,
     validate_connection,
@@ -258,16 +257,23 @@ class RemoteCli:
             bool, typer.Option("--ping", help="Check daemon health via /health")
         ] = False,
     ) -> None:
-        """Show the configured remote (or the local default); with --ping, health."""
-        quarry_cfg = read_proxy_config().get("quarry", {})
-        url = quarry_cfg.get("url", "") if isinstance(quarry_cfg, dict) else ""
-        if not url:
-            data: dict[str, object] = {"remote": None}
-            text = "No remote configured (commands use the local daemon)."
-        else:
-            token = self._masked_token(quarry_cfg)
-            data = {"url": url, "token_prefix": token}
-            text = f"Remote: {url}  token: {token}"
+        """Show the daemon target commands actually resolve to; with --ping, its health.
+
+        Reports the target :class:`TargetResolver` selects — explicit
+        ``QUARRY_URL``, then a stored login, then the loopback daemon — so this
+        never diverges from where data commands really go.
+        """
+        try:
+            cfg = TargetResolver.resolve()
+        except QuarryConnectionError as exc:
+            self._p.emit(
+                {"target": None, "reason": exc.message},
+                f"No daemon target resolved: {exc.message}",
+            )
+            return
+        token = mask_token(cfg.token) if cfg.token else "(none)"
+        data: dict[str, object] = {"url": cfg.url, "token_prefix": token}
+        text = f"Target: {cfg.url}  token: {token}"
         if ping:
             health = self._p.client().health()
             data["health"] = health.model_dump()
@@ -276,11 +282,3 @@ class RemoteCli:
                 f"api={health.api_version}, quarry={health.quarry_version})"
             )
         self._p.emit(data, text)
-
-    @staticmethod
-    def _masked_token(quarry_cfg: dict[str, object]) -> str:
-        """Return the masked bearer token from a stored login config."""
-        headers = quarry_cfg.get("headers")
-        auth = headers.get("Authorization", "") if isinstance(headers, dict) else ""
-        token = str(auth).removeprefix("Bearer ").strip()
-        return mask_token(token) if token else "(none)"

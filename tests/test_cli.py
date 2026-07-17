@@ -282,6 +282,20 @@ class TestMaintenance:
         assert body["collection"] == "c"
 
 
+class TestRemoteList:
+    def test_shows_resolved_env_target_not_stale_toml(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # With QUARRY_URL set, `remote list` must display the ACTUAL resolved
+        # target (env-first, like data commands), not a stale quarry.toml url.
+        monkeypatch.setenv("QUARRY_URL", "wss://env.example:9000")
+        monkeypatch.delenv("QUARRY_TOKEN", raising=False)
+        monkeypatch.delenv("QUARRY_CA_CERT", raising=False)
+        result = runner.invoke(app, ["remote", "list"])
+        assert result.exit_code == 0, result.output
+        assert "wss://env.example:9000" in result.output
+
+
 def _status_request(
     self: RecordingTransport,
     method: str,

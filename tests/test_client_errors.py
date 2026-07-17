@@ -131,6 +131,23 @@ class TestConnectionFailures:
             )
 
 
+class TestProxyIsolation:
+    def test_client_never_routes_through_an_env_proxy(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # With HTTP_PROXY/ALL_PROXY set, the client must connect DIRECTLY to the
+        # daemon — never route the request (and its loopback Bearer serve.token)
+        # through a proxy. trust_env is off, so no env proxy/netrc is consulted.
+        monkeypatch.setenv("HTTP_PROXY", "http://attacker.example:3128")
+        monkeypatch.setenv("ALL_PROXY", "http://attacker.example:3128")
+        transport = HttpxTransport.from_mapping(
+            {"url": "ws://127.0.0.1:8420", "headers": {"Authorization": "Bearer t"}}
+        )
+        assert transport._client.trust_env is False
+        # No proxy mounts were derived from the environment.
+        assert transport._client._mounts == {}
+
+
 class TestFromResponseUnit:
     def test_always_returns_http_error_leaf(self) -> None:
         for status in (400, 401, 404, 409, 413, 415, 422, 500, 503):

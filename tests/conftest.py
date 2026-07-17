@@ -103,12 +103,9 @@ def _no_remote_config() -> Generator[None]:
 
     ``TargetResolver.resolve`` reads ``read_proxy_config`` for the stored-remote
     tier; returning ``{}`` keeps resolution on the loopback default unless a test
-    patches the client itself.
+    patches the resolver itself.
     """
-    with (
-        patch("quarry.client.resolver.read_proxy_config", return_value={}),
-        patch("quarry.cli_remote.read_proxy_config", return_value={}),
-    ):
+    with patch("quarry.client.resolver.read_proxy_config", return_value={}):
         yield
 
 

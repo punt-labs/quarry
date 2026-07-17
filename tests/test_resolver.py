@@ -75,7 +75,7 @@ class TestTier1Env:
 
 
 class TestTier1EnvSecurity:
-    """The MED djb finding: never transmit a bearer in cleartext to a remote."""
+    """Never transmit a bearer in cleartext to a remote, or to a loopback NAME."""
 
     def test_cleartext_token_to_remote_is_refused(
         self, monkeypatch: pytest.MonkeyPatch
@@ -88,6 +88,21 @@ class TestTier1EnvSecurity:
         # The token is refused (never built into a config, so never transmitted)
         # and its value is not leaked in the error message.
         assert "supersecret" not in str(info.value)
+
+    def test_loopback_name_is_canonicalized_to_literal_never_the_name(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # ws://localhost + token: the NAME is migrated to 127.0.0.1 BEFORE the
+        # bearer is presented, so a dual-stack resolver can never redirect the
+        # token to a co-tenant's ::1.  The token never goes to "localhost".
+        monkeypatch.delenv("QUARRY_CA_CERT", raising=False)
+        monkeypatch.setenv("QUARRY_URL", "ws://localhost:9000")
+        monkeypatch.setenv("QUARRY_TOKEN", "tok")
+        cfg = TargetResolver.resolve()
+        assert cfg.url == "ws://127.0.0.1:9000"
+        assert "localhost" not in cfg.url
+        bearer = cfg.token
+        assert bearer == "tok"
 
     def test_loopback_plaintext_with_token_is_allowed(
         self, monkeypatch: pytest.MonkeyPatch

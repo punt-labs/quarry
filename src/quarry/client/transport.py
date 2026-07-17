@@ -84,6 +84,11 @@ class HttpxTransport:
             headers=headers,
             verify=verify,
             timeout=_DEFAULT_TIMEOUT,
+            # Never consult HTTP(S)_PROXY/ALL_PROXY or netrc: the client talks
+            # only to a known quarry daemon at an explicit URL. Honoring env
+            # proxies would route the request — including the loopback
+            # Authorization: Bearer serve.token — through a proxy, leaking it.
+            trust_env=False,
         )
         return cls(client)
 
