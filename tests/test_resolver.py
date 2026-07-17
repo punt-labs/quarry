@@ -225,9 +225,33 @@ class TestTier2StoredLogin:
     def test_loopback_login_daemon_down_raises_connection_error_with_nudge(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # The LOW djb finding: a stored loopback login whose quarryd is down must
-        # surface the same typed QuarryConnectionError + autostart nudge as
-        # tier 3, not a raw ClientConfigError with no guidance.
+        # A stored loopback login whose quarryd is DOWN (no serve.port) surfaces
+        # the same typed QuarryConnectionError + autostart nudge as tier 3, not a
+        # raw ClientConfigError with no guidance.
+        _no_env(monkeypatch)
+        login = {"quarry": {"url": "wss://127.0.0.1:8420"}}
+        down = _run_dir(0)
+        down.port_file.read.side_effect = FileNotFoundError("no serve.port")
+        with (
+            patch("quarry.client.resolver.read_proxy_config", return_value=login),
+            patch.object(
+                ClientConfig,
+                "_serve_token",
+                side_effect=ClientConfigError("serve.token missing"),
+            ),
+            patch.object(ClientConfig, "active_run_dir", return_value=down),
+            pytest.raises(QuarryConnectionError) as info,
+        ):
+            TargetResolver.resolve()
+        assert "quarryd is not running" in info.value.message
+        assert info.value.target == "127.0.0.1"
+
+    def test_loopback_login_token_unreadable_gives_token_specific_message(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # serve.port present (daemon UP) but the stored-login serve.token read
+        # fails: tier 2 surfaces the SAME token-specific guidance as tier 3, not
+        # the daemon-down autostart message.
         _no_env(monkeypatch)
         login = {"quarry": {"url": "wss://127.0.0.1:8420"}}
         with (
@@ -237,11 +261,42 @@ class TestTier2StoredLogin:
                 "_serve_token",
                 side_effect=ClientConfigError("serve.token unreadable"),
             ),
+            patch.object(ClientConfig, "active_run_dir", return_value=_run_dir(8420)),
             pytest.raises(QuarryConnectionError) as info,
         ):
             TargetResolver.resolve()
-        assert "quarryd is not running" in info.value.message
-        assert info.value.target == "127.0.0.1"
+        assert "serve.token is unreadable or stale" in info.value.message
+        assert "not running" not in info.value.message
+
+    def test_stored_url_with_no_host_warns_and_falls_through_to_loopback(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # A stored url with no host would default to localhost in httpx, silently
+        # redirecting the STORED BEARER there. It must warn and fall back to the
+        # loopback default (live token), never present the stored bearer to it.
+        _no_env(monkeypatch)
+        login = {
+            "quarry": {
+                "url": "ws://:9000",
+                "headers": {"Authorization": "Bearer stored-tok"},
+            }
+        }
+        with (
+            caplog.at_level(logging.WARNING, logger="quarry.client.resolver"),
+            patch("quarry.client.resolver.read_proxy_config", return_value=login),
+            patch("quarry.client.resolver._DAEMON_CA_PATH", tmp_path / "absent.crt"),
+            patch.object(ClientConfig, "active_run_dir", return_value=_run_dir(8420)),
+            patch.object(ClientConfig, "loopback_token", return_value="live"),
+        ):
+            cfg = TargetResolver.resolve()
+        assert cfg.url == "ws://127.0.0.1:8420"
+        assert "no host in url" in caplog.text
+        # The loopback live token, NOT the stored bearer sent to a localhost.
+        bearer = cfg.token
+        assert bearer == "live"
 
 
 class TestTier3Loopback:

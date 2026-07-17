@@ -77,18 +77,31 @@ class TargetResolver:
 
         A stored literal-loopback login whose quarryd is down raises
         :class:`ClientConfigError` from the live serve.token read.  Re-raise it as
-        the same typed :class:`QuarryConnectionError` + autostart nudge tier 3
-        uses, so every loopback-down path guides the operator identically instead
-        of one path leaking a raw RuntimeError with no nudge.
+        the same typed :class:`QuarryConnectionError` tier 3 uses — daemon-down
+        (no serve.port) vs token-unreadable (serve.port present) — so every
+        loopback-down path guides the operator identically instead of one path
+        leaking a raw RuntimeError.
         """
         try:
             return ClientConfig.from_login(login)
         except ClientConfigError as exc:
             if ClientConfig.is_loopback_url(str(login.get("url", ""))):
-                raise QuarryConnectionError(
-                    cls._down_message(), _LOOPBACK_HOST
-                ) from exc
+                raise cls._loopback_failure() from exc
             raise
+
+    @classmethod
+    def _loopback_failure(cls) -> QuarryConnectionError:
+        """Return the typed loopback failure, token-vs-daemon-down aware.
+
+        Shared by tier 2 (stored loopback login) and tier 3 (loopback default):
+        serve.port absent → daemon down (autostart nudge); serve.port present but
+        the token is unreadable/empty/stale → the token-specific guidance.
+        """
+        try:
+            cls._loopback_port()
+        except QuarryConnectionError as exc:
+            return exc
+        return QuarryConnectionError(cls._token_unreadable_message(), _LOOPBACK_HOST)
 
     @classmethod
     def _from_env(cls, url: str) -> ClientConfig:
@@ -196,10 +209,11 @@ class TargetResolver:
         """Return a stored remote login with a ``url``, or None (tier 2 probe).
 
         None = no usable remote login: the config is absent, malformed
-        (``ValueError``), or unreadable (``OSError`` — permissions, transient IO).
-        None of these may crash the CLI (bug class 2), but silently ignoring the
-        operator's remote config would be a split-horizon surprise — so log a
-        warning before falling through to the loopback default.
+        (``ValueError``), unreadable (``OSError`` — permissions, transient IO), or
+        has a ``url`` with no host.  None of these may crash the CLI (bug class 2),
+        but silently ignoring the operator's remote config — or silently sending
+        its stored bearer to a defaulted localhost — would be a split-horizon
+        surprise, so warn before falling through to the loopback default.
         """
         try:
             config = read_proxy_config()
@@ -210,6 +224,16 @@ class TargetResolver:
             )
             return None
         quarry_cfg = config.get("quarry")
-        if isinstance(quarry_cfg, Mapping) and quarry_cfg.get("url"):
-            return quarry_cfg
-        return None
+        url = quarry_cfg.get("url") if isinstance(quarry_cfg, Mapping) else None
+        if not url:
+            return None
+        # Validate the host at the boundary: a stored url with no host would
+        # default to localhost in httpx, silently redirecting the STORED BEARER to
+        # a local target. Warn and fall back to the loopback default instead.
+        if not urllib.parse.urlparse(ws_to_http(str(url))).hostname:
+            logger.warning(
+                "Ignoring quarry.toml with no host in url, using the local daemon: %s",
+                url,
+            )
+            return None
+        return quarry_cfg
