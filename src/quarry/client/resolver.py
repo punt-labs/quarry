@@ -9,17 +9,20 @@ a down local daemon fails closed with the autostart nudge.
 
 from __future__ import annotations
 
+import logging
 import os
 import urllib.parse
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Self, final
+from typing import final
 
 from quarry.client.client import QuarryClient
 from quarry.client.config import ClientConfig, ClientConfigError
 from quarry.client.errors import QuarryConnectionError
 from quarry.net import LoopbackPolicy
 from quarry.remote import read_proxy_config, ws_to_http
+
+logger = logging.getLogger(__name__)
 
 # The daemon's pinned CA (written by ``quarry install``); a managed daemon serves
 # ``--tls`` with it, so a loopback client verifies against it when present and
@@ -167,34 +170,22 @@ class TargetResolver:
         )
 
     @staticmethod
-    def _pinned_ca(url: str) -> str | None:
-        """Return the pinned daemon CA for a TLS *url*, else None.
-
-        None = a plaintext target, or a TLS target with no CA on disk (the
-        transport then fails closed on the missing pin); a documented transport
-        state, not an unresolved value.
-        """
-        scheme = urllib.parse.urlparse(ws_to_http(url)).scheme
-        if scheme == "https" and _DAEMON_CA_PATH.exists():
-            return str(_DAEMON_CA_PATH)
-        return None
-
-    @staticmethod
     def _stored_login() -> Mapping[str, object] | None:
         """Return a stored remote login with a ``url``, or None (tier 2 probe).
 
-        None = no usable remote login: the config is absent, or malformed TOML
-        (which must fall through to the loopback default, never crash the CLI).
+        None = no usable remote login: the config is absent, or malformed TOML.
+        A malformed config must not crash the CLI (bug class 2), but silently
+        ignoring the operator's remote config would be a split-horizon surprise —
+        so log a warning before falling through to the loopback default.
         """
         try:
             config = read_proxy_config()
-        except ValueError:
+        except ValueError as exc:
+            logger.warning(
+                "Ignoring malformed quarry.toml, using the local daemon: %s", exc
+            )
             return None
         quarry_cfg = config.get("quarry")
         if isinstance(quarry_cfg, Mapping) and quarry_cfg.get("url"):
             return quarry_cfg
         return None
-
-    def __new__(cls) -> Self:
-        # A stateless resolver; construction is unnecessary but harmless.
-        return super().__new__(cls)

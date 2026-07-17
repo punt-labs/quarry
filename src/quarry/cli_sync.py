@@ -19,7 +19,6 @@ from quarry.formatting import format_status
 
 if TYPE_CHECKING:
     from quarry.cli_captures import CliPlumbing
-    from quarry.client import TaskOutcome
 
 
 @final
@@ -102,7 +101,7 @@ class SyncCli:
             )
             raise typer.Exit(code=1)
         result = DeregisterResult(
-            collection, accepted.removed, self._deleted_chunks(outcome)
+            collection, accepted.removed, outcome.result_int("deleted_chunks")
         )
         self._p.emit(
             result.as_dict(),
@@ -115,9 +114,3 @@ class SyncCli:
         resp = self._p.client().status()
         data = resp.model_dump()
         self._p.emit(data, format_status(data))
-
-    @staticmethod
-    def _deleted_chunks(outcome: TaskOutcome) -> int:
-        """Return the purge task's deleted-chunk count (a wire integer)."""
-        value = outcome.results.get("deleted_chunks")
-        return value if isinstance(value, int) and not isinstance(value, bool) else 0

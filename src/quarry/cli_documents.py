@@ -117,7 +117,7 @@ class DocumentsCli:
                 style="red",
             )
             raise typer.Exit(code=1)
-        deleted = self._as_int(outcome.results.get("deleted"))
+        deleted = outcome.result_int("deleted")
         if deleted == 0:
             self._p.err_console.print(f"No data found for {label}", style="red")
             raise typer.Exit(code=1)
@@ -178,8 +178,3 @@ class DocumentsCli:
         resp = self._p.client().list_databases()
         dbs = [db.model_dump() for db in resp.databases]
         self._p.emit(dbs, ResultFormatter.databases(dbs))
-
-    @staticmethod
-    def _as_int(value: object) -> int:
-        """Return ``value`` when it is a non-bool int, else 0 (a wire count)."""
-        return value if isinstance(value, int) and not isinstance(value, bool) else 0

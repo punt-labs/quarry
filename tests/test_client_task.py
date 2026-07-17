@@ -1,9 +1,9 @@
 """``TaskOutcome`` and ``QuarryClient.await_task`` behavior.
 
-Covers the regression the typed outcome fixes (``RemoteClient`` printed a hardcoded
-``"Deregister failed"`` for every 202 caller) and the bxwd connection-lost
-fail-fast (consecutive connection losses short-circuit to ``unreachable`` rather
-than polling to the deadline).
+Covers the operation-agnostic outcome (a failed 202 task carries the server's
+own error, never a hardcoded operation name) and the connection-lost fail-fast
+(consecutive connection losses short-circuit to ``unreachable`` rather than
+polling to the deadline).
 """
 
 from __future__ import annotations

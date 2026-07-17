@@ -8,6 +8,7 @@ from collections.abc import Generator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from quarry.__main__ import app
@@ -105,6 +106,39 @@ class TestT23DisableCLIHappyPath:
 
         assert disable_result.exit_code == 0, disable_result.output
         assert "Disabled" in disable_result.output
+
+
+class TestDisablePurgeFailureExitsNonZero:
+    @pytest.mark.parametrize(
+        "outcome",
+        [
+            TaskOutcome.failed("t", "daemon purge blew up"),
+            TaskOutcome.timed_out("t"),
+            TaskOutcome.unreachable("t", "server gone"),
+        ],
+    )
+    def test_incomplete_purge_exits_1(
+        self, tmp_path: Path, outcome: TaskOutcome
+    ) -> None:
+        # A purge that fails, times out, or leaves the daemon unreachable must
+        # NOT report success while the chunks remain — disable exits 1, not 0.
+        project = tmp_path / "myproject"
+        project.mkdir()
+
+        failing = MagicMock()
+        failing.delete_collection.return_value = TaskAccepted(
+            task_id="t", status="accepted"
+        )
+        failing.await_task.return_value = outcome
+
+        with _patch_for_cli(tmp_path):
+            enable_result = runner.invoke(app, ["enable", str(project)])
+            assert enable_result.exit_code == 0, enable_result.output
+            with patch.object(TargetResolver, "connect", return_value=failing):
+                result = runner.invoke(app, ["disable", str(project)])
+
+        assert result.exit_code == 1, result.output
+        assert "did not complete" in result.output
 
 
 # -----------------------------------------------------------------------

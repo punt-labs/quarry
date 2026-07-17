@@ -117,13 +117,23 @@ class ProjectCli:
         self._p.emit(data, "\n".join(lines))
 
     def _purge(self, result: DisableResult) -> int:
-        """Purge each named collection's chunks via the daemon; return the total."""
+        """Purge each named collection's chunks via the daemon; return the total.
+
+        A purge that fails, times out, or leaves the daemon unreachable must not
+        report success while the chunks remain in LanceDB — fail loud (exit 1),
+        like the sibling delete/deregister commands, rather than count it as 0.
+        """
         client = self._p.client()
         deleted = 0
         for name in result.purge_collections:
             accepted = client.delete_collection(DeleteCollectionRequest(name=name))
             outcome = client.await_task(accepted.task_id)
-            value = outcome.results.get("deleted")
-            if isinstance(value, int) and not isinstance(value, bool):
-                deleted += value
+            if not outcome.is_completed:
+                self._p.err_console.print(
+                    f"Purge of collection {name!r} did not complete: "
+                    f"{outcome.error or outcome.status}",
+                    style="red",
+                )
+                raise typer.Exit(code=1)
+            deleted += outcome.result_int("deleted")
         return deleted

@@ -1,10 +1,8 @@
 """The typed terminal outcome of a polled background task.
 
-``RemoteClient.await_task`` printed a hardcoded ``"Deregister failed"`` for every
-202 caller; :class:`TaskOutcome` replaces that with an operation-agnostic value
-object.  ``QuarryClient.await_task`` returns one of these and the command layer
-decides the wording per operation, so an ingest or optimize wait never renders a
-deregister message.
+:class:`TaskOutcome` is operation-agnostic: ``QuarryClient.await_task`` returns
+one of these and the command layer decides the wording per operation, so an
+ingest or optimize wait never renders a deregister-specific message.
 """
 
 from __future__ import annotations

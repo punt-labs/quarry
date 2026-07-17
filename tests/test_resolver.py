@@ -8,6 +8,7 @@ CA when the daemon CA exists, ``ws`` only for a bare plaintext daemon.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -145,15 +146,20 @@ class TestTier2StoredLogin:
         bearer = cfg.token
         assert bearer == "stored-tok"
 
-    def test_malformed_toml_falls_through_to_loopback(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    def test_malformed_toml_warns_and_falls_through_to_loopback(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
-        # Class 2: a malformed remote config must not crash — it falls through
-        # to the loopback default rather than propagating ValueError.
+        # Class 2 + no-split-horizon: a malformed remote config must not crash —
+        # it falls through to the loopback default — but the operator's ignored
+        # config is surfaced with a warning, not silently.
         _no_env(monkeypatch)
         ca = tmp_path / "ca.crt"
         ca.write_text("x")
         with (
+            caplog.at_level(logging.WARNING, logger="quarry.client.resolver"),
             patch(
                 "quarry.client.resolver.read_proxy_config",
                 side_effect=ValueError("bad toml"),
@@ -164,6 +170,7 @@ class TestTier2StoredLogin:
         ):
             cfg = TargetResolver.resolve()
         assert cfg.url == "wss://127.0.0.1:8420"
+        assert "malformed quarry.toml" in caplog.text
 
     def test_loopback_login_daemon_down_raises_connection_error_with_nudge(
         self, monkeypatch: pytest.MonkeyPatch
