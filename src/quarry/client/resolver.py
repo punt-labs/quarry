@@ -153,12 +153,13 @@ class TargetResolver:
         url = f"{scheme}://{_LOOPBACK_HOST}:{port}"
         ca_cert = str(_DAEMON_CA_PATH) if tls else None
         # The live serve.token is presented ONLY to the literal loopback IP built
-        # above — never a name a resolver could redirect to a co-tenant.  A None
-        # token here means the daemon is up but its token is unreadable; fail
-        # closed with the same nudge rather than send an empty bearer.
+        # above — never a name a resolver could redirect to a co-tenant.  serve.port
+        # was already read above, so the daemon is UP: a None token here means its
+        # serve.token is unreadable/empty/stale (the multi-user case), a distinct
+        # cause from "daemon down" — surface that, not the generic autostart nudge.
         token = ClientConfig.loopback_token(_LOOPBACK_HOST)
         if token is None:
-            raise QuarryConnectionError(cls._down_message(), _LOOPBACK_HOST)
+            raise QuarryConnectionError(cls._token_unreadable_message(), _LOOPBACK_HOST)
         return ClientConfig(url, ca_cert, token)
 
     @classmethod
@@ -171,10 +172,18 @@ class TargetResolver:
 
     @staticmethod
     def _down_message() -> str:
-        """The fail-closed message when the local daemon is not reachable."""
+        """The fail-closed message when the local daemon is not running."""
         return (
-            "quarryd is not running (no serve.port/serve.token in the run dir). "
+            "quarryd is not running (no serve.port in the run dir). "
             "Start it with 'quarry install' (managed) or 'quarryd', then retry."
+        )
+
+    @staticmethod
+    def _token_unreadable_message() -> str:
+        """The fail-closed message when quarryd is up but its serve.token is bad."""
+        return (
+            "quarryd is running but its serve.token is unreadable or stale "
+            "(another user may own it, or it is empty/corrupt). Run 'quarry doctor'."
         )
 
     @staticmethod

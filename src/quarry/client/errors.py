@@ -17,9 +17,12 @@ is the right contract for an error.
 
 from __future__ import annotations
 
+import urllib.parse
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import final
+
+from quarry.net import LoopbackPolicy
 
 # The 409 conflict carries a ``task_id`` the CLI polls; the command layer maps it
 # to exit 0 ("already in progress").
@@ -94,6 +97,17 @@ class QuarryConnectionError(QuarryError):
     @property
     def target(self) -> str:
         return self._target
+
+    @property
+    def is_loopback(self) -> bool:
+        """Whether the unreachable target is a loopback address.
+
+        ``target`` may be a URL (``http://127.0.0.1:8420``) or a bare host
+        (``127.0.0.1``); the CLI shows the local autostart hint only when this is
+        True — a remote failure must not suggest starting a local daemon.
+        """
+        host = urllib.parse.urlparse(self._target).hostname or self._target
+        return LoopbackPolicy(host).is_loopback
 
 
 @final

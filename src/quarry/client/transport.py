@@ -150,8 +150,10 @@ class HttpxTransport:
         status = resp.status_code
         parsed_ok, body = cls._try_json(raw)
         if status >= _HTTP_MULTIPLE_CHOICES:
-            err_body = body if parsed_ok else {"error": raw.decode("utf-8", "replace")}
-            raise QuarryError.from_response(status, err_body)
+            # Truncate a non-JSON error body (e.g. a large HTML gateway page) so a
+            # big/hostile response cannot flood stderr or expose its full contents.
+            fallback = {"error": raw[:_PREVIEW_BYTES].decode("utf-8", "replace")}
+            raise QuarryError.from_response(status, body if parsed_ok else fallback)
         if not parsed_ok:
             if not raw:
                 return Response(status, {})

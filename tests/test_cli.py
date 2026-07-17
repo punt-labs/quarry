@@ -19,7 +19,7 @@ import pytest
 from typer.testing import CliRunner
 
 from quarry.__main__ import app
-from quarry.client import QuarryClient, TargetResolver
+from quarry.client import QuarryClient, QuarryConnectionError, TargetResolver
 from quarry.client.transport import Response
 
 runner = CliRunner()
@@ -294,6 +294,25 @@ class TestRemoteList:
         result = runner.invoke(app, ["remote", "list"])
         assert result.exit_code == 0, result.output
         assert "wss://env.example:9000" in result.output
+
+
+class TestAutostartHintGating:
+    def test_loopback_failure_shows_hint(self) -> None:
+        down = QuarryConnectionError("quarryd is not running", "127.0.0.1")
+        with patch.object(TargetResolver, "connect", side_effect=down):
+            result = runner.invoke(app, ["status"])
+        assert result.exit_code == 1
+        assert "If quarryd is not running" in result.output
+
+    def test_remote_failure_omits_hint(self) -> None:
+        # Starting a local daemon won't help a remote failure — no autostart hint.
+        down = QuarryConnectionError(
+            "Cannot reach remote quarry server", "https://remote.example:9000"
+        )
+        with patch.object(TargetResolver, "connect", side_effect=down):
+            result = runner.invoke(app, ["status"])
+        assert result.exit_code == 1
+        assert "If quarryd is not running" not in result.output
 
 
 def _status_request(

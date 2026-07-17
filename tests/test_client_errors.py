@@ -97,6 +97,35 @@ class TestMalformedBody:
             _transport(handler).request("GET", "/x")
         assert info.value.status == 404
 
+    def test_large_non_json_error_body_is_truncated(self) -> None:
+        # A big HTML/gateway error page must not flood the error detail — it is
+        # truncated to the same preview bound as a malformed 2xx body.
+        from quarry.client.transport import _PREVIEW_BYTES
+
+        big = b"<html>" + b"x" * 100_000 + b"</html>"
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(502, content=big)
+
+        with pytest.raises(HttpError) as info:
+            _transport(handler).request("GET", "/x")
+        assert len(info.value.message) <= _PREVIEW_BYTES
+
+
+class TestConnectionErrorIsLoopback:
+    @pytest.mark.parametrize(
+        "target",
+        ["http://127.0.0.1:8420", "127.0.0.1", "https://[::1]:8420", "localhost"],
+    )
+    def test_loopback_targets_are_loopback(self, target: str) -> None:
+        assert QuarryConnectionError("down", target).is_loopback is True
+
+    @pytest.mark.parametrize(
+        "target", ["https://remote.example:9000", "remote.example"]
+    )
+    def test_remote_targets_are_not_loopback(self, target: str) -> None:
+        assert QuarryConnectionError("down", target).is_loopback is False
+
 
 class TestConnectionFailures:
     def test_connect_error_raises_connection_error_not_oserror(self) -> None:

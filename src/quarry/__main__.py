@@ -34,11 +34,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Appended after any QuarryConnectionError so a down daemon points at the fix.
+# Appended after a LOOPBACK QuarryConnectionError so a down local daemon points at
+# the fix.  Never shown for a remote failure — starting quarryd would not help.
 _AUTOSTART_HINT = (
     "If quarryd is not running, start it with 'quarry install' (managed) or "
     "'quarryd' (foreground)."
 )
+
 
 _COMMAND_ORDER: list[str] = [
     # Product commands
@@ -198,7 +200,8 @@ def _cli_errors(fn: Callable[..., None]) -> Callable[..., None]:
             raise
         except QuarryConnectionError as exc:
             err_console.print(f"Error: {exc.message}", style="red")
-            err_console.print(_AUTOSTART_HINT, style="yellow")
+            if exc.is_loopback:
+                err_console.print(_AUTOSTART_HINT, style="yellow")
             raise typer.Exit(code=1) from exc
         except HttpError as exc:
             if exc.status == CONFLICT_STATUS:

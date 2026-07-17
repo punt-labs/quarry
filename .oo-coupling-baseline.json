@@ -259,11 +259,11 @@
     "avg_lcom": 0.333
   },
   "src/quarry/client/errors.py": {
-    "efferent_coupling": 1.0,
+    "efferent_coupling": 2.0,
     "public_names": 4.0,
     "circular_imports": 0.0,
     "max_lcom": 1.0,
-    "avg_lcom": 0.834
+    "avg_lcom": 0.556
   },
   "src/quarry/client/resolver.py": {
     "efferent_coupling": 6.0,

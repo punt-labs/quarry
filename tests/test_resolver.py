@@ -257,18 +257,22 @@ class TestTier3Loopback:
         assert "quarryd is not running" in info.value.message
         assert info.value.target == "127.0.0.1"
 
-    def test_missing_loopback_token_fails_closed(
+    def test_unreadable_token_gives_token_specific_message_not_daemon_down(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Daemon up (port present) but token unreadable -> fail closed, never send
-        # an empty bearer.
+        # serve.port present (daemon UP) but token unreadable/empty -> fail closed
+        # with the TOKEN-specific cause + 'quarry doctor', NOT the daemon-down
+        # autostart message (the multi-user case that matters).
         _no_env(monkeypatch)
         with (
             patch.object(ClientConfig, "active_run_dir", return_value=_run_dir(8420)),
             patch.object(ClientConfig, "loopback_token", return_value=None),
-            pytest.raises(QuarryConnectionError),
+            pytest.raises(QuarryConnectionError) as info,
         ):
             TargetResolver.resolve()
+        assert "serve.token is unreadable or stale" in info.value.message
+        assert "quarry doctor" in info.value.message
+        assert "not running" not in info.value.message
 
 
 class TestTrustBoundary:
