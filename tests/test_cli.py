@@ -13,13 +13,19 @@ import json
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Self, final
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from typer.testing import CliRunner
 
 from quarry.__main__ import app
-from quarry.client import QuarryClient, QuarryConnectionError, TargetResolver
+from quarry.api import TaskAccepted
+from quarry.client import (
+    QuarryClient,
+    QuarryConnectionError,
+    TargetResolver,
+    TaskOutcome,
+)
 from quarry.client.transport import Response
 
 runner = CliRunner()
@@ -313,6 +319,53 @@ class TestAutostartHintGating:
             result = runner.invoke(app, ["status"])
         assert result.exit_code == 1
         assert "If quarryd is not running" not in result.output
+
+
+class TestSyncAwaitsTask:
+    @staticmethod
+    def _client(outcome: TaskOutcome) -> MagicMock:
+        client = MagicMock()
+        client.sync.return_value = TaskAccepted(task_id="t", status="accepted")
+        client.await_task.return_value = outcome
+        return client
+
+    @pytest.mark.parametrize(
+        "outcome",
+        [
+            TaskOutcome.failed("t", "sync blew up on the daemon"),
+            TaskOutcome.timed_out("t"),
+            TaskOutcome.unreachable("t", "server gone"),
+        ],
+    )
+    def test_incomplete_sync_exits_1_not_0(self, outcome: TaskOutcome) -> None:
+        # No data command may exit 0 while its daemon task is unfinished or failed.
+        with patch.object(
+            TargetResolver, "connect", return_value=self._client(outcome)
+        ):
+            result = runner.invoke(app, ["sync"])
+        assert result.exit_code == 1, result.output
+
+    def test_completed_sync_exits_0_with_real_counts(self) -> None:
+        completed = TaskOutcome.completed(
+            "t",
+            {
+                "default": {
+                    "ingested": 3,
+                    "refreshed": 1,
+                    "deleted": 0,
+                    "skipped": 2,
+                    "failed": 0,
+                    "errors": [],
+                }
+            },
+        )
+        with patch.object(
+            TargetResolver, "connect", return_value=self._client(completed)
+        ):
+            result = runner.invoke(app, ["--json", "sync"])
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["default"]["ingested"] == 3
 
 
 def _status_request(

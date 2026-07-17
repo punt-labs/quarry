@@ -8,6 +8,7 @@ in progress" on ``sync`` is mapped to exit 0 by the shared error decorator.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Self, final
 
@@ -19,6 +20,7 @@ from quarry.formatting import format_status
 
 if TYPE_CHECKING:
     from quarry.cli_captures import CliPlumbing
+    from quarry.client import TaskOutcome
 
 
 @final
@@ -54,10 +56,50 @@ class SyncCli:
                 "Warning: --workers is ignored; the daemon sizes its own workers.",
                 style="yellow",
             )
-        accepted = self._p.client().sync()
-        self._p.emit(
-            accepted.model_dump(), f"Sync {accepted.status}: task_id={accepted.task_id}"
-        )
+        client = self._p.client()
+        accepted = client.sync()
+        # Await the terminal state: exiting 0 on the bare 202 would report success
+        # while the sync is still running or after it FAILED on the daemon.  A 409
+        # "already in progress" raised by sync() is mapped to exit 0 by the decorator.
+        outcome = client.await_task(accepted.task_id)
+        if not outcome.is_completed:
+            self._p.err_console.print(self._incomplete(outcome), style="red")
+            raise typer.Exit(code=1)
+        self._p.emit(dict(outcome.results), self._render(outcome.results))
+
+    @staticmethod
+    def _incomplete(outcome: TaskOutcome) -> str:
+        """The stderr message for a sync that did not reach ``completed``.
+
+        A poll timeout is surfaced as "still running", never as success — the
+        sync keeps going on the daemon and the caller polls it via status.
+        """
+        if outcome.status == "timed_out":
+            return (
+                f"Sync is still running (task_id={outcome.task_id}); it will "
+                "finish in the background — run 'quarry status' to check."
+            )
+        return f"Sync did not complete: {outcome.error or outcome.status}"
+
+    @staticmethod
+    def _render(results: Mapping[str, object]) -> str:
+        """Render the completed sync's ``{collection: counts}`` as a summary."""
+        if not results:
+            return "Nothing to sync (no registered directories)."
+        lines: list[str] = []
+        for col, raw in results.items():
+            res = raw if isinstance(raw, Mapping) else {}
+            line = (
+                f"{col}: {res.get('ingested', 0)} ingested, "
+                f"{res.get('refreshed', 0)} refreshed, "
+                f"{res.get('deleted', 0)} deleted, "
+                f"{res.get('skipped', 0)} unchanged, {res.get('failed', 0)} failed"
+            )
+            errors = res.get("errors")
+            if isinstance(errors, list) and errors:
+                line += "\n" + "\n".join(f"  error: {e}" for e in errors)
+            lines.append(line)
+        return "\n".join(lines)
 
     def _register(
         self,
