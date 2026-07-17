@@ -21,11 +21,10 @@ across `transform`, `index`, and `connector`).
   `QuarryConnectionError`, and `HttpError` — whose `status` selects the exit
   code, 409 being "already in progress") that the CLI maps to exit codes in one
   place, and a typed `TaskOutcome` for polled background tasks. `TargetResolver`
-  is the
-  single daemon-target resolver: explicit `QUARRY_URL`/`QUARRY_TOKEN`, then a
-  stored remote login, then the local daemon on `127.0.0.1` via `serve.port` +
-  live `serve.token` (fail-closed with an autostart hint when the daemon is
-  down).
+  is the single daemon-target resolver: explicit `QUARRY_URL`/`QUARRY_TOKEN`,
+  then a stored remote login, then the local daemon on `127.0.0.1` via
+  `serve.port` + live `serve.token` (fail-closed with an autostart hint when the
+  daemon is down).
 
 - **tool (daemon REST)**: two maintenance endpoints — `POST /v1/optimize`
   (compact the LanceDB table and rebuild indexes; `force` bypasses the

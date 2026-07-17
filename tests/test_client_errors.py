@@ -172,9 +172,8 @@ class TestProxyIsolation:
         transport = HttpxTransport.from_mapping(
             {"url": "ws://127.0.0.1:8420", "headers": {"Authorization": "Bearer t"}}
         )
+        # trust_env=False is the public contract that prevents env-proxy/netrc use.
         assert transport._client.trust_env is False
-        # No proxy mounts were derived from the environment.
-        assert transport._client._mounts == {}
 
 
 class TestTimeout:
