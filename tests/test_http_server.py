@@ -564,6 +564,30 @@ class TestServeToken:
         assert stat.S_IMODE(token_path.stat().st_mode) == 0o600
         assert server._bound is True
 
+    def test_ipv6_start_log_brackets_host(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # The run()-start log must also render a valid host:port for an IPv6 bind
+        # ([::1]:8420), not the ambiguous ::1:8420. Display only; bind unchanged.
+        settings = MagicMock()
+        settings.lancedb_path = tmp_path / "default" / "lancedb"
+        server = DaemonServer(settings, ServeConfig(host="::1", port=8420, api_key="k"))
+        with (
+            patch("quarry.daemon.server.DaemonContext"),
+            patch("quarry.daemon.server.build_app"),
+            patch("quarry.daemon.server.uvicorn.Server"),
+            caplog.at_level(logging.INFO, logger="quarry.daemon.server"),
+        ):
+            server.run()
+        starting = [
+            r.getMessage()
+            for r in caplog.records
+            if "Starting Quarry server" in r.getMessage()
+        ]
+        assert starting, "no start log emitted"
+        assert "[::1]:8420" in starting[0]
+        assert " on ::1:8420" not in starting[0]  # never the ambiguous bare form
+
     def test_ipv6_listening_log_brackets_host(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:

@@ -148,7 +148,9 @@ class ServeTokenFile:
         write is unlinked and the create retried once; a second ``FileExistsError``
         (a racing writer) propagates, failing closed rather than reusing the file.
         """
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        # O_CLOEXEC: the secret-write handle must not be inherited into a
+        # subprocess spawned during error handling (matches the serve.lock fd).
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
         try:
             return os.open(str(tmp), flags, 0o600)
         except FileExistsError:

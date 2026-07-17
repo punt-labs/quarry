@@ -152,9 +152,10 @@ class DaemonServer:
             server = uvicorn.Server(self._uvicorn_config(app))
             self._install_startup_hook(server)
             logger.info(
-                "Starting Quarry server on %s:%d",
-                self._config.host,
-                self._config.port,
+                # Bracket an IPv6 literal for the log so it renders a valid
+                # host:port (starting on [::1]:8420, not ::1:8420); bind unchanged.
+                "Starting Quarry server on %s",
+                to_netloc(self._config.host, self._config.port),
             )
             server.run()
             logger.info("Server stopped")

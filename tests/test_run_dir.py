@@ -9,6 +9,7 @@ window.
 
 from __future__ import annotations
 
+import fcntl
 import os
 import stat
 from pathlib import Path
@@ -54,6 +55,16 @@ class TestServeTokenFile:
         tf.write("token")
         mode = stat.S_IMODE(tf.path.stat().st_mode)
         assert mode == 0o600
+
+    def test_temp_fd_is_cloexec(self, tmp_path: Path) -> None:
+        # The secret-write handle must be O_CLOEXEC so it is not inherited into a
+        # subprocess spawned during error handling (matches the serve.lock fd).
+        fd = ServeTokenFile._create_0600(tmp_path / "serve.token.tmp")
+        try:
+            flags = fcntl.fcntl(fd, fcntl.F_GETFD)
+            assert flags & fcntl.FD_CLOEXEC
+        finally:
+            os.close(fd)
 
     def test_write_creates_parent_directories(self, tmp_path: Path) -> None:
         tf = ServeTokenFile(tmp_path / "a" / "b" / "serve.token")
