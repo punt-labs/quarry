@@ -368,6 +368,51 @@ class TestSyncAwaitsTask:
         assert data["default"]["ingested"] == 3
 
 
+class TestRegisterAwaitsTask:
+    @staticmethod
+    def _client(outcome: TaskOutcome) -> MagicMock:
+        client = MagicMock()
+        client.register.return_value = TaskAccepted(task_id="t", status="accepted")
+        client.await_task.return_value = outcome
+        return client
+
+    @pytest.mark.parametrize(
+        "outcome",
+        [
+            TaskOutcome.failed("t", "register blew up on the daemon"),
+            TaskOutcome.timed_out("t"),
+            TaskOutcome.unreachable("t", "server gone"),
+        ],
+    )
+    def test_incomplete_register_exits_1_not_0(
+        self, outcome: TaskOutcome, tmp_path: Path
+    ) -> None:
+        with patch.object(
+            TargetResolver, "connect", return_value=self._client(outcome)
+        ):
+            result = runner.invoke(app, ["register", str(tmp_path)])
+        assert result.exit_code == 1, result.output
+
+    def test_completed_register_exits_0_with_result(self, tmp_path: Path) -> None:
+        completed = TaskOutcome.completed(
+            "t",
+            {
+                "directory": str(tmp_path),
+                "collection": "mycol",
+                "registered_at": "2026-01-01",
+            },
+        )
+        with patch.object(
+            TargetResolver, "connect", return_value=self._client(completed)
+        ):
+            result = runner.invoke(
+                app, ["--json", "register", str(tmp_path), "--collection", "mycol"]
+            )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["collection"] == "mycol"
+
+
 def _status_request(
     self: RecordingTransport,
     method: str,

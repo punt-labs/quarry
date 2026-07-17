@@ -114,12 +114,22 @@ class SyncCli:
         # resolved path the server will allowlist against.
         resolved = str(directory.expanduser().resolve())
         col = collection or directory.name or Path(resolved).name
-        accepted = self._p.client().register(
-            RegisterRequest(directory=resolved, collection=col)
-        )
+        client = self._p.client()
+        accepted = client.register(RegisterRequest(directory=resolved, collection=col))
+        # Await the terminal state: a bare 202 would report success while the
+        # registration was still pending or after it FAILED on the daemon.
+        outcome = client.await_task(accepted.task_id)
+        if not outcome.is_completed:
+            self._p.err_console.print(
+                f"Register did not complete: {outcome.error or outcome.status}",
+                style="red",
+            )
+            raise typer.Exit(code=1)
+        results = outcome.results
         self._p.emit(
-            accepted.model_dump(),
-            f"Register {accepted.status}: task_id={accepted.task_id}",
+            dict(results),
+            f"Registered {results.get('directory', resolved)} as collection "
+            f"{results.get('collection', col)!r}",
         )
 
     def _deregister(
