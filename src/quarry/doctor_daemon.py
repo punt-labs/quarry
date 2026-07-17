@@ -115,26 +115,48 @@ class DaemonDiagnostics:
 
     @classmethod
     def _probe_health(cls, port: int) -> bool:
-        """GET ``https://127.0.0.1:<port>/health``; True iff ``state == "ready"``.
+        """Probe ``/health`` for ``state == "ready"``, over HTTPS then HTTP.
 
-        Verifies against the pinned CA when present, else skips verification —
-        this is a loopback liveness check, not a security boundary (mirrors
-        install.sh's ``--cacert`` gate and its ``-k`` fallback). Fail soft: any
-        connection or parse error is a not-ready result, never a raise.
+        A managed daemon serves ``--tls``; a bare ``quarryd`` (no ``--tls``)
+        serves plaintext. Try HTTPS first (verify against the pinned CA when
+        present, else skip verification — a loopback liveness check, not a
+        security boundary; mirrors install.sh's ``--cacert`` gate and its ``-k``
+        fallback). On a TLS handshake failure (``ssl.SSLError``, e.g. plaintext
+        behind https / wrong-version-number), fall back to plain HTTP so a
+        plaintext daemon still reports ready. Fail soft: a refused connection is
+        not-ready, never a raise.
         """
-        conn = http.client.HTTPSConnection(
+        https = http.client.HTTPSConnection(
             _HEALTH_HOST,
             port,
             context=cls._ssl_context(),
             timeout=_PROBE_TIMEOUT_SECONDS,
         )
         try:
+            return cls._probe_conn(https)
+        except ssl.SSLError:
+            # Plaintext daemon behind an HTTPS probe — retry over HTTP.
+            http_conn = http.client.HTTPConnection(
+                _HEALTH_HOST, port, timeout=_PROBE_TIMEOUT_SECONDS
+            )
+            return cls._probe_conn(http_conn)
+
+    @classmethod
+    def _probe_conn(cls, conn: http.client.HTTPConnection) -> bool:
+        """GET ``/health`` on *conn*; True iff a 200 body reports ``ready``.
+
+        Fail soft on a refused/broken connection (not-ready), but let an
+        ``ssl.SSLError`` propagate so :meth:`_probe_health` can retry over HTTP.
+        """
+        try:
             conn.request("GET", "/health")
             response = conn.getresponse()
             if response.status != 200:
                 return False
             body = response.read()
-        except (OSError, http.client.HTTPException):
+        except (OSError, http.client.HTTPException) as exc:
+            if isinstance(exc, ssl.SSLError):
+                raise  # a TLS handshake failure: let the HTTP fallback retry
             return False
         finally:
             conn.close()

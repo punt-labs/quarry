@@ -8,6 +8,7 @@ and the run dir are mocked.
 
 from __future__ import annotations
 
+import ssl
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
@@ -153,4 +154,46 @@ class TestProbeFailSoft:
             return conn
 
         with patch("quarry.doctor_daemon.http.client.HTTPSConnection", _conn):
+            assert DaemonDiagnostics._probe_health(8420) is False
+
+
+class TestProbeTransportFallback:
+    """A TLS daemon is probed over HTTPS; a plaintext daemon over HTTP."""
+
+    @staticmethod
+    def _ready_conn(*_args: object, **_kwargs: object) -> MagicMock:
+        conn = MagicMock()
+        conn.getresponse.return_value.status = 200
+        conn.getresponse.return_value.read.return_value = b'{"state":"ready"}'
+        return conn
+
+    def test_tls_daemon_ready_over_https(self) -> None:
+        with patch(
+            "quarry.doctor_daemon.http.client.HTTPSConnection", self._ready_conn
+        ):
+            assert DaemonDiagnostics._probe_health(8420) is True
+
+    def test_plaintext_daemon_ready_via_http_fallback(self) -> None:
+        # HTTPS raises SSLError (plaintext behind https / wrong-version-number);
+        # the probe must retry over plain HTTP and report the daemon ready.
+        def _https_ssl_error(*_args: object, **_kwargs: object) -> MagicMock:
+            conn = MagicMock()
+            conn.request.side_effect = ssl.SSLError("WRONG_VERSION_NUMBER")
+            return conn
+
+        with (
+            patch("quarry.doctor_daemon.http.client.HTTPSConnection", _https_ssl_error),
+            patch("quarry.doctor_daemon.http.client.HTTPConnection", self._ready_conn),
+        ):
+            assert DaemonDiagnostics._probe_health(8420) is True
+
+    def test_down_daemon_not_ready_no_raise(self) -> None:
+        # A refused connection (not a TLS error) is a not-ready result, never a
+        # raise and never an HTTP retry (the failure is not a plaintext-behind-TLS).
+        def _refused(*_args: object, **_kwargs: object) -> MagicMock:
+            conn = MagicMock()
+            conn.request.side_effect = ConnectionRefusedError("refused")
+            return conn
+
+        with patch("quarry.doctor_daemon.http.client.HTTPSConnection", _refused):
             assert DaemonDiagnostics._probe_health(8420) is False

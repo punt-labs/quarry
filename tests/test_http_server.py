@@ -851,6 +851,31 @@ class TestRunDirLock:
             finally:
                 server._release_run_dir_lock()
 
+    def test_release_swallows_a_failing_os_close(self, tmp_path: Path) -> None:
+        # os.close can ALSO raise (EBADF/EINTR); release must swallow+log it so
+        # the method truly never raises. _lock_fd is still cleared.
+        server = self._server(tmp_path, "k")
+        server._acquire_run_dir_lock()
+        with patch("quarry.daemon.server.os.close", side_effect=OSError("EBADF")):
+            server._release_run_dir_lock()  # must NOT raise
+        assert server._lock_fd < 0
+
+    def test_failing_os_close_does_not_mask_in_flight_exception(
+        self, tmp_path: Path
+    ) -> None:
+        # Even when os.close raises in release (called from run()'s finally), the
+        # original shutdown exception must propagate, not the close error.
+        server = self._server(tmp_path, "k")
+        server._acquire_run_dir_lock()
+        with (
+            patch("quarry.daemon.server.os.close", side_effect=OSError("EBADF")),
+            pytest.raises(RuntimeError, match="original shutdown failure"),
+        ):
+            try:
+                raise RuntimeError("original shutdown failure")
+            finally:
+                server._release_run_dir_lock()
+
     def test_acquire_fails_closed_when_fcntl_unavailable(self, tmp_path: Path) -> None:
         # Portability: fcntl is POSIX-only, imported optionally (None on a
         # non-POSIX platform).  A daemon start there must fail closed with a

@@ -229,8 +229,13 @@ class DaemonServer:
             logger.warning(
                 "serve.lock unlock failed (harmless, fd close releases it): %s", exc
             )
-        finally:
+        try:
             os.close(fd)
+        except OSError as exc:
+            # os.close can also raise (EINTR/EBADF); swallow it too so release
+            # NEVER raises from run()'s finally and can never mask the real
+            # shutdown reason. The descriptor is already gone on a close error.
+            logger.warning("serve.lock fd close failed: %s", exc)
 
     @asynccontextmanager
     async def _lifespan(self, _app: Starlette) -> AsyncGenerator[None]:
