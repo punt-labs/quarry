@@ -113,7 +113,8 @@ def enable_project(
     from quarry.config import Settings  # noqa: PLC0415
     from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
 
-    settings = Settings.load().resolve_db_paths(None)
+    # Honor the active database (--db / `quarry use`), matching the client target.
+    settings = Settings.load().resolve_db_paths(Settings.active_db() or None)
     conn = SyncRegistry(settings.registry_path)
     try:
         collection, created = _resolve_or_register(conn, directory, collection_override)
@@ -161,7 +162,8 @@ def disable_project(
     )
     from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
 
-    settings = Settings.load().resolve_db_paths(None)
+    # Honor the active database (--db / `quarry use`), matching the client target.
+    settings = Settings.load().resolve_db_paths(Settings.active_db() or None)
     conn = SyncRegistry(settings.registry_path)
     try:
         collection = _collection_for_cwd_conn(conn, str(directory))  # pyright: ignore[reportPrivateUsage]

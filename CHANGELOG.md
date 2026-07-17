@@ -17,10 +17,11 @@ across `transform`, `index`, and `connector`).
 ### Added
 
 - **tool (CLI)**: `QuarryClient` — a typed, pure-transport client the CLI drives
-  for every data command. It carries a `QuarryError` hierarchy
-  (`QuarryConnectionError`, `AuthError`, `NotFoundError`, `BadRequestError`,
-  `ServerError`, `ProtocolError`) that the CLI maps to exit codes in one place,
-  and a typed `TaskOutcome` for polled background tasks. `TargetResolver` is the
+  for every data command. It carries a `QuarryError` hierarchy (`QuarryError`,
+  `QuarryConnectionError`, and `HttpError` — whose `status` selects the exit
+  code, 409 being "already in progress") that the CLI maps to exit codes in one
+  place, and a typed `TaskOutcome` for polled background tasks. `TargetResolver`
+  is the
   single daemon-target resolver: explicit `QUARRY_URL`/`QUARRY_TOKEN`, then a
   stored remote login, then the local daemon on `127.0.0.1` via `serve.port` +
   live `serve.token` (fail-closed with an autostart hint when the daemon is

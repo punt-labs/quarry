@@ -19,7 +19,7 @@ import pytest
 from typer.testing import CliRunner
 
 from quarry.__main__ import app
-from quarry.client import QuarryClient
+from quarry.client import QuarryClient, TargetResolver
 from quarry.client.transport import Response
 
 runner = CliRunner()
@@ -125,9 +125,15 @@ class RecordingTransport:
 
 @pytest.fixture
 def transport() -> Iterator[RecordingTransport]:
-    """Patch the CLI's client factory to a QuarryClient over a recorder."""
+    """Patch the CLI's client factory to a QuarryClient over a recorder.
+
+    Patches ``TargetResolver.connect`` — the plumbing's actual factory — so the
+    command never runs ``resolve()`` and never depends on a live daemon. Patching
+    ``QuarryClient.connect`` would leave tier-3 loopback resolution running first,
+    making the test pass only where a real quarryd is up (a false green in CI).
+    """
     recorder = RecordingTransport()
-    with patch.object(QuarryClient, "connect", return_value=QuarryClient(recorder)):
+    with patch.object(TargetResolver, "connect", return_value=QuarryClient(recorder)):
         yield recorder
 
 

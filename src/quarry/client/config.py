@@ -260,7 +260,7 @@ class ClientConfig:
         dir, so raise a clear error rather than return an empty bearer that
         would be rejected far from its cause.
         """
-        # The resolution runs INSIDE the try: _active_run_dir can raise OSError on
+        # The resolution runs INSIDE the try: active_run_dir can raise OSError on
         # an unreadable default-db config and ValueError on a path-separator name,
         # and token_file.read() raises OSError when the daemon is down or another
         # UID owns the 0600 token.  All must surface as ClientConfigError so

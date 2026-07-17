@@ -233,7 +233,7 @@ class QuarryClient:
 
     @staticmethod
     def _model[M: BaseModel](resp: Response, model: type[M]) -> M:
-        """Validate the response body into *model*, or raise :class:`ProtocolError`."""
+        """Validate the response body into *model*, or raise :class:`QuarryError`."""
         body = resp.json_body
         if not isinstance(body, Mapping):
             raise QuarryError(
