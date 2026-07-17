@@ -233,9 +233,17 @@ class DaemonServer:
         try:
             os.close(fd)
         except OSError as exc:
-            # os.close can also raise (EINTR/EBADF); swallow it too so release
-            # NEVER raises from run()'s finally and can never mask the real
-            # shutdown reason. The descriptor is already gone on a close error.
+            # Swallow (never retry) a failing close, for two reasons:
+            #   1) Non-masking — release runs in run()'s shutdown ``finally``, so
+            #      raising here would hide the real shutdown/failure reason.
+            #   2) NEVER retry close on EINTR.  Per close(2) + PEP 475, on the
+            #      supported platforms (systemd=Linux, launchd=macOS) the fd IS
+            #      released even when close returns EINTR — Python 3.5+
+            #      deliberately does not auto-retry close, because a retry could
+            #      close an UNRELATED fd another thread reused in the interim.
+            # The advisory lock is already gone regardless: LOCK_UN above freed
+            # it, closing the fd frees it again, and process exit (this is the
+            # shutdown path) frees any flock the OS still holds.
             logger.warning("serve.lock fd close failed: %s", exc)
 
     @asynccontextmanager
