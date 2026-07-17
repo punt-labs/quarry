@@ -9,13 +9,45 @@ polling to the deadline).
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Self, final
+from typing import Self, cast, final
+from unittest.mock import MagicMock
 
 import pytest
 
-from quarry.client import QuarryClient, TaskOutcome
+from quarry.client import ClientConfig, QuarryClient, TaskOutcome
 from quarry.client.errors import QuarryConnectionError
 from quarry.client.transport import Response
+
+
+@final
+class _FalsyTransport:
+    """A Transport whose ``__bool__`` is False — connect must still use it."""
+
+    __slots__ = ()
+
+    def __bool__(self) -> bool:
+        return False
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Mapping[str, str] | None = None,
+        json_body: Mapping[str, object] | None = None,
+        timeout: float | None = None,
+    ) -> Response:
+        return Response(200, {})
+
+
+class TestConnect:
+    def test_connect_uses_a_falsy_injected_transport(self) -> None:
+        # `transport or build()` would discard a falsy transport and silently
+        # build a real HttpxTransport making network/TLS decisions; the explicit
+        # None check keeps the injected one.
+        fake = _FalsyTransport()
+        client = QuarryClient.connect(cast("ClientConfig", MagicMock()), transport=fake)
+        assert client._transport is fake
 
 
 @final

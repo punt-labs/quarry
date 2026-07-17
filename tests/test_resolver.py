@@ -104,6 +104,15 @@ class TestTier1EnvSecurity:
         bearer = cfg.token
         assert bearer == "tok"
 
+    def test_url_with_no_host_fails_fast(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # A QUARRY_URL with no host (ws://:9000) must error, not silently fall
+        # back to a localhost/empty target — validate at the boundary.
+        monkeypatch.delenv("QUARRY_TOKEN", raising=False)
+        monkeypatch.delenv("QUARRY_CA_CERT", raising=False)
+        monkeypatch.setenv("QUARRY_URL", "ws://:9000")
+        with pytest.raises(ClientConfigError, match="no host"):
+            TargetResolver.resolve()
+
     def test_loopback_plaintext_with_token_is_allowed(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

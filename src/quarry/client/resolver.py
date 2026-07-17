@@ -109,7 +109,12 @@ class TargetResolver:
         url = ClientConfig.canonical_url(url)
         parsed = urllib.parse.urlparse(ws_to_http(url))
         scheme = parsed.scheme or "http"
-        host = parsed.hostname or ""
+        # Validate at the boundary: a QUARRY_URL with no host (ws://:9000,
+        # ws:///path) must fail fast, not silently fall back to localhost — the
+        # operator set a target and deserves an error, not a split-horizon default.
+        if not parsed.hostname:
+            raise ClientConfigError(f"QUARRY_URL has no host: {url!r}")
+        host = parsed.hostname
         # Plaintext + bearer is allowed ONLY to a LITERAL loopback IP (same
         # machine); a name or a remote host must never receive the token in
         # cleartext.

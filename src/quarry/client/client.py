@@ -58,7 +58,8 @@ _MAX_UNREACHABLE_POLLS = 3
 
 @final
 class QuarryClient:
-    """Authenticated transport bound to one daemon target — 20 typed operations."""
+    """Authenticated transport to one daemon target: 20 REST operations plus
+    ``await_task`` (a client-side poll over ``task_status``)."""
 
     _transport: Transport
 
@@ -77,7 +78,13 @@ class QuarryClient:
         builds an :class:`HttpxTransport`; tests inject an ``ASGITransport``-backed
         transport over the real daemon app so the fake cannot drift from the wire.
         """
-        resolved = transport or HttpxTransport.from_mapping(config.remote_mapping())
+        # Explicit None check, not `or`: an injected transport whose __bool__ is
+        # falsy must still be used, never silently replaced by a real HttpxTransport.
+        resolved = (
+            HttpxTransport.from_mapping(config.remote_mapping())
+            if transport is None
+            else transport
+        )
         return cls(resolved)
 
     # -- search & show -----------------------------------------------------
