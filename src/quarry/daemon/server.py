@@ -26,6 +26,7 @@ from quarry.config import DEFAULT_PORT, Settings
 from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
 from quarry.fd_telemetry import FdTelemetry
+from quarry.remote import to_netloc
 from quarry.run_dir import RunDir
 
 if TYPE_CHECKING:
@@ -270,10 +271,12 @@ class DaemonServer:
                 actual_port = server.servers[0].sockets[0].getsockname()[1]
                 self._write_sidecars(actual_port)
                 logger.info(
-                    "Quarry server listening on %s://%s:%d",
+                    "Quarry server listening on %s://%s",
                     self._config.scheme,
-                    self._config.host,
-                    actual_port,
+                    # Bracket an IPv6 literal for the log so it renders a valid
+                    # URL (https://[::1]:8420, not the ambiguous ::1:8420); the
+                    # bind host is unchanged.
+                    to_netloc(self._config.host, actual_port),
                 )
             else:
                 logger.error(

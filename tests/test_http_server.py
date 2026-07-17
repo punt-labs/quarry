@@ -7,6 +7,7 @@ Each test class gets its own app instance via fixtures.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import sqlite3
 import stat
@@ -561,6 +562,26 @@ class TestServeToken:
         assert token_path.read_text() == "the-bearer"
         assert stat.S_IMODE(token_path.stat().st_mode) == 0o600
         assert server._bound is True
+
+    def test_ipv6_listening_log_brackets_host(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # The startup log must render a valid URL for an IPv6 bind — [::1]:8420,
+        # never the ambiguous bare ::1:8420 — via to_netloc. Display only; the
+        # bind host is unchanged.
+        settings = MagicMock()
+        settings.lancedb_path = tmp_path / "default" / "lancedb"
+        server = DaemonServer(settings, ServeConfig(host="::1", port=8420, api_key="k"))
+        uv = self._bound_server_mock()
+        server._install_startup_hook(uv)
+        with caplog.at_level(logging.INFO, logger="quarry.daemon.server"):
+            asyncio.run(uv.startup())
+        listening = [
+            r.getMessage() for r in caplog.records if "listening on" in r.getMessage()
+        ]
+        assert listening, "no listening log emitted"
+        assert "[::1]:8420" in listening[0]
+        assert "://::1:8420" not in listening[0]  # never the ambiguous bare form
 
     @pytest.mark.parametrize("api_key", [None, "", "   ", "\n"])
     def test_refuses_bind_without_key(

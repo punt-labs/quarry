@@ -184,6 +184,24 @@ class TestValidateConnection:
         assert ok is True
         assert reason == ""
 
+    def test_ipv6_failure_message_brackets_host(self) -> None:
+        # The connection-failure string must render a valid, unambiguous target
+        # for an IPv6 literal — [::1]:8420, not the bare ::1:8420 — matching the
+        # bracketed URL the request itself uses (to_netloc).
+        exc = urllib.error.URLError("connection refused")
+        with patch("urllib.request.urlopen", side_effect=exc):
+            ok, reason = validate_connection("::1", 8420, None)
+        assert ok is False
+        assert "[::1]:8420" in reason
+        assert "::1:8420" not in reason  # never the ambiguous bare form
+
+    def test_ipv4_failure_message_unchanged(self) -> None:
+        exc = urllib.error.URLError("connection refused")
+        with patch("urllib.request.urlopen", side_effect=exc):
+            ok, reason = validate_connection("127.0.0.1", 8420, None)
+        assert ok is False
+        assert "127.0.0.1:8420" in reason
+
     def test_probes_versioned_status_path(self) -> None:
         """The connectivity probe hits /v1/status, not the retired bare route."""
         captured: dict[str, str] = {}

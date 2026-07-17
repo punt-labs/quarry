@@ -198,7 +198,7 @@ def validate_connection(
         return False, f"Server returned {exc.code}."
     except (urllib.error.URLError, OSError) as exc:
         reason: object = exc.reason if isinstance(exc, urllib.error.URLError) else exc
-        return False, f"Could not connect to {host}:{port} — {reason}."
+        return False, f"Could not connect to {to_netloc(host, port)} — {reason}."
 
 
 def validate_connection_from_ws_url(
