@@ -7,6 +7,7 @@ Each test class gets its own app instance via fixtures.
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import logging
 import os
 import sqlite3
@@ -801,9 +802,21 @@ class TestRunDirLock:
         assert len(closed) == 1  # the lock fd was closed exactly once (no leak)
         assert server._lock_fd < 0  # never recorded a live fd on failure
 
-    def test_release_closes_fd_even_if_unlock_raises(self, tmp_path: Path) -> None:
-        # fd hygiene: if LOCK_UN raises (EINTR/OSError), release must STILL close
-        # the fd — never leak — and clear _lock_fd, mirroring the acquire side.
+    def test_lock_fd_is_cloexec(self, tmp_path: Path) -> None:
+        # The serve.lock fd must be O_CLOEXEC so it is not leaked into (and does
+        # not retain the lock across) subprocesses the daemon spawns.
+        server = self._server(tmp_path, "k")
+        server._acquire_run_dir_lock()
+        try:
+            flags = fcntl.fcntl(server._lock_fd, fcntl.F_GETFD)
+            assert flags & fcntl.FD_CLOEXEC
+        finally:
+            server._release_run_dir_lock()
+
+    def test_release_is_best_effort_and_never_raises(self, tmp_path: Path) -> None:
+        # release() runs in run()'s finally: a failing LOCK_UN must be swallowed
+        # (logged), never re-raised — else it would MASK the real shutdown
+        # reason. The fd is still closed (fd close releases the lock anyway).
         server = self._server(tmp_path, "k")
         server._acquire_run_dir_lock()
         held_fd = server._lock_fd
@@ -817,12 +830,26 @@ class TestRunDirLock:
         with (
             patch("quarry.daemon.server.fcntl.flock", side_effect=OSError("EINTR")),
             patch("quarry.daemon.server.os.close", side_effect=_spy_close),
-            pytest.raises(OSError, match="EINTR"),
         ):
-            server._release_run_dir_lock()
+            server._release_run_dir_lock()  # must NOT raise
 
-        assert held_fd in closed  # closed despite the LOCK_UN failure
-        assert server._lock_fd < 0  # cleared even though unlock raised
+        assert held_fd in closed  # fd closed despite the LOCK_UN failure
+        assert server._lock_fd < 0  # cleared
+
+    def test_release_does_not_mask_an_in_flight_exception(self, tmp_path: Path) -> None:
+        # Simulate run()'s finally: an exception is already in flight when
+        # release() is called and LOCK_UN also fails. The original exception
+        # must propagate, not the harmless unlock error.
+        server = self._server(tmp_path, "k")
+        server._acquire_run_dir_lock()
+        with (
+            patch("quarry.daemon.server.fcntl.flock", side_effect=OSError("EINTR")),
+            pytest.raises(RuntimeError, match="original shutdown failure"),
+        ):
+            try:
+                raise RuntimeError("original shutdown failure")
+            finally:
+                server._release_run_dir_lock()
 
     def test_acquire_fails_closed_when_fcntl_unavailable(self, tmp_path: Path) -> None:
         # Portability: fcntl is POSIX-only, imported optionally (None on a

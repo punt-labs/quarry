@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from quarry.api import API_VERSION
+from quarry.net import LoopbackPolicy
 
 MCP_PROXY_CONFIG_PATH: Path = Path.home() / ".punt-labs" / "mcp-proxy" / "quarry.toml"
 CA_CERT_PATH: Path = Path.home() / ".punt-labs" / "mcp-proxy" / "quarry-ca.crt"
@@ -194,6 +195,15 @@ def validate_connection(
             return True, ""
     except urllib.error.HTTPError as exc:
         if exc.code == 401:
+            # A LOOPBACK target authenticates with the daemon's live serve.token,
+            # NOT --api-key (loopback ignores it), so point a 401 at the real
+            # cause — the serve.token — not the operator's key. quarry doctor
+            # now checks quarryd reachability + serve.token, so it is actionable.
+            if LoopbackPolicy(host).is_literal_loopback:
+                return False, (
+                    "Loopback authentication failed — the daemon's serve.token "
+                    "is unreadable or stale. Run 'quarry doctor'."
+                )
             return False, "Authentication failed — check --api-key."
         return False, f"Server returned {exc.code}."
     except (urllib.error.URLError, OSError) as exc:

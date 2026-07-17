@@ -215,6 +215,39 @@ class TestValidateConnection:
         assert ok is True
         assert captured["url"] == "http://localhost:8420/v1/status"
 
+    def test_loopback_401_points_at_serve_token_not_api_key(self) -> None:
+        # Loopback auth uses the daemon's live serve.token and IGNORES --api-key,
+        # so a loopback 401 must point at the serve.token / doctor, not --api-key.
+        exc = urllib.error.HTTPError(
+            url="https://127.0.0.1:8420/v1/status",
+            code=401,
+            msg="Unauthorized",
+            hdrs=MagicMock(),
+            fp=None,
+        )
+        with patch("urllib.request.urlopen", side_effect=exc):
+            ok, reason = validate_connection("127.0.0.1", 8420, "tok", scheme="https")
+        assert ok is False
+        assert "serve.token" in reason
+        assert "quarry doctor" in reason
+        assert "--api-key" not in reason  # never the misleading remote hint
+
+    def test_remote_401_still_points_at_api_key(self) -> None:
+        exc = urllib.error.HTTPError(
+            url="https://gpu.example.com:8420/v1/status",
+            code=401,
+            msg="Unauthorized",
+            hdrs=MagicMock(),
+            fp=None,
+        )
+        with patch("urllib.request.urlopen", side_effect=exc):
+            ok, reason = validate_connection(
+                "gpu.example.com", 8420, "tok", scheme="https"
+            )
+        assert ok is False
+        assert "--api-key" in reason
+        assert "serve.token" not in reason
+
     def test_401_returns_false(self) -> None:
         exc = urllib.error.HTTPError(
             url="http://localhost:8420/v1/status",

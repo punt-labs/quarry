@@ -181,7 +181,9 @@ class DaemonServer:
             raise SystemExit(msg)
         lock_path = self._run_dir.lock_path
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+        # O_CLOEXEC: the lock fd must not leak into subprocesses the daemon
+        # spawns (directly or via deps), which would retain the lock across exec.
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR | os.O_CLOEXEC, 0o600)
         # Close the fd on EVERY flock failure — contention OR any other OSError
         # (permission, filesystem) — so a failed acquire never leaks a
         # descriptor (this daemon has EMFILE history).  _lock_fd is set only
@@ -202,13 +204,15 @@ class DaemonServer:
         self._lock_fd = fd
 
     def _release_run_dir_lock(self) -> None:
-        """Release the run-dir lock and close its fd (idempotent).
+        """Release the run-dir lock and close its fd (idempotent, best-effort).
 
-        Close the fd in a ``finally`` so a failing ``LOCK_UN`` (EINTR / OSError)
-        still frees the descriptor — release must never leak, mirroring the
-        acquire-side close-on-all-paths.  ``_lock_fd`` is cleared first so a
-        second call is a no-op.  ``flock`` also releases when the fd closes on
-        process exit, so a crashed daemon frees the lock for the next start.
+        Runs in ``run()``'s ``finally``, so it must NEVER raise — a raise here
+        would mask the real shutdown/failure reason.  A failing ``LOCK_UN``
+        (EINTR / OSError) is harmless because closing the fd releases the lock
+        anyway, so it is logged and swallowed; the fd is then closed in the
+        ``finally``.  ``_lock_fd`` is cleared first so a second call is a no-op.
+        ``flock`` also releases when the fd closes on process exit, so a crashed
+        daemon frees the lock for the next start.
         """
         if self._lock_fd < 0:
             return
@@ -219,6 +223,12 @@ class DaemonServer:
             # to satisfy the optional-import type and never deref None.
             if fcntl is not None:
                 fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError as exc:
+            # Best-effort: the fd close below releases the lock regardless, so a
+            # failing unlock is harmless — log and continue, never re-raise.
+            logger.warning(
+                "serve.lock unlock failed (harmless, fd close releases it): %s", exc
+            )
         finally:
             os.close(fd)
 
