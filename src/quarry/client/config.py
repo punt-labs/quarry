@@ -31,7 +31,6 @@ from typing import Self, final
 from quarry.config import Settings
 from quarry.net import LoopbackPolicy
 from quarry.remote import to_netloc, ws_to_http
-from quarry.remote_client import RemoteClient
 from quarry.run_dir import RunDir
 
 
@@ -122,17 +121,6 @@ class ClientConfig:
         else:
             token = cls._login_bearer(login)
         return cls(url, ca_cert, token)
-
-    @classmethod
-    def remote_client(cls, login: Mapping[str, object]) -> RemoteClient:
-        """Build a RemoteClient for a login config, injecting the loopback token.
-
-        The construction seam every CLI remote path shares: resolve the login
-        (loopback ⇒ live serve.token, remote ⇒ stored bearer) and wrap it in
-        the transport.  Living in the client tier keeps each CLI call site a
-        bare swap; RemoteClient is superseded by QuarryClient in PR-3.
-        """
-        return RemoteClient(cls.from_login(login).remote_mapping())
 
     @classmethod
     def loopback_token(cls, host: str) -> str | None:
@@ -251,25 +239,35 @@ class ClientConfig:
         return LoopbackPolicy(host).canonical_host
 
     @staticmethod
-    def _serve_token() -> str:
+    def active_run_dir() -> RunDir:
+        """Return the ACTIVE database's run dir (--db override, else default).
+
+        Both the loopback port (read by :class:`TargetResolver`) and the live
+        serve.token read from this one run dir, so a loopback client against a
+        ``--db`` daemon reads that daemon's sidecars, not the hardcoded default
+        database's.  Raises ``OSError`` on an unreadable default-db config and
+        ``ValueError`` on a path-separator name; each caller wraps those into its
+        own fail-closed error.
+        """
+        settings = Settings.load().resolve_db_paths(Settings.active_db() or None)
+        return RunDir(settings.lancedb_path.parent)
+
+    @classmethod
+    def _serve_token(cls) -> str:
         """Read the daemon's live loopback bearer, or raise if it is down.
 
         Fail closed: a missing ``serve.token`` means no daemon owns the run
         dir, so raise a clear error rather than return an empty bearer that
         would be rejected far from its cause.
         """
-        # serve.token lives under the daemon's startup-db run dir; resolve the
-        # ACTIVE database (the CLI's --db override, else the default) so a
-        # loopback client against a --db daemon reads the matching token, not
-        # the hardcoded default database's.  The resolution runs INSIDE the try:
-        # active_db() can raise OSError on an unreadable default-db config, and
-        # resolve_db_paths() raises ValueError on a default-db name containing a
-        # path separator.  Both must surface as ClientConfigError so loopback_token
-        # keeps its non-raising contract (returns None) rather than leaking a raw
-        # OSError/ValueError to a caller expecting a fail-closed probe.
+        # The resolution runs INSIDE the try: _active_run_dir can raise OSError on
+        # an unreadable default-db config and ValueError on a path-separator name,
+        # and token_file.read() raises OSError when the daemon is down or another
+        # UID owns the 0600 token.  All must surface as ClientConfigError so
+        # loopback_token keeps its non-raising contract (returns None) rather than
+        # leaking a raw OSError/ValueError to a caller expecting a fail-closed probe.
         try:
-            settings = Settings.load().resolve_db_paths(Settings.active_db() or None)
-            token = RunDir(settings.lancedb_path.parent).token_file.read()
+            token = cls.active_run_dir().token_file.read()
         except (OSError, ValueError) as exc:
             # OSError (not just FileNotFoundError): a PermissionError on the 0600
             # token — e.g. another UID owns the run dir — must surface an

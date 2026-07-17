@@ -492,7 +492,6 @@ class TestBackfillCLI:
         assert "--collection" in result.output
         assert "--project" in result.output
         assert "--limit" in result.output
-        assert "--provider" in result.output
 
 
 class TestBackfillCaptureRedaction:

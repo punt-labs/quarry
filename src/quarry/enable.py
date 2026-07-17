@@ -62,12 +62,13 @@ class EnableResult:
 
 @dataclass(frozen=True)
 class DisableResult:
-    """Result of disabling quarry for a project directory."""
+    """Result of disabling quarry: ``purge_collections`` names the chunks the CLI
+    purges via a daemon call (empty when ``keep_data`` was set)."""
 
     directory: str
     collection: str
     captures_collection: str
-    deleted_chunks: int = 0
+    purge_collections: tuple[str, ...] = ()
     config_removed: bool = False
     claudemd_removed: bool = False
 
@@ -155,8 +156,6 @@ def disable_project(
     """Disable quarry knowledge capture for a project directory."""
     directory = directory.resolve()
     from quarry.config import Settings  # noqa: PLC0415
-    from quarry.db.chunk_store import ChunkStore  # noqa: PLC0415
-    from quarry.db.storage import get_db  # noqa: PLC0415
     from quarry.hooks import (  # noqa: PLC0415
         _collection_for_cwd_conn,  # pyright: ignore[reportPrivateUsage]
     )
@@ -183,12 +182,12 @@ def disable_project(
         captures_collection = f"{collection}-captures"
         conn.deregister_directory(collection)
 
-        deleted_chunks = 0
-        if not keep_data:
-            db = get_db(settings.lancedb_path)
-            store = ChunkStore(db)
-            deleted_chunks += store.delete_collection(collection)
-            deleted_chunks += store.delete_collection(captures_collection)
+        # The LanceDB chunk purge is an engine operation; name the collections to
+        # purge and let the CLI perform it via a daemon call.  keep_data suppresses
+        # the purge, leaving the indexed chunks in place.
+        purge_collections: tuple[str, ...] = (
+            () if keep_data else (collection, captures_collection)
+        )
 
         config_path = directory / ".punt-labs" / "quarry" / "config.md"
         config_removed = False
@@ -208,7 +207,7 @@ def disable_project(
             directory=str(directory),
             collection=collection,
             captures_collection=captures_collection,
-            deleted_chunks=deleted_chunks,
+            purge_collections=purge_collections,
             config_removed=config_removed,
             claudemd_removed=claudemd_removed,
         )

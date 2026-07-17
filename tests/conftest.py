@@ -101,11 +101,14 @@ _QUARRY_ENV_VARS = (
 def _no_remote_config() -> Generator[None]:
     """Prevent tests from reading the real mcp-proxy config on disk.
 
-    Existing CLI tests assume local DB access. This fixture returns an empty
-    config so ``read_proxy_config()`` never triggers remote routing unless a
-    test explicitly patches it.
+    ``TargetResolver.resolve`` reads ``read_proxy_config`` for the stored-remote
+    tier; returning ``{}`` keeps resolution on the loopback default unless a test
+    patches the client itself.
     """
-    with patch("quarry.__main__.read_proxy_config", return_value={}):
+    with (
+        patch("quarry.client.resolver.read_proxy_config", return_value={}),
+        patch("quarry.cli_remote.read_proxy_config", return_value={}),
+    ):
         yield
 
 
@@ -135,17 +138,19 @@ def _force_no_color(monkeypatch: pytest.MonkeyPatch) -> None:
     pinned to ``force_terminal=False, no_color=True`` defeats that render-time
     re-read, making the gate color-deterministic regardless of the shell.
 
-    Every production ``Console(`` in ``src/quarry`` must be patched here:
-    ``__main__.err_console`` (local CLI errors) and
-    ``remote_client._err_console`` (remote-path errors). Add any new one.
-    Typer is not patched: every ``typer.Typer`` app sets
-    ``rich_markup_mode=None``, so typer renders errors/help through click's
-    plain formatter, never through ``rich_utils`` — it emits no color.
+    Every ``rich.console.Console`` holds a live reference to ``os.environ`` and
+    reads ``NO_COLOR`` at *render* time, so setting it here makes every console
+    (including the one ``CliPlumbing`` injected into each command group) emit
+    plain output — no per-object patching needed.  Typer is not patched: every
+    ``typer.Typer`` app sets ``rich_markup_mode=None``, so it renders through
+    click's plain formatter, never ``rich_utils``.
     """
-    for target in ("quarry.__main__.err_console", "quarry.remote_client._err_console"):
-        monkeypatch.setattr(
-            target, Console(stderr=True, no_color=True, force_terminal=False)
-        )
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
+    monkeypatch.setattr(
+        "quarry.__main__.err_console",
+        Console(stderr=True, no_color=True, force_terminal=False),
+    )
 
 
 @pytest.fixture(scope="session")

@@ -423,16 +423,13 @@ class TestT12DisableKeepData:
         with (
             patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
             patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
-            patch(
-                "quarry.db.chunk_store.ChunkStore.delete_collection",
-            ) as mock_delete,
         ):
             enable_project(project)
             result = disable_project(project, keep_data=True)
 
-        # delete_collection should NOT have been called.
-        mock_delete.assert_not_called()
-        assert result.deleted_chunks == 0
+        # keep_data names no collections to purge — the CLI performs no daemon
+        # delete, so the chunks are left in place.
+        assert result.purge_collections == ()
 
 
 # -----------------------------------------------------------------------
@@ -455,21 +452,16 @@ class TestT13DisablePreservesAgentMemory:
         with (
             patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
             patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
-            patch(
-                "quarry.db.chunk_store.ChunkStore.delete_collection",
-            ) as mock_delete,
         ):
             enable_project(project)
-            disable_project(project, keep_data=False)
+            result = disable_project(project, keep_data=False)
 
-        # delete_collection should only be called for project + captures,
-        # never for memory-* collections.
-        deleted_collections = [call.args[0] for call in mock_delete.call_args_list]
-        assert all(not c.startswith("memory-") for c in deleted_collections), (
-            f"Memory collection deleted: {deleted_collections}"
+        # The purge targets the CLI hands the daemon are exactly the project and
+        # its captures collection — never a memory-* collection.
+        assert len(result.purge_collections) == 2
+        assert all(not c.startswith("memory-") for c in result.purge_collections), (
+            f"Memory collection queued for purge: {result.purge_collections}"
         )
-        # Should be called exactly twice: once for project, once for captures.
-        assert mock_delete.call_count == 2
 
 
 # -----------------------------------------------------------------------

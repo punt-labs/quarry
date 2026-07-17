@@ -46,11 +46,11 @@ dependencies = [
     "ultimate-sitemap-parser>=1.8.0",
     "pyyaml>=6.0.0",
     "cryptography>=46.0.0",
+    "httpx>=0.27.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "httpx>=0.27.0",
     "ruff>=0.13.0",
     "mypy>=1.18.1",
     "pyright>=1.1.0",
@@ -146,6 +146,13 @@ ignore = [
 "src/quarry/__main__.py" = ["T20", "FBT"]
 "src/quarry/mcp_server.py" = ["T20", "FBT"]
 "src/quarry/cli_captures.py" = ["FBT"]  # typer boolean CLI flags
+"src/quarry/cli_search.py" = ["FBT"]  # typer boolean CLI flags
+"src/quarry/cli_ingest.py" = ["FBT"]  # typer boolean CLI flags
+"src/quarry/cli_documents.py" = ["FBT"]  # typer boolean CLI flags
+"src/quarry/cli_sync.py" = ["FBT"]  # typer boolean CLI flags
+"src/quarry/cli_project.py" = ["FBT"]  # typer boolean CLI flags
+"src/quarry/cli_maintenance.py" = ["FBT"]  # typer boolean CLI flags
+"src/quarry/cli_remote.py" = ["FBT"]  # typer boolean CLI flags
 "src/quarry/daemon/launcher.py" = ["FBT"]  # typer boolean CLI flags
 "src/quarry/hooks.py" = ["S603"]  # Popen calls use sys.executable — trusted
 

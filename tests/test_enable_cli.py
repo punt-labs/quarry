@@ -11,15 +11,25 @@ from unittest.mock import MagicMock, patch
 from typer.testing import CliRunner
 
 from quarry.__main__ import app
+from quarry.api import TaskAccepted
+from quarry.client import TargetResolver, TaskOutcome
 from quarry.config import Settings
 from quarry.sync_registry import SyncRegistry
 
 runner = CliRunner()
 
 
+def _fake_client() -> MagicMock:
+    """A QuarryClient double whose daemon chunk-purge completes with 0 deleted."""
+    client = MagicMock()
+    client.delete_collection.return_value = TaskAccepted(task_id="t", status="accepted")
+    client.await_task.return_value = TaskOutcome.completed("t", {"deleted": 0})
+    return client
+
+
 @contextlib.contextmanager
 def _patch_for_cli(tmp_path: Path) -> Generator[MagicMock]:
-    """Patch settings, ethos identities, and Settings methods for CLI isolation."""
+    """Patch settings, ethos identities, and the client for CLI isolation."""
     settings = MagicMock()
     settings.registry_path = tmp_path / "registry.db"
     settings.lancedb_path = tmp_path / "lancedb"
@@ -34,6 +44,7 @@ def _patch_for_cli(tmp_path: Path) -> Generator[MagicMock]:
     with (
         patch.object(Settings, "load", return_value=mock_loaded),
         patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
+        patch.object(TargetResolver, "connect", return_value=_fake_client()),
     ):
         yield settings
 
