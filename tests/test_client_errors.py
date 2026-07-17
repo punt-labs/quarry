@@ -148,6 +148,22 @@ class TestProxyIsolation:
         assert transport._client._mounts == {}
 
 
+class TestTimeout:
+    def test_zero_timeout_is_honored_not_swapped_for_default(self) -> None:
+        # An intentional 0/immediate timeout must reach the client, not be
+        # replaced by the default via a falsy `or`.
+        seen: dict[str, object] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["timeout"] = request.extensions.get("timeout")
+            return httpx.Response(200, json={})
+
+        _transport(handler).request("GET", "/x", timeout=0)
+        recorded = seen["timeout"]
+        assert isinstance(recorded, dict)
+        assert all(value == 0 for value in recorded.values())
+
+
 class TestFromResponseUnit:
     def test_always_returns_http_error_leaf(self) -> None:
         for status in (400, 401, 404, 409, 413, 415, 422, 500, 503):

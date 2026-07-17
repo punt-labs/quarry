@@ -108,6 +108,9 @@ class HttpxTransport:
         raises the classified :class:`QuarryError`.
         """
         target = str(self._client.base_url)
+        # Explicit None check, not `or`: a caller's intentional 0/0.0 (a
+        # zero/immediate timeout) must be honored, not swapped for the default.
+        effective_timeout = _DEFAULT_TIMEOUT if timeout is None else timeout
         last_exc: httpx.HTTPError | None = None
         for _ in range(_MAX_CONNECT_RETRIES + 1):
             try:
@@ -116,7 +119,7 @@ class HttpxTransport:
                     path,
                     params=dict(params) if params else None,
                     json=dict(json_body) if json_body is not None else None,
-                    timeout=timeout or _DEFAULT_TIMEOUT,
+                    timeout=effective_timeout,
                 )
             except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
                 last_exc = exc
