@@ -51,12 +51,11 @@ class ProjectCli:
         """Enable quarry knowledge capture for a project directory."""
         from quarry.enable import enable_project  # noqa: PLC0415
 
-        try:
-            result = enable_project(directory.resolve(), collection_override=collection)
-        except ValueError as exc:
-            self._p.emit({"error": str(exc)}, "")
-            self._p.err_console.print(f"Error: {exc}", style="red")
-            raise typer.Exit(code=1) from None
+        # A ValueError (e.g. unregistered/parent-covered dir) propagates to the
+        # shared _cli_errors boundary: stdout stays empty (no spurious JSON error
+        # object under --json), the diagnostic goes to stderr, exit 1 — consistent
+        # with every other command.
+        result = enable_project(directory.resolve(), collection_override=collection)
 
         lines = [
             f"Enabled quarry for {result.directory}",
@@ -91,12 +90,10 @@ class ProjectCli:
         """Disable quarry knowledge capture for a project directory."""
         from quarry.enable import disable_project  # noqa: PLC0415
 
-        try:
-            result = disable_project(directory.resolve(), keep_data=keep_data)
-        except ValueError as exc:
-            self._p.emit({"error": str(exc)}, "")
-            self._p.err_console.print(f"Error: {exc}", style="red")
-            raise typer.Exit(code=1) from None
+        # A ValueError (e.g. no registration covers the dir) propagates to the
+        # shared _cli_errors boundary: stdout stays empty under --json, the
+        # diagnostic goes to stderr, exit 1 — consistent with every other command.
+        result = disable_project(directory.resolve(), keep_data=keep_data)
 
         deleted = self._purge(result)
         data = {

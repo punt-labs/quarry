@@ -190,16 +190,18 @@ class TargetResolver:
     def _stored_login() -> Mapping[str, object] | None:
         """Return a stored remote login with a ``url``, or None (tier 2 probe).
 
-        None = no usable remote login: the config is absent, or malformed TOML.
-        A malformed config must not crash the CLI (bug class 2), but silently
-        ignoring the operator's remote config would be a split-horizon surprise —
-        so log a warning before falling through to the loopback default.
+        None = no usable remote login: the config is absent, malformed
+        (``ValueError``), or unreadable (``OSError`` — permissions, transient IO).
+        None of these may crash the CLI (bug class 2), but silently ignoring the
+        operator's remote config would be a split-horizon surprise — so log a
+        warning before falling through to the loopback default.
         """
         try:
             config = read_proxy_config()
-        except ValueError as exc:
+        except (ValueError, OSError) as exc:
             logger.warning(
-                "Ignoring malformed quarry.toml, using the local daemon: %s", exc
+                "Ignoring unreadable/malformed quarry.toml, using the local daemon: %s",
+                exc,
             )
             return None
         quarry_cfg = config.get("quarry")

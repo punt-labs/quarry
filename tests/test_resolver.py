@@ -187,6 +187,32 @@ class TestTier2StoredLogin:
         assert cfg.url == "wss://127.0.0.1:8420"
         assert "malformed quarry.toml" in caplog.text
 
+    def test_unreadable_toml_warns_and_falls_through_to_loopback(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Class 2: an EXISTING but unreadable quarry.toml (permissions / IO) raises
+        # OSError from read_proxy_config — it must warn and fall through to the
+        # loopback default, never crash the CLI.
+        _no_env(monkeypatch)
+        ca = tmp_path / "ca.crt"
+        ca.write_text("x")
+        with (
+            caplog.at_level(logging.WARNING, logger="quarry.client.resolver"),
+            patch(
+                "quarry.client.resolver.read_proxy_config",
+                side_effect=PermissionError("quarry.toml not readable"),
+            ),
+            patch("quarry.client.resolver._DAEMON_CA_PATH", ca),
+            patch.object(ClientConfig, "active_run_dir", return_value=_run_dir(8420)),
+            patch.object(ClientConfig, "loopback_token", return_value="live"),
+        ):
+            cfg = TargetResolver.resolve()
+        assert cfg.url == "wss://127.0.0.1:8420"
+        assert "unreadable/malformed quarry.toml" in caplog.text
+
     def test_loopback_login_daemon_down_raises_connection_error_with_nudge(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

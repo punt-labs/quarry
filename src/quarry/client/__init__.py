@@ -4,7 +4,8 @@ Layer 2 of DES-031 v2.2 — imports only ``quarry.api``/shared primitives, never
 the engine and never presentation.  :class:`ClientConfig` turns a stored login
 config into the URL + pinned CA + live bearer a client presents;
 :class:`QuarryClient` marshals typed ``quarry.api`` models over that target and
-raises typed :class:`QuarryError` leaves the command layer maps to exit codes.
+raises typed :class:`QuarryError` subclasses that the command layer maps to exit
+codes.
 """
 
 from __future__ import annotations

@@ -158,6 +158,33 @@ class TestT24DisableCLIUnregistered:
         assert "no registration covers" in result.output
 
 
+class TestJsonErrorPathKeepsStdoutEmpty:
+    def test_enable_failure_emits_no_json_to_stdout(self, tmp_path: Path) -> None:
+        # A failure in --json mode must not print a JSON error object to stdout;
+        # it goes through _cli_errors (stderr only), so `quarry enable --json | jq`
+        # never sees a spurious object.
+        project = tmp_path / "p"
+        project.mkdir()
+        with patch(
+            "quarry.enable.enable_project",
+            side_effect=ValueError("no registration covers"),
+        ):
+            result = runner.invoke(app, ["--json", "enable", str(project)])
+        assert result.exit_code == 1
+        assert '"error"' not in result.output
+
+    def test_disable_failure_emits_no_json_to_stdout(self, tmp_path: Path) -> None:
+        project = tmp_path / "p"
+        project.mkdir()
+        with patch(
+            "quarry.enable.disable_project",
+            side_effect=ValueError("no registration covers"),
+        ):
+            result = runner.invoke(app, ["--json", "disable", str(project)])
+        assert result.exit_code == 1
+        assert '"error"' not in result.output
+
+
 # -----------------------------------------------------------------------
 # T25: quarry enable --json outputs structured data
 # -----------------------------------------------------------------------
