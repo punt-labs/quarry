@@ -12,6 +12,7 @@ import os
 import sqlite3
 import stat
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -76,14 +77,25 @@ def _inject_mocks(ctx: DaemonContext) -> None:
 
 
 @pytest.fixture()
-def client(tmp_path: Path) -> TestClient:
-    """Build a test app and return a TestClient."""
+def client(tmp_path: Path) -> Iterator[TestClient]:
+    """Build a test app and yield a TestClient, draining background tasks on exit.
+
+    Entering the ``TestClient`` context runs the app on a portal event loop; on
+    teardown we cancel any still-running background ingest/sync task ON that loop
+    before the next test installs its own mocks.  Otherwise a leaked ``usp``
+    sitemap fetch resolves a hostname inside a later SSRF test's ``getaddrinfo``
+    patch window, tripping its ``assert_not_called`` (an isolation-order flake).
+    """
     settings = _mock_settings(tmp_path)
     ctx = DaemonContext(settings)
     _inject_mocks(ctx)
 
     app = build_app(ctx)
-    return TestClient(app, raise_server_exceptions=False)
+    with TestClient(app, raise_server_exceptions=False) as tc:
+        yield tc
+        portal = tc.portal  # set for the lifetime of the context
+        if portal is not None:
+            portal.call(ctx.tasks.cancel_all)
 
 
 class TestHealth:

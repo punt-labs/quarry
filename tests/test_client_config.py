@@ -104,10 +104,10 @@ class TestFromLoginLoopback:
             ClientConfig.from_login({"url": "wss://127.0.0.1:8420/mcp"})
 
     def test_stored_localhost_auto_migrates_to_literal(self, tmp_path: Path) -> None:
-        # HIGH regression: a config stored before the literal-IP flip holds the
-        # NAME ``localhost``.  On READ it must auto-migrate to 127.0.0.1 so the
-        # operator is not locked out — the live serve.token resolves AND the
-        # RemoteClient target is the literal, never the ambiguous name.
+        # A config stored before the literal-IP flip holds the NAME ``localhost``.
+        # On READ it must auto-migrate to 127.0.0.1 so the operator is not locked
+        # out — the live serve.token resolves AND the resolved target is the
+        # literal, never the ambiguous name.
         (tmp_path / "serve.token").write_text("live-token")
         with _run_dir_at(tmp_path):
             cfg = ClientConfig.from_login({"url": "wss://localhost:8420/mcp"})

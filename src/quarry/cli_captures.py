@@ -1,9 +1,10 @@
 """The ``quarry captures`` command group: push/init the private capture shadow.
 
 The shared top-level CLI plumbing (JSON/text emit, the error-boundary decorator,
-proxy config, settings, console) is injected as a :class:`CliPlumbing` bundle so
-this module never imports back into ``__main__`` — the two stay free of an import
-cycle, and the command group is testable in isolation with a stub plumbing.
+the connected client factory, console) is injected as a :class:`CliPlumbing`
+bundle so this module never imports back into ``__main__`` — the two stay free of
+an import cycle, and the command group is testable in isolation with a stub
+plumbing.
 """
 
 from __future__ import annotations
@@ -15,25 +16,24 @@ from typing import TYPE_CHECKING, Annotated, Self, final
 import typer
 
 from quarry.cli_formatters import ResultFormatter
-from quarry.client import ClientConfig
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from rich.console import Console
 
-    from quarry.config import Settings
+    from quarry.client import QuarryClient
 
 
 @dataclass(frozen=True, slots=True)
 class CliPlumbing:
-    """The top-level CLI helpers the captures commands borrow."""
+    """The top-level CLI helpers every command group borrows."""
 
     emit: Callable[[object, str], None]
     cli_errors: Callable[[Callable[..., None]], Callable[..., None]]
-    safe_proxy_config: Callable[[], dict[str, object]]
-    resolved_settings: Callable[[], Settings]
+    client: Callable[[], QuarryClient]
     err_console: Console
+    is_quiet: Callable[[], bool]
 
 
 @final
@@ -71,22 +71,11 @@ class CapturesCli:
 
     def _push(self) -> None:
         """Re-scrub and push redacted captures to each project's private shadow."""
-        from quarry.shadow import CaptureSync  # noqa: PLC0415
-
-        proxy_config = self._p.safe_proxy_config().get("quarry", {})
-        if isinstance(proxy_config, dict) and "url" in proxy_config:
-            client = ClientConfig.remote_client(proxy_config)
-            resp = client.request("POST", "/captures/push", body={})
-            rendered = ResultFormatter.coerce_results(resp.get("results", resp))
-            self._p.emit(resp, ResultFormatter.captures_push(rendered))
-        else:
-            results = CaptureSync.push_registered(
-                self._p.resolved_settings(), fail_open=True
-            )
-            rendered = {col: res.to_dict() for col, res in results.items()}
-            self._p.emit({"results": rendered}, ResultFormatter.captures_push(rendered))
-        # Both surfaces exit non-zero when any project failed to push (bug class 3
-        # parity — the remote path previously returned 0 even on refused pushes).
+        resp = self._p.client().captures_push()
+        rendered = ResultFormatter.coerce_results(resp.results)
+        self._p.emit({"results": rendered}, ResultFormatter.captures_push(rendered))
+        # Exit non-zero when any project failed to push (bug-class-3 parity — a
+        # refused push must not report success).
         if ResultFormatter.has_failures(rendered):
             raise typer.Exit(code=1)
 

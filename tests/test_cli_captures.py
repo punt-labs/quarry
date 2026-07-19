@@ -1,17 +1,19 @@
 """Tests for the extracted `quarry captures` command group (CapturesCli).
 
-Exercised in isolation with a stub CliPlumbing — no __main__ patching — plus one
-smoke test confirming the group is wired onto the top-level app.
+Exercised in isolation with a stub CliPlumbing whose ``client`` factory returns a
+fake QuarryClient — no __main__ patching — plus one smoke test confirming the
+group is wired onto the top-level app.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
+from quarry.api import CapturesPushResponse
 from quarry.cli_captures import CapturesCli, CliPlumbing
 from quarry.shadow.sync import ShadowSyncResult
 
@@ -20,6 +22,8 @@ if TYPE_CHECKING:
 
     import typer
 
+    from quarry.client import QuarryClient
+
 runner = CliRunner()
 
 _PUSHED = ShadowSyncResult(
@@ -27,7 +31,7 @@ _PUSHED = ShadowSyncResult(
 )
 
 
-def _plumbing(*, proxy: dict[str, object], recorder: list[object]) -> CliPlumbing:
+def _plumbing(*, client: object, recorder: list[object]) -> CliPlumbing:
     def emit(data: object, _text: str = "") -> None:
         recorder.append(data)
 
@@ -37,70 +41,42 @@ def _plumbing(*, proxy: dict[str, object], recorder: list[object]) -> CliPlumbin
     return CliPlumbing(
         emit=emit,
         cli_errors=cli_errors,
-        safe_proxy_config=lambda: proxy,
-        resolved_settings=MagicMock(),
+        client=lambda: cast("QuarryClient", client),
         err_console=MagicMock(),
+        is_quiet=lambda: False,
     )
 
 
-def _app(*, proxy: dict[str, object], recorder: list[object]) -> typer.Typer:
-    return CapturesCli(_plumbing(proxy=proxy, recorder=recorder)).build()
+def _app(*, client: object, recorder: list[object]) -> typer.Typer:
+    return CapturesCli(_plumbing(client=client, recorder=recorder)).build()
+
+
+def _client_pushing(results: dict[str, dict[str, object]]) -> MagicMock:
+    client = MagicMock()
+    client.captures_push.return_value = CapturesPushResponse(results=results)
+    return client
 
 
 class TestPushExitCode:
-    def test_local_nonzero_exit_when_not_pushed(self) -> None:
+    def test_nonzero_exit_when_not_pushed(self) -> None:
         aborted = ShadowSyncResult.aborted("public-remote")
-        with patch(
-            "quarry.shadow.CaptureSync.push_registered",
-            return_value={"proj": aborted},
-        ):
-            result = runner.invoke(_app(proxy={}, recorder=[]), ["push"])
-        assert result.exit_code == 1
-
-    def test_remote_nonzero_exit_when_not_pushed(self) -> None:
-        # bug class 3: the remote branch must exit non-zero on a refused push,
-        # matching the local branch (it previously always returned 0).
-        aborted = ShadowSyncResult.aborted("public-remote")
-        with patch("quarry.client.config.RemoteClient") as remote_client:
-            remote_client.return_value.request.return_value = {
-                "results": {"proj": aborted.to_dict()}
-            }
-            app = _app(proxy={"quarry": {"url": "https://h:8420"}}, recorder=[])
-            result = runner.invoke(app, ["push"])
+        client = _client_pushing({"proj": aborted.to_dict()})
+        result = runner.invoke(_app(client=client, recorder=[]), ["push"])
         assert result.exit_code == 1
 
     def test_success_exits_zero(self) -> None:
-        with patch(
-            "quarry.shadow.CaptureSync.push_registered",
-            return_value={"proj": _PUSHED},
-        ):
-            result = runner.invoke(_app(proxy={}, recorder=[]), ["push"])
+        client = _client_pushing({"proj": _PUSHED.to_dict()})
+        result = runner.invoke(_app(client=client, recorder=[]), ["push"])
         assert result.exit_code == 0
 
-
-class TestPushEquivalence:
-    def test_local_and_remote_emit_same_field_names(self) -> None:
-        local: list[object] = []
-        with patch(
-            "quarry.shadow.CaptureSync.push_registered",
-            return_value={"proj": _PUSHED},
-        ):
-            runner.invoke(_app(proxy={}, recorder=local), ["push"])
-
-        remote: list[object] = []
-        with patch("quarry.client.config.RemoteClient") as remote_client:
-            remote_client.return_value.request.return_value = {
-                "results": {"proj": _PUSHED.to_dict()}
-            }
-            app = _app(proxy={"quarry": {"url": "https://h"}}, recorder=remote)
-            runner.invoke(app, ["push"])
-
-        local_data = local[0]
-        remote_data = remote[0]
-        assert isinstance(local_data, dict)
-        assert isinstance(remote_data, dict)
-        assert set(local_data) == set(remote_data) == {"results"}
-        assert set(local_data["results"]["proj"]) == set(remote_data["results"]["proj"])
+    def test_emits_results_envelope(self) -> None:
+        recorder: list[object] = []
+        client = _client_pushing({"proj": _PUSHED.to_dict()})
+        runner.invoke(_app(client=client, recorder=recorder), ["push"])
+        data = recorder[0]
+        assert isinstance(data, dict)
+        assert set(data) == {"results"}
+        assert set(data["results"]["proj"]) == set(_PUSHED.to_dict())
 
 
 class TestInit:
@@ -109,7 +85,7 @@ class TestInit:
             patch("quarry.shadow.CaptureSync.from_directory", return_value=None),
             patch("pathlib.Path.cwd", return_value=tmp_path),
         ):
-            result = runner.invoke(_app(proxy={}, recorder=[]), ["init"])
+            result = runner.invoke(_app(client=MagicMock(), recorder=[]), ["init"])
         assert result.exit_code == 1
 
     def test_bootstraps(self, tmp_path: Path) -> None:
@@ -119,7 +95,7 @@ class TestInit:
             patch("quarry.shadow.CaptureSync.from_directory", return_value=shadow),
             patch("pathlib.Path.cwd", return_value=tmp_path),
         ):
-            result = runner.invoke(_app(proxy={}, recorder=[]), ["init"])
+            result = runner.invoke(_app(client=MagicMock(), recorder=[]), ["init"])
         assert result.exit_code == 0
         shadow.bootstrap.assert_called_once_with(create=False)
 
@@ -130,13 +106,13 @@ class TestInit:
             patch("quarry.shadow.CaptureSync.from_directory", return_value=shadow),
             patch("pathlib.Path.cwd", return_value=tmp_path),
         ):
-            runner.invoke(_app(proxy={}, recorder=[]), ["init", "--create"])
+            runner.invoke(_app(client=MagicMock(), recorder=[]), ["init", "--create"])
         shadow.bootstrap.assert_called_once_with(create=True)
 
 
 class TestCallback:
     def test_no_subcommand_errors(self) -> None:
-        result = runner.invoke(_app(proxy={}, recorder=[]), [])
+        result = runner.invoke(_app(client=MagicMock(), recorder=[]), [])
         assert result.exit_code == 1
 
 

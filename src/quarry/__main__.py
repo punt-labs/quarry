@@ -1,71 +1,46 @@
 from __future__ import annotations
 
-import contextlib
 import functools
 import importlib.metadata
 import json
 import logging
-import os
 import sys
-import tempfile
-import urllib.parse
-from collections.abc import Callable, Generator
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Annotated, Any, final
+from typing import TYPE_CHECKING, Annotated
 
 import typer
 import typer.core
 from rich.console import Console
-from rich.progress import Progress
 
 from quarry.cli_captures import CapturesCli, CliPlumbing
-from quarry.cli_formatters import ResultFormatter
-from quarry.cli_runtime import CliRuntime
-from quarry.client import ClientConfig
-from quarry.collections import CollectionName
-from quarry.config import (
-    DEFAULT_PORT,
-    Settings,
+from quarry.cli_documents import DocumentsCli
+from quarry.cli_ingest import IngestCli
+from quarry.cli_maintenance import MaintenanceCli
+from quarry.cli_project import ProjectCli
+from quarry.cli_remote import RemoteCli
+from quarry.cli_search import SearchCli
+from quarry.cli_sync import SyncCli
+from quarry.client import (
+    HttpError,
+    QuarryConnectionError,
+    QuarryError,
+    TargetResolver,
 )
-from quarry.db import Database
-from quarry.db.storage import (
-    dir_size_bytes,
-    discover_databases,
-)
-from quarry.deregister_result import DeregisterResult
-from quarry.formatting import (
-    format_collections,
-    format_document_detail,
-    format_documents,
-    format_status,
-)
-from quarry.ingestion.backends import get_embedding_backend
-from quarry.ingestion.pipeline import ingest_auto, ingest_content, ingest_document
-from quarry.ingestion.provider import ProviderSelection
+from quarry.client.errors import CONFLICT_STATUS
+from quarry.config import Settings
 from quarry.logging_config import LoggingConfig
-from quarry.remote import (
-    CA_CERT_PATH,
-    MCP_PROXY_CONFIG_PATH,
-    PermissionWarning,
-    delete_proxy_config,
-    fetch_ca_cert,
-    mask_token,
-    read_proxy_config,
-    store_ca_cert,
-    to_netloc,
-    validate_connection,
-    validate_connection_from_ws_url,
-    write_proxy_config,
-)
-from quarry.remote_client import RemoteError
-from quarry.results import SearchFilter
-from quarry.retrieval import SearchService
-from quarry.sync import sync_all
-from quarry.sync_registry import SyncRegistry
-from quarry.tls import cert_fingerprint
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
+
+# Appended after a LOOPBACK QuarryConnectionError so a down local daemon points at
+# the fix.  Never shown for a remote failure — starting quarryd would not help.
+_AUTOSTART_HINT = (
+    "If quarryd is not running, start it with 'quarry install' (managed) or "
+    "'quarryd' (foreground)."
+)
+
 
 _COMMAND_ORDER: list[str] = [
     # Product commands
@@ -118,7 +93,7 @@ hooks_app = typer.Typer(
 app.add_typer(hooks_app, name="hooks", hidden=True)
 err_console = Console(stderr=True)
 
-# Global state set by @app.callback
+# Global state set by @app.callback.
 _json_output: bool = False
 _verbose: bool = False
 _quiet: bool = False
@@ -183,7 +158,6 @@ def main_callback(
     # startup-db run dir (serve.token/serve.port) the same way — client and
     # daemon agree on the database by a matching --db.
     Settings.set_active_db(database)
-    # Determine stderr log level from flags.
     if _verbose:
         stderr_level = "INFO"
     elif _quiet:
@@ -199,9 +173,8 @@ def main_callback(
 def _emit(data: object, text: str = "") -> None:
     """Output helper: JSON when --json is active, otherwise text.
 
-    When ``--json`` is set, *data* is serialised to stdout as a single JSON
-    line.  Otherwise *text* is printed (if non-empty).  Commands should always
-    pass both a structured payload and a human-readable string.
+    Commands always pass both a structured payload and a human-readable string;
+    ``--json`` serialises *data* as a single line, otherwise *text* prints.
     """
     if _json_output:
         json.dump(data, sys.stdout)
@@ -210,39 +183,14 @@ def _emit(data: object, text: str = "") -> None:
         print(text)
 
 
-@contextlib.contextmanager
-def _progress(
-    label: str,
-) -> Generator[Callable[[str], None] | None]:
-    """Yield a progress callback, or None when output is suppressed.
-
-    The Rich progress bar renders on stderr.  It is suppressed in
-    ``--json`` mode (no visual noise alongside machine output) and in
-    ``--quiet`` mode (stderr contract: only fatal errors).
-    """
-    if _json_output or _quiet:
-        yield None
-        return
-    p = Progress(console=err_console)
-    task = p.add_task(label, total=None)
-    p.start()
-    try:
-        yield lambda message: p.update(task, description=message)
-    finally:
-        p.stop()
-
-
-def _resolved_settings(db: str = "") -> Settings:
-    """Load settings with --db resolution applied.
-
-    Priority: per-command ``db`` > global ``--db`` flag > persistent default.
-    """
-    effective = db or _global_db or Settings.read_default_db()
-    return Settings.load().resolve_db_paths(effective or None)
-
-
 def _cli_errors(fn: Callable[..., None]) -> Callable[..., None]:
-    """Catch exceptions at the CLI boundary, log, and exit with code 1."""
+    """Map typed client errors (and any escape) to a ``typer.Exit`` at the CLI edge.
+
+    This is the one place the client tier's :class:`QuarryError` hierarchy becomes
+    an exit code and a message; command bodies never catch it.  A 409 conflict is
+    "already in progress" (exit 0); a connection failure carries the autostart
+    nudge; every other typed error and any unexpected escape exits 1.
+    """
 
     @functools.wraps(fn)
     def wrapper(*args: object, **kwargs: object) -> None:
@@ -250,6 +198,30 @@ def _cli_errors(fn: Callable[..., None]) -> Callable[..., None]:
             fn(*args, **kwargs)
         except (SystemExit, KeyboardInterrupt, typer.Exit):
             raise
+        except QuarryConnectionError as exc:
+            err_console.print(f"Error: {exc.message}", style="red")
+            if exc.is_loopback:
+                err_console.print(_AUTOSTART_HINT, style="yellow")
+            raise typer.Exit(code=1) from exc
+        except HttpError as exc:
+            if exc.status == CONFLICT_STATUS:
+                # 409 = a singleton task is already running. Surface ITS task_id
+                # the same way the 202 acceptance path does (via _emit to stdout),
+                # so an operator can poll/track the in-flight task. Exit 0 — this
+                # completes the acceptance model (202 = "accepted, here's the id";
+                # 409 = "already running, here's ITS id"), not an error.
+                text = (
+                    f"Already in progress (task {exc.task_id})"
+                    if exc.task_id
+                    else f"Already in progress: {exc.message}"
+                )
+                _emit({"task_id": exc.task_id, "status": "in_progress"}, text)
+                raise typer.Exit(code=0) from exc
+            err_console.print(f"Error: {exc.message}", style="red")
+            raise typer.Exit(code=1) from exc
+        except QuarryError as exc:
+            err_console.print(f"Error: {exc.message}", style="red")
+            raise typer.Exit(code=1) from exc
         except Exception as exc:
             logger.exception("Command %s failed", fn.__name__)
             err_console.print(f"Error: {exc}", style="red")
@@ -259,449 +231,27 @@ def _cli_errors(fn: Callable[..., None]) -> Callable[..., None]:
 
 
 # ---------------------------------------------------------------------------
-# Product commands — ordered: find, ingest, show, remember, status, use,
-# delete, register, deregister, sync, list
+# Data commands — assembled from the per-domain CLI modules, each a client call.
 # ---------------------------------------------------------------------------
 
+_plumbing = CliPlumbing(
+    emit=_emit,
+    cli_errors=_cli_errors,
+    # Deferred to call time so resolution reads live --db/env state (and tests can
+    # substitute the client) — never resolved at import.
+    client=lambda: TargetResolver.connect(),
+    err_console=err_console,
+    is_quiet=lambda: _quiet,
+)
 
-def _safe_proxy_config() -> dict[str, Any]:
-    """Return parsed proxy config, falling back to {} on malformed TOML."""
-    try:
-        return read_proxy_config()
-    except ValueError as exc:
-        err_console.print(f"Warning: {exc}", style="yellow")
-        return {}
-
-
-@app.command(name="find")
-@_cli_errors
-def find_cmd(
-    query: Annotated[str, typer.Argument(help="Search query")],
-    limit: Annotated[int, typer.Option("--limit", "-n", help="Max results")] = 10,
-    document: Annotated[
-        str, typer.Option("--document", "-d", help="Filter by document name")
-    ] = "",
-    collection: Annotated[
-        str, typer.Option("--collection", "-c", help="Filter by collection")
-    ] = "",
-    page_type: Annotated[
-        str,
-        typer.Option("--page-type", help="Filter by content type (text, code, etc.)"),
-    ] = "",
-    source_format: Annotated[
-        str,
-        typer.Option(
-            "--source-format", help="Filter by source format (.pdf, .py, etc.)"
-        ),
-    ] = "",
-    agent_handle: Annotated[
-        str,
-        typer.Option("--agent-handle", help="Filter by agent handle"),
-    ] = "",
-    memory_type: Annotated[
-        str,
-        typer.Option("--memory-type", help="Filter by memory type"),
-    ] = "",
-) -> None:
-    """Search indexed documents."""
-    proxy_config = _safe_proxy_config().get("quarry", {})
-    if isinstance(proxy_config, dict) and "url" in proxy_config:
-        json_results, text = ClientConfig.remote_client(proxy_config).find(
-            query=query,
-            limit=limit,
-            collection=collection,
-            document=document,
-            page_type=page_type,
-            source_format=source_format,
-            agent_handle=agent_handle,
-            memory_type=memory_type,
-        )
-        _emit(json_results, text)
-        return
-
-    settings = _resolved_settings()
-    database = Database.connect(settings.lancedb_path)
-    query_vector = get_embedding_backend(settings).embed_query(query)
-    search_filter = SearchFilter(
-        collection=collection or None,
-        document=document or None,
-        page_type=page_type or None,
-        source_format=source_format or None,
-        agent_handle=agent_handle or None,
-        memory_type=memory_type or None,
-    )
-    results = SearchService(database).search(query, query_vector, search_filter, limit)
-
-    local_json_results: list[dict[str, object]] = []
-    local_lines: list[str] = []
-    for row in results:
-        meta = f"{row.page_type}/{row.source_format}"
-        local_lines.append(
-            f"\n[{row.document_name} p.{row.page_number} | {meta}]"
-            f" (similarity: {row.similarity})"
-        )
-        local_lines.append(row.text[:300])
-        local_json_results.append(row.to_dict())
-
-    _emit(local_json_results, "\n".join(local_lines))
-
-
-@app.command(name="ingest")
-@_cli_errors
-def ingest_cmd(
-    source: Annotated[
-        str,
-        typer.Argument(help="File path or URL to ingest"),
-    ],
-    overwrite: Annotated[
-        bool, typer.Option("--overwrite", help="Replace existing data")
-    ] = False,
-    collection: Annotated[
-        str, typer.Option("--collection", "-c", help="Collection name")
-    ] = "",
-    agent_handle: Annotated[
-        str,
-        typer.Option("--agent-handle", help="Agent handle to tag content"),
-    ] = "",
-    memory_type: Annotated[
-        str,
-        typer.Option(
-            "--memory-type",
-            help="Memory type: fact, observation, opinion, procedure",
-        ),
-    ] = "",
-    summary: Annotated[
-        str,
-        typer.Option("--summary", help="One-line summary of the content"),
-    ] = "",
-) -> None:
-    """Ingest a file or URL into the knowledge base.
-
-    Auto-detects the source type: URLs (http/https) use smart sitemap
-    discovery with single-page fallback; local paths are ingested as files.
-
-    Supports PDF, images, PPTX, XLSX, CSV, HTML, TXT, MD, TEX, DOCX, and
-    source code files.
-    """
-    is_url = source.startswith(("http://", "https://"))
-
-    proxy_config = _safe_proxy_config().get("quarry", {})
-    if isinstance(proxy_config, dict) and "url" in proxy_config:
-        if not is_url:
-            err_console.print(
-                "Error: file upload to remote server is not supported in "
-                "this release. Use a URL or run quarry locally.",
-                style="red",
-            )
-            raise typer.Exit(code=1)
-        body: dict[str, object] = {
-            "source": source,
-            "overwrite": overwrite,
-            "collection": collection,
-            "agent_handle": agent_handle,
-            "memory_type": memory_type,
-            "summary": summary,
-        }
-        # Fire-and-forget: POST /ingest returns 202 with task_id.
-        # The CLI prints the task_id and exits immediately.
-        try:
-            remote_resp = ClientConfig.remote_client(proxy_config).request(
-                "POST", "/ingest", body=body
-            )
-        except RemoteError as exc:
-            err_console.print(f"Error: {exc}", style="red")
-            raise typer.Exit(code=1) from exc
-        task_id = remote_resp.get("task_id", "")
-        status = remote_resp.get("status", "")
-        _emit(
-            remote_resp,
-            f"Ingest {status}: task_id={task_id}",
-        )
-        return
-
-    settings = _resolved_settings()
-    database = Database.connect(settings.lancedb_path)
-
-    if is_url:
-        with _progress(f"Fetching {source}") as cb:
-            result = ingest_auto(
-                source,
-                database,
-                settings,
-                overwrite=overwrite,
-                collection=collection,
-                progress_callback=cb,
-                agent_handle=agent_handle,
-                memory_type=memory_type,
-                summary=summary,
-            )
-
-        _emit(result, json.dumps(result, indent=2))
-        errors: list[str] = result.get("errors", [])  # type: ignore[assignment]
-        for err in errors:
-            err_console.print(f"  {err}", style="red")
-        CliRuntime.exit_on_ingest_failure(result)
-    else:
-        file_path = Path(source).resolve()
-        if file_path.is_dir():
-            err_console.print(
-                f"Error: {source!r} is a directory. "
-                "Use 'quarry register' to track directories.",
-                style="red",
-            )
-            raise typer.Exit(code=1)
-        col = CollectionName.from_path(file_path, explicit=collection or None)
-
-        with _progress(f"Processing {file_path.name}") as cb:
-            result = ingest_document(
-                file_path,
-                database,
-                settings,
-                overwrite=overwrite,
-                collection=str(col),
-                progress_callback=cb,
-                agent_handle=agent_handle,
-                memory_type=memory_type,
-                summary=summary,
-            )
-
-        _emit(result, json.dumps(result, indent=2))
-        CliRuntime.exit_on_ingest_failure(result)
-
-
-@app.command(name="show")
-@_cli_errors
-def show_cmd(
-    document_name: Annotated[str, typer.Argument(help="Document name")],
-    page: Annotated[
-        int | None,
-        typer.Option("--page", "-p", help="Page number to display"),
-    ] = None,
-    collection: Annotated[
-        str,
-        typer.Option("--collection", "-c", help="Scope to collection"),
-    ] = "",
-) -> None:
-    """Show document metadata or a specific page's text."""
-    if page is not None and page < 1:
-        err_console.print(f"Error: page number must be >= 1, got {page}", style="red")
-        raise typer.Exit(code=1)
-    proxy_config = _safe_proxy_config().get("quarry", {})
-    if isinstance(proxy_config, dict) and "url" in proxy_config:
-        _show_remote(proxy_config, document_name, page, collection)
-    else:
-        _show_local(document_name, page, collection)
-
-
-def _show_page_text(document_name: str, page: object, text: object) -> None:
-    """Emit a single page's text on both surfaces with identical field names."""
-    _emit(
-        {"document_name": document_name, "page_number": page, "text": text},
-        f"Document: {document_name}\nPage: {page}\n---\n{text}",
-    )
-
-
-def _show_remote(
-    proxy_config: dict[str, object],
-    document_name: str,
-    page: int | None,
-    collection: str,
-) -> None:
-    """Render ``quarry show`` from the remote HTTP ``/show`` endpoint."""
-    params: dict[str, str] = {"document": document_name}
-    if page is not None:
-        params["page"] = str(page)
-    if collection:
-        params["collection"] = collection
-    try:
-        query = urllib.parse.urlencode(params)
-        resp = ClientConfig.remote_client(proxy_config).get(f"/show?{query}")
-    except RemoteError as exc:
-        err_console.print(f"Error: {exc}", style="red")
-        raise typer.Exit(code=1) from exc
-    if page is not None:
-        _show_page_text(
-            str(resp.get("document_name", "")),
-            resp.get("page_number", ""),
-            resp.get("text", ""),
-        )
-    else:
-        _emit(resp, format_document_detail(resp))
-
-
-def _show_local(document_name: str, page: int | None, collection: str) -> None:
-    """Render ``quarry show`` from the local LanceDB catalog."""
-    catalog = Database.connect(_resolved_settings().lancedb_path).catalog
-    if page is not None:
-        text = catalog.get_page_text(document_name, page, collection=collection or None)
-        if text is None:
-            err_console.print(
-                f"No data found for {document_name!r} page {page}", style="red"
-            )
-            raise typer.Exit(code=1)
-        _show_page_text(document_name, page, text)
-        return
-    docs = catalog.list_documents(collection_filter=collection or None)
-    match = [d for d in docs if d["document_name"] == document_name]
-    if not match:
-        err_console.print(f"Document {document_name!r} not found", style="red")
-        raise typer.Exit(code=1)
-    _emit(match[0], format_document_detail(match[0]))
-
-
-@app.command()
-@_cli_errors
-def remember(
-    name: Annotated[
-        str, typer.Option("--name", "-n", help="Document name (required)")
-    ] = "",
-    collection: Annotated[
-        str,
-        typer.Option("--collection", "-c", help="Collection name"),
-    ] = "default",
-    format_hint: Annotated[
-        str,
-        typer.Option("--format", help="Format hint: auto, plain, markdown, latex"),
-    ] = "auto",
-    overwrite: Annotated[
-        bool,
-        typer.Option(
-            "--overwrite/--no-overwrite",
-            help="Replace existing document with same name",
-        ),
-    ] = True,
-    agent_handle: Annotated[
-        str,
-        typer.Option("--agent-handle", help="Agent handle to tag content"),
-    ] = "",
-    memory_type: Annotated[
-        str,
-        typer.Option(
-            "--memory-type",
-            help="Memory type: fact, observation, opinion, procedure",
-        ),
-    ] = "",
-    summary: Annotated[
-        str,
-        typer.Option("--summary", help="One-line summary of the content"),
-    ] = "",
-) -> None:
-    """Ingest inline content from stdin.
-
-    Reads text from stdin and indexes it for semantic search. Requires
-    --name to set the document name. Overwrites by default; use
-    --no-overwrite to skip if the document already exists.
-
-    Examples:
-        echo "meeting notes" | quarry remember --name notes.md
-        cat README.md | quarry remember --name readme.md --format markdown
-    """
-    if not name:
-        err_console.print("Error: --name is required for remember.", style="red")
-        raise typer.Exit(code=1)
-
-    content = sys.stdin.read()
-    if not content.strip():
-        err_console.print("Error: no content on stdin.", style="red")
-        raise typer.Exit(code=1)
-
-    proxy_config = _safe_proxy_config().get("quarry", {})
-    if isinstance(proxy_config, dict) and "url" in proxy_config:
-        body: dict[str, object] = {
-            "name": name,
-            "content": content,
-            "collection": collection,
-            "format_hint": format_hint,
-            "overwrite": overwrite,
-            "agent_handle": agent_handle,
-            "memory_type": memory_type,
-            "summary": summary,
-        }
-        # Fire-and-forget: POST /remember returns 202 with task_id.
-        try:
-            remote_resp = ClientConfig.remote_client(proxy_config).request(
-                "POST", "/remember", body=body
-            )
-        except RemoteError as exc:
-            err_console.print(f"Error: {exc}", style="red")
-            raise typer.Exit(code=1) from exc
-        task_id = remote_resp.get("task_id", "")
-        status = remote_resp.get("status", "")
-        _emit(remote_resp, f"Remember {status}: task_id={task_id}")
-        return
-
-    settings = _resolved_settings()
-    database = Database.connect(settings.lancedb_path)
-
-    with _progress("Remembering") as cb:
-        result = ingest_content(
-            content,
-            name,
-            database,
-            settings,
-            overwrite=overwrite,
-            collection=collection,
-            format_hint=format_hint,
-            progress_callback=cb,
-            agent_handle=agent_handle,
-            memory_type=memory_type,
-            summary=summary,
-        )
-
-    _emit(result, json.dumps(result, indent=2))
-    local_errors_raw = result.get("errors")
-    if isinstance(local_errors_raw, list):
-        for err_msg in local_errors_raw:
-            err_console.print(f"  {err_msg}", style="red")
-    CliRuntime.exit_on_ingest_failure(result)
-
-
-@app.command(name="status")
-@_cli_errors
-def status_cmd() -> None:
-    """Show database status: documents, chunks, storage, model info."""
-    proxy_config = _safe_proxy_config().get("quarry", {})
-    if isinstance(proxy_config, dict) and "url" in proxy_config:
-        try:
-            remote_data = ClientConfig.remote_client(proxy_config).get("/status")
-        except RemoteError as exc:
-            err_console.print(f"Error: {exc}", style="red")
-            raise typer.Exit(code=1) from exc
-        _emit(remote_data, format_status(remote_data))
-        return
-
-    settings = _resolved_settings()
-    database = Database.connect(settings.lancedb_path)
-
-    chunks = database.store.count()
-    cols = database.catalog.list_collections()
-    doc_count = sum(c["document_count"] for c in cols)
-
-    if settings.registry_path.exists():
-        conn = SyncRegistry(settings.registry_path)
-        try:
-            regs = conn.list_registrations()
-        finally:
-            conn.close()
-    else:
-        regs = []
-
-    db_size_bytes = (
-        dir_size_bytes(settings.lancedb_path) if settings.lancedb_path.exists() else 0
-    )
-
-    data = {
-        "document_count": doc_count,
-        "collection_count": len(cols),
-        "chunk_count": chunks,
-        "registered_directories": len(regs),
-        "database_path": str(settings.lancedb_path),
-        "database_size_bytes": db_size_bytes,
-        "embedding_model": settings.embedding_model,
-        "provider": ProviderSelection.display_cached(),
-        "embedding_dimension": settings.embedding_dimension,
-    }
-    _emit(data, format_status(data))
+SearchCli(_plumbing).register(app)
+IngestCli(_plumbing).register(app)
+DocumentsCli(_plumbing).register(app)
+SyncCli(_plumbing).register(app)
+ProjectCli(_plumbing).register(app)
+MaintenanceCli(_plumbing).register(app)
+RemoteCli(_plumbing).register(app)
+app.add_typer(CapturesCli(_plumbing).build(), name="captures")
 
 
 @app.command(name="use")
@@ -711,923 +261,19 @@ def use_cmd(
 ) -> None:
     """Set the persistent default database for subsequent commands.
 
-    Use 'default' to reset to the default database. The --db flag
-    overrides this per-call.
-
-    Note: database selection is always a client-side preference.  When a
-    remote server is configured, this still writes the local config — the
-    remote server is fixed to the database it was started with.
+    Database selection is a client-side preference: it points the client at that
+    database's daemon run dir.  Use 'default' to reset; the ``--db`` flag
+    overrides this per call.
     """
-    # Validate the name before persisting.
     Settings.load().resolve_db_paths(name if name != "default" else None)
     Settings.write_default_db(name)
-
-    proxy_config = _safe_proxy_config().get("quarry", {})
-    remote_note = (
-        "Note: this is a client-side preference; "
-        "the remote server is fixed to its own database."
-        if isinstance(proxy_config, dict) and "url" in proxy_config
-        else ""
-    )
-    text = f"Default database set to {name!r}"
-    if remote_note:
-        text += f"\n{remote_note}"
-    _emit({"database": name}, text)
-
-
-@app.command(name="delete")
-@_cli_errors
-def delete_cmd(
-    name: Annotated[str, typer.Argument(help="Document or collection name to delete")],
-    kind: Annotated[
-        str,
-        typer.Option("--type", "-t", help="What to delete: 'document' or 'collection'"),
-    ] = "document",
-    collection: Annotated[
-        str,
-        typer.Option("--collection", "-c", help="Scope to collection (documents only)"),
-    ] = "",
-) -> None:
-    """Delete indexed data for a document or collection."""
-    proxy_config = _safe_proxy_config().get("quarry", {})
-    if isinstance(proxy_config, dict) and "url" in proxy_config:
-        if kind == "collection":
-            path = f"/collections?name={urllib.parse.quote(name)}"
-        elif kind == "document":
-            del_params: dict[str, str] = {"name": name}
-            if collection:
-                del_params["collection"] = collection
-            path = f"/documents?{urllib.parse.urlencode(del_params)}"
-        else:
-            err_console.print(
-                f"Error: unknown type {kind!r}. Use 'document' or 'collection'.",
-                style="red",
-            )
-            raise typer.Exit(code=1)
-        # Fire-and-forget: DELETE returns 202 with task_id.
-        try:
-            client = ClientConfig.remote_client(proxy_config)
-            remote_resp = client.request("DELETE", path)
-        except RemoteError as exc:
-            err_console.print(f"Error: {exc}", style="red")
-            raise typer.Exit(code=1) from exc
-        task_id = remote_resp.get("task_id", "")
-        status = remote_resp.get("status", "")
-        _emit(remote_resp, f"Delete {status}: task_id={task_id}")
-        return
-
-    settings = _resolved_settings()
-    database = Database.connect(settings.lancedb_path)
-
-    if kind == "collection":
-        deleted = database.store.delete_collection(name)
-        label = f"collection {name!r}"
-    elif kind == "document":
-        deleted = database.store.delete_document(name, collection=collection or None)
-        label = f"{name!r}"
-    else:
-        err_console.print(
-            f"Error: unknown type {kind!r}. Use 'document' or 'collection'.",
-            style="red",
-        )
-        raise typer.Exit(code=1)
-
-    if deleted == 0:
-        err_console.print(f"No data found for {label}", style="red")
-        raise typer.Exit(code=1)
-    _emit(
-        {"deleted": deleted, "name": name, "type": kind},
-        f"Deleted {deleted} chunks for {label}",
-    )
-
-
-@app.command()
-@_cli_errors
-def register(
-    directory: Annotated[Path, typer.Argument(help="Directory to register")],
-    collection: Annotated[
-        str,
-        typer.Option("--collection", "-c", help="Collection name (default: dir name)"),
-    ] = "",
-) -> None:
-    """Register a directory for incremental sync."""
-    proxy_config = _safe_proxy_config().get("quarry", {})
-    if isinstance(proxy_config, dict) and "url" in proxy_config:
-        # Server-side path allowlist requires an absolute path — the resolved
-        # path is what the server will enforce against its $HOME.
-        resolved_str = str(directory.expanduser().resolve())
-        col = collection or directory.name or Path(resolved_str).name
-        body: dict[str, object] = {"directory": resolved_str, "collection": col}
-        # Fire-and-forget: POST /registrations returns 202 with task_id.
-        try:
-            remote_resp = ClientConfig.remote_client(proxy_config).request(
-                "POST", "/registrations", body=body
-            )
-        except RemoteError as exc:
-            err_console.print(f"Error: {exc}", style="red")
-            raise typer.Exit(code=1) from exc
-        task_id = remote_resp.get("task_id", "")
-        status = remote_resp.get("status", "")
-        _emit(remote_resp, f"Register {status}: task_id={task_id}")
-        return
-
-    settings = _resolved_settings()
-    resolved = directory.resolve()
-    col = collection or resolved.name
-    conn = SyncRegistry(settings.registry_path)
-    try:
-        reg = conn.register_directory(resolved, col)
-        _emit(
-            {"directory": str(reg.directory), "collection": reg.collection},
-            f"Registered {reg.directory} as collection {reg.collection!r}",
-        )
-    finally:
-        conn.close()
-
-
-@app.command()
-@_cli_errors
-def deregister(
-    collection: Annotated[str, typer.Argument(help="Collection to deregister")],
-    keep_data: Annotated[
-        bool,
-        typer.Option("--keep-data", help="Keep indexed data in LanceDB"),
-    ] = False,
-) -> None:
-    """Remove a directory registration. Optionally keep indexed data."""
-    proxy_config = _safe_proxy_config().get("quarry", {})
-    request = _Deregistration(collection, keep_data)
-    if isinstance(proxy_config, dict) and "url" in proxy_config:
-        result = request.remote(proxy_config)
-    else:
-        result = request.local()
-    _emit(
-        result.as_dict(),
-        f"Deregistered collection {collection!r} "
-        f"({result.removed} files, "
-        f"{result.deleted_chunks} chunks deleted)",
-    )
-
-
-@final
-@dataclass(frozen=True, slots=True)
-class _Deregistration:
-    """A pending deregistration, resolvable against a remote server or locally."""
-
-    _collection: str
-    _keep_data: bool
-
-    def remote(self, config: dict[str, object]) -> DeregisterResult:
-        """Deregister via the remote server: DELETE then poll the purge task.
-
-        A 404 maps to exit 1 with the same message as the local path; a purge
-        that fails or times out also exits 1 (never a false success).
-        """
-        params = {
-            "collection": self._collection,
-            "keep_data": str(self._keep_data).lower(),
-        }
-        path = f"/registrations?{urllib.parse.urlencode(params)}"
-        client = ClientConfig.remote_client(config)
-        try:
-            accepted = client.request("DELETE", path)
-        except RemoteError as exc:
-            msg = (
-                f"No registration found for {self._collection!r}"
-                if exc.status == 404
-                else f"Error: {exc}"
-            )
-            err_console.print(msg, style="red")
-            raise typer.Exit(code=1) from exc
-        polled = client.await_task(str(accepted.get("task_id", "")))
-        return DeregisterResult.from_task(self._collection, polled)
-
-    def local(self) -> DeregisterResult:
-        """Deregister against the local registry and purge chunks synchronously."""
-        settings = _resolved_settings()
-        conn = SyncRegistry(settings.registry_path)
-        try:
-            if conn.get_registration(self._collection) is None:
-                err_console.print(
-                    f"No registration found for {self._collection!r}", style="red"
-                )
-                raise typer.Exit(code=1)
-            doc_names = conn.deregister_directory(self._collection)
-        finally:
-            conn.close()
-        deleted_chunks = 0
-        if not self._keep_data and doc_names:
-            store = Database.connect(settings.lancedb_path).store
-            deleted_chunks = sum(
-                store.delete_document(n, collection=self._collection) for n in doc_names
-            )
-        return DeregisterResult(self._collection, len(doc_names), deleted_chunks)
-
-
-@app.command(name="sync")
-@_cli_errors
-def sync_cmd(
-    workers: Annotated[
-        int | None,
-        typer.Option(
-            "--workers",
-            "-w",
-            help="Parallel workers (default: 1)",
-        ),
-    ] = None,
-) -> None:
-    """Sync all registered directories: ingest new/changed, remove deleted."""
-    proxy_config = _safe_proxy_config().get("quarry", {})
-    if isinstance(proxy_config, dict) and "url" in proxy_config:
-        if workers is not None and not _quiet:
-            err_console.print(
-                "Warning: --workers is ignored when a remote quarry server is "
-                "configured",
-                style="yellow",
-            )
-        # Fire-and-forget: POST /sync returns 202 with task_id.
-        # The CLI prints the task_id and exits immediately.
-        try:
-            remote_resp = ClientConfig.remote_client(proxy_config).request(
-                "POST",
-                "/sync",
-                body={},
-            )
-        except RemoteError as exc:
-            # 409 means sync already running — extract task_id from the
-            # JSON body so the user can poll it.
-            if exc.status == 409:
-                conflict_task_id = "unknown"
-                msg = str(exc)
-                # The message embeds the raw body after the HTTP status prefix.
-                body_start = msg.find("{")
-                if body_start != -1:
-                    try:
-                        data = json.loads(msg[body_start:])
-                        conflict_task_id = str(data.get("task_id", "unknown"))
-                    except (json.JSONDecodeError, AttributeError):
-                        pass
-                if not _quiet:
-                    err_console.print(
-                        f"Sync already in progress: task_id={conflict_task_id}",
-                        style="yellow",
-                    )
-                raise typer.Exit(code=0) from exc
-            err_console.print(f"Error: {exc}", style="red")
-            raise typer.Exit(code=1) from exc
-        task_id = remote_resp.get("task_id", "")
-        status = remote_resp.get("status", "")
-        _emit(
-            remote_resp,
-            f"Sync {status}: task_id={task_id}",
-        )
-        return
-
-    settings = _resolved_settings()
-    effective_workers = (
-        workers if workers is not None else CliRuntime.auto_workers(settings)
-    )
-    logger.info("Using %d sync workers", effective_workers)
-    database = Database.connect(settings.lancedb_path)
-
-    with _progress("Syncing") as cb:
-        results = sync_all(
-            database.db,
-            settings,
-            max_workers=effective_workers,
-            progress_callback=cb,
-        )
-
-    json_data: dict[str, dict[str, object]] = {
-        col: {
-            "ingested": res.ingested,
-            "refreshed": res.refreshed,
-            "deleted": res.deleted,
-            "skipped": res.skipped,
-            "failed": res.failed,
-            "errors": list(res.errors),
-        }
-        for col, res in results.items()
-    }
-    _emit(json_data, ResultFormatter.sync_results(json_data))
-
-
-@app.command(name="enable")
-@_cli_errors
-def enable_cmd(
-    directory: Annotated[
-        Path,
-        typer.Argument(help="Project directory to enable (default: cwd)"),
-    ] = Path(),
-    collection: Annotated[
-        str,
-        typer.Option("--collection", "-c", help="Override collection name"),
-    ] = "",
-) -> None:
-    """Enable quarry knowledge capture for a project directory."""
-    from quarry.enable import enable_project  # noqa: PLC0415
-
-    resolved = directory.resolve()
-    try:
-        result = enable_project(resolved, collection_override=collection)
-    except ValueError as exc:
-        _emit({"error": str(exc)}, "")
-        err_console.print(f"Error: {exc}", style="red")
-        raise typer.Exit(code=1) from None
-
-    import dataclasses  # noqa: PLC0415
-
-    lines: list[str] = [
-        f"Enabled quarry for {result.directory}",
-        f"  Collection: {result.collection}",
-        f"  Captures: {result.captures_collection}",
-    ]
-    if result.config_path:
-        lines.append(f"  Config: {result.config_path}")
-    if result.claudemd_appended:
-        lines.append("  Appended quarry instructions to CLAUDE.md")
-    if result.ethos_skipped:
-        lines.append("  Ethos: not installed (agent memory skipped)")
-    else:
-        if result.ethos_created:
-            lines.append(f"  Ethos created: {', '.join(result.ethos_created)}")
-        if result.ethos_updated:
-            lines.append(f"  Ethos updated: {', '.join(result.ethos_updated)}")
-        if result.memory_collections:
-            lines.append(
-                f"  Memory collections: {', '.join(result.memory_collections)}"
-            )
-
-    _emit(dataclasses.asdict(result), "\n".join(lines))
-
-
-@app.command(name="disable")
-@_cli_errors
-def disable_cmd(
-    directory: Annotated[
-        Path,
-        typer.Argument(help="Project directory to disable (default: cwd)"),
-    ] = Path(),
-    keep_data: Annotated[
-        bool,
-        typer.Option("--keep-data", help="Keep indexed data in LanceDB"),
-    ] = False,
-) -> None:
-    """Disable quarry knowledge capture for a project directory."""
-    from quarry.enable import disable_project  # noqa: PLC0415
-
-    resolved = directory.resolve()
-    try:
-        result = disable_project(resolved, keep_data=keep_data)
-    except ValueError as exc:
-        _emit({"error": str(exc)}, "")
-        err_console.print(f"Error: {exc}", style="red")
-        raise typer.Exit(code=1) from None
-
-    import dataclasses  # noqa: PLC0415
-
-    lines: list[str] = [f"Disabled quarry for {result.directory}"]
-    if result.deleted_chunks > 0:
-        lines.append(f"  Deleted {result.deleted_chunks} chunks")
-    if result.config_removed:
-        lines.append("  Config file removed")
-    if result.claudemd_removed:
-        lines.append("  Removed quarry instructions from CLAUDE.md")
-
-    _emit(dataclasses.asdict(result), "\n".join(lines))
-
-
-@app.command(name="optimize")
-@_cli_errors
-def optimize_cmd(
-    force: Annotated[
-        bool,
-        typer.Option(
-            "--force",
-            help="Bypass the fragment-count safety guard.",
-        ),
-    ] = False,
-) -> None:
-    """Compact the LanceDB table and rebuild indexes.
-
-    When the database has more than 10,000 fragments, optimization is
-    skipped by default to prevent a compaction death spiral. Use --force
-    to bypass this safety guard for manual recovery.
-    """
-    settings = _resolved_settings()
-    database = Database.connect(settings.lancedb_path)
-
-    # The optimizer owns the threshold decision and counts fragments once,
-    # returning what it actually did — so the CLI neither re-counts nor
-    # duplicates the threshold constant.
-    outcome = database.optimizer.optimize(force=force)
-
-    if not _quiet:
-        err_console.print(f"Fragment count: {outcome.fragments}")
-    if not outcome.optimized:
-        err_console.print(f"Skipping: {outcome.reason}.", style="yellow")
-        raise typer.Exit(code=1)
-
-    _emit(
-        {"optimized": True, "fragments_before": outcome.fragments, "force": force},
-        "Optimization complete.",
-    )
-
-
-@app.command(name="backfill-sessions")
-@_cli_errors
-def backfill_sessions_cmd(
-    dry_run: Annotated[
-        bool,
-        typer.Option(
-            "--dry-run",
-            help="Scan and report what would be ingested without writing.",
-        ),
-    ] = False,
-    collection: Annotated[
-        str,
-        typer.Option(
-            "--collection",
-            "-c",
-            help="Override target collection (all transcripts go here).",
-        ),
-    ] = "",
-    project: Annotated[
-        str,
-        typer.Option(
-            "--project",
-            help="Only backfill transcripts for this project path.",
-        ),
-    ] = "",
-    limit: Annotated[
-        int,
-        typer.Option(
-            "--limit",
-            "-n",
-            help="Max number of transcripts to process.",
-        ),
-    ] = 0,
-    provider: Annotated[  # noqa: ARG001
-        str,
-        typer.Option(
-            "--provider",
-            help="ONNX execution provider override.",
-        ),
-    ] = "",
-) -> None:
-    """Backfill historical Claude Code session transcripts.
-
-    Scans ~/.claude/projects/ for JSONL transcripts and ingests them
-    into per-project capture collections based on quarry registrations.
-    """
-    from quarry.backfill import backfill_sessions  # noqa: PLC0415
-
-    settings = _resolved_settings()
-    stats = backfill_sessions(
-        settings,
-        dry_run=dry_run,
-        collection_override=collection,
-        project_filter=project,
-        limit=limit,
-    )
-
-    data = {
-        "ingested": stats.ingested,
-        "skipped_existing": stats.skipped_existing,
-        "skipped_unregistered": stats.skipped_unregistered,
-        "skipped_empty": stats.skipped_empty,
-        "errors": stats.errors,
-        "dry_run": dry_run,
-    }
-
-    if dry_run:
-        text = (
-            f"[DRY RUN] Would ingest {stats.ingested} transcripts "
-            f"({stats.skipped_existing} already present, "
-            f"{stats.skipped_unregistered} unregistered)"
-        )
-    else:
-        text = (
-            f"Backfill complete: {stats.ingested} ingested, "
-            f"{stats.skipped_existing} skipped (already present), "
-            f"{stats.skipped_unregistered} skipped (unregistered)"
-        )
-        if stats.skipped_empty:
-            text += f", {stats.skipped_empty} skipped (empty)"
-        if stats.errors:
-            text += f", {len(stats.errors)} errors"
-
-    _emit(data, text)
-
-
-@app.command(name="login")
-@_cli_errors
-def login_cmd(  # noqa: C901
-    host: Annotated[str, typer.Argument(help="Remote quarry host (hostname or IP)")],
-    port: Annotated[int, typer.Option("--port", "-p", help="Port")] = DEFAULT_PORT,
-    api_key: Annotated[
-        str | None,
-        typer.Option(
-            "--api-key",
-            help="Bearer token for remote server (omit for unauthenticated servers)",
-            hide_input=True,
-            envvar="QUARRY_API_KEY",
-        ),
-    ] = None,
-    yes: Annotated[
-        bool,
-        typer.Option(
-            "--yes",
-            "-y",
-            help="Skip TOFU confirmation prompt (non-interactive, trust automatically).",  # noqa: E501
-        ),
-    ] = False,
-) -> None:
-    """Connect to a remote quarry server using TOFU certificate pinning.
-
-    Fetches the server's CA certificate over HTTPS with SSL verification
-    disabled (TOFU bootstrap), displays its fingerprint, prompts for trust
-    confirmation, then validates the connection over HTTPS/WSS and writes
-    the mcp-proxy config.
-    """
-    # Step 0: Canonicalize a loopback NAME to the IPv4 literal the managed daemon
-    # binds, so the stored config presents the serve.token to 127.0.0.1 — not
-    # the ambiguous "localhost", which a dual-stack resolver could point at a
-    # co-tenant's ::1.  A deliberate policy mapping, not an OS-resolver lookup;
-    # a literal IP or a remote host is unchanged.
-    host = ClientConfig.canonical_host(host)
-    # Strip the operator key exactly as the daemon does (DaemonServer._authenticated):
-    # a trailing newline from `--api-key "$(cat key)"` would otherwise be stored
-    # verbatim and presented UNstripped, 401ing against the daemon that compares
-    # the stripped value.  Whitespace-only -> None (no bearer stored).
-    api_key = (api_key or "").strip() or None
-
-    # Step 1: Fetch CA cert over HTTPS with SSL verification disabled (TOFU bootstrap).
-    try:
-        ca_cert_pem = fetch_ca_cert(host, port)
-    except ValueError as exc:
-        err_console.print(f"Error: {exc}", style="red")
-        raise typer.Exit(code=1) from exc
-
-    # Step 2: Display fingerprint.
-    fp = cert_fingerprint(ca_cert_pem)
-    if not _quiet:
-        err_console.print(f"Server CA fingerprint: {fp}")
-
-    # Step 3: Prompt for trust (skip if --yes).
-    if not yes:
-        confirmed = typer.confirm("Trust this server?", default=False)
-        if not confirmed:
-            if not _quiet:
-                err_console.print("Aborted. Not logged in.")
-            raise typer.Exit(code=0)
-
-    # Step 4: Validate connection using a tempfile — store CA cert only on success
-    # so a failed validation does not leave an orphaned cert on disk.
-    # Two-block pattern: close the fd explicitly if os.fdopen raises (Fix 1).
-    tmp_fd, tmp_path_str = tempfile.mkstemp(suffix=".crt")
-    tmp_path = Path(tmp_path_str)
-    try:
-        try:
-            tmp_file = os.fdopen(tmp_fd, "wb")
-        except BaseException:
-            os.close(tmp_fd)
-            tmp_path.unlink(missing_ok=True)
-            raise
-        try:
-            with tmp_file:
-                tmp_file.write(ca_cert_pem)
-        except BaseException:
-            tmp_path.unlink(missing_ok=True)
-            raise
-        # For a loopback target the daemon's LIVE serve.token is the only
-        # valid credential — the daemon writes whatever key it uses (operator
-        # --api-key OR auto-minted) into serve.token, so a set/stale env key
-        # must NOT win over it (that would 401 against the daemon's own
-        # /v1/status).  --api-key applies to a REMOTE target only.
-        is_loopback_target = ClientConfig.is_loopback_host(host)
-        bearer = ClientConfig.loopback_token(host) if is_loopback_target else api_key
-        ok, reason = validate_connection(
-            host, port, bearer, scheme="https", ca_cert_path=tmp_path_str
-        )
-        if not ok:
-            err_console.print(f"Error: {reason}", style="red")
-            raise typer.Exit(code=1)
-    finally:
-        tmp_path.unlink(missing_ok=True)
-
-    # Step 5: Write mcp-proxy config first, then store the CA cert.
-    # This order ensures that if the CA cert write fails, we can roll back
-    # the config — the reverse order has no recovery path (Fix 2).
-    # to_netloc brackets an IPv6 literal host ([::1]) so the stored URL parses;
-    # a hostname or IPv4 literal is unchanged.
-    ws_url = f"wss://{to_netloc(host, port)}/mcp"
-    # R4 live-only: a loopback target's bearer is the LIVE serve.token, resolved
-    # fresh by ClientConfig on every call — NEVER persist it.  A stored key would
-    # go stale each daemon restart and would mislead any reader of the stored
-    # headers with a credential that is never used for auth.  Only a REMOTE login
-    # persists its operator key.
-    stored_key = None if is_loopback_target else api_key
-    try:
-        write_proxy_config(ws_url, stored_key, str(CA_CERT_PATH))
-    except PermissionWarning as exc:
-        err_console.print(f"Warning: {exc}", style="yellow")
-    except OSError as exc:
-        err_console.print(
-            f"Error: connection succeeded but could not write config to "
-            f"{MCP_PROXY_CONFIG_PATH}: {exc}",
-            style="red",
-        )
-        raise typer.Exit(code=1) from exc
-
-    # Step 6: Store CA cert — roll back the config on failure.
-    try:
-        store_ca_cert(ca_cert_pem)
-    except Exception as exc:
-        with contextlib.suppress(OSError):
-            delete_proxy_config()
-        err_console.print(
-            f"Error: could not store CA certificate: {exc}",
-            style="red",
-        )
-        raise typer.Exit(code=1) from exc
-
-    # Step 7: Print success.
-    _emit(
-        {"host": host, "port": port},
-        f"Logged in to {host}:{port}. Restart Claude Code to apply.",
-    )
-
-
-@app.command(name="logout")
-@_cli_errors
-def logout_cmd() -> None:
-    """Disconnect from remote quarry server and revert to local daemon."""
-    removed = delete_proxy_config()
-    if removed:
-        _emit(
-            {"logged_out": True},
-            "Logged out. Restart Claude Code to revert to local daemon.",
-        )
-    else:
-        _emit({"logged_out": False}, "No remote configured.")
-
-
-remote_app = typer.Typer(
-    help="Manage remote quarry server connection.",
-    invoke_without_command=True,
-    rich_markup_mode=None,
-)
-app.add_typer(remote_app, name="remote")
-
-
-@remote_app.callback(invoke_without_command=True)
-def remote_callback(ctx: typer.Context) -> None:
-    """Manage remote quarry server connection."""
-    if ctx.invoked_subcommand is None:
-        err_console.print("Error: specify a subcommand — list.", style="red")
-        raise typer.Exit(code=1)
-
-
-@remote_app.command(name="list")
-@_cli_errors
-def remote_list_cmd(
-    ping: Annotated[bool, typer.Option("--ping", help="Check server health")] = False,
-) -> None:
-    """Show configured remote server."""
-    config = _safe_proxy_config()
-    quarry_cfg = config.get("quarry", {})
-    if not isinstance(quarry_cfg, dict) or not quarry_cfg:
-        _emit({"remote": None}, "No remote configured.")
-        return
-    url = quarry_cfg.get("url", "")
-    if not url:
-        _emit(
-            {
-                "configured": False,
-                "message": "No remote configured. Run 'quarry login <host>'.",
-            },
-            "No remote configured. Run 'quarry login <host>'.",
-        )
-        return
-    headers_raw = quarry_cfg.get("headers")
-    auth_header = (
-        headers_raw.get("Authorization", "") if isinstance(headers_raw, dict) else ""
-    ) or ""
-    token: str | None = auth_header.removeprefix("Bearer ").strip() or None
-    masked = mask_token(token) if token is not None else "(none)"
-    ca_cert = quarry_cfg.get("ca_cert") or None
-    text = f"Remote: {url}  token: {masked}"
-    data: dict[str, object] = {"url": url, "token_prefix": masked}
-    if ping:
-        if url.startswith("wss://") and not ca_cert:
-            ok, reason = False, "wss:// configured but no CA certificate pinned"
-        else:
-            # Migrate a stored loopback NAME to the literal FIRST, then gate,
-            # token, and CONNECT all on the migrated URL.  A live serve.token is
-            # presented only over a connection to the un-hijackable 127.0.0.1 —
-            # never the raw name a resolver could redirect to a co-tenant's ::1.
-            # A loopback target authenticates with the LIVE serve.token only
-            # (never a stored bearer): a missing token means the daemon is down,
-            # so probe tokenless and let it report unreachable rather than mask
-            # the failure with a stale stored token.  A remote URL is unchanged
-            # and uses its stored bearer.
-            probe_url = ClientConfig.canonical_url(url)
-            if ClientConfig.is_loopback_url(probe_url):
-                probe_token = ClientConfig.loopback_token_for_url(probe_url)
-            else:
-                probe_token = token
-            ok, reason = validate_connection_from_ws_url(
-                probe_url,
-                probe_token,
-                ca_cert_path=str(ca_cert) if ca_cert is not None else None,
-            )
-        status = "healthy" if ok else f"unreachable ({reason})"
-        text += f"\nHealth: {status}"
-        data["health"] = status
-    _emit(data, text)
-
-
-app.add_typer(
-    CapturesCli(
-        CliPlumbing(
-            emit=_emit,
-            cli_errors=_cli_errors,
-            safe_proxy_config=_safe_proxy_config,
-            resolved_settings=_resolved_settings,
-            err_console=err_console,
-        )
-    ).build(),
-    name="captures",
-)
-
-
-list_app = typer.Typer(
-    help="List documents, collections, databases, or registrations.",
-    invoke_without_command=True,
-    rich_markup_mode=None,
-)
-app.add_typer(list_app, name="list")
-
-
-@list_app.callback(invoke_without_command=True)
-def list_callback(ctx: typer.Context) -> None:
-    """List documents, collections, databases, or registrations."""
-    if ctx.invoked_subcommand is None:
-        err_console.print(
-            "Error: specify a noun — documents, collections, "
-            "databases, or registrations.",
-            style="red",
-        )
-        raise typer.Exit(code=1)
-
-
-@list_app.command(name="documents")
-@_cli_errors
-def list_documents_cmd(
-    collection: Annotated[
-        str, typer.Option("--collection", "-c", help="Filter by collection")
-    ] = "",
-) -> None:
-    """List all indexed documents."""
-    proxy_config = _safe_proxy_config().get("quarry", {})
-    if isinstance(proxy_config, dict) and "url" in proxy_config:
-        params: dict[str, str] = {}
-        if collection:
-            params["collection"] = collection
-        qs = f"?{urllib.parse.urlencode(params)}" if params else ""
-        try:
-            client = ClientConfig.remote_client(proxy_config)
-            remote_resp = client.get(f"/documents{qs}")
-        except RemoteError as exc:
-            err_console.print(f"Error: {exc}", style="red")
-            raise typer.Exit(code=1) from exc
-        raw_docs = remote_resp.get("documents", [])
-        if not isinstance(raw_docs, list):
-            err_console.print(
-                "Warning: unexpected response from remote server", style="yellow"
-            )
-            raw_docs = []
-        docs: list[dict[str, object]] = list(raw_docs)
-        _emit(docs, format_documents(docs))
-        return
-
-    settings = _resolved_settings()
-    database = Database.connect(settings.lancedb_path)
-    local_docs = database.catalog.list_documents(collection_filter=collection or None)
-    _emit(local_docs, format_documents(local_docs))
-
-
-@list_app.command(name="collections")
-@_cli_errors
-def list_collections_cmd() -> None:
-    """List all collections with document and chunk counts."""
-    proxy_config = _safe_proxy_config().get("quarry", {})
-    if isinstance(proxy_config, dict) and "url" in proxy_config:
-        try:
-            remote_resp = ClientConfig.remote_client(proxy_config).get("/collections")
-        except RemoteError as exc:
-            err_console.print(f"Error: {exc}", style="red")
-            raise typer.Exit(code=1) from exc
-        raw_cols = remote_resp.get("collections", [])
-        if not isinstance(raw_cols, list):
-            err_console.print(
-                "Warning: unexpected response from remote server", style="yellow"
-            )
-            raw_cols = []
-        cols: list[dict[str, object]] = list(raw_cols)
-        _emit(cols, format_collections(cols))
-        return
-
-    settings = _resolved_settings()
-    database = Database.connect(settings.lancedb_path)
-    local_cols = database.catalog.list_collections()
-    _emit(local_cols, format_collections(local_cols))
-
-
-@list_app.command(name="registrations")
-@_cli_errors
-def list_registrations_cmd() -> None:
-    """List all registered directories."""
-    proxy_config = _safe_proxy_config().get("quarry", {})
-    if isinstance(proxy_config, dict) and "url" in proxy_config:
-        try:
-            remote_resp = ClientConfig.remote_client(proxy_config).get("/registrations")
-        except RemoteError as exc:
-            err_console.print(f"Error: {exc}", style="red")
-            raise typer.Exit(code=1) from exc
-        raw = remote_resp.get("registrations", [])
-        if not isinstance(raw, list):
-            err_console.print(
-                "Warning: unexpected response from remote server", style="yellow"
-            )
-            raw = []
-        remote_regs: list[dict[str, object]] = [
-            {
-                "collection": entry.get("collection", ""),
-                "directory": entry.get("directory", ""),
-                "registered_at": entry.get("registered_at", ""),
-            }
-            for entry in raw
-            if isinstance(entry, dict)
-        ]
-        _emit(remote_regs, ResultFormatter.registrations(remote_regs))
-        return
-
-    settings = _resolved_settings()
-    conn = SyncRegistry(settings.registry_path)
-    try:
-        regs = conn.list_registrations()
-    finally:
-        conn.close()
-
-    json_data: list[dict[str, object]] = [
-        {
-            "collection": reg.collection,
-            "directory": str(reg.directory),
-            "registered_at": reg.registered_at,
-        }
-        for reg in regs
-    ]
-    _emit(json_data, ResultFormatter.registrations(json_data))
-
-
-@list_app.command(name="databases")
-@_cli_errors
-def list_databases_cmd() -> None:
-    """List named databases with document counts and storage size.
-
-    When a remote server is configured, shows the single database the
-    remote server is fixed to.  The local path scans
-    ``~/.punt-labs/quarry/data/`` for every named database.
-    """
-    proxy_config = _safe_proxy_config().get("quarry", {})
-    if isinstance(proxy_config, dict) and "url" in proxy_config:
-        try:
-            remote_resp = ClientConfig.remote_client(proxy_config).get("/databases")
-        except RemoteError as exc:
-            err_console.print(f"Error: {exc}", style="red")
-            raise typer.Exit(code=1) from exc
-        raw = remote_resp.get("databases", [])
-        if not isinstance(raw, list):
-            err_console.print(
-                "Warning: unexpected response from remote server", style="yellow"
-            )
-            raw = []
-        remote_dbs: list[dict[str, object]] = [
-            dict(entry) for entry in raw if isinstance(entry, dict)
-        ]
-        _emit(remote_dbs, ResultFormatter.databases(remote_dbs))
-        return
-
-    settings = _resolved_settings()
-    databases = discover_databases(settings.quarry_root)
-    local_dbs: list[dict[str, object]] = [dict(db_info) for db_info in databases]
-    _emit(local_dbs, ResultFormatter.databases(local_dbs))
+    _emit({"database": name}, f"Default database set to {name!r}")
 
 
 # ---------------------------------------------------------------------------
-# Admin commands — install, doctor, serve, mcp, version, uninstall
+# Admin commands — install, doctor, mcp, version, uninstall.  ``mcp`` is the one
+# command that hosts the engine (via a lazy in-body import); all others are
+# client-side or pure config.
 # ---------------------------------------------------------------------------
 
 
@@ -1636,8 +282,7 @@ def install() -> None:
     """Set up data directory and download embedding model."""
     from quarry.doctor import run_install  # noqa: PLC0415
 
-    exit_code = run_install()
-    raise typer.Exit(code=exit_code)
+    raise typer.Exit(code=run_install())
 
 
 @app.command()
@@ -1645,8 +290,7 @@ def doctor() -> None:
     """Check environment: Python, data directory, model, imports."""
     from quarry.doctor import check_environment  # noqa: PLC0415
 
-    exit_code = check_environment()
-    raise typer.Exit(code=exit_code)
+    raise typer.Exit(code=check_environment())
 
 
 @app.command()
@@ -1679,9 +323,9 @@ def uninstall() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Hook subcommands — called by Claude Code hook scripts.
-# All hooks are fail-open: exceptions are caught, logged, and the process
-# exits 0 so Claude Code is never blocked.
+# Hook subcommands — called by Claude Code hook scripts.  All are fail-open:
+# exceptions are caught, logged, and the process exits 0 so Claude is never
+# blocked.
 # ---------------------------------------------------------------------------
 
 

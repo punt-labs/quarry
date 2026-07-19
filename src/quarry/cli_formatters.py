@@ -16,23 +16,6 @@ class ResultFormatter:
     __slots__ = ()
 
     @staticmethod
-    def sync_results(json_data: dict[str, dict[str, object]]) -> str:
-        """Format a ``{collection: result}`` mapping as a multi-line summary."""
-        lines: list[str] = []
-        for col, res in json_data.items():
-            line = (
-                f"{col}: {res.get('ingested', 0)} ingested, "
-                f"{res.get('refreshed', 0)} refreshed, "
-                f"{res.get('deleted', 0)} deleted, "
-                f"{res.get('skipped', 0)} unchanged, {res.get('failed', 0)} failed"
-            )
-            errors = res.get("errors")
-            if isinstance(errors, list) and errors:
-                line += "\n" + "\n".join(f"  error: {e}" for e in errors)
-            lines.append(line)
-        return "\n".join(lines)
-
-    @staticmethod
     def registrations(regs: list[dict[str, object]]) -> str:
         """Format registered directories as ``collection: directory`` lines."""
         if not regs:

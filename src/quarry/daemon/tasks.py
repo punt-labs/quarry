@@ -103,6 +103,18 @@ class TaskRegistry:
         self._refs[tid] = task
         task.add_done_callback(lambda _t: self._refs.pop(tid, None))
 
+    def cancel_all(self) -> None:
+        """Cancel every still-tracked task and drop its ref.
+
+        Must be called on the registry's own event-loop thread (``Task.cancel``
+        is not thread-safe).  Used at daemon/test-harness teardown so an
+        in-flight background task cannot outlive its context and keep touching
+        resources — e.g. resolving a hostname — after shutdown.
+        """
+        for task in list(self._refs.values()):
+            task.cancel()
+        self._refs.clear()
+
     def seed(self, state: TaskState) -> None:
         """Insert a pre-built *state* keyed by its ``task_id``.
 

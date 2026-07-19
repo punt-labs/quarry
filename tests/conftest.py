@@ -1,14 +1,23 @@
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Generator
+from collections.abc import Generator, Iterable
 from pathlib import Path
-from typing import Self
+from typing import Self, final
 from unittest.mock import patch
 
 import pytest
 from rich.console import Console
 
+from quarry.api import (
+    DeleteCollectionRequest,
+    DeregisterAccepted,
+    DeregisterRequest,
+    RegisterRequest,
+    RegistrationInfo,
+    RegistrationList,
+    TaskAccepted,
+)
 from quarry.config import Settings
 from quarry.db import Database
 from quarry.db.storage import get_db
@@ -83,6 +92,92 @@ def git_sandbox(tmp_path: Path) -> GitSandbox:
     return GitSandbox(tmp_path)
 
 
+@final
+class FakeRegistryClient:
+    """In-memory stand-in for the daemon registry surface enable/disable use.
+
+    Structurally satisfies ``quarry.enable.RegistryClient`` and records
+    register/deregister/delete_collection calls so a test can assert the client
+    dispatched exactly the daemon operations the design requires — never touching
+    a local ``SyncRegistry``.  Construct with ``(collection, directory)`` pairs to
+    seed a covering ``RegistrationList``.
+    """
+
+    __slots__ = ("_delete_error", "_deleted", "_deregistered", "_registered", "_regs")
+
+    _regs: list[RegistrationInfo]
+    _registered: list[RegisterRequest]
+    _deregistered: list[DeregisterRequest]
+    _deleted: list[str]
+    # When set, delete_collection raises it — models a rejected captures purge.
+    _delete_error: Exception | None
+
+    def __new__(
+        cls,
+        registrations: Iterable[tuple[str, Path]] = (),
+        *,
+        delete_error: Exception | None = None,
+    ) -> Self:
+        self = super().__new__(cls)
+        self._regs = [
+            RegistrationInfo(
+                collection=col,
+                directory=str(Path(directory).resolve()),
+                registered_at="2026-01-01",
+            )
+            for col, directory in registrations
+        ]
+        self._registered = []
+        self._deregistered = []
+        self._deleted = []
+        self._delete_error = delete_error
+        return self
+
+    def list_registrations(self) -> RegistrationList:
+        return RegistrationList(
+            total_registrations=len(self._regs), registrations=list(self._regs)
+        )
+
+    def register(self, req: RegisterRequest) -> TaskAccepted:
+        self._registered.append(req)
+        self._regs.append(
+            RegistrationInfo(
+                collection=req.collection,
+                directory=req.directory,
+                registered_at="2026-01-02",
+            )
+        )
+        return TaskAccepted(task_id="t")
+
+    def deregister(self, req: DeregisterRequest) -> DeregisterAccepted:
+        self._deregistered.append(req)
+        before = len(self._regs)
+        self._regs = [r for r in self._regs if r.collection != req.collection]
+        return DeregisterAccepted(task_id="t", removed=before - len(self._regs))
+
+    def delete_collection(self, req: DeleteCollectionRequest) -> TaskAccepted:
+        if self._delete_error is not None:
+            raise self._delete_error
+        self._deleted.append(req.name)
+        return TaskAccepted(task_id="t")
+
+    @property
+    def registered(self) -> list[RegisterRequest]:
+        return self._registered
+
+    @property
+    def deregistered(self) -> list[DeregisterRequest]:
+        return self._deregistered
+
+    @property
+    def deleted(self) -> list[str]:
+        return self._deleted
+
+    @property
+    def collections(self) -> list[str]:
+        return [r.collection for r in self._regs]
+
+
 # Environment variables that .envrc / shell may set and that pydantic-settings
 # would otherwise silently inject into Settings instances created in tests.
 _QUARRY_ENV_VARS = (
@@ -101,11 +196,11 @@ _QUARRY_ENV_VARS = (
 def _no_remote_config() -> Generator[None]:
     """Prevent tests from reading the real mcp-proxy config on disk.
 
-    Existing CLI tests assume local DB access. This fixture returns an empty
-    config so ``read_proxy_config()`` never triggers remote routing unless a
-    test explicitly patches it.
+    ``TargetResolver.resolve`` reads ``read_proxy_config`` for the stored-remote
+    tier; returning ``{}`` keeps resolution on the loopback default unless a test
+    patches the resolver itself.
     """
-    with patch("quarry.__main__.read_proxy_config", return_value={}):
+    with patch("quarry.client.resolver.read_proxy_config", return_value={}):
         yield
 
 
@@ -135,17 +230,19 @@ def _force_no_color(monkeypatch: pytest.MonkeyPatch) -> None:
     pinned to ``force_terminal=False, no_color=True`` defeats that render-time
     re-read, making the gate color-deterministic regardless of the shell.
 
-    Every production ``Console(`` in ``src/quarry`` must be patched here:
-    ``__main__.err_console`` (local CLI errors) and
-    ``remote_client._err_console`` (remote-path errors). Add any new one.
-    Typer is not patched: every ``typer.Typer`` app sets
-    ``rich_markup_mode=None``, so typer renders errors/help through click's
-    plain formatter, never through ``rich_utils`` — it emits no color.
+    Every ``rich.console.Console`` holds a live reference to ``os.environ`` and
+    reads ``NO_COLOR`` at *render* time, so setting it here makes every console
+    (including the one ``CliPlumbing`` injected into each command group) emit
+    plain output — no per-object patching needed.  Typer is not patched: every
+    ``typer.Typer`` app sets ``rich_markup_mode=None``, so it renders through
+    click's plain formatter, never ``rich_utils``.
     """
-    for target in ("quarry.__main__.err_console", "quarry.remote_client._err_console"):
-        monkeypatch.setattr(
-            target, Console(stderr=True, no_color=True, force_terminal=False)
-        )
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
+    monkeypatch.setattr(
+        "quarry.__main__.err_console",
+        Console(stderr=True, no_color=True, force_terminal=False),
+    )
 
 
 @pytest.fixture(scope="session")

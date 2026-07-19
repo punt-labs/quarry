@@ -16,6 +16,16 @@ across `transform`, `index`, and `connector`).
 
 ### Added
 
+- **tool (CLI)**: `QuarryClient` — a typed, pure-transport client the CLI drives
+  for every data command. It carries a `QuarryError` hierarchy (`QuarryError`,
+  `QuarryConnectionError`, and `HttpError` — whose `status` selects the exit
+  code, 409 being "already in progress") that the CLI maps to exit codes in one
+  place, and a typed `TaskOutcome` for polled background tasks. `TargetResolver`
+  is the single daemon-target resolver: explicit `QUARRY_URL`/`QUARRY_TOKEN`,
+  then a stored remote login, then the local daemon on `127.0.0.1` via
+  `serve.port` + live `serve.token` (fail-closed with an autostart hint when the
+  daemon is down).
+
 - **tool (daemon REST)**: two maintenance endpoints — `POST /v1/optimize`
   (compact the LanceDB table and rebuild indexes; `force` bypasses the
   fragment-count safety guard) and `POST /v1/backfill-sessions` (ingest
@@ -42,6 +52,24 @@ across `transform`, `index`, and `connector`).
 
 ### Changed
 
+- **tool (CLI)**: every data command (`find`, `ingest`, `show`, `remember`,
+  `status`, `delete`, `register`, `deregister`, `sync`, `enable`, `disable`,
+  `optimize`, `backfill-sessions`, `list …`, `captures push`) now runs
+  unconditionally through the daemon over `QuarryClient` — there is no in-process
+  engine path and no local-vs-remote fork. A running `quarryd` is required; when
+  it is down, commands fail closed with a start-the-service hint.
+- **tool (CLI)**: `quarry ingest` accepts a URL only. Local files and
+  directories are covered by `quarry register <dir>` + `quarry sync`; a non-URL
+  argument is rejected with that pointer.
+- **tool (CLI)**: `quarry backfill-sessions --limit` is forwarded to the daemon,
+  which applies its own bound; `--limit 0` now takes the daemon's default rather
+  than "all". The no-op `--provider` flag is removed (the daemon owns provider
+  selection).
+- **tool (CLI)**: `remote list --ping` now reports the daemon's `/health`
+  (`state`, `api_version`, `quarry_version`) instead of an ad-hoc reachability
+  string.
+- **infra (build)**: `httpx` is now a runtime dependency (`QuarryClient`'s
+  transport), moved from the dev extras.
 - **tool (daemon REST)**: the `quarry serve` daemon's REST API is now a FastAPI
   app, and every engine route moved under a `/v1` version prefix (`/v1/search`,
   `/v1/status`, `/v1/tasks/{id}`, …). `/health` and `/ca.crt` stay unversioned
@@ -79,6 +107,9 @@ across `transform`, `index`, and `connector`).
 
 ### Removed
 
+- **tool (CLI)**: `RemoteClient`/`RemoteError` (superseded by `QuarryClient` and
+  the typed `QuarryError` hierarchy) and the in-process engine path from every
+  CLI data command.
 - **tool (daemon REST)**: removed the `/sync/{task_id}` and `/ingest/{task_id}`
   task-status alias routes; poll every background task through the canonical
   `/v1/tasks/{task_id}` instead (the CLI already did).
