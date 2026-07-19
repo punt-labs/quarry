@@ -33,20 +33,9 @@ if TYPE_CHECKING:
     from quarry.artifacts import SessionArtifacts
     from quarry.client import QuarryClient
     from quarry.config import Settings
-    from quarry.sync_registry import DirectoryRegistration, SyncRegistry
+    from quarry.sync_registry import SyncRegistry
 
 logger = logging.getLogger(__name__)
-
-
-def _find_registration(  # pyright: ignore[reportUnusedFunction]
-    registrations: list[DirectoryRegistration],
-    directory: str,
-) -> DirectoryRegistration | None:
-    """Find an existing registration matching *directory*."""
-    for reg in registrations:
-        if reg.directory == directory:
-            return reg
-    return None
 
 
 def _unique_collection_name(

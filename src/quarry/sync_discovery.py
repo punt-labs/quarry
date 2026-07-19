@@ -25,9 +25,11 @@ _DEFAULT_IGNORE_PATTERNS: Final[list[str]] = [
     "dist/",
     "build/",
     ".DS_Store",
-    # Captures are the daemon's job (they land in <repo>-captures, scrubbed).
-    # Excluding them structurally keeps directory sync from folding transcripts
-    # into the project's MAIN collection, independent of the repo's .gitignore.
+    # Defense-in-depth for the captures dir.  The walk already prunes every
+    # dot-prefixed directory (``.punt-labs``) before patterns are matched, so
+    # this entry is redundant belt-and-braces — it records the intent that
+    # scrubbed captures (the daemon's <repo>-captures) must never be folded into
+    # the project's MAIN collection by directory sync.
     ".punt-labs/quarry/captures/",
 ]
 

@@ -16,7 +16,6 @@ from quarry.__main__ import app
 from quarry._stdlib import HookConfig, load_hook_config, read_hook_stdin
 from quarry.hooks import (
     _collection_for_cwd_conn,
-    _find_registration,
     _unique_collection_name,
     extract_message_text,
     extract_transcript_text,
@@ -24,7 +23,7 @@ from quarry.hooks import (
     handle_pre_compact,
     handle_session_start,
 )
-from quarry.sync_registry import DirectoryRegistration, SyncRegistry
+from quarry.sync_registry import SyncRegistry
 
 if TYPE_CHECKING:
     import pytest
@@ -35,22 +34,6 @@ runner = CliRunner()
 # ---------------------------------------------------------------------------
 # Unit tests for helper functions
 # ---------------------------------------------------------------------------
-
-
-class TestFindRegistration:
-    def test_finds_matching_directory(self) -> None:
-        regs = [
-            DirectoryRegistration("/a", "col-a", "2026-01-01"),
-            DirectoryRegistration("/b", "col-b", "2026-01-01"),
-        ]
-        assert _find_registration(regs, "/b") == regs[1]
-
-    def test_returns_none_when_not_found(self) -> None:
-        regs = [DirectoryRegistration("/a", "col-a", "2026-01-01")]
-        assert _find_registration(regs, "/z") is None
-
-    def test_empty_list(self) -> None:
-        assert _find_registration([], "/a") is None
 
 
 class TestUniqueCollectionName:

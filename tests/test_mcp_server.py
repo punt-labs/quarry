@@ -81,6 +81,26 @@ class TestRemember:
             call_kwargs = mock_ingest.call_args[1]
             assert call_kwargs["collection"] == "ml-101"
 
+    def test_remember_scrubs_content(self, tmp_path: Path) -> None:
+        """The stdio remember scrubs PII before storing, like the daemon path."""
+        settings = _settings(tmp_path)
+        done = threading.Event()
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.db.facade.get_db"),
+            patch(
+                "quarry.mcp_server.pipeline_ingest_content",
+                side_effect=lambda *a, **kw: done.set(),
+            ) as mock_ingest,
+        ):
+            mcp_remember("reach me at jmf@pobox.com", "note.md")
+            assert done.wait(timeout=2), "background thread did not run"
+
+        scrub = mock_ingest.call_args[1]["content_scrubber"]
+        redacted = scrub("reach me at jmf@pobox.com")
+        assert "jmf@pobox.com" not in redacted
+        assert "[REDACTED:email]" in redacted
+
 
 class TestDeleteDocument:
     def test_returns_immediately_with_background(self, tmp_path: Path) -> None:

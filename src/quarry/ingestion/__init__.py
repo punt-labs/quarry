@@ -8,7 +8,6 @@ from quarry.ingestion.backends import (
     get_ocr_backend,
 )
 from quarry.ingestion.chunker import chunk_pages
-from quarry.ingestion.image_preparer import ImagePreparer
 from quarry.ingestion.ocr_local import LocalOcrBackend, get_engine
 from quarry.ingestion.pdf_text_extractor import extract_text_pages
 from quarry.ingestion.pipeline import (
@@ -33,7 +32,6 @@ from quarry.ingestion.url_ingester import UrlIngester
 __all__ = [
     "PROVIDER_MODEL_MAP",
     "SUPPORTED_EXTENSIONS",
-    "ImagePreparer",
     "LocalOcrBackend",
     "ProviderSelection",
     "UrlFetcher",
