@@ -23,6 +23,7 @@ from starlette.testclient import TestClient
 
 from quarry.api import HealthResponse, SearchResponse, StatusResponse
 from quarry.backfill import BackfillStats
+from quarry.captures_collection import CapturesCollection
 from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
 from quarry.daemon.server import DaemonServer, ServeConfig
@@ -1348,6 +1349,16 @@ class TestCapture:
         error = resp.json()["error"].lower()
         assert "document_name" in error or "session" in error
 
+    def test_whitespace_name_and_session_returns_400(self, client: TestClient) -> None:
+        """Whitespace-only name/session must earn the 400, not a blank-named doc."""
+        resp = client.post(
+            "/v1/capture",
+            json={"content": "hi", "document_name": "   ", "session_id": "  \t"},
+        )
+        assert resp.status_code == 400
+        error = resp.json()["error"].lower()
+        assert "document_name" in error or "session" in error
+
     def test_capture_scrubs_and_derives_default_collection(
         self, tmp_path: Path
     ) -> None:
@@ -1483,6 +1494,41 @@ class TestRemember:
         resp = client.post("/v1/remember", json={"name": "   ", "content": "hello"})
         assert resp.status_code == 400
         assert "name" in resp.json()["error"].lower()
+
+    def test_scrubs_name_and_summary_not_just_content(self, tmp_path: Path) -> None:
+        """A secret in the free-form name or summary is redacted before store —
+        the chunker copies both onto every chunk, so content-only scrubbing leaks."""
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        seen: dict[str, object] = {}
+
+        def _content(
+            _content_arg: str, name: str, *_a: object, **kw: object
+        ) -> dict[str, object]:
+            seen["name"] = name
+            seen["summary"] = kw["summary"]
+            return {"document_name": name, "collection": "c", "chunks": 0}
+
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch("quarry.ingestion.pipeline.ingest_content", _content),
+        ):
+            resp = tc.post(
+                "/v1/remember",
+                json={
+                    "name": "note jmf@pobox.com",
+                    "content": "body",
+                    "summary": "contact jmf@pobox.com",
+                },
+            )
+            _poll_task_done(tc, resp.json()["task_id"])
+
+        assert "jmf@pobox.com" not in str(seen["name"])
+        assert "[REDACTED:email]" in str(seen["name"])
+        assert "jmf@pobox.com" not in str(seen["summary"])
+        assert "[REDACTED:email]" in str(seen["summary"])
 
     def test_invalid_json_returns_400(self, client: TestClient) -> None:
         resp = client.post(
@@ -1668,6 +1714,56 @@ class TestIngest:
         data = resp.json()
         assert data["status"] == "accepted"
         assert data["task_id"].startswith("ingest-")
+
+    def test_scrub_capture_with_empty_cwd_scrubs_not_ingest_auto(
+        self, tmp_path: Path
+    ) -> None:
+        """A web-fetch capture (scrub=True) with EMPTY cwd must scrub and land in
+        default-captures via ingest_url — never the unscrubbed ingest_auto branch.
+
+        The empty-cwd -> default-captures derivation is unit-tested in
+        ``test_captures_collection``; here the collection resolver is stubbed so
+        the assertion isolates the daemon's scrub-vs-plain routing.
+        """
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        url_kwargs: list[dict[str, object]] = []
+
+        def _url(*_a: object, **kw: object) -> dict[str, object]:
+            url_kwargs.append(kw)
+            return {"document_name": "u", "collection": kw["collection"], "chunks": 1}
+
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch(
+                "quarry.daemon.url_safety.socket_module.getaddrinfo",
+                side_effect=_fake_public_addrinfo,
+            ),
+            patch(
+                "quarry.captures_collection.CapturesCollection.for_registry_path",
+                return_value=CapturesCollection.fallback(),
+            ),
+            patch("quarry.ingestion.pipeline.ingest_url", _url),
+            patch("quarry.ingestion.pipeline.ingest_auto") as auto,
+        ):
+            resp = tc.post(
+                "/v1/ingest",
+                json={
+                    "source": "https://example.com/p",
+                    "scrub": True,
+                    "cwd": "",
+                    "overwrite": True,
+                },
+            )
+            _poll_task_done(tc, resp.json()["task_id"])
+
+        auto.assert_not_called()  # never the unscrubbed sitemap branch
+        assert url_kwargs
+        assert url_kwargs[0]["collection"] == "default-captures"
+        scrub = cast("Callable[[str], str]", url_kwargs[0]["content_scrubber"])
+        assert "[REDACTED:email]" in scrub("reach me at jmf@pobox.com")
 
     def test_missing_source_returns_400(self, client: TestClient) -> None:
         resp = client.post("/v1/ingest", json={})

@@ -384,10 +384,12 @@ def _extract_inline_pages(
     The inline path serves two callers: ``remember`` (text/markdown) and the
     web-fetch ``capture`` (raw HTML).  ``TextExtractor`` handles the text
     formats; a ``html`` hint hands the raw markup to ``HtmlExtractor`` so tags
-    become Markdown sections rather than being stored verbatim.
+    become Markdown sections rather than being stored verbatim.  For a web-fetch
+    capture the document name IS the redacted source URL, so it doubles as the
+    stored ``document_path`` — keeping the page's source location on every chunk.
     """
     if format_hint == "html":
-        return HtmlExtractor().extract_from_html(content, document_name, "")
+        return HtmlExtractor().extract_from_html(content, document_name, document_name)
     return TextExtractor().extract_raw(content, document_name, format_hint=format_hint)
 
 

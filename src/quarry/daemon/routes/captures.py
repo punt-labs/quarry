@@ -73,11 +73,16 @@ class CaptureRoutes(RouteGroup):
         )
 
     def _capture_name(self, body: dict[str, object]) -> str | JSONResponse:
-        """Derive the document name: explicit name, else ``session-<id[:8]>``."""
-        document_name = self._str_field(body, "document_name")
+        """Derive the document name: explicit name, else ``session-<id[:8]>``.
+
+        Inputs are stripped and only accepted when non-empty, so a
+        whitespace-only ``document_name``/``session_id`` earns the 400 rather
+        than storing a blank-named document.
+        """
+        document_name = self._str_field(body, "document_name").strip()
         if document_name:
             return document_name
-        session_id = self._str_field(body, "session_id")
+        session_id = self._str_field(body, "session_id").strip()
         if session_id:
             return f"session-{session_id[:8]}"
         return JSONResponse(

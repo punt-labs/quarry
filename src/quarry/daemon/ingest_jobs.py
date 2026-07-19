@@ -28,7 +28,9 @@ class ScrubbedIngestJob:
     the event loop, so its regex passes do not stall other requests.  Scrubbing
     precedes embedding and storage, so a scrub that raises aborts the whole
     operation before a single chunk is written — a failed scrub leaves nothing
-    half-redacted in the database.
+    half-redacted in the database.  Free-form metadata (the document name and
+    the summary) is scrubbed too: the chunker copies both into every stored
+    chunk, so a secret in a remember's name or summary would otherwise leak.
     """
 
     name: str
@@ -43,43 +45,54 @@ class ScrubbedIngestJob:
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Scrub then ingest the content in a background thread, tracking state."""
+        with task_terminal(state):
+            result = await run_in_threadpool(self._scrub_and_ingest, ctx)
+            state.status = "completed"
+            state.results = dict(result)
+
+    def _scrub_and_ingest(self, ctx: DaemonContext) -> dict[str, object]:
+        """Scrub the content AND the free-form metadata, then ingest."""
         from quarry.ingestion.pipeline import ingest_content  # noqa: PLC0415
         from quarry.scrub import scrub_and_log  # noqa: PLC0415
 
-        with task_terminal(state):
-            result = await run_in_threadpool(
-                ingest_content,
+        def scrub(text: str) -> str:
+            return scrub_and_log(text, self.scrub_label)
+
+        return dict(
+            ingest_content(
                 self.content,
-                self.name,
+                scrub(self.name),
                 ctx.database,
                 ctx.settings,
                 overwrite=self.overwrite,
                 collection=self.collection,
                 format_hint=self.format_hint,
-                content_scrubber=lambda text: scrub_and_log(text, self.scrub_label),
+                content_scrubber=scrub,
                 agent_handle=self.agent_handle,
                 memory_type=self.memory_type,
-                summary=self.summary,
+                summary=scrub(self.summary),
             )
-            state.status = "completed"
-            state.results = dict(result)
+        )
 
 
 @dataclass(frozen=True, slots=True)
 class IngestJob:
     """A validated ingest request that fetches and indexes a URL.
 
-    ``cwd`` set marks a capture re-fetch (the web-fetch hook's fallback): the URL
-    is fetched once through the SSRF-checked path, scrubbed, and stored in the
-    project's ``<repo>-captures`` collection — never a sitemap crawl.  ``cwd``
-    empty is a plain ``quarry ingest`` and keeps the sitemap-aware, unscrubbed
-    behavior.
+    ``scrub`` set marks a web-fetch capture re-fetch (the hook's fallback): the
+    URL is fetched once through the SSRF-checked path, scrubbed, and stored in
+    the project's ``<repo>-captures`` collection (``default-captures`` when the
+    working directory is unregistered) — never a sitemap crawl.  ``scrub`` unset
+    is a plain ``quarry ingest``: sitemap-aware and unscrubbed, since a
+    deliberately ingested document is stored byte-for-byte.  Capture-intent is
+    carried explicitly here, never inferred from whether ``cwd`` is empty.
     """
 
     source: str
     overwrite: bool
     collection: str
     cwd: str
+    scrub: bool
     agent_handle: str
     memory_type: str
     summary: str
@@ -93,7 +106,7 @@ class IngestJob:
 
     def _ingest(self, ctx: DaemonContext) -> dict[str, object]:
         """Run the capture re-fetch (scrubbed, captures collection) or plain ingest."""
-        if self.cwd:
+        if self.scrub:
             from quarry.captures_collection import CapturesCollection  # noqa: PLC0415
             from quarry.ingestion.pipeline import ingest_url  # noqa: PLC0415
             from quarry.scrub import scrub_and_log  # noqa: PLC0415

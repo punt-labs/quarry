@@ -102,11 +102,15 @@ class IngestionRoutes(RouteGroup):
         overwrite = RequestGuards.coerce_bool_field(body, "overwrite", default=False)
         if isinstance(overwrite, JSONResponse):
             return overwrite
+        scrub = RequestGuards.coerce_bool_field(body, "scrub", default=False)
+        if isinstance(scrub, JSONResponse):
+            return scrub
         return IngestJob(
             source=source,
             overwrite=overwrite,
             collection=self._str_field(body, "collection", ""),
             cwd=self._str_field(body, "cwd", ""),
+            scrub=scrub,
             agent_handle=self._str_field(body, "agent_handle", ""),
             memory_type=self._str_field(body, "memory_type", ""),
             summary=self._str_field(body, "summary", ""),

@@ -37,3 +37,13 @@ class TestCapturesCollection:
         regs = {str(Path.cwd()): "the-daemon-project"}
         assert CapturesCollection.for_cwd("", regs).name == "default-captures"
         assert CapturesCollection.for_cwd("   ", regs).name == "default-captures"
+
+    def test_invalid_cwd_falls_back_to_default(self) -> None:
+        """An OS-invalid cwd (embedded NUL) falls back to default-captures.
+
+        ``cwd`` is untrusted client input; ``Path.resolve()`` raises ``ValueError``
+        on an embedded NUL, which must degrade to default-captures rather than
+        propagate and 500 the capture request.
+        """
+        got = CapturesCollection.for_cwd("/bad\x00path", {"/x": "x"})
+        assert got.name == "default-captures"

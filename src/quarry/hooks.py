@@ -375,7 +375,7 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
         # SSRF-checked ingest route, scrubbing the page into <repo>-captures.
         logger.debug("post-web-fetch: no content in payload, re-fetching via daemon")
         _ingest_url_via_daemon(
-            IngestRequest(source=url, cwd=cwd, overwrite=True),
+            IngestRequest(source=url, cwd=cwd, overwrite=True, scrub=True),
             unreachable_log=_WEB_FETCH_UNREACHABLE,
         )
     return {}

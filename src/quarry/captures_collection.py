@@ -95,7 +95,12 @@ class CapturesCollection:
         # capture into that project instead of default-captures.
         if not cwd.strip() or not registrations:
             return None
-        current = Path(cwd).resolve()
+        try:
+            current = Path(cwd).resolve()
+        except (OSError, ValueError):
+            # cwd is untrusted client input; an embedded NUL or an OS-invalid
+            # path must fall back to default-captures, not 500 the capture.
+            return None
         while True:
             if (collection := registrations.get(str(current))) is not None:
                 return collection
