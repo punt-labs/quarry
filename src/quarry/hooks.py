@@ -340,11 +340,6 @@ def _collection_for_cwd_conn(
     return None
 
 
-# The captures collection a web fetch lands in when its cwd is unregistered.
-# Retained for the doctor's health check, which subtracts it from real projects.
-WEB_CAPTURES_FALLBACK = "web-captures"
-
-
 def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     """Handle PostToolUse on WebFetch.
 

@@ -46,6 +46,16 @@ class CapturesCollection:
         return cls.for_repo(base_collection or cls._FALLBACK_REPO)
 
     @classmethod
+    def fallback(cls) -> Self:
+        """Return the collection an unregistered directory's captures fall into.
+
+        This is the live ``default-captures`` fallback (not a base-less one-off),
+        so the doctor's orphan check must spare it — its base ``default`` is never
+        registered by design.
+        """
+        return cls.resolve(None)
+
+    @classmethod
     def for_cwd(cls, cwd: str, registrations: Mapping[str, str]) -> Self:
         """Resolve the captures collection for *cwd* against the sync registry.
 
