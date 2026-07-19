@@ -74,31 +74,45 @@ class ImagePreparer:
         photos); then downscale by halves until under limit.  Keeps quality while
         meeting OCR engine byte limits.
         """
-        from PIL import Image  # noqa: PLC0415
+        data = self._encode(img, out_fmt, save_kw)
+        if self._fits(data):
+            return data
+        if out_fmt != "JPEG":
+            img, out_fmt, save_kw, data = self._reencode_as_jpeg(img)
+            if self._fits(data):
+                return data
+        return self._downscale_to_fit(img, out_fmt, save_kw, data)
 
-        max_bytes = self._max_bytes
-        name = self._image_path.name
+    def _fits(self, data: bytes) -> bool:
+        """Whether *data* is within the byte budget (a non-positive budget fits)."""
+        return self._max_bytes <= 0 or len(data) <= self._max_bytes
 
+    @staticmethod
+    def _encode(img: PILImage, out_fmt: str, save_kw: dict[str, int]) -> bytes:
+        """Return *img* encoded as *out_fmt* bytes."""
         buf = io.BytesIO()
         img.save(buf, format=out_fmt, **save_kw)
-        data = buf.getvalue()
+        return buf.getvalue()
 
-        if max_bytes <= 0 or len(data) <= max_bytes:
-            return data
+    def _reencode_as_jpeg(
+        self, img: PILImage
+    ) -> tuple[PILImage, str, dict[str, int], bytes]:
+        """Re-encode *img* as an RGB JPEG (much smaller for photos)."""
+        rgb = img.convert("RGB") if img.mode != "RGB" else img
+        save_kw = {"quality": 95}
+        data = self._encode(rgb, "JPEG", save_kw)
+        logger.info(
+            "Re-encoded %s as JPEG (%d bytes)", self._image_path.name, len(data)
+        )
+        return rgb, "JPEG", save_kw, data
 
-        # Re-encode as JPEG if not already (much smaller for photos).
-        if out_fmt != "JPEG":
-            out_fmt, save_kw = "JPEG", {"quality": 95}
-            rgb = img.convert("RGB") if img.mode != "RGB" else img
-            buf = io.BytesIO()
-            rgb.save(buf, format=out_fmt, **save_kw)
-            data = buf.getvalue()
-            logger.info("Re-encoded %s as JPEG (%d bytes)", name, len(data))
-            if len(data) <= max_bytes:
-                return data
-            img = rgb
+    def _downscale_to_fit(
+        self, img: PILImage, out_fmt: str, save_kw: dict[str, int], data: bytes
+    ) -> bytes:
+        """Halve *img*'s dimensions up to five times until it fits the budget."""
+        from PIL import Image  # noqa: PLC0415
 
-        # Downscale until under limit.
+        name = self._image_path.name
         current = img
         for _ in range(5):
             w, h = current.size
@@ -106,21 +120,18 @@ class ImagePreparer:
             if (new_w, new_h) == (w, h):
                 break
             current = current.resize((new_w, new_h), Image.Resampling.LANCZOS)
-            buf = io.BytesIO()
-            current.save(buf, format=out_fmt, **save_kw)
-            data = buf.getvalue()
+            data = self._encode(current, out_fmt, save_kw)
             logger.info(
                 "Downscaled %s to %dx%d (%d bytes)", name, new_w, new_h, len(data)
             )
-            if len(data) <= max_bytes:
+            if self._fits(data):
                 return data
 
-        if max_bytes > 0 and len(data) > max_bytes:
+        if not self._fits(data):
             logger.warning(
                 "%s still %d bytes after downscaling (limit %d)",
                 name,
                 len(data),
-                max_bytes,
+                self._max_bytes,
             )
-
         return data

@@ -597,6 +597,19 @@
     "module_size": 77.0,
     "public_attr_violations": 0.0
   },
+  "src/quarry/daemon/ingest_jobs.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 2.0,
+    "max_complexity": 1.0,
+    "avg_complexity": 1.0,
+    "module_size": 79.0,
+    "classes_per_module": 2.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/quarry/daemon/launcher.py": {
     "avg_complexity": 2.62,
     "avg_params": 1.0,
@@ -702,17 +715,17 @@
     "public_attr_violations": 0.0
   },
   "src/quarry/daemon/routes/ingestion.py": {
-    "avg_complexity": 3.57,
-    "avg_params": 1.71,
-    "class_to_func_ratio": 1.0,
-    "classes_per_module": 3.0,
-    "encapsulation_ratio": 1.0,
-    "future_annotations": 1.0,
-    "init_violations": 0.0,
-    "max_complexity": 8.0,
     "method_ratio": 1.0,
-    "module_size": 172.0,
-    "public_attr_violations": 0.0
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.71,
+    "max_complexity": 5.0,
+    "avg_complexity": 3.14,
+    "module_size": 118.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/quarry/daemon/routes/maintenance.py": {
     "avg_complexity": 3.86,
@@ -804,6 +817,19 @@
     "method_ratio": 1.0,
     "module_size": 26.0,
     "public_attr_violations": 0.0
+  },
+  "src/quarry/daemon/scrubbed_ingest.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 2.0,
+    "max_complexity": 1.0,
+    "avg_complexity": 1.0,
+    "module_size": 53.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/quarry/daemon/server.py": {
     "avg_complexity": 2.46,
@@ -1325,6 +1351,19 @@
     "module_size": 66.0,
     "public_attr_violations": 0.0
   },
+  "src/quarry/ingestion/image_prep.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 2.14,
+    "max_complexity": 8.0,
+    "avg_complexity": 3.14,
+    "module_size": 112.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/quarry/ingestion/image_preparer.py": {
     "avg_complexity": 6.0,
     "avg_params": 2.67,
@@ -1454,6 +1493,19 @@
     "method_ratio": 0.875,
     "module_size": 105.0,
     "public_attr_violations": 0.0
+  },
+  "src/quarry/ingestion/text_format.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 2.0,
+    "max_complexity": 1.0,
+    "avg_complexity": 1.0,
+    "module_size": 79.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/quarry/ingestion/text_splitter.py": {
     "avg_complexity": 2.8,

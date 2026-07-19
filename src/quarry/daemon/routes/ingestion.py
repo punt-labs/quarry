@@ -7,109 +7,44 @@ ten-argument task function.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, final
+from typing import final
 
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from quarry.daemon.ingest_jobs import IngestJob, ScrubbedIngestJob
 from quarry.daemon.routes.base import RouteGroup
-from quarry.daemon.tasks import TaskState, task_terminal
 from quarry.daemon.url_safety import UrlSafetyCheck
 from quarry.http_guards import RequestGuards
-
-if TYPE_CHECKING:
-    from quarry.daemon.context import DaemonContext
 
 # Maximum request body sizes.  Remember accepts content, ingest only a URL.
 MAX_REMEMBER_BODY_BYTES = 50 * 1024 * 1024
 MAX_INGEST_BODY_BYTES = 1 * 1024 * 1024
 
 
-@dataclass(frozen=True, slots=True)
-class RememberJob:
-    """A validated remember request that indexes inline text content."""
-
-    name: str
-    content: str
-    collection: str
-    format_hint: str
-    overwrite: bool
-    agent_handle: str
-    memory_type: str
-    summary: str
-
-    async def run(self, ctx: DaemonContext, state: TaskState) -> None:
-        """Execute ingest_content in a background thread and update task state."""
-        from quarry.ingestion.pipeline import ingest_content  # noqa: PLC0415
-
-        with task_terminal(state):
-            result = await run_in_threadpool(
-                ingest_content,
-                self.content,
-                self.name,
-                ctx.database,
-                ctx.settings,
-                overwrite=self.overwrite,
-                collection=self.collection,
-                format_hint=self.format_hint,
-                agent_handle=self.agent_handle,
-                memory_type=self.memory_type,
-                summary=self.summary,
-            )
-            state.status = "completed"
-            state.results = dict(result)
-
-
-@dataclass(frozen=True, slots=True)
-class IngestJob:
-    """A validated ingest request that fetches and indexes a URL."""
-
-    source: str
-    overwrite: bool
-    collection: str
-    agent_handle: str
-    memory_type: str
-    summary: str
-
-    async def run(self, ctx: DaemonContext, state: TaskState) -> None:
-        """Execute ingest_auto in a background thread and update task state."""
-        from quarry.ingestion.pipeline import ingest_auto  # noqa: PLC0415
-
-        with task_terminal(state):
-            result = await run_in_threadpool(
-                ingest_auto,
-                self.source,
-                ctx.database,
-                ctx.settings,
-                overwrite=self.overwrite,
-                collection=self.collection,
-                agent_handle=self.agent_handle,
-                memory_type=self.memory_type,
-                summary=self.summary,
-            )
-            state.status = "completed"
-            state.results = dict(result)
-
-
 @final
 class IngestionRoutes(RouteGroup):
     """Serve inline-text and URL ingestion as 202 background tasks."""
+
+    async def _authorized_body(
+        self, request: Request, max_bytes: int
+    ) -> dict[str, object] | JSONResponse:
+        """Reject on auth failure or oversize body, else return the JSON object."""
+        auth_resp = self.reject_unauthorized(request)
+        if auth_resp is not None:
+            return auth_resp
+        size_err = RequestGuards.check_body_size(request, max_bytes)
+        if size_err is not None:
+            return size_err
+        return await self.json_object(request)
 
     async def remember(self, request: Request) -> JSONResponse:
         """Ingest inline text content as a background task.
 
         Body: {name, content, ...optional}. Returns 202 Accepted with a task_id.
         """
-        auth_resp = self.reject_unauthorized(request)
-        if auth_resp is not None:
-            return auth_resp
-        size_err = RequestGuards.check_body_size(request, MAX_REMEMBER_BODY_BYTES)
-        if size_err is not None:
-            return size_err
-
-        body = await self.json_object(request)
+        body = await self._authorized_body(request, MAX_REMEMBER_BODY_BYTES)
         if isinstance(body, JSONResponse):
             return body
         job = self._remember_job(body)
@@ -127,22 +62,13 @@ class IngestionRoutes(RouteGroup):
         runs as an asyncio background task, polled by that task id.  Unlike
         sync, multiple concurrent ingests are allowed.
         """
-        auth_resp = self.reject_unauthorized(request)
-        if auth_resp is not None:
-            return auth_resp
-        size_err = RequestGuards.check_body_size(request, MAX_INGEST_BODY_BYTES)
-        if size_err is not None:
-            return size_err
-
-        body = await self.json_object(request)
+        body = await self._authorized_body(request, MAX_INGEST_BODY_BYTES)
         if isinstance(body, JSONResponse):
             return body
 
-        source = body.get("source")
-        if not isinstance(source, str) or not source:
-            return JSONResponse(
-                {"error": "Missing required field: source"}, status_code=400
-            )
+        source = self._require_text(body, "source")
+        if isinstance(source, JSONResponse):
+            return source
         # UrlSafetyCheck owns all scheme + address validation.  It calls
         # getaddrinfo(), which can block on DNS — run it in the threadpool.
         reason = await run_in_threadpool(UrlSafetyCheck.reject_reason, source)
@@ -161,27 +87,36 @@ class IngestionRoutes(RouteGroup):
         """Return ``body[key]`` as a string, falling back when absent or empty."""
         return str(body.get(key) or default)
 
-    def _remember_job(self, body: dict[str, object]) -> RememberJob | JSONResponse:
-        """Validate a remember body into a :class:`RememberJob` or a 400."""
-        name = body.get("name")
-        if not isinstance(name, str) or not name.strip():
+    @staticmethod
+    def _require_text(body: dict[str, object], key: str) -> str | JSONResponse:
+        """Return a non-empty string ``body[key]`` or a 400 naming the field."""
+        value = body.get(key)
+        if not isinstance(value, str) or not value.strip():
             return JSONResponse(
-                {"error": "Missing required field: name"}, status_code=400
+                {"error": f"Missing required field: {key}"}, status_code=400
             )
-        content = body.get("content")
-        if not isinstance(content, str) or not content.strip():
-            return JSONResponse(
-                {"error": "Missing required field: content"}, status_code=400
-            )
+        return value
+
+    def _remember_job(
+        self, body: dict[str, object]
+    ) -> ScrubbedIngestJob | JSONResponse:
+        """Validate a remember body into a :class:`ScrubbedIngestJob` or a 400."""
+        name = self._require_text(body, "name")
+        if isinstance(name, JSONResponse):
+            return name
+        content = self._require_text(body, "content")
+        if isinstance(content, JSONResponse):
+            return content
         overwrite = RequestGuards.coerce_bool_field(body, "overwrite", default=True)
         if isinstance(overwrite, JSONResponse):
             return overwrite
-        return RememberJob(
+        return ScrubbedIngestJob(
             name=name,
             content=content,
             collection=self._str_field(body, "collection", "default"),
             format_hint=self._str_field(body, "format_hint", "auto"),
             overwrite=overwrite,
+            scrub_label="remember",
             agent_handle=self._str_field(body, "agent_handle", ""),
             memory_type=self._str_field(body, "memory_type", ""),
             summary=self._str_field(body, "summary", ""),
