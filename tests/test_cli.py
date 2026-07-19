@@ -13,13 +13,14 @@ import json
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Self, final
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from typer.testing import CliRunner
 
 from quarry.__main__ import app
 from quarry.client import (
+    HttpError,
     QuarryClient,
     QuarryConnectionError,
     TargetResolver,
@@ -312,6 +313,27 @@ class TestAutostartHintGating:
             result = runner.invoke(app, ["status"])
         assert result.exit_code == 1
         assert "If quarryd is not running" not in result.output
+
+
+class TestConflictSurfacesRunningTaskId:
+    def test_409_exits_0_and_surfaces_task_id(self) -> None:
+        # 409 = a singleton task is already running. It exits 0 (not an error) and
+        # surfaces the running task's id in both --json and text, so an operator
+        # can poll/track it — the id must not be dropped.
+        conflict = HttpError("sync already in progress", 409, "sync-abc123")
+        client = MagicMock()
+        client.sync.side_effect = conflict
+
+        with patch.object(TargetResolver, "connect", return_value=client):
+            json_result = runner.invoke(app, ["--json", "sync"])
+        assert json_result.exit_code == 0, json_result.output
+        data = json.loads(json_result.stdout)
+        assert data == {"task_id": "sync-abc123", "status": "in_progress"}
+
+        with patch.object(TargetResolver, "connect", return_value=client):
+            text_result = runner.invoke(app, ["sync"])
+        assert text_result.exit_code == 0, text_result.output
+        assert "sync-abc123" in text_result.stdout
 
 
 class TestTaskCommandsAreFireAndForget:

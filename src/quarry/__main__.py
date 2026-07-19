@@ -205,10 +205,17 @@ def _cli_errors(fn: Callable[..., None]) -> Callable[..., None]:
             raise typer.Exit(code=1) from exc
         except HttpError as exc:
             if exc.status == CONFLICT_STATUS:
-                if not _quiet:
-                    err_console.print(
-                        f"Already in progress: {exc.message}", style="yellow"
-                    )
+                # 409 = a singleton task is already running. Surface ITS task_id
+                # the same way the 202 acceptance path does (via _emit to stdout),
+                # so an operator can poll/track the in-flight task. Exit 0 — this
+                # completes the acceptance model (202 = "accepted, here's the id";
+                # 409 = "already running, here's ITS id"), not an error.
+                text = (
+                    f"Already in progress (task {exc.task_id})"
+                    if exc.task_id
+                    else f"Already in progress: {exc.message}"
+                )
+                _emit({"task_id": exc.task_id, "status": "in_progress"}, text)
                 raise typer.Exit(code=0) from exc
             err_console.print(f"Error: {exc.message}", style="red")
             raise typer.Exit(code=1) from exc
