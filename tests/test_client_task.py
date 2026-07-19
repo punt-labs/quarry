@@ -54,16 +54,21 @@ class TestConnect:
 class ScriptedTransport:
     """A transport that replays a fixed sequence of task-status bodies/errors."""
 
-    __slots__ = ("_steps", "calls")
+    __slots__ = ("_calls", "_steps")
 
     _steps: list[object]
-    calls: int
+    _calls: int
 
     def __new__(cls, steps: list[object]) -> Self:
         self = super().__new__(cls)
         self._steps = steps
-        self.calls = 0
+        self._calls = 0
         return self
+
+    @property
+    def calls(self) -> int:
+        """Return how many times ``request`` was invoked."""
+        return self._calls
 
     def request(
         self,
@@ -74,8 +79,8 @@ class ScriptedTransport:
         json_body: Mapping[str, object] | None = None,
         timeout: float | None = None,
     ) -> Response:
-        step = self._steps[min(self.calls, len(self._steps) - 1)]
-        self.calls += 1
+        step = self._steps[min(self._calls, len(self._steps) - 1)]
+        self._calls += 1
         if isinstance(step, Exception):
             raise step
         return Response(200, step)
@@ -149,8 +154,8 @@ class TestAwaitTask:
         assert dereg.result_int("deleted_chunks") == 4
 
     def test_connection_lost_fail_fast_at_max_polls(self) -> None:
-        # bxwd: three consecutive connection losses short-circuit to unreachable
-        # at exactly _MAX_UNREACHABLE_POLLS, not after polling to the deadline.
+        # Three consecutive connection losses short-circuit to unreachable at
+        # exactly _MAX_UNREACHABLE_POLLS, not after polling to the deadline.
         from quarry.client.client import _MAX_UNREACHABLE_POLLS
 
         transport = ScriptedTransport(

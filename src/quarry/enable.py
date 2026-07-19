@@ -68,7 +68,7 @@ documents by meaning, ingest new content, and recall knowledge across sessions.
 """
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class EnableResult:
     """Result of enabling quarry for a project directory."""
 
@@ -86,7 +86,7 @@ class EnableResult:
     ethos_failed: list[str] = field(default_factory=list)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class DisableResult:
     """Result of disabling quarry.  ``removed`` is the registry file count the
     daemon reported synchronously; the chunk purge runs as a background task."""

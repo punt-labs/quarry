@@ -525,7 +525,7 @@
     "avg_params": 1.29,
     "max_complexity": 5.0,
     "avg_complexity": 2.14,
-    "module_size": 193.0,
+    "module_size": 200.0,
     "classes_per_module": 2.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,

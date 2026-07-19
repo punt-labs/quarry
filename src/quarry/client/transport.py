@@ -181,7 +181,14 @@ class HttpxTransport:
         raw_url = str(mapping["url"])
         parsed = urllib.parse.urlparse(ws_to_http(raw_url))
         scheme = parsed.scheme or "http"
-        host = parsed.hostname or "localhost"
+        # Fail closed: a hostless URL (e.g. "ws://:9000") must NOT default to
+        # localhost — that would send Authorization: Bearer to loopback. The
+        # resolver validates upstream; this is the defense-in-depth boundary.
+        host = parsed.hostname
+        if not host:
+            raise QuarryConnectionError(
+                f"Invalid server URL has no host: {raw_url!r}", raw_url
+            )
         port = parsed.port or 8420
         base_url = f"{scheme}://{to_netloc(host, port)}"
         headers = cls._headers(mapping)

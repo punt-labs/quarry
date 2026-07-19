@@ -159,6 +159,14 @@ class TestConnectionFailures:
                 {"url": "wss://example.com:8420", "ca_cert": bad_ca}
             )
 
+    def test_hostless_url_raises_does_not_default_to_localhost(self) -> None:
+        # Fail closed: a hostless URL must raise, NOT silently target localhost —
+        # otherwise a bearer token could be sent to loopback (trust boundary).
+        with pytest.raises(QuarryConnectionError) as info:
+            HttpxTransport.from_mapping({"url": "ws://:9000"})
+        assert "no host" in info.value.message
+        assert "localhost" not in info.value.target
+
 
 class TestProxyIsolation:
     def test_client_never_routes_through_an_env_proxy(
