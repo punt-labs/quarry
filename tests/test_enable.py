@@ -1,27 +1,17 @@
 """Tests for the enable/disable module.
 
 enable/disable drive the daemon's registry through a client port
-(``RegistryClient``); these tests supply an in-memory ``_FakeRegistryClient`` so
-no real ``SyncRegistry`` or daemon is involved.
+(``RegistryClient``); these tests supply the in-memory ``FakeRegistryClient``
+(from conftest) so no real ``SyncRegistry`` or daemon is involved.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Self, final
 from unittest.mock import patch
 
 import pytest
 
-from quarry.api import (
-    DeleteCollectionRequest,
-    DeregisterAccepted,
-    DeregisterRequest,
-    RegisterRequest,
-    RegistrationInfo,
-    RegistrationList,
-    TaskAccepted,
-)
 from quarry.enable import (
     _CLAUDEMD_BEGIN,
     _CLAUDEMD_BLOCK,
@@ -36,84 +26,7 @@ from quarry.enable import (
     disable_project,
     enable_project,
 )
-
-if TYPE_CHECKING:
-    from collections.abc import Iterable
-
-
-@final
-class _FakeRegistryClient:
-    """In-memory stand-in for the daemon registry surface enable/disable use.
-
-    Records ``register``/``deregister``/``delete_collection`` calls so a test can
-    assert the client dispatched exactly the daemon operations the design requires
-    — never touching a local ``SyncRegistry``.
-    """
-
-    __slots__ = ("_deleted", "_deregistered", "_registered", "_regs")
-
-    _regs: list[RegistrationInfo]
-    _registered: list[RegisterRequest]
-    _deregistered: list[DeregisterRequest]
-    _deleted: list[str]
-
-    def __new__(cls, registrations: Iterable[tuple[str, Path]] = ()) -> Self:
-        self = super().__new__(cls)
-        self._regs = [
-            RegistrationInfo(
-                collection=col,
-                directory=str(Path(directory).resolve()),
-                registered_at="2026-01-01",
-            )
-            for col, directory in registrations
-        ]
-        self._registered = []
-        self._deregistered = []
-        self._deleted = []
-        return self
-
-    def list_registrations(self) -> RegistrationList:
-        return RegistrationList(
-            total_registrations=len(self._regs), registrations=list(self._regs)
-        )
-
-    def register(self, req: RegisterRequest) -> TaskAccepted:
-        self._registered.append(req)
-        self._regs.append(
-            RegistrationInfo(
-                collection=req.collection,
-                directory=req.directory,
-                registered_at="2026-01-02",
-            )
-        )
-        return TaskAccepted(task_id="t")
-
-    def deregister(self, req: DeregisterRequest) -> DeregisterAccepted:
-        self._deregistered.append(req)
-        before = len(self._regs)
-        self._regs = [r for r in self._regs if r.collection != req.collection]
-        return DeregisterAccepted(task_id="t", removed=before - len(self._regs))
-
-    def delete_collection(self, req: DeleteCollectionRequest) -> TaskAccepted:
-        self._deleted.append(req.name)
-        return TaskAccepted(task_id="t")
-
-    @property
-    def registered(self) -> list[RegisterRequest]:
-        return self._registered
-
-    @property
-    def deregistered(self) -> list[DeregisterRequest]:
-        return self._deregistered
-
-    @property
-    def deleted(self) -> list[str]:
-        return self._deleted
-
-    @property
-    def collections(self) -> list[str]:
-        return [r.collection for r in self._regs]
-
+from tests.conftest import FakeRegistryClient
 
 _NO_ETHOS = "quarry.enable._GLOBAL_IDENTITIES"
 
@@ -122,7 +35,7 @@ class TestT1EnableNewDirectory:
     def test_registers_new_directory(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
-        client = _FakeRegistryClient()
+        client = FakeRegistryClient()
 
         with patch(_NO_ETHOS, tmp_path / "no-ethos"):
             result = enable_project(project, client)
@@ -139,7 +52,7 @@ class TestT2EnableIdempotent:
     def test_idempotent_on_registered_directory(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
-        client = _FakeRegistryClient([("foo", project)])
+        client = FakeRegistryClient([("foo", project)])
 
         with patch(_NO_ETHOS, tmp_path / "no-ethos"):
             result = enable_project(project, client)
@@ -155,7 +68,7 @@ class TestT3EnableChildRaisesValueError:
         parent.mkdir()
         child = parent / "src"
         child.mkdir()
-        client = _FakeRegistryClient([("project", parent)])
+        client = FakeRegistryClient([("project", parent)])
 
         with (
             patch(_NO_ETHOS, tmp_path / "no-ethos"),
@@ -168,7 +81,7 @@ class TestT4EnableCollectionOverride:
     def test_collection_override(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
-        client = _FakeRegistryClient()
+        client = FakeRegistryClient()
 
         with patch(_NO_ETHOS, tmp_path / "no-ethos"):
             result = enable_project(project, client, collection_override="custom")
@@ -182,7 +95,7 @@ class TestT5EnableCreatesConfig:
     def test_creates_config_file(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
-        client = _FakeRegistryClient()
+        client = FakeRegistryClient()
 
         with patch(_NO_ETHOS, tmp_path / "no-ethos"):
             result = enable_project(project, client)
@@ -202,7 +115,7 @@ class TestT6EnablePreservesExistingConfig:
         config_path = config_dir / "config.md"
         custom_content = "---\ncustom: true\n---\n"
         config_path.write_text(custom_content)
-        client = _FakeRegistryClient()
+        client = FakeRegistryClient()
 
         with patch(_NO_ETHOS, tmp_path / "no-ethos"):
             enable_project(project, client)
@@ -222,9 +135,10 @@ class TestT7EnableCreatesEthosExtFiles:
 
         monkeypatch.setattr("quarry.enable._GLOBAL_IDENTITIES", identities_dir)
 
-        created, updated, already_set, skipped = _bootstrap_ethos_memory()
+        created, updated, already_set, failed, skipped = _bootstrap_ethos_memory()
 
         assert skipped is False
+        assert failed == []
         assert "claude" in created
         assert "rmh" in created
         assert set(updated) == {"claude", "rmh"}
@@ -254,7 +168,7 @@ class TestT7bExistingQuarryYamlNotModified:
 
         monkeypatch.setattr("quarry.enable._GLOBAL_IDENTITIES", identities_dir)
 
-        created, _, _, skipped = _bootstrap_ethos_memory()
+        created, _, _, _, skipped = _bootstrap_ethos_memory()
 
         assert skipped is False
         assert "claude" not in created
@@ -265,7 +179,7 @@ class TestT8EnableSkipsEthosWhenMissing:
     def test_skips_when_identities_dir_missing(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
-        client = _FakeRegistryClient()
+        client = FakeRegistryClient()
 
         with patch(_NO_ETHOS, tmp_path / "nonexistent-identities"):
             result = enable_project(project, client)
@@ -277,7 +191,7 @@ class TestT9EnableCapturesCollectionName:
     def test_captures_collection_name(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
-        client = _FakeRegistryClient()
+        client = FakeRegistryClient()
 
         with patch(_NO_ETHOS, tmp_path / "no-ethos"):
             result = enable_project(project, client)
@@ -289,7 +203,7 @@ class TestT10DisableRemovesRegistration:
     def test_removes_registration(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
-        client = _FakeRegistryClient()
+        client = FakeRegistryClient()
 
         with patch(_NO_ETHOS, tmp_path / "no-ethos"):
             enable_result = enable_project(project, client)
@@ -305,7 +219,7 @@ class TestT11DisableRemovesConfig:
     def test_removes_config_file(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
-        client = _FakeRegistryClient()
+        client = FakeRegistryClient()
 
         with patch(_NO_ETHOS, tmp_path / "no-ethos"):
             enable_project(project, client)
@@ -322,7 +236,7 @@ class TestT12DisableKeepData:
     def test_keep_data_dispatches_no_captures_purge(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
-        client = _FakeRegistryClient()
+        client = FakeRegistryClient()
 
         with patch(_NO_ETHOS, tmp_path / "no-ethos"):
             enable_project(project, client)
@@ -339,7 +253,7 @@ class TestT13DisablePurgesCapturesSibling:
     def test_purges_only_captures_never_memory(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
-        client = _FakeRegistryClient()
+        client = FakeRegistryClient()
 
         with patch(_NO_ETHOS, tmp_path / "no-ethos"):
             enable_project(project, client)
@@ -357,7 +271,7 @@ class TestT14DisableUnregisteredRaises:
     def test_raises_on_unregistered_directory(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
-        client = _FakeRegistryClient()
+        client = FakeRegistryClient()
 
         with pytest.raises(ValueError, match="no registration covers"):
             disable_project(project, client)
@@ -421,7 +335,7 @@ class TestT15DisableOnChildOfRegisteredParentRaises:
         parent.mkdir()
         child = parent / "src"
         child.mkdir()
-        client = _FakeRegistryClient([("project", parent)])
+        client = FakeRegistryClient([("project", parent)])
 
         with pytest.raises(ValueError, match="covered by parent registration"):
             disable_project(child, client)
@@ -443,12 +357,14 @@ class TestT16BootstrapEthosMemorySkipsBadYaml:
 
         monkeypatch.setattr("quarry.enable._GLOBAL_IDENTITIES", identities_dir)
 
+        from yaml import YAMLError
+
         from quarry.doctor import _write_ethos_ext_session_context as original_write
 
         def selective_raise(quarry_yaml: Path, handle: str) -> str:
             if handle == "bad":
                 msg = "simulated YAML parse failure"
-                raise ValueError(msg)
+                raise YAMLError(msg)
             return original_write(quarry_yaml, handle)
 
         monkeypatch.setattr(
@@ -456,11 +372,14 @@ class TestT16BootstrapEthosMemorySkipsBadYaml:
             selective_raise,
         )
 
-        created, updated, already_set, skipped = _bootstrap_ethos_memory()
+        created, updated, already_set, failed, skipped = _bootstrap_ethos_memory()
 
         assert skipped is False
         assert "alice" in created
+        # bad's quarry.yaml file was written (so it's "created"), but the
+        # session_context write raised — it lands in failed, never updated.
         assert "bad" in created
+        assert "bad" in failed
         assert "bad" not in updated
         assert "bad" not in already_set
 
@@ -474,7 +393,7 @@ class TestT17EnableWithOverrideOnChildRaises:
         parent.mkdir()
         child = parent / "src"
         child.mkdir()
-        client = _FakeRegistryClient([("project", parent)])
+        client = FakeRegistryClient([("project", parent)])
 
         with (
             patch(_NO_ETHOS, tmp_path / "no-ethos"),
@@ -490,7 +409,7 @@ class TestT18EnableResolvesRelativePath:
         project = tmp_path / "myproject"
         project.mkdir()
         monkeypatch.chdir(project)
-        client = _FakeRegistryClient()
+        client = FakeRegistryClient()
 
         with patch(_NO_ETHOS, tmp_path / "no-ethos"):
             result = enable_project(Path(), client)
@@ -506,7 +425,7 @@ class TestT19DisableResolvesRelativePath:
         project = tmp_path / "myproject"
         project.mkdir()
         monkeypatch.chdir(project)
-        client = _FakeRegistryClient()
+        client = FakeRegistryClient()
 
         with patch(_NO_ETHOS, tmp_path / "no-ethos"):
             enable_project(project, client)
@@ -566,7 +485,7 @@ class TestEnableAppendsClaudemdBlock:
     def test_enable_creates_claudemd_with_markers(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
-        client = _FakeRegistryClient()
+        client = FakeRegistryClient()
 
         with patch(_NO_ETHOS, tmp_path / "no-ethos"):
             result = enable_project(project, client)
@@ -584,7 +503,7 @@ class TestEnableClaudemdIdempotent:
     def test_running_enable_twice_does_not_duplicate(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
-        client = _FakeRegistryClient()
+        client = FakeRegistryClient()
 
         with patch(_NO_ETHOS, tmp_path / "no-ethos"):
             result1 = enable_project(project, client)
@@ -602,7 +521,7 @@ class TestEnableAppendsToExistingClaudemd:
         project.mkdir()
         claudemd = project / "CLAUDE.md"
         claudemd.write_text("# My Project\n\nExisting content.\n")
-        client = _FakeRegistryClient()
+        client = FakeRegistryClient()
 
         with patch(_NO_ETHOS, tmp_path / "no-ethos"):
             result = enable_project(project, client)
@@ -618,7 +537,7 @@ class TestDisableRemovesClaudemdBlock:
     def test_disable_removes_markers_and_content(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
-        client = _FakeRegistryClient()
+        client = FakeRegistryClient()
 
         with patch(_NO_ETHOS, tmp_path / "no-ethos"):
             enable_project(project, client)
@@ -638,7 +557,7 @@ class TestDisablePreservesOtherClaudemdContent:
         project.mkdir()
         claudemd = project / "CLAUDE.md"
         claudemd.write_text("# My Project\n\nKeep this.\n")
-        client = _FakeRegistryClient()
+        client = FakeRegistryClient()
 
         with patch(_NO_ETHOS, tmp_path / "no-ethos"):
             enable_project(project, client)

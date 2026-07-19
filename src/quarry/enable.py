@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
+from yaml import YAMLError
+
 if TYPE_CHECKING:
     from quarry.api import (
         DeleteCollectionRequest,
@@ -81,6 +83,7 @@ class EnableResult:
     ethos_updated: list[str] = field(default_factory=list)
     ethos_already_set: list[str] = field(default_factory=list)
     ethos_created: list[str] = field(default_factory=list)
+    ethos_failed: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -149,9 +152,13 @@ def enable_project(
 
     captures_collection = f"{collection}-captures"
 
-    created_handles, updated_handles, already_set_handles, ethos_skipped = (
-        _bootstrap_ethos_memory()
-    )
+    (
+        created_handles,
+        updated_handles,
+        already_set_handles,
+        failed_handles,
+        ethos_skipped,
+    ) = _bootstrap_ethos_memory()
 
     memory_collections = [f"memory-{h}" for h in created_handles]
 
@@ -172,6 +179,7 @@ def enable_project(
         ethos_updated=updated_handles,
         ethos_already_set=already_set_handles,
         ethos_created=created_handles,
+        ethos_failed=failed_handles,
     )
 
 
@@ -269,23 +277,31 @@ def _resolve_or_register(
     return name, True
 
 
-def _bootstrap_ethos_memory() -> tuple[list[str], list[str], list[str], bool]:
+def _bootstrap_ethos_memory() -> tuple[
+    list[str], list[str], list[str], list[str], bool
+]:
     """Create quarry.yaml ext files and write session_context.
 
     Reads only the global identities directory (repo-level identities are
-    read-only). Returns (created, updated, already_set, skipped); skipped is
-    True when the global identities directory does not exist.
+    read-only). Returns (created, updated, already_set, failed, skipped);
+    skipped is True when the global identities directory does not exist.
+
+    A handle appears in ``failed`` when its session_context write raised an
+    I/O or YAML error — the useful part never landed, so the caller must not
+    report unqualified success for it.  Non-OSError/YAMLError exceptions are
+    real bugs and propagate.
     """
     from quarry.doctor import (  # noqa: PLC0415
         _write_ethos_ext_session_context,  # pyright: ignore[reportPrivateUsage]
     )
 
     if not _GLOBAL_IDENTITIES.is_dir():
-        return [], [], [], True
+        return [], [], [], [], True
 
     created: list[str] = []
     updated: list[str] = []
     already_set: list[str] = []
+    failed: list[str] = []
     for identity_file in sorted(_GLOBAL_IDENTITIES.glob("*.yaml")):
         handle = identity_file.stem
         ext_dir = _GLOBAL_IDENTITIES / f"{handle}.ext"
@@ -300,15 +316,16 @@ def _bootstrap_ethos_memory() -> tuple[list[str], list[str], list[str], bool]:
 
         try:
             result = _write_ethos_ext_session_context(quarry_yaml, handle)
-        except Exception:  # noqa: BLE001
+        except (OSError, YAMLError):
             logger.warning("failed to write session context for %s", handle)
+            failed.append(handle)
             continue
         if result == "updated":
             updated.append(handle)
         elif result == "already_set":
             already_set.append(handle)
 
-    return created, updated, already_set, False
+    return created, updated, already_set, failed, False
 
 
 def _write_project_config(directory: Path) -> str:

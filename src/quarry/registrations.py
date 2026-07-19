@@ -41,6 +41,11 @@ class Registrations:
         "no coverage" contract, not a failure. Compares the resolved path against
         the daemon's absolute registration directories.
         """
+        # Exact string match is correct ONLY because the daemon persists resolved
+        # absolute paths (enable_project registers str(directory.resolve())). If a
+        # future change stored a non-normalized path (trailing slash, unresolved
+        # symlink), a real parent would be missed → a spurious "no registration
+        # covers".
         current = directory.resolve()
         while True:
             found = self._by_dir.get(str(current))

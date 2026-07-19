@@ -96,18 +96,22 @@ def test_deregister_accepted_carries_removed() -> None:
     assert acc.removed == 3
 
 
-def test_api_package_imports_without_engine() -> None:
-    """``quarry.api`` must import with no lancedb/onnxruntime pulled in.
+def test_client_modules_import_without_engine() -> None:
+    """The client tier must import with no engine pulled in (DES-031 §3.1 #3).
 
-    Runs in a fresh interpreter so the main test process (which has the engine
-    loaded) cannot mask a hidden import.
+    Covers every module the trust model requires to stay engine-free — ``quarry.api``
+    plus ``quarry.enable`` and ``quarry.registrations`` (enable/disable run in thin
+    clients). A fresh interpreter is used so the main test process (which has the
+    engine loaded) cannot mask a hidden import, and the guard is structural: a
+    future ``import lancedb`` or non-lazy ``from quarry.db import ...`` added to any
+    of these fails here instead of passing CI true-by-luck.
     """
     code = (
-        "import sys, quarry.api;"
-        "assert 'lancedb' not in sys.modules, "
-        "sorted(m for m in sys.modules if 'lance' in m);"
-        "assert 'onnxruntime' not in sys.modules;"
-        "assert 'pyarrow' not in sys.modules;"
+        "import sys;"
+        "import quarry.api, quarry.enable, quarry.registrations;"
+        "engine = ('lancedb', 'onnxruntime', 'pyarrow', 'quarry.db', 'quarry.sync');"
+        "loaded = [m for m in engine if m in sys.modules];"
+        "assert not loaded, loaded;"
         "print('engine-free')"
     )
     result = subprocess.run(

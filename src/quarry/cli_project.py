@@ -75,6 +75,10 @@ class ProjectCli:
             if result.memory_collections:
                 joined = ", ".join(result.memory_collections)
                 lines.append(f"  Memory collections: {joined}")
+        if result.ethos_failed:
+            # session_context never landed for these handles — surface the
+            # partial failure rather than let "Ethos created" imply success.
+            lines.append(f"  Ethos FAILED: {', '.join(result.ethos_failed)}")
         self._p.emit(dataclasses.asdict(result), "\n".join(lines))
 
     def _disable(

@@ -1,9 +1,9 @@
 """The document-facing commands: ``show``, ``delete``, and the ``list`` group.
 
 All are pure client calls.  ``show`` and the ``list`` nouns read one wire model
-each and render it; ``delete`` fires a 202 task and waits for the deleted-chunk
-count so the emitted ``{deleted, name, type}`` shape matches what the local path
-produced before the daemon owned deletion (bug-class-3 field parity).
+each and render it; ``delete`` is fire-and-forget (DES-001) — it dispatches the
+daemon delete and emits the 202 acceptance (``{task_id, status}``), never an
+awaited chunk count.  The chunk removal runs as a background task.
 """
 
 from __future__ import annotations
