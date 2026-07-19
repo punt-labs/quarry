@@ -103,6 +103,16 @@ class TestTier1EnvSecurity:
         with pytest.raises(ClientConfigError, match="cleartext"):
             TargetResolver.resolve()
 
+    def test_plaintext_http_remote_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A plaintext ``http://`` (not just ``ws://``) remote target is refused."""
+        monkeypatch.delenv("QUARRY_TOKEN", raising=False)
+        monkeypatch.delenv("QUARRY_CA_CERT", raising=False)
+        monkeypatch.setenv("QUARRY_URL", "http://remote.example:9000")
+        with pytest.raises(ClientConfigError, match="cleartext"):
+            TargetResolver.resolve()
+
     def test_loopback_name_is_canonicalized_to_literal_never_the_name(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

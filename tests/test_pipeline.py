@@ -656,6 +656,50 @@ class TestIngestContentScrubbing:
         assert stored == []  # never reached the store — zero chunks written
         assert deleted == []  # prior scrubbed copy preserved (fail-closed delete)
 
+    def test_empty_extraction_keeps_prior_and_stores_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An extraction yielding zero pages must not delete the prior document.
+
+        A web-fetch re-capture (overwrite=True) whose HTML extracts to nothing
+        (already-markdown, JS-only, non-HTML) must keep the prior good capture
+        and report zero chunks — never delete it and falsely report a fresh one.
+        """
+        from quarry.ingestion import pipeline
+        from quarry.ingestion.pipeline import ingest_content
+
+        deleted: list[str] = []
+        seen_pages: list[int] = []
+
+        def _store(
+            pages_arg: list[PageContent], *_a: object, **_k: object
+        ) -> dict[str, object]:
+            seen_pages.append(len(pages_arg))
+            return {
+                "document_name": "note",
+                "collection": "c",
+                "chunks": len(pages_arg),
+            }
+
+        monkeypatch.setattr(pipeline, "_chunk_embed_store", _store)
+        monkeypatch.setattr(
+            "quarry.db.chunk_store.ChunkStore.delete_document",
+            lambda _self, name, **_k: deleted.append(name),
+        )
+
+        result = ingest_content(
+            "<html><body></body></html>",
+            "note",
+            Database(MagicMock()),
+            _settings(),
+            overwrite=True,
+            format_hint="html",
+        )
+
+        assert seen_pages == [0]  # the extraction really was empty
+        assert deleted == []  # prior document NOT deleted on an empty extraction
+        assert result["chunks"] == 0  # honest zero, not a bogus fresh capture
+
     def test_no_scrubber_leaves_inline_text_unchanged(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -699,6 +699,30 @@ class TestHandlePostWebFetch:
         assert cap.call_args[0][0].cwd == "/projects/myapp"
         assert ing.call_args[0][0].cwd == "/projects/myapp"
 
+    def test_down_daemon_logs_page_not_indexed_not_backfill(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A web fetch writes no durable copy, so a down daemon must not promise
+        a backfill that will never run — the log says the page is not indexed."""
+        from quarry.client import QuarryConnectionError
+
+        payload: dict[str, object] = {
+            "tool_input": {"url": "https://example.com/p"},
+            "tool_response": json.dumps({"result": "<html>hi</html>"}),
+        }
+        with (
+            patch(
+                "quarry.client.TargetResolver.connect",
+                side_effect=QuarryConnectionError("down", "url"),
+            ),
+            caplog.at_level(logging.WARNING),
+        ):
+            result = handle_post_web_fetch(payload)
+
+        assert result == {}
+        assert "page not indexed" in caplog.text
+        assert "backfill" not in caplog.text
+
 
 class TestHookImportsNoEngine:
     """The capture hook paths must run with the engine libraries poisoned.

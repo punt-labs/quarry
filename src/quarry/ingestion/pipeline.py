@@ -436,10 +436,18 @@ def ingest_content(
     if content_scrubber is not None:
         pages = [replace(page, text=content_scrubber(page.text)) for page in pages]
 
-    # Delete the prior copy only AFTER a successful scrub: a scrub that raises
-    # must abort before destroying the last good scrubbed document, so a
-    # re-capture whose scrub fails never trades a stored document for nothing.
-    if overwrite:
+    # Delete the prior copy only after a successful scrub AND only when the new
+    # extraction actually yielded content.  A scrub that raises aborts before
+    # this line; an empty extraction (already-markdown, JS-only, or non-HTML)
+    # must not replace a prior good capture with nothing — that would be silent
+    # data loss reported as a fresh capture.
+    if not pages:
+        logger.warning(
+            "ingest_content: %s extracted to zero pages — keeping any prior "
+            "document, storing nothing",
+            document_name,
+        )
+    elif overwrite:
         database.store.delete_document(
             document_name, collection=collection, count=False
         )

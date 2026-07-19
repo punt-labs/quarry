@@ -1410,6 +1410,7 @@ class TestCapture:
                 side_effect=ValueError("scrub exploded"),
             ),
             patch("quarry.ingestion.pipeline._chunk_embed_store") as store,
+            patch("quarry.db.chunk_store.ChunkStore.delete_document") as delete,
         ):
             resp = tc.post(
                 "/v1/capture",
@@ -1417,13 +1418,15 @@ class TestCapture:
                     "content": "secret jmf@pobox.com",
                     "document_name": "note",
                     "cwd": str(tmp_path),
+                    "overwrite": True,
                 },
             )
             data = _poll_task_done(tc, resp.json()["task_id"])
 
         assert data["status"] == "failed"
         assert "scrub exploded" in data["error"]
-        store.assert_not_called()
+        store.assert_not_called()  # nothing stored
+        delete.assert_not_called()  # AND the prior document is not deleted
 
 
 class TestRemember:

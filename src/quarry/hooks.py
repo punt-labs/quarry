@@ -378,13 +378,17 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
         _capture_via_daemon(
             CaptureIngestRequest(
                 content=content, cwd=cwd, document_name=meta_url, format_hint="html"
-            )
+            ),
+            unreachable_log=_WEB_FETCH_UNREACHABLE,
         )
     else:
         # Fallback: no usable content — the daemon re-fetches through the
         # SSRF-checked ingest route, scrubbing the page into <repo>-captures.
         logger.debug("post-web-fetch: no content in payload, re-fetching via daemon")
-        _ingest_url_via_daemon(IngestRequest(source=url, cwd=cwd, overwrite=True))
+        _ingest_url_via_daemon(
+            IngestRequest(source=url, cwd=cwd, overwrite=True),
+            unreachable_log=_WEB_FETCH_UNREACHABLE,
+        )
     return {}
 
 
@@ -599,20 +603,23 @@ def _write_capture_file(
     )
 
 
-def _send_to_daemon(post: Callable[[QuarryClient], object]) -> bool:
+def _send_to_daemon(
+    post: Callable[[QuarryClient], object], *, unreachable_log: str
+) -> bool:
     """Connect to the daemon and run *post*; return False if it was unreachable.
 
     The hook imports only the thin client — no engine.  A down or unreachable
-    daemon is not fatal (the durable local copies are already written and
-    ``backfill-sessions`` re-ingests later), so this returns False rather than
-    raising, and the request is fire-and-forget: the daemon 202s immediately.
+    daemon is not fatal, and the request is fire-and-forget (the daemon 202s
+    immediately), so this returns False rather than raising.  What "not fatal"
+    means differs per caller — a compaction has a durable archive, a web fetch
+    does not — so the caller supplies the truthful *unreachable_log* message.
     """
     from quarry.client import QuarryError, TargetResolver  # noqa: PLC0415
 
     try:
         post(TargetResolver.connect())
     except QuarryError:
-        logger.warning("capture: daemon unreachable; archived for backfill")
+        logger.warning("%s", unreachable_log)
         return False
     return True
 
@@ -622,18 +629,27 @@ def _send_to_daemon(post: Callable[[QuarryClient], object]) -> bool:
 # never make a compaction wait — the durable archive already holds the transcript.
 _CAPTURE_SEND_TIMEOUT = 5.0
 
+# A web fetch writes NO durable local copy and backfill-sessions only re-ingests
+# session transcripts, so a lost web capture is genuinely lost — the log must not
+# promise a backfill that will never happen.
+_WEB_FETCH_UNREACHABLE = (
+    "web-fetch: daemon unreachable; page not indexed (re-fetch to retry)"
+)
 
-def _capture_via_daemon(req: CaptureIngestRequest) -> bool:
+
+def _capture_via_daemon(req: CaptureIngestRequest, *, unreachable_log: str) -> bool:
     """Send an inline capture (transcript or fetched page) to the daemon."""
     return _send_to_daemon(
-        lambda client: client.capture(req, timeout=_CAPTURE_SEND_TIMEOUT)
+        lambda client: client.capture(req, timeout=_CAPTURE_SEND_TIMEOUT),
+        unreachable_log=unreachable_log,
     )
 
 
-def _ingest_url_via_daemon(req: IngestRequest) -> bool:
+def _ingest_url_via_daemon(req: IngestRequest, *, unreachable_log: str) -> bool:
     """Ask the daemon to re-fetch and index a URL (the web-fetch fallback)."""
     return _send_to_daemon(
-        lambda client: client.ingest_url(req, timeout=_CAPTURE_SEND_TIMEOUT)
+        lambda client: client.ingest_url(req, timeout=_CAPTURE_SEND_TIMEOUT),
+        unreachable_log=unreachable_log,
     )
 
 
@@ -712,7 +728,11 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
         agent_handle=agent_handle,
         format_hint="markdown",
     )
-    if not _capture_via_daemon(req):
+    unreachable = (
+        "pre-compact: daemon unreachable; transcript archived, "
+        "run backfill-sessions to index it"
+    )
+    if not _capture_via_daemon(req, unreachable_log=unreachable):
         return {
             "systemMessage": (
                 "Warning: quarryd is not reachable, so this session was not "
