@@ -344,7 +344,10 @@ def _bootstrap_ethos_memory() -> tuple[
 
         try:
             result = _write_ethos_ext_session_context(quarry_yaml, handle)
-        except (OSError, YAMLError):
+        except (OSError, YAMLError, UnicodeDecodeError):
+            # UnicodeDecodeError (a ValueError, not an OSError) fires on a
+            # non-UTF8/corrupt identity file — record the handle and continue
+            # rather than crash enable; a real bug still propagates.
             logger.warning("failed to write session context for %s", handle)
             failed.append(handle)
             continue

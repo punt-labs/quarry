@@ -1040,17 +1040,17 @@
     "public_attr_violations": 0.0
   },
   "src/quarry/enable.py": {
-    "avg_complexity": 3.82,
-    "avg_params": 1.45,
-    "class_to_func_ratio": 0.222,
-    "classes_per_module": 2.0,
-    "encapsulation_ratio": 1.0,
-    "future_annotations": 1.0,
-    "init_violations": 0.0,
-    "max_complexity": 11.0,
     "method_ratio": 0.364,
-    "module_size": 349.0,
-    "public_attr_violations": 0.0
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.45,
+    "max_complexity": 11.0,
+    "avg_complexity": 3.82,
+    "module_size": 352.0,
+    "classes_per_module": 2.0,
+    "class_to_func_ratio": 0.222,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/quarry/extractors/__init__.py": {
     "avg_complexity": 0.0,

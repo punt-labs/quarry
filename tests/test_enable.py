@@ -442,6 +442,27 @@ class TestT16BootstrapEthosMemorySkipsBadYaml:
         assert (identities_dir / "alice.ext" / "quarry.yaml").exists()
         assert (identities_dir / "bad.ext" / "quarry.yaml").exists()
 
+    def test_non_utf8_identity_file_recorded_not_fatal(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A non-UTF8/corrupt ext quarry.yaml makes the session-context reader raise
+        # UnicodeDecodeError (a ValueError, not OSError). enable must record the
+        # handle in ethos_failed and continue, never crash.
+        identities_dir = tmp_path / "identities"
+        identities_dir.mkdir()
+        (identities_dir / "alice.yaml").write_text("agent: alice\n")
+        ext_dir = identities_dir / "alice.ext"
+        ext_dir.mkdir()
+        (ext_dir / "quarry.yaml").write_bytes(b"memory_collection: \xff\xfe bad\n")
+        monkeypatch.setattr("quarry.enable._GLOBAL_IDENTITIES", identities_dir)
+
+        _created, updated, already_set, failed, skipped = _bootstrap_ethos_memory()
+
+        assert skipped is False
+        assert "alice" in failed
+        assert "alice" not in updated
+        assert "alice" not in already_set
+
 
 class TestT17EnableWithOverrideOnChildRaises:
     def test_override_does_not_bypass_parent_check(self, tmp_path: Path) -> None:
