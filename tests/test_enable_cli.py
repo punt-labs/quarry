@@ -13,6 +13,7 @@ import contextlib
 import json
 from collections.abc import Generator
 from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 from typer.testing import CliRunner
@@ -20,6 +21,9 @@ from typer.testing import CliRunner
 from quarry.__main__ import app
 from quarry.client import TargetResolver
 from tests.conftest import FakeRegistryClient
+
+if TYPE_CHECKING:
+    import pytest
 
 runner = CliRunner()
 
@@ -53,6 +57,30 @@ class TestT21EnableCLIHappyPath:
 
         assert result.exit_code == 0, result.output
         assert "myproject" in result.output
+
+
+class TestEnableCLIExpandsTilde:
+    def test_tilde_path_resolves_against_home_not_cwd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # `quarry enable ~/proj` must resolve "~" against $HOME (enable_project's
+        # expanduser().resolve()), NOT cwd — the CLI passes the raw path so the
+        # tilde survives to the single normalization point. A bare `.resolve()`
+        # at the CLI layer would target ./~/proj instead.
+        home = tmp_path / "home"
+        project = home / "proj"
+        project.mkdir(parents=True)
+        monkeypatch.setenv("HOME", str(home))
+        # Guarantee cwd is elsewhere, so a cwd-relative "~" would resolve wrong.
+        monkeypatch.chdir(tmp_path)
+
+        with _patch_for_cli(tmp_path):
+            result = runner.invoke(app, ["--json", "enable", "~/proj"])
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.stdout)
+        assert data["directory"] == str(project.resolve())
+        assert "~" not in data["directory"]
 
 
 class TestT22EnableCLICollectionOverride:

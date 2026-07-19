@@ -52,8 +52,11 @@ class ProjectCli:
         # A ValueError (e.g. parent-covered dir) propagates to the shared
         # _cli_errors boundary: stdout stays empty (no spurious JSON error object
         # under --json), the diagnostic goes to stderr, exit 1.
+        # Pass the raw path: enable_project owns normalization
+        # (expanduser().resolve()). Resolving here would turn "~/proj" into
+        # "./~/proj" before the tilde is ever expanded.
         result = enable_project(
-            directory.resolve(), self._p.client(), collection_override=collection
+            directory, self._p.client(), collection_override=collection
         )
 
         lines = [
@@ -95,9 +98,9 @@ class ProjectCli:
 
         # A ValueError (no registration covers the dir) propagates to the shared
         # _cli_errors boundary: stdout stays empty under --json, exit 1.
-        result = disable_project(
-            directory.resolve(), self._p.client(), keep_data=keep_data
-        )
+        # Pass the raw path: disable_project owns normalization
+        # (expanduser().resolve()). Resolving here would mangle "~/proj".
+        result = disable_project(directory, self._p.client(), keep_data=keep_data)
 
         # Emit the deregistration line in BOTH branches: the daemon dropped the
         # registry row either way, so --keep-data must not look like only local
