@@ -700,6 +700,53 @@ class TestHandlePostWebFetch:
         assert ing.call_args[0][0].cwd == "/projects/myapp"
 
 
+class TestHookImportsNoEngine:
+    """The capture hook paths must run with the engine libraries poisoned.
+
+    This is the runtime gate the import-linter cannot provide: the hook's engine
+    imports (if any) are lazy, so a static rule sees nothing.  Poison lancedb and
+    onnxruntime so *any* import of them (directly or via the pipeline/db) raises,
+    then run the pre-compact and web-fetch capture paths — they must complete.
+    """
+
+    def test_capture_paths_run_with_engine_poisoned(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # None in sys.modules makes ``import <name>`` raise ImportError, which
+        # transitively poisons anything (pipeline, db) that pulls the engine in.
+        for name in ("lancedb", "onnxruntime", "quarry.ingestion.pipeline"):
+            monkeypatch.setitem(sys.modules, name, None)
+
+        import importlib
+
+        from quarry import _hook_entry
+
+        # The entry point itself must import stdlib-only.
+        importlib.reload(_hook_entry)
+
+        transcript = _make_transcript(tmp_path, "hello world")
+        with (
+            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
+            patch("quarry.hooks._capture_via_daemon", return_value=True) as pre_cap,
+        ):
+            handle_pre_compact(
+                {"transcript_path": str(transcript), "session_id": "abcd1234ef"}
+            )
+        assert pre_cap.called
+
+        with (
+            patch("quarry.hooks._capture_via_daemon", return_value=True) as web_cap,
+            patch("quarry.hooks._ingest_url_via_daemon", return_value=True),
+        ):
+            handle_post_web_fetch(
+                {
+                    "tool_input": {"url": "https://example.com/p"},
+                    "tool_response": json.dumps({"result": "<html>hi</html>"}),
+                }
+            )
+        assert web_cap.called
+
+
 class TestExtractMessageText:
     def test_extracts_short_tool_result_string(self) -> None:
         record: dict[str, object] = {

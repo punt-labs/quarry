@@ -16,6 +16,13 @@ across `transform`, `index`, and `connector`).
 
 ### Added
 
+- **tool (daemon REST)**: `POST /v1/capture` — the capture front door, sharing
+  one always-scrubbing `ScrubbedIngestJob` with `remember`. The daemon derives
+  the target `<repo>-captures` collection server-side from the client's working
+  directory (falling back to `default-captures`) and scrubs before storing, so
+  a client never picks the collection or trusts a pre-scrub. Reached via the new
+  `client.capture()` and `CaptureIngestRequest`.
+
 - **tool (CLI)**: `QuarryClient` — a typed, pure-transport client the CLI drives
   for every data command. It carries a `QuarryError` hierarchy (`QuarryError`,
   `QuarryConnectionError`, and `HttpError` — whose `status` selects the exit
@@ -51,6 +58,16 @@ across `transform`, `index`, and `connector`).
   and a missing loopback token fails closed with an actionable error.
 
 ### Changed
+
+- **index (captures)**: the session-compaction and web-fetch hooks post to the
+  running daemon instead of spawning a cold ~1.6 GB engine subprocess per
+  compaction — ending the load-average spike from many concurrent cold-starts.
+  The hooks now import no engine, only the thin client; a down daemon still
+  writes the durable transcript archive and scrubbed `.md`, and
+  `backfill-sessions` indexes them later.
+- **index (sync)**: directory sync now excludes `.punt-labs/quarry/captures/`
+  structurally (built-in ignore list), so scrubbed captures can never be folded
+  into a project's main collection regardless of the repo's `.gitignore`.
 
 - **tool (CLI)**: every data command (`find`, `ingest`, `show`, `remember`,
   `status`, `delete`, `register`, `deregister`, `sync`, `enable`, `disable`,
@@ -107,6 +124,9 @@ across `transform`, `index`, and `connector`).
 
 ### Removed
 
+- **index (captures)**: the detached `background_ingest` engine subprocess and
+  its `_hook_entry` dispatch — superseded by the daemon capture path (no more
+  cold engine spawned per compaction).
 - **tool (CLI)**: `RemoteClient`/`RemoteError` (superseded by `QuarryClient` and
   the typed `QuarryError` hierarchy) and the in-process engine path from every
   CLI data command.
@@ -131,6 +151,12 @@ across `transform`, `index`, and `connector`).
 
 ### Security
 
+- **index (memory/captures)**: `remember` and session captures are now scrubbed
+  of secrets, PII, and profanity on the daemon before any chunk is stored —
+  previously the database copy of a remembered note or a session transcript
+  landed in cleartext (only the git-committed `.md` was scrubbed). A failed
+  scrub writes zero chunks. Forward-only: existing cleartext is left to a future
+  purge.
 - **infra (loopback auth)**: the daemon no longer serves unauthenticated
   loopback requests. It writes a mode-0600 `serve.token` and requires it on
   every request, and the loopback classifier is fixed to recognize
