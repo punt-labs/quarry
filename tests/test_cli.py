@@ -232,6 +232,15 @@ class TestSyncRegisterDeregister:
         assert body["collection"] == "c"
         assert body["directory"]  # an absolute resolved path
 
+    def test_register_root_dir_uses_nonempty_collection(
+        self, transport: RecordingTransport
+    ) -> None:
+        # A filesystem-root path has an empty leaf; register must fall back to a
+        # non-empty collection name ("root"), never dispatch an empty one.
+        _run(["register", "/"])
+        body = transport.body_for("POST", "/v1/registrations")
+        assert body["collection"] == "root"
+
     def test_deregister_encodes_params_and_dispatches(
         self, transport: RecordingTransport
     ) -> None:

@@ -77,8 +77,12 @@ class SyncCli:
         The path is resolved against $HOME and re-guarded by the daemon on its own
         filesystem (traversal + $HOME allowlist); the registry write is deferred.
         """
-        resolved = str(directory.expanduser().resolve())
-        col = collection or directory.name or Path(resolved).name
+        resolved_path = directory.expanduser().resolve()
+        resolved = str(resolved_path)
+        # A filesystem-root path has an empty leaf; fall back to "root" so
+        # register never dispatches an empty collection name (matches the
+        # leaf rule in Registrations.unique_collection_name).
+        col = collection or resolved_path.name or "root"
         accepted = self._p.client().register(
             RegisterRequest(directory=resolved, collection=col)
         )
