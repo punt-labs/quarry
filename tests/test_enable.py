@@ -267,15 +267,70 @@ class TestT13DisablePurgesCapturesSibling:
         assert all(not name.startswith("memory-") for name in client.deleted)
 
 
-class TestT14DisableUnregisteredRaises:
-    def test_raises_on_unregistered_directory(self, tmp_path: Path) -> None:
+class TestT14DisableUnregisteredIsIdempotentNoop:
+    def test_unregistered_directory_is_noop_success(self, tmp_path: Path) -> None:
+        # Disabling a never-enabled directory is not an error — it is an idempotent
+        # no-op: no deregister, empty collection, exit-0 result.
         project = tmp_path / "myproject"
         project.mkdir()
         client = FakeRegistryClient()
 
-        with pytest.raises(ValueError, match="no registration covers"):
-            disable_project(project, client)
+        result = disable_project(project, client)
+
+        assert result.collection == ""
+        assert result.removed == 0
         assert client.deregistered == []
+        assert client.deleted == []
+
+
+class TestDisableIdempotentRetrySafe:
+    def test_already_deregistered_still_cleans_local_files(
+        self, tmp_path: Path
+    ) -> None:
+        # A prior partial disable removed the registration but left the local
+        # files. A retry (covering is None) must still clean them and succeed.
+        project = tmp_path / "myproject"
+        project.mkdir()
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            enable_project(project, FakeRegistryClient())
+        config_path = project / ".punt-labs" / "quarry" / "config.md"
+        assert config_path.exists()
+
+        # Fresh client with NO registrations models the already-deregistered state.
+        result = disable_project(project, FakeRegistryClient())
+
+        assert result.collection == ""
+        assert result.config_removed is True
+        assert not config_path.exists()
+
+    def test_rejected_captures_purge_still_cleans_files_and_retry_converges(
+        self, tmp_path: Path
+    ) -> None:
+        # A rejected captures purge must NOT leave config.md claiming enabled: the
+        # local cleanup runs before the purge dispatch. A retry then converges.
+        from quarry.client import QuarryError
+
+        project = tmp_path / "myproject"
+        project.mkdir()
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            enable_project(project, FakeRegistryClient())
+        config_path = project / ".punt-labs" / "quarry" / "config.md"
+
+        failing = FakeRegistryClient(
+            [("myproject", project)],
+            delete_error=QuarryError("captures purge rejected"),
+        )
+        with pytest.raises(QuarryError):
+            disable_project(project, failing)
+
+        # The registration was dropped and the local files were cleaned BEFORE the
+        # purge raised — the project is not stuck claiming enabled.
+        assert failing.deregistered[0].collection == "myproject"
+        assert not config_path.exists()
+
+        # A retry (registration already gone) converges to fully-disabled, exit 0.
+        result = disable_project(project, FakeRegistryClient())
+        assert result.collection == ""
 
 
 class TestWriteProjectConfig:

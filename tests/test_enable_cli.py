@@ -119,15 +119,18 @@ class TestT23DisableCLIHappyPath:
 
 
 class TestT24DisableCLIUnregistered:
-    def test_disable_unregistered_exits_1(self, tmp_path: Path) -> None:
+    def test_disable_unregistered_is_idempotent_noop(self, tmp_path: Path) -> None:
+        # Disabling a never-enabled directory is an idempotent no-op: exit 0 with
+        # an "already disabled" note, not a "no registration covers" failure.
         project = tmp_path / "myproject"
         project.mkdir()
 
-        with _patch_for_cli(tmp_path):
+        with _patch_for_cli(tmp_path) as fake:
             result = runner.invoke(app, ["disable", str(project)])
 
-        assert result.exit_code == 1
-        assert "no registration covers" in result.output
+        assert result.exit_code == 0, result.output
+        assert "Already disabled" in result.output
+        assert fake.deregistered == []
 
 
 class TestJsonErrorPathKeepsStdoutEmpty:

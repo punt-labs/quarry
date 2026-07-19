@@ -102,14 +102,18 @@ class ProjectCli:
         # (expanduser().resolve()). Resolving here would mangle "~/proj".
         result = disable_project(directory, self._p.client(), keep_data=keep_data)
 
-        # Emit the deregistration line in BOTH branches: the daemon dropped the
-        # registry row either way, so --keep-data must not look like only local
-        # files were touched — vary only the chunk-fate wording.
-        fate = "chunk purge queued" if not keep_data else "kept indexed data"
-        lines = [
-            f"Disabled quarry for {result.directory}",
-            f"  Deregistered {result.collection} ({result.removed} files); {fate}",
-        ]
+        lines = [f"Disabled quarry for {result.directory}"]
+        if result.collection:
+            # A registration was present: report it in both keep-data branches so
+            # --keep-data does not look like only local files were touched.
+            fate = "chunk purge queued" if not keep_data else "kept indexed data"
+            lines.append(
+                f"  Deregistered {result.collection} ({result.removed} files); {fate}"
+            )
+        else:
+            # Idempotent no-op: nothing was registered (never enabled, or a prior
+            # partial disable already deregistered it).
+            lines.append("  Already disabled (no registration)")
         if result.config_removed:
             lines.append("  Config file removed")
         if result.claudemd_removed:

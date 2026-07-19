@@ -193,11 +193,17 @@ def disable_project(
 ) -> DisableResult:
     """Disable quarry knowledge capture for a project directory.
 
-    Deregisters the covering collection via the daemon (which drops the registry
-    row and purges the collection's chunks server-side) and, unless ``keep_data``,
-    dispatches a purge of the ``-captures`` sibling.  Both are fire-and-forget; the
-    registry is never mutated through a local ``SyncRegistry``.  The project files
-    are the client's and are removed locally.
+    Idempotent and retry-safe.  Deregisters the covering collection via the daemon
+    (dropping the registry row and purging its chunks server-side) and, unless
+    ``keep_data``, dispatches a purge of the ``-captures`` sibling — both
+    fire-and-forget; the registry is never mutated through a local ``SyncRegistry``.
+
+    A directory with no covering registration is NOT an error: it was never
+    enabled, or a prior partial disable already removed it.  The local project
+    files are still cleaned and the call succeeds, so a retry after a mid-teardown
+    failure always converges to fully-disabled.  Local file cleanup runs BEFORE
+    the best-effort captures purge, so a rejected purge can never leave config.md
+    or CLAUDE.md claiming enabled.
     """
     from quarry.api import DeleteCollectionRequest, DeregisterRequest  # noqa: PLC0415
     from quarry.registrations import Registrations  # noqa: PLC0415
@@ -207,24 +213,25 @@ def disable_project(
     directory = directory.expanduser().resolve()
     view = Registrations(client.list_registrations().registrations)
     covering = view.covering(directory)
-    if covering is None:
-        msg = f"no registration covers {directory}"
-        raise ValueError(msg)
-    if covering.directory != str(directory):
+
+    # Disabling a CHILD of a registered parent is a real error — the parent covers
+    # it; never silently deregister the parent. This guard alone stays fatal.
+    if covering is not None and covering.directory != str(directory):
         msg = (
             f"no registration for {directory}; "
             f"it is covered by parent registration at {covering.directory}"
         )
         raise ValueError(msg)
 
-    collection = covering.collection
-    captures_collection = f"{collection}-captures"
-    accepted = client.deregister(
-        DeregisterRequest(collection=collection, keep_data=keep_data)
-    )
-    if not keep_data:
-        client.delete_collection(DeleteCollectionRequest(name=captures_collection))
+    collection = covering.collection if covering is not None else ""
+    removed = 0
+    if covering is not None:
+        removed = client.deregister(
+            DeregisterRequest(collection=collection, keep_data=keep_data)
+        ).removed
 
+    # Clean local files whether or not a registration was present, and BEFORE the
+    # best-effort captures purge below — a retry always reaches here.
     config_path = directory / ".punt-labs" / "quarry" / "config.md"
     config_removed = False
     if config_path.exists():
@@ -239,11 +246,18 @@ def disable_project(
     if claudemd_removed:
         logger.info("Removed quarry instructions from CLAUDE.md")
 
+    # Best-effort captures purge, dispatched last so its rejection cannot abort the
+    # local cleanup above. Once the registration is gone a retry cannot re-derive
+    # the captures name, so this is the single dispatch attempt.
+    captures_collection = f"{collection}-captures" if collection else ""
+    if covering is not None and not keep_data:
+        client.delete_collection(DeleteCollectionRequest(name=captures_collection))
+
     return DisableResult(
         directory=str(directory),
         collection=collection,
         captures_collection=captures_collection,
-        removed=accepted.removed,
+        removed=removed,
         config_removed=config_removed,
         claudemd_removed=claudemd_removed,
     )

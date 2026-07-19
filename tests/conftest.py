@@ -103,14 +103,21 @@ class FakeRegistryClient:
     seed a covering ``RegistrationList``.
     """
 
-    __slots__ = ("_deleted", "_deregistered", "_registered", "_regs")
+    __slots__ = ("_delete_error", "_deleted", "_deregistered", "_registered", "_regs")
 
     _regs: list[RegistrationInfo]
     _registered: list[RegisterRequest]
     _deregistered: list[DeregisterRequest]
     _deleted: list[str]
+    # When set, delete_collection raises it — models a rejected captures purge.
+    _delete_error: Exception | None
 
-    def __new__(cls, registrations: Iterable[tuple[str, Path]] = ()) -> Self:
+    def __new__(
+        cls,
+        registrations: Iterable[tuple[str, Path]] = (),
+        *,
+        delete_error: Exception | None = None,
+    ) -> Self:
         self = super().__new__(cls)
         self._regs = [
             RegistrationInfo(
@@ -123,6 +130,7 @@ class FakeRegistryClient:
         self._registered = []
         self._deregistered = []
         self._deleted = []
+        self._delete_error = delete_error
         return self
 
     def list_registrations(self) -> RegistrationList:
@@ -148,6 +156,8 @@ class FakeRegistryClient:
         return DeregisterAccepted(task_id="t", removed=before - len(self._regs))
 
     def delete_collection(self, req: DeleteCollectionRequest) -> TaskAccepted:
+        if self._delete_error is not None:
+            raise self._delete_error
         self._deleted.append(req.name)
         return TaskAccepted(task_id="t")
 
