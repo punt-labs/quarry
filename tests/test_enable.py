@@ -512,10 +512,17 @@ class TestT19DisableResolvesRelativePath:
 
 
 class TestT20CheckEnableStatusConfigMissing:
-    # enable-status is now computed from the daemon's view of the collection
-    # (``_collection_for_cwd``) plus local config.md presence — registry_path is
-    # ignored (enable no longer reads a local SyncRegistry directly). A registered
-    # cwd with no config.md fails; with config.md it passes.
+    # enable-status is computed from the sync registry (the cwd's registered
+    # collection) plus local config.md presence.  A registered cwd with no
+    # config.md fails; with config.md it passes.
+    @staticmethod
+    def _register(registry_path: Path, project: Path) -> None:
+        from quarry.sync_registry import SyncRegistry
+
+        conn = SyncRegistry(registry_path)
+        conn.register_directory(project, "myproject")
+        conn.close()
+
     def test_config_missing_returns_not_passed(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -524,11 +531,10 @@ class TestT20CheckEnableStatusConfigMissing:
         project = tmp_path / "myproject"
         project.mkdir()
         monkeypatch.chdir(project)
-        monkeypatch.setattr(
-            "quarry.hooks._collection_for_cwd", lambda _cwd: "myproject"
-        )
+        registry_path = tmp_path / "registry.db"
+        self._register(registry_path, project)
 
-        result = _check_enable_status(tmp_path / "registry.db", str(project))
+        result = _check_enable_status(registry_path, str(project))
 
         assert result.passed is False
         assert "config.md missing" in result.message
@@ -542,9 +548,8 @@ class TestT20CheckEnableStatusConfigMissing:
         project = tmp_path / "myproject"
         project.mkdir()
         monkeypatch.chdir(project)
-        monkeypatch.setattr(
-            "quarry.hooks._collection_for_cwd", lambda _cwd: "myproject"
-        )
+        registry_path = tmp_path / "registry.db"
+        self._register(registry_path, project)
 
         config_dir = project / ".punt-labs" / "quarry"
         config_dir.mkdir(parents=True)
@@ -552,7 +557,7 @@ class TestT20CheckEnableStatusConfigMissing:
             "---\nauto_capture:\n  session_sync: true\n---\n"
         )
 
-        result = _check_enable_status(tmp_path / "registry.db", str(project))
+        result = _check_enable_status(registry_path, str(project))
 
         assert result.passed is True
         assert "config.md missing" not in result.message

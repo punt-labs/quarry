@@ -840,7 +840,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "description": "Body for fetching and indexing a URL.\n\n``source`` is an ``http(s)`` URL; the daemon validates it against the\nSSRF allowlist before fetching. File upload is not part of this contract.",
+                "description": "Body for fetching and indexing a URL.\n\n``source`` is an ``http(s)`` URL; the daemon validates it against the\nSSRF allowlist before fetching. File upload is not part of this contract.\n``cwd`` (when set) marks a capture re-fetch: the daemon derives the\n``<repo>-captures`` collection from it and scrubs the fetched page.",
                 "properties": {
                   "agent_handle": {
                     "default": "",
@@ -850,6 +850,11 @@
                   "collection": {
                     "default": "",
                     "title": "Collection",
+                    "type": "string"
+                  },
+                  "cwd": {
+                    "default": "",
+                    "title": "Cwd",
                     "type": "string"
                   },
                   "memory_type": {

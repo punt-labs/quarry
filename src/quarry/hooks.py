@@ -27,10 +27,12 @@ from quarry._stdlib import load_hook_config
 from quarry.web_capture import WebFetchPayload
 
 if TYPE_CHECKING:
-    from quarry.api import CaptureIngestRequest
+    from collections.abc import Callable
+
+    from quarry.api import CaptureIngestRequest, IngestRequest
     from quarry.artifacts import SessionArtifacts
+    from quarry.client import QuarryClient
     from quarry.config import Settings
-    from quarry.db.facade import Database
     from quarry.sync_registry import DirectoryRegistration, SyncRegistry
 
 logger = logging.getLogger(__name__)
@@ -313,10 +315,6 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
         conn.close()
 
 
-WEB_CAPTURES_FALLBACK = "web-captures"
-_SESSION_NOTES_FALLBACK = "session-notes"
-
-
 def _collection_for_cwd_conn(
     conn: SyncRegistry,
     cwd: str,
@@ -342,40 +340,20 @@ def _collection_for_cwd_conn(
     return None
 
 
-def _collection_for_cwd(cwd: str) -> str | None:
-    """Resolve the registered collection for a working directory.
-
-    Walks up from *cwd* to find a registered parent directory (or exact
-    match).  Returns the collection name, or ``None`` if no registration
-    covers *cwd*.
-    """
-    if not cwd:
-        return None
-
-    from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
-
-    settings = _resolve_settings()
-    conn = SyncRegistry(settings.registry_path)
-    try:
-        return _collection_for_cwd_conn(conn, cwd)
-    finally:
-        conn.close()
-
-
-def _is_already_ingested(url: str, database: Database, collection: str) -> bool:
-    """Check if *url* is already in the given collection."""
-    docs = database.catalog.list_documents(collection_filter=collection)
-    return any(d["document_name"] == url for d in docs)
+# The captures collection a web fetch lands in when its cwd is unregistered.
+# Retained for the doctor's health check, which subtracts it from real projects.
+WEB_CAPTURES_FALLBACK = "web-captures"
 
 
 def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     """Handle PostToolUse on WebFetch.
 
-    Ingests the already-fetched content from the hook payload into the
-    ``web-captures`` collection.  Uses ``tool_response`` directly — no
-    second network request.  Falls back to ``ingest_url`` only if the
-    payload lacks content.  Skips URLs already ingested (dedup by
-    document_name).
+    Sends the already-fetched page to the daemon, which extracts, scrubs, and
+    stores it in the project's ``<repo>-captures`` collection.  Uses the payload
+    ``tool_response`` directly — no second fetch.  When the payload has no usable
+    content, the daemon re-fetches through the SSRF-checked URL-ingest route
+    instead.  The hook imports no engine — only the thin client and the
+    lightweight URL/scrub helpers.
     """
     cwd_obj = payload.get("cwd")
     cwd = cwd_obj if isinstance(cwd_obj, str) else ""
@@ -391,70 +369,27 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
         logger.debug("post-web-fetch: no valid URL in payload, skipping")
         return {}
 
-    # Heavy imports deferred past early-return guards.
-    from quarry.db.facade import Database  # noqa: PLC0415
-    from quarry.ingestion.pipeline import ingest_content, ingest_url  # noqa: PLC0415
-
-    base_collection = _collection_for_cwd(cwd)
-    collection = (
-        f"{base_collection}-captures" if base_collection else WEB_CAPTURES_FALLBACK
-    )
-
-    settings = _resolve_settings()
-    database = Database.connect(settings.lancedb_path)
-
+    from quarry.api import CaptureIngestRequest, IngestRequest  # noqa: PLC0415
     from quarry.capture_url import CaptureUrl  # noqa: PLC0415
     from quarry.scrub import scrub_and_log  # noqa: PLC0415
 
-    # Both ingest paths scrub before content reaches the pushable web-captures
-    # collection, so DB ingress is PII-clean on primary AND fallback.
-    def web_fetch_scrub(raw: str) -> str:
-        return scrub_and_log(raw, "web-fetch")
+    # A capture must not persist the URL's userinfo/query/fragment as the stored
+    # document name; redact it for the name the daemon files under.
+    meta_url = CaptureUrl(url).redacted(lambda raw: scrub_and_log(raw, "web-fetch"))
 
-    # A capture must not persist the URL's userinfo/query/fragment as document
-    # metadata. Redact once and reuse for dedup and the primary branch; the
-    # fallback ingest_url redacts identically, so the stored name/path matches.
-    meta_url = CaptureUrl(url).redacted(web_fetch_scrub)
-
-    if _is_already_ingested(meta_url, database, collection):
-        logger.debug("post-web-fetch: already ingested %s, skipping", meta_url)
-        return {}
-
-    # Prefer already-fetched tool_response content (avoids a second fetch).
     content = parsed.content
-    result = None
     if content:
-        from quarry.extractors.html_extractor import HtmlExtractor  # noqa: PLC0415
-
-        pages = HtmlExtractor().extract_from_html(content, meta_url, meta_url)
-        if pages:
-            clean_text = web_fetch_scrub("\n\n".join(p.text for p in pages))
-            result = ingest_content(
-                clean_text,
-                meta_url,
-                database,
-                settings,
-                collection=collection,
-                format_hint="markdown",
+        # Primary: hand the raw HTML to the daemon (it extracts, scrubs, chunks).
+        _capture_via_daemon(
+            CaptureIngestRequest(
+                content=content, cwd=cwd, document_name=meta_url, format_hint="html"
             )
-        else:
-            logger.debug("post-web-fetch: no text in tool_response, falling back")
-
-    if result is None:
-        # Fallback re-fetch; ingest_url redacts the URL and scrubs each page, so
-        # this capture is stored identically to the primary branch.
-        result = ingest_url(
-            url,
-            database,
-            settings,
-            collection=collection,
-            content_scrubber=web_fetch_scrub,
         )
-    logger.info(
-        "post-web-fetch: ingested %s (%d chunks)",
-        meta_url,
-        result["chunks"],
-    )
+    else:
+        # Fallback: no usable content — the daemon re-fetches through the
+        # SSRF-checked ingest route, scrubbing the page into <repo>-captures.
+        logger.debug("post-web-fetch: no content in payload, re-fetching via daemon")
+        _ingest_url_via_daemon(IngestRequest(source=url, cwd=cwd, overwrite=True))
     return {}
 
 
@@ -669,22 +604,32 @@ def _write_capture_file(
     )
 
 
-def _capture_via_daemon(req: CaptureIngestRequest) -> bool:
-    """Send a capture to the local daemon; return False if it could not deliver.
+def _send_to_daemon(post: Callable[[QuarryClient], object]) -> bool:
+    """Connect to the daemon and run *post*; return False if it was unreachable.
 
     The hook imports only the thin client — no engine.  A down or unreachable
-    daemon is not fatal: the durable ``.md`` and JSONL archive are already
-    written, and ``backfill-sessions`` re-ingests later, so this returns False
-    and the caller shows an "archived for backfill" message instead of blocking.
+    daemon is not fatal (the durable local copies are already written and
+    ``backfill-sessions`` re-ingests later), so this returns False rather than
+    raising, and the request is fire-and-forget: the daemon 202s immediately.
     """
     from quarry.client import QuarryError, TargetResolver  # noqa: PLC0415
 
     try:
-        TargetResolver.connect().capture(req)
+        post(TargetResolver.connect())
     except QuarryError:
         logger.warning("capture: daemon unreachable; archived for backfill")
         return False
     return True
+
+
+def _capture_via_daemon(req: CaptureIngestRequest) -> bool:
+    """Send an inline capture (transcript or fetched page) to the daemon."""
+    return _send_to_daemon(lambda client: client.capture(req))
+
+
+def _ingest_url_via_daemon(req: IngestRequest) -> bool:
+    """Ask the daemon to re-fetch and index a URL (the web-fetch fallback)."""
+    return _send_to_daemon(lambda client: client.ingest_url(req))
 
 
 def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:

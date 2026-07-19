@@ -67,22 +67,58 @@ class ScrubbedIngestJob:
 
 @dataclass(frozen=True, slots=True)
 class IngestJob:
-    """A validated ingest request that fetches and indexes a URL."""
+    """A validated ingest request that fetches and indexes a URL.
+
+    ``cwd`` set marks a capture re-fetch (the web-fetch hook's fallback): the URL
+    is fetched once through the SSRF-checked path, scrubbed, and stored in the
+    project's ``<repo>-captures`` collection — never a sitemap crawl.  ``cwd``
+    empty is a plain ``quarry ingest`` and keeps the sitemap-aware, unscrubbed
+    behavior.
+    """
 
     source: str
     overwrite: bool
     collection: str
+    cwd: str
     agent_handle: str
     memory_type: str
     summary: str
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
-        """Execute ingest_auto in a background thread and update task state."""
+        """Fetch and index the URL in a background thread, updating task state."""
+        with task_terminal(state):
+            result = await run_in_threadpool(self._ingest, ctx)
+            state.status = "completed"
+            state.results = dict(result)
+
+    def _ingest(self, ctx: DaemonContext) -> dict[str, object]:
+        """Run the capture re-fetch (scrubbed, captures collection) or plain ingest."""
+        if self.cwd:
+            from quarry.captures_collection import CapturesCollection  # noqa: PLC0415
+            from quarry.ingestion.pipeline import ingest_url  # noqa: PLC0415
+            from quarry.scrub import scrub_and_log  # noqa: PLC0415
+
+            collection = CapturesCollection.for_registry_path(
+                self.cwd, ctx.settings.registry_path
+            ).name
+            return dict(
+                ingest_url(
+                    self.source,
+                    ctx.database,
+                    ctx.settings,
+                    overwrite=self.overwrite,
+                    collection=collection,
+                    content_scrubber=lambda text: scrub_and_log(text, "web-fetch"),
+                    agent_handle=self.agent_handle,
+                    memory_type=self.memory_type,
+                    summary=self.summary,
+                )
+            )
+
         from quarry.ingestion.pipeline import ingest_auto  # noqa: PLC0415
 
-        with task_terminal(state):
-            result = await run_in_threadpool(
-                ingest_auto,
+        return dict(
+            ingest_auto(
                 self.source,
                 ctx.database,
                 ctx.settings,
@@ -92,5 +128,4 @@ class IngestJob:
                 memory_type=self.memory_type,
                 summary=self.summary,
             )
-            state.status = "completed"
-            state.results = dict(result)
+        )

@@ -106,6 +106,7 @@ class IngestionRoutes(RouteGroup):
             source=source,
             overwrite=overwrite,
             collection=self._str_field(body, "collection", ""),
+            cwd=self._str_field(body, "cwd", ""),
             agent_handle=self._str_field(body, "agent_handle", ""),
             memory_type=self._str_field(body, "memory_type", ""),
             summary=self._str_field(body, "summary", ""),

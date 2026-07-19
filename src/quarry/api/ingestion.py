@@ -23,11 +23,14 @@ class IngestRequest(BaseModel):
 
     ``source`` is an ``http(s)`` URL; the daemon validates it against the
     SSRF allowlist before fetching. File upload is not part of this contract.
+    ``cwd`` (when set) marks a capture re-fetch: the daemon derives the
+    ``<repo>-captures`` collection from it and scrubs the fetched page.
     """
 
     source: str
     overwrite: bool = False
     collection: str = ""
+    cwd: str = ""
     agent_handle: str = ""
     memory_type: str = ""
     summary: str = ""
