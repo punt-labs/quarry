@@ -130,13 +130,21 @@ class QuarryClient:
         """Index inline text content as a 202 background task."""
         return self._post("/remember", TaskAccepted, req)
 
-    def capture(self, req: CaptureIngestRequest) -> TaskAccepted:
-        """File a scrubbed capture (transcript or fetched page) as a 202 task."""
-        return self._post("/capture", TaskAccepted, req)
+    def capture(
+        self, req: CaptureIngestRequest, *, timeout: float | None = None
+    ) -> TaskAccepted:
+        """File a scrubbed capture (transcript or fetched page) as a 202 task.
 
-    def ingest_url(self, req: IngestRequest) -> TaskAccepted:
+        The hook passes a short *timeout* so a saturated daemon cannot block
+        compaction — the 202 comes back before any embedding runs.
+        """
+        return self._post("/capture", TaskAccepted, req, timeout=timeout)
+
+    def ingest_url(
+        self, req: IngestRequest, *, timeout: float | None = None
+    ) -> TaskAccepted:
         """Fetch and index a URL as a 202 background task."""
-        return self._post("/ingest", TaskAccepted, req)
+        return self._post("/ingest", TaskAccepted, req, timeout=timeout)
 
     # -- sync & captures ---------------------------------------------------
 
@@ -233,9 +241,11 @@ class QuarryClient:
         resp = self._transport.request("DELETE", f"{_API_PREFIX}{path}", params=params)
         return self._model(resp, model)
 
-    def _post[M: BaseModel](self, path: str, model: type[M], req: BaseModel) -> M:
+    def _post[M: BaseModel](
+        self, path: str, model: type[M], req: BaseModel, *, timeout: float | None = None
+    ) -> M:
         resp = self._transport.request(
-            "POST", f"{_API_PREFIX}{path}", json_body=req.model_dump()
+            "POST", f"{_API_PREFIX}{path}", json_body=req.model_dump(), timeout=timeout
         )
         return self._model(resp, model)
 

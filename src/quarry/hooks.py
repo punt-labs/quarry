@@ -617,14 +617,24 @@ def _send_to_daemon(post: Callable[[QuarryClient], object]) -> bool:
     return True
 
 
+# The daemon 202s a capture before any embedding runs, so a healthy send is near
+# instant.  Cap it well below the client's 15s default: a saturated daemon must
+# never make a compaction wait — the durable archive already holds the transcript.
+_CAPTURE_SEND_TIMEOUT = 5.0
+
+
 def _capture_via_daemon(req: CaptureIngestRequest) -> bool:
     """Send an inline capture (transcript or fetched page) to the daemon."""
-    return _send_to_daemon(lambda client: client.capture(req))
+    return _send_to_daemon(
+        lambda client: client.capture(req, timeout=_CAPTURE_SEND_TIMEOUT)
+    )
 
 
 def _ingest_url_via_daemon(req: IngestRequest) -> bool:
     """Ask the daemon to re-fetch and index a URL (the web-fetch fallback)."""
-    return _send_to_daemon(lambda client: client.ingest_url(req))
+    return _send_to_daemon(
+        lambda client: client.ingest_url(req, timeout=_CAPTURE_SEND_TIMEOUT)
+    )
 
 
 def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
