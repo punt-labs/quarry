@@ -12,9 +12,9 @@ import os
 import sqlite3
 import stat
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -1306,6 +1306,94 @@ class TestDeleteCollections:
         resp = client.delete("/v1/collections")
         assert resp.status_code == 400
         assert "name" in resp.json()["error"].lower()
+
+
+class TestCapture:
+    """Tests for POST /capture -- server-derived collection, always scrubs."""
+
+    def test_success_returns_202(self, tmp_path: Path) -> None:
+        mock_result = {
+            "document_name": "session-abcd1234",
+            "collection": "default-captures",
+            "chunks": 2,
+        }
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch("quarry.ingestion.pipeline.ingest_content", return_value=mock_result),
+        ):
+            resp = tc.post(
+                "/v1/capture",
+                json={
+                    "content": "hello",
+                    "session_id": "abcd1234ef",
+                    "cwd": str(tmp_path),
+                },
+            )
+
+        assert resp.status_code == 202
+        assert resp.json()["task_id"].startswith("capture-")
+
+    def test_missing_content_returns_400(self, client: TestClient) -> None:
+        resp = client.post("/v1/capture", json={"session_id": "abcd1234"})
+        assert resp.status_code == 400
+        assert "content" in resp.json()["error"].lower()
+
+    def test_missing_name_and_session_returns_400(self, client: TestClient) -> None:
+        resp = client.post("/v1/capture", json={"content": "hi"})
+        assert resp.status_code == 400
+        error = resp.json()["error"].lower()
+        assert "document_name" in error or "session" in error
+
+    def test_capture_scrubs_and_derives_default_collection(
+        self, tmp_path: Path
+    ) -> None:
+        """The route hands ingest_content a redacting scrubber for default-captures.
+
+        The working directory is unregistered, so the derived collection is
+        ``default-captures``; the captured ``content_scrubber`` redacts PII —
+        together these prove a stored capture chunk is scrubbed into the right
+        collection.  ``ingest_content``'s own scrub-of-stored-pages is covered in
+        ``tests/test_pipeline.py::TestIngestContentScrubbing``.
+        """
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        scrubbers: list[Callable[[str], str]] = []
+        collections: list[object] = []
+
+        def _spy(*_a: object, **kwargs: object) -> dict[str, object]:
+            scrubbers.append(cast("Callable[[str], str]", kwargs["content_scrubber"]))
+            collections.append(kwargs["collection"])
+            return {
+                "document_name": "note",
+                "collection": "default-captures",
+                "chunks": 0,
+            }
+
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch("quarry.ingestion.pipeline.ingest_content", _spy),
+        ):
+            resp = tc.post(
+                "/v1/capture",
+                json={
+                    "content": "reach me at jmf@pobox.com",
+                    "document_name": "note",
+                    "cwd": str(tmp_path),
+                },
+            )
+            _poll_task_done(tc, resp.json()["task_id"])
+
+        assert collections == ["default-captures"]
+        assert scrubbers
+        redacted = scrubbers[0]("reach me at jmf@pobox.com")
+        assert "jmf@pobox.com" not in redacted
+        assert "[REDACTED:email]" in redacted
 
 
 class TestRemember:

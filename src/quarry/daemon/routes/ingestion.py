@@ -27,18 +27,6 @@ MAX_INGEST_BODY_BYTES = 1 * 1024 * 1024
 class IngestionRoutes(RouteGroup):
     """Serve inline-text and URL ingestion as 202 background tasks."""
 
-    async def _authorized_body(
-        self, request: Request, max_bytes: int
-    ) -> dict[str, object] | JSONResponse:
-        """Reject on auth failure or oversize body, else return the JSON object."""
-        auth_resp = self.reject_unauthorized(request)
-        if auth_resp is not None:
-            return auth_resp
-        size_err = RequestGuards.check_body_size(request, max_bytes)
-        if size_err is not None:
-            return size_err
-        return await self.json_object(request)
-
     async def remember(self, request: Request) -> JSONResponse:
         """Ingest inline text content as a background task.
 
@@ -81,21 +69,6 @@ class IngestionRoutes(RouteGroup):
 
         state = self.ctx.tasks.begin("ingest")
         return self.accept(state, job.run(self.ctx, state))
-
-    @staticmethod
-    def _str_field(body: dict[str, object], key: str, default: str) -> str:
-        """Return ``body[key]`` as a string, falling back when absent or empty."""
-        return str(body.get(key) or default)
-
-    @staticmethod
-    def _require_text(body: dict[str, object], key: str) -> str | JSONResponse:
-        """Return a non-empty string ``body[key]`` or a 400 naming the field."""
-        value = body.get(key)
-        if not isinstance(value, str) or not value.strip():
-            return JSONResponse(
-                {"error": f"Missing required field: {key}"}, status_code=400
-            )
-        return value
 
     def _remember_job(
         self, body: dict[str, object]

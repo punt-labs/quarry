@@ -635,6 +635,86 @@
         "summary": "Backfill Sessions"
       }
     },
+    "/v1/capture": {
+      "post": {
+        "description": "File a scrubbed capture as a 202 background task.\n\nBody: {content, cwd, ...optional}. The daemon derives the target\n``<repo>-captures`` collection from ``cwd`` and always scrubs.",
+        "operationId": "capture_v1_capture_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "description": "Body for filing a scrubbed capture: a transcript or a fetched page.\n\nThe daemon derives the target ``<repo>-captures`` collection from ``cwd``\n(falling back to ``default-captures``) and always scrubs before storing.\nThe document name is ``document_name`` when set (a fetched URL) or, failing\nthat, ``session-<session_id[:8]>`` (a compaction transcript).",
+                "properties": {
+                  "agent_handle": {
+                    "default": "",
+                    "title": "Agent Handle",
+                    "type": "string"
+                  },
+                  "content": {
+                    "title": "Content",
+                    "type": "string"
+                  },
+                  "cwd": {
+                    "default": "",
+                    "title": "Cwd",
+                    "type": "string"
+                  },
+                  "document_name": {
+                    "default": "",
+                    "title": "Document Name",
+                    "type": "string"
+                  },
+                  "format_hint": {
+                    "default": "auto",
+                    "title": "Format Hint",
+                    "type": "string"
+                  },
+                  "memory_type": {
+                    "default": "",
+                    "title": "Memory Type",
+                    "type": "string"
+                  },
+                  "overwrite": {
+                    "default": true,
+                    "title": "Overwrite",
+                    "type": "boolean"
+                  },
+                  "session_id": {
+                    "default": "",
+                    "title": "Session Id",
+                    "type": "string"
+                  },
+                  "summary": {
+                    "default": "",
+                    "title": "Summary",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "content"
+                ],
+                "title": "CaptureIngestRequest",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Capture"
+      }
+    },
     "/v1/captures/push": {
       "post": {
         "operationId": "push_v1_captures_push_post",

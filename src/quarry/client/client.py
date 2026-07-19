@@ -20,6 +20,7 @@ from pydantic import BaseModel, ValidationError
 from quarry.api import (
     API_VERSION,
     BackfillRequest,
+    CaptureIngestRequest,
     CapturesPushResponse,
     CollectionList,
     DatabaseList,
@@ -128,6 +129,10 @@ class QuarryClient:
     def remember(self, req: RememberRequest) -> TaskAccepted:
         """Index inline text content as a 202 background task."""
         return self._post("/remember", TaskAccepted, req)
+
+    def capture(self, req: CaptureIngestRequest) -> TaskAccepted:
+        """File a scrubbed capture (transcript or fetched page) as a 202 task."""
+        return self._post("/capture", TaskAccepted, req)
 
     def ingest_url(self, req: IngestRequest) -> TaskAccepted:
         """Fetch and index a URL as a 202 background task."""
