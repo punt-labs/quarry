@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -1180,107 +1179,38 @@ class TestHandlePreCompact:
         result = handle_pre_compact(payload)
         assert result == {}
 
-    def test_returns_immediately_with_system_message(self, tmp_path: Path) -> None:
-        """handle_pre_compact returns systemMessage with collection and doc name."""
-        transcript = _make_transcript(tmp_path)
-
-        with (
-            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
-            patch(
-                "quarry.hooks._resolve_settings",
-                return_value=_mock_settings(),
-            ),
-            patch("quarry.hooks._collection_for_cwd", return_value=None),
-            patch("quarry.hooks.subprocess.Popen") as mock_popen,
-        ):
-            result = handle_pre_compact(
-                {
-                    "transcript_path": str(transcript),
-                    "session_id": "abc12345-full-id",
-                }
-            )
-
-        assert "systemMessage" in result
-        msg = str(result["systemMessage"])
-        assert "session-abc12345-" in msg
-        assert '"session-notes"' in msg
-        assert "/find" in msg
-        mock_popen.assert_called_once()
-
-    def test_popen_called_with_correct_args(self, tmp_path: Path) -> None:
-        """subprocess.Popen receives quarry-hook ingest-background with all args."""
-        transcript = _make_transcript(tmp_path)
-
-        with (
-            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
-            patch(
-                "quarry.hooks._resolve_settings",
-                return_value=_mock_settings(),
-            ),
-            patch("quarry.hooks._collection_for_cwd", return_value="myapp"),
-            patch("quarry.hooks.subprocess.Popen") as mock_popen,
-        ):
-            handle_pre_compact(
-                {
-                    "cwd": "/projects/myapp",
-                    "transcript_path": str(transcript),
-                    "session_id": "abc12345-full-id",
-                }
-            )
-
-        args = mock_popen.call_args[0][0]
-        assert args[0] == sys.executable
-        assert args[1:3] == ["-m", "quarry._hook_entry"]
-        assert args[3] == "ingest-background"
-        # args[4] is the text file path
-        assert args[4].endswith(".txt")
-        assert "session-abc12345-" in args[5]  # document_name
-        assert args[6] == "myapp-captures"  # collection
-        assert args[7] == str(Path("/fake/lancedb"))  # lancedb_path
-        assert args[8] == "abc12345"  # session_prefix
-
-        kwargs = mock_popen.call_args[1]
-        assert kwargs["start_new_session"] is True
-        assert kwargs["stdin"] == subprocess.DEVNULL
-
-    def test_writes_text_file_for_background(self, tmp_path: Path) -> None:
-        """Extracted text is written to a temp file in sessions dir."""
+    def test_sends_capture_request_to_daemon(self, tmp_path: Path) -> None:
+        """The transcript text, cwd, and session travel to the daemon as a capture."""
         transcript = _make_transcript(tmp_path, "Important context here")
 
         with (
             patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
-            patch(
-                "quarry.hooks._resolve_settings",
-                return_value=_mock_settings(),
-            ),
-            patch("quarry.hooks._collection_for_cwd", return_value=None),
-            patch("quarry.hooks.subprocess.Popen") as mock_popen,
+            patch("quarry.hooks._capture_via_daemon", return_value=True) as cap,
         ):
-            handle_pre_compact(
+            result = handle_pre_compact(
                 {
                     "transcript_path": str(transcript),
                     "session_id": "abc12345-full-id",
                 }
             )
 
-        text_file = Path(mock_popen.call_args[0][0][4])
-        assert text_file.exists()
-        assert "Important context here" in text_file.read_text()
+        req = cap.call_args[0][0]
+        assert "Important context here" in req.content
+        assert req.session_id == "abc12345-full-id"
+        assert req.format_hint == "markdown"
+        assert "systemMessage" in result
 
-    def test_uses_project_collection_when_registered(self, tmp_path: Path) -> None:
-        """Session notes go to the project collection when cwd is registered."""
+    def test_passes_cwd_and_agent_for_server_derivation(self, tmp_path: Path) -> None:
+        """The hook sends cwd (daemon derives <repo>-captures) and the agent handle."""
         transcript = _make_transcript(tmp_path, "Working on myapp")
 
         with (
             patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
-            patch(
-                "quarry.hooks._resolve_settings",
-                return_value=_mock_settings(),
-            ),
-            patch("quarry.hooks._collection_for_cwd", return_value="myapp"),
-            patch("quarry.hooks.subprocess.Popen") as mock_popen,
+            patch("quarry.hooks._read_ethos_agent_handle", return_value="rmh"),
+            patch("quarry.hooks._write_capture_file"),
+            patch("quarry.hooks._capture_via_daemon", return_value=True) as cap,
         ):
-            result = handle_pre_compact(
+            handle_pre_compact(
                 {
                     "cwd": "/projects/myapp",
                     "transcript_path": str(transcript),
@@ -1288,39 +1218,15 @@ class TestHandlePreCompact:
                 }
             )
 
-        assert '"myapp-captures"' in str(result["systemMessage"])
-        assert mock_popen.call_args[0][0][6] == "myapp-captures"
-
-    def test_falls_back_to_session_notes_when_unregistered(
-        self, tmp_path: Path
-    ) -> None:
-        """Session notes use fallback collection when cwd has no registration."""
-        transcript = _make_transcript(tmp_path, "Some work")
-
-        with (
-            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
-            patch(
-                "quarry.hooks._resolve_settings",
-                return_value=_mock_settings(),
-            ),
-            patch("quarry.hooks._collection_for_cwd", return_value=None),
-            patch("quarry.hooks.subprocess.Popen") as mock_popen,
-        ):
-            handle_pre_compact(
-                {
-                    "cwd": "/unknown/dir",
-                    "transcript_path": str(transcript),
-                    "session_id": "abc12345-full-id",
-                }
-            )
-
-        assert mock_popen.call_args[0][0][6] == "session-notes"
+        req = cap.call_args[0][0]
+        assert req.cwd == "/projects/myapp"
+        assert req.agent_handle == "rmh"
 
     def test_empty_transcript_skips_ingestion(self, tmp_path: Path) -> None:
         transcript = tmp_path / "empty.jsonl"
         transcript.write_text("")
 
-        with patch("quarry.hooks.subprocess.Popen") as mock_popen:
+        with patch("quarry.hooks._capture_via_daemon") as cap:
             result = handle_pre_compact(
                 {
                     "transcript_path": str(transcript),
@@ -1329,7 +1235,7 @@ class TestHandlePreCompact:
             )
 
         assert result == {}
-        mock_popen.assert_not_called()
+        cap.assert_not_called()
 
     def test_archives_raw_jsonl(self, tmp_path: Path) -> None:
         """Raw JSONL is copied to the sessions directory."""
@@ -1347,7 +1253,7 @@ class TestHandlePreCompact:
                 return_value=_mock_settings(),
             ),
             patch("quarry.hooks._collection_for_cwd", return_value=None),
-            patch("quarry.hooks.subprocess.Popen"),
+            patch("quarry.hooks._capture_via_daemon", return_value=True),
         ):
             handle_pre_compact(
                 {
@@ -1383,7 +1289,7 @@ class TestHandlePreCompact:
                 return_value=_mock_settings(),
             ),
             patch("quarry.hooks._collection_for_cwd", return_value=None),
-            patch("quarry.hooks.subprocess.Popen"),
+            patch("quarry.hooks._capture_via_daemon", return_value=True),
         ):
             handle_pre_compact(
                 {
@@ -1397,7 +1303,7 @@ class TestHandlePreCompact:
         assert len(new_archives) == 1
 
     def test_archive_failure_does_not_prevent_capture(self, tmp_path: Path) -> None:
-        """Background ingest is spawned even when archival raises an exception."""
+        """The daemon capture still runs even when archival raises an exception."""
         transcript = tmp_path / "session.jsonl"
         transcript.write_text(
             '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Hello"}]}}\n'
@@ -1406,12 +1312,7 @@ class TestHandlePreCompact:
         with (
             patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
             patch("quarry.hooks.shutil.copy", side_effect=OSError("disk full")),
-            patch(
-                "quarry.hooks._resolve_settings",
-                return_value=_mock_settings(),
-            ),
-            patch("quarry.hooks._collection_for_cwd", return_value=None),
-            patch("quarry.hooks.subprocess.Popen") as mock_popen,
+            patch("quarry.hooks._capture_via_daemon", return_value=True) as cap,
         ):
             handle_pre_compact(
                 {
@@ -1420,7 +1321,7 @@ class TestHandlePreCompact:
                 }
             )
 
-        mock_popen.assert_called_once()
+        cap.assert_called_once()
 
     def test_archive_deduplicates_prior_sessions(self, tmp_path: Path) -> None:
         """Prior archive files for the same session are replaced."""
@@ -1443,7 +1344,7 @@ class TestHandlePreCompact:
                 return_value=_mock_settings(),
             ),
             patch("quarry.hooks._collection_for_cwd", return_value=None),
-            patch("quarry.hooks.subprocess.Popen"),
+            patch("quarry.hooks._capture_via_daemon", return_value=True),
         ):
             handle_pre_compact(
                 {
@@ -1476,7 +1377,7 @@ class TestHandlePreCompact:
                 return_value=_mock_settings(),
             ),
             patch("quarry.hooks._collection_for_cwd", return_value=None),
-            patch("quarry.hooks.subprocess.Popen"),
+            patch("quarry.hooks._capture_via_daemon", return_value=True),
         ):
             handle_pre_compact(
                 {
@@ -1489,20 +1390,13 @@ class TestHandlePreCompact:
         new_archives = list(sessions_dir.glob("session-abc12345-*.jsonl"))
         assert len(new_archives) == 1, "archive should survive retention cleanup"
 
-    def test_system_message_contains_collection_and_doc_name(
-        self, tmp_path: Path
-    ) -> None:
-        """systemMessage includes collection, document name, and /find hint."""
+    def test_system_message_is_collection_generic(self, tmp_path: Path) -> None:
+        """The message names no collection or document — the daemon owns them."""
         transcript = _make_transcript(tmp_path, "Confirm capture")
 
         with (
             patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
-            patch(
-                "quarry.hooks._resolve_settings",
-                return_value=_mock_settings(),
-            ),
-            patch("quarry.hooks._collection_for_cwd", return_value="quarry"),
-            patch("quarry.hooks.subprocess.Popen"),
+            patch("quarry.hooks._capture_via_daemon", return_value=True),
         ):
             result = handle_pre_compact(
                 {
@@ -1513,27 +1407,18 @@ class TestHandlePreCompact:
 
         assert "systemMessage" in result
         msg = str(result["systemMessage"])
-        assert "session-abc12345-" in msg
-        assert '"quarry-captures"' in msg
+        assert msg.startswith("Capturing")
         assert "/find" in msg
-        # No chunk count in new format.
         assert "chunks" not in msg
+        assert "-captures" not in msg
 
-    def test_popen_failure_cleans_up_and_returns_warning(self, tmp_path: Path) -> None:
-        """Popen OSError cleans up temp file and returns a warning systemMessage."""
-        transcript = _make_transcript(tmp_path, "Will not be ingested")
+    def test_daemon_down_returns_backfill_warning(self, tmp_path: Path) -> None:
+        """A down daemon leaves the durable archive and nudges backfill-sessions."""
+        transcript = _make_transcript(tmp_path, "Will not be indexed now")
 
         with (
             patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
-            patch(
-                "quarry.hooks._resolve_settings",
-                return_value=_mock_settings(),
-            ),
-            patch("quarry.hooks._collection_for_cwd", return_value=None),
-            patch(
-                "quarry.hooks.subprocess.Popen",
-                side_effect=FileNotFoundError("quarry-hook"),
-            ),
+            patch("quarry.hooks._capture_via_daemon", return_value=False),
         ):
             result = handle_pre_compact(
                 {
@@ -1545,11 +1430,7 @@ class TestHandlePreCompact:
         assert "systemMessage" in result
         msg = str(result["systemMessage"])
         assert "Warning" in msg
-        assert "sessions/" in msg
-        # Temp file should be cleaned up.
-        sessions_dir = tmp_path / "home" / ".punt-labs" / "quarry" / "sessions"
-        txt_files = list(sessions_dir.glob("*.txt"))
-        assert txt_files == []
+        assert "backfill-sessions" in msg
 
     def test_system_message_uses_present_tense(self, tmp_path: Path) -> None:
         """systemMessage says 'Capturing' not 'captured' (async honesty)."""
@@ -1562,7 +1443,7 @@ class TestHandlePreCompact:
                 return_value=_mock_settings(),
             ),
             patch("quarry.hooks._collection_for_cwd", return_value=None),
-            patch("quarry.hooks.subprocess.Popen"),
+            patch("quarry.hooks._capture_via_daemon", return_value=True),
         ):
             result = handle_pre_compact(
                 {
@@ -2055,34 +1936,6 @@ class TestT17WebFetchRoutesToCaptures:
         assert mock_ingest.call_args[1]["collection"] == "proj-captures"
 
 
-class TestT18PreCompactRoutesToCaptures:
-    """T18: pre-compact routes to captures collection."""
-
-    def test_pre_compact_uses_captures_collection(self, tmp_path: Path) -> None:
-        transcript = _make_transcript(tmp_path, "Working on proj")
-
-        with (
-            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
-            patch(
-                "quarry.hooks._resolve_settings",
-                return_value=_mock_settings(),
-            ),
-            patch("quarry.hooks._collection_for_cwd", return_value="proj"),
-            patch("quarry.hooks.subprocess.Popen") as mock_popen,
-        ):
-            handle_pre_compact(
-                {
-                    "cwd": "/projects/proj",
-                    "transcript_path": str(transcript),
-                    "session_id": "abc12345-full-id",
-                }
-            )
-
-        # The collection argument (args[6]) should be proj-captures.
-        args = mock_popen.call_args[0][0]
-        assert args[6] == "proj-captures"
-
-
 class TestT19WebFetchFallback:
     """T19: web-fetch with no registration uses fallback."""
 
@@ -2112,35 +1965,6 @@ class TestT19WebFetchFallback:
         from quarry.hooks import WEB_CAPTURES_FALLBACK
 
         assert mock_url.call_args[1]["collection"] == WEB_CAPTURES_FALLBACK
-
-
-class TestT20PreCompactFallback:
-    """T20: pre-compact with no registration uses fallback."""
-
-    def test_uses_fallback_when_unregistered(self, tmp_path: Path) -> None:
-        transcript = _make_transcript(tmp_path, "Some unregistered work")
-
-        with (
-            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
-            patch(
-                "quarry.hooks._resolve_settings",
-                return_value=_mock_settings(),
-            ),
-            patch("quarry.hooks._collection_for_cwd", return_value=None),
-            patch("quarry.hooks.subprocess.Popen") as mock_popen,
-        ):
-            handle_pre_compact(
-                {
-                    "cwd": "/unknown/dir",
-                    "transcript_path": str(transcript),
-                    "session_id": "abc12345-full-id",
-                }
-            )
-
-        from quarry.hooks import _SESSION_NOTES_FALLBACK
-
-        args = mock_popen.call_args[0][0]
-        assert args[6] == _SESSION_NOTES_FALLBACK
 
 
 class TestPreCompactCaptureRedaction:

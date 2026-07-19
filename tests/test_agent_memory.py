@@ -715,8 +715,8 @@ class TestReadEthosAgentHandle:
 
 
 class TestPreCompactEthosTagging:
-    def test_passes_agent_handle_to_popen(self, tmp_path: Path) -> None:
-        """PreCompact passes ethos agent handle to background process."""
+    def test_passes_agent_handle_to_capture(self, tmp_path: Path) -> None:
+        """PreCompact puts the ethos agent handle on the daemon capture request."""
         from quarry.hooks import handle_pre_compact
 
         project = tmp_path / "myproject"
@@ -725,19 +725,9 @@ class TestPreCompactEthosTagging:
         transcript = _make_transcript(tmp_path)
 
         with (
-            patch(
-                "quarry.hooks.Path.home",
-                return_value=tmp_path / "home",
-            ),
-            patch(
-                "quarry.hooks._resolve_settings",
-                return_value=_mock_settings(),
-            ),
-            patch(
-                "quarry.hooks._collection_for_cwd",
-                return_value="myproject",
-            ),
-            patch("quarry.hooks.subprocess.Popen") as mock_popen,
+            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
+            patch("quarry.hooks._write_capture_file"),
+            patch("quarry.hooks._capture_via_daemon", return_value=True) as cap,
         ):
             handle_pre_compact(
                 {
@@ -747,32 +737,20 @@ class TestPreCompactEthosTagging:
                 }
             )
 
-        args = mock_popen.call_args[0][0]
-        # Last three args: agent_handle, memory_type, summary.
-        assert args[-3] == "claude"
-        assert args[-2] == ""
-        assert args[-1] == ""
+        req = cap.call_args[0][0]
+        assert req.agent_handle == "claude"
+        assert req.memory_type == ""
+        assert req.summary == ""
 
     def test_empty_handle_when_no_ethos(self, tmp_path: Path) -> None:
-        """PreCompact passes empty agent_handle when no ethos config."""
+        """PreCompact sends an empty agent_handle when there is no ethos config."""
         from quarry.hooks import handle_pre_compact
 
         transcript = _make_transcript(tmp_path)
 
         with (
-            patch(
-                "quarry.hooks.Path.home",
-                return_value=tmp_path / "home",
-            ),
-            patch(
-                "quarry.hooks._resolve_settings",
-                return_value=_mock_settings(),
-            ),
-            patch(
-                "quarry.hooks._collection_for_cwd",
-                return_value=None,
-            ),
-            patch("quarry.hooks.subprocess.Popen") as mock_popen,
+            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
+            patch("quarry.hooks._capture_via_daemon", return_value=True) as cap,
         ):
             handle_pre_compact(
                 {
@@ -781,9 +759,8 @@ class TestPreCompactEthosTagging:
                 }
             )
 
-        args = mock_popen.call_args[0][0]
-        # Last three args: agent_handle, memory_type, summary — all empty.
-        assert args[-3:] == ["", "", ""]
+        req = cap.call_args[0][0]
+        assert req.agent_handle == ""
 
 
 # ── New regression tests ─────────────────────────────────────────────

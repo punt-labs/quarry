@@ -20,15 +20,14 @@ from __future__ import annotations
 import contextlib
 import logging
 import shutil
-import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from quarry._stdlib import load_hook_config
-from quarry.background_ingest import BackgroundIngestJob
 from quarry.web_capture import WebFetchPayload
 
 if TYPE_CHECKING:
+    from quarry.api import CaptureIngestRequest
     from quarry.artifacts import SessionArtifacts
     from quarry.config import Settings
     from quarry.db.facade import Database
@@ -643,41 +642,6 @@ def _archive_transcript(
                 f.unlink()
 
 
-def _spawn_background_ingest(
-    text_file: Path, text: str, job: BackgroundIngestJob
-) -> bool:
-    """Write text to a temp file and spawn detached ingestion process.
-
-    Redirects stdin/stdout/stderr to DEVNULL; the subprocess calls
-    ``LoggingConfig.configure()`` itself, so the rotating file handler captures
-    all diagnostics.
-
-    Returns True on success, False if the spawn failed (temp file cleaned up).
-    """
-    try:
-        text_file.write_text(text)
-    except OSError:
-        logger.exception("pre-compact: failed to write temp file %s", text_file)
-        text_file.unlink(missing_ok=True)
-        return False
-
-    try:
-        subprocess.Popen(
-            job.command(text_file),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-    except OSError:
-        logger.exception("pre-compact: failed to spawn background ingest")
-        text_file.unlink(missing_ok=True)
-        return False
-
-    logger.info("pre-compact: spawned background ingest for %s", job.document_name)
-    return True
-
-
 def _write_capture_file(
     project_dir: Path,
     session_id: str,
@@ -705,13 +669,31 @@ def _write_capture_file(
     )
 
 
+def _capture_via_daemon(req: CaptureIngestRequest) -> bool:
+    """Send a capture to the local daemon; return False if it could not deliver.
+
+    The hook imports only the thin client — no engine.  A down or unreachable
+    daemon is not fatal: the durable ``.md`` and JSONL archive are already
+    written, and ``backfill-sessions`` re-ingests later, so this returns False
+    and the caller shows an "archived for backfill" message instead of blocking.
+    """
+    from quarry.client import QuarryError, TargetResolver  # noqa: PLC0415
+
+    try:
+        TargetResolver.connect().capture(req)
+    except QuarryError:
+        logger.warning("capture: daemon unreachable; archived for backfill")
+        return False
+    return True
+
+
 def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
     """Handle PreCompact hook.
 
-    Reads the conversation transcript before compaction, writes the
-    extracted text to a temp file, and spawns a background process to
-    ingest it.  Returns the systemMessage immediately so compaction
-    is never blocked by embedding work.
+    Archives the raw transcript and writes the scrubbed ``.md`` capture locally,
+    then sends the conversation text to the daemon to embed in the background.
+    Returns the systemMessage immediately so compaction is never blocked, and a
+    down daemon still leaves the durable local copies for ``backfill-sessions``.
     """
     cwd_obj = payload.get("cwd")
     cwd = cwd_obj if isinstance(cwd_obj, str) else ""
@@ -758,19 +740,11 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
 
     from datetime import UTC, datetime  # noqa: PLC0415
 
-    base_collection = _collection_for_cwd(cwd)
-    collection = (
-        f"{base_collection}-captures" if base_collection else _SESSION_NOTES_FALLBACK
-    )
-    settings = _resolve_settings()
     agent_handle = _read_ethos_agent_handle(cwd) if cwd else ""
 
-    now = datetime.now(UTC)
-    timestamp = now.strftime("%Y%m%dT%H%M%S")
-    iso_timestamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    # Write capture file to project directory.
+    # Write the scrubbed .md capture to the project directory (durable copy).
     if cwd:
+        iso_timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         _write_capture_file(
             project_dir=Path(cwd),
             session_id=session_id,
@@ -778,34 +752,28 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
             artifacts=artifacts,
             text=raw_text,
         )
-    document_name = f"session-{session_id[:8]}-{timestamp}"
 
-    # Write extracted text and spawn background ingestion.
-    sessions_dir.mkdir(parents=True, exist_ok=True)
-    text_file = sessions_dir / f"{document_name}.txt"
-    if not _spawn_background_ingest(
-        text_file,
-        text,
-        BackgroundIngestJob(
-            document_name=document_name,
-            collection=collection,
-            lancedb_path=settings.lancedb_path,
-            session_prefix=session_id[:8],
-            agent_handle=agent_handle,
-        ),
-    ):
+    from quarry.api import CaptureIngestRequest  # noqa: PLC0415
+
+    req = CaptureIngestRequest(
+        content=text,
+        cwd=cwd,
+        session_id=session_id,
+        agent_handle=agent_handle,
+        format_hint="markdown",
+    )
+    if not _capture_via_daemon(req):
         return {
             "systemMessage": (
-                "Warning: session transcript capture failed. "
-                "The raw JSONL archive is still available in "
-                "~/.punt-labs/quarry/sessions/."
+                "Warning: quarryd is not reachable, so this session was not "
+                "indexed now. The raw JSONL archive and scrubbed capture are "
+                "saved; run 'quarry backfill-sessions' to index them later."
             ),
         }
 
     return {
         "systemMessage": (
-            f'Capturing conversation as "{document_name}" '
-            f'in collection "{collection}" (background). '
-            "Search with /find or show to retrieve context."
+            "Capturing this session's conversation (background). "
+            "Search with /find or show to retrieve it."
         ),
     }
