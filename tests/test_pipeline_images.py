@@ -366,11 +366,11 @@ class TestPrepareImageBytes:
         _create_image(path, "PNG")
         raw = path.read_bytes()
 
-        from quarry.ingestion.pipeline import _prepare_image_bytes
+        from quarry.ingestion.image_prep import ImagePreparer
 
-        result = _prepare_image_bytes(
+        result = ImagePreparer(
             path, needs_conversion=False, max_bytes=10_000_000
-        )
+        ).to_bytes()
         assert result == raw
 
     def test_no_limit_returns_raw(self, tmp_path: Path) -> None:
@@ -379,9 +379,9 @@ class TestPrepareImageBytes:
         _create_image(path, "PNG")
         raw = path.read_bytes()
 
-        from quarry.ingestion.pipeline import _prepare_image_bytes
+        from quarry.ingestion.image_prep import ImagePreparer
 
-        result = _prepare_image_bytes(path, needs_conversion=False, max_bytes=0)
+        result = ImagePreparer(path, needs_conversion=False, max_bytes=0).to_bytes()
         assert result == raw
 
     def test_oversized_png_reencoded_as_jpeg(self, tmp_path: Path) -> None:
@@ -394,12 +394,12 @@ class TestPrepareImageBytes:
         img.save(path, format="PNG")
         png_size = path.stat().st_size
 
-        from quarry.ingestion.pipeline import _prepare_image_bytes
+        from quarry.ingestion.image_prep import ImagePreparer
 
         # Set max_bytes between JPEG size and PNG size
-        result = _prepare_image_bytes(
+        result = ImagePreparer(
             path, needs_conversion=False, max_bytes=png_size - 1
-        )
+        ).to_bytes()
         # JPEG magic bytes and smaller than PNG
         assert result[:2] == b"\xff\xd8"
         assert len(result) < png_size
@@ -416,12 +416,12 @@ class TestPrepareImageBytes:
         img.save(path, format="JPEG", quality=99)
         jpeg_size = path.stat().st_size
 
-        from quarry.ingestion.pipeline import _prepare_image_bytes
+        from quarry.ingestion.image_prep import ImagePreparer
 
         # Set max_bytes to force downscaling
-        result = _prepare_image_bytes(
+        result = ImagePreparer(
             path, needs_conversion=False, max_bytes=jpeg_size // 4
-        )
+        ).to_bytes()
         assert result[:2] == b"\xff\xd8"  # Still JPEG
         assert len(result) <= jpeg_size // 4
 
@@ -430,9 +430,11 @@ class TestPrepareImageBytes:
         path = tmp_path / "scan.bmp"
         _create_image(path, "BMP")
 
-        from quarry.ingestion.pipeline import _prepare_image_bytes
+        from quarry.ingestion.image_prep import ImagePreparer
 
-        result = _prepare_image_bytes(path, needs_conversion=True, max_bytes=10_000_000)
+        result = ImagePreparer(
+            path, needs_conversion=True, max_bytes=10_000_000
+        ).to_bytes()
         assert result[:4] == b"\x89PNG"
 
     def test_rgba_png_converts_to_jpeg(self, tmp_path: Path) -> None:
@@ -444,11 +446,11 @@ class TestPrepareImageBytes:
         img.save(path, format="PNG")
         png_size = path.stat().st_size
 
-        from quarry.ingestion.pipeline import _prepare_image_bytes
+        from quarry.ingestion.image_prep import ImagePreparer
 
-        result = _prepare_image_bytes(
+        result = ImagePreparer(
             path, needs_conversion=False, max_bytes=png_size - 1
-        )
+        ).to_bytes()
         assert result[:2] == b"\xff\xd8"
 
     def test_mpo_conversion_with_max_bytes(self, tmp_path: Path) -> None:
@@ -456,9 +458,11 @@ class TestPrepareImageBytes:
         path = tmp_path / "photo.jpg"
         _create_mpo_image(path)
 
-        from quarry.ingestion.pipeline import _prepare_image_bytes
+        from quarry.ingestion.image_prep import ImagePreparer
 
-        result = _prepare_image_bytes(path, needs_conversion=True, max_bytes=10_000_000)
+        result = ImagePreparer(
+            path, needs_conversion=True, max_bytes=10_000_000
+        ).to_bytes()
         assert result[:2] == b"\xff\xd8"
 
 

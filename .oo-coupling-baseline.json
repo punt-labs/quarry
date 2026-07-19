@@ -749,11 +749,11 @@
     "public_names": 2.0
   },
   "src/quarry/ingestion/pipeline.py": {
-    "avg_lcom": 0.0,
+    "efferent_coupling": 16.0,
+    "public_names": 10.0,
     "circular_imports": 0.0,
-    "efferent_coupling": 17.0,
     "max_lcom": 0.0,
-    "public_names": 15.0
+    "avg_lcom": 0.0
   },
   "src/quarry/ingestion/progressive.py": {
     "avg_lcom": 0.5,

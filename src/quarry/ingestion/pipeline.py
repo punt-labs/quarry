@@ -11,44 +11,32 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
-    from PIL.Image import Image as PILImage
-
     from quarry.models import Chunk
     from quarry.sitemap import SitemapEntry
 
 from quarry.capture_url import CaptureUrl
 from quarry.config import Settings
 from quarry.db import Database
-from quarry.extractors.code_extractor import SUPPORTED_CODE_EXTENSIONS, CodeExtractor
-from quarry.extractors.html_extractor import SUPPORTED_HTML_EXTENSIONS, HtmlExtractor
+from quarry.extractors.html_extractor import HtmlExtractor
 from quarry.extractors.image_extractor import SUPPORTED_IMAGE_EXTENSIONS, ImageExtractor
 from quarry.extractors.pdf_extractor import PdfExtractor
-from quarry.extractors.presentation_extractor import (
-    SUPPORTED_PRESENTATION_EXTENSIONS,
-    PresentationExtractor,
-)
-from quarry.extractors.spreadsheet_extractor import (
-    SUPPORTED_SPREADSHEET_EXTENSIONS,
-    SpreadsheetExtractor,
-)
-from quarry.extractors.text_extractor import SUPPORTED_TEXT_EXTENSIONS, TextExtractor
+from quarry.extractors.text_extractor import TextExtractor
 from quarry.ingestion.backends import get_ocr_backend
+from quarry.ingestion.image_prep import ImagePreparer
 from quarry.ingestion.ingest_stats import IngestStats
 from quarry.ingestion.streaming import DocumentStreamer, progressive_insert
+from quarry.ingestion.text_format import TEXT_LIKE_FORMATS, TextLikeFormat
 from quarry.ingestion.web_fetch import WebFetcher
 from quarry.models import Chunk, PageContent, PageType
 from quarry.results import IngestResult, SitemapResult
 
 logger = logging.getLogger(__name__)
 
+# The text-like formats reach the pipeline through ``TEXT_LIKE_FORMATS`` (its keys
+# are their extensions), so the per-format extractor modules are imported there,
+# not here.
 SUPPORTED_EXTENSIONS = (
-    frozenset({".pdf"})
-    | SUPPORTED_TEXT_EXTENSIONS
-    | SUPPORTED_IMAGE_EXTENSIONS
-    | SUPPORTED_CODE_EXTENSIONS
-    | SUPPORTED_SPREADSHEET_EXTENSIONS
-    | SUPPORTED_HTML_EXTENSIONS
-    | SUPPORTED_PRESENTATION_EXTENSIONS
+    frozenset({".pdf"}) | SUPPORTED_IMAGE_EXTENSIONS | frozenset(TEXT_LIKE_FORMATS)
 )
 
 
@@ -118,30 +106,6 @@ def ingest_document(
             **memory_kw,
         )
 
-    if suffix in SUPPORTED_CODE_EXTENSIONS:
-        return ingest_code_file(
-            file_path,
-            database,
-            settings,
-            overwrite=overwrite,
-            collection=collection,
-            document_name=document_name,
-            progress_callback=progress_callback,
-            **memory_kw,
-        )
-
-    if suffix in SUPPORTED_TEXT_EXTENSIONS:
-        return ingest_text_file(
-            file_path,
-            database,
-            settings,
-            overwrite=overwrite,
-            collection=collection,
-            document_name=document_name,
-            progress_callback=progress_callback,
-            **memory_kw,
-        )
-
     if suffix in SUPPORTED_IMAGE_EXTENSIONS:
         return ingest_image(
             file_path,
@@ -154,32 +118,10 @@ def ingest_document(
             **memory_kw,
         )
 
-    if suffix in SUPPORTED_SPREADSHEET_EXTENSIONS:
-        return ingest_spreadsheet(
-            file_path,
-            database,
-            settings,
-            overwrite=overwrite,
-            collection=collection,
-            document_name=document_name,
-            progress_callback=progress_callback,
-            **memory_kw,
-        )
-
-    if suffix in SUPPORTED_HTML_EXTENSIONS:
-        return ingest_html_file(
-            file_path,
-            database,
-            settings,
-            overwrite=overwrite,
-            collection=collection,
-            document_name=document_name,
-            progress_callback=progress_callback,
-            **memory_kw,
-        )
-
-    if suffix in SUPPORTED_PRESENTATION_EXTENSIONS:
-        return ingest_presentation(
+    fmt = TEXT_LIKE_FORMATS.get(suffix)
+    if fmt is not None:
+        return _ingest_text_like(
+            fmt,
             file_path,
             database,
             settings,
@@ -264,7 +206,8 @@ def ingest_pdf(
     )
 
 
-def ingest_text_file(
+def _ingest_text_like(
+    fmt: TextLikeFormat,
     file_path: Path,
     database: Database,
     settings: Settings,
@@ -277,34 +220,19 @@ def ingest_text_file(
     memory_type: str = "",
     summary: str = "",
 ) -> IngestResult:
-    """Ingest a text document: read, split into sections, chunk, embed, store.
-
-    Supported: .txt, .md, .tex, .docx.
-
-    Args:
-        file_path: Path to the text file.
-        database: Quarry database facade.
-        settings: Application settings.
-        overwrite: If True, delete existing data for this document first.
-        collection: Collection name for organizing documents.
-        document_name: Override for the stored document name.
-        progress_callback: Optional callable for progress messages.
-
-    Returns:
-        Dict with ingestion results.
-    """
+    """Ingest one text-like document per *fmt*: extract pages, chunk, embed, store."""
     progress = _make_progress(progress_callback)
     document_name = document_name or file_path.name
 
-    progress("Reading: %s", document_name)
+    progress("%s: %s", fmt.read_verb, document_name)
 
     if overwrite:
         database.store.delete_document(
             document_name, collection=collection, count=False
         )
 
-    pages = TextExtractor().extract_pages(file_path, document_name=document_name)
-    progress("Sections: %d", len(pages))
+    pages = fmt.extract(settings, file_path, document_name)
+    progress("%s: %d", fmt.unit_label, len(pages))
 
     return _chunk_embed_store(
         pages,
@@ -314,238 +242,7 @@ def ingest_text_file(
         progress,
         collection=collection,
         source_format=file_path.suffix.lower(),
-        stats=IngestStats(sections=len(pages)),
-        agent_handle=agent_handle,
-        memory_type=memory_type,
-        summary=summary,
-    )
-
-
-def ingest_code_file(
-    file_path: Path,
-    database: Database,
-    settings: Settings,
-    *,
-    overwrite: bool = False,
-    collection: str = "default",
-    document_name: str | None = None,
-    progress_callback: Callable[[str], None] | None = None,
-    agent_handle: str = "",
-    memory_type: str = "",
-    summary: str = "",
-) -> IngestResult:
-    """Ingest source code: parse into definitions, chunk, embed, store.
-
-    Uses tree-sitter for language-aware splitting when available.
-
-    Args:
-        file_path: Path to the source code file.
-        database: Quarry database facade.
-        settings: Application settings.
-        overwrite: If True, delete existing data for this document first.
-        collection: Collection name for organizing documents.
-        document_name: Override for the stored document name.
-        progress_callback: Optional callable for progress messages.
-
-    Returns:
-        Dict with ingestion results.
-    """
-    progress = _make_progress(progress_callback)
-    document_name = document_name or file_path.name
-
-    progress("Parsing: %s", document_name)
-
-    if overwrite:
-        database.store.delete_document(
-            document_name, collection=collection, count=False
-        )
-
-    pages = CodeExtractor().extract_pages(file_path, document_name=document_name)
-    progress("Definitions: %d", len(pages))
-
-    return _chunk_embed_store(
-        pages,
-        document_name,
-        database,
-        settings,
-        progress,
-        collection=collection,
-        source_format=file_path.suffix.lower(),
-        stats=IngestStats(definitions=len(pages)),
-        agent_handle=agent_handle,
-        memory_type=memory_type,
-        summary=summary,
-    )
-
-
-def ingest_spreadsheet(
-    file_path: Path,
-    database: Database,
-    settings: Settings,
-    *,
-    overwrite: bool = False,
-    collection: str = "default",
-    document_name: str | None = None,
-    progress_callback: Callable[[str], None] | None = None,
-    agent_handle: str = "",
-    memory_type: str = "",
-    summary: str = "",
-) -> IngestResult:
-    """Ingest a spreadsheet: read sheets, serialize to LaTeX, chunk, embed, store.
-
-    Supported: .xlsx, .csv.
-
-    Args:
-        file_path: Path to the spreadsheet file.
-        database: Quarry database facade.
-        settings: Application settings.
-        overwrite: If True, delete existing data for this document first.
-        collection: Collection name for organizing documents.
-        document_name: Override for the stored document name.
-        progress_callback: Optional callable for progress messages.
-
-    Returns:
-        Dict with ingestion results.
-    """
-    progress = _make_progress(progress_callback)
-    document_name = document_name or file_path.name
-
-    progress("Reading: %s", document_name)
-
-    if overwrite:
-        database.store.delete_document(
-            document_name, collection=collection, count=False
-        )
-
-    extractor = SpreadsheetExtractor(max_chars=settings.chunk_max_chars)
-    pages = extractor.extract_pages(file_path, document_name=document_name)
-    progress("Sections: %d", len(pages))
-
-    return _chunk_embed_store(
-        pages,
-        document_name,
-        database,
-        settings,
-        progress,
-        collection=collection,
-        source_format=file_path.suffix.lower(),
-        stats=IngestStats(sections=len(pages)),
-        agent_handle=agent_handle,
-        memory_type=memory_type,
-        summary=summary,
-    )
-
-
-def ingest_html_file(
-    file_path: Path,
-    database: Database,
-    settings: Settings,
-    *,
-    overwrite: bool = False,
-    collection: str = "default",
-    document_name: str | None = None,
-    progress_callback: Callable[[str], None] | None = None,
-    agent_handle: str = "",
-    memory_type: str = "",
-    summary: str = "",
-) -> IngestResult:
-    """Ingest an HTML document: parse, clean, convert to Markdown, chunk, embed, store.
-
-    Supported: .html, .htm.
-
-    Args:
-        file_path: Path to the HTML file.
-        database: Quarry database facade.
-        settings: Application settings.
-        overwrite: If True, delete existing data for this document first.
-        collection: Collection name for organizing documents.
-        document_name: Override for the stored document name.
-        progress_callback: Optional callable for progress messages.
-
-    Returns:
-        Dict with ingestion results.
-    """
-    progress = _make_progress(progress_callback)
-    document_name = document_name or file_path.name
-
-    progress("Reading: %s", document_name)
-
-    if overwrite:
-        database.store.delete_document(
-            document_name, collection=collection, count=False
-        )
-
-    pages = HtmlExtractor().extract_pages(file_path, document_name=document_name)
-    progress("Sections: %d", len(pages))
-
-    return _chunk_embed_store(
-        pages,
-        document_name,
-        database,
-        settings,
-        progress,
-        collection=collection,
-        source_format=file_path.suffix.lower(),
-        stats=IngestStats(sections=len(pages)),
-        agent_handle=agent_handle,
-        memory_type=memory_type,
-        summary=summary,
-    )
-
-
-def ingest_presentation(
-    file_path: Path,
-    database: Database,
-    settings: Settings,
-    *,
-    overwrite: bool = False,
-    collection: str = "default",
-    document_name: str | None = None,
-    progress_callback: Callable[[str], None] | None = None,
-    agent_handle: str = "",
-    memory_type: str = "",
-    summary: str = "",
-) -> IngestResult:
-    """Ingest a presentation: extract slides, chunk, embed, store.
-
-    Supported: .pptx.
-
-    Args:
-        file_path: Path to the presentation file.
-        database: Quarry database facade.
-        settings: Application settings.
-        overwrite: If True, delete existing data for this document first.
-        collection: Collection name for organizing documents.
-        document_name: Override for the stored document name.
-        progress_callback: Optional callable for progress messages.
-
-    Returns:
-        Dict with ingestion results.
-    """
-    progress = _make_progress(progress_callback)
-    document_name = document_name or file_path.name
-
-    progress("Reading: %s", document_name)
-
-    if overwrite:
-        database.store.delete_document(
-            document_name, collection=collection, count=False
-        )
-
-    pages = PresentationExtractor().extract_pages(
-        file_path, document_name=document_name
-    )
-    progress("Slides: %d", len(pages))
-
-    return _chunk_embed_store(
-        pages,
-        document_name,
-        database,
-        settings,
-        progress,
-        collection=collection,
-        source_format=file_path.suffix.lower(),
-        stats=IngestStats(slides=len(pages)),
+        stats=fmt.stats(len(pages)),
         agent_handle=agent_handle,
         memory_type=memory_type,
         summary=summary,
@@ -617,10 +314,9 @@ def ingest_image(
             summary=summary,
         )
 
-    image_bytes = _prepare_image_bytes(
-        file_path,
-        needs_conversion=analysis.needs_conversion,
-    )
+    image_bytes = ImagePreparer(
+        file_path, needs_conversion=analysis.needs_conversion
+    ).to_bytes()
     ocr = get_ocr_backend(settings)
     page = ocr.ocr_image_bytes(
         image_bytes,
@@ -641,112 +337,6 @@ def ingest_image(
         memory_type=memory_type,
         summary=summary,
     )
-
-
-def _prepare_image_bytes(
-    image_path: Path,
-    *,
-    needs_conversion: bool,
-    max_bytes: int = 0,
-) -> bytes:
-    """Read image bytes, converting format and/or downscaling as needed.
-
-    Format conversion: MPO → JPEG, BMP/WebP → PNG, with EXIF transpose.
-    Size reduction: when *max_bytes* > 0 and the encoded image exceeds it,
-    lossless formats are re-encoded as JPEG (quality 95); if still too large,
-    dimensions are halved up to 5 times.
-    """
-    if not needs_conversion and max_bytes <= 0:
-        return image_path.read_bytes()
-
-    if not needs_conversion:
-        raw = image_path.read_bytes()
-        if len(raw) <= max_bytes:
-            return raw
-
-    from PIL import Image, ImageOps  # noqa: PLC0415
-
-    with Image.open(image_path) as im:
-        img = ImageOps.exif_transpose(im)
-
-        out_fmt: str
-        save_kw: dict[str, int]
-        if im.format == "MPO":
-            out_fmt, save_kw = "JPEG", {"quality": 95}
-        elif im.format in ("BMP", "WEBP"):
-            out_fmt, save_kw = "PNG", {}
-        else:
-            out_fmt, save_kw = im.format or "PNG", {}
-
-        return _encode_image_to_fit(img, out_fmt, save_kw, max_bytes, image_path.name)
-
-
-def _encode_image_to_fit(
-    img: PILImage,
-    out_fmt: str,
-    save_kw: dict[str, int],
-    max_bytes: int,
-    name: str,
-) -> bytes:
-    """Encode image, re-encoding as JPEG and/or downscaling if oversized.
-
-    Strategy: save as-is; if over limit, re-encode as JPEG (much smaller for
-    photos); then downscale by halves until under limit. Keeps quality while
-    meeting OCR engine byte limits.
-    """
-    import io  # noqa: PLC0415
-
-    from PIL import Image  # noqa: PLC0415
-
-    buf = io.BytesIO()
-    img.save(buf, format=out_fmt, **save_kw)
-    data = buf.getvalue()
-
-    if max_bytes <= 0 or len(data) <= max_bytes:
-        return data
-
-    # Re-encode as JPEG if not already (much smaller for photos)
-    if out_fmt != "JPEG":
-        out_fmt, save_kw = "JPEG", {"quality": 95}
-        rgb = img.convert("RGB") if img.mode != "RGB" else img
-        buf = io.BytesIO()
-        rgb.save(buf, format=out_fmt, **save_kw)
-        data = buf.getvalue()
-        logger.info("Re-encoded %s as JPEG (%d bytes)", name, len(data))
-        if len(data) <= max_bytes:
-            return data
-        img = rgb
-
-    # Downscale until under limit
-    current = img
-    for _ in range(5):
-        w, h = current.size
-        new_w, new_h = max(1, w // 2), max(1, h // 2)
-        if (new_w, new_h) == (w, h):
-            break
-        current = current.resize((new_w, new_h), Image.Resampling.LANCZOS)
-        buf = io.BytesIO()
-        current.save(buf, format=out_fmt, **save_kw)
-        data = buf.getvalue()
-        logger.info(
-            "Downscaled %s to %dx%d (%d bytes)",
-            name,
-            new_w,
-            new_h,
-            len(data),
-        )
-        if len(data) <= max_bytes:
-            return data
-
-    if max_bytes > 0 and len(data) > max_bytes:
-        logger.warning(
-            "%s still %d bytes after downscaling (limit %d)",
-            name,
-            len(data),
-            max_bytes,
-        )
-
-    return data
 
 
 def _ingest_multipage_image(
@@ -786,6 +376,21 @@ def _ingest_multipage_image(
     )
 
 
+def _extract_inline_pages(
+    content: str, document_name: str, format_hint: str
+) -> list[PageContent]:
+    """Split inline *content* into pages, routing ``html`` to the HTML extractor.
+
+    The inline path serves two callers: ``remember`` (text/markdown) and the
+    web-fetch ``capture`` (raw HTML).  ``TextExtractor`` handles the text
+    formats; a ``html`` hint hands the raw markup to ``HtmlExtractor`` so tags
+    become Markdown sections rather than being stored verbatim.
+    """
+    if format_hint == "html":
+        return HtmlExtractor().extract_from_html(content, document_name, "")
+    return TextExtractor().extract_raw(content, document_name, format_hint=format_hint)
+
+
 def ingest_content(
     content: str,
     document_name: str,
@@ -796,6 +401,7 @@ def ingest_content(
     collection: str = "default",
     format_hint: str = "auto",
     progress_callback: Callable[[str], None] | None = None,
+    content_scrubber: Callable[[str], str] | None = None,
     agent_handle: str = "",
     memory_type: str = "",
     summary: str = "",
@@ -809,8 +415,12 @@ def ingest_content(
         settings: Application settings.
         overwrite: If True, delete existing data for this document first.
         collection: Collection name for organizing documents.
-        format_hint: One of 'auto', 'plain', 'markdown', 'latex'.
+        format_hint: One of 'auto', 'plain', 'markdown', 'latex', 'html'.
         progress_callback: Optional callable for progress messages.
+        content_scrubber: Optional redaction hook applied to each extracted page
+            before chunking.  ``None`` (the default) stores the text
+            byte-for-byte, so user-initiated remembers are unchanged; the capture
+            ingress passes a scrubber so its collection never receives raw PII.
         agent_handle: Agent that owns this memory (empty for non-agent content).
         memory_type: Memory classification (fact, observation, opinion, procedure).
         summary: One-line summary of the content.
@@ -827,7 +437,9 @@ def ingest_content(
             document_name, collection=collection, count=False
         )
 
-    pages = TextExtractor().extract_raw(content, document_name, format_hint=format_hint)
+    pages = _extract_inline_pages(content, document_name, format_hint)
+    if content_scrubber is not None:
+        pages = [replace(page, text=content_scrubber(page.text)) for page in pages]
     progress("Sections: %d", len(pages))
 
     return _chunk_embed_store(
@@ -1429,9 +1041,9 @@ def _extract_image_pages(
             analysis.page_count,
             document_name=document_name,
         )
-    image_bytes = _prepare_image_bytes(
+    image_bytes = ImagePreparer(
         file_path, needs_conversion=analysis.needs_conversion
-    )
+    ).to_bytes()
     ocr = get_ocr_backend(settings)
     return [
         ocr.ocr_image_bytes(
@@ -1454,22 +1066,11 @@ def _extract_pages(
         return PdfExtractor(settings, ocr).extract_pages(
             file_path, document_name=document_name
         )
-    if suffix in SUPPORTED_CODE_EXTENSIONS:
-        return CodeExtractor().extract_pages(file_path, document_name=document_name)
-    if suffix in SUPPORTED_TEXT_EXTENSIONS:
-        return TextExtractor().extract_pages(file_path, document_name=document_name)
     if suffix in SUPPORTED_IMAGE_EXTENSIONS:
         return _extract_image_pages(file_path, document_name, settings)
-    if suffix in SUPPORTED_SPREADSHEET_EXTENSIONS:
-        return SpreadsheetExtractor(max_chars=settings.chunk_max_chars).extract_pages(
-            file_path, document_name=document_name
-        )
-    if suffix in SUPPORTED_HTML_EXTENSIONS:
-        return HtmlExtractor().extract_pages(file_path, document_name=document_name)
-    if suffix in SUPPORTED_PRESENTATION_EXTENSIONS:
-        return PresentationExtractor().extract_pages(
-            file_path, document_name=document_name
-        )
+    fmt = TEXT_LIKE_FORMATS.get(suffix)
+    if fmt is not None:
+        return fmt.extract(settings, file_path, document_name)
 
     msg = f"Unsupported file format: {suffix}"
     raise ValueError(msg)

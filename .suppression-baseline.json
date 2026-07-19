@@ -1,16 +1,16 @@
 {
-  "total": 257,
+  "total": 242,
   "by_category": {
-    "noqa": 208,
-    "type_ignore": 9,
+    "noqa": 193,
+    "type_ignore": 8,
     "pylint_disable": 0,
-    "pyright_ignore": 12,
-    "per_file_ignores": 28
+    "pyright_ignore": 6,
+    "per_file_ignores": 35
   },
   "by_file": {
     "src/quarry/__main__.py": {
-      "noqa": 21,
-      "type_ignore": 2
+      "noqa": 12,
+      "type_ignore": 1
     },
     "src/quarry/_hook_entry.py": {
       "noqa": 8
@@ -19,9 +19,9 @@
       "noqa": 1
     },
     "src/quarry/cli_captures.py": {
-      "noqa": 2
+      "noqa": 1
     },
-    "src/quarry/cli_runtime.py": {
+    "src/quarry/cli_project.py": {
       "noqa": 2
     },
     "src/quarry/collections.py": {
@@ -64,8 +64,8 @@
       "noqa": 3
     },
     "src/quarry/enable.py": {
-      "noqa": 10,
-      "pyright_ignore": 7
+      "noqa": 6,
+      "pyright_ignore": 1
     },
     "src/quarry/extractors/image_extractor.py": {
       "noqa": 1
@@ -87,6 +87,9 @@
     "src/quarry/ingestion/backends.py": {
       "noqa": 3
     },
+    "src/quarry/ingestion/image_prep.py": {
+      "noqa": 2
+    },
     "src/quarry/ingestion/image_preparer.py": {
       "noqa": 3
     },
@@ -94,7 +97,7 @@
       "noqa": 1
     },
     "src/quarry/ingestion/pipeline.py": {
-      "noqa": 10
+      "noqa": 7
     },
     "src/quarry/ingestion/provider.py": {
       "noqa": 2
@@ -134,5 +137,5 @@
       "noqa": 1
     }
   },
-  "updated_at": "2026-07-16T01:01:20Z"
+  "updated_at": "2026-07-19T16:14:45Z"
 }

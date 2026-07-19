@@ -1404,17 +1404,17 @@
     "public_attr_violations": 0.0
   },
   "src/quarry/ingestion/pipeline.py": {
-    "avg_complexity": 4.71,
-    "avg_params": 8.12,
-    "class_to_func_ratio": 0.0,
-    "classes_per_module": 0.0,
-    "encapsulation_ratio": 1.0,
-    "future_annotations": 1.0,
-    "init_violations": 0.0,
-    "max_complexity": 11.0,
     "method_ratio": 0.0,
-    "module_size": 1280.0,
-    "public_attr_violations": 0.0
+    "encapsulation_ratio": 1.0,
+    "avg_params": 8.0,
+    "max_complexity": 11.0,
+    "avg_complexity": 4.16,
+    "module_size": 940.0,
+    "classes_per_module": 0.0,
+    "class_to_func_ratio": 0.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/quarry/ingestion/progressive.py": {
     "avg_complexity": 1.83,

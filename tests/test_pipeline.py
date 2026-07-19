@@ -571,6 +571,83 @@ class TestIngestUrlScrubbing:
         assert captured[0].text == self._RAW
 
 
+class TestIngestContentScrubbing:
+    """``ingest_content`` scrubs inline text only when a scrubber is supplied.
+
+    The ``remember`` and ``capture`` front doors both pass one so the database
+    copy is PII-clean; a user-initiated ingest passes none and stores the text
+    byte-for-byte.  ``format_hint="html"`` routes raw markup through the HTML
+    extractor rather than storing tags verbatim.
+    """
+
+    _RAW = "reach me at jmf@pobox.com"
+
+    def _capture_stored_pages(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> list[PageContent]:
+        from quarry.ingestion import pipeline
+
+        captured: list[PageContent] = []
+
+        def _capture(
+            pages_arg: list[PageContent], *_a: object, **_k: object
+        ) -> dict[str, object]:
+            captured.extend(pages_arg)
+            return {"document_name": "note", "collection": "memory-x", "chunks": 0}
+
+        monkeypatch.setattr(pipeline, "_chunk_embed_store", _capture)
+        return captured
+
+    def test_scrubber_redacts_inline_text_before_store(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from quarry.ingestion.pipeline import ingest_content
+        from quarry.scrub import scrub_and_log
+
+        captured = self._capture_stored_pages(monkeypatch)
+        ingest_content(
+            self._RAW,
+            "note",
+            Database(MagicMock()),
+            _settings(),
+            content_scrubber=lambda t: scrub_and_log(t, "remember"),
+        )
+
+        assert captured
+        assert "jmf@pobox.com" not in captured[0].text
+        assert "[REDACTED:email]" in captured[0].text
+
+    def test_no_scrubber_leaves_inline_text_unchanged(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from quarry.ingestion.pipeline import ingest_content
+
+        captured = self._capture_stored_pages(monkeypatch)
+        ingest_content(self._RAW, "note", Database(MagicMock()), _settings())
+
+        assert captured
+        assert captured[0].text == self._RAW
+
+    def test_html_hint_extracts_markdown_not_raw_tags(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from quarry.ingestion.pipeline import ingest_content
+
+        captured = self._capture_stored_pages(monkeypatch)
+        ingest_content(
+            "<html><body><h1>Title</h1><p>Body text.</p></body></html>",
+            "page",
+            Database(MagicMock()),
+            _settings(),
+            format_hint="html",
+        )
+
+        assert captured
+        stored = "\n".join(p.text for p in captured)
+        assert "Body text." in stored
+        assert "<h1>" not in stored
+
+
 class _FakeEmbedder:
     @property
     def dimension(self) -> int:
