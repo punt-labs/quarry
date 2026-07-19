@@ -204,6 +204,18 @@ class TestIsAlreadyIngested:
     def test_empty_set(self) -> None:
         assert is_already_ingested("1e7aa08d", set()) is False
 
+    def test_recognizes_hooks_stable_name(self) -> None:
+        """A session the compaction hook stored under the stable ``session-<id>``
+        name (no ``-<mtime>``) must be recognized, so backfill skips it instead
+        of re-ingesting a duplicate."""
+        existing = {"session-1e7aa08d"}
+        assert is_already_ingested("1e7aa08d", existing) is True
+
+    def test_stable_prefix_not_a_false_match(self) -> None:
+        """A different session sharing a name-prefix is not treated as present."""
+        existing = {"session-1e7aa08dXY"}
+        assert is_already_ingested("1e7aa08d", existing) is False
+
 
 # ---------------------------------------------------------------------------
 # backfill_sessions integration

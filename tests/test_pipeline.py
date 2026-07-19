@@ -552,6 +552,69 @@ class TestIngestUrlScrubbing:
         assert "jmf@pobox.com" not in captured[0].text
         assert "[REDACTED:email]" in captured[0].text
 
+    def test_empty_extraction_keeps_prior_and_stores_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A re-fetch whose HTML extracts to zero pages must not delete the prior."""
+        from quarry.ingestion.pipeline import ingest_url
+
+        monkeypatch.setattr(
+            "quarry.ingestion.web_fetch.WebFetcher.fetch",
+            lambda _self, _url: "<html></html>",
+        )
+        monkeypatch.setattr(
+            "quarry.extractors.html_extractor.HtmlExtractor.extract_from_html",
+            lambda _self, _html, _name, _url: [],
+        )
+        deleted: list[str] = []
+        monkeypatch.setattr(
+            "quarry.db.chunk_store.ChunkStore.delete_document",
+            lambda _self, name, **_k: deleted.append(name),
+        )
+        captured = self._capture_stored_pages(monkeypatch)
+
+        result = ingest_url(
+            "https://example.com/p",
+            Database(MagicMock()),
+            _settings(),
+            overwrite=True,
+            collection="c",
+        )
+
+        assert deleted == []  # prior document not deleted on empty extraction
+        assert captured == []  # nothing stored
+        assert result["chunks"] == 0
+
+    def test_scrub_raise_keeps_prior_and_stores_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A scrub that raises aborts before the overwrite-delete on ingest_url."""
+        from quarry.ingestion.pipeline import ingest_url
+
+        self._patch_fetch_and_extract(monkeypatch)
+        deleted: list[str] = []
+        monkeypatch.setattr(
+            "quarry.db.chunk_store.ChunkStore.delete_document",
+            lambda _self, name, **_k: deleted.append(name),
+        )
+        stored = self._capture_stored_pages(monkeypatch)
+
+        def _boom(_text: str) -> str:
+            raise ValueError("scrub failed")
+
+        with pytest.raises(ValueError, match="scrub failed"):
+            ingest_url(
+                "https://example.com/p",
+                Database(MagicMock()),
+                _settings(),
+                overwrite=True,
+                collection="c",
+                content_scrubber=_boom,
+            )
+
+        assert deleted == []  # prior document preserved
+        assert stored == []  # never reached the store
+
     def test_no_scrubber_leaves_text_byte_unchanged(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

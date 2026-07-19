@@ -529,14 +529,23 @@ def ingest_url(
     html = WebFetcher(timeout).fetch(url)
     progress("Fetched %d characters", len(html))
 
-    if overwrite:
-        database.store.delete_document(
-            document_name, collection=collection, count=False
-        )
-
     pages = HtmlExtractor().extract_from_html(html, document_name, meta_url)
     if content_scrubber is not None:
         pages = [replace(page, text=content_scrubber(page.text)) for page in pages]
+
+    # Delete the prior copy only after a successful fetch+extraction+scrub AND
+    # only when there are pages to store: an empty extraction or a scrub error
+    # must not remove a good prior capture and store nothing (silent data loss).
+    if not pages:
+        logger.warning(
+            "ingest_url: %s extracted to zero pages — keeping any prior "
+            "document, storing nothing",
+            meta_url,
+        )
+    elif overwrite:
+        database.store.delete_document(
+            document_name, collection=collection, count=False
+        )
     progress("Sections: %d", len(pages))
 
     return _chunk_embed_store(

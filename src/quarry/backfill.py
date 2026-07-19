@@ -121,9 +121,17 @@ def is_already_ingested(
     session_id_prefix: str,
     existing_doc_names: set[str],
 ) -> bool:
-    """Check if a transcript with the given session prefix is already ingested."""
-    prefix = f"session-{session_id_prefix}-"
-    return any(name.startswith(prefix) for name in existing_doc_names)
+    """Check if a transcript with the given session prefix is already ingested.
+
+    Recognizes both the compaction hook's stable ``session-<id[:8]>`` name and
+    backfill's own ``session-<id[:8]>-<mtime>`` name — so a session already
+    captured by the hook is skipped instead of re-ingested as a duplicate.
+    """
+    stable = f"session-{session_id_prefix}"
+    timestamped = f"{stable}-"
+    return any(
+        name == stable or name.startswith(timestamped) for name in existing_doc_names
+    )
 
 
 def _get_existing_doc_names(database: Database, collection: str) -> set[str]:
