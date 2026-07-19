@@ -7,12 +7,35 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
-    from quarry.sync_registry import SyncRegistry
+    from quarry.api import (
+        DeleteCollectionRequest,
+        DeregisterAccepted,
+        DeregisterRequest,
+        RegisterRequest,
+        RegistrationList,
+        TaskAccepted,
+    )
+    from quarry.registrations import Registrations
 
 logger = logging.getLogger(__name__)
+
+
+class RegistryClient(Protocol):
+    """The daemon-registry surface enable/disable need — the client is the adapter.
+
+    Depending on this port (not the concrete ``QuarryClient``) keeps enable/disable
+    off the client package's import graph and lets a test supply an in-memory
+    stand-in.
+    """
+
+    def list_registrations(self) -> RegistrationList: ...
+    def register(self, req: RegisterRequest) -> TaskAccepted: ...
+    def deregister(self, req: DeregisterRequest) -> DeregisterAccepted: ...
+    def delete_collection(self, req: DeleteCollectionRequest) -> TaskAccepted: ...
+
 
 _CLAUDEMD_BEGIN = "<!-- quarry:begin -->"
 _CLAUDEMD_END = "<!-- quarry:end -->"
@@ -62,13 +85,13 @@ class EnableResult:
 
 @dataclass(frozen=True)
 class DisableResult:
-    """Result of disabling quarry: ``purge_collections`` names the chunks the CLI
-    purges via a daemon call (empty when ``keep_data`` was set)."""
+    """Result of disabling quarry.  ``removed`` is the registry file count the
+    daemon reported synchronously; the chunk purge runs as a background task."""
 
     directory: str
     collection: str
     captures_collection: str
-    purge_collections: tuple[str, ...] = ()
+    removed: int = 0
     config_removed: bool = False
     claudemd_removed: bool = False
 
@@ -102,24 +125,27 @@ repo into a per-project private shadow (`<repo>` -> `<repo>-quarry`).
 
 def enable_project(
     directory: Path,
+    client: RegistryClient,
     collection_override: str = "",
 ) -> EnableResult:
-    """Enable quarry knowledge capture for a project directory."""
+    """Enable quarry knowledge capture for a project directory.
+
+    The registry is the daemon's (DES-031 I2): coverage is computed from its
+    ``RegistrationList`` and a new registration is dispatched via ``client``, never
+    a local ``SyncRegistry``.  The project files (config.md, CLAUDE.md, ethos ext)
+    are the client's and are written locally.
+    """
+    from quarry.registrations import Registrations  # noqa: PLC0415
+
     directory = directory.resolve()
     if not directory.is_dir():
         msg = f"directory not found: {directory}"
         raise ValueError(msg)
 
-    from quarry.config import Settings  # noqa: PLC0415
-    from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
-
-    # Honor the active database (--db / `quarry use`), matching the client target.
-    settings = Settings.load().resolve_db_paths(Settings.active_db() or None)
-    conn = SyncRegistry(settings.registry_path)
-    try:
-        collection, created = _resolve_or_register(conn, directory, collection_override)
-    finally:
-        conn.close()
+    view = Registrations(client.list_registrations().registrations)
+    collection, created = _resolve_or_register(
+        view, client, directory, collection_override
+    )
 
     captures_collection = f"{collection}-captures"
 
@@ -151,108 +177,95 @@ def enable_project(
 
 def disable_project(
     directory: Path,
+    client: RegistryClient,
     *,
     keep_data: bool = False,
 ) -> DisableResult:
-    """Disable quarry knowledge capture for a project directory."""
+    """Disable quarry knowledge capture for a project directory.
+
+    Deregisters the covering collection via the daemon (which drops the registry
+    row and purges the collection's chunks server-side) and, unless ``keep_data``,
+    dispatches a purge of the ``-captures`` sibling.  Both are fire-and-forget; the
+    registry is never mutated through a local ``SyncRegistry``.  The project files
+    are the client's and are removed locally.
+    """
+    from quarry.api import DeleteCollectionRequest, DeregisterRequest  # noqa: PLC0415
+    from quarry.registrations import Registrations  # noqa: PLC0415
+
     directory = directory.resolve()
-    from quarry.config import Settings  # noqa: PLC0415
-    from quarry.hooks import (  # noqa: PLC0415
-        _collection_for_cwd_conn,  # pyright: ignore[reportPrivateUsage]
+    view = Registrations(client.list_registrations().registrations)
+    covering = view.covering(directory)
+    if covering is None:
+        msg = f"no registration covers {directory}"
+        raise ValueError(msg)
+    if covering.directory != str(directory):
+        msg = (
+            f"no registration for {directory}; "
+            f"it is covered by parent registration at {covering.directory}"
+        )
+        raise ValueError(msg)
+
+    collection = covering.collection
+    captures_collection = f"{collection}-captures"
+    accepted = client.deregister(
+        DeregisterRequest(collection=collection, keep_data=keep_data)
     )
-    from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
+    if not keep_data:
+        client.delete_collection(DeleteCollectionRequest(name=captures_collection))
 
-    # Honor the active database (--db / `quarry use`), matching the client target.
-    settings = Settings.load().resolve_db_paths(Settings.active_db() or None)
-    conn = SyncRegistry(settings.registry_path)
-    try:
-        collection = _collection_for_cwd_conn(conn, str(directory))  # pyright: ignore[reportPrivateUsage]
-        if collection is None:
-            msg = f"no registration covers {directory}"
-            raise ValueError(msg)
+    config_path = directory / ".punt-labs" / "quarry" / "config.md"
+    config_removed = False
+    if config_path.exists():
+        config_path.unlink()
+        config_removed = True
 
-        # Guard against walk-up match deleting a parent registration.
-        registrations = conn.list_registrations()
-        match = next((r for r in registrations if r.collection == collection), None)
-        if match is not None and match.directory != str(directory):
-            msg = (
-                f"no registration for {directory}; "
-                f"it is covered by parent registration at {match.directory}"
-            )
-            raise ValueError(msg)
+    quarry_dir = directory / ".punt-labs" / "quarry"
+    if quarry_dir.is_dir() and not any(quarry_dir.iterdir()):
+        quarry_dir.rmdir()
 
-        captures_collection = f"{collection}-captures"
-        conn.deregister_directory(collection)
+    claudemd_removed = _remove_claudemd_block(directory)
+    if claudemd_removed:
+        logger.info("Removed quarry instructions from CLAUDE.md")
 
-        # The LanceDB chunk purge is an engine operation; name the collections to
-        # purge and let the CLI perform it via a daemon call.  keep_data suppresses
-        # the purge, leaving the indexed chunks in place.
-        purge_collections: tuple[str, ...] = (
-            () if keep_data else (collection, captures_collection)
-        )
-
-        config_path = directory / ".punt-labs" / "quarry" / "config.md"
-        config_removed = False
-        if config_path.exists():
-            config_path.unlink()
-            config_removed = True
-
-        quarry_dir = directory / ".punt-labs" / "quarry"
-        if quarry_dir.is_dir() and not any(quarry_dir.iterdir()):
-            quarry_dir.rmdir()
-
-        claudemd_removed = _remove_claudemd_block(directory)
-        if claudemd_removed:
-            logger.info("Removed quarry instructions from CLAUDE.md")
-
-        return DisableResult(
-            directory=str(directory),
-            collection=collection,
-            captures_collection=captures_collection,
-            purge_collections=purge_collections,
-            config_removed=config_removed,
-            claudemd_removed=claudemd_removed,
-        )
-    finally:
-        conn.close()
+    return DisableResult(
+        directory=str(directory),
+        collection=collection,
+        captures_collection=captures_collection,
+        removed=accepted.removed,
+        config_removed=config_removed,
+        claudemd_removed=claudemd_removed,
+    )
 
 
 def _resolve_or_register(
-    conn: SyncRegistry,
+    view: Registrations,
+    client: RegistryClient,
     directory: Path,
     collection_override: str,
 ) -> tuple[str, bool]:
-    """Find existing registration or create one.
+    """Reuse the covering registration, or dispatch a new one to the daemon.
 
-    Returns (collection_name, created_bool).
-    Raises ValueError for parent-covered-child case.
+    Returns (collection_name, created).  Raises ValueError when *directory* is a
+    child of an existing registration (sessions there use the parent's collection
+    automatically).
     """
-    from quarry.hooks import (  # noqa: PLC0415
-        _collection_for_cwd_conn,  # pyright: ignore[reportPrivateUsage]
-        _unique_collection_name,  # pyright: ignore[reportPrivateUsage]
-    )
+    from quarry.api import RegisterRequest  # noqa: PLC0415
 
-    collection = _collection_for_cwd_conn(conn, str(directory))  # pyright: ignore[reportPrivateUsage]
-
-    if collection is not None:
-        # Determine whether this is an exact match or a parent match.
-        registrations = conn.list_registrations()
-        for reg in registrations:
-            if reg.collection == collection and reg.directory == str(directory):
-                # Exact match -- reuse.
-                return collection, False
-        # Parent match -- the directory is a child of an existing registration.
-        parent_reg = next(r for r in registrations if r.collection == collection)
+    covering = view.covering(directory)
+    if covering is not None:
+        if covering.directory == str(directory):
+            return covering.collection, False
         msg = (
             f"This directory is already covered by the registration at "
-            f"{parent_reg.directory} (collection: {parent_reg.collection}). "
+            f"{covering.directory} (collection: {covering.collection}). "
             f"Sessions here use that collection automatically. No action needed."
         )
         raise ValueError(msg)
 
-    # No coverage -- create a new registration.
-    name = collection_override or _unique_collection_name(conn, directory)  # pyright: ignore[reportPrivateUsage]
-    conn.register_directory(directory, name)
+    name = collection_override or view.unique_collection_name(directory)
+    # Fire-and-forget: the daemon re-guards the path on its own filesystem and
+    # writes the registry row as a background task.
+    client.register(RegisterRequest(directory=str(directory), collection=name))
     return name, True
 
 

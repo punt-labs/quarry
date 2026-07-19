@@ -1,9 +1,10 @@
 """The ``quarry enable`` / ``quarry disable`` project-capture commands.
 
-``enable`` and ``disable`` do their own local filesystem and registry work
-(config.md, CLAUDE.md, ethos ext files) — that is client-side.  The one engine
-operation, purging a disabled project's LanceDB chunks, is performed here via a
-daemon ``delete_collection`` call rather than an in-process store.
+The registry is the daemon's (DES-031 I2): ``enable``/``disable`` read coverage
+over the wire and register/deregister via the injected client, never a local
+``SyncRegistry``.  The project files (config.md, CLAUDE.md, ethos ext) are the
+client's and are written/removed locally.  The chunk purge on disable is a
+daemon call dispatched fire-and-forget (DES-001).
 """
 
 from __future__ import annotations
@@ -14,11 +15,8 @@ from typing import TYPE_CHECKING, Annotated, Self, final
 
 import typer
 
-from quarry.api import DeleteCollectionRequest
-
 if TYPE_CHECKING:
     from quarry.cli_captures import CliPlumbing
-    from quarry.enable import DisableResult
 
 
 @final
@@ -51,11 +49,12 @@ class ProjectCli:
         """Enable quarry knowledge capture for a project directory."""
         from quarry.enable import enable_project  # noqa: PLC0415
 
-        # A ValueError (e.g. unregistered/parent-covered dir) propagates to the
-        # shared _cli_errors boundary: stdout stays empty (no spurious JSON error
-        # object under --json), the diagnostic goes to stderr, exit 1 — consistent
-        # with every other command.
-        result = enable_project(directory.resolve(), collection_override=collection)
+        # A ValueError (e.g. parent-covered dir) propagates to the shared
+        # _cli_errors boundary: stdout stays empty (no spurious JSON error object
+        # under --json), the diagnostic goes to stderr, exit 1.
+        result = enable_project(
+            directory.resolve(), self._p.client(), collection_override=collection
+        )
 
         lines = [
             f"Enabled quarry for {result.directory}",
@@ -90,47 +89,20 @@ class ProjectCli:
         """Disable quarry knowledge capture for a project directory."""
         from quarry.enable import disable_project  # noqa: PLC0415
 
-        # A ValueError (e.g. no registration covers the dir) propagates to the
-        # shared _cli_errors boundary: stdout stays empty under --json, the
-        # diagnostic goes to stderr, exit 1 — consistent with every other command.
-        result = disable_project(directory.resolve(), keep_data=keep_data)
+        # A ValueError (no registration covers the dir) propagates to the shared
+        # _cli_errors boundary: stdout stays empty under --json, exit 1.
+        result = disable_project(
+            directory.resolve(), self._p.client(), keep_data=keep_data
+        )
 
-        deleted = self._purge(result)
-        data = {
-            "directory": result.directory,
-            "collection": result.collection,
-            "captures_collection": result.captures_collection,
-            "deleted_chunks": deleted,
-            "config_removed": result.config_removed,
-            "claudemd_removed": result.claudemd_removed,
-        }
         lines = [f"Disabled quarry for {result.directory}"]
-        if deleted > 0:
-            lines.append(f"  Deleted {deleted} chunks")
+        if not keep_data:
+            lines.append(
+                f"  Deregistered {result.collection} "
+                f"({result.removed} files); chunk purge queued"
+            )
         if result.config_removed:
             lines.append("  Config file removed")
         if result.claudemd_removed:
             lines.append("  Removed quarry instructions from CLAUDE.md")
-        self._p.emit(data, "\n".join(lines))
-
-    def _purge(self, result: DisableResult) -> int:
-        """Purge each named collection's chunks via the daemon; return the total.
-
-        A purge that fails, times out, or leaves the daemon unreachable must not
-        report success while the chunks remain in LanceDB — fail loud (exit 1),
-        like the sibling delete/deregister commands, rather than count it as 0.
-        """
-        client = self._p.client()
-        deleted = 0
-        for name in result.purge_collections:
-            accepted = client.delete_collection(DeleteCollectionRequest(name=name))
-            outcome = client.await_task(accepted.task_id)
-            if not outcome.is_completed:
-                self._p.err_console.print(
-                    f"Purge of collection {name!r} did not complete: "
-                    f"{outcome.error or outcome.status}",
-                    style="red",
-                )
-                raise typer.Exit(code=1)
-            deleted += outcome.result_int("deleted")
-        return deleted
+        self._p.emit(dataclasses.asdict(result), "\n".join(lines))

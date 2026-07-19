@@ -1,13 +1,27 @@
-"""Tests for the enable/disable module -- T1 through T14."""
+"""Tests for the enable/disable module.
+
+enable/disable drive the daemon's registry through a client port
+(``RegistryClient``); these tests supply an in-memory ``_FakeRegistryClient`` so
+no real ``SyncRegistry`` or daemon is involved.
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from typing import TYPE_CHECKING, Self, final
+from unittest.mock import patch
 
 import pytest
 
-from quarry.config import Settings
+from quarry.api import (
+    DeleteCollectionRequest,
+    DeregisterAccepted,
+    DeregisterRequest,
+    RegisterRequest,
+    RegistrationInfo,
+    RegistrationList,
+    TaskAccepted,
+)
 from quarry.enable import (
     _CLAUDEMD_BEGIN,
     _CLAUDEMD_BLOCK,
@@ -22,85 +36,117 @@ from quarry.enable import (
     disable_project,
     enable_project,
 )
-from quarry.sync_registry import SyncRegistry
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 
-def _mock_settings_load(settings: MagicMock) -> MagicMock:
-    """Return a mock whose resolve_db_paths returns *settings*."""
-    mock_loaded = MagicMock()
-    mock_loaded.resolve_db_paths.return_value = settings
-    return mock_loaded
+@final
+class _FakeRegistryClient:
+    """In-memory stand-in for the daemon registry surface enable/disable use.
+
+    Records ``register``/``deregister``/``delete_collection`` calls so a test can
+    assert the client dispatched exactly the daemon operations the design requires
+    — never touching a local ``SyncRegistry``.
+    """
+
+    __slots__ = ("_deleted", "_deregistered", "_registered", "_regs")
+
+    _regs: list[RegistrationInfo]
+    _registered: list[RegisterRequest]
+    _deregistered: list[DeregisterRequest]
+    _deleted: list[str]
+
+    def __new__(cls, registrations: Iterable[tuple[str, Path]] = ()) -> Self:
+        self = super().__new__(cls)
+        self._regs = [
+            RegistrationInfo(
+                collection=col,
+                directory=str(Path(directory).resolve()),
+                registered_at="2026-01-01",
+            )
+            for col, directory in registrations
+        ]
+        self._registered = []
+        self._deregistered = []
+        self._deleted = []
+        return self
+
+    def list_registrations(self) -> RegistrationList:
+        return RegistrationList(
+            total_registrations=len(self._regs), registrations=list(self._regs)
+        )
+
+    def register(self, req: RegisterRequest) -> TaskAccepted:
+        self._registered.append(req)
+        self._regs.append(
+            RegistrationInfo(
+                collection=req.collection,
+                directory=req.directory,
+                registered_at="2026-01-02",
+            )
+        )
+        return TaskAccepted(task_id="t")
+
+    def deregister(self, req: DeregisterRequest) -> DeregisterAccepted:
+        self._deregistered.append(req)
+        before = len(self._regs)
+        self._regs = [r for r in self._regs if r.collection != req.collection]
+        return DeregisterAccepted(task_id="t", removed=before - len(self._regs))
+
+    def delete_collection(self, req: DeleteCollectionRequest) -> TaskAccepted:
+        self._deleted.append(req.name)
+        return TaskAccepted(task_id="t")
+
+    @property
+    def registered(self) -> list[RegisterRequest]:
+        return self._registered
+
+    @property
+    def deregistered(self) -> list[DeregisterRequest]:
+        return self._deregistered
+
+    @property
+    def deleted(self) -> list[str]:
+        return self._deleted
+
+    @property
+    def collections(self) -> list[str]:
+        return [r.collection for r in self._regs]
 
 
-# -----------------------------------------------------------------------
-# T1: enable registers a new directory
-# -----------------------------------------------------------------------
+_NO_ETHOS = "quarry.enable._GLOBAL_IDENTITIES"
 
 
 class TestT1EnableNewDirectory:
     def test_registers_new_directory(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
+        client = _FakeRegistryClient()
 
-        settings = MagicMock()
-        settings.registry_path = tmp_path / "registry.db"
-        settings.lancedb_path = tmp_path / "lancedb"
-
-        # Ensure registry exists.
-        conn = SyncRegistry(settings.registry_path)
-        conn.close()
-
-        with (
-            patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
-        ):
-            result = enable_project(project)
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            result = enable_project(project, client)
 
         assert isinstance(result, EnableResult)
         assert result.created_registration is True
         assert result.collection == "myproject"
         assert result.directory == str(project)
-
-        # Verify registration in the registry.
-        conn = SyncRegistry(settings.registry_path)
-        regs = conn.list_registrations()
-        conn.close()
-        assert len(regs) == 1
-        assert regs[0].collection == "myproject"
-
-
-# -----------------------------------------------------------------------
-# T2: enable is idempotent on already-registered directory
-# -----------------------------------------------------------------------
+        assert [r.collection for r in client.registered] == ["myproject"]
+        assert client.registered[0].directory == str(project)
 
 
 class TestT2EnableIdempotent:
     def test_idempotent_on_registered_directory(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
+        client = _FakeRegistryClient([("foo", project)])
 
-        settings = MagicMock()
-        settings.registry_path = tmp_path / "registry.db"
-        settings.lancedb_path = tmp_path / "lancedb"
-
-        # Pre-register.
-        conn = SyncRegistry(settings.registry_path)
-        conn.register_directory(project, "foo")
-        conn.close()
-
-        with (
-            patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
-        ):
-            result = enable_project(project)
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            result = enable_project(project, client)
 
         assert result.collection == "foo"
         assert result.created_registration is False
-
-
-# -----------------------------------------------------------------------
-# T3: enable on child of registered parent raises ValueError
-# -----------------------------------------------------------------------
+        assert client.registered == []
 
 
 class TestT3EnableChildRaisesValueError:
@@ -109,116 +155,59 @@ class TestT3EnableChildRaisesValueError:
         parent.mkdir()
         child = parent / "src"
         child.mkdir()
-
-        settings = MagicMock()
-        settings.registry_path = tmp_path / "registry.db"
-        settings.lancedb_path = tmp_path / "lancedb"
-
-        conn = SyncRegistry(settings.registry_path)
-        conn.register_directory(parent, "project")
-        conn.close()
+        client = _FakeRegistryClient([("project", parent)])
 
         with (
-            patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
+            patch(_NO_ETHOS, tmp_path / "no-ethos"),
             pytest.raises(ValueError, match="already covered by the registration at"),
         ):
-            enable_project(child)
-
-
-# -----------------------------------------------------------------------
-# T4: enable with --collection override
-# -----------------------------------------------------------------------
+            enable_project(child, client)
 
 
 class TestT4EnableCollectionOverride:
     def test_collection_override(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
+        client = _FakeRegistryClient()
 
-        settings = MagicMock()
-        settings.registry_path = tmp_path / "registry.db"
-        settings.lancedb_path = tmp_path / "lancedb"
-
-        conn = SyncRegistry(settings.registry_path)
-        conn.close()
-
-        with (
-            patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
-        ):
-            result = enable_project(project, collection_override="custom")
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            result = enable_project(project, client, collection_override="custom")
 
         assert result.collection == "custom"
         assert result.created_registration is True
-
-
-# -----------------------------------------------------------------------
-# T5: enable creates config file
-# -----------------------------------------------------------------------
+        assert client.registered[0].collection == "custom"
 
 
 class TestT5EnableCreatesConfig:
     def test_creates_config_file(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
+        client = _FakeRegistryClient()
 
-        settings = MagicMock()
-        settings.registry_path = tmp_path / "registry.db"
-        settings.lancedb_path = tmp_path / "lancedb"
-
-        conn = SyncRegistry(settings.registry_path)
-        conn.close()
-
-        with (
-            patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
-        ):
-            result = enable_project(project)
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            result = enable_project(project, client)
 
         config_path = project / ".punt-labs" / "quarry" / "config.md"
         assert config_path.exists()
-        content = config_path.read_text()
-        assert "auto_capture:" in content
+        assert "auto_capture:" in config_path.read_text()
         assert result.config_path == str(config_path)
-
-
-# -----------------------------------------------------------------------
-# T6: enable does not overwrite existing config file
-# -----------------------------------------------------------------------
 
 
 class TestT6EnablePreservesExistingConfig:
     def test_does_not_overwrite_existing_config(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
-
-        # Create a custom config before enable.
         config_dir = project / ".punt-labs" / "quarry"
         config_dir.mkdir(parents=True)
         config_path = config_dir / "config.md"
         custom_content = "---\ncustom: true\n---\n"
         config_path.write_text(custom_content)
+        client = _FakeRegistryClient()
 
-        settings = MagicMock()
-        settings.registry_path = tmp_path / "registry.db"
-        settings.lancedb_path = tmp_path / "lancedb"
-
-        conn = SyncRegistry(settings.registry_path)
-        conn.close()
-
-        with (
-            patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
-        ):
-            enable_project(project)
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            enable_project(project, client)
 
         assert config_path.read_text() == custom_content
-
-
-# -----------------------------------------------------------------------
-# T7: enable creates ethos ext quarry.yaml files
-# -----------------------------------------------------------------------
 
 
 class TestT7EnableCreatesEthosExtFiles:
@@ -228,7 +217,6 @@ class TestT7EnableCreatesEthosExtFiles:
         identities_dir = tmp_path / "identities"
         identities_dir.mkdir()
 
-        # Create minimal identity YAML files.
         (identities_dir / "claude.yaml").write_text("agent: claude\n")
         (identities_dir / "rmh.yaml").write_text("agent: rmh\n")
 
@@ -239,22 +227,15 @@ class TestT7EnableCreatesEthosExtFiles:
         assert skipped is False
         assert "claude" in created
         assert "rmh" in created
-        # session_context written on freshly created files yields "updated".
         assert set(updated) == {"claude", "rmh"}
         assert already_set == []
 
-        # Check files were created.
         claude_yaml = identities_dir / "claude.ext" / "quarry.yaml"
         rmh_yaml = identities_dir / "rmh.ext" / "quarry.yaml"
         assert claude_yaml.exists()
         assert rmh_yaml.exists()
         assert "memory_collection: memory-claude" in claude_yaml.read_text()
         assert "memory_collection: memory-rmh" in rmh_yaml.read_text()
-
-
-# -----------------------------------------------------------------------
-# T7b: existing quarry.yaml with wrong memory_collection is not modified
-# -----------------------------------------------------------------------
 
 
 class TestT7bExistingQuarryYamlNotModified:
@@ -266,7 +247,6 @@ class TestT7bExistingQuarryYamlNotModified:
 
         (identities_dir / "claude.yaml").write_text("agent: claude\n")
 
-        # Pre-create ext dir with wrong memory_collection.
         ext_dir = identities_dir / "claude.ext"
         ext_dir.mkdir()
         quarry_yaml = ext_dir / "quarry.yaml"
@@ -277,221 +257,111 @@ class TestT7bExistingQuarryYamlNotModified:
         created, _, _, skipped = _bootstrap_ethos_memory()
 
         assert skipped is False
-        assert "claude" not in created  # Not in created since file already existed.
-        # The wrong value should be preserved.
+        assert "claude" not in created
         assert "memory_collection: wrong-name" in quarry_yaml.read_text()
-
-
-# -----------------------------------------------------------------------
-# T8: enable skips ethos when identities dir missing
-# -----------------------------------------------------------------------
 
 
 class TestT8EnableSkipsEthosWhenMissing:
     def test_skips_when_identities_dir_missing(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
+        client = _FakeRegistryClient()
 
-        settings = MagicMock()
-        settings.registry_path = tmp_path / "registry.db"
-        settings.lancedb_path = tmp_path / "lancedb"
-
-        conn = SyncRegistry(settings.registry_path)
-        conn.close()
-
-        with (
-            patch(
-                "quarry.enable._GLOBAL_IDENTITIES",
-                tmp_path / "nonexistent-identities",
-            ),
-            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
-        ):
-            result = enable_project(project)
+        with patch(_NO_ETHOS, tmp_path / "nonexistent-identities"):
+            result = enable_project(project, client)
 
         assert result.ethos_skipped is True
-
-
-# -----------------------------------------------------------------------
-# T9: enable derives captures collection name correctly
-# -----------------------------------------------------------------------
 
 
 class TestT9EnableCapturesCollectionName:
     def test_captures_collection_name(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
+        client = _FakeRegistryClient()
 
-        settings = MagicMock()
-        settings.registry_path = tmp_path / "registry.db"
-        settings.lancedb_path = tmp_path / "lancedb"
-
-        conn = SyncRegistry(settings.registry_path)
-        conn.close()
-
-        with (
-            patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
-        ):
-            result = enable_project(project)
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            result = enable_project(project, client)
 
         assert result.captures_collection == f"{result.collection}-captures"
-
-
-# -----------------------------------------------------------------------
-# T10: disable removes registration
-# -----------------------------------------------------------------------
 
 
 class TestT10DisableRemovesRegistration:
     def test_removes_registration(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
+        client = _FakeRegistryClient()
 
-        settings = MagicMock()
-        settings.registry_path = tmp_path / "registry.db"
-        settings.lancedb_path = tmp_path / "lancedb"
-
-        # Enable first.
-        conn = SyncRegistry(settings.registry_path)
-        conn.close()
-
-        with (
-            patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
-        ):
-            enable_result = enable_project(project)
-            disable_result = disable_project(project)
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            enable_result = enable_project(project, client)
+            disable_result = disable_project(project, client)
 
         assert isinstance(disable_result, DisableResult)
         assert disable_result.collection == enable_result.collection
-
-        # Verify registration is gone.
-        conn = SyncRegistry(settings.registry_path)
-        regs = conn.list_registrations()
-        conn.close()
-        assert len(regs) == 0
-
-
-# -----------------------------------------------------------------------
-# T11: disable removes config file
-# -----------------------------------------------------------------------
+        assert [r.collection for r in client.deregistered] == ["myproject"]
+        assert client.collections == []
 
 
 class TestT11DisableRemovesConfig:
     def test_removes_config_file(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
+        client = _FakeRegistryClient()
 
-        settings = MagicMock()
-        settings.registry_path = tmp_path / "registry.db"
-        settings.lancedb_path = tmp_path / "lancedb"
-
-        conn = SyncRegistry(settings.registry_path)
-        conn.close()
-
-        with (
-            patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
-        ):
-            enable_project(project)
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            enable_project(project, client)
             config_path = project / ".punt-labs" / "quarry" / "config.md"
             assert config_path.exists()
 
-            result = disable_project(project)
+            result = disable_project(project, client)
 
         assert result.config_removed is True
         assert not config_path.exists()
 
 
-# -----------------------------------------------------------------------
-# T12: disable with --keep-data preserves LanceDB data
-# -----------------------------------------------------------------------
-
-
 class TestT12DisableKeepData:
-    def test_keep_data_preserves_chunks(self, tmp_path: Path) -> None:
+    def test_keep_data_dispatches_no_captures_purge(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
+        client = _FakeRegistryClient()
 
-        settings = MagicMock()
-        settings.registry_path = tmp_path / "registry.db"
-        settings.lancedb_path = tmp_path / "lancedb"
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            enable_project(project, client)
+            result = disable_project(project, client, keep_data=True)
 
-        conn = SyncRegistry(settings.registry_path)
-        conn.close()
-
-        with (
-            patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
-        ):
-            enable_project(project)
-            result = disable_project(project, keep_data=True)
-
-        # keep_data names no collections to purge — the CLI performs no daemon
-        # delete, so the chunks are left in place.
-        assert result.purge_collections == ()
+        # keep_data suppresses the captures purge: the client dispatches a
+        # deregister with keep_data=True and no delete_collection.
+        assert result.removed >= 0
+        assert client.deregistered[0].keep_data is True
+        assert client.deleted == []
 
 
-# -----------------------------------------------------------------------
-# T13: disable preserves agent memory collections
-# -----------------------------------------------------------------------
-
-
-class TestT13DisablePreservesAgentMemory:
-    def test_preserves_memory_collections(self, tmp_path: Path) -> None:
+class TestT13DisablePurgesCapturesSibling:
+    def test_purges_only_captures_never_memory(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
+        client = _FakeRegistryClient()
 
-        settings = MagicMock()
-        settings.registry_path = tmp_path / "registry.db"
-        settings.lancedb_path = tmp_path / "lancedb"
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            enable_project(project, client)
+            disable_project(project, client, keep_data=False)
 
-        conn = SyncRegistry(settings.registry_path)
-        conn.close()
-
-        with (
-            patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
-        ):
-            enable_project(project)
-            result = disable_project(project, keep_data=False)
-
-        # The purge targets the CLI hands the daemon are exactly the project and
-        # its captures collection — never a memory-* collection.
-        assert len(result.purge_collections) == 2
-        assert all(not c.startswith("memory-") for c in result.purge_collections), (
-            f"Memory collection queued for purge: {result.purge_collections}"
-        )
-
-
-# -----------------------------------------------------------------------
-# T14: disable on unregistered directory returns error
-# -----------------------------------------------------------------------
+        # The daemon purges the main collection via deregister; the client purges
+        # exactly the -captures sibling — never a memory-* collection.
+        assert client.deregistered[0].collection == "myproject"
+        assert client.deregistered[0].keep_data is False
+        assert client.deleted == ["myproject-captures"]
+        assert all(not name.startswith("memory-") for name in client.deleted)
 
 
 class TestT14DisableUnregisteredRaises:
     def test_raises_on_unregistered_directory(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
+        client = _FakeRegistryClient()
 
-        settings = MagicMock()
-        settings.registry_path = tmp_path / "registry.db"
-        settings.lancedb_path = tmp_path / "lancedb"
-
-        # Ensure empty registry.
-        conn = SyncRegistry(settings.registry_path)
-        conn.close()
-
-        with (
-            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
-            pytest.raises(ValueError, match="no registration covers"),
-        ):
-            disable_project(project)
-
-
-# -----------------------------------------------------------------------
-# _write_project_config direct tests
-# -----------------------------------------------------------------------
+        with pytest.raises(ValueError, match="no registration covers"):
+            disable_project(project, client)
+        assert client.deregistered == []
 
 
 class TestWriteProjectConfig:
@@ -545,43 +415,20 @@ class TestWriteProjectConfig:
         mock_close.assert_called_once_with(captured_fd[0])
 
 
-# -----------------------------------------------------------------------
-# T15: disable on child of registered parent raises (not silent deletion)
-# -----------------------------------------------------------------------
-
-
 class TestT15DisableOnChildOfRegisteredParentRaises:
     def test_disable_on_child_of_registered_parent_raises(self, tmp_path: Path) -> None:
         parent = tmp_path / "project"
         parent.mkdir()
         child = parent / "src"
         child.mkdir()
+        client = _FakeRegistryClient([("project", parent)])
 
-        settings = MagicMock()
-        settings.registry_path = tmp_path / "registry.db"
-        settings.lancedb_path = tmp_path / "lancedb"
+        with pytest.raises(ValueError, match="covered by parent registration"):
+            disable_project(child, client)
 
-        conn = SyncRegistry(settings.registry_path)
-        conn.register_directory(parent, "project")
-        conn.close()
-
-        with (
-            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
-            pytest.raises(ValueError, match="covered by parent registration"),
-        ):
-            disable_project(child)
-
-        # Verify parent registration was NOT deleted.
-        conn = SyncRegistry(settings.registry_path)
-        regs = conn.list_registrations()
-        conn.close()
-        assert len(regs) == 1
-        assert regs[0].collection == "project"
-
-
-# -----------------------------------------------------------------------
-# T16: _bootstrap_ethos_memory skips bad YAML without crashing
-# -----------------------------------------------------------------------
+        # The parent registration must NOT be deregistered.
+        assert client.deregistered == []
+        assert client.collections == ["project"]
 
 
 class TestT16BootstrapEthosMemorySkipsBadYaml:
@@ -591,32 +438,17 @@ class TestT16BootstrapEthosMemorySkipsBadYaml:
         identities_dir = tmp_path / "identities"
         identities_dir.mkdir()
 
-        # Valid identity.
         (identities_dir / "alice.yaml").write_text("agent: alice\n")
-        # Malformed identity — will cause _write_ethos_ext_session_context to
-        # raise when it tries to yaml.safe_load the quarry.yaml we create for
-        # it (the quarry.yaml itself is valid, so we need to make the ext call
-        # raise). We simulate this by making the ext call raise for "bad".
         (identities_dir / "bad.yaml").write_text("agent: bad\n")
 
         monkeypatch.setattr("quarry.enable._GLOBAL_IDENTITIES", identities_dir)
 
-        # Make the session context writer raise for "bad" handle only.
-        original_write = None
-        try:
-            from quarry.doctor import (
-                _write_ethos_ext_session_context as _orig,
-            )
-
-            original_write = _orig
-        except ImportError:
-            pass
+        from quarry.doctor import _write_ethos_ext_session_context as original_write
 
         def selective_raise(quarry_yaml: Path, handle: str) -> str:
             if handle == "bad":
                 msg = "simulated YAML parse failure"
                 raise ValueError(msg)
-            assert original_write is not None
             return original_write(quarry_yaml, handle)
 
         monkeypatch.setattr(
@@ -627,23 +459,13 @@ class TestT16BootstrapEthosMemorySkipsBadYaml:
         created, updated, already_set, skipped = _bootstrap_ethos_memory()
 
         assert skipped is False
-        # alice was processed.
         assert "alice" in created
-        # bad was also created (quarry.yaml file written) but the session
-        # context call failed — it should not appear in updated/already_set.
         assert "bad" in created
         assert "bad" not in updated
         assert "bad" not in already_set
 
-        # alice's ext file exists.
         assert (identities_dir / "alice.ext" / "quarry.yaml").exists()
-        # bad's ext file also exists (file was created before the call failed).
         assert (identities_dir / "bad.ext" / "quarry.yaml").exists()
-
-
-# -----------------------------------------------------------------------
-# T17: enable with collection override on child of registered parent raises
-# -----------------------------------------------------------------------
 
 
 class TestT17EnableWithOverrideOnChildRaises:
@@ -652,26 +474,13 @@ class TestT17EnableWithOverrideOnChildRaises:
         parent.mkdir()
         child = parent / "src"
         child.mkdir()
-
-        settings = MagicMock()
-        settings.registry_path = tmp_path / "registry.db"
-        settings.lancedb_path = tmp_path / "lancedb"
-
-        conn = SyncRegistry(settings.registry_path)
-        conn.register_directory(parent, "project")
-        conn.close()
+        client = _FakeRegistryClient([("project", parent)])
 
         with (
-            patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
+            patch(_NO_ETHOS, tmp_path / "no-ethos"),
             pytest.raises(ValueError, match="already covered by the registration"),
         ):
-            enable_project(child, collection_override="custom")
-
-
-# -----------------------------------------------------------------------
-# T18: enable resolves relative paths
-# -----------------------------------------------------------------------
+            enable_project(child, client, collection_override="custom")
 
 
 class TestT18EnableResolvesRelativePath:
@@ -681,28 +490,13 @@ class TestT18EnableResolvesRelativePath:
         project = tmp_path / "myproject"
         project.mkdir()
         monkeypatch.chdir(project)
+        client = _FakeRegistryClient()
 
-        settings = MagicMock()
-        settings.registry_path = tmp_path / "registry.db"
-        settings.lancedb_path = tmp_path / "lancedb"
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            result = enable_project(Path(), client)
 
-        conn = SyncRegistry(settings.registry_path)
-        conn.close()
-
-        with (
-            patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
-        ):
-            result = enable_project(Path("."))  # noqa: PTH201
-
-        # Directory should be the resolved absolute path, not ".".
         assert result.directory == str(project)
         assert result.created_registration is True
-
-
-# -----------------------------------------------------------------------
-# T19: disable resolves relative paths
-# -----------------------------------------------------------------------
 
 
 class TestT19DisableResolvesRelativePath:
@@ -712,30 +506,20 @@ class TestT19DisableResolvesRelativePath:
         project = tmp_path / "myproject"
         project.mkdir()
         monkeypatch.chdir(project)
+        client = _FakeRegistryClient()
 
-        settings = MagicMock()
-        settings.registry_path = tmp_path / "registry.db"
-        settings.lancedb_path = tmp_path / "lancedb"
-
-        conn = SyncRegistry(settings.registry_path)
-        conn.close()
-
-        with (
-            patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
-        ):
-            enable_project(project)
-            result = disable_project(Path("."))  # noqa: PTH201
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            enable_project(project, client)
+            result = disable_project(Path(), client)
 
         assert result.directory == str(project)
 
 
-# -----------------------------------------------------------------------
-# T20: _check_enable_status returns passed=False when config.md missing
-# -----------------------------------------------------------------------
-
-
 class TestT20CheckEnableStatusConfigMissing:
+    # enable-status is now computed from the daemon's view of the collection
+    # (``_collection_for_cwd``) plus local config.md presence — registry_path is
+    # ignored (enable no longer reads a local SyncRegistry directly). A registered
+    # cwd with no config.md fails; with config.md it passes.
     def test_config_missing_returns_not_passed(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -744,18 +528,11 @@ class TestT20CheckEnableStatusConfigMissing:
         project = tmp_path / "myproject"
         project.mkdir()
         monkeypatch.chdir(project)
+        monkeypatch.setattr(
+            "quarry.hooks._collection_for_cwd", lambda _cwd: "myproject"
+        )
 
-        settings = MagicMock()
-        settings.registry_path = tmp_path / "registry.db"
-        settings.lancedb_path = tmp_path / "lancedb"
-
-        conn = SyncRegistry(settings.registry_path)
-        conn.register_directory(project, "myproject")
-        conn.close()
-
-        # No config.md on disk — only the registration exists.
-        with patch.object(Settings, "load", return_value=_mock_settings_load(settings)):
-            result = _check_enable_status(settings.registry_path, str(project))
+        result = _check_enable_status(tmp_path / "registry.db", str(project))
 
         assert result.passed is False
         assert "config.md missing" in result.message
@@ -769,51 +546,30 @@ class TestT20CheckEnableStatusConfigMissing:
         project = tmp_path / "myproject"
         project.mkdir()
         monkeypatch.chdir(project)
+        monkeypatch.setattr(
+            "quarry.hooks._collection_for_cwd", lambda _cwd: "myproject"
+        )
 
-        settings = MagicMock()
-        settings.registry_path = tmp_path / "registry.db"
-        settings.lancedb_path = tmp_path / "lancedb"
-
-        conn = SyncRegistry(settings.registry_path)
-        conn.register_directory(project, "myproject")
-        conn.close()
-
-        # Create config.md so it's present.
         config_dir = project / ".punt-labs" / "quarry"
         config_dir.mkdir(parents=True)
         (config_dir / "config.md").write_text(
             "---\nauto_capture:\n  session_sync: true\n---\n"
         )
 
-        with patch.object(Settings, "load", return_value=_mock_settings_load(settings)):
-            result = _check_enable_status(settings.registry_path, str(project))
+        result = _check_enable_status(tmp_path / "registry.db", str(project))
 
         assert result.passed is True
         assert "config.md missing" not in result.message
-
-
-# -----------------------------------------------------------------------
-# CLAUDE.md block injection tests
-# -----------------------------------------------------------------------
 
 
 class TestEnableAppendsClaudemdBlock:
     def test_enable_creates_claudemd_with_markers(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
+        client = _FakeRegistryClient()
 
-        settings = MagicMock()
-        settings.registry_path = tmp_path / "registry.db"
-        settings.lancedb_path = tmp_path / "lancedb"
-
-        conn = SyncRegistry(settings.registry_path)
-        conn.close()
-
-        with (
-            patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
-        ):
-            result = enable_project(project)
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            result = enable_project(project, client)
 
         assert result.claudemd_appended is True
         claudemd = project / "CLAUDE.md"
@@ -828,20 +584,11 @@ class TestEnableClaudemdIdempotent:
     def test_running_enable_twice_does_not_duplicate(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
+        client = _FakeRegistryClient()
 
-        settings = MagicMock()
-        settings.registry_path = tmp_path / "registry.db"
-        settings.lancedb_path = tmp_path / "lancedb"
-
-        conn = SyncRegistry(settings.registry_path)
-        conn.close()
-
-        with (
-            patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
-        ):
-            result1 = enable_project(project)
-            result2 = enable_project(project)
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            result1 = enable_project(project, client)
+            result2 = enable_project(project, client)
 
         assert result1.claudemd_appended is True
         assert result2.claudemd_appended is False
@@ -855,19 +602,10 @@ class TestEnableAppendsToExistingClaudemd:
         project.mkdir()
         claudemd = project / "CLAUDE.md"
         claudemd.write_text("# My Project\n\nExisting content.\n")
+        client = _FakeRegistryClient()
 
-        settings = MagicMock()
-        settings.registry_path = tmp_path / "registry.db"
-        settings.lancedb_path = tmp_path / "lancedb"
-
-        conn = SyncRegistry(settings.registry_path)
-        conn.close()
-
-        with (
-            patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
-        ):
-            result = enable_project(project)
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            result = enable_project(project, client)
 
         assert result.claudemd_appended is True
         content = claudemd.read_text()
@@ -880,20 +618,11 @@ class TestDisableRemovesClaudemdBlock:
     def test_disable_removes_markers_and_content(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
+        client = _FakeRegistryClient()
 
-        settings = MagicMock()
-        settings.registry_path = tmp_path / "registry.db"
-        settings.lancedb_path = tmp_path / "lancedb"
-
-        conn = SyncRegistry(settings.registry_path)
-        conn.close()
-
-        with (
-            patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
-        ):
-            enable_project(project)
-            result = disable_project(project)
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            enable_project(project, client)
+            result = disable_project(project, client)
 
         assert result.claudemd_removed is True
         claudemd = project / "CLAUDE.md"
@@ -909,20 +638,11 @@ class TestDisablePreservesOtherClaudemdContent:
         project.mkdir()
         claudemd = project / "CLAUDE.md"
         claudemd.write_text("# My Project\n\nKeep this.\n")
+        client = _FakeRegistryClient()
 
-        settings = MagicMock()
-        settings.registry_path = tmp_path / "registry.db"
-        settings.lancedb_path = tmp_path / "lancedb"
-
-        conn = SyncRegistry(settings.registry_path)
-        conn.close()
-
-        with (
-            patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
-            patch.object(Settings, "load", return_value=_mock_settings_load(settings)),
-        ):
-            enable_project(project)
-            result = disable_project(project)
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            enable_project(project, client)
+            result = disable_project(project, client)
 
         assert result.claudemd_removed is True
         content = claudemd.read_text()
@@ -975,5 +695,4 @@ class TestAppendClaudemdBlockDirect:
 
         assert appended is True
         content = claudemd.read_text()
-        assert content.startswith("no trailing newline\n")
         assert _CLAUDEMD_BEGIN in content

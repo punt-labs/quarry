@@ -13,38 +13,20 @@ import json
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Self, final
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from typer.testing import CliRunner
 
 from quarry.__main__ import app
-from quarry.api import TaskAccepted
 from quarry.client import (
     QuarryClient,
     QuarryConnectionError,
     TargetResolver,
-    TaskOutcome,
 )
 from quarry.client.transport import Response
 
 runner = CliRunner()
-
-# A completed task body the poll loop terminates on; ``results`` carries the
-# per-operation keys each awaiting command reads.
-_TASK_RESULTS = {
-    "deleted": 3,
-    "deleted_chunks": 5,
-    "removed": 2,
-    "optimized": True,
-    "fragments_before": 9,
-    "ingested": 1,
-    "skipped_existing": 0,
-    "skipped_unregistered": 0,
-    "skipped_empty": 0,
-    "errors": [],
-    "dry_run": False,
-}
 
 # Canned 2xx bodies keyed by (method, path-without-query). Each satisfies the
 # quarry.api response model the client parses for that route.
@@ -94,10 +76,6 @@ class RecordingTransport:
     ) -> Response:
         base = path.split("?")[0]
         self.requests.append((method, base, dict(params or {}), dict(json_body or {})))
-        if base.startswith("/v1/tasks/"):
-            return Response(
-                200, {"task_id": "t", "status": "completed", "results": _TASK_RESULTS}
-            )
         if base == "/v1/show":
             return Response(200, self._show_body(params))
         return Response(200, _BODIES.get((method, base), {}))
@@ -229,15 +207,16 @@ class TestListFieldParity:
 
 
 class TestDelete:
-    def test_document_params_and_awaited_count(
-        self, transport: RecordingTransport
-    ) -> None:
+    def test_document_params_and_task_id(self, transport: RecordingTransport) -> None:
+        # Delete is fire-and-forget (DES-001): the filters reach the daemon and
+        # the emitted body is the 202 acceptance — task_id, no awaited count.
         data = _run(["delete", "mydoc", "--collection", "c"])
         params = transport.params_for("DELETE", "/v1/documents")
         assert params["name"] == "mydoc"
         assert params["collection"] == "c"
         assert isinstance(data, dict)
-        assert data["deleted"] == 3
+        assert data["task_id"] == "t"
+        assert data["status"] == "accepted"
 
     def test_collection_route(self, transport: RecordingTransport) -> None:
         _run(["delete", "mycol", "--type", "collection"])
@@ -253,15 +232,20 @@ class TestSyncRegisterDeregister:
         assert body["collection"] == "c"
         assert body["directory"]  # an absolute resolved path
 
-    def test_deregister_encodes_params_and_awaits(
+    def test_deregister_encodes_params_and_dispatches(
         self, transport: RecordingTransport
     ) -> None:
+        # Deregister is fire-and-forget: the daemon reports ``removed``
+        # synchronously and queues the chunk purge as a task. The emitted body is
+        # the 202 acceptance (task_id + removed) — no awaited deleted-chunk count.
         data = _run(["deregister", "mycol", "--keep-data"])
         params = transport.params_for("DELETE", "/v1/registrations")
         assert params["collection"] == "mycol"
         assert params["keep_data"] == "true"
         assert isinstance(data, dict)
-        assert set(data) == {"collection", "removed", "deleted_chunks"}
+        assert data["task_id"] == "t"
+        assert data["removed"] == 2
+        assert data["status"] == "accepted"
 
     def test_sync_posts(self, transport: RecordingTransport) -> None:
         _run(["sync"])
@@ -321,96 +305,33 @@ class TestAutostartHintGating:
         assert "If quarryd is not running" not in result.output
 
 
-class TestSyncAwaitsTask:
-    @staticmethod
-    def _client(outcome: TaskOutcome) -> MagicMock:
-        client = MagicMock()
-        client.sync.return_value = TaskAccepted(task_id="t", status="accepted")
-        client.await_task.return_value = outcome
-        return client
+class TestTaskCommandsAreFireAndForget:
+    """Every task-dispatching command exits 0 on the 202 with the task id.
 
-    @pytest.mark.parametrize(
-        "outcome",
-        [
-            TaskOutcome.failed("t", "sync blew up on the daemon"),
-            TaskOutcome.timed_out("t"),
-            TaskOutcome.unreachable("t", "server gone"),
-        ],
-    )
-    def test_incomplete_sync_exits_1_not_0(self, outcome: TaskOutcome) -> None:
-        # No data command may exit 0 while its daemon task is unfinished or failed.
-        with patch.object(
-            TargetResolver, "connect", return_value=self._client(outcome)
-        ):
-            result = runner.invoke(app, ["sync"])
-        assert result.exit_code == 1, result.output
+    DES-001: side-effect commands return the optimistic acceptance immediately;
+    a 4xx rejection still raises (→ exit 1) because the daemon validates before
+    the 202.  Awaiting completion is the opt-in ``--wait`` path, not the default.
+    """
 
-    def test_completed_sync_exits_0_with_real_counts(self) -> None:
-        completed = TaskOutcome.completed(
-            "t",
-            {
-                "default": {
-                    "ingested": 3,
-                    "refreshed": 1,
-                    "deleted": 0,
-                    "skipped": 2,
-                    "failed": 0,
-                    "errors": [],
-                }
-            },
-        )
-        with patch.object(
-            TargetResolver, "connect", return_value=self._client(completed)
-        ):
-            result = runner.invoke(app, ["--json", "sync"])
-        assert result.exit_code == 0, result.output
-        data = json.loads(result.output)
-        assert data["default"]["ingested"] == 3
+    def test_sync_emits_accepted_task_id(self, transport: RecordingTransport) -> None:
+        data = _run(["sync"])
+        transport.body_for("POST", "/v1/sync")
+        assert isinstance(data, dict)
+        assert data == {"task_id": "t", "status": "accepted"}
 
-
-class TestRegisterAwaitsTask:
-    @staticmethod
-    def _client(outcome: TaskOutcome) -> MagicMock:
-        client = MagicMock()
-        client.register.return_value = TaskAccepted(task_id="t", status="accepted")
-        client.await_task.return_value = outcome
-        return client
-
-    @pytest.mark.parametrize(
-        "outcome",
-        [
-            TaskOutcome.failed("t", "register blew up on the daemon"),
-            TaskOutcome.timed_out("t"),
-            TaskOutcome.unreachable("t", "server gone"),
-        ],
-    )
-    def test_incomplete_register_exits_1_not_0(
-        self, outcome: TaskOutcome, tmp_path: Path
+    def test_optimize_emits_accepted_task_id(
+        self, transport: RecordingTransport
     ) -> None:
-        with patch.object(
-            TargetResolver, "connect", return_value=self._client(outcome)
-        ):
-            result = runner.invoke(app, ["register", str(tmp_path)])
-        assert result.exit_code == 1, result.output
+        data = _run(["optimize"])
+        assert isinstance(data, dict)
+        assert data["task_id"] == "t"
 
-    def test_completed_register_exits_0_with_result(self, tmp_path: Path) -> None:
-        completed = TaskOutcome.completed(
-            "t",
-            {
-                "directory": str(tmp_path),
-                "collection": "mycol",
-                "registered_at": "2026-01-01",
-            },
-        )
-        with patch.object(
-            TargetResolver, "connect", return_value=self._client(completed)
-        ):
-            result = runner.invoke(
-                app, ["--json", "register", str(tmp_path), "--collection", "mycol"]
-            )
-        assert result.exit_code == 0, result.output
-        data = json.loads(result.output)
-        assert data["collection"] == "mycol"
+    def test_backfill_emits_accepted_task_id(
+        self, transport: RecordingTransport
+    ) -> None:
+        data = _run(["backfill-sessions"])
+        assert isinstance(data, dict)
+        assert data["task_id"] == "t"
 
 
 def _status_request(

@@ -1,9 +1,9 @@
 """The ``quarry optimize`` and ``quarry backfill-sessions`` maintenance commands.
 
-Both fire a singleton 202 task on the daemon and wait for its terminal result, so
-the emitted fields match what the local path produced (bug-class-3 parity).  A
-concurrent run is rejected by the daemon with 409, which the shared error
-decorator maps to exit 0 ("already in progress").
+Both dispatch a singleton 202 task on the daemon and return immediately with the
+task id (fire-and-forget, DES-001): the daemon validates synchronously before the
+202, so a rejection (e.g. a 409 concurrent run) still raises and exits non-zero
+via the shared error decorator; only the processing is not awaited.
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ from quarry.api import BackfillRequest, OptimizeRequest
 
 if TYPE_CHECKING:
     from quarry.cli_captures import CliPlumbing
-    from quarry.client import TaskOutcome
 
 
 @final
@@ -43,28 +42,15 @@ class MaintenanceCli:
             bool, typer.Option("--force", help="Bypass the fragment-count guard")
         ] = False,
     ) -> None:
-        """Compact the LanceDB table and rebuild indexes.
+        """Compact the LanceDB table and rebuild indexes (dispatch only).
 
         The daemon owns the fragment-count safety guard; ``--force`` bypasses it
-        for manual recovery.  A skip (guard tripped) exits non-zero with the
-        reason, never a false success.
+        for manual recovery.  Returns the task id; poll it with ``quarry status``.
         """
-        client = self._p.client()
-        accepted = client.optimize(OptimizeRequest(force=force))
-        outcome = client.await_task(accepted.task_id)
-        self._require_completed(outcome, "Optimize")
-        results = outcome.results
-        if not results.get("optimized"):
-            reason = results.get("reason") or "fragment-count guard"
-            self._p.err_console.print(f"Skipping: {reason}.", style="yellow")
-            raise typer.Exit(code=1)
+        accepted = self._p.client().optimize(OptimizeRequest(force=force))
         self._p.emit(
-            {
-                "optimized": True,
-                "fragments_before": outcome.result_int("fragments_before"),
-                "force": force,
-            },
-            "Optimization complete.",
+            accepted.model_dump(),
+            f"Optimize {accepted.status}: task_id={accepted.task_id}",
         )
 
     def _backfill(
@@ -82,47 +68,16 @@ class MaintenanceCli:
             int, typer.Option("--limit", "-n", help="Max transcripts to process")
         ] = 0,
     ) -> None:
-        """Backfill historical Claude Code session transcripts.
+        """Backfill historical Claude Code session transcripts (dispatch only).
 
         Scans ``~/.claude/projects/`` for JSONL transcripts and ingests them into
         per-project capture collections based on quarry registrations.
         """
-        client = self._p.client()
         req = BackfillRequest(
             dry_run=dry_run, collection=collection, project=project, limit=limit
         )
-        outcome = client.await_task(client.backfill_sessions(req).task_id)
-        self._require_completed(outcome, "Backfill")
-        self._p.emit(dict(outcome.results), self._render(outcome, dry_run=dry_run))
-
-    def _require_completed(self, outcome: TaskOutcome, label: str) -> None:
-        """Fail 1 when the task did not reach a completed terminal state."""
-        if not outcome.is_completed:
-            self._p.err_console.print(
-                f"{label} did not complete: {outcome.error or outcome.status}",
-                style="red",
-            )
-            raise typer.Exit(code=1)
-
-    @staticmethod
-    def _render(outcome: TaskOutcome, *, dry_run: bool) -> str:
-        """Render the backfill summary line from the completed task result."""
-        ingested = outcome.result_int("ingested")
-        present = outcome.result_int("skipped_existing")
-        unregistered = outcome.result_int("skipped_unregistered")
-        if dry_run:
-            return (
-                f"[DRY RUN] Would ingest {ingested} transcripts "
-                f"({present} already present, {unregistered} unregistered)"
-            )
-        text = (
-            f"Backfill complete: {ingested} ingested, {present} skipped "
-            f"(already present), {unregistered} skipped (unregistered)"
+        accepted = self._p.client().backfill_sessions(req)
+        self._p.emit(
+            accepted.model_dump(),
+            f"Backfill {accepted.status}: task_id={accepted.task_id}",
         )
-        empty = outcome.result_int("skipped_empty")
-        if empty:
-            text += f", {empty} skipped (empty)"
-        errors = outcome.results.get("errors")
-        if isinstance(errors, list) and errors:
-            text += f", {len(errors)} errors"
-        return text

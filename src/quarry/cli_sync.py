@@ -1,26 +1,25 @@
 """The directory-sync commands: ``sync``, ``register``, ``deregister``, ``status``.
 
-All pure client calls.  ``deregister`` fires the daemon's purge task and waits
-for the deleted-chunk count so its ``{collection, removed, deleted_chunks}`` shape
-is identical to what the local path emitted (bug-class-3 parity); a 409 "already
-in progress" on ``sync`` is mapped to exit 0 by the shared error decorator.
+All pure client calls against the daemon that owns the registry (DES-031 I2): the
+CLI never touches a local ``SyncRegistry``.  The task-dispatching commands are
+fire-and-forget (DES-001) — the daemon validates synchronously before the 202
+(malformed body / 409-concurrent for sync; path guard for register; existence +
+404 for deregister), so a rejection still exits non-zero via the shared decorator,
+and only the index/purge processing is deferred.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Self, final
 
 import typer
 
 from quarry.api import DeregisterRequest, RegisterRequest
-from quarry.deregister_result import DeregisterResult
 from quarry.formatting import format_status
 
 if TYPE_CHECKING:
     from quarry.cli_captures import CliPlumbing
-    from quarry.client import TaskOutcome
 
 
 @final
@@ -50,56 +49,20 @@ class SyncCli:
             typer.Option("--workers", "-w", help="Ignored — the daemon sizes workers"),
         ] = None,
     ) -> None:
-        """Sync all registered directories: ingest new/changed, remove deleted."""
+        """Sync all registered directories (dispatch only).
+
+        Returns the task id; poll it with ``quarry status``.  A 409 "already in
+        progress" raised by the daemon is mapped to exit 0 by the decorator.
+        """
         if workers is not None and not self._p.is_quiet():
             self._p.err_console.print(
                 "Warning: --workers is ignored; the daemon sizes its own workers.",
                 style="yellow",
             )
-        client = self._p.client()
-        accepted = client.sync()
-        # Await the terminal state: exiting 0 on the bare 202 would report success
-        # while the sync is still running or after it FAILED on the daemon.  A 409
-        # "already in progress" raised by sync() is mapped to exit 0 by the decorator.
-        outcome = client.await_task(accepted.task_id)
-        if not outcome.is_completed:
-            self._p.err_console.print(self._incomplete(outcome), style="red")
-            raise typer.Exit(code=1)
-        self._p.emit(dict(outcome.results), self._render(outcome.results))
-
-    @staticmethod
-    def _incomplete(outcome: TaskOutcome) -> str:
-        """The stderr message for a sync that did not reach ``completed``.
-
-        A poll timeout is surfaced as "still running", never as success — the
-        sync keeps going on the daemon and the caller polls it via status.
-        """
-        if outcome.status == "timed_out":
-            return (
-                f"Sync is still running (task_id={outcome.task_id}); it will "
-                "finish in the background — run 'quarry status' to check."
-            )
-        return f"Sync did not complete: {outcome.error or outcome.status}"
-
-    @staticmethod
-    def _render(results: Mapping[str, object]) -> str:
-        """Render the completed sync's ``{collection: counts}`` as a summary."""
-        if not results:
-            return "Nothing to sync (no registered directories)."
-        lines: list[str] = []
-        for col, raw in results.items():
-            res = raw if isinstance(raw, Mapping) else {}
-            line = (
-                f"{col}: {res.get('ingested', 0)} ingested, "
-                f"{res.get('refreshed', 0)} refreshed, "
-                f"{res.get('deleted', 0)} deleted, "
-                f"{res.get('skipped', 0)} unchanged, {res.get('failed', 0)} failed"
-            )
-            errors = res.get("errors")
-            if isinstance(errors, list) and errors:
-                line += "\n" + "\n".join(f"  error: {e}" for e in errors)
-            lines.append(line)
-        return "\n".join(lines)
+        accepted = self._p.client().sync()
+        self._p.emit(
+            accepted.model_dump(), f"Sync {accepted.status}: task_id={accepted.task_id}"
+        )
 
     def _register(
         self,
@@ -109,27 +72,19 @@ class SyncCli:
             typer.Option("--collection", "-c", help="Collection name (default: dir)"),
         ] = "",
     ) -> None:
-        """Register a directory for incremental sync."""
-        # The daemon enforces an absolute path inside its $HOME, so send the
-        # resolved path the server will allowlist against.
+        """Register a directory for incremental sync (dispatch only).
+
+        The path is resolved against $HOME and re-guarded by the daemon on its own
+        filesystem (traversal + $HOME allowlist); the registry write is deferred.
+        """
         resolved = str(directory.expanduser().resolve())
         col = collection or directory.name or Path(resolved).name
-        client = self._p.client()
-        accepted = client.register(RegisterRequest(directory=resolved, collection=col))
-        # Await the terminal state: a bare 202 would report success while the
-        # registration was still pending or after it FAILED on the daemon.
-        outcome = client.await_task(accepted.task_id)
-        if not outcome.is_completed:
-            self._p.err_console.print(
-                f"Register did not complete: {outcome.error or outcome.status}",
-                style="red",
-            )
-            raise typer.Exit(code=1)
-        results = outcome.results
+        accepted = self._p.client().register(
+            RegisterRequest(directory=resolved, collection=col)
+        )
         self._p.emit(
-            dict(results),
-            f"Registered {results.get('directory', resolved)} as collection "
-            f"{results.get('collection', col)!r}",
+            accepted.model_dump(),
+            f"Register {accepted.status}: task_id={accepted.task_id}",
         )
 
     def _deregister(
@@ -139,26 +94,19 @@ class SyncCli:
             bool, typer.Option("--keep-data", help="Keep indexed data in LanceDB")
         ] = False,
     ) -> None:
-        """Remove a directory registration. Optionally keep indexed data."""
-        client = self._p.client()
-        accepted = client.deregister(
+        """Remove a directory registration (dispatch only).
+
+        The daemon drops the registry row and reports ``removed`` synchronously
+        (a 404 if the collection is unknown); the chunk purge runs as a background
+        task, so ``deleted_chunks`` is not awaited here.
+        """
+        accepted = self._p.client().deregister(
             DeregisterRequest(collection=collection, keep_data=keep_data)
         )
-        outcome = client.await_task(accepted.task_id)
-        if not outcome.is_completed:
-            self._p.err_console.print(
-                f"Deregister purge did not complete: {outcome.error or outcome.status}"
-                f" (the registration was removed; run 'quarry status' to verify).",
-                style="red",
-            )
-            raise typer.Exit(code=1)
-        result = DeregisterResult(
-            collection, accepted.removed, outcome.result_int("deleted_chunks")
-        )
         self._p.emit(
-            result.as_dict(),
-            f"Deregistered collection {collection!r} "
-            f"({result.removed} files, {result.deleted_chunks} chunks deleted)",
+            accepted.model_dump(),
+            f"Deregistered collection {collection!r} ({accepted.removed} files); "
+            f"chunk purge {accepted.status}: task_id={accepted.task_id}",
         )
 
     def _status(self) -> None:

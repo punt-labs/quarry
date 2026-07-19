@@ -26,7 +26,6 @@ from quarry.formatting import (
 
 if TYPE_CHECKING:
     from quarry.cli_captures import CliPlumbing
-    from quarry.client import TaskOutcome
 
 
 @final
@@ -89,41 +88,27 @@ class DocumentsCli:
             str, typer.Option("--collection", "-c", help="Scope (documents only)")
         ] = "",
     ) -> None:
-        """Delete indexed data for a document or collection."""
+        """Delete indexed data for a document or collection (dispatch only).
+
+        Returns the daemon's task id; the chunk removal runs as a background
+        task (fire-and-forget, DES-001).  An unknown type is rejected here.
+        """
         client = self._p.client()
         if kind == "document":
             accepted = client.delete_document(
                 DeleteDocumentRequest(name=name, collection=collection)
             )
-            label = f"{name!r}"
         elif kind == "collection":
             accepted = client.delete_collection(DeleteCollectionRequest(name=name))
-            label = f"collection {name!r}"
         else:
             self._p.err_console.print(
                 f"Error: unknown type {kind!r}. Use 'document' or 'collection'.",
                 style="red",
             )
             raise typer.Exit(code=1)
-        self._render_delete(client.await_task(accepted.task_id), name, kind, label)
-
-    def _render_delete(
-        self, outcome: TaskOutcome, name: str, kind: str, label: str
-    ) -> None:
-        """Emit the deleted-chunk count, or fail 1 on an empty or failed delete."""
-        if not outcome.is_completed:
-            self._p.err_console.print(
-                f"Delete did not complete: {outcome.error or outcome.status}",
-                style="red",
-            )
-            raise typer.Exit(code=1)
-        deleted = outcome.result_int("deleted")
-        if deleted == 0:
-            self._p.err_console.print(f"No data found for {label}", style="red")
-            raise typer.Exit(code=1)
         self._p.emit(
-            {"deleted": deleted, "name": name, "type": kind},
-            f"Deleted {deleted} chunks for {label}",
+            accepted.model_dump(),
+            f"Delete {accepted.status}: task_id={accepted.task_id}",
         )
 
     def _build_list(self) -> typer.Typer:
