@@ -126,3 +126,20 @@ class LoopbackPolicy:
                 "Non-loopback hosts require authentication (set QUARRY_API_KEY)."
             )
             raise SystemExit(msg)
+
+    def enforce_bind_tls(self, *, tls: bool) -> None:
+        """Refuse a non-loopback bind that serves plaintext (no TLS).
+
+        A key authenticates the peer but does NOT encrypt the wire: a keyed
+        plaintext bind still ships every request — including remembered notes and
+        raw session transcripts — in the clear to any on-path observer.  A
+        remote-reachable bind must therefore carry TLS, not just a key.  Loopback
+        plaintext stays allowed: it never leaves the machine.
+        """
+        if not self.is_loopback and not tls:
+            msg = (
+                f"Refusing to bind to {self._host} without TLS. "
+                "Non-loopback hosts must serve over TLS (pass --tls; see "
+                "'quarry install') so request content is never sent in cleartext."
+            )
+            raise SystemExit(msg)

@@ -101,8 +101,12 @@ class DaemonLauncher:
         # that token is unreadable by the remote clients who would need it, so
         # binding there without an operator-set key is false security.  The
         # guard runs against the ORIGINAL key, before the loopback fallback is
-        # minted, so an auto-token can never satisfy a network bind.
-        LoopbackPolicy(options.host).enforce_bind_key(options.api_key)
+        # minted, so an auto-token can never satisfy a network bind.  A key
+        # authenticates but does not encrypt, so a non-loopback bind must ALSO
+        # carry TLS — else raw request content (transcripts) ships in cleartext.
+        policy = LoopbackPolicy(options.host)
+        policy.enforce_bind_key(options.api_key)
+        policy.enforce_bind_tls(tls=options.tls)
         certfile, keyfile = self._tls_paths()
         config = ServeConfig(
             host=options.host,

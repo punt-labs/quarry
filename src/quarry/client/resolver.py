@@ -128,14 +128,18 @@ class TargetResolver:
         if not parsed.hostname:
             raise ClientConfigError(f"QUARRY_URL has no host: {url!r}")
         host = parsed.hostname
-        # Plaintext + bearer is allowed ONLY to a LITERAL loopback IP (same
-        # machine); a name or a remote host must never receive the token in
-        # cleartext.
+        # A cleartext (http/ws) connection to a non-loopback host is refused
+        # REGARDLESS of a token: the content is what needs protecting, not just
+        # the bearer.  This change routes raw remembered notes and transcripts to
+        # the daemon, so an unencrypted network target would expose them to any
+        # on-path observer even when no token is present.  Only a LITERAL loopback
+        # IP (same machine) may be plaintext.
         cleartext = scheme == "http" and not LoopbackPolicy(host).is_literal_loopback
-        if token is not None and cleartext:
+        if cleartext:
             raise ClientConfigError(
-                "refusing to send QUARRY_TOKEN in cleartext to non-loopback "
-                f"host {host!r}: use a wss:// URL with QUARRY_CA_CERT, or unset it."
+                "refusing a cleartext (http/ws) connection to non-loopback host "
+                f"{host!r}: request content would be exposed. Use a wss:// URL "
+                "with QUARRY_CA_CERT, or a loopback target."
             )
         return ClientConfig(url, cls._env_ca(scheme, host), token)
 

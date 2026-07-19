@@ -109,10 +109,15 @@ class TestLaunch:
             launcher.launch()
         assert mock_serve.call_args[0][1].host == host
 
-    def test_non_loopback_host_unchanged(self) -> None:
-        """A non-loopback 0.0.0.0 is left unchanged (and still key-gated)."""
-        launcher = DaemonLauncher(_options(host="0.0.0.0", api_key="k"))  # noqa: S104
+    def test_non_loopback_host_unchanged(self, tmp_path: Path) -> None:
+        """A non-loopback 0.0.0.0 is left unchanged (with a key and TLS)."""
+        (tmp_path / "server.crt").write_text("CERT")
+        (tmp_path / "server.key").write_text("KEY")
+        launcher = DaemonLauncher(
+            _options(host="0.0.0.0", api_key="k", tls=True)  # noqa: S104
+        )
         with (
+            patch("quarry.daemon.launcher.TLS_DIR", tmp_path),
             patch("quarry.daemon.launcher.DaemonServer.serve") as mock_serve,
             patch("quarry.daemon.launcher.Settings"),
         ):
@@ -130,14 +135,40 @@ class TestLaunch:
             launcher.launch()
         mock_serve.assert_not_called()
 
-    def test_non_loopback_with_key_serves(self) -> None:
-        launcher = DaemonLauncher(_options(host="0.0.0.0", api_key="k"))  # noqa: S104
+    def test_non_loopback_without_tls_refuses(self) -> None:
+        """A keyed but plaintext network bind ships content in the clear — refuse.
+
+        A key authenticates but does not encrypt; a non-loopback bind must carry
+        TLS so remembered notes and raw transcripts never cross the wire in
+        cleartext.  The refusal fires even though an operator key is present.
+        """
+        launcher = DaemonLauncher(
+            _options(host="0.0.0.0", api_key="k", tls=False)  # noqa: S104
+        )
         with (
+            patch("quarry.daemon.launcher.DaemonServer.serve") as mock_serve,
+            patch("quarry.daemon.launcher.Settings"),
+            pytest.raises(SystemExit, match="without TLS"),
+        ):
+            launcher.launch()
+        mock_serve.assert_not_called()
+
+    def test_non_loopback_with_key_and_tls_serves(self, tmp_path: Path) -> None:
+        """A non-loopback bind serves once it has BOTH a key and TLS."""
+        (tmp_path / "server.crt").write_text("CERT")
+        (tmp_path / "server.key").write_text("KEY")
+        launcher = DaemonLauncher(
+            _options(host="0.0.0.0", api_key="k", tls=True)  # noqa: S104
+        )
+        with (
+            patch("quarry.daemon.launcher.TLS_DIR", tmp_path),
             patch("quarry.daemon.launcher.DaemonServer.serve") as mock_serve,
             patch("quarry.daemon.launcher.Settings"),
         ):
             launcher.launch()
-        assert mock_serve.call_args[0][1].api_key == "k"
+        config = mock_serve.call_args[0][1]
+        assert config.api_key == "k"
+        assert config.ssl_certfile == str(tmp_path / "server.crt")
 
     def test_whitespace_key_loopback_mints(self) -> None:
         """A whitespace-only key is absent: a loopback bind MINTS and starts

@@ -51,7 +51,9 @@ class TestTier1Env:
     def test_env_whitespace_token_is_none(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("QUARRY_URL", "ws://remote.example:9000")
+        # Loopback host: plaintext is same-machine and allowed, so this exercises
+        # the whitespace-token -> None mapping without tripping the cleartext guard.
+        monkeypatch.setenv("QUARRY_URL", "ws://127.0.0.1:9000")
         monkeypatch.setenv("QUARRY_TOKEN", "   ")
         assert TargetResolver.resolve().token is None
 
@@ -68,10 +70,10 @@ class TestTier1Env:
     def test_env_takes_precedence_over_stored_login(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("QUARRY_URL", "ws://env.example:9000")
+        monkeypatch.setenv("QUARRY_URL", "wss://env.example:9000")
         login = {"quarry": {"url": "wss://stored.example:8420"}}
         with patch("quarry.client.resolver.read_proxy_config", return_value=login):
-            assert TargetResolver.resolve().url == "ws://env.example:9000"
+            assert TargetResolver.resolve().url == "wss://env.example:9000"
 
 
 class TestTier1EnvSecurity:
@@ -88,6 +90,18 @@ class TestTier1EnvSecurity:
         # The token is refused (never built into a config, so never transmitted)
         # and its value is not leaked in the error message.
         assert "supersecret" not in str(info.value)
+
+    def test_cleartext_no_token_to_remote_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A plaintext remote target is refused even with NO token: it is the
+        request CONTENT (remembered notes, transcripts) that must not cross the
+        wire in cleartext, not just the bearer."""
+        monkeypatch.delenv("QUARRY_TOKEN", raising=False)
+        monkeypatch.delenv("QUARRY_CA_CERT", raising=False)
+        monkeypatch.setenv("QUARRY_URL", "ws://remote.example:9000")
+        with pytest.raises(ClientConfigError, match="cleartext"):
+            TargetResolver.resolve()
 
     def test_loopback_name_is_canonicalized_to_literal_never_the_name(
         self, monkeypatch: pytest.MonkeyPatch

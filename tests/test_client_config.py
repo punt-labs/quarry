@@ -182,6 +182,23 @@ class TestFromLoginRemote:
         resolved = cfg.token
         assert resolved == "remote-key"
 
+    def test_cleartext_ws_remote_login_is_refused(self) -> None:
+        """A stored ws:// (plaintext) non-loopback login is refused: TLS-or-refused."""
+        with pytest.raises(ClientConfigError, match="cleartext"):
+            ClientConfig.from_login({"url": "ws://quarry.example.com:9000"})
+
+    def test_cleartext_http_remote_login_is_refused(self) -> None:
+        with pytest.raises(ClientConfigError, match="cleartext"):
+            ClientConfig.from_login({"url": "http://10.0.0.5:8420"})
+
+    def test_loopback_plaintext_login_is_allowed(self, tmp_path: Path) -> None:
+        """Loopback plaintext (ws://127.0.0.1) is same-machine — never refused."""
+        (tmp_path / "serve.token").write_text("loop-token")
+        with _run_dir_at(tmp_path):
+            cfg = ClientConfig.from_login({"url": "ws://127.0.0.1:8420"})
+        resolved = cfg.token
+        assert resolved == "loop-token"
+
 
 class TestRemoteMapping:
     def test_url_only(self) -> None:
