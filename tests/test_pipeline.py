@@ -617,6 +617,45 @@ class TestIngestContentScrubbing:
         assert "jmf@pobox.com" not in captured[0].text
         assert "[REDACTED:email]" in captured[0].text
 
+    def test_failed_scrub_writes_zero_chunks_and_keeps_prior(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A scrub that raises aborts before store AND before the overwrite-delete.
+
+        The security property (nothing half-redacted is stored) and the
+        availability property (the last good document is not traded for nothing)
+        are locked together: neither ``_chunk_embed_store`` nor the overwrite
+        delete may run when the scrubber raises.
+        """
+        from quarry.ingestion import pipeline
+        from quarry.ingestion.pipeline import ingest_content
+
+        stored: list[int] = []
+        deleted: list[str] = []
+        monkeypatch.setattr(
+            pipeline, "_chunk_embed_store", lambda *_a, **_k: stored.append(1)
+        )
+        monkeypatch.setattr(
+            "quarry.db.chunk_store.ChunkStore.delete_document",
+            lambda _self, name, **_k: deleted.append(name),
+        )
+
+        def _boom(_text: str) -> str:
+            raise ValueError("scrub failed")
+
+        with pytest.raises(ValueError, match="scrub failed"):
+            ingest_content(
+                self._RAW,
+                "note",
+                Database(MagicMock()),
+                _settings(),
+                overwrite=True,
+                content_scrubber=_boom,
+            )
+
+        assert stored == []  # never reached the store — zero chunks written
+        assert deleted == []  # prior scrubbed copy preserved (fail-closed delete)
+
     def test_no_scrubber_leaves_inline_text_unchanged(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

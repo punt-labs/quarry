@@ -432,14 +432,17 @@ def ingest_content(
 
     progress("Processing: %s", document_name)
 
+    pages = _extract_inline_pages(content, document_name, format_hint)
+    if content_scrubber is not None:
+        pages = [replace(page, text=content_scrubber(page.text)) for page in pages]
+
+    # Delete the prior copy only AFTER a successful scrub: a scrub that raises
+    # must abort before destroying the last good scrubbed document, so a
+    # re-capture whose scrub fails never trades a stored document for nothing.
     if overwrite:
         database.store.delete_document(
             document_name, collection=collection, count=False
         )
-
-    pages = _extract_inline_pages(content, document_name, format_hint)
-    if content_scrubber is not None:
-        pages = [replace(page, text=content_scrubber(page.text)) for page in pages]
     progress("Sections: %d", len(pages))
 
     return _chunk_embed_store(

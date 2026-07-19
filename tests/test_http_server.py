@@ -1395,6 +1395,36 @@ class TestCapture:
         assert "jmf@pobox.com" not in redacted
         assert "[REDACTED:email]" in redacted
 
+    def test_scrub_failure_marks_task_failed_and_stores_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        """A scrub that raises fails the task before any chunk is stored."""
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch(
+                "quarry.scrub.scrub_and_log",
+                side_effect=ValueError("scrub exploded"),
+            ),
+            patch("quarry.ingestion.pipeline._chunk_embed_store") as store,
+        ):
+            resp = tc.post(
+                "/v1/capture",
+                json={
+                    "content": "secret jmf@pobox.com",
+                    "document_name": "note",
+                    "cwd": str(tmp_path),
+                },
+            )
+            data = _poll_task_done(tc, resp.json()["task_id"])
+
+        assert data["status"] == "failed"
+        assert "scrub exploded" in data["error"]
+        store.assert_not_called()
+
 
 class TestRemember:
     """Tests for POST /remember endpoint -- now returns 202."""
