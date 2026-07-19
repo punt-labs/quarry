@@ -45,7 +45,9 @@ class MaintenanceCli:
         """Compact the LanceDB table and rebuild indexes (dispatch only).
 
         The daemon owns the fragment-count safety guard; ``--force`` bypasses it
-        for manual recovery.  Returns the task id; poll it with ``quarry status``.
+        for manual recovery.  Fire-and-forget: returns the daemon's task id and
+        exits immediately (no per-task poll command exists yet — that is the
+        future ``--wait``).
         """
         accepted = self._p.client().optimize(OptimizeRequest(force=force))
         self._p.emit(

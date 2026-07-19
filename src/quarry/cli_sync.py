@@ -51,8 +51,10 @@ class SyncCli:
     ) -> None:
         """Sync all registered directories (dispatch only).
 
-        Returns the task id; poll it with ``quarry status``.  A 409 "already in
-        progress" raised by the daemon is mapped to exit 0 by the decorator.
+        Fire-and-forget: returns the daemon's task id and exits immediately (no
+        per-task poll command exists yet — that is the future ``--wait``). A 409
+        "already in progress" raised by the daemon is mapped to exit 0 by the
+        decorator.
         """
         if workers is not None and not self._p.is_quiet():
             self._p.err_console.print(
