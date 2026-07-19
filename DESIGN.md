@@ -1641,8 +1641,9 @@ it); scrubbing source on sync (corrupts fixtures/paths/changelogs); relying on
 event loop (blocks every other request); a one-time legacy-cleartext sweep
 (forward-only ruling).
 
-**Consequence.** `pipeline.py` decomposed 1,475→1,077 (`ImagePreparer`,
-`TextLikeFormat`); `background_ingest.py` and `BackgroundIngest` deleted (PL-PP-1, no
+**Consequence.** `pipeline.py` decomposed 1,475→~1,090 (`ImagePreparer` consolidated
+to one implementation, `TextLikeFormat`); `background_ingest.py` and `BackgroundIngest`
+deleted (PL-PP-1, no
 shim). Scoped ratchet relaxations were taken only for irreducible wire-contract /
 security-gate growth on pure-schema/re-export files that carry no offsettable metric
 (real principal paid on `pipeline.py`/`ingestion`), each justified in the audit logs
