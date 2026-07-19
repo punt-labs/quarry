@@ -25,6 +25,10 @@ _DEFAULT_IGNORE_PATTERNS: Final[list[str]] = [
     "dist/",
     "build/",
     ".DS_Store",
+    # Captures are the daemon's job (they land in <repo>-captures, scrubbed).
+    # Excluding them structurally keeps directory sync from folding transcripts
+    # into the project's MAIN collection, independent of the repo's .gitignore.
+    ".punt-labs/quarry/captures/",
 ]
 
 _HASH_CHUNK_SIZE: Final[int] = 1 << 20  # 1 MiB
