@@ -87,6 +87,22 @@ class TestUniqueCollectionName:
 
         assert view.unique_collection_name(project) == "myproject-acme"
 
+    def test_root_dir_falls_back_to_nonempty_leaf(self) -> None:
+        # A filesystem-root directory has an empty .name; the collection must
+        # never be registered with an empty name — the leaf falls back to "root".
+        view = Registrations([])
+
+        assert view.unique_collection_name(Path("/")) == "root"
+
+    def test_root_dir_collision_disambiguates_off_root_leaf(self) -> None:
+        # With "root" taken, the root dir disambiguates off the "root" leaf
+        # (never off an empty string).
+        view = Registrations([_reg("root", Path("/"))])
+
+        name = view.unique_collection_name(Path("/"))
+        assert name.startswith("root-")
+        assert name != "root-"
+
     def test_hash_suffix_on_double_collision(self, tmp_path: Path) -> None:
         # Both "myproject" and "myproject-acme" are taken → sha256 path suffix.
         parent = tmp_path / "acme"

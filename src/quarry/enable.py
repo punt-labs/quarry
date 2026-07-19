@@ -140,7 +140,9 @@ def enable_project(
     """
     from quarry.registrations import Registrations  # noqa: PLC0415
 
-    directory = directory.resolve()
+    # expanduser BEFORE resolve: a bare "~/proj" otherwise resolves against cwd
+    # ("./~/proj"), targeting the wrong directory.
+    directory = directory.expanduser().resolve()
     if not directory.is_dir():
         msg = f"directory not found: {directory}"
         raise ValueError(msg)
@@ -200,7 +202,9 @@ def disable_project(
     from quarry.api import DeleteCollectionRequest, DeregisterRequest  # noqa: PLC0415
     from quarry.registrations import Registrations  # noqa: PLC0415
 
-    directory = directory.resolve()
+    # expanduser BEFORE resolve: a bare "~/proj" otherwise resolves against cwd,
+    # targeting (and deregistering) the wrong path.
+    directory = directory.expanduser().resolve()
     view = Registrations(client.list_registrations().registrations)
     covering = view.covering(directory)
     if covering is None:

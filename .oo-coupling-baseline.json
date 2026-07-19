@@ -441,11 +441,11 @@
     "public_names": 3.0
   },
   "src/quarry/daemon/tasks.py": {
-    "avg_lcom": 0.179,
-    "circular_imports": 0.0,
     "efferent_coupling": 1.0,
-    "max_lcom": 0.179,
-    "public_names": 5.0
+    "public_names": 5.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.278,
+    "avg_lcom": 0.278
   },
   "src/quarry/daemon/url_safety.py": {
     "avg_lcom": 0.0,

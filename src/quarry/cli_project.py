@@ -99,12 +99,14 @@ class ProjectCli:
             directory.resolve(), self._p.client(), keep_data=keep_data
         )
 
-        lines = [f"Disabled quarry for {result.directory}"]
-        if not keep_data:
-            lines.append(
-                f"  Deregistered {result.collection} "
-                f"({result.removed} files); chunk purge queued"
-            )
+        # Emit the deregistration line in BOTH branches: the daemon dropped the
+        # registry row either way, so --keep-data must not look like only local
+        # files were touched — vary only the chunk-fate wording.
+        fate = "chunk purge queued" if not keep_data else "kept indexed data"
+        lines = [
+            f"Disabled quarry for {result.directory}",
+            f"  Deregistered {result.collection} ({result.removed} files); {fate}",
+        ]
         if result.config_removed:
             lines.append("  Config file removed")
         if result.claudemd_removed:

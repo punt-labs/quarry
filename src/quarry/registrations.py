@@ -60,14 +60,16 @@ class Registrations:
         """Return a collection name for *directory* not colliding with an existing one.
 
         Prefers the leaf name; disambiguates with the parent dir name, then a
-        path-hash suffix.
+        path-hash suffix.  A filesystem-root directory has an empty ``.name``, so
+        the leaf falls back to ``"root"`` — a collection is never registered with
+        an empty name.
         """
-        candidate = directory.name
-        if candidate not in self._names:
-            return candidate
+        leaf = directory.name or "root"
+        if leaf not in self._names:
+            return leaf
         parent = directory.parent.name or "root"
-        candidate = f"{directory.name}-{parent}"
+        candidate = f"{leaf}-{parent}"
         if candidate not in self._names:
             return candidate
         suffix = hashlib.sha256(str(directory).encode()).hexdigest()[:8]
-        return f"{directory.name}-{suffix}"
+        return f"{leaf}-{suffix}"
