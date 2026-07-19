@@ -206,6 +206,7 @@ def disable_project(
     or CLAUDE.md claiming enabled.
     """
     from quarry.api import DeleteCollectionRequest, DeregisterRequest  # noqa: PLC0415
+    from quarry.client.errors import QuarryError  # noqa: PLC0415
     from quarry.registrations import Registrations  # noqa: PLC0415
 
     # expanduser BEFORE resolve: a bare "~/proj" otherwise resolves against cwd,
@@ -246,12 +247,21 @@ def disable_project(
     if claudemd_removed:
         logger.info("Removed quarry instructions from CLAUDE.md")
 
-    # Best-effort captures purge, dispatched last so its rejection cannot abort the
-    # local cleanup above. Once the registration is gone a retry cannot re-derive
-    # the captures name, so this is the single dispatch attempt.
+    # Best-effort captures purge, dispatched last. A rejection is caught and
+    # warned, never propagated: the primary teardown (deregister + local file
+    # cleanup) already succeeded and disable is idempotent, so a stranded
+    # secondary purge must not fail the whole command. Once the registration is
+    # gone a retry cannot re-derive the captures name, so this is the one attempt.
     captures_collection = f"{collection}-captures" if collection else ""
     if covering is not None and not keep_data:
-        client.delete_collection(DeleteCollectionRequest(name=captures_collection))
+        try:
+            client.delete_collection(DeleteCollectionRequest(name=captures_collection))
+        except QuarryError:
+            logger.warning(
+                "captures purge for %s was rejected; its chunks may remain, but "
+                "the project is fully disabled (deregistered + local files removed)",
+                captures_collection,
+            )
 
     return DisableResult(
         directory=str(directory),

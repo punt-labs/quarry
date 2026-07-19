@@ -28,6 +28,7 @@ import urllib.parse
 from collections.abc import Mapping
 from typing import Self, final
 
+from quarry.client.errors import QuarryError
 from quarry.config import Settings
 from quarry.net import LoopbackPolicy
 from quarry.remote import to_netloc, ws_to_http
@@ -35,8 +36,14 @@ from quarry.run_dir import RunDir
 
 
 @final
-class ClientConfigError(RuntimeError):
-    """A daemon target could not be resolved (e.g. loopback token missing)."""
+class ClientConfigError(QuarryError):
+    """A daemon target could not be resolved (e.g. loopback token missing).
+
+    A ``QuarryError`` (not a bare ``RuntimeError``) so the CLI's ``_cli_errors``
+    boundary renders an EXPECTED config mistake — hostless ``QUARRY_URL``, a
+    cleartext token to a non-loopback host — as a clean message + exit 1, never a
+    stack-trace dump through the generic-exception path.
+    """
 
 
 @final

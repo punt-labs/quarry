@@ -303,11 +303,13 @@ class TestDisableIdempotentRetrySafe:
         assert result.config_removed is True
         assert not config_path.exists()
 
-    def test_rejected_captures_purge_still_cleans_files_and_retry_converges(
-        self, tmp_path: Path
+    def test_rejected_captures_purge_warns_but_disable_succeeds(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
-        # A rejected captures purge must NOT leave config.md claiming enabled: the
-        # local cleanup runs before the purge dispatch. A retry then converges.
+        # A rejected captures purge is best-effort: the primary teardown
+        # (deregister + local file cleanup) succeeded, so disable warns and STILL
+        # returns success — it does not fail the whole command or leave the project
+        # files claiming enabled.
         from quarry.client import QuarryError
 
         project = tmp_path / "myproject"
@@ -320,17 +322,16 @@ class TestDisableIdempotentRetrySafe:
             [("myproject", project)],
             delete_error=QuarryError("captures purge rejected"),
         )
-        with pytest.raises(QuarryError):
-            disable_project(project, failing)
+        with caplog.at_level("WARNING", logger="quarry.enable"):
+            result = disable_project(project, failing)
 
-        # The registration was dropped and the local files were cleaned BEFORE the
-        # purge raised — the project is not stuck claiming enabled.
+        # Disable succeeded: registration dropped, local files cleaned.
+        assert result.collection == "myproject"
         assert failing.deregistered[0].collection == "myproject"
         assert not config_path.exists()
-
-        # A retry (registration already gone) converges to fully-disabled, exit 0.
-        result = disable_project(project, FakeRegistryClient())
-        assert result.collection == ""
+        # The rejected purge was caught (not recorded) and surfaced as a warning.
+        assert failing.deleted == []
+        assert "captures purge for myproject-captures was rejected" in caplog.text
 
 
 class TestWriteProjectConfig:

@@ -296,6 +296,21 @@ class TestRemoteList:
         assert "wss://env.example:9000" in result.output
 
 
+class TestConfigErrorRendersCleanly:
+    def test_hostless_env_url_exits_1_without_traceback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A bad QUARRY_URL is an EXPECTED operator mistake: ClientConfigError is a
+        # QuarryError, so _cli_errors renders a clean message + exit 1 — never a
+        # stack-trace dump through the generic-exception path.
+        monkeypatch.setenv("QUARRY_URL", "ws://:9000")
+        monkeypatch.delenv("QUARRY_TOKEN", raising=False)
+        result = runner.invoke(app, ["status"])
+        assert result.exit_code == 1, result.output
+        assert "no host" in result.output
+        assert "Traceback" not in result.output
+
+
 class TestAutostartHintGating:
     def test_loopback_failure_shows_hint(self) -> None:
         down = QuarryConnectionError("quarryd is not running", "127.0.0.1")
