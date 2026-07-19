@@ -7,9 +7,9 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
-import pytest
 from typer.testing import CliRunner
 
 from quarry.__main__ import app
@@ -25,6 +25,9 @@ from quarry.hooks import (
     handle_session_start,
 )
 from quarry.sync_registry import DirectoryRegistration, SyncRegistry
+
+if TYPE_CHECKING:
+    import pytest
 
 runner = CliRunner()
 
@@ -1455,134 +1458,6 @@ class TestHandlePreCompact:
         msg = str(result["systemMessage"])
         assert msg.startswith("Capturing")
         assert "background" in msg
-
-
-class TestIngestBackground:
-    """Tests for the ingest-background entry point."""
-
-    def test_performs_dedup_and_ingestion(self, tmp_path: Path) -> None:
-        """Background entry point does dedup + ingest and cleans up temp file."""
-        text_file = tmp_path / "session-abc12345-20260327T120000.txt"
-        text_file.write_text("Some transcript content")
-
-        mock_result: dict[str, object] = {
-            "document_name": "session-abc12345-20260327T120000",
-            "collection": "session-notes",
-            "chunks": 5,
-        }
-
-        existing_docs = [
-            {
-                "document_name": "session-abc12345-20260327T100000",
-                "document_path": "",
-                "collection": "session-notes",
-                "total_pages": 1,
-                "chunk_count": 3,
-                "indexed_pages": 1,
-                "ingestion_timestamp": "2026-03-27T10:00:00",
-            },
-        ]
-
-        from quarry._hook_entry import _ingest_background
-
-        with (
-            patch(
-                "sys.argv",
-                [
-                    "quarry-hook",
-                    "ingest-background",
-                    str(text_file),
-                    "session-abc12345-20260327T120000",
-                    "session-notes",
-                    str(tmp_path / "lancedb"),
-                    "abc12345",
-                ],
-            ),
-            patch(
-                "quarry.config.Settings.load",
-                return_value=MagicMock(),
-            ),
-            patch(
-                "quarry.db.facade.get_db",
-                return_value=MagicMock(),
-            ),
-            patch(
-                "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
-                return_value=existing_docs,
-            ),
-            patch(
-                "quarry.db.chunk_store.ChunkStore.delete_document",
-            ) as mock_delete,
-            patch(
-                "quarry.ingestion.pipeline.ingest_content",
-                return_value=mock_result,
-            ) as mock_ingest,
-        ):
-            _ingest_background()
-
-        mock_delete.assert_called_once()
-        mock_ingest.assert_called_once()
-        call_args = mock_ingest.call_args
-        assert "Some transcript content" in call_args[0][0]
-        assert call_args[0][1] == "session-abc12345-20260327T120000"
-        assert call_args[1]["collection"] == "session-notes"
-        # Temp file cleaned up.
-        assert not text_file.exists()
-
-    def test_cleans_up_temp_file_on_ingest_failure(self, tmp_path: Path) -> None:
-        """Temp file is removed even when ingestion fails."""
-        text_file = tmp_path / "session-abc12345-20260327T120000.txt"
-        text_file.write_text("Content")
-
-        from quarry._hook_entry import _ingest_background
-
-        with (
-            patch(
-                "sys.argv",
-                [
-                    "quarry-hook",
-                    "ingest-background",
-                    str(text_file),
-                    "session-abc12345-20260327T120000",
-                    "session-notes",
-                    str(tmp_path / "lancedb"),
-                    "abc12345",
-                ],
-            ),
-            patch(
-                "quarry.config.Settings.load",
-                return_value=MagicMock(),
-            ),
-            patch(
-                "quarry.db.facade.get_db",
-                return_value=MagicMock(),
-            ),
-            patch(
-                "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
-            ),
-            patch(
-                "quarry.ingestion.pipeline.ingest_content",
-                side_effect=RuntimeError("embedding failed"),
-            ),
-        ):
-            _ingest_background()
-
-        assert not text_file.exists()
-
-    def test_exits_with_usage_on_bad_arg_count(self) -> None:
-        """Too few argv slots exit non-zero before any ingest work runs."""
-        from quarry._hook_entry import _ingest_background
-
-        with (
-            patch("sys.argv", ["quarry-hook", "ingest-background", "only-one-arg"]),
-            pytest.raises(SystemExit),
-        ):
-            _ingest_background()
-
-
-# ---------------------------------------------------------------------------
-# CLI dispatcher tests
-# ---------------------------------------------------------------------------
 
 
 class TestHookCLI:

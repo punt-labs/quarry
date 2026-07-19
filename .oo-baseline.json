@@ -39,17 +39,17 @@
     "public_attr_violations": 0.0
   },
   "src/quarry/_hook_entry.py": {
-    "avg_complexity": 2.0,
-    "avg_params": 0.0,
-    "class_to_func_ratio": 0.143,
-    "classes_per_module": 1.0,
+    "method_ratio": 0.0,
     "encapsulation_ratio": 1.0,
-    "future_annotations": 1.0,
+    "avg_params": 0.0,
+    "max_complexity": 3.0,
+    "avg_complexity": 1.4,
+    "module_size": 46.0,
+    "classes_per_module": 0.0,
+    "class_to_func_ratio": 0.0,
     "init_violations": 0.0,
-    "max_complexity": 6.0,
-    "method_ratio": 0.4,
-    "module_size": 172.0,
-    "public_attr_violations": 0.0
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/quarry/_sql.py": {
     "avg_complexity": 1.0,
