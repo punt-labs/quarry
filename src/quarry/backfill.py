@@ -14,11 +14,11 @@ from quarry.artifacts import (
 )
 from quarry.config import Settings
 from quarry.db.facade import Database
-from quarry.hooks import extract_transcript_text
 from quarry.ingestion.pipeline import ingest_content
 from quarry.scrub import scrub_and_log
 from quarry.sync_registry import DirectoryRegistration, SyncRegistry
 from quarry.transcript import Transcript
+from quarry.transcript_reader import TranscriptReader
 
 logger = logging.getLogger(__name__)
 
@@ -246,7 +246,7 @@ class _ProjectProcessor:
             self._acc.ingested += 1
             self._acc.processed += 1
             return
-        text = extract_transcript_text(str(transcript))
+        text = TranscriptReader(transcript).text()
         if not text.strip():
             self._acc.skipped_empty += 1
             self._acc.processed += 1
