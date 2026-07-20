@@ -552,6 +552,45 @@ class TestIngestUrlScrubbing:
         assert "jmf@pobox.com" not in captured[0].text
         assert "[REDACTED:email]" in captured[0].text
 
+    def test_scrubber_redacts_document_name_and_summary(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The URL choke point redacts the metadata the chunker copies on chunks.
+
+        Same guarantee as ``ingest_content``: an explicit document_name and the
+        summary are redacted when a scrubber is present, so the capture callers
+        forward them raw and the pipeline redacts once.
+        """
+        from quarry.ingestion import pipeline
+        from quarry.ingestion.pipeline import ingest_url
+        from quarry.scrub import scrub_and_log
+
+        self._patch_fetch_and_extract(monkeypatch)
+        seen: dict[str, object] = {}
+
+        def _capture(
+            _pages: object, document_name: str, *_a: object, **kw: object
+        ) -> dict[str, object]:
+            seen["name"] = document_name
+            seen["summary"] = kw["summary"]
+            return {"document_name": document_name, "collection": "c", "chunks": 0}
+
+        monkeypatch.setattr(pipeline, "_chunk_embed_store", _capture)
+        ingest_url(
+            "https://example.com/p",
+            Database(MagicMock()),
+            _settings(),
+            collection="c",
+            document_name="note jmf@pobox.com",
+            content_scrubber=lambda t: scrub_and_log(t, "web-fetch"),
+            summary="contact jmf@pobox.com",
+        )
+
+        assert "jmf@pobox.com" not in str(seen["name"])
+        assert "[REDACTED:email]" in str(seen["name"])
+        assert "jmf@pobox.com" not in str(seen["summary"])
+        assert "[REDACTED:email]" in str(seen["summary"])
+
     def test_empty_extraction_keeps_prior_and_stores_nothing(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -679,6 +718,69 @@ class TestIngestContentScrubbing:
         assert captured
         assert "jmf@pobox.com" not in captured[0].text
         assert "[REDACTED:email]" in captured[0].text
+
+    def _capture_stored_metadata(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> dict[str, object]:
+        from quarry.ingestion import pipeline
+
+        seen: dict[str, object] = {}
+
+        def _capture(
+            _pages: object, document_name: str, *_a: object, **kw: object
+        ) -> dict[str, object]:
+            seen["name"] = document_name
+            seen["summary"] = kw["summary"]
+            return {"document_name": document_name, "collection": "c", "chunks": 0}
+
+        monkeypatch.setattr(pipeline, "_chunk_embed_store", _capture)
+        return seen
+
+    def test_scrubber_redacts_document_name_and_summary(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The choke point redacts the metadata the chunker copies onto chunks.
+
+        A ``content_scrubber`` is the single signal that this is a scrubbed
+        ingest, so ``ingest_content`` redacts the document name and summary
+        itself — every caller (daemon, stdio MCP, backfill) inherits it and none
+        can forget it.
+        """
+        from quarry.ingestion.pipeline import ingest_content
+        from quarry.scrub import scrub_and_log
+
+        seen = self._capture_stored_metadata(monkeypatch)
+        ingest_content(
+            "body",
+            "note jmf@pobox.com",
+            Database(MagicMock()),
+            _settings(),
+            content_scrubber=lambda t: scrub_and_log(t, "remember"),
+            summary="contact jmf@pobox.com",
+        )
+
+        assert "jmf@pobox.com" not in str(seen["name"])
+        assert "[REDACTED:email]" in str(seen["name"])
+        assert "jmf@pobox.com" not in str(seen["summary"])
+        assert "[REDACTED:email]" in str(seen["summary"])
+
+    def test_no_scrubber_keeps_document_name_and_summary(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A plain ingest (no scrubber) stores metadata byte-for-byte."""
+        from quarry.ingestion.pipeline import ingest_content
+
+        seen = self._capture_stored_metadata(monkeypatch)
+        ingest_content(
+            "body",
+            "note jmf@pobox.com",
+            Database(MagicMock()),
+            _settings(),
+            summary="contact jmf@pobox.com",
+        )
+
+        assert seen["name"] == "note jmf@pobox.com"
+        assert seen["summary"] == "contact jmf@pobox.com"
 
     def test_failed_scrub_writes_zero_chunks_and_keeps_prior(
         self, monkeypatch: pytest.MonkeyPatch

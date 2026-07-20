@@ -1491,8 +1491,9 @@ class TestCapture:
         assert len(url_kwargs) == 1
         assert url_kwargs[0]["source"] == "https://example.com/p"
         assert url_kwargs[0]["collection"] == "default-captures"
-        assert "jmf@pobox.com" not in str(url_kwargs[0]["summary"])
-        assert "[REDACTED:email]" in str(url_kwargs[0]["summary"])
+        # The caller forwards the raw summary plus a content_scrubber; ingest_url
+        # (the choke point) redacts summary+name — see test_pipeline's
+        # ingest_url metadata-scrub test.  Here we assert the scrubber is wired.
         scrub = cast("Callable[[str], str]", url_kwargs[0]["content_scrubber"])
         assert "[REDACTED:email]" in scrub("reach jmf@pobox.com")
 
@@ -1627,24 +1628,29 @@ class TestRemember:
         assert "name" in resp.json()["error"].lower()
 
     def test_scrubs_name_and_summary_not_just_content(self, tmp_path: Path) -> None:
-        """A secret in the free-form name or summary is redacted before store —
-        the chunker copies both onto every chunk, so content-only scrubbing leaks."""
+        """A secret in the free-form name or summary is redacted before store.
+
+        The daemon forwards the raw name/summary and a content_scrubber; the
+        pipeline choke point (ingest_content) is what redacts them, so this
+        patches the store boundary and asserts the REAL scrub ran end-to-end —
+        the chunker copies name+summary onto every chunk, so content-only
+        scrubbing would leak."""
         settings = _mock_settings(tmp_path)
         ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
         seen: dict[str, object] = {}
 
-        def _content(
-            _content_arg: str, name: str, *_a: object, **kw: object
+        def _store(
+            _pages: object, document_name: str, *_a: object, **kw: object
         ) -> dict[str, object]:
-            seen["name"] = name
+            seen["name"] = document_name
             seen["summary"] = kw["summary"]
-            return {"document_name": name, "collection": "c", "chunks": 0}
+            return {"document_name": document_name, "collection": "c", "chunks": 0}
 
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
-            patch("quarry.ingestion.pipeline.ingest_content", _content),
+            patch("quarry.ingestion.pipeline._chunk_embed_store", _store),
         ):
             resp = tc.post(
                 "/v1/remember",

@@ -31,9 +31,11 @@ class ScrubbedIngestJob:
     the event loop, so its regex passes do not stall other requests.  Scrubbing
     precedes embedding and storage, so a scrub that raises aborts the whole
     operation before a single chunk is written — a failed scrub leaves nothing
-    half-redacted in the database.  Free-form metadata (the document name and
-    the summary) is scrubbed too: the chunker copies both into every stored
-    chunk, so a secret in a remember's name or summary would otherwise leak.
+    half-redacted in the database.  The free-form metadata (document name and
+    summary) is scrubbed too, but at the choke point: passing ``content_scrubber``
+    to ``ingest_content`` is the signal that redacts content AND metadata, so
+    this job forwards the raw name/summary and lets the pipeline redact once —
+    no surface can forget it (the stdio MCP remember once did).
     """
 
     name: str
@@ -54,7 +56,7 @@ class ScrubbedIngestJob:
             state.results = dict(result)
 
     def scrub_and_ingest(self, ctx: DaemonContext) -> dict[str, object]:
-        """Scrub the content AND the free-form metadata, then ingest."""
+        """Ingest with a scrubber; the pipeline redacts content AND metadata."""
         from quarry.ingestion.pipeline import ingest_content  # noqa: PLC0415
         from quarry.scrub import scrub_and_log  # noqa: PLC0415
 
@@ -64,7 +66,7 @@ class ScrubbedIngestJob:
         return dict(
             ingest_content(
                 self.content,
-                scrub(self.name),
+                self.name,
                 ctx.database,
                 ctx.settings,
                 overwrite=self.overwrite,
@@ -73,7 +75,7 @@ class ScrubbedIngestJob:
                 content_scrubber=scrub,
                 agent_handle=self.agent_handle,
                 memory_type=self.memory_type,
-                summary=scrub(self.summary),
+                summary=self.summary,
             )
         )
 
@@ -130,7 +132,7 @@ class IngestJob:
                     content_scrubber=scrub,
                     agent_handle=self.agent_handle,
                     memory_type=self.memory_type,
-                    summary=scrub(self.summary),
+                    summary=self.summary,
                 )
             )
 
@@ -205,6 +207,6 @@ class CaptureIngestJob:
                 content_scrubber=scrub,
                 agent_handle=self.inline.agent_handle,
                 memory_type=self.inline.memory_type,
-                summary=scrub(self.inline.summary),
+                summary=self.inline.summary,
             )
         )

@@ -432,6 +432,16 @@ def ingest_content(
     """
     progress = _make_progress(progress_callback)
 
+    if content_scrubber is not None:
+        # Choke point: the scrubber's presence marks a scrubbed ingest, so the
+        # free-form metadata the chunker copies onto every chunk — the document
+        # name and the summary — is redacted HERE, once, for every scrubbed
+        # caller (daemon capture/remember, stdio MCP, backfill).  No caller can
+        # forget it and no new surface can reintroduce the leak.  A plain ingest
+        # (no scrubber) stores metadata byte-for-byte, unchanged.
+        document_name = content_scrubber(document_name)
+        summary = content_scrubber(summary)
+
     progress("Processing: %s", document_name)
 
     pages = _extract_inline_pages(content, document_name, format_hint)
@@ -520,6 +530,15 @@ def ingest_url(
         else url
     )
     document_name = document_name or meta_url
+    if content_scrubber is not None:
+        # Same choke point as ingest_content: a scrubbed URL ingest redacts the
+        # metadata the chunker copies onto every chunk.  CaptureUrl already
+        # stripped userinfo/query/fragment from meta_url; this second pass
+        # catches PII in an explicit document_name and in the summary, so no
+        # caller has to scrub them itself.  Idempotent — a re-scrub of a redacted
+        # value is a no-op.
+        document_name = content_scrubber(document_name)
+        summary = content_scrubber(summary)
 
     if delay:
         # Sub-second jitter from the monotonic clock (non-security-critical) to
