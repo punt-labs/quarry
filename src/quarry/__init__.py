@@ -1,13 +1,20 @@
-"""Quarry: local semantic search for your knowledge base.
+"""Quarry: local semantic search — the thin-client library.
 
-Library API — import core types for programmatic use::
+Import the client surface for programmatic use::
 
-    from quarry import Settings, ChunkSearch, get_db
-    from quarry import ingest_content, ingest_document, ingest_url
+    import quarry
+    from quarry.api import IngestRequest, SearchRequest
 
-All public symbols are lazy-loaded via PEP 562 to avoid pulling in
-pydantic, lancedb, onnxruntime, etc. when lightweight entry points
-(``quarry-hook``) only need stdlib.
+    client = quarry.TargetResolver.connect()   # resolves the local daemon
+    resp = client.search(SearchRequest(query="what did we decide about X"))
+
+The library holds no engine: using it never pulls lancedb, onnxruntime, or the
+ingestion pipeline into the caller — those live only in the daemon. Request and
+response models live in ``quarry.api``; the engine's own modules (``quarry.db``,
+``quarry.ingestion.pipeline``, ``quarry.retrieval``) stay importable for
+server-side use but are not re-exported here. Names are lazy-loaded via PEP 562
+so a bare ``import quarry`` stays stdlib-cheap on the ``quarry-hook`` path — the
+pydantic/httpx client cost is paid only on first attribute access.
 """
 
 from __future__ import annotations
@@ -17,56 +24,47 @@ from importlib.metadata import version
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from quarry.collections import CollectionName as CollectionName
-    from quarry.config import Settings as Settings
-    from quarry.db.chunk_search import ChunkSearch as ChunkSearch
-    from quarry.db.facade import Database as Database
-    from quarry.db.storage import get_db as get_db
-    from quarry.ingestion.pipeline import (
-        ingest_content as ingest_content,
-        ingest_document as ingest_document,
-        ingest_url as ingest_url,
+    from quarry.client import (
+        ClientConfig as ClientConfig,
+        HttpError as HttpError,
+        QuarryClient as QuarryClient,
+        QuarryConnectionError as QuarryConnectionError,
+        QuarryError as QuarryError,
+        TargetResolver as TargetResolver,
+        TaskOutcome as TaskOutcome,
     )
 
 __version__ = version("punt-quarry")
 
 __all__ = [
-    "ChunkSearch",
-    "CollectionName",
-    "Database",
-    "Settings",
+    "ClientConfig",
+    "HttpError",
+    "QuarryClient",
+    "QuarryConnectionError",
+    "QuarryError",
+    "TargetResolver",
+    "TaskOutcome",
     "__version__",
-    "get_db",
-    "ingest_content",
-    "ingest_document",
-    "ingest_url",
 ]
 
-# Map each public name to (module_path, attribute_name).
+# Each public name maps to (module_path, attribute) in the client tier.
 _LAZY_ATTRS: dict[str, tuple[str, str]] = {
-    "ChunkSearch": ("quarry.db.chunk_search", "ChunkSearch"),
-    "Database": ("quarry.db.facade", "Database"),
-    "CollectionName": ("quarry.collections", "CollectionName"),
-    "Settings": ("quarry.config", "Settings"),
-    "get_db": ("quarry.db.storage", "get_db"),
-    "ingest_content": ("quarry.ingestion.pipeline", "ingest_content"),
-    "ingest_document": ("quarry.ingestion.pipeline", "ingest_document"),
-    "ingest_url": ("quarry.ingestion.pipeline", "ingest_url"),
+    "ClientConfig": ("quarry.client", "ClientConfig"),
+    "HttpError": ("quarry.client", "HttpError"),
+    "QuarryClient": ("quarry.client", "QuarryClient"),
+    "QuarryConnectionError": ("quarry.client", "QuarryConnectionError"),
+    "QuarryError": ("quarry.client", "QuarryError"),
+    "TargetResolver": ("quarry.client", "TargetResolver"),
+    "TaskOutcome": ("quarry.client", "TaskOutcome"),
 }
 
 
 def __getattr__(name: str) -> object:
-    """Lazy import for public API symbols.
-
-    Avoids loading the full dependency tree (lancedb, pydantic,
-    onnxruntime) when lightweight entry points like ``quarry-hook``
-    only need ``quarry._stdlib``.
-    """
-    if name in _LAZY_ATTRS:
-        module_path, attr = _LAZY_ATTRS[name]
-        mod = importlib.import_module(module_path)
-        value = getattr(mod, attr)
-        globals()[name] = value  # cache for subsequent access
-        return value
-    msg = f"module 'quarry' has no attribute {name!r}"
-    raise AttributeError(msg)
+    """Lazily resolve a public client name via PEP 562 (see module docstring)."""
+    if name not in _LAZY_ATTRS:
+        msg = f"module 'quarry' has no attribute {name!r}"
+        raise AttributeError(msg)
+    module_path, attr = _LAZY_ATTRS[name]
+    value = getattr(importlib.import_module(module_path), attr)
+    globals()[name] = value  # cache so the client import happens at most once
+    return value

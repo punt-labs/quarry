@@ -148,6 +148,15 @@ across `transform`, `index`, and `connector`).
   remote `QuarryClient` MCP path lands.
 - **tool (CLI)**: removed the `quarry serve` subcommand (no shim, PL-PP-1) —
   start the engine with `quarryd` (the supervised unit does this for you).
+- **infra (library API)**: `import quarry` no longer re-exports the engine.
+  The names `Database`, `get_db`, `ChunkSearch`, `ingest_content`,
+  `ingest_document`, and `ingest_url` are removed from the top-level package
+  (no shim, PL-PP-1) — so `import quarry` stays engine-free and stdlib-cheap.
+  The library is now a thin client: the top-level surface is `QuarryClient`,
+  `TargetResolver`, `ClientConfig`, the `QuarryError`/`QuarryConnectionError`/
+  `HttpError` hierarchy, `TaskOutcome`, and `__version__`; request/response
+  models live in `quarry.api`. Engine-side callers import from `quarry.db` /
+  `quarry.ingestion.pipeline` / `quarry.retrieval` directly.
 
 ### Security
 
