@@ -168,11 +168,6 @@ def ingest_pdf(
 
     progress("Analyzing: %s", document_name)
 
-    if overwrite:
-        database.store.delete_document(
-            document_name, collection=collection, count=False
-        )
-
     ocr = get_ocr_backend(settings)
     extractor = PdfExtractor(settings, ocr)
     all_pages = extractor.extract_pages(file_path, document_name=document_name)
@@ -193,6 +188,7 @@ def ingest_pdf(
         database,
         settings,
         progress,
+        overwrite=overwrite,
         collection=collection,
         source_format=".pdf",
         stats=IngestStats(
@@ -226,11 +222,6 @@ def _ingest_text_like(
 
     progress("%s: %s", fmt.read_verb, document_name)
 
-    if overwrite:
-        database.store.delete_document(
-            document_name, collection=collection, count=False
-        )
-
     pages = fmt.extract(settings, file_path, document_name)
     progress("%s: %d", fmt.unit_label, len(pages))
 
@@ -240,6 +231,7 @@ def _ingest_text_like(
         database,
         settings,
         progress,
+        overwrite=overwrite,
         collection=collection,
         source_format=file_path.suffix.lower(),
         stats=fmt.stats(len(pages)),
@@ -287,11 +279,6 @@ def ingest_image(
 
     progress("Analyzing image: %s", document_name)
 
-    if overwrite:
-        database.store.delete_document(
-            document_name, collection=collection, count=False
-        )
-
     analysis = ImageExtractor.analyze(file_path)
     progress(
         "Image: %s, %d pages, conversion=%s",
@@ -307,6 +294,7 @@ def ingest_image(
             database,
             settings,
             progress,
+            overwrite=overwrite,
             document_name=document_name,
             collection=collection,
             agent_handle=agent_handle,
@@ -330,6 +318,7 @@ def ingest_image(
         database,
         settings,
         progress,
+        overwrite=overwrite,
         collection=collection,
         source_format=file_path.suffix.lower(),
         stats=IngestStats(file_format=analysis.format, image_pages=1),
@@ -346,6 +335,7 @@ def _ingest_multipage_image(
     settings: Settings,
     progress: Callable[..., None],
     *,
+    overwrite: bool = False,
     document_name: str | None = None,
     collection: str = "default",
     agent_handle: str = "",
@@ -367,6 +357,7 @@ def _ingest_multipage_image(
         database,
         settings,
         progress,
+        overwrite=overwrite,
         collection=collection,
         source_format=file_path.suffix.lower(),
         stats=IngestStats(file_format="TIFF", image_pages=page_count),
@@ -420,9 +411,12 @@ def ingest_content(
         format_hint: One of 'auto', 'plain', 'markdown', 'latex', 'html'.
         progress_callback: Optional callable for progress messages.
         content_scrubber: Optional redaction hook applied to each extracted page
-            before chunking.  ``None`` (the default) stores the text
-            byte-for-byte, so user-initiated remembers are unchanged; the capture
-            ingress passes a scrubber so its collection never receives raw PII.
+            (and, at the choke point, the document name and summary) before
+            chunking.  ``None`` (the default) stores the extracted text and
+            metadata unredacted — extraction still runs (including HTML→Markdown),
+            so this is about redaction, not verbatim bytes — so user-initiated
+            remembers keep their content; the capture ingress passes a scrubber
+            so its collection never receives raw PII.
         agent_handle: Agent that owns this memory (empty for non-agent content).
         memory_type: Memory classification (fact, observation, opinion, procedure).
         summary: One-line summary of the content.
@@ -447,30 +441,18 @@ def ingest_content(
     pages = _extract_inline_pages(content, document_name, format_hint)
     if content_scrubber is not None:
         pages = [replace(page, text=content_scrubber(page.text)) for page in pages]
-
-    # Delete the prior copy only after a successful scrub AND only when the new
-    # extraction actually yielded content.  A scrub that raises aborts before
-    # this line; an empty extraction (already-markdown, JS-only, or non-HTML)
-    # must not replace a prior good capture with nothing — that would be silent
-    # data loss reported as a fresh capture.
-    if not pages:
-        logger.warning(
-            "ingest_content: %s extracted to zero pages — keeping any prior "
-            "document, storing nothing",
-            document_name,
-        )
-    elif overwrite:
-        database.store.delete_document(
-            document_name, collection=collection, count=False
-        )
     progress("Sections: %d", len(pages))
 
+    # The overwrite-delete is fail-closed inside _chunk_embed_store: it fires
+    # only once a replacement chunk set exists, so an empty extraction or an
+    # extraction that chunks to nothing keeps the prior good document.
     return _chunk_embed_store(
         pages,
         document_name,
         database,
         settings,
         progress,
+        overwrite=overwrite,
         collection=collection,
         source_format="inline",
         stats=IngestStats(sections=len(pages)),
@@ -553,28 +535,18 @@ def ingest_url(
     pages = HtmlExtractor().extract_from_html(html, document_name, meta_url)
     if content_scrubber is not None:
         pages = [replace(page, text=content_scrubber(page.text)) for page in pages]
-
-    # Delete the prior copy only after a successful fetch+extraction+scrub AND
-    # only when there are pages to store: an empty extraction or a scrub error
-    # must not remove a good prior capture and store nothing (silent data loss).
-    if not pages:
-        logger.warning(
-            "ingest_url: %s extracted to zero pages — keeping any prior "
-            "document, storing nothing",
-            meta_url,
-        )
-    elif overwrite:
-        database.store.delete_document(
-            document_name, collection=collection, count=False
-        )
     progress("Sections: %d", len(pages))
 
+    # The overwrite-delete is fail-closed inside _chunk_embed_store: it fires
+    # only once a replacement chunk set exists, so an empty extraction — or an
+    # extraction that chunks to nothing — keeps the prior good capture.
     return _chunk_embed_store(
         pages,
         document_name,
         database,
         settings,
         progress,
+        overwrite=overwrite,
         collection=collection,
         source_format=".html",
         stats=IngestStats(sections=len(pages)),
@@ -966,6 +938,7 @@ def _chunk_embed_store(
     settings: Settings,
     progress: Callable[..., None],
     *,
+    overwrite: bool = False,
     collection: str = "default",
     source_format: str = "",
     stats: IngestStats = _NO_STATS,
@@ -973,7 +946,14 @@ def _chunk_embed_store(
     memory_type: str = "",
     summary: str = "",
 ) -> IngestResult:
-    """Shared pipeline: chunk pages, embed in bounded windows, store progressively."""
+    """Shared pipeline: chunk pages, embed in bounded windows, store progressively.
+
+    The overwrite-delete lives HERE — the one point every ingest path converges
+    on — and is gated on there being CHUNKS to store, not merely non-empty pages.
+    Pages that parse but chunk to nothing (unchunkable/empty sections) must not
+    delete a prior good document and then store nothing: the fail-closed delete
+    fires only when a replacement chunk set actually exists.
+    """
     progress("Chunking")
     t0 = time.perf_counter()
     chunks = DocumentStreamer(settings).build_chunks(
@@ -993,6 +973,10 @@ def _chunk_embed_store(
     progress("Created %d chunks", len(chunks))
 
     if chunks:
+        if overwrite:
+            database.store.delete_document(
+                document_name, collection=collection, count=False
+            )
         progress("Embedding + storing in bounded windows")
         t0 = time.perf_counter()
         inserted = progressive_insert(chunks, database.store, settings, document_name)
@@ -1004,6 +988,11 @@ def _chunk_embed_store(
         progress("Done: %d chunks indexed from %s", inserted, document_name)
     else:
         inserted = 0
+        logger.warning(
+            "pipeline: %s produced zero chunks — keeping any prior document, "
+            "storing nothing",
+            document_name,
+        )
         progress("No text found — nothing to index")
 
     result: IngestResult = {

@@ -213,6 +213,12 @@ class TestIngestDocument:
         assert result["chunks"] == 0
 
     def test_overwrite_deletes_existing(self, monkeypatch, tmp_path: Path):
+        """Overwrite deletes the prior document — but only once chunks exist.
+
+        The delete is gated on a replacement chunk set (see
+        ``test_overwrite_keeps_prior_when_chunks_empty`` for the zero-chunk case),
+        so this ingest produces one chunk and asserts the prior copy is deleted.
+        """
         pdf_file = tmp_path / "test.pdf"
         pdf_file.write_bytes(b"%PDF-fake")
 
@@ -220,6 +226,21 @@ class TestIngestDocument:
             PageAnalysis(page_number=1, page_type=PageType.TEXT, text_length=100),
         ]
         text_pages = [_make_page_content(1, PageType.TEXT)]
+        chunks = [
+            Chunk(
+                document_name="test.pdf",
+                document_path=str(pdf_file),
+                collection="default",
+                page_number=1,
+                total_pages=1,
+                chunk_index=0,
+                text="chunk",
+                page_raw_text="full",
+                page_type="text",
+                source_format=".pdf",
+                ingestion_timestamp=datetime.now(tz=UTC),
+            )
+        ]
 
         monkeypatch.setattr(
             "quarry.extractors.pdf_extractor.PdfExtractor._classify_pages",
@@ -231,7 +252,12 @@ class TestIngestDocument:
         )
         monkeypatch.setattr(
             "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [],
+            lambda _pages, max_chars, overlap_chars, **_kw: chunks,
+        )
+        _mock_embedding_backend(monkeypatch, np.zeros((1, 768), dtype=np.float32))
+        monkeypatch.setattr(
+            "quarry.db.chunk_store.ChunkStore.insert",
+            lambda _db, _chunks, _vectors: 1,
         )
 
         delete_called_with: list[str] = []
@@ -250,6 +276,50 @@ class TestIngestDocument:
         ingest_document(pdf_file, db, _settings(), overwrite=True)
 
         assert delete_called_with == ["test.pdf"]
+
+    def test_overwrite_keeps_prior_when_chunks_empty(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        """Overwrite must NOT delete when extraction chunks to zero.
+
+        Pages that parse but chunk to nothing must not delete the prior good
+        document and then store nothing — the fail-closed overwrite gate fires
+        only when a replacement chunk set exists.
+        """
+        pdf_file = tmp_path / "test.pdf"
+        pdf_file.write_bytes(b"%PDF-fake")
+
+        analyses = [
+            PageAnalysis(page_number=1, page_type=PageType.TEXT, text_length=100),
+        ]
+        text_pages = [_make_page_content(1, PageType.TEXT)]
+        monkeypatch.setattr(
+            "quarry.extractors.pdf_extractor.PdfExtractor._classify_pages",
+            staticmethod(lambda _path: analyses),
+        )
+        monkeypatch.setattr(
+            "quarry.extractors.pdf_extractor.extract_text_pages",
+            lambda _path, _pages, _total, **_kw: text_pages,
+        )
+        # Pages extract, but chunking yields nothing.
+        monkeypatch.setattr(
+            "quarry.ingestion.streaming.chunk_pages",
+            lambda _pages, max_chars, overlap_chars, **_kw: [],
+        )
+
+        deleted: list[str] = []
+        monkeypatch.setattr(
+            "quarry.db.chunk_store.ChunkStore.delete_document",
+            lambda _db, name, **_kw: deleted.append(name),
+        )
+
+        from quarry.ingestion.pipeline import ingest_document
+
+        db = Database(MagicMock())
+        result = ingest_document(pdf_file, db, _settings(), overwrite=True)
+
+        assert deleted == []  # prior document preserved on empty chunk set
+        assert result["chunks"] == 0
 
     def test_progress_callback(self, monkeypatch, tmp_path: Path):
         pdf_file = tmp_path / "test.pdf"
@@ -458,9 +528,30 @@ class TestIngestText:
         assert sections == 1
 
     def test_overwrite_deletes_existing(self, monkeypatch):
+        """Overwrite deletes the prior document once a replacement chunk exists."""
+        chunks = [
+            Chunk(
+                document_name="doc.txt",
+                document_path="",
+                collection="default",
+                page_number=1,
+                total_pages=1,
+                chunk_index=0,
+                text="text",
+                page_raw_text="text",
+                page_type="text",
+                source_format="inline",
+                ingestion_timestamp=datetime.now(tz=UTC),
+            )
+        ]
         monkeypatch.setattr(
             "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [],
+            lambda _pages, max_chars, overlap_chars, **_kw: chunks,
+        )
+        _mock_embedding_backend(monkeypatch, np.zeros((1, 768), dtype=np.float32))
+        monkeypatch.setattr(
+            "quarry.db.chunk_store.ChunkStore.insert",
+            lambda _db, _chunks, _vectors: 1,
         )
 
         delete_called: list[str] = []
@@ -479,6 +570,27 @@ class TestIngestText:
         ingest_content("text", "doc.txt", db, _settings(), overwrite=True)
 
         assert delete_called == ["doc.txt"]
+
+    def test_overwrite_keeps_prior_when_chunks_empty(self, monkeypatch) -> None:
+        """Inline content that chunks to zero must not delete the prior document."""
+        monkeypatch.setattr(
+            "quarry.ingestion.streaming.chunk_pages",
+            lambda _pages, max_chars, overlap_chars, **_kw: [],
+        )
+
+        deleted: list[str] = []
+        monkeypatch.setattr(
+            "quarry.db.chunk_store.ChunkStore.delete_document",
+            lambda _db, name, **_kw: deleted.append(name),
+        )
+
+        from quarry.ingestion.pipeline import ingest_content
+
+        db = Database(MagicMock())
+        result = ingest_content("text", "doc.txt", db, _settings(), overwrite=True)
+
+        assert deleted == []  # prior document preserved on empty chunk set
+        assert result["chunks"] == 0
 
     def test_empty_text_returns_zero_chunks(self, monkeypatch):
         monkeypatch.setattr(

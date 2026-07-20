@@ -734,6 +734,35 @@ class TestHandlePostWebFetch:
         assert "page not indexed" not in caplog.text
         assert "unreachable" not in caplog.text
 
+    def test_config_error_logs_misconfigured_not_unreachable(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A local misconfig (e.g. QUARRY_URL at a refused cleartext remote) is a
+        configuration error, not a down daemon — it must be logged as such, never
+        collapsed into 'unreachable' or the generic 'malformed response'."""
+        from quarry.client import ClientConfigError
+
+        payload: dict[str, object] = {
+            "tool_input": {"url": "https://example.com/p"},
+            "tool_response": json.dumps({"result": "<html>hi</html>"}),
+        }
+        with (
+            patch(
+                "quarry.client.TargetResolver.connect",
+                side_effect=ClientConfigError("QUARRY_URL is cleartext http"),
+            ),
+            caplog.at_level(logging.WARNING),
+        ):
+            result = handle_post_web_fetch(payload)
+
+        assert result == {}
+        assert "misconfigured" in caplog.text
+        assert "cleartext" in caplog.text
+        # Not misclassified as down or malformed:
+        assert "page not indexed" not in caplog.text
+        assert "unreachable" not in caplog.text
+        assert "malformed response" not in caplog.text
+
 
 class TestHookImportsNoEngine:
     """The capture hook paths must run with the engine libraries poisoned.
@@ -1064,6 +1093,16 @@ class TestHandlePreCompact:
     def test_rejects_non_jsonl_transcript(self, tmp_path: Path) -> None:
         payload: dict[str, object] = {
             "transcript_path": str(tmp_path / "secrets.txt"),
+            "session_id": "abc123",
+        }
+        result = handle_pre_compact(payload)
+        assert result == {}
+
+    def test_invalid_transcript_path_skips_not_crashes(self) -> None:
+        """An OS-invalid transcript_path (embedded NUL) must no-op per the skip
+        contract, not crash the PreCompact hook — the path is untrusted input."""
+        payload: dict[str, object] = {
+            "transcript_path": "/bad\x00path.jsonl",
             "session_id": "abc123",
         }
         result = handle_pre_compact(payload)

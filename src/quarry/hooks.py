@@ -607,15 +607,17 @@ def _send_to_daemon(
 
     The hook imports only the thin client — no engine.  A failed send is never
     fatal (the request is fire-and-forget; the daemon 202s immediately), so this
-    returns False rather than raising.  The three failure classes are logged
-    distinctly so an operator is not misled: only a genuine connection failure is
-    "unreachable" (what that costs differs per caller — a compaction has a durable
-    archive, a web fetch does not — so the caller supplies *unreachable_log*); a
-    non-2xx response means the daemon is up but rejected the request (auth,
-    server, validation), and must not be logged as "down"; a malformed response
-    is a reachable-but-broken daemon.
+    returns False rather than raising.  The four failure classes are logged
+    distinctly so an operator is not misled: a local misconfiguration (e.g. a
+    QUARRY_URL pointing at a refused cleartext remote) is a config error, not a
+    down daemon; a genuine connection failure is "unreachable" (what that costs
+    differs per caller — a compaction has a durable archive, a web fetch does not
+    — so the caller supplies *unreachable_log*); a non-2xx response means the
+    daemon is up but rejected the request (auth, server, validation), not "down";
+    a bare QuarryError is a reachable-but-broken daemon (malformed response).
     """
     from quarry.client import (  # noqa: PLC0415
+        ClientConfigError,
         HttpError,
         QuarryConnectionError,
         QuarryError,
@@ -624,6 +626,9 @@ def _send_to_daemon(
 
     try:
         post(TargetResolver.connect())
+    except ClientConfigError as exc:
+        logger.warning("daemon target misconfigured: %s", exc.message)
+        return False
     except QuarryConnectionError:
         logger.warning("%s", unreachable_log)
         return False
@@ -685,7 +690,13 @@ def _precompact_target(payload: dict[str, object]) -> tuple[str, str, Path] | No
     if not transcript_path or not session_id:
         logger.debug("pre-compact: missing transcript_path or session_id")
         return None
-    resolved = Path(transcript_path).resolve()
+    try:
+        resolved = Path(transcript_path).resolve()
+    except (OSError, ValueError):
+        # transcript_path is untrusted hook input; an embedded NUL or an
+        # OS-invalid path must skip per the no-op contract, not crash the hook.
+        logger.warning("pre-compact: unresolvable transcript_path", exc_info=True)
+        return None
     if resolved.suffix != ".jsonl":
         logger.warning("pre-compact: unexpected suffix %s", resolved.suffix)
         return None

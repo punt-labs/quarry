@@ -176,7 +176,7 @@ Deleted:
 
 - The background-ingest module (moved aside, verified, then removed).
 
-Tests: remember scrubs and capture scrubs (checking a stored chunk is actually redacted, for each door); a failed scrub writes zero chunks; a non-loopback bind without TLS is refused; sync skips the captures directory even with no gitignore line; the web-fetch content path, its fallback routing, and its dedup; an unregistered directory falls back to `default-captures`; the runtime engine-sabotage test for the hook; the stable-name overwrite dedup; and a field-name equivalence check per door so the client and daemon can't drift. No sweep tests, since that's out of scope.
+Tests: remember scrubs and capture scrubs (checking a stored chunk is actually redacted, for each door, including the free-form document name and summary at the pipeline choke point); a failed scrub writes zero chunks; a non-loopback bind without TLS is refused; sync skips the captures directory even with no gitignore line; the web-fetch content path and its fallback routing; an unregistered directory falls back to `default-captures`; the runtime engine-sabotage test for the hook; the stable-name overwrite dedup (a re-captured document replaces its prior copy in place via `overwrite=True` + a stable redacted-URL name — there is no separate "already captured, skip" path, so no skip test); the fail-closed overwrite guard (an extraction that chunks to zero keeps the prior document); and a field-name equivalence check per door so the client and daemon can't drift. No sweep tests, since that's out of scope.
 
 Docs: an ADR entry in DESIGN.md, a changelog note, and a refreshed OpenAPI dump.
 
