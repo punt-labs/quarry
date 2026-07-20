@@ -1,16 +1,16 @@
 {
   "src/quarry/__init__.py": {
-    "avg_complexity": 2.0,
-    "avg_params": 1.0,
-    "class_to_func_ratio": 0.0,
-    "classes_per_module": 0.0,
-    "encapsulation_ratio": 1.0,
-    "future_annotations": 1.0,
-    "init_violations": 0.0,
-    "max_complexity": 2.0,
     "method_ratio": 0.0,
-    "module_size": 60.0,
-    "public_attr_violations": 0.0
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.0,
+    "max_complexity": 2.0,
+    "avg_complexity": 2.0,
+    "module_size": 58.0,
+    "classes_per_module": 0.0,
+    "class_to_func_ratio": 0.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/quarry/__main__.py": {
     "avg_complexity": 2.6,

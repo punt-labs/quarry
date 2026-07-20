@@ -65,7 +65,7 @@ package.
 A full-tree grep for top-level importers of the six engine names (and the two
 thin ones) returns **zero real callers**:
 
-```
+```text
 grep -rEn "from quarry import.*(Database|get_db|ingest_content|ingest_document|
   ingest_url|ChunkSearch|Settings|CollectionName)" src/ tests/ tools/
 → src/quarry/__init__.py:5-6   (the module DOCSTRING's usage example — not code)
@@ -208,8 +208,8 @@ rejected — it regresses the `quarry-hook` fast path ~6x.**
 The current loader (`__init__.py:58-72`) defers the heavy **engine** import so the
 lightweight `quarry-hook` entry point stays stdlib-cheap. That specific rationale
 evaporates in PR-5: there is no engine to defer. But a *new* reason takes its
-place — `QuarryClient` and the api models are not free either. They pull `pydantic`
-+ `httpx` (and, via `httpx._main`, `rich.console`).
+place — `QuarryClient` and the api models are not free either. They pull in
+`pydantic` + `httpx` (and, via `httpx._main`, `rich.console`).
 
 ### 5.2 Measured cost (fresh interpreter, warm cache, min of 3 runs)
 
