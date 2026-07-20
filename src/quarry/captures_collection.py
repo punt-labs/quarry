@@ -89,22 +89,19 @@ class CapturesCollection:
     @staticmethod
     def _covering_collection(cwd: str, registrations: Mapping[str, str]) -> str | None:
         """Return the base collection of the registered ancestor of *cwd*."""
-        # A blank cwd is "unregistered", not the daemon's own directory:
-        # ``Path("").resolve()`` returns the daemon PROCESS's cwd, which — if
-        # quarryd was started inside a repo checkout — would silently misfile the
-        # capture into that project instead of default-captures.
-        if not cwd.strip() or not registrations:
+        # A blank or RELATIVE cwd is "unregistered", not the daemon's own dir:
+        # both resolve against the daemon PROCESS's cwd, which — if quarryd was
+        # started inside a repo checkout — would misfile the capture into that
+        # project.  cwd is untrusted client input; only an absolute path names a
+        # real client directory.
+        if not registrations or not Path(cwd).is_absolute():
             return None
         try:
             current = Path(cwd).resolve()
         except (OSError, ValueError):
-            # cwd is untrusted client input; an embedded NUL or an OS-invalid
-            # path must fall back to default-captures, not 500 the capture.
+            # An embedded NUL or OS-invalid path falls back to default-captures.
             return None
-        while True:
-            if (collection := registrations.get(str(current))) is not None:
+        for path in (current, *current.parents):
+            if (collection := registrations.get(str(path))) is not None:
                 return collection
-            parent = current.parent
-            if parent == current:
-                return None
-            current = parent
+        return None
