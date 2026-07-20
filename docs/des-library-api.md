@@ -1,6 +1,6 @@
 # DES-031 PR-5 (v2-5) — The Library as a Thin Client
 
-**Status:** PROPOSED (design only — not implemented)
+**Status:** IMPLEMENTED (PR #368)
 **Date:** 2026-07-19
 **Author:** rmh
 **Bead:** quarry-5e5t
