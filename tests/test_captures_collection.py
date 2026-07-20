@@ -38,6 +38,33 @@ class TestCapturesCollection:
         assert CapturesCollection.for_cwd("", regs).name == "default-captures"
         assert CapturesCollection.for_cwd("   ", regs).name == "default-captures"
 
+    def test_relative_cwd_is_default_not_daemon_project(self) -> None:
+        """A RELATIVE cwd resolves to default-captures, never the daemon's project.
+
+        ``cwd`` is untrusted client input.  ``Path("src").resolve()`` resolves
+        against the daemon PROCESS's cwd, so a relative path could match a
+        registered ancestor the client never named — misfiling the capture into
+        whatever project quarryd was launched under.  The registrations below map
+        the process cwd and its parent (the resolution targets of ``"src"`` and
+        ``".."``); the absolute-path guard must short-circuit before resolve().
+        """
+        regs = {
+            str(Path.cwd()): "daemon-project",
+            str(Path.cwd().parent): "daemon-parent",
+        }
+        assert CapturesCollection.for_cwd("src", regs).name == "default-captures"
+        assert CapturesCollection.for_cwd("..", regs).name == "default-captures"
+
+    def test_deep_cwd_finds_registered_ancestor(self) -> None:
+        """A deep absolute cwd resolves to its registered ancestor.
+
+        Ancestors are iterated lazily (``chain``) rather than materialized into a
+        full tuple, so an untrusted deep path resolves without amplifying memory.
+        """
+        deep = "/projects/myapp/" + "/".join(["a"] * 500)
+        regs = {"/projects/myapp": "myapp"}
+        assert CapturesCollection.for_cwd(deep, regs).name == "myapp-captures"
+
     def test_invalid_cwd_falls_back_to_default(self) -> None:
         """An OS-invalid cwd (embedded NUL) falls back to default-captures.
 
