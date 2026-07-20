@@ -26,16 +26,12 @@ from quarry.ingestion.text_splitter import (
     split_markdown,
     split_plain,
 )
-from quarry.ingestion.url_fetcher import UrlFetcher
-from quarry.ingestion.url_ingester import UrlIngester
 
 __all__ = [
     "PROVIDER_MODEL_MAP",
     "SUPPORTED_EXTENSIONS",
     "LocalOcrBackend",
     "ProviderSelection",
-    "UrlFetcher",
-    "UrlIngester",
     "chunk_pages",
     "clear_caches",
     "extract_text_pages",

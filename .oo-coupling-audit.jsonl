@@ -90,3 +90,4 @@
 {"ts":"2026-07-20T01:45:56Z","commit":"8fdfe83","source":null,"files_scored":161,"files_improved":0,"files_regressed":1,"verdict":"fail","reason":null,"deltas":{}}
 {"ts":"2026-07-20T01:46:15Z","commit":"8fdfe83","source":null,"files_scored":161,"files_improved":0,"files_regressed":1,"verdict":"relaxed","reason":"NEW jobs module: CaptureIngestJob composition + its imports (ingest_url/scrub via lazy, plus tasks); efferent 1 is well under the <=7 target","deltas":{"src/quarry/daemon/ingest_jobs.py":{"efferent_coupling":[0.0,1.0]}}}
 {"ts":"2026-07-20T01:46:21Z","commit":"8fdfe83","source":null,"files_scored":161,"files_improved":0,"files_regressed":0,"verdict":"pass","reason":null,"deltas":{}}
+{"ts":"2026-07-20T03:41:13Z","commit":"c73fc4b","source":null,"files_scored":159,"files_improved":1,"files_regressed":0,"verdict":"pass","reason":null,"deltas":{"src/quarry/ingestion/__init__.py":{"efferent_coupling":[9.0,7.0],"public_names":[22.0,20.0]}}}

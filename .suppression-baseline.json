@@ -1,10 +1,11 @@
 {
+  "total": 229,
   "by_category": {
-    "noqa": 193,
-    "per_file_ignores": 35,
+    "noqa": 181,
+    "type_ignore": 8,
     "pylint_disable": 0,
-    "pyright_ignore": 6,
-    "type_ignore": 8
+    "pyright_ignore": 5,
+    "per_file_ignores": 35
   },
   "by_file": {
     "src/quarry/__main__.py": {
@@ -12,9 +13,12 @@
       "type_ignore": 1
     },
     "src/quarry/_hook_entry.py": {
-      "noqa": 8
+      "noqa": 4
     },
     "src/quarry/backfill.py": {
+      "noqa": 1
+    },
+    "src/quarry/captures_collection.py": {
       "noqa": 1
     },
     "src/quarry/cli_captures.py": {
@@ -26,11 +30,11 @@
     "src/quarry/collections.py": {
       "type_ignore": 1
     },
+    "src/quarry/daemon/ingest_jobs.py": {
+      "noqa": 8
+    },
     "src/quarry/daemon/routes/captures.py": {
       "noqa": 1
-    },
-    "src/quarry/daemon/routes/ingestion.py": {
-      "noqa": 2
     },
     "src/quarry/daemon/routes/maintenance.py": {
       "noqa": 1
@@ -53,8 +57,8 @@
     },
     "src/quarry/doctor.py": {
       "noqa": 71,
-      "pyright_ignore": 2,
-      "type_ignore": 1
+      "type_ignore": 1,
+      "pyright_ignore": 2
     },
     "src/quarry/doctor_captures.py": {
       "noqa": 6
@@ -80,8 +84,8 @@
       "noqa": 1
     },
     "src/quarry/hooks.py": {
-      "noqa": 20,
-      "pyright_ignore": 3
+      "noqa": 19,
+      "pyright_ignore": 2
     },
     "src/quarry/ingestion/backends.py": {
       "noqa": 3
@@ -98,14 +102,11 @@
     "src/quarry/ingestion/provider.py": {
       "noqa": 2
     },
-    "src/quarry/ingestion/url_fetcher.py": {
-      "noqa": 4
-    },
-    "src/quarry/ingestion/url_ingester.py": {
-      "noqa": 8
-    },
     "src/quarry/ingestion/web_fetch.py": {
       "noqa": 2
+    },
+    "src/quarry/mcp_server.py": {
+      "noqa": 1
     },
     "src/quarry/onnx_session.py": {
       "noqa": 1
@@ -133,6 +134,5 @@
       "noqa": 1
     }
   },
-  "total": 242,
-  "updated_at": "2026-07-19T16:14:45Z"
+  "updated_at": "2026-07-20T03:41:13Z"
 }
