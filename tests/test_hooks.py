@@ -706,6 +706,34 @@ class TestHandlePostWebFetch:
         assert "page not indexed" in caplog.text
         assert "backfill" not in caplog.text
 
+    def test_http_error_logs_status_not_unreachable(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A non-2xx means the daemon is UP but rejected the request (auth,
+        server, validation).  It must be logged with its status, never collapsed
+        into 'unreachable' — that would send an operator chasing a phantom down
+        daemon when the real cause is a 401/500."""
+        from quarry.client import HttpError
+
+        client = MagicMock()
+        client.capture.side_effect = HttpError("Unauthorized", 401, "")
+        payload: dict[str, object] = {
+            "tool_input": {"url": "https://example.com/p"},
+            "tool_response": json.dumps({"result": "<html>hi</html>"}),
+        }
+        with (
+            patch("quarry.client.TargetResolver.connect", return_value=client),
+            caplog.at_level(logging.WARNING),
+        ):
+            result = handle_post_web_fetch(payload)
+
+        assert result == {}
+        assert "daemon rejected request" in caplog.text
+        assert "401" in caplog.text
+        # Not misclassified as a connection failure:
+        assert "page not indexed" not in caplog.text
+        assert "unreachable" not in caplog.text
+
 
 class TestHookImportsNoEngine:
     """The capture hook paths must run with the engine libraries poisoned.

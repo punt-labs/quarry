@@ -603,20 +603,35 @@ def _write_capture_file(
 def _send_to_daemon(
     post: Callable[[QuarryClient], object], *, unreachable_log: str
 ) -> bool:
-    """Connect to the daemon and run *post*; return False if it was unreachable.
+    """Connect to the daemon and run *post*; return False if the send failed.
 
-    The hook imports only the thin client — no engine.  A down or unreachable
-    daemon is not fatal, and the request is fire-and-forget (the daemon 202s
-    immediately), so this returns False rather than raising.  What "not fatal"
-    means differs per caller — a compaction has a durable archive, a web fetch
-    does not — so the caller supplies the truthful *unreachable_log* message.
+    The hook imports only the thin client — no engine.  A failed send is never
+    fatal (the request is fire-and-forget; the daemon 202s immediately), so this
+    returns False rather than raising.  The three failure classes are logged
+    distinctly so an operator is not misled: only a genuine connection failure is
+    "unreachable" (what that costs differs per caller — a compaction has a durable
+    archive, a web fetch does not — so the caller supplies *unreachable_log*); a
+    non-2xx response means the daemon is up but rejected the request (auth,
+    server, validation), and must not be logged as "down"; a malformed response
+    is a reachable-but-broken daemon.
     """
-    from quarry.client import QuarryError, TargetResolver  # noqa: PLC0415
+    from quarry.client import (  # noqa: PLC0415
+        HttpError,
+        QuarryConnectionError,
+        QuarryError,
+        TargetResolver,
+    )
 
     try:
         post(TargetResolver.connect())
-    except QuarryError:
+    except QuarryConnectionError:
         logger.warning("%s", unreachable_log)
+        return False
+    except HttpError as exc:
+        logger.warning("daemon rejected request: HTTP %s — %s", exc.status, exc.message)
+        return False
+    except QuarryError as exc:
+        logger.warning("daemon send failed (malformed response): %s", exc.message)
         return False
     return True
 
@@ -650,6 +665,33 @@ def _ingest_url_via_daemon(req: IngestRequest, *, unreachable_log: str) -> bool:
     )
 
 
+def _precompact_target(payload: dict[str, object]) -> tuple[str, str, Path] | None:
+    """Return ``(cwd, session_id, resolved jsonl path)`` for a capturable compaction.
+
+    ``None`` means the hook must no-op — the documented skip contract, not a
+    failure: disabled by config, a missing ``transcript_path``/``session_id``, or
+    a non-JSONL transcript suffix (defense-in-depth).  ``cwd`` may be empty (an
+    unregistered directory still archives and ingests); the other two are
+    required.  Extracting this gate keeps ``handle_pre_compact`` under the
+    complexity ceiling.
+    """
+    cwd_obj = payload.get("cwd")
+    cwd = cwd_obj if isinstance(cwd_obj, str) else ""
+    if cwd and not load_hook_config(cwd).compaction:
+        logger.debug("pre-compact: disabled by config")
+        return None
+    transcript_path = str(payload.get("transcript_path", ""))
+    session_id = str(payload.get("session_id", ""))
+    if not transcript_path or not session_id:
+        logger.debug("pre-compact: missing transcript_path or session_id")
+        return None
+    resolved = Path(transcript_path).resolve()
+    if resolved.suffix != ".jsonl":
+        logger.warning("pre-compact: unexpected suffix %s", resolved.suffix)
+        return None
+    return cwd, session_id, resolved
+
+
 def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
     """Handle PreCompact hook.
 
@@ -658,25 +700,10 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
     Returns the systemMessage immediately so compaction is never blocked, and a
     down daemon still leaves the durable local copies for ``backfill-sessions``.
     """
-    cwd_obj = payload.get("cwd")
-    cwd = cwd_obj if isinstance(cwd_obj, str) else ""
-    if cwd:
-        config = load_hook_config(cwd)
-        if not config.compaction:
-            logger.debug("pre-compact: disabled by config")
-            return {}
-
-    transcript_path = str(payload.get("transcript_path", ""))
-    session_id = str(payload.get("session_id", ""))
-    if not transcript_path or not session_id:
-        logger.debug("pre-compact: missing transcript_path or session_id")
+    target = _precompact_target(payload)
+    if target is None:
         return {}
-
-    # Defense-in-depth: reject non-JSONL paths (suffix check only).
-    tp = Path(transcript_path).resolve()
-    if tp.suffix != ".jsonl":
-        logger.warning("pre-compact: unexpected suffix %s", tp.suffix)
-        return {}
+    cwd, session_id, tp = target
 
     # Archive raw JSONL before extraction.
     sessions_dir = Path.home() / ".punt-labs" / "quarry" / "sessions"
@@ -685,7 +712,7 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
     except Exception:
         logger.exception("pre-compact: archival failed, proceeding with ingest")
 
-    text = extract_transcript_text(transcript_path)
+    text = extract_transcript_text(str(tp))
     if not text:
         logger.debug("pre-compact: no conversation text found")
         return {}

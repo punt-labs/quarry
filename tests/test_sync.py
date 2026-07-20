@@ -271,8 +271,11 @@ class TestDiscoverFiles:
         """The captures dir is pruned structurally, even with no .gitignore.
 
         A scrubbed session capture must never be folded into the project's MAIN
-        collection by directory sync; the built-in ignore list guarantees it
-        regardless of whether the repo gitignores ``.punt-labs/quarry/captures``.
+        collection by directory sync.  ``discover()`` prunes every dot-prefixed
+        directory before ignore patterns even apply, and ``.punt-labs`` is a dot
+        dir — so dot-dir pruning is the primary guard here; the built-in
+        ``.punt-labs/quarry/captures`` ignore entry is defense-in-depth for any
+        future non-dot capture path.
         """
         captures = tmp_path / ".punt-labs" / "quarry" / "captures"
         captures.mkdir(parents=True)
