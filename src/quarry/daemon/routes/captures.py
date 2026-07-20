@@ -11,6 +11,7 @@ from starlette.responses import JSONResponse
 from quarry.captures_collection import CapturesCollection
 from quarry.daemon.ingest_jobs import CaptureIngestJob, ScrubbedIngestJob
 from quarry.daemon.routes.base import RouteGroup
+from quarry.daemon.url_safety import UrlSafetyCheck
 from quarry.http_guards import RequestGuards
 
 if TYPE_CHECKING:
@@ -55,6 +56,10 @@ class CaptureRoutes(RouteGroup):
         overwrite = RequestGuards.coerce_bool_field(body, "overwrite", default=True)
         if isinstance(overwrite, JSONResponse):
             return overwrite
+        source_url = self._str_field(body, "source_url")
+        rejection = await self._reject_unsafe_source(source_url)
+        if rejection is not None:
+            return rejection
         collection = await run_in_threadpool(
             CapturesCollection.for_registry_path,
             self._str_field(body, "cwd"),
@@ -71,9 +76,24 @@ class CaptureRoutes(RouteGroup):
             memory_type=self._str_field(body, "memory_type"),
             summary=self._str_field(body, "summary"),
         )
-        return CaptureIngestJob(
-            inline=inline, source_url=self._str_field(body, "source_url")
-        )
+        return CaptureIngestJob(inline=inline, source_url=source_url)
+
+    async def _reject_unsafe_source(self, source_url: str) -> JSONResponse | None:
+        """Reject a source_url that resolves to a private/metadata address.
+
+        The daemon re-fetches this URL server-side when the inline HTML extracts
+        to zero chunks, so it is an SSRF sink identical to ``POST /ingest`` — it
+        must run the same UrlSafetyCheck gate at the route boundary, fail-closed,
+        before the job is built.  An empty source_url (a transcript) is nothing
+        to fetch and needs no gate.  reject_reason calls getaddrinfo, which can
+        block on DNS, so run it in the threadpool.
+        """
+        if not source_url:
+            return None
+        reason = await run_in_threadpool(UrlSafetyCheck.reject_reason, source_url)
+        if reason is not None:
+            return JSONResponse({"error": f"URL rejected: {reason}"}, status_code=400)
+        return None
 
     def _capture_name(self, body: dict[str, object]) -> str | JSONResponse:
         """Derive the document name: explicit name, else ``session-<id[:8]>``.

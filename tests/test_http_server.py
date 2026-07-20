@@ -1523,6 +1523,53 @@ class TestCapture:
         assert data["results"]["chunks"] == 3
         url.assert_not_called()  # inline chunks were stored — no re-fetch
 
+    @pytest.mark.parametrize(
+        "source_url",
+        [
+            "http://169.254.169.254/latest/meta-data/",  # cloud metadata
+            "http://metadata.google.internal/",  # GCP metadata host
+            "http://127.0.0.1/admin",  # loopback
+            "http://10.0.0.1/",  # RFC 1918 private
+            "http://192.168.1.1/",  # RFC 1918 private
+        ],
+    )
+    def test_internal_source_url_rejected_and_never_fetched(
+        self, tmp_path: Path, source_url: str
+    ) -> None:
+        """An internal source_url is rejected at the route, never fetched.
+
+        The daemon re-fetches source_url server-side when inline HTML extracts to
+        zero chunks — an SSRF sink.  The capture route must run the same
+        UrlSafetyCheck gate as /v1/ingest, fail-closed with a 400, before any
+        job runs, so a crafted internal URL never reaches ingest_url/WebFetcher.
+        """
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        empty = {"document_name": "p", "collection": "default-captures", "chunks": 0}
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch(
+                "quarry.ingestion.pipeline.ingest_content", return_value=empty
+            ) as content,
+            patch("quarry.ingestion.pipeline.ingest_url") as url,
+        ):
+            resp = tc.post(
+                "/v1/capture",
+                json={
+                    "content": "<html><body></body></html>",
+                    "document_name": "victim",
+                    "source_url": source_url,
+                    "format_hint": "html",
+                },
+            )
+
+        assert resp.status_code == 400
+        assert "rejected" in resp.json()["error"].lower()
+        url.assert_not_called()  # the SSRF sink was never reached
+        content.assert_not_called()  # rejected before any ingest job ran
+
 
 class TestRemember:
     """Tests for POST /remember endpoint -- now returns 202."""

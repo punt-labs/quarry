@@ -157,10 +157,13 @@ class CaptureIngestJob:
     The daemon scrubs and stores the already-fetched HTML through the composed
     :class:`ScrubbedIngestJob`.  A JS-rendered or otherwise text-empty page can
     extract to zero chunks; rather than silently index nothing, the daemon then
-    re-fetches the *source URL* through the SSRF-checked URL-ingest path (scrub
-    on, same captures collection) so the page is captured instead of dropped.
-    A capture with no source URL (a compaction transcript) simply stores what it
-    has.  The re-fetch scrubs content and summary, matching the inline phase.
+    re-fetches the *source URL* server-side (scrub on, same captures collection)
+    so the page is captured instead of dropped.  That re-fetch is an SSRF sink,
+    so the capture route runs the ``UrlSafetyCheck`` gate on ``source_url`` at
+    the boundary before building this job — the job trusts an already-validated
+    URL and does not re-check.  A capture with no source URL (a compaction
+    transcript) simply stores what it has.  The re-fetch scrubs content and
+    summary, matching the inline phase.
     """
 
     inline: ScrubbedIngestJob

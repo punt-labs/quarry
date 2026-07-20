@@ -364,9 +364,10 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     content = parsed.content
     if content:
         # Primary: hand the raw HTML to the daemon (it extracts, scrubs, chunks).
-        # Carry the source URL so the daemon can re-fetch through the SSRF-checked
-        # path if the HTML extracts to zero chunks (a JS-rendered page) — the page
-        # is captured, not silently dropped, and the client stays engine-free.
+        # Carry the source URL so that if the HTML extracts to zero chunks (a
+        # JS-rendered page) the daemon can re-fetch it server-side — the capture
+        # route SSRF-gates source_url before the re-fetch — so the page is
+        # captured, not silently dropped, and the client stays engine-free.
         _capture_via_daemon(
             CaptureIngestRequest(
                 content=content,
