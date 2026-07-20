@@ -22,6 +22,10 @@ import pytest
 
 import quarry
 
+# The engine modules a thin ``import quarry`` must never load. ``_POISONED`` is
+# the subset set to ``None`` in a fresh interpreter so a stray ``import`` of them
+# raises ``ImportError``; the rest are checked by absence from ``sys.modules``.
+# One canonical list drives both — no second, drifting copy.
 _ENGINE = (
     "lancedb",
     "onnxruntime",
@@ -31,6 +35,7 @@ _ENGINE = (
     "quarry.retrieval",
     "quarry.sync",
 )
+_POISONED = ("lancedb", "onnxruntime")
 
 _REMOVED_ENGINE_NAMES = (
     "Database",
@@ -59,23 +64,22 @@ def test_import_quarry_is_engine_free_under_sabotage() -> None:
     ``import lancedb`` in the import or attribute-access path into an
     ``ImportError``, so a future re-target back to the engine fails here.
     """
-    code = (
-        "import sys;"
-        "sys.modules['lancedb'] = None;"
-        "sys.modules['onnxruntime'] = None;"
-        "import quarry;"
-        "engine = ('pyarrow', 'quarry.db', 'quarry.ingestion',"
-        "          'quarry.retrieval', 'quarry.sync');"
-        "loaded = [m for m in engine if m in sys.modules];"
-        "assert not loaded, loaded;"
-        "_ = (quarry.QuarryClient, quarry.TargetResolver, quarry.ClientConfig,"
-        "     quarry.QuarryError, quarry.QuarryConnectionError, quarry.HttpError,"
-        "     quarry.TaskOutcome);"
-        "loaded = [m for m in engine if m in sys.modules];"
-        "assert not loaded, loaded;"
-        "print('engine-free')"
-    )
-    result = _run(code)
+    program = f"""
+import sys
+poison = {_POISONED!r}
+for _m in poison:
+    sys.modules[_m] = None  # any real import of these now raises ImportError
+import quarry
+engine = {_ENGINE!r}
+check = [m for m in engine if m not in poison]
+loaded = [m for m in check if m in sys.modules]
+assert not loaded, loaded
+_ = tuple(getattr(quarry, n) for n in quarry.__all__ if n != "__version__")
+loaded = [m for m in check if m in sys.modules]
+assert not loaded, loaded
+print("engine-free")
+"""
+    result = _run(program)
     assert result.returncode == 0, result.stderr
     assert "engine-free" in result.stdout
 
@@ -88,15 +92,16 @@ def test_bare_import_stays_lazy() -> None:
     ``from quarry.client import ...`` in ``__init__`` fails this test instead of
     silently regressing the ``quarry-hook`` fast path.
     """
-    code = (
-        "import sys, quarry;"
-        "hot = [m for m in ('pydantic', 'quarry.client') if m in sys.modules];"
-        "assert not hot, hot;"
-        "quarry.QuarryClient;"
-        "assert 'quarry.client' in sys.modules;"
-        "print('lazy')"
-    )
-    result = _run(code)
+    program = """
+import sys
+import quarry
+hot = [m for m in ("pydantic", "quarry.client") if m in sys.modules]
+assert not hot, hot
+quarry.QuarryClient
+assert "quarry.client" in sys.modules
+print("lazy")
+"""
+    result = _run(program)
     assert result.returncode == 0, result.stderr
     assert "lazy" in result.stdout
 
