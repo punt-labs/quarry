@@ -81,6 +81,56 @@ class TestRemember:
             call_kwargs = mock_ingest.call_args[1]
             assert call_kwargs["collection"] == "ml-101"
 
+    def test_remember_scrubs_content(self, tmp_path: Path) -> None:
+        """The stdio remember scrubs PII before storing, like the daemon path."""
+        settings = _settings(tmp_path)
+        done = threading.Event()
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.db.facade.get_db"),
+            patch(
+                "quarry.mcp_server.pipeline_ingest_content",
+                side_effect=lambda *a, **kw: done.set(),
+            ) as mock_ingest,
+        ):
+            mcp_remember("reach me at jmf@pobox.com", "note.md")
+            assert done.wait(timeout=2), "background thread did not run"
+
+        scrub = mock_ingest.call_args[1]["content_scrubber"]
+        redacted = scrub("reach me at jmf@pobox.com")
+        assert "jmf@pobox.com" not in redacted
+        assert "[REDACTED:email]" in redacted
+
+    def test_remember_scrubs_document_name_and_summary(self, tmp_path: Path) -> None:
+        """The stdio remember redacts the document_name AND summary, not just
+        content — the pipeline choke point guarantees it end-to-end, so a secret
+        in a remember's name or summary never reaches memory-<agent> in the clear.
+        """
+        settings = _settings(tmp_path)
+        done = threading.Event()
+        seen: dict[str, object] = {}
+
+        def _store(
+            _pages: object, document_name: str, *_a: object, **kw: object
+        ) -> dict[str, object]:
+            seen["name"] = document_name
+            seen["summary"] = kw["summary"]
+            done.set()
+            return {"document_name": document_name, "collection": "c", "chunks": 0}
+
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.db.facade.get_db"),
+            patch("quarry.ingestion.pipeline._chunk_embed_store", _store),
+        ):
+            mcp_remember("body", "note jmf@pobox.com", summary="contact jmf@pobox.com")
+            assert done.wait(timeout=2), "background thread did not run"
+
+        assert "jmf@pobox.com" not in str(seen["name"])
+        assert "[REDACTED:email]" in str(seen["name"])
+        assert "jmf@pobox.com" not in str(seen["summary"])
+        assert "[REDACTED:email]" in str(seen["summary"])
+
 
 class TestDeleteDocument:
     def test_returns_immediately_with_background(self, tmp_path: Path) -> None:

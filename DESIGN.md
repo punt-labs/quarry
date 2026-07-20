@@ -1587,3 +1587,66 @@ once `check-coupling` is a gate, a branch whose base predates adoption fails cou
 with "base commit predates baseline adoption — rebase onto current main" (correct
 fail-closed behavior). Vox's stricter gate (no ratio tolerance, no asymmetric
 `module_size` headroom) may block growth that previously passed.
+
+---
+
+## DES-041: One scrubbing content-ingest path — remember and capture collapse; the capture hook goes thin
+
+**Status:** Accepted (2026-07-19) · **Bead:** quarry-en68 · **Full design:** `docs/des-capture-ingest.md`
+
+**Context.** Two accidental gaps shared one fix. (1) The inline-content DB write did
+not scrub: `RememberJob` called `ingest_content` with no scrubber, and the
+PreCompact transcript capture rode the same path — so `memory-<agent>` and
+`<repo>-captures` collections stored secrets/PII in cleartext. Only the git-tracked
+`.md` capture file was scrubbed (DES-036 covered that surface only). (2) The
+capture/PreCompact hook was the last fat client of the DES-031 daemon-first cutover:
+it spawned a detached subprocess that built a full ~1.6 GB engine per compaction.
+With no concurrency cap, ~14 cold engines oversubscribed an 8-core host to load
+77-97 (quarry-lnog). An earlier draft assumed `remember` was *deliberately*
+unscrubbed and proposed a separate scrubbing capture endpoint; the operator
+established that assumption was false — remember simply never scrubbed, and should.
+
+**Decision.** One scrubbing inline-content core, shared by two correctly-named entry
+points, with the collection as a parameter (reuse the logic, never the name):
+`remember` (`POST /v1/remember` → `memory-<agent>`) and `capture`
+(`POST /v1/capture` → `<repo>-captures`, one door for both the transcript and
+web-fetch triggers). Both build one `ScrubbedIngestJob` that always scrubs
+server-side, on the worker thread, **before** embed/store (fail-closed: a raised
+scrub writes zero chunks and — after DES-041's fix — deletes nothing on overwrite).
+The capture hook becomes thin: it writes its durable local `.md` + raw archive, then
+POSTs content to the resident daemon via `QuarryClient` fire-and-forget (202), and
+returns — no per-hook engine (kills quarry-lnog), no engine import (unblocks the PR-6
+boundary, gated by a runtime engine-sabotage test, not import-linter, since the
+hook's imports were already lazy). Directory `sync` fills the `<repo>` core
+collection from files on disk and stays **unscrubbed** (scrubbing source corrupts
+it); an unregistered cwd falls back to `default-captures` via the standard
+`<repo>-captures` pattern (the one-off `session-notes`/`web-captures` names are
+retired). Captures are kept out of the core collection **structurally** —
+`.punt-labs/quarry/captures/` is added to sync-discovery's `_DEFAULT_IGNORE_PATTERNS`
+rather than relying on an ambient `.gitignore` line. As a security completion under
+"ship means secure," a non-loopback bind now requires TLS (a key authenticates but
+does not encrypt), and the client resolver refuses a plaintext non-loopback target
+regardless of token presence — so raw pre-scrub content only ever crosses loopback
+or TLS. Legacy cleartext already in the DB is **not** swept (operator-ruled
+forward-only; a future full purge covers it).
+
+**Rejected alternatives.** A dedicated capture endpoint justified by scrub semantics
+(the false "remember must stay raw"); reusing the `/remember` name/`RememberJob` for
+captures (overloads the name — a reader can't tell a capture from a remember); a
+`scrub: bool` flag (a mode a caller sets wrong silently corrupts); a discriminated
+`IngestRequest{url|content}` (revives the scoped-out user file-ingest surface); a
+daemon path-read mode (arbitrary-local-file-read surface — content-over-path avoids
+it); scrubbing source on sync (corrupts fixtures/paths/changelogs); relying on
+`.gitignore` to keep captures out of `<repo>` (per-repo, fragile); scrubbing on the
+event loop (blocks every other request); a one-time legacy-cleartext sweep
+(forward-only ruling).
+
+**Consequence.** `pipeline.py` decomposed 1,475→~1,090 (`ImagePreparer` consolidated
+to one implementation, `TextLikeFormat`); `background_ingest.py` and `BackgroundIngest`
+deleted (PL-PP-1, no
+shim). Scoped ratchet relaxations were taken only for irreducible wire-contract /
+security-gate growth on pure-schema/re-export files that carry no offsettable metric
+(real principal paid on `pipeline.py`/`ingestion`), each justified in the audit logs
+and verified against the merge-base. quarry-lxrk (the serialized per-collection queue)
+remains the follow-on that bounds bursty concurrent captures; quarry-czf3 decides
+whether an unregistered cwd should nudge-to-register rather than fall back at all.

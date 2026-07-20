@@ -7,7 +7,7 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, final
 
-from quarry.hooks import WEB_CAPTURES_FALLBACK
+from quarry.captures_collection import CapturesCollection
 from quarry.results import CheckResult
 from quarry.shadow.repo import PARENT_TRACKED_REMEDIATION
 
@@ -44,9 +44,10 @@ class CaptureDiagnostics:
 
         database = Database.connect(db_path)
         collections = {c["collection"] for c in database.catalog.list_collections()}
-        # web-captures is the base-less web-fetch fallback; its base "web" is
-        # never registered by design, so drop it before the orphan test.
-        col_names = collections - {WEB_CAPTURES_FALLBACK}
+        # ``default-captures`` is the live fallback for an unregistered directory;
+        # its base "default" is never registered by design, so spare it from the
+        # orphan test (else any unregistered-dir capture flags a false positive).
+        col_names = collections - {CapturesCollection.fallback().name}
         with contextlib.closing(SyncRegistry(registry_path)) as conn:
             registered = {r.collection for r in conn.list_registrations()}
         return sorted(

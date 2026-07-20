@@ -12,6 +12,7 @@ present, so a pure client never pulls in lancedb/onnxruntime.
 
 from __future__ import annotations
 
+from quarry.api.capture_ingest import CaptureIngestRequest
 from quarry.api.captures import CapturesPushResponse
 from quarry.api.collections import (
     CollectionInfo,
@@ -41,6 +42,7 @@ API_VERSION = "1"
 __all__ = [
     "API_VERSION",
     "BackfillRequest",
+    "CaptureIngestRequest",
     "CapturesPushResponse",
     "CollectionInfo",
     "CollectionList",

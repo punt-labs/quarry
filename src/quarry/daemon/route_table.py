@@ -16,6 +16,7 @@ from starlette.responses import JSONResponse, PlainTextResponse
 
 from quarry.api import (
     BackfillRequest,
+    CaptureIngestRequest,
     CapturesPushResponse,
     CollectionList,
     DatabaseList,
@@ -138,6 +139,7 @@ class RouteTable:
         docs = DocumentRoutes(ctx)
         cols = CollectionRoutes(ctx)
         ingestion = IngestionRoutes(ctx)
+        captures = CaptureRoutes(ctx)
         tasks = TaskStatusRoutes(ctx)
         db = DatabaseRoutes(ctx)
         reg = RegistrationRoutes(ctx)
@@ -184,11 +186,19 @@ class RouteTable:
                 status_code=202,
             ),
             RouteSpec(
+                "/capture",
+                captures.capture,
+                ("POST",),
+                TaskAccepted,
+                request_model=CaptureIngestRequest,
+                status_code=202,
+            ),
+            RouteSpec(
                 "/sync", SyncRoutes(ctx).sync, ("POST",), TaskAccepted, status_code=202
             ),
             RouteSpec(
                 "/captures/push",
-                CaptureRoutes(ctx).push,
+                captures.push,
                 ("POST",),
                 CapturesPushResponse,
             ),

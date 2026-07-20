@@ -1348,9 +1348,9 @@ class TestCheckOrphanedCaptures:
         with patch.object(Database, "connect", return_value=facade):
             return CaptureDiagnostics.orphaned(registry_path, db_path)
 
-    def test_web_captures_fallback_not_flagged(self, tmp_path: Path) -> None:
-        """web-captures is the base-less fallback bucket -- never orphaned."""
-        result = self._run(tmp_path, collections=["web-captures"], registered=[])
+    def test_default_captures_fallback_not_flagged(self, tmp_path: Path) -> None:
+        """default-captures is the live base-less fallback -- never orphaned."""
+        result = self._run(tmp_path, collections=["default-captures"], registered=[])
         assert result.passed is True
         assert "no orphaned" in result.message
 
@@ -1360,18 +1360,18 @@ class TestCheckOrphanedCaptures:
         assert result.passed is False
         assert "myproj-captures" in result.message
 
-    def test_web_fallback_excluded_but_real_orphan_flagged(
+    def test_default_fallback_excluded_but_real_orphan_flagged(
         self, tmp_path: Path
     ) -> None:
-        """The exclusion is precise: web-captures spared, real orphan flagged."""
+        """The exclusion is precise: default-captures spared, real orphan flagged."""
         result = self._run(
             tmp_path,
-            collections=["web-captures", "myproj-captures"],
+            collections=["default-captures", "myproj-captures"],
             registered=[],
         )
         assert result.passed is False
         assert "myproj-captures" in result.message
-        assert "web-captures" not in result.message
+        assert "default-captures" not in result.message
 
     def test_registered_project_captures_not_flagged(self, tmp_path: Path) -> None:
         """A <project>-captures whose <project> is registered is not orphaned."""

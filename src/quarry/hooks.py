@@ -20,32 +20,22 @@ from __future__ import annotations
 import contextlib
 import logging
 import shutil
-import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from quarry._stdlib import load_hook_config
-from quarry.background_ingest import BackgroundIngestJob
 from quarry.web_capture import WebFetchPayload
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from quarry.api import CaptureIngestRequest, IngestRequest
     from quarry.artifacts import SessionArtifacts
+    from quarry.client import QuarryClient
     from quarry.config import Settings
-    from quarry.db.facade import Database
-    from quarry.sync_registry import DirectoryRegistration, SyncRegistry
+    from quarry.sync_registry import SyncRegistry
 
 logger = logging.getLogger(__name__)
-
-
-def _find_registration(  # pyright: ignore[reportUnusedFunction]
-    registrations: list[DirectoryRegistration],
-    directory: str,
-) -> DirectoryRegistration | None:
-    """Find an existing registration matching *directory*."""
-    for reg in registrations:
-        if reg.directory == directory:
-            return reg
-    return None
 
 
 def _unique_collection_name(
@@ -314,10 +304,6 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
         conn.close()
 
 
-WEB_CAPTURES_FALLBACK = "web-captures"
-_SESSION_NOTES_FALLBACK = "session-notes"
-
-
 def _collection_for_cwd_conn(
     conn: SyncRegistry,
     cwd: str,
@@ -343,40 +329,15 @@ def _collection_for_cwd_conn(
     return None
 
 
-def _collection_for_cwd(cwd: str) -> str | None:
-    """Resolve the registered collection for a working directory.
-
-    Walks up from *cwd* to find a registered parent directory (or exact
-    match).  Returns the collection name, or ``None`` if no registration
-    covers *cwd*.
-    """
-    if not cwd:
-        return None
-
-    from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
-
-    settings = _resolve_settings()
-    conn = SyncRegistry(settings.registry_path)
-    try:
-        return _collection_for_cwd_conn(conn, cwd)
-    finally:
-        conn.close()
-
-
-def _is_already_ingested(url: str, database: Database, collection: str) -> bool:
-    """Check if *url* is already in the given collection."""
-    docs = database.catalog.list_documents(collection_filter=collection)
-    return any(d["document_name"] == url for d in docs)
-
-
 def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     """Handle PostToolUse on WebFetch.
 
-    Ingests the already-fetched content from the hook payload into the
-    ``web-captures`` collection.  Uses ``tool_response`` directly — no
-    second network request.  Falls back to ``ingest_url`` only if the
-    payload lacks content.  Skips URLs already ingested (dedup by
-    document_name).
+    Sends the already-fetched page to the daemon, which extracts, scrubs, and
+    stores it in the project's ``<repo>-captures`` collection.  Uses the payload
+    ``tool_response`` directly — no second fetch.  When the payload has no usable
+    content, the daemon re-fetches through the SSRF-checked URL-ingest route
+    instead.  The hook imports no engine — only the thin client and the
+    lightweight URL/scrub helpers.
     """
     cwd_obj = payload.get("cwd")
     cwd = cwd_obj if isinstance(cwd_obj, str) else ""
@@ -392,70 +353,39 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
         logger.debug("post-web-fetch: no valid URL in payload, skipping")
         return {}
 
-    # Heavy imports deferred past early-return guards.
-    from quarry.db.facade import Database  # noqa: PLC0415
-    from quarry.ingestion.pipeline import ingest_content, ingest_url  # noqa: PLC0415
-
-    base_collection = _collection_for_cwd(cwd)
-    collection = (
-        f"{base_collection}-captures" if base_collection else WEB_CAPTURES_FALLBACK
-    )
-
-    settings = _resolve_settings()
-    database = Database.connect(settings.lancedb_path)
-
+    from quarry.api import CaptureIngestRequest, IngestRequest  # noqa: PLC0415
     from quarry.capture_url import CaptureUrl  # noqa: PLC0415
     from quarry.scrub import scrub_and_log  # noqa: PLC0415
 
-    # Both ingest paths scrub before content reaches the pushable web-captures
-    # collection, so DB ingress is PII-clean on primary AND fallback.
-    def web_fetch_scrub(raw: str) -> str:
-        return scrub_and_log(raw, "web-fetch")
+    # A capture must not persist the URL's userinfo/query/fragment as the stored
+    # document name; redact it for the name the daemon files under.
+    meta_url = CaptureUrl(url).redacted(lambda raw: scrub_and_log(raw, "web-fetch"))
 
-    # A capture must not persist the URL's userinfo/query/fragment as document
-    # metadata. Redact once and reuse for dedup and the primary branch; the
-    # fallback ingest_url redacts identically, so the stored name/path matches.
-    meta_url = CaptureUrl(url).redacted(web_fetch_scrub)
-
-    if _is_already_ingested(meta_url, database, collection):
-        logger.debug("post-web-fetch: already ingested %s, skipping", meta_url)
-        return {}
-
-    # Prefer already-fetched tool_response content (avoids a second fetch).
     content = parsed.content
-    result = None
     if content:
-        from quarry.extractors.html_extractor import HtmlExtractor  # noqa: PLC0415
-
-        pages = HtmlExtractor().extract_from_html(content, meta_url, meta_url)
-        if pages:
-            clean_text = web_fetch_scrub("\n\n".join(p.text for p in pages))
-            result = ingest_content(
-                clean_text,
-                meta_url,
-                database,
-                settings,
-                collection=collection,
-                format_hint="markdown",
-            )
-        else:
-            logger.debug("post-web-fetch: no text in tool_response, falling back")
-
-    if result is None:
-        # Fallback re-fetch; ingest_url redacts the URL and scrubs each page, so
-        # this capture is stored identically to the primary branch.
-        result = ingest_url(
-            url,
-            database,
-            settings,
-            collection=collection,
-            content_scrubber=web_fetch_scrub,
+        # Primary: hand the raw HTML to the daemon (it extracts, scrubs, chunks).
+        # Carry the source URL so that if the HTML extracts to zero chunks (a
+        # JS-rendered page) the daemon can re-fetch it server-side — the capture
+        # route SSRF-gates source_url before the re-fetch — so the page is
+        # captured, not silently dropped, and the client stays engine-free.
+        _capture_via_daemon(
+            CaptureIngestRequest(
+                content=content,
+                cwd=cwd,
+                document_name=meta_url,
+                format_hint="html",
+                source_url=url,
+            ),
+            unreachable_log=_WEB_FETCH_UNREACHABLE,
         )
-    logger.info(
-        "post-web-fetch: ingested %s (%d chunks)",
-        meta_url,
-        result["chunks"],
-    )
+    else:
+        # Fallback: no usable content — the daemon re-fetches through the
+        # SSRF-checked ingest route, scrubbing the page into <repo>-captures.
+        logger.debug("post-web-fetch: no content in payload, re-fetching via daemon")
+        _ingest_url_via_daemon(
+            IngestRequest(source=url, cwd=cwd, overwrite=True, scrub=True),
+            unreachable_log=_WEB_FETCH_UNREACHABLE,
+        )
     return {}
 
 
@@ -643,41 +573,6 @@ def _archive_transcript(
                 f.unlink()
 
 
-def _spawn_background_ingest(
-    text_file: Path, text: str, job: BackgroundIngestJob
-) -> bool:
-    """Write text to a temp file and spawn detached ingestion process.
-
-    Redirects stdin/stdout/stderr to DEVNULL; the subprocess calls
-    ``LoggingConfig.configure()`` itself, so the rotating file handler captures
-    all diagnostics.
-
-    Returns True on success, False if the spawn failed (temp file cleaned up).
-    """
-    try:
-        text_file.write_text(text)
-    except OSError:
-        logger.exception("pre-compact: failed to write temp file %s", text_file)
-        text_file.unlink(missing_ok=True)
-        return False
-
-    try:
-        subprocess.Popen(
-            job.command(text_file),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-    except OSError:
-        logger.exception("pre-compact: failed to spawn background ingest")
-        text_file.unlink(missing_ok=True)
-        return False
-
-    logger.info("pre-compact: spawned background ingest for %s", job.document_name)
-    return True
-
-
 def _write_capture_file(
     project_dir: Path,
     session_id: str,
@@ -705,33 +600,121 @@ def _write_capture_file(
     )
 
 
-def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
-    """Handle PreCompact hook.
+def _send_to_daemon(
+    post: Callable[[QuarryClient], object], *, unreachable_log: str
+) -> bool:
+    """Connect to the daemon and run *post*; return False if the send failed.
 
-    Reads the conversation transcript before compaction, writes the
-    extracted text to a temp file, and spawns a background process to
-    ingest it.  Returns the systemMessage immediately so compaction
-    is never blocked by embedding work.
+    The hook imports only the thin client — no engine.  A failed send is never
+    fatal (the request is fire-and-forget; the daemon 202s immediately), so this
+    returns False rather than raising.  The four failure classes are logged
+    distinctly so an operator is not misled: a local misconfiguration (e.g. a
+    QUARRY_URL pointing at a refused cleartext remote) is a config error, not a
+    down daemon; a genuine connection failure is "unreachable" (what that costs
+    differs per caller — a compaction has a durable archive, a web fetch does not
+    — so the caller supplies *unreachable_log*); a non-2xx response means the
+    daemon is up but rejected the request (auth, server, validation), not "down";
+    a bare QuarryError is a reachable-but-broken daemon (malformed response).
+    """
+    from quarry.client import (  # noqa: PLC0415
+        ClientConfigError,
+        HttpError,
+        QuarryConnectionError,
+        QuarryError,
+        TargetResolver,
+    )
+
+    try:
+        post(TargetResolver.connect())
+    except ClientConfigError as exc:
+        logger.warning("daemon target misconfigured: %s", exc.message)
+        return False
+    except QuarryConnectionError:
+        logger.warning("%s", unreachable_log)
+        return False
+    except HttpError as exc:
+        logger.warning("daemon rejected request: HTTP %s — %s", exc.status, exc.message)
+        return False
+    except QuarryError as exc:
+        logger.warning("daemon send failed (malformed response): %s", exc.message)
+        return False
+    return True
+
+
+# The daemon 202s a capture before any embedding runs, so a healthy send is near
+# instant.  Cap it well below the client's 15s default: a saturated daemon must
+# never make a compaction wait — the durable archive already holds the transcript.
+_CAPTURE_SEND_TIMEOUT = 5.0
+
+# A web fetch writes NO durable local copy and backfill-sessions only re-ingests
+# session transcripts, so a lost web capture is genuinely lost — the log must not
+# promise a backfill that will never happen.
+_WEB_FETCH_UNREACHABLE = (
+    "web-fetch: daemon unreachable; page not indexed (re-fetch to retry)"
+)
+
+
+def _capture_via_daemon(req: CaptureIngestRequest, *, unreachable_log: str) -> bool:
+    """Send an inline capture (transcript or fetched page) to the daemon."""
+    return _send_to_daemon(
+        lambda client: client.capture(req, timeout=_CAPTURE_SEND_TIMEOUT),
+        unreachable_log=unreachable_log,
+    )
+
+
+def _ingest_url_via_daemon(req: IngestRequest, *, unreachable_log: str) -> bool:
+    """Ask the daemon to re-fetch and index a URL (the web-fetch fallback)."""
+    return _send_to_daemon(
+        lambda client: client.ingest_url(req, timeout=_CAPTURE_SEND_TIMEOUT),
+        unreachable_log=unreachable_log,
+    )
+
+
+def _precompact_target(payload: dict[str, object]) -> tuple[str, str, Path] | None:
+    """Return ``(cwd, session_id, resolved jsonl path)`` for a capturable compaction.
+
+    ``None`` means the hook must no-op — the documented skip contract, not a
+    failure: disabled by config, a missing ``transcript_path``/``session_id``, or
+    a non-JSONL transcript suffix (defense-in-depth).  ``cwd`` may be empty (an
+    unregistered directory still archives and ingests); the other two are
+    required.  Extracting this gate keeps ``handle_pre_compact`` under the
+    complexity ceiling.
     """
     cwd_obj = payload.get("cwd")
     cwd = cwd_obj if isinstance(cwd_obj, str) else ""
-    if cwd:
-        config = load_hook_config(cwd)
-        if not config.compaction:
-            logger.debug("pre-compact: disabled by config")
-            return {}
-
+    if cwd and not load_hook_config(cwd).compaction:
+        logger.debug("pre-compact: disabled by config")
+        return None
     transcript_path = str(payload.get("transcript_path", ""))
     session_id = str(payload.get("session_id", ""))
     if not transcript_path or not session_id:
         logger.debug("pre-compact: missing transcript_path or session_id")
-        return {}
+        return None
+    try:
+        resolved = Path(transcript_path).resolve()
+    except (OSError, ValueError):
+        # transcript_path is untrusted hook input; an embedded NUL or an
+        # OS-invalid path must skip per the no-op contract, not crash the hook.
+        logger.warning("pre-compact: unresolvable transcript_path", exc_info=True)
+        return None
+    if resolved.suffix != ".jsonl":
+        logger.warning("pre-compact: unexpected suffix %s", resolved.suffix)
+        return None
+    return cwd, session_id, resolved
 
-    # Defense-in-depth: reject non-JSONL paths (suffix check only).
-    tp = Path(transcript_path).resolve()
-    if tp.suffix != ".jsonl":
-        logger.warning("pre-compact: unexpected suffix %s", tp.suffix)
+
+def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
+    """Handle PreCompact hook.
+
+    Archives the raw transcript and writes the scrubbed ``.md`` capture locally,
+    then sends the conversation text to the daemon to embed in the background.
+    Returns the systemMessage immediately so compaction is never blocked, and a
+    down daemon still leaves the durable local copies for ``backfill-sessions``.
+    """
+    target = _precompact_target(payload)
+    if target is None:
         return {}
+    cwd, session_id, tp = target
 
     # Archive raw JSONL before extraction.
     sessions_dir = Path.home() / ".punt-labs" / "quarry" / "sessions"
@@ -740,7 +723,7 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
     except Exception:
         logger.exception("pre-compact: archival failed, proceeding with ingest")
 
-    text = extract_transcript_text(transcript_path)
+    text = extract_transcript_text(str(tp))
     if not text:
         logger.debug("pre-compact: no conversation text found")
         return {}
@@ -758,19 +741,11 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
 
     from datetime import UTC, datetime  # noqa: PLC0415
 
-    base_collection = _collection_for_cwd(cwd)
-    collection = (
-        f"{base_collection}-captures" if base_collection else _SESSION_NOTES_FALLBACK
-    )
-    settings = _resolve_settings()
     agent_handle = _read_ethos_agent_handle(cwd) if cwd else ""
 
-    now = datetime.now(UTC)
-    timestamp = now.strftime("%Y%m%dT%H%M%S")
-    iso_timestamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    # Write capture file to project directory.
+    # Write the scrubbed .md capture to the project directory (durable copy).
     if cwd:
+        iso_timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         _write_capture_file(
             project_dir=Path(cwd),
             session_id=session_id,
@@ -778,34 +753,32 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
             artifacts=artifacts,
             text=raw_text,
         )
-    document_name = f"session-{session_id[:8]}-{timestamp}"
 
-    # Write extracted text and spawn background ingestion.
-    sessions_dir.mkdir(parents=True, exist_ok=True)
-    text_file = sessions_dir / f"{document_name}.txt"
-    if not _spawn_background_ingest(
-        text_file,
-        text,
-        BackgroundIngestJob(
-            document_name=document_name,
-            collection=collection,
-            lancedb_path=settings.lancedb_path,
-            session_prefix=session_id[:8],
-            agent_handle=agent_handle,
-        ),
-    ):
+    from quarry.api import CaptureIngestRequest  # noqa: PLC0415
+
+    req = CaptureIngestRequest(
+        content=text,
+        cwd=cwd,
+        session_id=session_id,
+        agent_handle=agent_handle,
+        format_hint="markdown",
+    )
+    unreachable = (
+        "pre-compact: daemon unreachable; transcript archived, "
+        "run backfill-sessions to index it"
+    )
+    if not _capture_via_daemon(req, unreachable_log=unreachable):
         return {
             "systemMessage": (
-                "Warning: session transcript capture failed. "
-                "The raw JSONL archive is still available in "
-                "~/.punt-labs/quarry/sessions/."
+                "Warning: quarryd is not reachable, so this session was not "
+                "indexed now. The raw JSONL archive and scrubbed capture are "
+                "saved; run 'quarry backfill-sessions' to index them later."
             ),
         }
 
     return {
         "systemMessage": (
-            f'Capturing conversation as "{document_name}" '
-            f'in collection "{collection}" (background). '
-            "Search with /find or show to retrieve context."
+            "Capturing this session's conversation (background). "
+            "Search with /find or show to retrieve it."
         ),
     }

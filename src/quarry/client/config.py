@@ -119,11 +119,24 @@ class ClientConfig:
         url = cls.canonical_url(str(login["url"]))
         raw_ca = login.get("ca_cert")
         ca_cert = str(raw_ca) if raw_ca else None
+        host = cls._host_of(url)
+        policy = LoopbackPolicy(host)
+        # A stored cleartext (http/ws) login to a non-loopback host is refused:
+        # request content — remembered notes, transcripts — would cross the wire
+        # in the clear.  A remote login must be ``wss://``; loopback plaintext is
+        # same-machine and stays fine.
+        scheme = urllib.parse.urlparse(ws_to_http(url)).scheme or "http"
+        if scheme == "http" and not policy.is_literal_loopback:
+            raise ClientConfigError(
+                "refusing a cleartext (http/ws) login to non-loopback host "
+                f"{host!r}: request content would be exposed. Re-login with a "
+                "wss:// URL (see 'quarry login')."
+            )
         token: str | None
         # ``url`` is already migrated, so a stored ``localhost`` presents here as
         # the literal and the stored URL below is the literal too — the gate and
         # the connection target can never diverge.
-        if LoopbackPolicy(cls._host_of(url)).is_literal_loopback:
+        if policy.is_literal_loopback:
             token = cls._serve_token()
         else:
             token = cls._login_bearer(login)

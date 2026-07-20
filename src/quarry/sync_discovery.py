@@ -25,6 +25,12 @@ _DEFAULT_IGNORE_PATTERNS: Final[list[str]] = [
     "dist/",
     "build/",
     ".DS_Store",
+    # Defense-in-depth for the captures dir.  The walk already prunes every
+    # dot-prefixed directory (``.punt-labs``) before patterns are matched, so
+    # this entry is redundant belt-and-braces — it records the intent that
+    # scrubbed captures (the daemon's <repo>-captures) must never be folded into
+    # the project's MAIN collection by directory sync.
+    ".punt-labs/quarry/captures/",
 ]
 
 _HASH_CHUNK_SIZE: Final[int] = 1 << 20  # 1 MiB

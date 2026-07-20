@@ -398,13 +398,22 @@ def _check_sync_directories(registry_path: Path) -> CheckResult:
         )
 
 
-def _check_enable_status(registry_path: Path, cwd: str) -> CheckResult:  # noqa: ARG001
+def _check_enable_status(registry_path: Path, cwd: str) -> CheckResult:
     """Check if the cwd has quarry enabled."""
     from quarry.hooks import (  # noqa: PLC0415
-        _collection_for_cwd,  # pyright: ignore[reportPrivateUsage]
+        _collection_for_cwd_conn,  # pyright: ignore[reportPrivateUsage]
     )
+    from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
 
-    collection = _collection_for_cwd(cwd)  # pyright: ignore[reportPrivateUsage]
+    conn = SyncRegistry(registry_path)
+    try:
+        collection = (
+            _collection_for_cwd_conn(conn, cwd)  # pyright: ignore[reportPrivateUsage]
+            if cwd
+            else None
+        )
+    finally:
+        conn.close()
     if collection is None:
         return CheckResult(
             name="Enable status",

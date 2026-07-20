@@ -1,37 +1,40 @@
 {
-  "total": 257,
+  "total": 229,
   "by_category": {
-    "noqa": 208,
-    "type_ignore": 9,
+    "noqa": 181,
+    "type_ignore": 8,
     "pylint_disable": 0,
-    "pyright_ignore": 12,
-    "per_file_ignores": 28
+    "pyright_ignore": 5,
+    "per_file_ignores": 35
   },
   "by_file": {
     "src/quarry/__main__.py": {
-      "noqa": 21,
-      "type_ignore": 2
+      "noqa": 12,
+      "type_ignore": 1
     },
     "src/quarry/_hook_entry.py": {
-      "noqa": 8
+      "noqa": 4
     },
     "src/quarry/backfill.py": {
       "noqa": 1
     },
-    "src/quarry/cli_captures.py": {
-      "noqa": 2
+    "src/quarry/captures_collection.py": {
+      "noqa": 1
     },
-    "src/quarry/cli_runtime.py": {
+    "src/quarry/cli_captures.py": {
+      "noqa": 1
+    },
+    "src/quarry/cli_project.py": {
       "noqa": 2
     },
     "src/quarry/collections.py": {
       "type_ignore": 1
     },
+    "src/quarry/daemon/ingest_jobs.py": {
+      "noqa": 8
+    },
     "src/quarry/daemon/routes/captures.py": {
       "noqa": 1
-    },
-    "src/quarry/daemon/routes/ingestion.py": {
-      "noqa": 2
     },
     "src/quarry/daemon/routes/maintenance.py": {
       "noqa": 1
@@ -64,8 +67,8 @@
       "noqa": 3
     },
     "src/quarry/enable.py": {
-      "noqa": 10,
-      "pyright_ignore": 7
+      "noqa": 6,
+      "pyright_ignore": 1
     },
     "src/quarry/extractors/image_extractor.py": {
       "noqa": 1
@@ -81,32 +84,29 @@
       "noqa": 1
     },
     "src/quarry/hooks.py": {
-      "noqa": 20,
-      "pyright_ignore": 3
+      "noqa": 19,
+      "pyright_ignore": 2
     },
     "src/quarry/ingestion/backends.py": {
       "noqa": 3
     },
-    "src/quarry/ingestion/image_preparer.py": {
-      "noqa": 3
+    "src/quarry/ingestion/image_prep.py": {
+      "noqa": 2
     },
     "src/quarry/ingestion/ocr_local.py": {
       "noqa": 1
     },
     "src/quarry/ingestion/pipeline.py": {
-      "noqa": 10
+      "noqa": 7
     },
     "src/quarry/ingestion/provider.py": {
       "noqa": 2
     },
-    "src/quarry/ingestion/url_fetcher.py": {
-      "noqa": 4
-    },
-    "src/quarry/ingestion/url_ingester.py": {
-      "noqa": 8
-    },
     "src/quarry/ingestion/web_fetch.py": {
       "noqa": 2
+    },
+    "src/quarry/mcp_server.py": {
+      "noqa": 1
     },
     "src/quarry/onnx_session.py": {
       "noqa": 1
@@ -134,5 +134,5 @@
       "noqa": 1
     }
   },
-  "updated_at": "2026-07-16T01:01:20Z"
+  "updated_at": "2026-07-20T03:41:13Z"
 }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -170,18 +171,35 @@ class TestListTranscriptFiles:
 
 
 class TestDocumentNameForTranscript:
-    def test_uses_session_prefix_and_mtime(self, tmp_path: Path) -> None:
+    def test_uses_stable_session_prefix(self, tmp_path: Path) -> None:
+        """The document name is the stable ``session-<id[:8]>`` — no mtime — so
+        it matches the compaction hook's name and one document exists per
+        session regardless of who wrote it first."""
         name = "1e7aa08d-c485-45d1-8228-54d1a375c812.jsonl"
         transcript = tmp_path / name
         transcript.write_text("{}")
 
         result = document_name_for_transcript(transcript)
 
-        assert result.startswith("session-1e7aa08d-")
-        parts = result.split("-", 2)
-        assert len(parts) == 3
-        assert parts[0] == "session"
-        assert parts[1] == "1e7aa08d"
+        assert result == "session-1e7aa08d"
+
+    def test_name_matches_compaction_hook_so_one_doc_in_both_orders(
+        self, tmp_path: Path
+    ) -> None:
+        """Backfill derives the SAME document_name the compaction hook files
+        under (``session-<id[:8]>``), so a session yields ONE document in either
+        write order: hook-first -> backfill's exact-name check skips it;
+        backfill-first -> the hook's overwrite=True replaces the same name."""
+        session_id = "1e7aa08d-c485-45d1-8228-54d1a375c812"
+        transcript = tmp_path / f"{session_id}.jsonl"
+        transcript.write_text("{}")
+
+        backfill_name = document_name_for_transcript(transcript)
+        # The capture route (compaction hook path) files under session-<id[:8]>.
+        hook_name = f"session-{session_id[:8]}"
+
+        assert backfill_name == hook_name
+        assert is_already_ingested(session_id[:8], {backfill_name}) is True
 
 
 # ---------------------------------------------------------------------------
@@ -191,18 +209,27 @@ class TestDocumentNameForTranscript:
 
 class TestIsAlreadyIngested:
     def test_found(self) -> None:
-        existing = {
-            "session-1e7aa08d-20250101T000000",
-            "session-abcd1234-20250102T000000",
-        }
+        existing = {"session-1e7aa08d", "session-abcd1234"}
         assert is_already_ingested("1e7aa08d", existing) is True
 
     def test_not_found(self) -> None:
-        existing = {"session-abcd1234-20250102T000000"}
+        existing = {"session-abcd1234"}
         assert is_already_ingested("1e7aa08d", existing) is False
 
     def test_empty_set(self) -> None:
         assert is_already_ingested("1e7aa08d", set()) is False
+
+    def test_recognizes_stable_name_from_either_writer(self) -> None:
+        """Hook and backfill file under the same stable ``session-<id>`` name, so
+        a session captured by either — in either order — is recognized and not
+        re-ingested as a second document."""
+        existing = {"session-1e7aa08d"}
+        assert is_already_ingested("1e7aa08d", existing) is True
+
+    def test_stable_prefix_not_a_false_match(self) -> None:
+        """A different session sharing a name-prefix is not treated as present."""
+        existing = {"session-1e7aa08dXY"}
+        assert is_already_ingested("1e7aa08d", existing) is False
 
 
 # ---------------------------------------------------------------------------
@@ -352,7 +379,7 @@ class TestBackfillSessions:
         _setup_registry(env["registry_path"], str(env["real_project"]), "myproject")
 
         fake_doc = {
-            "document_name": "session-abcd1234-20250101T000000",
+            "document_name": "session-abcd1234",
             "document_path": "",
             "collection": "myproject-captures",
             "total_pages": 1,
@@ -445,12 +472,13 @@ class TestBackfillSessions:
         assert stats.skipped_empty == 1
 
     def test_ingested_text_is_scrubbed(self, tmp_path: Path) -> None:
-        """Transcript text is scrubbed before ingest — the DES-036 leak lock.
+        """Transcript text is scrubbed before store — the DES-036 leak lock.
 
-        A secret token and an email in a transcript must never reach the
-        searchable LanceDB store (retrievable via /v1/search): backfill scrubs
-        through the same Scrubber the capture writer uses, so ingest_content
-        receives redacted text, not the raw transcript.
+        Backfill routes through the pipeline choke point (it passes a
+        content_scrubber, no manual pre-scrub), so ingest_content redacts the
+        content before store.  A secret token and an email in a transcript must
+        never reach the searchable LanceDB store (retrievable via /v1/search).
+        Patching the store boundary asserts the REAL pipeline scrub ran.
         """
         from quarry.backfill import backfill_sessions
 
@@ -464,18 +492,25 @@ class TestBackfillSessions:
         settings = _make_settings(env["db_path"], env["registry_path"])
         _setup_registry(env["registry_path"], str(env["real_project"]), "myproject")
 
+        stored: list[object] = []
+
+        def _store(pages: list[object], *_a: object, **_k: object) -> dict[str, object]:
+            stored.extend(pages)
+            return {"document_name": "d", "collection": "c", "chunks": 0}
+
         with (
             patch("quarry.backfill.CLAUDE_PROJECTS_DIR", env["projects_dir"]),
-            patch("quarry.backfill.ingest_content") as mock_ingest,
+            patch("quarry.ingestion.pipeline._chunk_embed_store", _store),
+            patch("quarry.db.chunk_store.ChunkStore.delete_document"),
         ):
             backfill_sessions(settings)
 
-        mock_ingest.assert_called_once()
-        ingested_text = mock_ingest.call_args.args[0]
-        assert fake_pat not in ingested_text
-        assert email not in ingested_text
-        assert "[REDACTED:gh-pat]" in ingested_text
-        assert "[REDACTED:email]" in ingested_text
+        assert stored, "ingest_content never reached the store"
+        joined = " ".join(page.text for page in stored)  # type: ignore[attr-defined]
+        assert fake_pat not in joined
+        assert email not in joined
+        assert "[REDACTED:gh-pat]" in joined
+        assert "[REDACTED:email]" in joined
 
 
 # ---------------------------------------------------------------------------
@@ -503,6 +538,10 @@ class TestBackfillCaptureRedaction:
 
         transcript = tmp_path / "sess1234abcd.jsonl"
         transcript.write_text("{}\n", encoding="utf-8")
+        # Pin the mtime: the capture frontmatter timestamp falls back to the
+        # transcript's mtime, so rewriting the file on a rerun must not let a
+        # straddled clock tick change the bytes this test asserts are identical.
+        os.utime(transcript, (1_700_000_000, 1_700_000_000))
         _write_backfill_capture_file(
             project_path=str(tmp_path),
             session_id="sess1234abcd",

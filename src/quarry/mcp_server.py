@@ -200,6 +200,11 @@ def _do_remember(
     database: Database,
 ) -> None:
     """Blocking remember — runs in background thread."""
+    from quarry.scrub import scrub_and_log  # noqa: PLC0415
+
+    # Scrub secrets/PII/profanity before the memory collection stores a chunk,
+    # matching the daemon's ScrubbedIngestJob — the stdio server must not be the
+    # one write path that leaks cleartext into memory-<agent>.
     pipeline_ingest_content(
         content,
         document_name,
@@ -208,6 +213,7 @@ def _do_remember(
         overwrite=overwrite,
         collection=collection,
         format_hint=format_hint,
+        content_scrubber=lambda text: scrub_and_log(text, "remember"),
         agent_handle=agent_handle,
         memory_type=memory_type,
         summary=summary,

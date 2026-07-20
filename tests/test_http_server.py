@@ -12,9 +12,10 @@ import os
 import sqlite3
 import stat
 import sys
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -23,6 +24,7 @@ from starlette.testclient import TestClient
 
 from quarry.api import HealthResponse, SearchResponse, StatusResponse
 from quarry.backfill import BackfillStats
+from quarry.captures_collection import CapturesCollection
 from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
 from quarry.daemon.server import DaemonServer, ServeConfig
@@ -31,16 +33,23 @@ from quarry.results import SearchResult
 
 
 def _poll_task_done(
-    tc: TestClient, task_id: str, max_polls: int = 50
+    tc: TestClient, task_id: str, max_polls: int = 100
 ) -> dict[str, Any]:
-    """Poll GET /tasks/{task_id} until terminal status. Return the final JSON."""
-    data: dict[str, Any] = {}
+    """Poll GET /tasks/{task_id} until a terminal status, returning the final JSON.
+
+    Sleeps between polls so the background thread — which does a real LanceDB
+    connect on its first ``ctx.database`` access — can finish.  A task still
+    ``running`` when the budget drains is a bug, not a pass: returning that
+    non-terminal snapshot lets a caller's assertions silently not run (the mock
+    never fired), so raise instead.
+    """
     for _ in range(max_polls):
-        resp = tc.get(f"/v1/tasks/{task_id}")
-        data = resp.json()
+        data: dict[str, Any] = tc.get(f"/v1/tasks/{task_id}").json()
         if data["status"] != "running":
             return data
-    return data
+        time.sleep(0.05)
+    msg = f"task {task_id} still running after {max_polls} polls"
+    raise AssertionError(msg)
 
 
 def _mock_settings(tmp_path: Path) -> MagicMock:
@@ -1308,6 +1317,261 @@ class TestDeleteCollections:
         assert "name" in resp.json()["error"].lower()
 
 
+class TestCapture:
+    """Tests for POST /v1/capture -- server-derived collection, always scrubs."""
+
+    def test_success_returns_202(self, tmp_path: Path) -> None:
+        mock_result = {
+            "document_name": "session-abcd1234",
+            "collection": "default-captures",
+            "chunks": 2,
+        }
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch("quarry.ingestion.pipeline.ingest_content", return_value=mock_result),
+        ):
+            resp = tc.post(
+                "/v1/capture",
+                json={
+                    "content": "hello",
+                    "session_id": "abcd1234ef",
+                    "cwd": str(tmp_path),
+                },
+            )
+
+        assert resp.status_code == 202
+        assert resp.json()["task_id"].startswith("capture-")
+
+    def test_missing_content_returns_400(self, client: TestClient) -> None:
+        resp = client.post("/v1/capture", json={"session_id": "abcd1234"})
+        assert resp.status_code == 400
+        assert "content" in resp.json()["error"].lower()
+
+    def test_missing_name_and_session_returns_400(self, client: TestClient) -> None:
+        resp = client.post("/v1/capture", json={"content": "hi"})
+        assert resp.status_code == 400
+        error = resp.json()["error"].lower()
+        assert "document_name" in error or "session" in error
+
+    def test_whitespace_name_and_session_returns_400(self, client: TestClient) -> None:
+        """Whitespace-only name/session must earn the 400, not a blank-named doc."""
+        resp = client.post(
+            "/v1/capture",
+            json={"content": "hi", "document_name": "   ", "session_id": "  \t"},
+        )
+        assert resp.status_code == 400
+        error = resp.json()["error"].lower()
+        assert "document_name" in error or "session" in error
+
+    def test_capture_scrubs_and_derives_default_collection(
+        self, tmp_path: Path
+    ) -> None:
+        """The route hands ingest_content a redacting scrubber for default-captures.
+
+        The working directory is unregistered, so the derived collection is
+        ``default-captures``; the captured ``content_scrubber`` redacts PII —
+        together these prove a stored capture chunk is scrubbed into the right
+        collection.  ``ingest_content``'s own scrub-of-stored-pages is covered in
+        ``tests/test_pipeline.py::TestIngestContentScrubbing``.
+        """
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        scrubbers: list[Callable[[str], str]] = []
+        collections: list[object] = []
+
+        def _spy(*_a: object, **kwargs: object) -> dict[str, object]:
+            scrubbers.append(cast("Callable[[str], str]", kwargs["content_scrubber"]))
+            collections.append(kwargs["collection"])
+            return {
+                "document_name": "note",
+                "collection": "default-captures",
+                "chunks": 0,
+            }
+
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch("quarry.ingestion.pipeline.ingest_content", _spy),
+        ):
+            resp = tc.post(
+                "/v1/capture",
+                json={
+                    "content": "reach me at jmf@pobox.com",
+                    "document_name": "note",
+                    "cwd": str(tmp_path),
+                },
+            )
+            _poll_task_done(tc, resp.json()["task_id"])
+
+        assert collections == ["default-captures"]
+        assert scrubbers
+        redacted = scrubbers[0]("reach me at jmf@pobox.com")
+        assert "jmf@pobox.com" not in redacted
+        assert "[REDACTED:email]" in redacted
+
+    def test_scrub_failure_marks_task_failed_and_stores_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        """A scrub that raises fails the task before any chunk is stored."""
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch(
+                "quarry.scrub.scrub_and_log",
+                side_effect=ValueError("scrub exploded"),
+            ),
+            patch("quarry.ingestion.pipeline._chunk_embed_store") as store,
+            patch("quarry.db.chunk_store.ChunkStore.delete_document") as delete,
+        ):
+            resp = tc.post(
+                "/v1/capture",
+                json={
+                    "content": "secret jmf@pobox.com",
+                    "document_name": "note",
+                    "cwd": str(tmp_path),
+                    "overwrite": True,
+                },
+            )
+            data = _poll_task_done(tc, resp.json()["task_id"])
+
+        assert data["status"] == "failed"
+        assert "scrub exploded" in data["error"]
+        store.assert_not_called()  # nothing stored
+        delete.assert_not_called()  # AND the prior document is not deleted
+
+    def test_empty_extraction_refetches_source_url(self, tmp_path: Path) -> None:
+        """A JS-rendered page that extracts to zero chunks re-fetches its source.
+
+        The inline HTML yields no chunks; rather than silently index nothing the
+        daemon re-fetches the source URL through the SSRF-checked ingest path,
+        scrubbing content AND summary (symmetric with the inline phase).
+        """
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        url_kwargs: list[dict[str, object]] = []
+
+        def _url(source: str, *_a: object, **kw: object) -> dict[str, object]:
+            url_kwargs.append({"source": source, **kw})
+            return {
+                "document_name": source,
+                "collection": kw["collection"],
+                "chunks": 1,
+            }
+
+        empty = {"document_name": "p", "collection": "default-captures", "chunks": 0}
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch("quarry.ingestion.pipeline.ingest_content", return_value=empty),
+            patch("quarry.ingestion.pipeline.ingest_url", _url),
+        ):
+            resp = tc.post(
+                "/v1/capture",
+                json={
+                    "content": "<html><body></body></html>",
+                    "document_name": "example.com/p",
+                    "source_url": "https://example.com/p",
+                    "summary": "see jmf@pobox.com",
+                    "format_hint": "html",
+                },
+            )
+            data = _poll_task_done(tc, resp.json()["task_id"])
+
+        assert data["status"] == "completed"
+        assert data["results"]["chunks"] == 1  # the re-fetch indexed the page
+        assert len(url_kwargs) == 1
+        assert url_kwargs[0]["source"] == "https://example.com/p"
+        assert url_kwargs[0]["collection"] == "default-captures"
+        # The caller forwards the raw summary plus a content_scrubber; ingest_url
+        # (the choke point) redacts summary+name — see test_pipeline's
+        # ingest_url metadata-scrub test.  Here we assert the scrubber is wired.
+        scrub = cast("Callable[[str], str]", url_kwargs[0]["content_scrubber"])
+        assert "[REDACTED:email]" in scrub("reach jmf@pobox.com")
+
+    def test_nonempty_extraction_does_not_refetch(self, tmp_path: Path) -> None:
+        """A page that extracts to >=1 chunk stores inline and never re-fetches."""
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        stored = {"document_name": "p", "collection": "default-captures", "chunks": 3}
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch("quarry.ingestion.pipeline.ingest_content", return_value=stored),
+            patch("quarry.ingestion.pipeline.ingest_url") as url,
+        ):
+            resp = tc.post(
+                "/v1/capture",
+                json={
+                    "content": "real page text",
+                    "document_name": "example.com/p",
+                    "source_url": "https://example.com/p",
+                    "format_hint": "html",
+                },
+            )
+            data = _poll_task_done(tc, resp.json()["task_id"])
+
+        assert data["status"] == "completed"
+        assert data["results"]["chunks"] == 3
+        url.assert_not_called()  # inline chunks were stored — no re-fetch
+
+    @pytest.mark.parametrize(
+        "source_url",
+        [
+            "http://169.254.169.254/latest/meta-data/",  # cloud metadata
+            "http://metadata.google.internal/",  # GCP metadata host
+            "http://127.0.0.1/admin",  # loopback
+            "http://10.0.0.1/",  # RFC 1918 private
+            "http://192.168.1.1/",  # RFC 1918 private
+        ],
+    )
+    def test_internal_source_url_rejected_and_never_fetched(
+        self, tmp_path: Path, source_url: str
+    ) -> None:
+        """An internal source_url is rejected at the route, never fetched.
+
+        The daemon re-fetches source_url server-side when inline HTML extracts to
+        zero chunks — an SSRF sink.  The capture route must run the same
+        UrlSafetyCheck gate as /v1/ingest, fail-closed with a 400, before any
+        job runs, so a crafted internal URL never reaches ingest_url/WebFetcher.
+        """
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        empty = {"document_name": "p", "collection": "default-captures", "chunks": 0}
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch(
+                "quarry.ingestion.pipeline.ingest_content", return_value=empty
+            ) as content,
+            patch("quarry.ingestion.pipeline.ingest_url") as url,
+        ):
+            resp = tc.post(
+                "/v1/capture",
+                json={
+                    "content": "<html><body></body></html>",
+                    "document_name": "victim",
+                    "source_url": source_url,
+                    "format_hint": "html",
+                },
+            )
+
+        assert resp.status_code == 400
+        assert "rejected" in resp.json()["error"].lower()
+        url.assert_not_called()  # the SSRF sink was never reached
+        content.assert_not_called()  # rejected before any ingest job ran
+
+
 class TestRemember:
     """Tests for POST /remember endpoint -- now returns 202."""
 
@@ -1362,6 +1626,46 @@ class TestRemember:
         resp = client.post("/v1/remember", json={"name": "   ", "content": "hello"})
         assert resp.status_code == 400
         assert "name" in resp.json()["error"].lower()
+
+    def test_scrubs_name_and_summary_not_just_content(self, tmp_path: Path) -> None:
+        """A secret in the free-form name or summary is redacted before store.
+
+        The daemon forwards the raw name/summary and a content_scrubber; the
+        pipeline choke point (ingest_content) is what redacts them, so this
+        patches the store boundary and asserts the REAL scrub ran end-to-end —
+        the chunker copies name+summary onto every chunk, so content-only
+        scrubbing would leak."""
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        seen: dict[str, object] = {}
+
+        def _store(
+            _pages: object, document_name: str, *_a: object, **kw: object
+        ) -> dict[str, object]:
+            seen["name"] = document_name
+            seen["summary"] = kw["summary"]
+            return {"document_name": document_name, "collection": "c", "chunks": 0}
+
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch("quarry.ingestion.pipeline._chunk_embed_store", _store),
+        ):
+            resp = tc.post(
+                "/v1/remember",
+                json={
+                    "name": "note jmf@pobox.com",
+                    "content": "body",
+                    "summary": "contact jmf@pobox.com",
+                },
+            )
+            _poll_task_done(tc, resp.json()["task_id"])
+
+        assert "jmf@pobox.com" not in str(seen["name"])
+        assert "[REDACTED:email]" in str(seen["name"])
+        assert "jmf@pobox.com" not in str(seen["summary"])
+        assert "[REDACTED:email]" in str(seen["summary"])
 
     def test_invalid_json_returns_400(self, client: TestClient) -> None:
         resp = client.post(
@@ -1547,6 +1851,56 @@ class TestIngest:
         data = resp.json()
         assert data["status"] == "accepted"
         assert data["task_id"].startswith("ingest-")
+
+    def test_scrub_capture_with_empty_cwd_scrubs_not_ingest_auto(
+        self, tmp_path: Path
+    ) -> None:
+        """A web-fetch capture (scrub=True) with EMPTY cwd must scrub and land in
+        default-captures via ingest_url — never the unscrubbed ingest_auto branch.
+
+        The empty-cwd -> default-captures derivation is unit-tested in
+        ``test_captures_collection``; here the collection resolver is stubbed so
+        the assertion isolates the daemon's scrub-vs-plain routing.
+        """
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        url_kwargs: list[dict[str, object]] = []
+
+        def _url(*_a: object, **kw: object) -> dict[str, object]:
+            url_kwargs.append(kw)
+            return {"document_name": "u", "collection": kw["collection"], "chunks": 1}
+
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch(
+                "quarry.daemon.url_safety.socket_module.getaddrinfo",
+                side_effect=_fake_public_addrinfo,
+            ),
+            patch(
+                "quarry.captures_collection.CapturesCollection.for_registry_path",
+                return_value=CapturesCollection.fallback(),
+            ),
+            patch("quarry.ingestion.pipeline.ingest_url", _url),
+            patch("quarry.ingestion.pipeline.ingest_auto") as auto,
+        ):
+            resp = tc.post(
+                "/v1/ingest",
+                json={
+                    "source": "https://example.com/p",
+                    "scrub": True,
+                    "cwd": "",
+                    "overwrite": True,
+                },
+            )
+            _poll_task_done(tc, resp.json()["task_id"])
+
+        auto.assert_not_called()  # never the unscrubbed sitemap branch
+        assert url_kwargs
+        assert url_kwargs[0]["collection"] == "default-captures"
+        scrub = cast("Callable[[str], str]", url_kwargs[0]["content_scrubber"])
+        assert "[REDACTED:email]" in scrub("reach me at jmf@pobox.com")
 
     def test_missing_source_returns_400(self, client: TestClient) -> None:
         resp = client.post("/v1/ingest", json={})

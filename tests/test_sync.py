@@ -267,6 +267,24 @@ class TestDiscoverFiles:
         assert len(result) == 1
         assert result[0].name == "module.py"
 
+    def test_skips_captures_dir_without_gitignore(self, tmp_path: Path):
+        """The captures dir is pruned structurally, even with no .gitignore.
+
+        A scrubbed session capture must never be folded into the project's MAIN
+        collection by directory sync.  ``discover()`` prunes every dot-prefixed
+        directory before ignore patterns even apply, and ``.punt-labs`` is a dot
+        dir — so dot-dir pruning is the primary guard here; the built-in
+        ``.punt-labs/quarry/captures`` ignore entry is defense-in-depth for any
+        future non-dot capture path.
+        """
+        captures = tmp_path / ".punt-labs" / "quarry" / "captures"
+        captures.mkdir(parents=True)
+        (captures / "session-abcd1234.md").touch()
+        (tmp_path / "notes.md").touch()
+        # No .gitignore is written -- the exclusion must be structural.
+        result = FileDiscovery(tmp_path).discover(frozenset({".md"}))
+        assert [p.name for p in result] == ["notes.md"]
+
     def test_respects_gitignore(self, tmp_path: Path):
         (tmp_path / ".gitignore").write_text("data/\n*.log\n")
         data = tmp_path / "data"

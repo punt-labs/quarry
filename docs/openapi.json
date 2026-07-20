@@ -635,6 +635,91 @@
         "summary": "Backfill Sessions"
       }
     },
+    "/v1/capture": {
+      "post": {
+        "description": "File a scrubbed capture as a 202 background task.\n\nBody: {content, cwd, ...optional}. The daemon derives the target\n``<repo>-captures`` collection from ``cwd`` and always scrubs.",
+        "operationId": "capture_v1_capture_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "description": "Body for filing a scrubbed capture: a transcript or a fetched page.\n\nThe daemon derives the target ``<repo>-captures`` collection from ``cwd``\n(falling back to ``default-captures``) and always scrubs before storing.\nThe document name is ``document_name`` when set (a fetched URL) or, failing\nthat, ``session-<session_id[:8]>`` (a compaction transcript).",
+                "properties": {
+                  "agent_handle": {
+                    "default": "",
+                    "title": "Agent Handle",
+                    "type": "string"
+                  },
+                  "content": {
+                    "title": "Content",
+                    "type": "string"
+                  },
+                  "cwd": {
+                    "default": "",
+                    "title": "Cwd",
+                    "type": "string"
+                  },
+                  "document_name": {
+                    "default": "",
+                    "title": "Document Name",
+                    "type": "string"
+                  },
+                  "format_hint": {
+                    "default": "auto",
+                    "title": "Format Hint",
+                    "type": "string"
+                  },
+                  "memory_type": {
+                    "default": "",
+                    "title": "Memory Type",
+                    "type": "string"
+                  },
+                  "overwrite": {
+                    "default": true,
+                    "title": "Overwrite",
+                    "type": "boolean"
+                  },
+                  "session_id": {
+                    "default": "",
+                    "title": "Session Id",
+                    "type": "string"
+                  },
+                  "source_url": {
+                    "default": "",
+                    "title": "Source Url",
+                    "type": "string"
+                  },
+                  "summary": {
+                    "default": "",
+                    "title": "Summary",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "content"
+                ],
+                "title": "CaptureIngestRequest",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Capture"
+      }
+    },
     "/v1/captures/push": {
       "post": {
         "operationId": "push_v1_captures_push_post",
@@ -760,7 +845,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "description": "Body for fetching and indexing a URL.\n\n``source`` is an ``http(s)`` URL; the daemon validates it against the\nSSRF allowlist before fetching. File upload is not part of this contract.",
+                "description": "Body for fetching and indexing a URL.\n\n``source`` is an ``http(s)`` URL; the daemon validates it against the\nSSRF allowlist before fetching. File upload is not part of this contract.\n``scrub`` marks a web-fetch capture re-fetch: the daemon scrubs the fetched\npage and stores it in the ``<repo>-captures`` collection derived from\n``cwd`` (``default-captures`` when ``cwd`` is empty/unregistered). Without\n``scrub`` this is a plain ``quarry ingest`` \u2014 sitemap-aware and unscrubbed.",
                 "properties": {
                   "agent_handle": {
                     "default": "",
@@ -772,6 +857,11 @@
                     "title": "Collection",
                     "type": "string"
                   },
+                  "cwd": {
+                    "default": "",
+                    "title": "Cwd",
+                    "type": "string"
+                  },
                   "memory_type": {
                     "default": "",
                     "title": "Memory Type",
@@ -780,6 +870,11 @@
                   "overwrite": {
                     "default": false,
                     "title": "Overwrite",
+                    "type": "boolean"
+                  },
+                  "scrub": {
+                    "default": false,
+                    "title": "Scrub",
                     "type": "boolean"
                   },
                   "source": {

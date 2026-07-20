@@ -37,5 +37,11 @@ class Transcript:
         return when.strftime(fmt)
 
     def document_name(self) -> str:
-        """Return ``session-<prefix>-<mtime>`` — the stored document name."""
-        return f"session-{self.session_prefix}-{self.timestamp('%Y%m%dT%H%M%S')}"
+        """Return ``session-<prefix>`` — the stored document name.
+
+        The SAME stable name the compaction hook files under, so hook and
+        backfill write one canonical document per session and ``overwrite=True``
+        dedups regardless of which ran first.  A changed transcript overwrites
+        that one document rather than accumulating an mtime-suffixed duplicate.
+        """
+        return f"session-{self.session_prefix}"
