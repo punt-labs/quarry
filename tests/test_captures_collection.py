@@ -55,6 +55,16 @@ class TestCapturesCollection:
         assert CapturesCollection.for_cwd("src", regs).name == "default-captures"
         assert CapturesCollection.for_cwd("..", regs).name == "default-captures"
 
+    def test_deep_cwd_finds_registered_ancestor(self) -> None:
+        """A deep absolute cwd resolves to its registered ancestor.
+
+        Ancestors are iterated lazily (``chain``) rather than materialized into a
+        full tuple, so an untrusted deep path resolves without amplifying memory.
+        """
+        deep = "/projects/myapp/" + "/".join(["a"] * 500)
+        regs = {"/projects/myapp": "myapp"}
+        assert CapturesCollection.for_cwd(deep, regs).name == "myapp-captures"
+
     def test_invalid_cwd_falls_back_to_default(self) -> None:
         """An OS-invalid cwd (embedded NUL) falls back to default-captures.
 

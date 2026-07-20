@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
@@ -101,7 +102,9 @@ class CapturesCollection:
         except (OSError, ValueError):
             # An embedded NUL or OS-invalid path falls back to default-captures.
             return None
-        for path in (current, *current.parents):
+        # Iterate ancestors lazily; never materialize the full parent list —
+        # untrusted deep cwd (``/a/a/.../a``) would retain O(depth²) prefixes.
+        for path in chain((current,), current.parents):
             if (collection := registrations.get(str(path))) is not None:
                 return collection
         return None
