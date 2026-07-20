@@ -286,14 +286,14 @@
     "public_attr_violations": 0.0
   },
   "src/quarry/backfill.py": {
-    "method_ratio": 0.0,
+    "method_ratio": 0.308,
     "encapsulation_ratio": 1.0,
-    "avg_params": 2.6,
-    "max_complexity": 11.0,
-    "avg_complexity": 3.9,
-    "module_size": 258.0,
-    "classes_per_module": 4.0,
-    "class_to_func_ratio": 0.286,
+    "avg_params": 2.23,
+    "max_complexity": 8.0,
+    "avg_complexity": 3.15,
+    "module_size": 292.0,
+    "classes_per_module": 5.0,
+    "class_to_func_ratio": 0.357,
     "init_violations": 0.0,
     "public_attr_violations": 0.0,
     "future_annotations": 1.0

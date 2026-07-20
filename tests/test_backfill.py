@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -457,12 +458,13 @@ class TestBackfillSessions:
         assert stats.skipped_empty == 1
 
     def test_ingested_text_is_scrubbed(self, tmp_path: Path) -> None:
-        """Transcript text is scrubbed before ingest — the DES-036 leak lock.
+        """Transcript text is scrubbed before store — the DES-036 leak lock.
 
-        A secret token and an email in a transcript must never reach the
-        searchable LanceDB store (retrievable via /v1/search): backfill scrubs
-        through the same Scrubber the capture writer uses, so ingest_content
-        receives redacted text, not the raw transcript.
+        Backfill routes through the pipeline choke point (it passes a
+        content_scrubber, no manual pre-scrub), so ingest_content redacts the
+        content before store.  A secret token and an email in a transcript must
+        never reach the searchable LanceDB store (retrievable via /v1/search).
+        Patching the store boundary asserts the REAL pipeline scrub ran.
         """
         from quarry.backfill import backfill_sessions
 
@@ -476,18 +478,25 @@ class TestBackfillSessions:
         settings = _make_settings(env["db_path"], env["registry_path"])
         _setup_registry(env["registry_path"], str(env["real_project"]), "myproject")
 
+        stored: list[object] = []
+
+        def _store(pages: list[object], *_a: object, **_k: object) -> dict[str, object]:
+            stored.extend(pages)
+            return {"document_name": "d", "collection": "c", "chunks": 0}
+
         with (
             patch("quarry.backfill.CLAUDE_PROJECTS_DIR", env["projects_dir"]),
-            patch("quarry.backfill.ingest_content") as mock_ingest,
+            patch("quarry.ingestion.pipeline._chunk_embed_store", _store),
+            patch("quarry.db.chunk_store.ChunkStore.delete_document"),
         ):
             backfill_sessions(settings)
 
-        mock_ingest.assert_called_once()
-        ingested_text = mock_ingest.call_args.args[0]
-        assert fake_pat not in ingested_text
-        assert email not in ingested_text
-        assert "[REDACTED:gh-pat]" in ingested_text
-        assert "[REDACTED:email]" in ingested_text
+        assert stored, "ingest_content never reached the store"
+        joined = " ".join(page.text for page in stored)  # type: ignore[attr-defined]
+        assert fake_pat not in joined
+        assert email not in joined
+        assert "[REDACTED:gh-pat]" in joined
+        assert "[REDACTED:email]" in joined
 
 
 # ---------------------------------------------------------------------------
@@ -515,6 +524,10 @@ class TestBackfillCaptureRedaction:
 
         transcript = tmp_path / "sess1234abcd.jsonl"
         transcript.write_text("{}\n", encoding="utf-8")
+        # Pin the mtime: the capture frontmatter timestamp falls back to the
+        # transcript's mtime, so rewriting the file on a rerun must not let a
+        # straddled clock tick change the bytes this test asserts are identical.
+        os.utime(transcript, (1_700_000_000, 1_700_000_000))
         _write_backfill_capture_file(
             project_path=str(tmp_path),
             session_id="sess1234abcd",
