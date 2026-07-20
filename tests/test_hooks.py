@@ -1108,6 +1108,30 @@ class TestHandlePreCompact:
         result = handle_pre_compact(payload)
         assert result == {}
 
+    def test_non_string_session_id_skips_cleanly(self, tmp_path: Path) -> None:
+        """A non-string session_id (None) is MISSING, not the literal "None".
+
+        Coercing with ``str()`` forged a truthy ``"None"`` that bypassed the
+        missing-field guard, producing a bogus ``session-None`` capture; the
+        hook must instead skip and never reach the daemon.
+        """
+        transcript = _make_transcript(tmp_path, "Hello")
+        with patch("quarry.hooks._capture_via_daemon") as cap:
+            result = handle_pre_compact(
+                {"transcript_path": str(transcript), "session_id": None}
+            )
+        assert result == {}
+        cap.assert_not_called()
+
+    def test_non_string_transcript_path_skips_cleanly(self, tmp_path: Path) -> None:
+        """A non-string transcript_path (None) is MISSING — no phantom-path resolve."""
+        with patch("quarry.hooks._capture_via_daemon") as cap:
+            result = handle_pre_compact(
+                {"transcript_path": None, "session_id": "abc123"}
+            )
+        assert result == {}
+        cap.assert_not_called()
+
     def test_sends_capture_request_to_daemon(self, tmp_path: Path) -> None:
         """The transcript text, cwd, and session travel to the daemon as a capture."""
         transcript = _make_transcript(tmp_path, "Important context here")

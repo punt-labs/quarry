@@ -18,8 +18,13 @@ Hook events:
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
+import os
 import shutil
+import subprocess
+import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -86,8 +91,6 @@ def _is_sync_running() -> bool:
     - PermissionError (EPERM) → process exists, another user (running)
     - ValueError → corrupt PID file (stale)
     """
-    import os  # noqa: PLC0415
-
     pidfile = _sync_lockfile()
     if not pidfile.exists():
         return False
@@ -116,8 +119,6 @@ def _acquire_sync_lock() -> int | None:
     Returns the file descriptor on success, None if the lock is held
     or on any OS error.
     """
-    import os  # noqa: PLC0415
-
     pidfile = _sync_lockfile()
     pidfile.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -151,10 +152,6 @@ def _sync_in_background() -> str:
     if a sync is already in progress (or the lock is held), or
     ``"failed"`` if the launch itself errored.
     """
-    import os  # noqa: PLC0415
-    import subprocess  # noqa: PLC0415
-    import sys  # noqa: PLC0415
-
     # Fast path: if a sync is already running, skip without trying the lock.
     if _is_sync_running():
         logger.debug("session-start: sync already running, skipping")
@@ -212,8 +209,7 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
         _is_ancestor_of,  # pyright: ignore[reportPrivateUsage]
     )
 
-    cwd_obj = payload.get("cwd")
-    cwd = cwd_obj if isinstance(cwd_obj, str) else ""
+    cwd = _as_str(payload.get("cwd"))
     if not cwd:
         logger.debug("session-start: no cwd in payload, skipping")
         return {}
@@ -275,13 +271,10 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
 
         # Return context immediately; sync runs in background.
         sync_status = _sync_in_background()
-
-        if sync_status == "launched":
-            sync_line = "Background sync in progress."
-        elif sync_status == "running":
-            sync_line = "Background sync already running."
-        else:
-            sync_line = "Background sync failed to launch."
+        sync_line = {
+            "launched": "Background sync in progress.",
+            "running": "Background sync already running.",
+        }.get(sync_status, "Background sync failed to launch.")
         context = (
             "Quarry semantic search is active for this project.\n"
             f'Collection: "{collection}" ({directory})\n'
@@ -339,8 +332,7 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     instead.  The hook imports no engine — only the thin client and the
     lightweight URL/scrub helpers.
     """
-    cwd_obj = payload.get("cwd")
-    cwd = cwd_obj if isinstance(cwd_obj, str) else ""
+    cwd = _as_str(payload.get("cwd"))
     if cwd:
         config = load_hook_config(cwd)
         if not config.web_fetch:
@@ -496,8 +488,6 @@ def extract_transcript_text(transcript_path: str) -> str:
     Extracts user and assistant messages, prefixing each with the role.
     Skips tool-use content blocks, file snapshots, and system messages.
     """
-    import json as _json  # noqa: PLC0415
-
     path = Path(transcript_path)
     if not path.is_file():
         return ""
@@ -511,7 +501,7 @@ def extract_transcript_text(transcript_path: str) -> str:
     parts: list[str] = []
     for line in raw.splitlines():
         try:
-            obj = _json.loads(line)
+            obj = json.loads(line)
         except (ValueError, TypeError):
             continue
         entry = extract_message_text(obj)
@@ -547,8 +537,6 @@ def _archive_transcript(
     Creates the directory if needed, deduplicates prior archives for the
     same session, and lazily prunes files older than ``_ARCHIVE_RETENTION_DAYS``.
     """
-    from datetime import UTC, datetime  # noqa: PLC0415
-
     sessions_dir.mkdir(parents=True, exist_ok=True)
 
     prefix = f"session-{session_id[:8]}-"
@@ -670,6 +658,17 @@ def _ingest_url_via_daemon(req: IngestRequest, *, unreachable_log: str) -> bool:
     )
 
 
+def _as_str(value: object) -> str:
+    """Return ``value`` when it is a ``str``, else ``""`` (treated as absent).
+
+    A non-string payload field (``None``, a number) is MISSING, not a value.
+    Coercing with ``str()`` would forge a truthy ``"None"``/``"123"`` that slips
+    past an emptiness guard — producing a bogus ``session-None`` capture and a
+    resolve of a phantom transcript path — so hook input is read defensively.
+    """
+    return value if isinstance(value, str) else ""
+
+
 def _precompact_target(payload: dict[str, object]) -> tuple[str, str, Path] | None:
     """Return ``(cwd, session_id, resolved jsonl path)`` for a capturable compaction.
 
@@ -677,16 +676,14 @@ def _precompact_target(payload: dict[str, object]) -> tuple[str, str, Path] | No
     failure: disabled by config, a missing ``transcript_path``/``session_id``, or
     a non-JSONL transcript suffix (defense-in-depth).  ``cwd`` may be empty (an
     unregistered directory still archives and ingests); the other two are
-    required.  Extracting this gate keeps ``handle_pre_compact`` under the
-    complexity ceiling.
+    required.
     """
-    cwd_obj = payload.get("cwd")
-    cwd = cwd_obj if isinstance(cwd_obj, str) else ""
+    cwd = _as_str(payload.get("cwd"))
     if cwd and not load_hook_config(cwd).compaction:
         logger.debug("pre-compact: disabled by config")
         return None
-    transcript_path = str(payload.get("transcript_path", ""))
-    session_id = str(payload.get("session_id", ""))
+    transcript_path = _as_str(payload.get("transcript_path"))
+    session_id = _as_str(payload.get("session_id"))
     if not transcript_path or not session_id:
         logger.debug("pre-compact: missing transcript_path or session_id")
         return None
@@ -738,8 +735,6 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
     header = format_artifacts_header(artifacts)
     if header:
         text = header + "\n\n" + text
-
-    from datetime import UTC, datetime  # noqa: PLC0415
 
     agent_handle = _read_ethos_agent_handle(cwd) if cwd else ""
 

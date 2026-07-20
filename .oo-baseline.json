@@ -1263,10 +1263,10 @@
   "src/quarry/hooks.py": {
     "method_ratio": 0.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 1.29,
+    "avg_params": 1.27,
     "max_complexity": 10.0,
-    "avg_complexity": 5.1,
-    "module_size": 658.0,
+    "avg_complexity": 4.82,
+    "module_size": 657.0,
     "classes_per_module": 0.0,
     "class_to_func_ratio": 0.0,
     "init_violations": 0.0,
