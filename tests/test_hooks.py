@@ -15,10 +15,9 @@ from typer.testing import CliRunner
 from quarry.__main__ import app
 from quarry._stdlib import HookConfig, load_hook_config, read_hook_stdin
 from quarry.hooks import (
+    _as_dir,
     _collection_for_cwd_conn,
     _unique_collection_name,
-    extract_message_text,
-    extract_transcript_text,
     handle_post_web_fetch,
     handle_pre_compact,
     handle_session_start,
@@ -811,235 +810,6 @@ class TestHookImportsNoEngine:
         assert web_cap.called
 
 
-class TestExtractMessageText:
-    def test_extracts_short_tool_result_string(self) -> None:
-        record: dict[str, object] = {
-            "type": "user",
-            "message": {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": "toolu_abc",
-                        "content": "5 passed, 0 failed",
-                    }
-                ],
-            },
-        }
-        result = extract_message_text(record)
-        assert result is not None
-        assert "[tool_result] 5 passed, 0 failed" in result
-
-    def test_extracts_short_tool_result_list(self) -> None:
-        record: dict[str, object] = {
-            "type": "user",
-            "message": {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": "toolu_abc",
-                        "content": [{"type": "text", "text": "No matches found"}],
-                    }
-                ],
-            },
-        }
-        result = extract_message_text(record)
-        assert result is not None
-        assert "[tool_result] No matches found" in result
-
-    def test_skips_long_tool_result(self) -> None:
-        long_output = "x" * 501
-        record: dict[str, object] = {
-            "type": "user",
-            "message": {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": "toolu_abc",
-                        "content": long_output,
-                    }
-                ],
-            },
-        }
-        result = extract_message_text(record)
-        assert result is None
-
-    def test_skips_tool_use_blocks(self) -> None:
-        record: dict[str, object] = {
-            "type": "assistant",
-            "message": {
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "tool_use",
-                        "id": "toolu_abc",
-                        "name": "Bash",
-                        "input": {"command": "ls"},
-                    }
-                ],
-            },
-        }
-        result = extract_message_text(record)
-        assert result is None
-
-
-class TestExtractTranscriptText:
-    def _write_transcript(self, path: Path, records: list[dict[str, object]]) -> None:
-        lines = [json.dumps(r) for r in records]
-        path.write_text("\n".join(lines))
-
-    def test_extracts_user_and_assistant_text(self, tmp_path: Path) -> None:
-        transcript = tmp_path / "session.jsonl"
-        self._write_transcript(
-            transcript,
-            [
-                {
-                    "type": "user",
-                    "message": {
-                        "role": "user",
-                        "content": [{"type": "text", "text": "Hello"}],
-                    },
-                },
-                {
-                    "type": "assistant",
-                    "message": {
-                        "role": "assistant",
-                        "content": [{"type": "text", "text": "Hi there"}],
-                    },
-                },
-            ],
-        )
-        text = extract_transcript_text(str(transcript))
-        assert "[user] Hello" in text
-        assert "[assistant] Hi there" in text
-
-    def test_skips_non_conversation_records(self, tmp_path: Path) -> None:
-        transcript = tmp_path / "session.jsonl"
-        self._write_transcript(
-            transcript,
-            [
-                {"type": "file-history-snapshot", "snapshot": {}},
-                {"type": "system", "message": {"role": "system"}},
-                {
-                    "type": "user",
-                    "message": {
-                        "role": "user",
-                        "content": [{"type": "text", "text": "Real"}],
-                    },
-                },
-            ],
-        )
-        text = extract_transcript_text(str(transcript))
-        assert "[user] Real" in text
-        assert "snapshot" not in text
-        assert "system" not in text
-
-    def test_skips_tool_use_blocks(self, tmp_path: Path) -> None:
-        transcript = tmp_path / "session.jsonl"
-        self._write_transcript(
-            transcript,
-            [
-                {
-                    "type": "assistant",
-                    "message": {
-                        "role": "assistant",
-                        "content": [
-                            {"type": "tool_use", "name": "Bash"},
-                            {"type": "text", "text": "Done"},
-                        ],
-                    },
-                },
-            ],
-        )
-        text = extract_transcript_text(str(transcript))
-        assert "[assistant] Done" in text
-        assert "Bash" not in text
-
-    def test_returns_empty_for_nonexistent_file(self) -> None:
-        assert extract_transcript_text("/nonexistent/path.jsonl") == ""
-
-    def test_returns_empty_for_empty_file(self, tmp_path: Path) -> None:
-        transcript = tmp_path / "empty.jsonl"
-        transcript.write_text("")
-        assert extract_transcript_text(str(transcript)) == ""
-
-    def test_respects_char_limit(self, tmp_path: Path) -> None:
-        transcript = tmp_path / "big.jsonl"
-        # Each entry is "[user] " + 200 "a"s = 207 chars.
-        # 5000 entries = 1,035,000 chars of content alone.
-        big_text = "a" * 200
-        records = [
-            json.dumps(
-                {
-                    "type": "user",
-                    "message": {
-                        "role": "user",
-                        "content": [{"type": "text", "text": big_text}],
-                    },
-                }
-            )
-            for _ in range(5000)
-        ]
-        transcript.write_text("\n".join(records))
-
-        from quarry.hooks import _MAX_TRANSCRIPT_CHARS
-
-        text = extract_transcript_text(str(transcript))
-        # Total includes "\n\n" separators between entries, so allow
-        # a small margin above the content limit.
-        assert len(text) < _MAX_TRANSCRIPT_CHARS * 1.02
-
-    def test_front_truncation_keeps_newest(self, tmp_path: Path) -> None:
-        from quarry.hooks import _MAX_TRANSCRIPT_CHARS
-
-        transcript = tmp_path / "session.jsonl"
-        # Each message is "[user] " (7 chars) + text.
-        # Make msg1 large enough that msg1+msg2+msg3 > _MAX_TRANSCRIPT_CHARS
-        # but msg2+msg3 fits.
-        half = _MAX_TRANSCRIPT_CHARS // 2
-        msg1_text = "A" * half
-        msg2_text = "B" * half
-        msg3_text = "C" * 50
-        self._write_transcript(
-            transcript,
-            [
-                {
-                    "type": "user",
-                    "message": {
-                        "role": "user",
-                        "content": [{"type": "text", "text": msg1_text}],
-                    },
-                },
-                {
-                    "type": "user",
-                    "message": {
-                        "role": "user",
-                        "content": [{"type": "text", "text": msg2_text}],
-                    },
-                },
-                {
-                    "type": "user",
-                    "message": {
-                        "role": "user",
-                        "content": [{"type": "text", "text": msg3_text}],
-                    },
-                },
-            ],
-        )
-        text = extract_transcript_text(str(transcript))
-        # First message (AAA...) should be dropped, last two kept.
-        assert "A" * 50 not in text
-        assert msg2_text in text
-        assert msg3_text in text
-
-    def test_returns_empty_for_unreadable_file(self, tmp_path: Path) -> None:
-        transcript = tmp_path / "binary.jsonl"
-        transcript.write_bytes(b"\x80\x81\x82\xff\xfe")
-        assert extract_transcript_text(str(transcript)) == ""
-
-
 def _make_transcript(tmp_path: Path, text: str = "Build a feature") -> Path:
     """Create a minimal JSONL transcript file for testing."""
     transcript = tmp_path / "session.jsonl"
@@ -1262,7 +1032,10 @@ class TestHandlePreCompact:
 
         with (
             patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
-            patch("quarry.hooks.shutil.copy", side_effect=OSError("disk full")),
+            patch(
+                "quarry.transcript_reader.shutil.copy",
+                side_effect=OSError("disk full"),
+            ),
             patch("quarry.hooks._capture_via_daemon", return_value=True) as cap,
         ):
             handle_pre_compact(
@@ -1738,3 +1511,121 @@ class TestPreCompactCaptureRedaction:
         assert "/Users/" not in content
         assert "@" not in content
         assert "~/repo" in content
+
+
+class TestAsDir:
+    """A payload cwd is honored only when it names an absolute path."""
+
+    def test_absolute_path_is_returned(self) -> None:
+        assert _as_dir("/projects/myapp") == "/projects/myapp"
+
+    def test_relative_path_is_unregistered(self) -> None:
+        assert _as_dir("src") == ""
+        assert _as_dir("..") == ""
+
+    def test_non_string_is_unregistered(self) -> None:
+        assert _as_dir(None) == ""
+        assert _as_dir(123) == ""
+
+    def test_blank_string_is_unregistered(self) -> None:
+        assert _as_dir("") == ""
+
+
+class TestCwdHardeningSessionStart:
+    """SessionStart must not auto-register on a non-absolute or non-string cwd.
+
+    A relative cwd resolves against the hook process's own directory, so honoring
+    it would register (and sync) an unintended tree — symmetric with the daemon
+    covering-collection guard.
+    """
+
+    def test_relative_cwd_does_not_register(self, tmp_path: Path) -> None:
+        with (
+            patch("quarry.hooks._resolve_settings") as settings,
+            patch("quarry.hooks._sync_in_background") as sync,
+        ):
+            result = handle_session_start({"cwd": "src"})
+        assert result == {}
+        settings.assert_not_called()  # never reaches the registry
+        sync.assert_not_called()
+
+    def test_non_string_cwd_does_not_register(self, tmp_path: Path) -> None:
+        with (
+            patch("quarry.hooks._resolve_settings") as settings,
+            patch("quarry.hooks._sync_in_background") as sync,
+        ):
+            result = handle_session_start({"cwd": 123})
+        assert result == {}
+        settings.assert_not_called()
+        sync.assert_not_called()
+
+
+class TestCwdHardeningPostWebFetch:
+    """A non-absolute cwd must not attribute a fetched page to a wrong project."""
+
+    def test_relative_cwd_sends_empty_cwd(self) -> None:
+        payload: dict[str, object] = {
+            "cwd": "src",
+            "tool_input": {"url": "https://example.com/docs"},
+            "tool_response": json.dumps({"result": "<p>Some docs</p>"}),
+        }
+        with patch("quarry.hooks._capture_via_daemon", return_value=True) as cap:
+            handle_post_web_fetch(payload)
+        # cwd is blanked, so the daemon files into default-captures, not a
+        # project derived from the hook process's own directory.
+        assert cap.call_args[0][0].cwd == ""
+
+    def test_non_string_cwd_sends_empty_cwd(self) -> None:
+        payload: dict[str, object] = {
+            "cwd": 123,
+            "tool_input": {"url": "https://example.com/docs"},
+            "tool_response": json.dumps({"result": "<p>Some docs</p>"}),
+        }
+        with patch("quarry.hooks._capture_via_daemon", return_value=True) as cap:
+            handle_post_web_fetch(payload)
+        assert cap.call_args[0][0].cwd == ""
+
+
+class TestCwdHardeningPreCompact:
+    """A non-absolute cwd must not write the capture relative to the process cwd."""
+
+    def test_relative_cwd_skips_local_write(self, tmp_path: Path) -> None:
+        transcript = _make_transcript(tmp_path, "Working somewhere")
+        with (
+            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
+            patch("quarry.hooks._write_capture_file") as write_local,
+            patch("quarry.hooks._read_ethos_agent_handle") as ethos,
+            patch("quarry.hooks._capture_via_daemon", return_value=True) as cap,
+        ):
+            handle_pre_compact(
+                {
+                    "cwd": "src",
+                    "transcript_path": str(transcript),
+                    "session_id": "abc12345-full-id",
+                }
+            )
+        # No local .md write and no ethos lookup rooted at the process cwd.
+        write_local.assert_not_called()
+        ethos.assert_not_called()
+        assert cap.call_args[0][0].cwd == ""
+
+    def test_non_string_cwd_skips_local_write_and_blanks_cwd(
+        self, tmp_path: Path
+    ) -> None:
+        transcript = _make_transcript(tmp_path, "Working somewhere")
+        with (
+            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
+            patch("quarry.hooks._write_capture_file") as write_local,
+            patch("quarry.hooks._read_ethos_agent_handle") as ethos,
+            patch("quarry.hooks._capture_via_daemon", return_value=True) as cap,
+        ):
+            handle_pre_compact(
+                {
+                    "cwd": 123,
+                    "transcript_path": str(transcript),
+                    "session_id": "abc12345-full-id",
+                }
+            )
+        write_local.assert_not_called()
+        ethos.assert_not_called()
+        assert cap.call_args[0][0].cwd == ""

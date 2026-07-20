@@ -18,10 +18,9 @@ Hook events:
 from __future__ import annotations
 
 import contextlib
-import json
+import hashlib
 import logging
 import os
-import shutil
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -62,8 +61,6 @@ def _unique_collection_name(
     if conn.get_registration(candidate) is None:
         return candidate
     # Last resort: use the full resolved path hash suffix.
-    import hashlib  # noqa: PLC0415
-
     suffix = hashlib.sha256(str(directory).encode()).hexdigest()[:8]
     return f"{directory.name}-{suffix}"
 
@@ -209,7 +206,7 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
         _is_ancestor_of,  # pyright: ignore[reportPrivateUsage]
     )
 
-    cwd = _as_str(payload.get("cwd"))
+    cwd = _as_dir(payload.get("cwd"))
     if not cwd:
         logger.debug("session-start: no cwd in payload, skipping")
         return {}
@@ -332,7 +329,7 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     instead.  The hook imports no engine — only the thin client and the
     lightweight URL/scrub helpers.
     """
-    cwd = _as_str(payload.get("cwd"))
+    cwd = _as_dir(payload.get("cwd"))
     if cwd:
         config = load_hook_config(cwd)
         if not config.web_fetch:
@@ -413,152 +410,6 @@ def _read_ethos_agent_handle(cwd: str) -> str:
             break
         current = parent
     return ""
-
-
-_MAX_TRANSCRIPT_CHARS = 500_000
-
-
-_MAX_TOOL_RESULT_CHARS = 500
-
-
-def _extract_tool_result_text(block: dict[str, object]) -> str:
-    """Extract text from a tool_result content block.
-
-    Returns the concatenated text if under _MAX_TOOL_RESULT_CHARS, else empty string.
-    """
-    tool_content = block.get("content")
-    tool_text = ""
-    if isinstance(tool_content, str):
-        tool_text = tool_content.strip()
-    elif isinstance(tool_content, list):
-        parts = [
-            str(b["text"]).strip()
-            for b in tool_content
-            if isinstance(b, dict)
-            and b.get("type") == "text"
-            and isinstance(b.get("text"), str)
-        ]
-        tool_text = " ".join(parts)
-    if tool_text and len(tool_text) <= _MAX_TOOL_RESULT_CHARS:
-        return tool_text
-    return ""
-
-
-def _extract_content_texts(content: list[object]) -> list[str]:
-    """Extract text fragments from a list of content blocks."""
-    texts: list[str] = []
-    for block in content:
-        if not isinstance(block, dict):
-            continue
-        block_type = block.get("type")
-        if block_type == "text" and isinstance(block.get("text"), str):
-            stripped = str(block["text"]).strip()
-            if stripped:
-                texts.append(stripped)
-        elif block_type == "tool_result":
-            tool_text = _extract_tool_result_text(block)
-            if tool_text:
-                texts.append(f"[tool_result] {tool_text}")
-    return texts
-
-
-def extract_message_text(record: dict[str, object]) -> str | None:
-    """Extract text from a single transcript record, or None if not a message."""
-    record_type = record.get("type", "")
-    if record_type not in ("user", "assistant"):
-        return None
-    message = record.get("message")
-    if not isinstance(message, dict):
-        return None
-    role = message.get("role", record_type)
-    content = message.get("content")
-    if isinstance(content, str):
-        return f"[{role}] {content}" if content.strip() else None
-    if not isinstance(content, list):
-        return None
-    texts = _extract_content_texts(content)
-    if not texts:
-        return None
-    return f"[{role}] {' '.join(texts)}"
-
-
-def extract_transcript_text(transcript_path: str) -> str:
-    """Read a Claude Code transcript JSONL and extract conversation text.
-
-    Extracts user and assistant messages, prefixing each with the role.
-    Skips tool-use content blocks, file snapshots, and system messages.
-    """
-    path = Path(transcript_path)
-    if not path.is_file():
-        return ""
-
-    try:
-        raw = path.read_text()
-    except (OSError, UnicodeDecodeError):
-        logger.warning("pre-compact: could not read transcript %s", path)
-        return ""
-
-    parts: list[str] = []
-    for line in raw.splitlines():
-        try:
-            obj = json.loads(line)
-        except (ValueError, TypeError):
-            continue
-        entry = extract_message_text(obj)
-        if entry:
-            parts.append(entry)
-
-    # Front-truncation: drop oldest entries until total fits within budget.
-    total_chars = sum(len(p) for p in parts)
-    start = 0
-    while start < len(parts) and total_chars > _MAX_TRANSCRIPT_CHARS:
-        total_chars -= len(parts[start])
-        start += 1
-    if start > 0:
-        logger.debug(
-            "pre-compact: dropped %d oldest entries from transcript",
-            start,
-        )
-        parts = parts[start:]
-
-    return "\n\n".join(parts)
-
-
-_ARCHIVE_RETENTION_DAYS = 90
-
-
-def _archive_transcript(
-    transcript_path: Path,
-    session_id: str,
-    sessions_dir: Path,
-) -> None:
-    """Copy raw JSONL transcript to the sessions archive directory.
-
-    Creates the directory if needed, deduplicates prior archives for the
-    same session, and lazily prunes files older than ``_ARCHIVE_RETENTION_DAYS``.
-    """
-    sessions_dir.mkdir(parents=True, exist_ok=True)
-
-    prefix = f"session-{session_id[:8]}-"
-
-    # Copy first — prior archives survive if this fails.
-    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
-    dest = sessions_dir / f"{prefix}{timestamp}.jsonl"
-    shutil.copy(transcript_path, dest)
-
-    # Then dedup: remove prior archives, excluding the one we just wrote.
-    for existing in sessions_dir.glob(f"{prefix}*.jsonl"):
-        if existing != dest:
-            with contextlib.suppress(OSError):
-                existing.unlink()
-
-    # Lazy retention cleanup.
-    now = datetime.now(UTC).timestamp()
-    retention_seconds = _ARCHIVE_RETENTION_DAYS * 86400
-    for f in sessions_dir.glob("session-*.jsonl"):
-        with contextlib.suppress(OSError):
-            if now - f.stat().st_mtime > retention_seconds:
-                f.unlink()
 
 
 def _write_capture_file(
@@ -669,6 +520,20 @@ def _as_str(value: object) -> str:
     return value if isinstance(value, str) else ""
 
 
+def _as_dir(value: object) -> str:
+    """Return ``value`` only when it is a ``str`` naming an ABSOLUTE path, else ``""``.
+
+    A blank or RELATIVE cwd is "unregistered", not the hook's own directory: both
+    resolve against the hook PROCESS's cwd, so a relative cwd would auto-register
+    the wrong tree, read config from the wrong project, or write a capture into the
+    wrong checkout.  cwd is untrusted hook input; only an absolute path names a real
+    client directory.  This mirrors the daemon-side covering-collection guard so
+    both boundaries treat a non-absolute cwd the same way.
+    """
+    cwd = _as_str(value)
+    return cwd if cwd and Path(cwd).is_absolute() else ""
+
+
 def _precompact_target(payload: dict[str, object]) -> tuple[str, str, Path] | None:
     """Return ``(cwd, session_id, resolved jsonl path)`` for a capturable compaction.
 
@@ -678,7 +543,7 @@ def _precompact_target(payload: dict[str, object]) -> tuple[str, str, Path] | No
     unregistered directory still archives and ingests); the other two are
     required.
     """
-    cwd = _as_str(payload.get("cwd"))
+    cwd = _as_dir(payload.get("cwd"))
     if cwd and not load_hook_config(cwd).compaction:
         logger.debug("pre-compact: disabled by config")
         return None
@@ -713,14 +578,17 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
         return {}
     cwd, session_id, tp = target
 
+    from quarry.transcript_reader import TranscriptReader  # noqa: PLC0415
+
     # Archive raw JSONL before extraction.
     sessions_dir = Path.home() / ".punt-labs" / "quarry" / "sessions"
+    reader = TranscriptReader(tp)
     try:
-        _archive_transcript(tp, session_id, sessions_dir)
+        reader.archive(session_id, sessions_dir)
     except Exception:
         logger.exception("pre-compact: archival failed, proceeding with ingest")
 
-    text = extract_transcript_text(str(tp))
+    text = reader.text()
     if not text:
         logger.debug("pre-compact: no conversation text found")
         return {}
