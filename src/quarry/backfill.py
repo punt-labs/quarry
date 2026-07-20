@@ -114,7 +114,7 @@ def list_transcript_files(encoded_dir: str) -> list[Path]:
 
 
 def document_name_for_transcript(transcript_path: Path) -> str:
-    """Derive the ``session-<id[:8]>-<mtime>`` document name for a transcript."""
+    """Derive the stable ``session-<id[:8]>`` document name for a transcript."""
     return Transcript(transcript_path).document_name()
 
 
@@ -122,17 +122,13 @@ def is_already_ingested(
     session_id_prefix: str,
     existing_doc_names: set[str],
 ) -> bool:
-    """Check if a transcript with the given session prefix is already ingested.
+    """Return True if this session's document already exists.
 
-    Recognizes both the compaction hook's stable ``session-<id[:8]>`` name and
-    backfill's own ``session-<id[:8]>-<mtime>`` name — so a session already
-    captured by the hook is skipped instead of re-ingested as a duplicate.
+    Hook and backfill both file under the same stable ``session-<id[:8]>`` name,
+    so this is a clean exact-name check: a session captured by either path — in
+    either order — is skipped rather than re-ingested as a second document.
     """
-    stable = f"session-{session_id_prefix}"
-    timestamped = f"{stable}-"
-    return any(
-        name == stable or name.startswith(timestamped) for name in existing_doc_names
-    )
+    return f"session-{session_id_prefix}" in existing_doc_names
 
 
 def _get_existing_doc_names(database: Database, collection: str) -> set[str]:

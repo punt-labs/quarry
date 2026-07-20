@@ -13,11 +13,13 @@ def test_session_prefix_is_first_eight_chars_of_stem() -> None:
     assert t.session_prefix == "1e7aa08d"
 
 
-def test_document_name_format(tmp_path: Path) -> None:
+def test_document_name_is_stable_session_prefix(tmp_path: Path) -> None:
+    """The document name is the stable ``session-<prefix>`` — no mtime suffix —
+    so it matches the compaction hook's name and one document exists per session."""
     transcript = tmp_path / "sess1234abcd.jsonl"
     transcript.write_text("{}\n", encoding="utf-8")
     name = Transcript(transcript).document_name()
-    assert name.startswith("session-sess1234-")
+    assert name == "session-sess1234"
 
 
 def test_timestamp_uses_file_mtime(tmp_path: Path) -> None:

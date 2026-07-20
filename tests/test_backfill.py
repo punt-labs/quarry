@@ -171,18 +171,35 @@ class TestListTranscriptFiles:
 
 
 class TestDocumentNameForTranscript:
-    def test_uses_session_prefix_and_mtime(self, tmp_path: Path) -> None:
+    def test_uses_stable_session_prefix(self, tmp_path: Path) -> None:
+        """The document name is the stable ``session-<id[:8]>`` — no mtime — so
+        it matches the compaction hook's name and one document exists per
+        session regardless of who wrote it first."""
         name = "1e7aa08d-c485-45d1-8228-54d1a375c812.jsonl"
         transcript = tmp_path / name
         transcript.write_text("{}")
 
         result = document_name_for_transcript(transcript)
 
-        assert result.startswith("session-1e7aa08d-")
-        parts = result.split("-", 2)
-        assert len(parts) == 3
-        assert parts[0] == "session"
-        assert parts[1] == "1e7aa08d"
+        assert result == "session-1e7aa08d"
+
+    def test_name_matches_compaction_hook_so_one_doc_in_both_orders(
+        self, tmp_path: Path
+    ) -> None:
+        """Backfill derives the SAME document_name the compaction hook files
+        under (``session-<id[:8]>``), so a session yields ONE document in either
+        write order: hook-first -> backfill's exact-name check skips it;
+        backfill-first -> the hook's overwrite=True replaces the same name."""
+        session_id = "1e7aa08d-c485-45d1-8228-54d1a375c812"
+        transcript = tmp_path / f"{session_id}.jsonl"
+        transcript.write_text("{}")
+
+        backfill_name = document_name_for_transcript(transcript)
+        # The capture route (compaction hook path) files under session-<id[:8]>.
+        hook_name = f"session-{session_id[:8]}"
+
+        assert backfill_name == hook_name
+        assert is_already_ingested(session_id[:8], {backfill_name}) is True
 
 
 # ---------------------------------------------------------------------------
@@ -192,23 +209,20 @@ class TestDocumentNameForTranscript:
 
 class TestIsAlreadyIngested:
     def test_found(self) -> None:
-        existing = {
-            "session-1e7aa08d-20250101T000000",
-            "session-abcd1234-20250102T000000",
-        }
+        existing = {"session-1e7aa08d", "session-abcd1234"}
         assert is_already_ingested("1e7aa08d", existing) is True
 
     def test_not_found(self) -> None:
-        existing = {"session-abcd1234-20250102T000000"}
+        existing = {"session-abcd1234"}
         assert is_already_ingested("1e7aa08d", existing) is False
 
     def test_empty_set(self) -> None:
         assert is_already_ingested("1e7aa08d", set()) is False
 
-    def test_recognizes_hooks_stable_name(self) -> None:
-        """A session the compaction hook stored under the stable ``session-<id>``
-        name (no ``-<mtime>``) must be recognized, so backfill skips it instead
-        of re-ingesting a duplicate."""
+    def test_recognizes_stable_name_from_either_writer(self) -> None:
+        """Hook and backfill file under the same stable ``session-<id>`` name, so
+        a session captured by either — in either order — is recognized and not
+        re-ingested as a second document."""
         existing = {"session-1e7aa08d"}
         assert is_already_ingested("1e7aa08d", existing) is True
 
@@ -365,7 +379,7 @@ class TestBackfillSessions:
         _setup_registry(env["registry_path"], str(env["real_project"]), "myproject")
 
         fake_doc = {
-            "document_name": "session-abcd1234-20250101T000000",
+            "document_name": "session-abcd1234",
             "document_path": "",
             "collection": "myproject-captures",
             "total_pages": 1,
