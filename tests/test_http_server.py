@@ -12,6 +12,7 @@ import os
 import sqlite3
 import stat
 import sys
+import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, cast
@@ -32,16 +33,23 @@ from quarry.results import SearchResult
 
 
 def _poll_task_done(
-    tc: TestClient, task_id: str, max_polls: int = 50
+    tc: TestClient, task_id: str, max_polls: int = 100
 ) -> dict[str, Any]:
-    """Poll GET /tasks/{task_id} until terminal status. Return the final JSON."""
-    data: dict[str, Any] = {}
+    """Poll GET /tasks/{task_id} until a terminal status, returning the final JSON.
+
+    Sleeps between polls so the background thread — which does a real LanceDB
+    connect on its first ``ctx.database`` access — can finish.  A task still
+    ``running`` when the budget drains is a bug, not a pass: returning that
+    non-terminal snapshot lets a caller's assertions silently not run (the mock
+    never fired), so raise instead.
+    """
     for _ in range(max_polls):
-        resp = tc.get(f"/v1/tasks/{task_id}")
-        data = resp.json()
+        data: dict[str, Any] = tc.get(f"/v1/tasks/{task_id}").json()
         if data["status"] != "running":
             return data
-    return data
+        time.sleep(0.05)
+    msg = f"task {task_id} still running after {max_polls} polls"
+    raise AssertionError(msg)
 
 
 def _mock_settings(tmp_path: Path) -> MagicMock:
@@ -1310,7 +1318,7 @@ class TestDeleteCollections:
 
 
 class TestCapture:
-    """Tests for POST /capture -- server-derived collection, always scrubs."""
+    """Tests for POST /v1/capture -- server-derived collection, always scrubs."""
 
     def test_success_returns_202(self, tmp_path: Path) -> None:
         mock_result = {
@@ -1438,6 +1446,82 @@ class TestCapture:
         assert "scrub exploded" in data["error"]
         store.assert_not_called()  # nothing stored
         delete.assert_not_called()  # AND the prior document is not deleted
+
+    def test_empty_extraction_refetches_source_url(self, tmp_path: Path) -> None:
+        """A JS-rendered page that extracts to zero chunks re-fetches its source.
+
+        The inline HTML yields no chunks; rather than silently index nothing the
+        daemon re-fetches the source URL through the SSRF-checked ingest path,
+        scrubbing content AND summary (symmetric with the inline phase).
+        """
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        url_kwargs: list[dict[str, object]] = []
+
+        def _url(source: str, *_a: object, **kw: object) -> dict[str, object]:
+            url_kwargs.append({"source": source, **kw})
+            return {
+                "document_name": source,
+                "collection": kw["collection"],
+                "chunks": 1,
+            }
+
+        empty = {"document_name": "p", "collection": "default-captures", "chunks": 0}
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch("quarry.ingestion.pipeline.ingest_content", return_value=empty),
+            patch("quarry.ingestion.pipeline.ingest_url", _url),
+        ):
+            resp = tc.post(
+                "/v1/capture",
+                json={
+                    "content": "<html><body></body></html>",
+                    "document_name": "example.com/p",
+                    "source_url": "https://example.com/p",
+                    "summary": "see jmf@pobox.com",
+                    "format_hint": "html",
+                },
+            )
+            data = _poll_task_done(tc, resp.json()["task_id"])
+
+        assert data["status"] == "completed"
+        assert data["results"]["chunks"] == 1  # the re-fetch indexed the page
+        assert len(url_kwargs) == 1
+        assert url_kwargs[0]["source"] == "https://example.com/p"
+        assert url_kwargs[0]["collection"] == "default-captures"
+        assert "jmf@pobox.com" not in str(url_kwargs[0]["summary"])
+        assert "[REDACTED:email]" in str(url_kwargs[0]["summary"])
+        scrub = cast("Callable[[str], str]", url_kwargs[0]["content_scrubber"])
+        assert "[REDACTED:email]" in scrub("reach jmf@pobox.com")
+
+    def test_nonempty_extraction_does_not_refetch(self, tmp_path: Path) -> None:
+        """A page that extracts to >=1 chunk stores inline and never re-fetches."""
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        stored = {"document_name": "p", "collection": "default-captures", "chunks": 3}
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch("quarry.ingestion.pipeline.ingest_content", return_value=stored),
+            patch("quarry.ingestion.pipeline.ingest_url") as url,
+        ):
+            resp = tc.post(
+                "/v1/capture",
+                json={
+                    "content": "real page text",
+                    "document_name": "example.com/p",
+                    "source_url": "https://example.com/p",
+                    "format_hint": "html",
+                },
+            )
+            data = _poll_task_done(tc, resp.json()["task_id"])
+
+        assert data["status"] == "completed"
+        assert data["results"]["chunks"] == 3
+        url.assert_not_called()  # inline chunks were stored — no re-fetch
 
 
 class TestRemember:

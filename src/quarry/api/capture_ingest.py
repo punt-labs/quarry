@@ -23,3 +23,8 @@ class CaptureIngestRequest(BaseModel):
     agent_handle: str = ""
     memory_type: str = ""
     summary: str = ""
+    # The raw fetch URL, used only as the SSRF-checked re-fetch source when the
+    # inline HTML extracts to zero chunks (a JS-rendered page).  It is a locator,
+    # never stored as-is: the daemon files the capture under the redacted
+    # ``document_name``.  Empty for transcripts, which have nothing to re-fetch.
+    source_url: str = ""

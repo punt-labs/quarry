@@ -684,6 +684,11 @@
                     "title": "Session Id",
                     "type": "string"
                   },
+                  "source_url": {
+                    "default": "",
+                    "title": "Source Url",
+                    "type": "string"
+                  },
                   "summary": {
                     "default": "",
                     "title": "Summary",

@@ -8,6 +8,7 @@ build :class:`ScrubbedIngestJob`; the URL route builds :class:`IngestJob`.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -18,6 +19,8 @@ from quarry.daemon.tasks import task_terminal
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.tasks import TaskState
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,11 +49,11 @@ class ScrubbedIngestJob:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Scrub then ingest the content in a background thread, tracking state."""
         with task_terminal(state):
-            result = await run_in_threadpool(self._scrub_and_ingest, ctx)
+            result = await run_in_threadpool(self.scrub_and_ingest, ctx)
             state.status = "completed"
             state.results = dict(result)
 
-    def _scrub_and_ingest(self, ctx: DaemonContext) -> dict[str, object]:
+    def scrub_and_ingest(self, ctx: DaemonContext) -> dict[str, object]:
         """Scrub the content AND the free-form metadata, then ingest."""
         from quarry.ingestion.pipeline import ingest_content  # noqa: PLC0415
         from quarry.scrub import scrub_and_log  # noqa: PLC0415
@@ -111,6 +114,9 @@ class IngestJob:
             from quarry.ingestion.pipeline import ingest_url  # noqa: PLC0415
             from quarry.scrub import scrub_and_log  # noqa: PLC0415
 
+            def scrub(text: str) -> str:
+                return scrub_and_log(text, "web-fetch")
+
             collection = CapturesCollection.for_registry_path(
                 self.cwd, ctx.settings.registry_path
             ).name
@@ -121,10 +127,10 @@ class IngestJob:
                     ctx.settings,
                     overwrite=self.overwrite,
                     collection=collection,
-                    content_scrubber=lambda text: scrub_and_log(text, "web-fetch"),
+                    content_scrubber=scrub,
                     agent_handle=self.agent_handle,
                     memory_type=self.memory_type,
-                    summary=self.summary,
+                    summary=scrub(self.summary),
                 )
             )
 
@@ -140,5 +146,62 @@ class IngestJob:
                 agent_handle=self.agent_handle,
                 memory_type=self.memory_type,
                 summary=self.summary,
+            )
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureIngestJob:
+    """A web-fetch capture: scrub the fetched HTML inline, re-fetch if it's empty.
+
+    The daemon scrubs and stores the already-fetched HTML through the composed
+    :class:`ScrubbedIngestJob`.  A JS-rendered or otherwise text-empty page can
+    extract to zero chunks; rather than silently index nothing, the daemon then
+    re-fetches the *source URL* through the SSRF-checked URL-ingest path (scrub
+    on, same captures collection) so the page is captured instead of dropped.
+    A capture with no source URL (a compaction transcript) simply stores what it
+    has.  The re-fetch scrubs content and summary, matching the inline phase.
+    """
+
+    inline: ScrubbedIngestJob
+    source_url: str
+
+    async def run(self, ctx: DaemonContext, state: TaskState) -> None:
+        """Ingest inline, re-fetching the source on empty, tracking task state."""
+        with task_terminal(state):
+            result = await run_in_threadpool(self._capture, ctx)
+            state.status = "completed"
+            state.results = dict(result)
+
+    def _capture(self, ctx: DaemonContext) -> dict[str, object]:
+        """Scrub-ingest inline; on zero chunks with a source URL, re-fetch it."""
+        result = self.inline.scrub_and_ingest(ctx)
+        if result.get("chunks") or not self.source_url:
+            return result
+        return self._refetch(ctx)
+
+    def _refetch(self, ctx: DaemonContext) -> dict[str, object]:
+        """Re-fetch the source URL when inline extraction yielded no chunks."""
+        from quarry.ingestion.pipeline import ingest_url  # noqa: PLC0415
+        from quarry.scrub import scrub_and_log  # noqa: PLC0415
+
+        def scrub(text: str) -> str:
+            return scrub_and_log(text, "web-fetch")
+
+        logger.info(
+            "capture: %s extracted to zero chunks — re-fetching source via daemon",
+            self.inline.name,
+        )
+        return dict(
+            ingest_url(
+                self.source_url,
+                ctx.database,
+                ctx.settings,
+                overwrite=self.inline.overwrite,
+                collection=self.inline.collection,
+                content_scrubber=scrub,
+                agent_handle=self.inline.agent_handle,
+                memory_type=self.inline.memory_type,
+                summary=scrub(self.inline.summary),
             )
         )

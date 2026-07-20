@@ -9,7 +9,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from quarry.captures_collection import CapturesCollection
-from quarry.daemon.ingest_jobs import ScrubbedIngestJob
+from quarry.daemon.ingest_jobs import CaptureIngestJob, ScrubbedIngestJob
 from quarry.daemon.routes.base import RouteGroup
 from quarry.http_guards import RequestGuards
 
@@ -44,8 +44,8 @@ class CaptureRoutes(RouteGroup):
 
     async def _capture_job(
         self, body: dict[str, object]
-    ) -> ScrubbedIngestJob | JSONResponse:
-        """Validate a capture body into a :class:`ScrubbedIngestJob` or a 400."""
+    ) -> CaptureIngestJob | JSONResponse:
+        """Validate a capture body into a :class:`CaptureIngestJob` or a 400."""
         content = self._require_text(body, "content")
         if isinstance(content, JSONResponse):
             return content
@@ -60,7 +60,7 @@ class CaptureRoutes(RouteGroup):
             self._str_field(body, "cwd"),
             self.ctx.settings.registry_path,
         )
-        return ScrubbedIngestJob(
+        inline = ScrubbedIngestJob(
             name=name,
             content=content,
             collection=collection.name,
@@ -70,6 +70,9 @@ class CaptureRoutes(RouteGroup):
             agent_handle=self._str_field(body, "agent_handle"),
             memory_type=self._str_field(body, "memory_type"),
             summary=self._str_field(body, "summary"),
+        )
+        return CaptureIngestJob(
+            inline=inline, source_url=self._str_field(body, "source_url")
         )
 
     def _capture_name(self, body: dict[str, object]) -> str | JSONResponse:
