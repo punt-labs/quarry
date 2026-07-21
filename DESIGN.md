@@ -948,6 +948,38 @@ added pyright to CI; PR-2 introduces `quarry/api` + FastAPI + `/v1` (+ the missi
 `serve.token`, `QuarryClient` + the CLI thin-client (deleting `RemoteClient`), and
 `quarry mcp`-as-client.
 
+**PR-6 (`quarry-7ftj`) locked the boundary — the epic (`quarry-ma6f`/`quarry-ynvs`)
+is complete.** An **import-linter** contract (`.importlinter`, run by
+`make check-imports` in the `make check` chain and in CI) forbids every client
+module (`quarry.__main__`, `quarry.hooks`, `quarry.mcp_server`, `quarry.client`,
+`quarry.api`) from importing any engine package (`quarry.db`, `quarry.embeddings`,
+`quarry.ingestion`, `quarry.retrieval`, `quarry.sync`, `quarry.daemon`) along any
+*transitive* chain — a violating import fails CI, not review. A **full-client-surface
+runtime sabotage test** (`tests/test_init.py`, each client module imported in a
+subprocess with `lancedb`/`onnxruntime`/`pyarrow` poisoned) is the companion guard
+that no engine reaches a client module's *module* scope. A hermetic **in-process
+ASGI fixture** (`httpx.ASGITransport` over `build_app`) lets daemon-dependent tests
+hit the real handlers without a socket, and one **real-loopback-TLS smoke** (slow
+tier, out of the fast CI suite) covers the pinned-CA wire contract end-to-end;
+**install health-gates** on `/health` `ready` before exit 0. Net: one engine in
+`quarryd`, four thin client surfaces (CLI, hooks, library, MCP), the boundary
+enforced structurally so it cannot regress.
+
+**Correction to §3.1 enforcement-#2 of `docs/des-031v2-daemon-first.md`.** That
+text assumed import-linter *cannot see* function-body lazy imports, so the
+host-local engine-owning commands would be invisible to the static graph. With the
+current toolchain (grimp 3.15) that is **false** — grimp resolves lazy imports.
+The boundary therefore does **not** rest on lazy-import invisibility: the engine's
+only entry point (`quarry.daemon.launcher`, the `quarryd` script) lives *inside*
+`quarry.daemon` (engine-side, never a contract source), and the one sanctioned
+exception — the host-admin diagnostics (`doctor`/`install`/`uninstall`) that probe
+the local engine environment to report *why* a daemon is unhealthy — is an
+**explicit, enumerated `ignore_imports` list** of eight lazy diagnostic edges, not
+an invisibility trick. A new engine import from any other client-reachable module
+still fails the contract; the sabotage test proves those diagnostics stay off the
+module-scope hot path. (`quarry mcp` is no longer in the exception at all — PR-4
+made it a pure client.)
+
 #### PR-3a as landed (`quarryd` + `serve.token` + `ClientConfig`)
 
 PR-3a implements the daemon/supervision/loopback-auth half of v2.2. What shipped:

@@ -519,6 +519,46 @@ preflight the CORS policy refuses) --- with the \texttt{serve.token} bearer
 above.  The guard blocks a forged cross-origin write; the token blocks an
 unauthorized local reader.
 
+\subsection{Client/Engine Boundary (I1)}
+
+The daemon-first split (DES-031) is a hard boundary, enforced
+\emph{structurally} rather than by convention: a client process never
+imports the engine.  Three layers, dependency arrow pointing inward:
+\modpath{quarry/api} (the wire contract --- Pydantic models, zero engine,
+zero heavy deps) $\leftarrow$ \modpath{quarry/client} (\texttt{QuarryClient}
+transport + typed errors, imports only \texttt{api}) $\leftarrow$ the client
+processes (\modpath{\_\_main\_\_}, \modpath{hooks}, \modpath{mcp\_server}).
+The engine --- \modpath{db/}, \modpath{embeddings}, \modpath{ingestion/},
+\modpath{retrieval/}, \modpath{sync}, \modpath{daemon/} --- is server-side
+only; its entry point \modpath{daemon/launcher.py} (the \texttt{quarryd}
+script) lives inside \modpath{daemon/}, so it is engine-side and never a
+client.
+
+Two mechanisms lock it (PR-6):
+
+\begin{itemize}
+  \item \textbf{An import-linter contract} (\texttt{.importlinter}, run by
+    \texttt{make check-imports} in \texttt{make check} and CI) forbids any of
+    the five client modules from importing any of the six engine packages
+    along a \emph{transitive} chain; a violating import fails CI, not review.
+    The one sanctioned exception is an explicit, enumerated
+    \texttt{ignore\_imports} list of the host-admin diagnostic edges
+    (\texttt{doctor}/\texttt{install}/\texttt{uninstall} probe the local engine
+    environment to report why a daemon is unhealthy) --- function-body lazy
+    imports off the hot path, not an invisibility trick (grimp resolves lazy
+    imports).
+  \item \textbf{A runtime engine-sabotage test} imports each client module in
+    a subprocess with \texttt{lancedb}/\texttt{onnxruntime}/\texttt{pyarrow}
+    poisoned and asserts no engine module reaches \emph{module} scope --- the
+    companion guard that the diagnostic lazy imports stay deferred.
+\end{itemize}
+
+Daemon-dependent tests run against a hermetic in-process ASGI fixture
+(\texttt{httpx.ASGITransport} over the FastAPI \texttt{build\_app}, no
+socket); a single real-loopback-TLS smoke (slow tier, excluded from the fast
+suite) covers the pinned-CA wire contract end-to-end; and \texttt{install}
+gates on \texttt{/health} \texttt{ready} before exiting~0.
+
 \subsection{mcp-proxy Architecture}
 
 \texttt{quarry install} downloads \texttt{mcp-proxy} (SHA256-verified,
