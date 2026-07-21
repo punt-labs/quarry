@@ -7,6 +7,7 @@ fetched — the bypass a leaf-only test would hide.
 
 from __future__ import annotations
 
+import io
 import urllib.request
 from email.message import Message
 from http.client import HTTPMessage
@@ -14,6 +15,7 @@ from typing import Any
 from urllib.error import HTTPError
 
 import pytest
+from usp.web_client.abstract_client import WebClientErrorResponse
 
 import quarry.sitemap_web_client as swc
 from quarry.ingestion.ssrf_redirect import SsrfGuardedRedirectHandler
@@ -114,6 +116,29 @@ class _TimeoutOpener:
         self, request: urllib.request.Request, timeout: float | None = None
     ) -> _FakeResp:
         raise TimeoutError("read timed out")
+
+
+class _TrackedFp(io.BytesIO):
+    """A response body that records whether it was closed."""
+
+    closed_count: int = 0
+
+    def close(self) -> None:
+        type(self).closed_count += 1
+        super().close()
+
+
+class _HttpErrorOpener:
+    """An opener that raises an HTTPError carrying an open (fd-holding) body."""
+
+    def __init__(self, code: int) -> None:
+        self._code = code
+
+    def open(
+        self, request: urllib.request.Request, timeout: float | None = None
+    ) -> _FakeResp:
+        fp = _TrackedFp(b"error body")
+        raise HTTPError(request.full_url, self._code, "err", HTTPMessage(), fp)
 
 
 class _BrokenReadResp:
@@ -263,6 +288,51 @@ class TestGatedClientGet:
 
         assert isinstance(resp, WebClientErrorResponse)
         assert resp.retryable() is True
+
+    def test_http_error_closes_response_fd(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every HTTPError-returning fetch closes the response fd (no leak).
+
+        HTTPError IS an open response holding a socket fd; leaking one per
+        failed fetch would exhaust fds over a crawl (EMFILE -> starvation).
+        """
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _HttpErrorOpener(500))
+        _TrackedFp.closed_count = 0
+        for _ in range(20):
+            resp = GatedSitemapWebClient().get("https://safe.example/x.xml")
+            assert isinstance(resp, WebClientErrorResponse)
+        assert _TrackedFp.closed_count == 20  # one close per failed fetch
+
+    @pytest.mark.parametrize("code", [500, 503, 429])
+    def test_transient_http_errors_are_retryable(
+        self, code: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """5xx and 429 (rate limit) are transient, so the fetch is retryable."""
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _HttpErrorOpener(code))
+        resp = GatedSitemapWebClient().get("https://safe.example/x.xml")
+        assert isinstance(resp, WebClientErrorResponse)
+        assert resp.retryable() is True
+
+    @pytest.mark.parametrize("code", [400, 403, 404])
+    def test_permanent_http_errors_are_not_retryable(
+        self, code: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """4xx (other than 429) are permanent, so the fetch is not retried."""
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _HttpErrorOpener(code))
+        resp = GatedSitemapWebClient().get("https://safe.example/x.xml")
+        assert isinstance(resp, WebClientErrorResponse)
+        assert resp.retryable() is False
+
+    def test_ssrf_block_is_non_retryable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An SSRF-blocked URL is never retried (and never opened)."""
+        monkeypatch.setattr(_GETADDRINFO, lambda *a, **k: _addrinfo("10.0.0.9"))
+        resp = GatedSitemapWebClient().get("https://internal.example/x.xml")
+        assert isinstance(resp, WebClientErrorResponse)
+        assert resp.retryable() is False
 
 
 class TestUspRecursionGated:

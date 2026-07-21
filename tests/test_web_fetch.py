@@ -56,6 +56,13 @@ class TestWebFetcher:
         assert "Hello" in WebFetcher().fetch("https://example.com")
 
     @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    def test_uppercase_scheme_accepted(self, mock_open: MagicMock) -> None:
+        """An uppercase scheme is accepted, consistent with UrlSafetyCheck."""
+        body = b"<html><body><p>OK</p></body></html>"
+        mock_open.return_value = _mock_response(body, "text/html")
+        assert "OK" in WebFetcher().fetch("HTTP://example.com")
+
+    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
     def test_rejects_non_html_content_type(self, mock_open: MagicMock) -> None:
         mock_open.return_value = _mock_response(b"%PDF-1.4", "application/pdf")
         with pytest.raises(ValueError, match="non-HTML"):

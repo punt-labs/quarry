@@ -57,7 +57,7 @@ class WebFetcher:
                 the body exceeds the size cap.
             OSError: On network errors or once the total-time deadline passes.
         """
-        if not url.startswith(("http://", "https://")):
+        if not url.lower().startswith(("http://", "https://")):
             msg = f"Only HTTP(S) URLs are supported: {url}"
             raise ValueError(msg)
 

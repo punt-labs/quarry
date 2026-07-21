@@ -103,7 +103,12 @@ class GatedSitemapWebClient(AbstractWebClient):
         except RedirectRejectedError as exc:
             return self._error(str(exc), retryable=False)
         except HTTPError as exc:
-            return self._error(f"HTTP {exc.code}", retryable=False)
+            # HTTPError IS an open response holding a socket fd; close it or the
+            # fd leaks -- over a crawl that is EMFILE -> daemon starvation.  5xx
+            # and 429 are transient (retry); other 4xx are permanent.
+            retryable = self._retryable_http(exc.code)
+            exc.close()
+            return self._error(f"HTTP {exc.code}", retryable=retryable)
         except (TimeoutError, URLError) as exc:
             return self._error(f"cannot reach {url}: {exc}", retryable=True)
         except (OSError, HTTPException, ValueError) as exc:
@@ -133,6 +138,11 @@ class GatedSitemapWebClient(AbstractWebClient):
         if self._max_bytes is None:
             return resp.read()
         return resp.read(self._max_bytes)
+
+    @staticmethod
+    def _retryable_http(code: int) -> bool:
+        """Return whether an HTTP status is transient: 5xx or 429 (rate limit)."""
+        return code >= 500 or code == 429
 
     @staticmethod
     def _error(message: str, *, retryable: bool) -> WebClientErrorResponse:

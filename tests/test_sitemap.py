@@ -42,6 +42,16 @@ def _resolve_public(monkeypatch: pytest.MonkeyPatch) -> None:
 # ---------------------------------------------------------------------------
 
 
+class TestSitemapEntry:
+    """SitemapEntry is a frozen, slotted value object."""
+
+    def test_is_slotted(self) -> None:
+        entry = SitemapEntry(loc="https://example.com/p", lastmod=None)
+        assert SitemapEntry.__slots__ == ("loc", "lastmod")
+        with pytest.raises(AttributeError):
+            _ = entry.__dict__  # slotted instances have no __dict__
+
+
 class TestDiscoverPages:
     """Test auto-discovery using USP's sitemap_tree_for_homepage."""
 

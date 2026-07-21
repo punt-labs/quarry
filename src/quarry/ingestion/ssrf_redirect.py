@@ -66,6 +66,10 @@ class SsrfGuardedRedirectHandler(urllib.request.HTTPRedirectHandler):
         """
         reason = UrlSafetyCheck.reject_reason(newurl)
         if reason is not None:
+            # urllib's http_error_30x calls this BEFORE it reads/closes fp, so
+            # raising here would leak the intermediate 3xx response's fd on every
+            # blocked hop.  Close it first (Class-1 fd hygiene).
+            fp.close()
             raise RedirectRejectedError(f"redirect target rejected: {reason}")
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 

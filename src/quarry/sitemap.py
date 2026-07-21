@@ -19,7 +19,7 @@ from quarry.url_safety import UrlSafetyCheck
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SitemapEntry:
     """A URL discovered from a sitemap."""
 
