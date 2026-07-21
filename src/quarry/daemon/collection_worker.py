@@ -100,24 +100,33 @@ class CollectionWorker:
         """Return seconds since the worker last finished a job (or was created)."""
         return now - self._last_active
 
-    def shutdown(self) -> None:
-        """Cancel an idle worker's task; the caller guarantees an empty queue."""
-        self._task.cancel()
+    def shutdown(self) -> asyncio.Task[None]:
+        """Cancel an idle worker's task and return it for the caller to retain.
 
-    def abort(self) -> None:
-        """Cancel the worker and fail every still-queued job (recoverable).
+        The caller guarantees an empty queue.  Returning the cancelled task lets
+        a synchronous reaper hold a strong reference (and a done-callback) until
+        the cancellation completes, so the pending task is never garbage-collected
+        mid-flight — asyncio keeps only a weak reference of its own.
+        """
+        self._task.cancel()
+        return self._task
+
+    def abort(self) -> asyncio.Task[None]:
+        """Cancel the worker, fail every still-queued job, and return the task.
 
         The in-flight job's own ``task_terminal`` records ``failed`` when the
         cancellation reaches it; the jobs still waiting never ran, so this marks
         them ``failed`` and frees their admit slots.  A durable capture artifact
         outlives a ``failed`` task and is recoverable via ``quarry backfill``.
+        The cancelled task is returned so a sync caller can retain it the way
+        ``aclose`` awaits it.
         """
         self._task.cancel()
         while True:
             try:
                 item = self._queue.get_nowait()
             except asyncio.QueueEmpty:
-                return
+                return self._task
             if item is not None:
                 item.state.status = "failed"
                 item.state.error = "daemon shut down before ingest completed"

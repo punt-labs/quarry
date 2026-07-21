@@ -42,7 +42,7 @@ class IngestionRoutes(RouteGroup):
             return job
 
         state = self.ctx.tasks.begin("remember")
-        return self.submit(job.collection, job, state)
+        return self.submit(job, state)
 
     async def ingest(self, request: Request) -> JSONResponse:
         """Ingest a URL as a background task.
@@ -70,7 +70,7 @@ class IngestionRoutes(RouteGroup):
             return job
 
         state = self.ctx.tasks.begin("ingest")
-        return self.submit(job.collection, job, state)
+        return self.submit(job, state)
 
     def _remember_job(
         self, body: dict[str, object]

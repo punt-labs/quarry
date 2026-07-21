@@ -41,7 +41,7 @@ class CaptureRoutes(RouteGroup):
         if isinstance(job, JSONResponse):
             return job
         state = self.ctx.tasks.begin("capture")
-        return self.submit(job.collection, job, state)
+        return self.submit(job, state)
 
     async def _capture_job(
         self, body: dict[str, object]
