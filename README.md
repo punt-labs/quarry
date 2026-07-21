@@ -167,8 +167,8 @@ quarry captures init                           # bootstrap the private capture s
 quarry captures push                           # re-scrub + push captures to the shadow
 quarry status                                  # database dashboard
 quarry doctor                                  # health check
-quarryd                                        # start the engine daemon on :8420
-quarry install                                 # set up daemon, TLS certs, mcp-proxy
+quarry install                                 # set up daemon service, TLS certs, mcp-proxy
+quarryd                                        # run the engine in the foreground (normally the service runs it)
 
 # Remote connections
 quarry login okinos.local --api-key <token>    # TOFU login to remote server
@@ -246,6 +246,30 @@ One resident engine means the CLI and hooks reuse the daemon's loaded model inst
 The **target** is that *every* interface — CLI, library, and MCP — is a thin client of that one daemon over a versioned REST/WebSocket contract; this daemon-first model is specified in [DES-031 v2](DESIGN.md) (ACCEPTED, in implementation). Today the CLI and library still load the engine in-process on local calls, and MCP can fall back to an in-process `quarry mcp` when mcp-proxy is absent; those local-engine paths are being removed.
 
 `quarry install` downloads mcp-proxy (SHA256-verified, correct platform) and configures MCP clients.
+
+### Managing the daemon
+
+`quarry install` registers `quarryd` as a per-user background service that starts at login and restarts on crash — **launchd** on macOS (label `com.punt-labs.quarry`) and **systemd** on Linux (unit `quarry.service`). You rarely need to touch it, but **after upgrading the wheel you must restart the service** so the new engine loads — a running daemon holds the old code in memory (`quarry doctor` reports the CLI version, not the daemon's).
+
+macOS (launchd):
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.punt-labs.quarry              # restart (use after an upgrade)
+launchctl unload -w ~/Library/LaunchAgents/com.punt-labs.quarry.plist  # stop
+launchctl load   -w ~/Library/LaunchAgents/com.punt-labs.quarry.plist  # start
+launchctl list com.punt-labs.quarry                                    # status (shows PID, or "-" if stopped)
+```
+
+Linux (systemd, user scope):
+
+```bash
+systemctl --user restart quarry        # restart (use after an upgrade)
+systemctl --user disable --now quarry  # stop
+systemctl --user enable  --now quarry  # start
+systemctl --user status  quarry        # status
+```
+
+`quarry doctor` confirms `quarryd: running and ready`. `quarry uninstall` removes the service and its unit file. To run the engine in the foreground for debugging, run `quarryd` directly — it blocks until you stop it.
 
 ## Documentation
 
