@@ -48,7 +48,6 @@ ignore_imports =
     quarry.doctor -> quarry.ingestion.ocr_local
     quarry.doctor -> quarry.ingestion.provider
     quarry.doctor_captures -> quarry.db.facade
-    quarry.onnx_session -> quarry.ingestion.provider
 
 [importlinter:contract:api-sits-below-client]
 name = The wire contract (quarry.api) sits below the transport client
