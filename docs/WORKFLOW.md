@@ -39,8 +39,9 @@ LoopState
   open ∩ closed = ∅         -- a bead is open or closed, never both
 ```
 
-A bead's lifecycle is a walk through these sets: `open → validated → claimed
-→ closed`. Steps that were performed ("the recap was sent", "the daemon was
+A bead's lifecycle is a walk through these sets:
+`open → validated → claimed → closed`. Steps that were performed ("the recap
+was sent", "the daemon was
 exercised") appear as named predicates over declared terms, never as bare
 primed flags.
 
@@ -343,8 +344,9 @@ unresolved local findings is a procedural violation.
 mean the feature works, and a green `quarry doctor` does **not** mean the new
 code is running. Before any PR opens:
 
-1. **Build + install** the wheel: `make build` → `uv tool install --force
-   dist/*.whl` (`--force` reinstalls the same version number with new code).
+1. **Build + install** the wheel: `make build`, then
+   `uv tool install --force dist/*.whl` (`--force` reinstalls the same version
+   number with new code).
 2. **Restart the daemon service.** A running `quarryd` holds the OLD engine in
    memory until restarted; installing the wheel does nothing to the live
    process. There is no `quarryd restart` subcommand.
