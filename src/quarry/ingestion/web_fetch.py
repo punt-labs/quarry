@@ -61,6 +61,14 @@ class WebFetcher:
         if not url.lower().startswith(("http://", "https://")):
             msg = f"Only HTTP(S) URLs are supported: {url}"
             raise ValueError(msg)
+        # Self-gate the initial URL (host + resolved address) BEFORE opening the
+        # socket -- defence in depth behind the route boundary, and so a direct
+        # caller cannot reach an internal address.  Redirect hops are gated by
+        # GUARDED_OPENER; this covers the first hop.
+        reason = UrlSafetyCheck.reject_reason(url)
+        if reason is not None:
+            msg = f"URL rejected: {reason}"
+            raise ValueError(msg)
 
         request = urllib.request.Request(  # noqa: S310
             url,
@@ -74,7 +82,7 @@ class WebFetcher:
             # HTTPError IS an open response holding a socket fd; close it before
             # re-raising or a failed fetch leaks an fd (EMFILE over a crawl).
             msg = f"HTTP {exc.code} fetching {url}"
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(OSError, ValueError):
                 exc.close()
             raise ValueError(msg) from exc
         except URLError as exc:

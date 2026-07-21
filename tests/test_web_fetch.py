@@ -102,7 +102,13 @@ class TestWebFetcher:
         mock_resp = _mock_response(b"<html></html>", "text/html")
         mock_resp.url = "http://landed.internal/"
         mock_open.return_value = mock_resp
-        monkeypatch.setattr(_GETADDRINFO, lambda *a, **k: _addrinfo("127.0.0.1"))
+        # The initial URL resolves public (passes the initial gate); only the
+        # landed final URL resolves loopback, so the final-URL check is what fires.
+        resolve = {"landed.internal": "127.0.0.1"}
+        monkeypatch.setattr(
+            _GETADDRINFO,
+            lambda host, *a, **k: _addrinfo(resolve.get(host, _PUBLIC_ADDR)),
+        )
         with pytest.raises(ValueError, match="final URL rejected"):
             WebFetcher().fetch("https://example.com/redirect")
 
@@ -164,6 +170,63 @@ class TestWebFetcher:
         with pytest.raises(TimeoutError, match="time budget") as excinfo:
             WebFetcher().fetch("https://example.com/slow")
         assert "https://example.com/slow" in str(excinfo.value)
+
+
+class TestInitialUrlGate:
+    """WebFetcher self-gates its initial URL before opening any socket."""
+
+    @pytest.mark.parametrize(
+        "resolved",
+        [
+            "127.0.0.1",
+            "::1",
+            "169.254.169.254",
+            "10.0.0.5",
+            "192.168.1.1",
+            "100.64.1.1",
+        ],
+    )
+    def test_initial_internal_url_rejected_no_socket(
+        self, resolved: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Each internal class is rejected on the initial URL; no socket opened.
+
+        The gate resolves the host, so a public-looking name pointing at an
+        internal address is caught; the opener is never called.
+        """
+        monkeypatch.setattr(_GETADDRINFO, lambda *a, **k: _addrinfo(resolved))
+        opener = MagicMock()
+        monkeypatch.setattr(wf, "GUARDED_OPENER", opener)
+        with pytest.raises(ValueError, match="URL rejected"):
+            WebFetcher().fetch("https://evil.test/x")
+        assert opener.open.call_count == 0  # gate ran before any socket
+
+    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    def test_public_initial_url_still_fetches(self, mock_open: MagicMock) -> None:
+        """A public initial URL passes the gate and is fetched (resolver public)."""
+        body = b"<html><body><p>OK</p></body></html>"
+        mock_open.return_value = _mock_response(body, "text/html")
+        assert "OK" in WebFetcher().fetch("https://example.com")
+
+    def test_close_failure_does_not_mask_the_real_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A close() raising OSError is suppressed; the HTTP error still surfaces."""
+        from http.client import HTTPMessage
+        from urllib.error import HTTPError
+
+        class _BadCloseError(HTTPError):
+            def close(self) -> None:
+                raise OSError("close failed")
+
+        def _open(_req: object, timeout: float | None = None) -> object:
+            raise _BadCloseError(
+                "https://example.com/x", 404, "nf", HTTPMessage(), None
+            )
+
+        monkeypatch.setattr("quarry.ingestion.web_fetch.GUARDED_OPENER.open", _open)
+        with pytest.raises(ValueError, match="HTTP 404"):
+            WebFetcher().fetch("https://example.com/x")
 
 
 class TestRedirectGate:
@@ -250,7 +313,13 @@ class TestRedirectGate:
         """
         start = "https://public.example/start"
         internal = "http://internal.service/secret"
-        monkeypatch.setattr(_GETADDRINFO, lambda *a, **k: _addrinfo("10.0.0.9"))
+        # Public start passes the initial-URL gate; the redirect TARGET resolves
+        # internal so the per-hop gate blocks it.
+        resolve = {"public.example": _PUBLIC_ADDR, "internal.service": "10.0.0.9"}
+        monkeypatch.setattr(
+            _GETADDRINFO,
+            lambda host, *a, **k: _addrinfo(resolve.get(host, _PUBLIC_ADDR)),
+        )
         recorder = _RecordingHandler(start, internal)
         opener = urllib.request.OpenerDirector()
         opener.add_handler(SsrfGuardedRedirectHandler())

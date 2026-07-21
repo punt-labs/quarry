@@ -71,7 +71,7 @@ class SsrfGuardedRedirectHandler(urllib.request.HTTPRedirectHandler):
             # raising here would leak the intermediate 3xx response's fd on every
             # blocked hop.  Close it first (Class-1 fd hygiene); a close failure
             # must not mask the SSRF rejection, so it is suppressed.
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(OSError, ValueError):
                 fp.close()
             raise RedirectRejectedError(f"redirect target rejected: {reason}")
         return super().redirect_request(req, fp, code, msg, headers, newurl)

@@ -112,7 +112,7 @@ class GatedSitemapWebClient(AbstractWebClient):
             # permanent.  Then close the fd (or it leaks -> EMFILE -> starvation).
             retryable = self._retryable_http(exc.code)
             error = self._error(f"HTTP {exc.code}", retryable=retryable)
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(OSError, ValueError):
                 # A close failure must not break get()'s never-raises contract;
                 # the kernel still frees the fd regardless.
                 exc.close()
