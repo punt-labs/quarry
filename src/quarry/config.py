@@ -31,6 +31,14 @@ class Settings(BaseSettings):
     sync_flush_mb: int = Field(default=32, ge=1)
     embed_window_chunks: int = Field(default=512, ge=1)
 
+    # Serialized capture/index queue (DES-042).  embed_concurrency is clamped to
+    # the queue's hard ceiling regardless of this value; queue_depth bounds the
+    # admitted (in-flight + waiting) jobs; drain_timeout_s bounds the shutdown
+    # drain so queued captures flush without hanging the daemon on exit.
+    ingest_embed_concurrency: int = Field(default=1, ge=1)
+    ingest_queue_depth: int = Field(default=32, ge=1)
+    ingest_drain_timeout_s: float = Field(default=30.0, ge=0)
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
     _DEFAULT_LANCEDB: ClassVar[Path] = quarry_root / "default" / "lancedb"

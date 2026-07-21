@@ -10,6 +10,7 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, Self, final
 
+from quarry.daemon.ingest_queue import IngestQueue
 from quarry.daemon.tasks import TaskRegistry
 from quarry.http_resources import QuarryResources
 
@@ -31,6 +32,7 @@ class DaemonContext:
     _cors_origins: frozenset[str]
     _start_time: float
     _tasks: TaskRegistry
+    _ingest_queue: IngestQueue
     _ready: bool
 
     def __new__(
@@ -46,6 +48,9 @@ class DaemonContext:
         self._cors_origins = cors_origins or DEFAULT_CORS_ORIGINS
         self._start_time = time.monotonic()
         self._tasks = TaskRegistry()
+        # Built here (no running loop needed — its workers start lazily on first
+        # submit) so every route reaches one resident queue through the context.
+        self._ingest_queue = IngestQueue(self)
         self._ready = False
         return self
 
@@ -60,6 +65,17 @@ class DaemonContext:
     @property
     def tasks(self) -> TaskRegistry:
         return self._tasks
+
+    @property
+    def ingest_queue(self) -> IngestQueue:
+        """Return the resident serialized ingest queue."""
+        return self._ingest_queue
+
+    async def aclose_ingest_queue(self) -> None:
+        """Drain and close the ingest queue on shutdown (bounded by settings)."""
+        await self._ingest_queue.aclose(
+            drain_timeout=self.settings.ingest_drain_timeout_s
+        )
 
     @property
     def uptime_seconds(self) -> float:

@@ -40,6 +40,9 @@ def _mock_settings(tmp_path: Path) -> MagicMock:
     s.embedding_dimension = 768
     s.chunk_max_chars = 1800
     s.chunk_overlap_chars = 200
+    s.ingest_queue_depth = 32
+    s.ingest_embed_concurrency = 1
+    s.ingest_drain_timeout_s = 30.0
     return s
 
 

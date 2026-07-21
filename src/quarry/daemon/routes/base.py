@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from starlette.requests import Request
 
     from quarry.daemon.context import DaemonContext
+    from quarry.daemon.ingest_unit import IngestUnit
 
 
 class RouteGroup:
@@ -111,6 +112,31 @@ class RouteGroup:
                 "task_id": running.task_id,
             },
             status_code=409,
+        )
+
+    def submit(
+        self, collection: str, job: IngestUnit, state: TaskState
+    ) -> JSONResponse:
+        """Enqueue *job* on *collection*'s FIFO worker, returning 202 or 503.
+
+        The queue serializes ingest per collection and bounds embed concurrency
+        (DES-042).  A full queue returns ``503`` — retriable, never a silent
+        drop — and drops the task record so no orphan lingers in ``queued``; the
+        durable capture artifact remains recoverable via ``quarry backfill``.
+        """
+        if not self._ctx.ingest_queue.try_submit(collection, job, state):
+            self._ctx.tasks.drop(state)
+            return JSONResponse(
+                {
+                    "error": "ingest queue full; capture retained locally, "
+                    "retry via `quarry backfill`",
+                    "status": "rejected",
+                },
+                status_code=503,
+            )
+        return JSONResponse(
+            {"task_id": state.task_id, "status": "accepted"},
+            status_code=202,
         )
 
     def accept(self, state: TaskState, coro: Coroutine[Any, Any, None]) -> JSONResponse:

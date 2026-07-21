@@ -1,7 +1,7 @@
 {
-  "total": 221,
+  "total": 220,
   "by_category": {
-    "noqa": 173,
+    "noqa": 172,
     "type_ignore": 8,
     "pylint_disable": 0,
     "pyright_ignore": 5,
@@ -31,7 +31,7 @@
       "type_ignore": 1
     },
     "src/quarry/daemon/ingest_jobs.py": {
-      "noqa": 8
+      "noqa": 7
     },
     "src/quarry/daemon/routes/captures.py": {
       "noqa": 1
@@ -134,5 +134,5 @@
       "noqa": 1
     }
   },
-  "updated_at": "2026-07-20T20:37:27Z"
+  "updated_at": "2026-07-21T00:38:48Z"
 }

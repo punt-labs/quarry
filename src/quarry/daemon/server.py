@@ -247,12 +247,16 @@ class DaemonServer:
             logger.warning("serve.lock fd close failed: %s", exc)
 
     @asynccontextmanager
-    async def _lifespan(self, _app: Starlette) -> AsyncGenerator[None]:
+    async def _lifespan(self, app: Starlette) -> AsyncGenerator[None]:
         # Runs for the daemon's lifetime; cancelled on shutdown below.
+        ctx = cast("DaemonContext", app.state.ctx)
         monitor = asyncio.create_task(FdTelemetry(_FD_TELEMETRY_INTERVAL_SECONDS).run())
         try:
             yield
         finally:
+            # Drain queued captures before touching sidecars so a clean shutdown
+            # does not silently lose an admitted-but-unwritten capture (DES-042).
+            await ctx.aclose_ingest_queue()
             monitor.cancel()
             # Remove ONLY the sidecars this instance wrote after its own
             # successful bind.  A second quarryd that fails to bind (port in

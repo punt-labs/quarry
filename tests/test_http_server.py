@@ -39,16 +39,17 @@ def _poll_task_done(
 
     Sleeps between polls so the background thread — which does a real LanceDB
     connect on its first ``ctx.database`` access — can finish.  A task still
-    ``running`` when the budget drains is a bug, not a pass: returning that
-    non-terminal snapshot lets a caller's assertions silently not run (the mock
-    never fired), so raise instead.
+    ``queued``/``running`` when the budget drains is a bug, not a pass: returning
+    that non-terminal snapshot lets a caller's assertions silently not run (the
+    mock never fired), so raise instead.  The queue interposes a ``queued`` state
+    before ``running`` (DES-042), so both are non-terminal here.
     """
     for _ in range(max_polls):
         data: dict[str, Any] = tc.get(f"/v1/tasks/{task_id}").json()
-        if data["status"] != "running":
+        if data["status"] not in {"queued", "running"}:
             return data
         time.sleep(0.05)
-    msg = f"task {task_id} still running after {max_polls} polls"
+    msg = f"task {task_id} still pending after {max_polls} polls"
     raise AssertionError(msg)
 
 
@@ -59,6 +60,9 @@ def _mock_settings(tmp_path: Path) -> MagicMock:
     s.registry_path = tmp_path / "registry.db"  # does not exist -> regs = []
     s.embedding_model = "Snowflake/snowflake-arctic-embed-m-v1.5"
     s.embedding_dimension = 768
+    s.ingest_queue_depth = 32
+    s.ingest_embed_concurrency = 1
+    s.ingest_drain_timeout_s = 30.0
     return s
 
 
@@ -105,6 +109,10 @@ def client(tmp_path: Path) -> Iterator[TestClient]:
         portal = tc.portal  # set for the lifetime of the context
         if portal is not None:
             portal.call(ctx.tasks.cancel_all)
+            # Ingest jobs now run inside per-collection queue workers, not tracked
+            # tasks, so stop those workers too or a queued job could run into a
+            # later test's mock window (the same isolation guard as cancel_all).
+            portal.call(ctx.ingest_queue.cancel_workers)
 
 
 class TestHealth:
@@ -693,9 +701,13 @@ class TestServeToken:
 
         server = self._server(tmp_path, "live-token")
         server._bound = True  # this instance bound successfully
+        # The lifespan drains the ingest queue via app.state.ctx on shutdown, so
+        # give it a real context whose (empty) queue closes cleanly.
+        app = MagicMock()
+        app.state.ctx = DaemonContext(_mock_settings(tmp_path / "ctx"))
 
         async def _drive() -> None:
-            async with server._lifespan(MagicMock()):
+            async with server._lifespan(app):
                 assert token.exists()  # present while serving
                 assert port.exists()
 
