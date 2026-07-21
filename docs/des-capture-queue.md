@@ -1,6 +1,6 @@
 # DES-042: Daemon-Owned Serialized Capture/Index Queue
 
-Status: PROPOSED (design only — ratify before implementation)
+Status: IMPLEMENTED (PR #371 — DES-042 queue portion of quarry-lxrk)
 Bead: quarry-lxrk
 Supersedes the residual-concurrency risk left open by DES-041 / PR #367.
 Scope: daemon-internal (`quarry.daemon` + `retrieval`/`ingestion`). No wire change.
