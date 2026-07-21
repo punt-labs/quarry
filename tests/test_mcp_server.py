@@ -387,6 +387,58 @@ class TestUseDatabase:
         finally:
             Settings.set_active_db(original or "")
 
+    def test_default_selects_literal_default_not_persistent(
+        self, harness: _ToolHarness, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """use("default") targets the literal default db even when the persistent
+        default is set to something else — active_db() and the summary path agree.
+        """
+        from quarry.config import Settings
+
+        # Persistent default is "coding"; use("default") must NOT pick it up.
+        monkeypatch.setattr(
+            Settings, "read_default_db", classmethod(lambda _cls: "coding")
+        )
+        original = Settings.active_db()
+        try:
+            Settings.set_active_db("")  # nothing selected this session yet
+            result = harness.tools.use_database("default")
+            assert Settings.active_db() == "default"
+            default_path = str(Settings.load().resolve_db_paths("default").lancedb_path)
+            coding_path = str(Settings.load().resolve_db_paths("coding").lancedb_path)
+            assert default_path in result
+            assert coding_path not in result
+        finally:
+            Settings.set_active_db(original or "")
+
+    def test_named_switch_sets_active_db(
+        self, harness: _ToolHarness, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from quarry.config import Settings
+
+        monkeypatch.setattr(
+            Settings, "read_default_db", classmethod(lambda _cls: "coding")
+        )
+        original = Settings.active_db()
+        try:
+            harness.tools.use_database("coding")
+            assert Settings.active_db() == "coding"
+        finally:
+            Settings.set_active_db(original or "")
+
+    def test_round_trip_target_follows_selection(self, harness: _ToolHarness) -> None:
+        """After use("work"), the active db resolves to work's target path."""
+        from quarry.config import Settings
+
+        original = Settings.active_db()
+        try:
+            result = harness.tools.use_database("work")
+            work_path = str(Settings.load().resolve_db_paths("work").lancedb_path)
+            assert Settings.active_db() == "work"
+            assert work_path in result
+        finally:
+            Settings.set_active_db(original or "")
+
     def test_invalid_name_does_not_corrupt_state(self, harness: _ToolHarness) -> None:
         from quarry.config import Settings
 

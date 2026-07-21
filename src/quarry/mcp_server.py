@@ -399,11 +399,13 @@ class McpTools:
                   the default database.
         """
         previous = Settings.active_db() or "default"
-        selection = None if name == "default" else name
-        # Validate before mutating: resolve_db_paths raises ValueError for a name
-        # with path separators or traversal segments, leaving selection unchanged.
-        resolved = Settings.load().resolve_db_paths(selection)
-        Settings.set_active_db(selection or "")
+        # Select the literal named db, "default" included — never fall through to
+        # the persistent read_default_db(), or use("default") would silently pick
+        # whatever the CLI last persisted and the summary path would lie about the
+        # target subsequent tools connect to. Validate before mutating:
+        # resolve_db_paths raises ValueError on a bad name, leaving the db unchanged.
+        resolved = Settings.load().resolve_db_paths(name)
+        Settings.set_active_db(name)
         return format_switch_summary(previous, name, str(resolved.lancedb_path))
 
     def _list_documents(self, collection: str) -> str:
