@@ -51,9 +51,11 @@ forks, and confirms demos for user-facing changes. Claude (the leader) runs
 everything else: the backlog, the missions, the review cycles, and the merges.
 Review of code is done by agents — the ethos evaluator inside each mission,
 the local review agents on the diff, and Copilot/Cursor/Bugbot on the PR.
-There is no human review gate. The operator reads code in the IDE, but that
-inspection is separate, feeds design discussion only, and nothing in these
-loops waits on it.
+There is no human **code-review** gate: the operator reads code in the IDE, but
+that inspection is separate, feeds design discussion only, and nothing in these
+loops waits on it. The one human gate is the **demo** (Level 2) — the operator
+confirms observed behavior for user-facing changes; that is verification of what
+ran, not review of the diff.
 
 ## Level 1 — The backlog loop
 
@@ -425,9 +427,11 @@ ExitMission ≙ [ Δ LoopState; m : MISSION |
   ∧ (∀ c : commitsOf(m) • checkGreen(c))  -- every commit passed make check
                                           --   AND the three merge-base ratchets
   ∧ testCount′ ≥ testCount                -- coverage never decreases
-  ∧ ooImproved(touchedFiles(m))           -- a real OO improvement on the files
-                                          --   touched, sized to the opportunity
-                                          --   — the ratchet is debt amortization
+  ∧ (touchesScoredSource(m) ⇒            -- a real OO improvement on any scored
+       ooImproved(touchedFiles(m)))       --   source files touched, sized to the
+                                          --   opportunity — the ratchet is debt
+                                          --   amortization; a docs- or test-only
+                                          --   mission has nothing to score
   ∧ missionClosed(m) ]
 ```
 
