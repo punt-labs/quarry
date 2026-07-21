@@ -1547,17 +1547,17 @@
     "public_attr_violations": 0.0
   },
   "src/quarry/ingestion/web_fetch.py": {
-    "avg_complexity": 4.5,
-    "avg_params": 1.0,
-    "class_to_func_ratio": 1.0,
-    "classes_per_module": 1.0,
-    "encapsulation_ratio": 1.0,
-    "future_annotations": 1.0,
-    "init_violations": 0.0,
-    "max_complexity": 5.0,
     "method_ratio": 1.0,
-    "module_size": 57.0,
-    "public_attr_violations": 0.0
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.67,
+    "max_complexity": 5.0,
+    "avg_complexity": 4.33,
+    "module_size": 94.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/quarry/latex_utils.py": {
     "avg_complexity": 3.5,

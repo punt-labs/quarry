@@ -5,9 +5,9 @@ built on: a single consumer coroutine draining one ``asyncio.Queue`` means only
 one ``progressive_insert`` caller per LanceDB collection is ever in flight —
 the single-writer precondition DES-034's ingest primitives assume.  Each unit
 runs under the shared embed gate; its duration is bounded by the ingest work
-itself — the web fetch enforces a socket timeout and the embed and LanceDB write
-are finite — not by a coroutine-level deadline, which could not interrupt a
-non-cancellable threadpool ingest anyway.
+itself — the web fetch enforces a total deadline + size cap and the embed and
+LanceDB write are finite — not by a coroutine-level deadline, which could not
+interrupt a non-cancellable threadpool ingest anyway.
 """
 
 from __future__ import annotations
@@ -137,8 +137,8 @@ class CollectionWorker:
                 # non-cancellable threadpool thread, so asyncio.wait_for could
                 # not interrupt a hang — it would await the thread anyway and
                 # hold the gate for the whole hang.  The one genuinely unbounded
-                # wait is the web fetch, which is bounded at its own socket
-                # timeout (web_fetch.py); embed + LanceDB write are finite.
+                # wait is the web fetch, bounded by its own total deadline + size
+                # cap (web_fetch.py); embed + LanceDB write are finite.
                 async with self._embed_gate:  # global embed-concurrency bound
                     await item.job.run(self._ctx, item.state)  # records terminal
             finally:
