@@ -34,10 +34,12 @@ class WebFetcher:
 
     Two bounds keep a single fetch finite so it can never hold the ingest
     queue's embed gate open indefinitely (DES-042): ``timeout`` bounds each
-    socket operation, and a *total* wall-clock deadline spanning connect and
-    every read (plus a response-size cap) bounds the fetch as a whole.  A
-    slow-drip server that satisfies every per-op timeout yet never finishes is
-    still aborted at the deadline, and an unbounded body fails at the cap.
+    socket operation, and a total wall-clock deadline (plus a response-size cap)
+    bounds the fetch as a whole.  The deadline is checked between reads — after
+    each returns, never mid-read — so a single in-flight read is not interrupted;
+    a slow-drip server that satisfies every per-op timeout yet never finishes is
+    caught at the next check, bounding the whole fetch to roughly the deadline
+    plus one socket timeout.  An unbounded body fails at the size cap.
     """
 
     timeout: int = 30
