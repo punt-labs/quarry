@@ -98,27 +98,51 @@ class SitemapDiscovery:
         return entries
 
     @staticmethod
-    def reject_unsafe(
-        entries: list[SitemapEntry], *, limit: int = 0
+    def _matches(
+        entry: SitemapEntry,
+        include: list[str] | None,
+        exclude: list[str] | None,
+    ) -> bool:
+        """Return whether *entry*'s path passes the include/exclude globs.
+
+        Exclude takes precedence over include; no patterns means match-all.
+        """
+        path = urlparse(entry.loc).path
+        if exclude and any(fnmatch(path, pat) for pat in exclude):
+            return False
+        return not (include and not any(fnmatch(path, pat) for pat in include))
+
+    @staticmethod
+    def select_safe(
+        entries: list[SitemapEntry],
+        *,
+        include: list[str] | None = None,
+        exclude: list[str] | None = None,
+        limit: int = 0,
     ) -> list[SitemapEntry]:
-        """Return the SSRF-safe entries, fail-closed, up to *limit* if positive.
+        """Glob-filter, SSRF-gate, and cap the entries in ONE lazy pass.
 
         A sitemap is attacker-controlled content: its entries may point at
         internal addresses (link-local, loopback, RFC-1918, CGNAT, metadata).
-        Each URL is gated against its resolved address -- the same check the
-        ingest route runs on the initial source -- and an unsafe entry is
-        dropped and logged rather than fetched, so a public sitemap listing
-        internal URLs triggers no internal fetch.  Complementary to pinning the
-        resolved IP (a separate follow-up): this gates each listed URL, not the
-        connection.
+        Every considered entry is gated against its resolved address -- the same
+        check the ingest route runs on the initial source -- and an unsafe or
+        unresolvable URL is dropped and logged rather than fetched, so a public
+        sitemap listing internal URLs triggers no internal fetch.  Complementary
+        to pinning the resolved IP (a separate follow-up): this gates each listed
+        URL, not the connection.
 
-        When *limit* > 0 the scan stops once *limit* SAFE entries are gathered,
-        so the result is *limit* safe pages -- not *limit* minus the unsafe ones
-        that happened to sort first -- and only about enough hosts to fill the
-        limit are resolved rather than the whole (possibly huge) sitemap.
+        Fusing glob-filter, gate, and cap into one pass keeps the added work
+        proportional to the result, not the sitemap: with *limit* > 0 the scan
+        stops once *limit* SAFE entries are gathered, so ``urlparse`` (glob) and
+        DNS resolution (gate) run only ~enough times to fill the limit rather
+        than across the whole (possibly huge) sitemap.  The limit thus counts
+        SAFE pages -- not *limit* minus the unsafe ones that happened to sort
+        first.  With *limit* == 0 every matching entry is gated.
         """
         safe: list[SitemapEntry] = []
         for entry in entries:
+            if not SitemapDiscovery._matches(entry, include, exclude):
+                continue
             reason = UrlSafetyCheck.reject_reason(entry.loc)
             if reason is not None:
                 logger.warning("Dropping unsafe sitemap URL %s: %s", entry.loc, reason)
@@ -150,16 +174,9 @@ class SitemapDiscovery:
         """
         result: list[SitemapEntry] = []
         for entry in entries:
-            path = urlparse(entry.loc).path
-
-            if exclude and any(fnmatch(path, pat) for pat in exclude):
+            if not SitemapDiscovery._matches(entry, include, exclude):
                 continue
-            if include and not any(fnmatch(path, pat) for pat in include):
-                continue
-
             result.append(entry)
-
             if limit > 0 and len(result) >= limit:
                 break
-
         return result

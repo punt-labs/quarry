@@ -35,13 +35,18 @@ class SsrfGuardedRedirectHandler(urllib.request.HTTPRedirectHandler):
 
     @classmethod
     def build_opener(cls) -> urllib.request.OpenerDirector:
-        """Return an opener whose redirect handler is this SSRF gate.
+        """Return an opener whose redirect handler is this SSRF gate, no proxy.
 
         ``build_opener`` swaps urllib's default redirect handler for this
         subclass (it replaces a default handler when given a subclass of it) and
-        keeps every other default handler.
+        keeps every other default handler.  The empty ``ProxyHandler({})``
+        replaces the default proxy handler so HTTP_PROXY/HTTPS_PROXY in the
+        daemon env are NOT honored: the fetch goes DIRECT to the gated host.
+        Otherwise the socket would connect to the proxy -- a host the gate never
+        resolved or checked -- reintroducing SSRF through an internal/attacker
+        proxy.  Matches the client's trust_env=False posture.
         """
-        return urllib.request.build_opener(cls())
+        return urllib.request.build_opener(cls(), urllib.request.ProxyHandler({}))
 
     def redirect_request(
         self,

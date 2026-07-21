@@ -255,6 +255,37 @@ class TestRedirectGate:
         assert recorder.opened == [start]  # internal target never fetched
 
 
+class TestGuardedOpenerProxy:
+    """GUARDED_OPENER must not honor env proxies (would route around the gate)."""
+
+    def test_env_proxy_is_not_honored(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """With HTTP(S)_PROXY set, the guarded opener routes to no proxy.
+
+        The gate resolves and checks the TARGET host; if urllib honored an env
+        proxy the socket would instead connect to the proxy -- a host the gate
+        never vetted -- reintroducing SSRF via an internal/attacker proxy.
+        """
+        monkeypatch.setenv("HTTP_PROXY", "http://10.0.0.1:3128")
+        monkeypatch.setenv("HTTPS_PROXY", "http://10.0.0.1:3128")
+        # Sanity: urllib does see the env proxy, and a DEFAULT opener would use it.
+        assert urllib.request.getproxies().get("http") == "http://10.0.0.1:3128"
+
+        def _routes_to_proxy(opener: urllib.request.OpenerDirector) -> bool:
+            # .handlers / ProxyHandler.proxies are runtime attrs absent from
+            # typeshed; read them via getattr to stay type-clean.
+            handlers = getattr(opener, "handlers", [])
+            return any(
+                isinstance(h, urllib.request.ProxyHandler)
+                and getattr(h, "proxies", None)
+                for h in handlers
+            )
+
+        # Sanity: a DEFAULT opener WOULD route to the env proxy.
+        assert _routes_to_proxy(urllib.request.build_opener())
+        # The guarded opener honors no proxy -- direct, gated connection only.
+        assert not _routes_to_proxy(SsrfGuardedRedirectHandler.build_opener())
+
+
 def _boom(*_a: Any, **_k: Any) -> Any:
     """A resolver that must never be called."""
     raise AssertionError("getaddrinfo should not be called for a literal metadata IP")

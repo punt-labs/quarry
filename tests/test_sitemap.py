@@ -954,12 +954,12 @@ class TestIngestAuto:
 
 
 # ---------------------------------------------------------------------------
-# SSRF gate — reject_unsafe drops attacker-controlled sitemap entries
+# SSRF gate — select_safe glob-filters + gates + caps sitemap entries
 # ---------------------------------------------------------------------------
 
 
-class TestRejectUnsafe:
-    """SitemapDiscovery.reject_unsafe drops entries resolving to internal IPs."""
+class TestSelectSafe:
+    """SitemapDiscovery.select_safe drops entries resolving to internal IPs."""
 
     @pytest.mark.parametrize(
         "resolved",
@@ -978,7 +978,7 @@ class TestRejectUnsafe:
         """An entry whose host RESOLVES to any blocked class is dropped."""
         monkeypatch.setattr(_GETADDRINFO, lambda *a, **k: _addrinfo(resolved))
         entries = [SitemapEntry(loc="https://listed.attacker.test/x", lastmod=None)]
-        assert SitemapDiscovery.reject_unsafe(entries) == []
+        assert SitemapDiscovery.select_safe(entries) == []
 
     def test_drops_metadata_host_without_dns(
         self, monkeypatch: pytest.MonkeyPatch
@@ -990,7 +990,7 @@ class TestRejectUnsafe:
 
         monkeypatch.setattr(_GETADDRINFO, _boom)
         entries = [SitemapEntry(loc="http://169.254.169.254/latest/", lastmod=None)]
-        assert SitemapDiscovery.reject_unsafe(entries) == []
+        assert SitemapDiscovery.select_safe(entries) == []
 
     def test_keeps_safe_and_drops_unsafe_in_mixed_list(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1007,7 +1007,7 @@ class TestRejectUnsafe:
             SitemapEntry(loc="https://internal.example/secret", lastmod=None),
             SitemapEntry(loc="https://safe.example/b", lastmod=None),
         ]
-        safe = SitemapDiscovery.reject_unsafe(entries)
+        safe = SitemapDiscovery.select_safe(entries)
         locs = [e.loc for e in safe]
         assert locs == ["https://safe.example/a", "https://safe.example/b"]
 
@@ -1020,7 +1020,7 @@ class TestRejectUnsafe:
         monkeypatch.setattr(_GETADDRINFO, lambda *a, **k: _addrinfo("127.0.0.1"))
         entries = [SitemapEntry(loc="https://loops.example/x", lastmod=None)]
         with caplog.at_level(logging.WARNING, logger="quarry.sitemap"):
-            SitemapDiscovery.reject_unsafe(entries)
+            SitemapDiscovery.select_safe(entries)
         assert "https://loops.example/x" in caplog.text
 
     def test_limit_counts_safe_entries_not_raw(
@@ -1043,7 +1043,7 @@ class TestRejectUnsafe:
             SitemapEntry(loc="https://safe.example/b", lastmod=None),
             SitemapEntry(loc="https://safe.example/c", lastmod=None),
         ]
-        safe = SitemapDiscovery.reject_unsafe(entries, limit=2)
+        safe = SitemapDiscovery.select_safe(entries, limit=2)
         assert [e.loc for e in safe] == [
             "https://safe.example/a",
             "https://safe.example/b",
@@ -1057,20 +1057,31 @@ class TestRejectUnsafe:
         Only ~enough hosts to fill the limit are resolved -- a huge sitemap is
         not fully resolved -- and every entry looked at goes through the gate.
         """
+        from urllib.parse import urlparse as _real_urlparse
+
         resolved: list[str] = []
+        parsed: list[str] = []
 
         def _resolver(host: str, *_a: object, **_k: object) -> object:
             resolved.append(host)
             return _addrinfo("93.184.216.34")
 
+        def _counting_urlparse(url: str) -> object:
+            parsed.append(url)
+            return _real_urlparse(url)
+
         monkeypatch.setattr(_GETADDRINFO, _resolver)
+        monkeypatch.setattr("quarry.sitemap.urlparse", _counting_urlparse)
         entries = [
             SitemapEntry(loc=f"https://safe{i}.example/p", lastmod=None)
             for i in range(50)
         ]
-        safe = SitemapDiscovery.reject_unsafe(entries, limit=3)
+        safe = SitemapDiscovery.select_safe(entries, limit=3)
         assert len(safe) == 3
+        # One lazy pass: glob (urlparse) AND gate (resolution) run only ~limit
+        # times, not across all 50 entries.
         assert resolved == ["safe0.example", "safe1.example", "safe2.example"]
+        assert len(parsed) == 3
 
     def test_fewer_safe_than_limit_returns_all_no_error(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1086,7 +1097,7 @@ class TestRejectUnsafe:
             SitemapEntry(loc="https://safe.example/a", lastmod=None),
             SitemapEntry(loc="https://internal.example/x", lastmod=None),
         ]
-        safe = SitemapDiscovery.reject_unsafe(entries, limit=5)
+        safe = SitemapDiscovery.select_safe(entries, limit=5)
         assert [e.loc for e in safe] == ["https://safe.example/a"]
 
 
@@ -1181,3 +1192,41 @@ class TestBulkIngestSsrfGate:
         fetched = [call.args[0] for call in mock_ingest.call_args_list]
         assert fetched == ["https://safe.example/a", "https://safe.example/b"]
         assert "https://internal.example/secret" not in fetched
+
+    @patch("quarry.ingestion.pipeline.ingest_url")
+    @patch("quarry.db.chunk_catalog.ChunkCatalog.list_documents")
+    @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
+    def test_after_filter_reports_post_gate_count(
+        self,
+        mock_discover: MagicMock,
+        mock_list_docs: MagicMock,
+        mock_ingest: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The summary's after_filter reflects the post-gate set, not the raw total."""
+        from quarry.ingestion.pipeline import ingest_sitemap
+
+        resolve = {"internal.example": "10.0.0.9"}
+
+        def _resolver(host: str, *_a: object, **_k: object) -> object:
+            return _addrinfo(resolve.get(host, "93.184.216.34"))
+
+        monkeypatch.setattr(_GETADDRINFO, _resolver)
+        mock_discover.return_value = [
+            SitemapEntry(loc="https://safe.example/a", lastmod=None),
+            SitemapEntry(loc="https://internal.example/secret", lastmod=None),
+            SitemapEntry(loc="https://safe.example/b", lastmod=None),
+        ]
+        mock_list_docs.return_value = []
+        mock_ingest.return_value = _MOCK_RESULT
+
+        result = ingest_sitemap(
+            "https://safe.example/sitemap.xml",
+            Database(MagicMock()),
+            MagicMock(),
+            collection="test",
+        )
+
+        assert result["total_discovered"] == 3
+        assert result["after_filter"] == 2  # post-gate, not the pre-gate 3
+        assert result["ingested"] == 2
