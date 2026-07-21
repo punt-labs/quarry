@@ -271,9 +271,9 @@ def use_cmd(
 
 
 # ---------------------------------------------------------------------------
-# Admin commands — install, doctor, mcp, version, uninstall.  ``mcp`` is the one
-# command that hosts the engine (via a lazy in-body import); all others are
-# client-side or pure config.
+# Admin commands — install, doctor, mcp, version, uninstall.  Every command here
+# is client-side or pure config: ``mcp`` launches the client-tier FastMCP server
+# (a QuarryClient over the daemon, DES-031 v2.2), never an in-process engine.
 # ---------------------------------------------------------------------------
 
 

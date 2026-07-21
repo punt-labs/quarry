@@ -84,6 +84,47 @@ print("engine-free")
     assert "engine-free" in result.stdout
 
 
+def test_mcp_server_is_engine_free_under_sabotage() -> None:
+    """``import quarry.mcp_server`` and its tools load no engine, even poisoned.
+
+    ``quarry mcp`` is a client-tier FastMCP server (DES-031 v2.2 R1): importing
+    the module, building ``McpTools``, and registering every tool must pull in
+    zero engine, so a stray ``import lancedb`` on the MCP path fails here.  A
+    tool call with a down client returns a clean error string — proving the
+    fail-closed boundary loads no engine either.
+    """
+    program = f"""
+import sys
+poison = {_POISONED!r}
+for _m in poison:
+    sys.modules[_m] = None  # any real import of these now raises ImportError
+import quarry.mcp_server as mcp_server
+from mcp.server.fastmcp import FastMCP
+
+engine = {_ENGINE!r}
+check = [m for m in engine if m not in poison]
+loaded = [m for m in check if m in sys.modules]
+assert not loaded, loaded
+
+# Registering every tool on a fresh server must not import the engine.
+server = FastMCP("sabotage")
+mcp_server.McpTools().register(server)
+
+# A tool call with a down client returns an error string, not an engine import.
+def _down():
+    raise RuntimeError("daemon down")
+result = mcp_server.McpTools(connect=_down).status()
+assert result.startswith("Error:"), result
+
+loaded = [m for m in check if m in sys.modules]
+assert not loaded, loaded
+print("engine-free")
+"""
+    result = _run(program)
+    assert result.returncode == 0, result.stderr
+    assert "engine-free" in result.stdout
+
+
 def test_bare_import_stays_lazy() -> None:
     """A bare ``import quarry`` pulls in neither pydantic nor ``quarry.client``.
 
