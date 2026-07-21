@@ -106,14 +106,16 @@ class InProcessDaemon:
     _ctx: DaemonContext
     _app: FastAPI
 
-    def __new__(cls, data_dir: Path) -> Self:
+    def __new__(cls, data_dir: Path, *, api_key: str | None = None) -> Self:
         self = super().__new__(cls)
         (data_dir / "lancedb").mkdir(parents=True, exist_ok=True)
         settings = Settings(
             lancedb_path=data_dir / "lancedb",
             registry_path=data_dir / "registry.db",
         )
-        ctx = DaemonContext(settings)
+        # With api_key set the routes enforce bearer auth — the TLS smoke uses it
+        # to exercise the authenticated wire; None (default) leaves routes open.
+        ctx = DaemonContext(settings, api_key=api_key)
         # Short-circuit the cached_property so no ONNX session is ever built.
         ctx._resources.__dict__["embedder"] = FakeEmbedder(settings.embedding_dimension)
         self._ctx = ctx

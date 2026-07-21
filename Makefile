@@ -1,10 +1,15 @@
-.PHONY: help test lint lint-docs type check check-full check-oo audit-oo update-oo check-coupling update-coupling check-suppressions update-suppressions check-imports check-openapi openapi report format install build test-wheel clean depot bench-cuda docs docs-clean metrics coverage eval eval-baseline
+.PHONY: help test test-slow lint lint-docs type check check-full check-oo audit-oo update-oo check-coupling update-coupling check-suppressions update-suppressions check-imports check-openapi openapi report format install build test-wheel clean depot bench-cuda docs docs-clean metrics coverage eval eval-baseline
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
 
 test: ## Run tests (excludes slow integration tests)
 	uv run pytest
+
+# The slow tier the fast CI job never runs (-m 'not slow'): live-server / real-TLS
+# smokes that can hang a shared runner. Run here or in the wheel gate (quarry-5pg1).
+test-slow: ## Run the slow tier (real-TLS/live-server smokes)
+	uv run pytest -m slow
 
 lint: lint-docs ## Lint and format check
 	uv run ruff check .
