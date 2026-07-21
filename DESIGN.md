@@ -974,8 +974,8 @@ only entry point (`quarry.daemon.launcher`, the `quarryd` script) lives *inside*
 `quarry.daemon` (engine-side, never a contract source), and the one sanctioned
 exception — the host-admin diagnostics (`doctor`/`install`/`uninstall`) that probe
 the local engine environment to report *why* a daemon is unhealthy — is an
-**explicit, enumerated `ignore_imports` list** of eight lazy diagnostic edges, not
-an invisibility trick. A new engine import from any other client-reachable module
+**explicit, enumerated `ignore_imports` list** of the host-admin diagnostic lazy
+edges (`doctor`/`doctor_captures`), not an invisibility trick. A new engine import from any other client-reachable module
 still fails the contract; the sabotage test proves those diagnostics stay off the
 module-scope hot path. (`quarry mcp` is no longer in the exception at all — PR-4
 made it a pure client.)

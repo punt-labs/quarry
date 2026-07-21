@@ -274,8 +274,8 @@ CLI-local; the chunk purge crosses to the daemon. `disable` is therefore a
    client-side exception — the host-admin diagnostics (`doctor`, and through it
    `install`/`uninstall`) that probe the local engine environment (model cache,
    ONNX runtime, on-disk LanceDB) to report *why* a daemon is unhealthy even when
-   it is down — is an explicit, self-documenting `ignore_imports` list of eight
-   lazy diagnostic edges in `.importlinter`. Those imports are function-body lazy
+   it is down — is an explicit, self-documenting `ignore_imports` list of the
+   host-admin diagnostic lazy edges (`doctor`/`doctor_captures`) in `.importlinter`. Those imports are function-body lazy
    so the heavy engine never loads on the hot CLI/hook path, and the **runtime
    sabotage test** (enforcement #3) proves that module-scope engine-freeness. A
    new engine import from any *other* client-reachable module still fails the
