@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 def test_write_creates_a_json_file(tmp_path: Path) -> None:
     """A written record lands as a JSON file carrying its recoverable fields."""
     spool = JobSpool(tmp_path / "spool")
-    spool.write(SpoolRecord("remember", "mem", "note", "payload text"))
+    assert spool.write(SpoolRecord("remember", "mem", "note", "payload text")) is True
     files = list((tmp_path / "spool").glob("remember-*.json"))
     assert len(files) == 1
     data = json.loads(files[0].read_text())
@@ -88,7 +88,8 @@ def test_write_failure_leaves_no_temp(
         raise OSError(msg)
 
     monkeypatch.setattr(Path, "replace", boom)
-    JobSpool(tmp_path / "spool").write(SpoolRecord("remember", "c", "n", "p"))
+    wrote = JobSpool(tmp_path / "spool").write(SpoolRecord("remember", "c", "n", "p"))
+    assert wrote is False  # a failed write reports the loss, never a false success
     assert not list((tmp_path / "spool").glob("*.tmp"))
     assert not list((tmp_path / "spool").glob("*.json"))
 

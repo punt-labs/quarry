@@ -114,8 +114,11 @@ class TestWebFetcher:
         clock = iter([0.0, 0.0, 1_000_000.0, 1_000_000.0, 1_000_000.0])
         monkeypatch.setattr(wf, "monotonic", lambda: next(clock))
         mock_urlopen.return_value = drip
-        with pytest.raises(TimeoutError, match="time budget"):
+        # fetch() wraps the deadline TimeoutError with the URL so concurrent
+        # fetches are distinguishable in logs.
+        with pytest.raises(TimeoutError, match="time budget") as excinfo:
             WebFetcher().fetch("https://example.com/slow")
+        assert "https://example.com/slow" in str(excinfo.value)
 
 
 def _mock_response(

@@ -137,23 +137,28 @@ class CollectionWorker:
 
     def _fail_aborted(self, item: _Queued, spool: JobSpool) -> None:
         """Fail a still-queued job, spooling it when it has no durable copy."""
-        spooled = self._spool(item.job, spool)
         item.state.status = "failed"
-        item.state.error = (
-            "daemon shut down before ingest; spooled for recovery"
-            if spooled
-            else "daemon shut down before ingest completed"
-        )
+        item.state.error = self._abort_reason(item.job, spool)
         self._release_admit()
 
     @staticmethod
-    def _spool(job: IngestUnit, spool: JobSpool) -> bool:
-        """Spool *job*'s recoverable snapshot; ``False`` if it has a durable copy."""
+    def _abort_reason(job: IngestUnit, spool: JobSpool) -> str:
+        """Return the truthful terminal error for a drain-aborted job.
+
+        A job with a durable client copy (a capture's transcript ``.md``) is
+        recoverable via ``quarry backfill``.  One without is spooled — but ONLY a
+        spool write that actually succeeded may claim recoverability, so a failed
+        write (already logged) records the loss truthfully rather than a false
+        "spooled" claim that would hide the exact silent-loss this path prevents.
+        """
         record = job.spool_record()
         if record is None:
-            return False
-        spool.write(record)
-        return True
+            return "daemon shut down before ingest completed"
+        if spool.write(record):
+            return "daemon shut down before ingest; spooled for recovery"
+        return (
+            "daemon shut down before ingest; spool write failed, content not recovered"
+        )
 
     async def _run(self) -> None:
         """Drain jobs FIFO, one at a time, each under the shared embed gate."""
@@ -191,10 +196,7 @@ class CollectionWorker:
 
     def _mark_aborted(self, item: _Queued) -> None:
         """Record a drain-cancelled in-flight job as failed, spooling it first."""
-        spooled = self._spool(item.job, JobSpool.for_settings(self._ctx.settings))
         item.state.status = "failed"
-        item.state.error = (
-            "daemon shut down before ingest; spooled for recovery"
-            if spooled
-            else "daemon shut down before ingest completed"
+        item.state.error = self._abort_reason(
+            item.job, JobSpool.for_settings(self._ctx.settings)
         )

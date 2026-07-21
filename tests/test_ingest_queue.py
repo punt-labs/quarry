@@ -126,15 +126,26 @@ def _make_queue(
     worker_idle: float = 60.0,
     quarry_root: Path | None = None,
 ) -> IngestQueue:
-    """Build an ``IngestQueue`` over a fake context carrying only settings."""
+    """Build an ``IngestQueue`` over a fake context carrying only settings.
+
+    When *quarry_root* is not supplied, a ``TemporaryDirectory`` is created and
+    pinned to the settings object (``_spool_tmp``) so it is cleaned up when the
+    queue is collected — no stray temp dirs leak onto the host between runs.
+    """
     settings = SimpleNamespace(
         ingest_embed_concurrency=concurrency,
         ingest_queue_depth=depth,
         ingest_drain_timeout_s=30.0,
         ingest_max_workers=max_workers,
         ingest_worker_idle_s=worker_idle,
-        quarry_root=quarry_root or Path(tempfile.mkdtemp()),
     )
+    if quarry_root is not None:
+        settings.quarry_root = quarry_root
+    else:
+        spool_tmp = tempfile.TemporaryDirectory()
+        settings.quarry_root = Path(spool_tmp.name)
+        # Pin the handle so it is cleaned up when the settings object is collected.
+        settings.spool_tmp = spool_tmp
     ctx = SimpleNamespace(settings=settings)
     return IngestQueue(cast("DaemonContext", ctx))
 
@@ -528,6 +539,44 @@ def test_aborted_queued_job_with_durable_copy_is_not_spooled(tmp_path: Path) -> 
         assert queue.try_submit("c", b, state_b)
         await queue.aclose(drain_timeout=0.05)
         assert state_b.status == "failed"
+        assert not list((tmp_path / "spool").glob("*.json"))
+
+    asyncio.run(_run())
+
+
+def test_failed_spool_write_records_the_truth_not_a_recovery_claim(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """A spool write that fails must NOT claim 'spooled for recovery'.
+
+    Otherwise the task would report recoverable while the content is lost —
+    reintroducing the silent-loss the spool exists to prevent. The atomic
+    rename is forced to fail, so write() returns False and the task records the
+    truthful failure.
+    """
+
+    def boom(self: Path, target: Path) -> Path:
+        del self, target
+        msg = "replace boom"
+        raise OSError(msg)
+
+    monkeypatch.setattr(Path, "replace", boom)
+
+    async def _run() -> None:
+        ledger = _Ledger()
+        queue = _make_queue(quarry_root=tmp_path)
+        gate = asyncio.Event()  # never set -> A blocks past the drain timeout
+        a = _StubUnit("c", "a", ledger, gate=gate)
+        record = SpoolRecord("remember", "c", "note", "lost content")
+        b = _StubUnit("c", "b", ledger, gate=gate, spool=record)
+        state_b = _state("b")
+        assert queue.try_submit("c", a, _state("a"))
+        await asyncio.sleep(0.02)  # A dequeued and blocked; B enqueued behind it
+        assert queue.try_submit("c", b, state_b)
+        await queue.aclose(drain_timeout=0.05)  # times out -> abort -> spool fails
+        assert state_b.status == "failed"
+        assert "not recovered" in state_b.error
+        assert "spooled for recovery" not in state_b.error
         assert not list((tmp_path / "spool").glob("*.json"))
 
     asyncio.run(_run())

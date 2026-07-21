@@ -79,15 +79,19 @@ class JobSpool:
         """Return the spool rooted at ``<quarry_root>/spool`` for *settings*."""
         return cls(settings.quarry_root / "spool")
 
-    def write(self, record: SpoolRecord) -> None:
-        """Persist *record* atomically and privately; never raise into shutdown.
+    def write(self, record: SpoolRecord) -> bool:
+        """Persist *record* atomically and privately; return whether it stuck.
+
+        Returns ``True`` only when the atomic rename succeeded — i.e. the record
+        is durably on disk and recoverable.  A failure returns ``False`` (never
+        raises into shutdown) so the caller can record the truth instead of a
+        false recoverability claim: the content is lost, not spooled.
 
         The spool holds best-effort-scrubbed content (DES-036 is regex redaction,
         not a guarantee), so it is created private — the dir ``0o700`` and the
         file ``0o600`` from the start, never group/other-readable even for an
-        instant.  A spool-file problem must not wedge daemon shutdown, so a
-        failure is logged (with the collection, so the loss stays visible) rather
-        than propagated — the abort loop keeps failing the remaining jobs.
+        instant.  A failure is logged (with the collection, so the loss stays
+        visible) rather than propagated — the abort loop keeps failing the rest.
         """
         try:
             self._ensure_private_dir()
@@ -96,6 +100,8 @@ class JobSpool:
             logger.exception(
                 "failed to spool aborted %s job for %s", record.kind, record.collection
             )
+            return False
+        return True
 
     def _ensure_private_dir(self) -> None:
         """Create the spool dir ``0o700``, tightening it if it exists looser.

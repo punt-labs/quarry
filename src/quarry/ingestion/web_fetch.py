@@ -74,10 +74,23 @@ class WebFetcher:
         except URLError as exc:
             msg = f"Cannot reach {url}: {exc.reason}"
             raise OSError(msg) from exc
+        except TimeoutError as exc:
+            # Name the URL so concurrent fetches are distinguishable in logs; the
+            # size-cap ValueError already carries its own context and is left as is.
+            msg = f"Timed out fetching {url} (exceeded total time budget)"
+            raise TimeoutError(msg) from exc
 
     @staticmethod
     def _decode_html(resp: HTTPResponse, deadline: float) -> str:
-        """Validate the final URL and media type, then decode the bounded body."""
+        """Validate the response, then decode the bounded body to text."""
+        WebFetcher._reject_non_html(resp)
+        charset = resp.headers.get_content_charset() or "utf-8"
+        body = WebFetcher._read_body(resp, deadline)
+        return body.decode(charset, errors="replace")
+
+    @staticmethod
+    def _reject_non_html(resp: HTTPResponse) -> None:
+        """Raise if the final URL left HTTP(S) or the body is not HTML."""
         final_url: str = resp.url
         if not final_url.startswith(("http://", "https://")):
             msg = f"Redirect left HTTP(S): {final_url}"
@@ -87,9 +100,6 @@ class WebFetcher:
         if media_type and media_type not in _ALLOWED_MEDIA_TYPES:
             msg = f"URL returned non-HTML content: {content_type}"
             raise ValueError(msg)
-        charset = resp.headers.get_content_charset() or "utf-8"
-        body = WebFetcher._read_body(resp, deadline)
-        return body.decode(charset, errors="replace")
 
     @staticmethod
     def _read_body(resp: HTTPResponse, deadline: float) -> bytes:
