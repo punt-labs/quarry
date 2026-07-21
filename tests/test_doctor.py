@@ -1079,21 +1079,36 @@ class TestConfigureClaudeCode:
         assert result.passed is True
         assert "configured" in result.message
 
-    def test_claude_mcp_add_already_exists(self, monkeypatch: MP):
+    def test_replaces_stale_entry(self, monkeypatch: MP):
+        """A stale ``quarry`` entry is removed first so the direct add wins (djb).
+
+        Class-5 mock-claude-binary: record every invocation and assert ``mcp
+        remove quarry`` precedes ``mcp add quarry -- quarry mcp`` — the stale
+        mcp-proxy shim entry cannot shadow the new direct entry.
+        """
         monkeypatch.setattr(
             "quarry.doctor.shutil.which", lambda _name: "/usr/bin/claude"
         )
-        mock_result = type(
-            "CompletedProcess",
-            (),
-            {"returncode": 1, "stdout": "", "stderr": "already exists"},
-        )()
-        monkeypatch.setattr(
-            "quarry.doctor.subprocess.run", lambda *_a, **_kw: mock_result
-        )
+        calls: list[list[str]] = []
+
+        def _record(argv: list[str], **_kw: object) -> object:
+            calls.append(argv)
+            return type("CP", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr("quarry.doctor.subprocess.run", _record)
         result = _configure_claude_code()
+
         assert result.passed is True
-        assert "already configured" in result.message
+        subcommands = [c[2:4] for c in calls]  # (verb, server-name) pairs
+        assert ["remove", "quarry"] in subcommands
+        assert ["add", "quarry"] in subcommands
+        remove_i = subcommands.index(["remove", "quarry"])
+        add_i = subcommands.index(["add", "quarry"])
+        assert remove_i < add_i, "remove must precede add so the new entry wins"
+        # The add registers the direct `quarry mcp`, not a proxy shim.
+        add_argv = calls[add_i]
+        assert add_argv[-2:] == ["quarry", "mcp"]
+        assert "mcp-proxy" not in " ".join(add_argv)
 
     def test_claude_mcp_add_fails(self, monkeypatch: MP):
         monkeypatch.setattr(

@@ -30,7 +30,7 @@ from quarry.api import (
     SearchRequest,
     ShowRequest,
 )
-from quarry.client import QuarryClient, TargetResolver
+from quarry.client import HttpError, QuarryClient, TargetResolver
 from quarry.config import Settings
 from quarry.formatting import (
     format_collections,
@@ -45,6 +45,10 @@ from quarry.formatting import (
 from quarry.logging_config import LoggingConfig
 
 logger = logging.getLogger(__name__)
+
+# The daemon returns 404 for a missing document/page; `show` translates it into a
+# plain "not found" line rather than the guard's terse "Error: HttpError: …".
+_NOT_FOUND = 404
 
 
 def _guard(method: Callable[..., str]) -> Callable[..., str]:
@@ -185,8 +189,8 @@ class McpTools:
         """
         if not source.startswith(("http://", "https://")):
             return (
-                f"{source!r} is not a URL. Use register(directory=...) to track "
-                "local files and directories, then sync_all_registrations()."
+                f"Error: {source!r} is not a URL. Use register(directory=...) to "
+                "track local files and directories, then sync_all_registrations()."
             )
         accepted = self._connect().ingest_url(
             IngestRequest(source=source, overwrite=overwrite, collection=collection)
@@ -223,6 +227,9 @@ class McpTools:
             memory_type: Memory classification: fact, observation, opinion, procedure.
             summary: One-line summary of the content.
         """
+        # The MCP surface deliberately defaults overwrite=False (unlike the CLI and
+        # the RememberRequest model default of True): an agent calling remember
+        # should add, not silently replace. The value is always passed explicitly.
         accepted = self._connect().remember(
             RememberRequest(
                 name=document_name,
@@ -254,7 +261,7 @@ class McpTools:
         }.get(kind)
         if handler is None:
             return (
-                f"unknown kind {kind!r}. "
+                f"Error: unknown kind {kind!r}. "
                 "Use documents, collections, databases, or registrations."
             )
         return handler(collection)
@@ -277,20 +284,25 @@ class McpTools:
             collection: Optional collection scope.
         """
         client = self._connect()
-        if page_number > 0:
-            page = client.show_page(
-                ShowRequest(
-                    document=document_name, collection=collection, page=page_number
-                )
-            )
-            return (
-                f"Document: {page.document_name}\nPage: {page.page_number}\n---\n"
-                f"{page.text}"
-            )
-        info = client.show_document(
-            ShowRequest(document=document_name, collection=collection)
+        req = ShowRequest(
+            document=document_name, collection=collection, page=page_number or None
         )
-        return format_document_detail(info.model_dump())
+        try:
+            if page_number > 0:
+                page = client.show_page(req)
+                return (
+                    f"Document: {page.document_name}\nPage: {page.page_number}\n---\n"
+                    f"{page.text}"
+                )
+            return format_document_detail(client.show_document(req).model_dump())
+        except HttpError as exc:
+            # A 404 is the documented "no such document/page" outcome — render the
+            # plain domain message a model expects, not the guard's "Error: HttpError".
+            if exc.status != _NOT_FOUND:
+                raise
+            if page_number > 0:
+                return f"No data found for {document_name} page {page_number}"
+            return f"Document {document_name!r} not found"
 
     @_guard
     def delete(
@@ -308,15 +320,17 @@ class McpTools:
             kind: What to delete — "document" or "collection".
             collection: Optional collection scope (only for kind="document").
         """
+        # Validate the input before reaching for the daemon: a bad kind is a
+        # caller error, answerable without a connection.
+        if kind not in ("document", "collection"):
+            return f"Error: Invalid kind {kind!r}. Must be 'document' or 'collection'."
         client = self._connect()
         if kind == "document":
             accepted = client.delete_document(
                 DeleteDocumentRequest(name=name, collection=collection)
             )
-        elif kind == "collection":
-            accepted = client.delete_collection(DeleteCollectionRequest(name=name))
         else:
-            return f"Invalid kind {kind!r}. Must be 'document' or 'collection'."
+            accepted = client.delete_collection(DeleteCollectionRequest(name=name))
         return f"▶  Deleting {kind} {name!r} (task {accepted.task_id})"
 
     @_guard

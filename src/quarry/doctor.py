@@ -463,7 +463,13 @@ _DESKTOP_CONFIG_PATH = (
 
 
 def _configure_claude_code() -> CheckResult:
-    """Add quarry MCP server to Claude Code via `claude mcp add`."""
+    """Register the quarry MCP server with Claude Code, replacing any stale entry.
+
+    A pre-existing ``quarry`` entry (e.g. the retired mcp-proxy shim) would make
+    ``claude mcp add`` fail with "already exists" and shadow the new direct
+    ``quarry mcp`` — so the old entry is removed first (best-effort) and the
+    direct entry then wins.
+    """
     claude_path = shutil.which("claude")
     if claude_path is None:
         return CheckResult(
@@ -472,6 +478,13 @@ def _configure_claude_code() -> CheckResult:
             message="claude CLI not found on PATH",
             required=False,
         )
+    # Best-effort removal: a missing entry exits non-zero, which is fine — the
+    # add below is the operation that must succeed, so its result is the verdict.
+    subprocess.run(  # noqa: S603
+        [claude_path, "mcp", "remove", _MCP_SERVER_NAME],
+        capture_output=True,
+        text=True,
+    )
     command, args = _mcp_command()
     result = subprocess.run(  # noqa: S603
         [claude_path, "mcp", "add", _MCP_SERVER_NAME, "--", command, *args],
@@ -479,17 +492,10 @@ def _configure_claude_code() -> CheckResult:
         text=True,
     )
     if result.returncode != 0:
-        stderr = result.stderr.strip()
-        if "already exists" in stderr:
-            return CheckResult(
-                name="Claude Code MCP",
-                passed=True,
-                message="already configured",
-            )
         return CheckResult(
             name="Claude Code MCP",
             passed=False,
-            message=f"claude mcp add failed: {stderr}",
+            message=f"claude mcp add failed: {result.stderr.strip()}",
             required=False,
         )
     return CheckResult(

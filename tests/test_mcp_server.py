@@ -278,12 +278,22 @@ class TestShow:
         assert "report.pdf" in result
         assert "math" in result
 
-    def test_page_not_found_is_clean_error(self, harness: _ToolHarness) -> None:
+    def test_missing_page_is_friendly_not_found(self, harness: _ToolHarness) -> None:
+        """A 404 renders the plain domain message, not "Error: HttpError"."""
         with patch(
             "quarry.db.chunk_catalog.ChunkCatalog.get_page_text", return_value=None
         ):
             result = harness.tools.show("missing.pdf", page_number=99)
-        assert result.startswith("Error:")
+        assert result == "No data found for missing.pdf page 99"
+
+    def test_missing_document_is_friendly_not_found(
+        self, harness: _ToolHarness
+    ) -> None:
+        with patch(
+            "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
+        ):
+            result = harness.tools.show("missing.pdf")
+        assert result == "Document 'missing.pdf' not found"
 
 
 class TestRemember:
