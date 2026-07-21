@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
-from typing import Any
+import asyncio
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 
+from quarry.daemon.ingest_jobs import IngestJob
+from quarry.daemon.routes.ingestion import IngestionRoutes
 from quarry.db import Database
 from quarry.extractors.html_extractor import HtmlExtractor
 from quarry.models import PageType
+
+if TYPE_CHECKING:
+    from quarry.daemon.context import DaemonContext
 
 _FETCH = "quarry.ingestion.web_fetch.WebFetcher.fetch"
 
@@ -184,6 +191,49 @@ class TestIngestUrl:
             result = ingest_url(url, db, settings)
 
         assert result["document_name"] == url
+
+
+class TestIngestRouteKeying:
+    """The route keys the queue on the resolved table, not the body collection.
+
+    quarry-ickn: a plain ingest with an omitted collection derives the URL host
+    INSIDE the job, so keying the queue on the empty body collection would route
+    it to a different worker than an explicit ``collection=<host>`` request for
+    the same host — two writers on one table. The route now resolves the table
+    before building the job, so the key always equals the table it writes.
+    """
+
+    def test_explicit_host_and_empty_key_the_same_collection(self) -> None:
+        """collection=host and an omitted collection resolve to one queue key."""
+        routes = IngestionRoutes(cast("DaemonContext", SimpleNamespace()))
+        explicit = asyncio.run(
+            routes._ingest_job(
+                {"source": "https://example.com/a", "collection": "example.com"},
+                "https://example.com/a",
+            )
+        )
+        empty = asyncio.run(
+            routes._ingest_job(
+                {"source": "https://example.com/b"}, "https://example.com/b"
+            )
+        )
+        assert isinstance(explicit, IngestJob)
+        assert isinstance(empty, IngestJob)
+        assert explicit.collection == empty.collection == "example.com"
+
+    def test_distinct_hosts_key_distinct_collections(self) -> None:
+        """Ingests to different hosts still route to their own workers."""
+        routes = IngestionRoutes(cast("DaemonContext", SimpleNamespace()))
+        a = asyncio.run(
+            routes._ingest_job({"source": "https://a.test/x"}, "https://a.test/x")
+        )
+        b = asyncio.run(
+            routes._ingest_job({"source": "https://b.test/y"}, "https://b.test/y")
+        )
+        assert isinstance(a, IngestJob)
+        assert isinstance(b, IngestJob)
+        assert a.collection == "a.test"
+        assert b.collection == "b.test"
 
 
 def _fake_settings() -> MagicMock:

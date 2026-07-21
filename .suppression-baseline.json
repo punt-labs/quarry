@@ -1,7 +1,7 @@
 {
-  "total": 220,
+  "total": 219,
   "by_category": {
-    "noqa": 172,
+    "noqa": 171,
     "type_ignore": 8,
     "pylint_disable": 0,
     "pyright_ignore": 5,
@@ -97,7 +97,7 @@
       "noqa": 1
     },
     "src/quarry/ingestion/pipeline.py": {
-      "noqa": 7
+      "noqa": 6
     },
     "src/quarry/ingestion/provider.py": {
       "noqa": 2
@@ -134,5 +134,5 @@
       "noqa": 1
     }
   },
-  "updated_at": "2026-07-21T00:38:48Z"
+  "updated_at": "2026-07-21T06:01:08Z"
 }
