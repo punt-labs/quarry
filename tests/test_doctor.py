@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Self
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1058,73 +1059,108 @@ class TestMcpCommand:
         assert not command.startswith("/")
 
 
+class _ScriptedClaude:
+    """A mock ``claude`` binary: record each argv, return scripted results.
+
+    Class-5 pattern — hand it a list of ``(returncode, stderr)`` in call order;
+    it records every ``subprocess.run`` argv so a test can assert the add/remove
+    sequence the add-first replace performs.
+    """
+
+    __slots__ = ("_calls", "_results")
+
+    _results: list[tuple[int, str]]
+    _calls: list[list[str]]
+
+    def __new__(cls, results: list[tuple[int, str]]) -> Self:
+        self = super().__new__(cls)
+        self._results = results
+        self._calls = []
+        return self
+
+    def run(self, argv: list[str], **_kw: object) -> object:
+        self._calls.append(argv)
+        code, stderr = self._results[len(self._calls) - 1]
+        return type("CP", (), {"returncode": code, "stdout": "", "stderr": stderr})()
+
+    @property
+    def verbs(self) -> list[list[str]]:
+        """Return the (verb, server-name) pair of each recorded call."""
+        return [c[2:4] for c in self._calls]
+
+    @property
+    def calls(self) -> list[list[str]]:
+        return self._calls
+
+
 class TestConfigureClaudeCode:
+    @staticmethod
+    def _install(monkeypatch: MP, results: list[tuple[int, str]]) -> _ScriptedClaude:
+        monkeypatch.setattr(
+            "quarry.doctor.shutil.which", lambda _name: "/usr/bin/claude"
+        )
+        claude = _ScriptedClaude(results)
+        monkeypatch.setattr("quarry.doctor.subprocess.run", claude.run)
+        return claude
+
     def test_claude_not_on_path(self, monkeypatch: MP):
         monkeypatch.setattr("quarry.doctor.shutil.which", lambda _name: None)
         result = _configure_claude_code()
         assert result.passed is False
         assert "not found" in result.message
 
-    def test_claude_mcp_add_succeeds(self, monkeypatch: MP):
-        monkeypatch.setattr(
-            "quarry.doctor.shutil.which", lambda _name: "/usr/bin/claude"
-        )
-        mock_result = type(
-            "CompletedProcess", (), {"returncode": 0, "stdout": "", "stderr": ""}
-        )()
-        monkeypatch.setattr(
-            "quarry.doctor.subprocess.run", lambda *_a, **_kw: mock_result
-        )
+    def test_fresh_add_succeeds_without_remove(self, monkeypatch: MP):
+        """A fresh slot: the add succeeds outright, no remove is ever issued."""
+        claude = self._install(monkeypatch, [(0, "")])
         result = _configure_claude_code()
         assert result.passed is True
         assert "configured" in result.message
+        assert ["remove", "quarry"] not in claude.verbs
 
     def test_replaces_stale_entry(self, monkeypatch: MP):
-        """A stale ``quarry`` entry is removed first so the direct add wins (djb).
+        """A stale ``quarry`` entry blocks the add → remove → re-add wins (djb).
 
-        Class-5 mock-claude-binary: record every invocation and assert ``mcp
-        remove quarry`` precedes ``mcp add quarry -- quarry mcp`` — the stale
-        mcp-proxy shim entry cannot shadow the new direct entry.
+        The add is tried first; only its "already exists" failure triggers the
+        remove, then the direct ``quarry mcp`` is re-added.
         """
-        monkeypatch.setattr(
-            "quarry.doctor.shutil.which", lambda _name: "/usr/bin/claude"
-        )
-        calls: list[list[str]] = []
-
-        def _record(argv: list[str], **_kw: object) -> object:
-            calls.append(argv)
-            return type("CP", (), {"returncode": 0, "stdout": "", "stderr": ""})()
-
-        monkeypatch.setattr("quarry.doctor.subprocess.run", _record)
+        claude = self._install(monkeypatch, [(1, "already exists"), (0, ""), (0, "")])
         result = _configure_claude_code()
 
         assert result.passed is True
-        subcommands = [c[2:4] for c in calls]  # (verb, server-name) pairs
-        assert ["remove", "quarry"] in subcommands
-        assert ["add", "quarry"] in subcommands
-        remove_i = subcommands.index(["remove", "quarry"])
-        add_i = subcommands.index(["add", "quarry"])
-        assert remove_i < add_i, "remove must precede add so the new entry wins"
-        # The add registers the direct `quarry mcp`, not a proxy shim.
-        add_argv = calls[add_i]
+        assert claude.verbs == [
+            ["add", "quarry"],
+            ["remove", "quarry"],
+            ["add", "quarry"],
+        ]
+        # The successful re-add registers the direct `quarry mcp`, not a proxy.
+        add_argv = claude.calls[-1]
         assert add_argv[-2:] == ["quarry", "mcp"]
         assert "mcp-proxy" not in " ".join(add_argv)
 
-    def test_claude_mcp_add_fails(self, monkeypatch: MP):
-        monkeypatch.setattr(
-            "quarry.doctor.shutil.which", lambda _name: "/usr/bin/claude"
+    def test_removed_then_readd_fails_is_surfaced(self, monkeypatch: MP):
+        """remove-succeeds + re-add-fails is NOT reported as configured (djb).
+
+        The user is told the entry was removed and the re-add failed, so they
+        know to re-run — never a silent wipe reported as success.
+        """
+        claude = self._install(
+            monkeypatch, [(1, "already exists"), (0, ""), (1, "boom")]
         )
-        mock_result = type(
-            "CompletedProcess",
-            (),
-            {"returncode": 1, "stdout": "", "stderr": "permission denied"},
-        )()
-        monkeypatch.setattr(
-            "quarry.doctor.subprocess.run", lambda *_a, **_kw: mock_result
-        )
+        result = _configure_claude_code()
+
+        assert result.passed is False
+        assert ["remove", "quarry"] in claude.verbs
+        assert "removed" in result.message
+        assert "re-add failed" in result.message
+        assert "boom" in result.message
+
+    def test_fresh_add_fails_leaves_no_remove(self, monkeypatch: MP):
+        """A non-"already exists" add failure surfaces and never removes."""
+        claude = self._install(monkeypatch, [(1, "permission denied")])
         result = _configure_claude_code()
         assert result.passed is False
         assert "permission denied" in result.message
+        assert ["remove", "quarry"] not in claude.verbs
 
 
 class TestConfigureClaudeDesktop:

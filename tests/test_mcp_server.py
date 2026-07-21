@@ -387,6 +387,53 @@ class TestUseDatabase:
         finally:
             Settings.set_active_db(original or "")
 
+    def test_remote_target_refuses_switch(
+        self, harness: _ToolHarness, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Under a remote target, use() must NOT report a false local switch.
+
+        A local db selection is ignored by TargetResolver when a remote target is
+        active, so switching would silently leave subsequent tools on the remote
+        daemon — data confusion. The tool returns an honest no-effect message and
+        leaves the active db unchanged.
+        """
+        from quarry.config import Settings
+
+        monkeypatch.setattr(
+            "quarry.mcp_server.TargetResolver.selects_local_db",
+            classmethod(lambda _cls: False),
+        )
+        original = Settings.active_db()
+        try:
+            Settings.set_active_db("start")
+            result = harness.tools.use_database("coding")
+            assert result.startswith("Error:")
+            assert "remote" in result
+            assert Settings.active_db() == "start", "must not switch under remote"
+        finally:
+            Settings.set_active_db(original or "")
+
+    def test_quarry_url_env_refuses_switch_via_real_precedence(
+        self, harness: _ToolHarness, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Detection uses the real TargetResolver precedence: QUARRY_URL wins.
+
+        No mock of the predicate — a set QUARRY_URL is tier 1, so selects_local_db
+        is False and use() refuses, proving the guard matches what a real find/
+        remember call would resolve.
+        """
+        from quarry.config import Settings
+
+        monkeypatch.setenv("QUARRY_URL", "wss://remote.example.com:8420")
+        original = Settings.active_db()
+        try:
+            Settings.set_active_db("start")
+            result = harness.tools.use_database("coding")
+            assert result.startswith("Error:")
+            assert Settings.active_db() == "start"
+        finally:
+            Settings.set_active_db(original or "")
+
     def test_default_selects_literal_default_not_persistent(
         self, harness: _ToolHarness, monkeypatch: pytest.MonkeyPatch
     ) -> None:

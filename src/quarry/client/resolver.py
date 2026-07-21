@@ -72,6 +72,21 @@ class TargetResolver:
         return cls._loopback_default()
 
     @classmethod
+    def selects_local_db(cls) -> bool:
+        """Return whether a database selection governs the resolved target.
+
+        The ``--db`` / MCP ``use`` selection only picks among LOCAL databases via
+        the loopback run dir (tier 3). When ``QUARRY_URL`` or a stored remote
+        login is present (tiers 1-2), :meth:`resolve` short-circuits before the
+        run dir, so the selected db is ignored and the target daemon is fixed to
+        its own database. A caller must know the selection has no effect there.
+        Mirrors :meth:`resolve`'s precedence exactly, without opening a connection.
+        """
+        if os.environ.get("QUARRY_URL"):
+            return False
+        return cls._stored_login() is None
+
+    @classmethod
     def _from_stored_login(cls, login: Mapping[str, object]) -> ClientConfig:
         """Build from a stored login; surface a down loopback daemon uniformly.
 

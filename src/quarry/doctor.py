@@ -462,14 +462,26 @@ _DESKTOP_CONFIG_PATH = (
 )
 
 
+def _run_claude(claude_path: str, *argv: str) -> subprocess.CompletedProcess[str]:
+    """Run the ``claude`` CLI with *argv*, capturing output (the one S603 site)."""
+    return subprocess.run(  # noqa: S603
+        [claude_path, *argv], capture_output=True, text=True
+    )
+
+
 def _configure_claude_code() -> CheckResult:
     """Register the quarry MCP server with Claude Code, replacing any stale entry.
 
-    A pre-existing ``quarry`` entry (e.g. the retired mcp-proxy shim) would make
-    ``claude mcp add`` fail with "already exists" and shadow the new direct
-    ``quarry mcp`` — so the old entry is removed first (best-effort) and the
-    direct entry then wins.
+    Add-first, remove-only-if-blocked: try ``claude mcp add`` and act on the
+    result. A fresh slot succeeds outright. Only when the add reports the entry
+    already exists (e.g. the retired mcp-proxy shim shadowing the direct entry)
+    do we remove and re-add — so a failing add on a fresh install never leaves
+    Claude Code with no quarry entry. If the re-add fails after a removal, that
+    is surfaced loudly (the user must re-run), never reported as configured.
     """
+    ok = CheckResult(
+        name="Claude Code MCP", passed=True, message="configured (scope: local)"
+    )
     claude_path = shutil.which("claude")
     if claude_path is None:
         return CheckResult(
@@ -478,30 +490,33 @@ def _configure_claude_code() -> CheckResult:
             message="claude CLI not found on PATH",
             required=False,
         )
-    # Best-effort removal: a missing entry exits non-zero, which is fine — the
-    # add below is the operation that must succeed, so its result is the verdict.
-    subprocess.run(  # noqa: S603
-        [claude_path, "mcp", "remove", _MCP_SERVER_NAME],
-        capture_output=True,
-        text=True,
-    )
     command, args = _mcp_command()
-    result = subprocess.run(  # noqa: S603
-        [claude_path, "mcp", "add", _MCP_SERVER_NAME, "--", command, *args],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
+    add_argv = ["mcp", "add", _MCP_SERVER_NAME, "--", command, *args]
+    result = _run_claude(claude_path, *add_argv)
+    if result.returncode == 0:
+        return ok
+    if "already exists" not in result.stderr:
         return CheckResult(
             name="Claude Code MCP",
             passed=False,
             message=f"claude mcp add failed: {result.stderr.strip()}",
             required=False,
         )
+    # An entry already exists and blocks the direct add. Remove it and re-add;
+    # only now — with the entry confirmed present — do we risk a removal.
+    _run_claude(claude_path, "mcp", "remove", _MCP_SERVER_NAME)
+    retry = _run_claude(claude_path, *add_argv)
+    if retry.returncode == 0:
+        return ok
     return CheckResult(
         name="Claude Code MCP",
-        passed=True,
-        message="configured (scope: local)",
+        passed=False,
+        message=(
+            "removed the stale quarry MCP entry but the re-add failed: "
+            f"{retry.stderr.strip()}. Re-run 'quarry install' or "
+            "'claude mcp add quarry -- quarry mcp'."
+        ),
+        required=False,
     )
 
 

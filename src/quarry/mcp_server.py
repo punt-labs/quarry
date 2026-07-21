@@ -177,8 +177,9 @@ class McpTools:
         """Ingest an HTTP(S) URL into the knowledge base.
 
         Fetches a URL with smart sitemap discovery and single-page fallback.
-        For local files and directories, use ``register`` + ``sync`` — the
-        daemon owns the filesystem, so there is no in-process file loader here.
+        For local files and directories, use ``register_directory`` +
+        ``sync_all_registrations`` — the daemon owns the filesystem, so there is
+        no in-process file loader here.
 
         Returns immediately — the daemon indexes in the background.
 
@@ -189,8 +190,9 @@ class McpTools:
         """
         if not source.startswith(("http://", "https://")):
             return (
-                f"Error: {source!r} is not a URL. Use register(directory=...) to "
-                "track local files and directories, then sync_all_registrations()."
+                f"Error: {source!r} is not a URL. Use "
+                "register_directory(directory=...) to track local files and "
+                "directories, then sync_all_registrations()."
             )
         accepted = self._connect().ingest_url(
             IngestRequest(source=source, overwrite=overwrite, collection=collection)
@@ -394,10 +396,25 @@ class McpTools:
         daemon until changed again. Use list(kind="databases") to see the
         database the daemon is fixed to.
 
+        Only selects among LOCAL databases: while a remote target (QUARRY_URL or
+        a 'quarry login') is active, the remote daemon is fixed to its own
+        database and this has no effect.
+
         Args:
             name: Database name (e.g., 'coding', 'work'). Use 'default' for
                   the default database.
         """
+        # A local db selection only governs the loopback run-dir target. Under a
+        # remote/explicit target it is IGNORED by TargetResolver — so refuse
+        # rather than report a switch that silently doesn't take effect and could
+        # read or destroy data on the wrong (remote) daemon.
+        if not TargetResolver.selects_local_db():
+            return (
+                "Error: no local switch — a remote quarry target is active "
+                "(QUARRY_URL or 'quarry login'). The remote daemon is fixed to "
+                "its own database; 'use' only selects among local databases. Run "
+                "'quarry logout' or unset QUARRY_URL to return to the local daemon."
+            )
         previous = Settings.active_db() or "default"
         # Select the literal named db, "default" included — never fall through to
         # the persistent read_default_db(), or use("default") would silently pick
