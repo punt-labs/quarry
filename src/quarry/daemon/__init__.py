@@ -8,6 +8,4 @@ the historical ``http_server`` god module.
 
 from __future__ import annotations
 
-from quarry.daemon.url_safety import UrlSafetyCheck
-
-__all__ = ["UrlSafetyCheck"]
+__all__: list[str] = []
