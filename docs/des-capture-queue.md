@@ -282,8 +282,12 @@ I-NOBLOCK and stalls the hook (the exact regression DES-041 removed).
 
 `TaskState` gains a `"queued"` initial status:
 
-- `tasks.begin(kind)` sets `status = "queued"` (was `"running"`,
-  `tasks.py:96`).
+- As built, `tasks.begin(kind)` keeps its `"running"` default and
+  `IngestQueue.try_submit` sets `status = "queued"` on enqueue. (Setting
+  `"queued"` in `begin()` would leave the non-queued accept-path routes —
+  sync/optimize/backfill — permanently `"queued"` and break `running_of_kind`'s
+  DES-026 guard, which filters on `"running"`; scoping the value to the queued
+  path avoids that.)
 - The worker sets `status = "running"` when it dequeues the job (§3.2), before
   `job.run`. `task_terminal` (`tasks.py:39-61`) then records
   `completed`/`failed`/`cancelled→failed` exactly as today.
@@ -301,12 +305,14 @@ orphan stuck in `queued`.
 
 The queue lives for the daemon's lifetime (single resident process, DES-031 —
 this is the "serialized per-collection queue" that ADR names as this bead's job;
-see §4.3). It needs the running loop, so it is created inside the ASGI
-**lifespan**, not in `DaemonContext.__new__`:
+see §4.3). As built, it is created eagerly in `DaemonContext.__new__` — the
+queue's `asyncio.Semaphore`s bind to the loop lazily on first `acquire`, and
+each per-collection worker `create_task`s only on first submit (always inside a
+request handler, i.e. under the running serving loop), so no lifespan start
+step is needed. The ASGI **lifespan** owns only the bounded shutdown drain:
 
-- `DaemonServer._lifespan` (`daemon/server.py:249-265`): after `ctx.warm()`,
-  `await ctx.start_ingest_queue()`; in the `finally`, `await
-  ctx.ingest_queue.aclose(drain_timeout=DRAIN_TIMEOUT)` **before** the sidecar
+- `DaemonServer._lifespan` (`daemon/server.py`): in the `finally`, `await
+  ctx.aclose_ingest_queue()` (bounded by `ingest_drain_timeout_s`) **before** the sidecar
   cleanup.
 - `aclose` sets `_closing` (rejects new submits with 503), enqueues a `_Stop`
   after each collection's pending jobs, and `await`s each queue's `join()` under
