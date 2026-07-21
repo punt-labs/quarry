@@ -10,13 +10,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import tempfile
 from collections import defaultdict
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Self, cast, final
 
 from quarry.daemon import ingest_queue as iq
 from quarry.daemon.ingest_queue import IngestQueue
+from quarry.daemon.job_spool import SpoolRecord
 from quarry.daemon.routes.base import RouteGroup
 from quarry.daemon.tasks import TaskRegistry, TaskState, task_terminal
 
@@ -75,6 +78,7 @@ class _StubUnit:
     gate: asyncio.Event | None = None
     barrier: asyncio.Barrier | None = None
     boom: bool = False
+    spool: SpoolRecord | None = None
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Record entry, wait as configured, then record a terminal status."""
@@ -94,6 +98,10 @@ class _StubUnit:
                 state.status = "completed"
             finally:
                 self.ledger.leave(self.collection, self.name)
+
+    def spool_record(self) -> SpoolRecord | None:
+        """Return the configured spool record (``None`` for durable-copy jobs)."""
+        return self.spool
 
 
 @final
@@ -116,6 +124,7 @@ def _make_queue(
     concurrency: int = 1,
     max_workers: int = 256,
     worker_idle: float = 60.0,
+    quarry_root: Path | None = None,
 ) -> IngestQueue:
     """Build an ``IngestQueue`` over a fake context carrying only settings."""
     settings = SimpleNamespace(
@@ -124,6 +133,7 @@ def _make_queue(
         ingest_drain_timeout_s=30.0,
         ingest_max_workers=max_workers,
         ingest_worker_idle_s=worker_idle,
+        quarry_root=quarry_root or Path(tempfile.mkdtemp()),
     )
     ctx = SimpleNamespace(settings=settings)
     return IngestQueue(cast("DaemonContext", ctx))
@@ -441,6 +451,58 @@ def test_cancel_workers_retains_aborted_tasks_until_done() -> None:
         assert queue._reaped  # the aborted task is retained
         await asyncio.sleep(0.02)  # cancellation runs out
         assert not queue._reaped  # done-callback discarded it
+
+    asyncio.run(_run())
+
+
+def test_aborted_queued_job_without_durable_copy_is_spooled(tmp_path: Path) -> None:
+    """A drain-aborted remember/ingest is spooled, never silently dropped.
+
+    quarry-atsz: job A holds the worker (blocked) so B stays queued; the drain
+    times out and aborts. B has no durable client copy, so it must be recorded
+    in the server-side spool with its recoverable content, and its task records
+    the spooled reason rather than a silent 'failed'.
+    """
+
+    async def _run() -> None:
+        ledger = _Ledger()
+        queue = _make_queue(quarry_root=tmp_path)
+        gate = asyncio.Event()  # never set -> A blocks past the drain timeout
+        a = _StubUnit("c", "a", ledger, gate=gate)
+        record = SpoolRecord("remember", "c", "note", "remembered content")
+        b = _StubUnit("c", "b", ledger, gate=gate, spool=record)
+        state_b = _state("b")
+        assert queue.try_submit("c", a, _state("a"))
+        await asyncio.sleep(0.02)  # A dequeued and blocked; B enqueued behind it
+        assert queue.try_submit("c", b, state_b)
+        await queue.aclose(drain_timeout=0.05)  # times out -> abort
+        assert state_b.status == "failed"
+        assert "spooled" in state_b.error
+        files = list((tmp_path / "spool").glob("remember-*.json"))
+        assert len(files) == 1
+        payload = json.loads(files[0].read_text())
+        assert payload["collection"] == "c"
+        assert payload["payload"] == "remembered content"
+
+    asyncio.run(_run())
+
+
+def test_aborted_queued_job_with_durable_copy_is_not_spooled(tmp_path: Path) -> None:
+    """A capture (durable .md) aborted at drain fails without a spool file."""
+
+    async def _run() -> None:
+        ledger = _Ledger()
+        queue = _make_queue(quarry_root=tmp_path)
+        gate = asyncio.Event()
+        a = _StubUnit("c", "a", ledger, gate=gate)
+        b = _StubUnit("c", "b", ledger, gate=gate)  # spool=None -> durable copy
+        state_b = _state("b")
+        assert queue.try_submit("c", a, _state("a"))
+        await asyncio.sleep(0.02)
+        assert queue.try_submit("c", b, state_b)
+        await queue.aclose(drain_timeout=0.05)
+        assert state_b.status == "failed"
+        assert not list((tmp_path / "spool").glob("*.json"))
 
     asyncio.run(_run())
 

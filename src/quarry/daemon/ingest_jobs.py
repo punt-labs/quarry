@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 from starlette.concurrency import run_in_threadpool
 
+from quarry.daemon.job_spool import SpoolRecord
 from quarry.daemon.tasks import task_terminal
 
 if TYPE_CHECKING:
@@ -55,13 +56,29 @@ class ScrubbedIngestJob:
             state.status = "completed"
             state.results = dict(result)
 
+    def spool_record(self) -> SpoolRecord | None:
+        """Return a scrubbed snapshot; ``remember`` has no durable client copy.
+
+        The content and name are scrubbed here (the same redaction ``run`` would
+        apply at ingest), so a drain-abort snapshot never lands unredacted on
+        disk while still carrying the knowledge back for recovery.
+        """
+        return SpoolRecord(
+            kind=self.scrub_label,
+            collection=self.collection,
+            name=self._scrubbed(self.name),
+            payload=self._scrubbed(self.content),
+        )
+
+    def _scrubbed(self, text: str) -> str:
+        """Redact *text* under this job's scrub label (shared by ingest + spool)."""
+        from quarry.scrub import scrub_and_log  # noqa: PLC0415
+
+        return scrub_and_log(text, self.scrub_label)
+
     def scrub_and_ingest(self, ctx: DaemonContext) -> dict[str, object]:
         """Ingest with a scrubber; the pipeline redacts content AND metadata."""
         from quarry.ingestion.pipeline import ingest_content  # noqa: PLC0415
-        from quarry.scrub import scrub_and_log  # noqa: PLC0415
-
-        def scrub(text: str) -> str:
-            return scrub_and_log(text, self.scrub_label)
 
         return dict(
             ingest_content(
@@ -72,7 +89,7 @@ class ScrubbedIngestJob:
                 overwrite=self.overwrite,
                 collection=self.collection,
                 format_hint=self.format_hint,
-                content_scrubber=scrub,
+                content_scrubber=self._scrubbed,
                 agent_handle=self.agent_handle,
                 memory_type=self.memory_type,
                 summary=self.summary,
@@ -108,6 +125,20 @@ class IngestJob:
             result = await run_in_threadpool(self._ingest, ctx)
             state.status = "completed"
             state.results = dict(result)
+
+    def spool_record(self) -> SpoolRecord | None:
+        """Return a snapshot of the source URL; an ``ingest`` has no client copy.
+
+        The source is the recoverable unit — re-issuing the ingest re-fetches it.
+        It is stored as given (a plain ingest already persists the URL verbatim),
+        so recovery has the exact URL to retry.
+        """
+        return SpoolRecord(
+            kind="ingest",
+            collection=self.collection,
+            name=self.source,
+            payload=self.source,
+        )
 
     def _ingest(self, ctx: DaemonContext) -> dict[str, object]:
         """Run the capture re-fetch (scrubbed, captures collection) or plain ingest."""
@@ -171,6 +202,14 @@ class CaptureIngestJob:
     def collection(self) -> str:
         """Return the captures collection this job writes (the queue routing key)."""
         return self.inline.collection
+
+    def spool_record(self) -> SpoolRecord | None:
+        """Return ``None``: a capture's transcript ``.md`` predates the POST.
+
+        The client-side artifact already outlives a drain-abort and ``quarry
+        backfill`` re-ingests it, so the daemon need not spool this job.
+        """
+        return None
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Ingest inline, re-fetching the source on empty, tracking task state."""

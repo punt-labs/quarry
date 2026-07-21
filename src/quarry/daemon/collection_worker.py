@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from time import monotonic
 from typing import TYPE_CHECKING, Self, final
 
+from quarry.daemon.job_spool import JobSpool
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -116,21 +118,33 @@ class CollectionWorker:
 
         The in-flight job's own ``task_terminal`` records ``failed`` when the
         cancellation reaches it; the jobs still waiting never ran, so this marks
-        them ``failed`` and frees their admit slots.  A durable capture artifact
-        outlives a ``failed`` task and is recoverable via ``quarry backfill``.
-        The cancelled task is returned so a sync caller can retain it the way
-        ``aclose`` awaits it.
+        them ``failed`` and frees their admit slots.  A job with a durable client
+        artifact (a capture's transcript ``.md``) is recoverable via ``quarry
+        backfill``; one without (``remember``/``ingest``) is spooled here so an
+        admitted job is never *silently* dropped.  The cancelled task is returned
+        so a sync caller can retain it the way ``aclose`` awaits it.
         """
         self._task.cancel()
+        spool = JobSpool.for_settings(self._ctx.settings)
         while True:
             try:
                 item = self._queue.get_nowait()
             except asyncio.QueueEmpty:
                 return self._task
             if item is not None:
-                item.state.status = "failed"
-                item.state.error = "daemon shut down before ingest completed"
-                self._release_admit()
+                self._fail_aborted(item, spool)
+
+    def _fail_aborted(self, item: _Queued, spool: JobSpool) -> None:
+        """Fail a still-queued job, spooling it when it has no durable copy."""
+        record = item.job.spool_record()
+        if record is not None:
+            spool.write(record)
+            reason = "daemon shut down before ingest; spooled for recovery"
+        else:
+            reason = "daemon shut down before ingest completed"
+        item.state.status = "failed"
+        item.state.error = reason
+        self._release_admit()
 
     async def _run(self) -> None:
         """Drain jobs FIFO, one at a time, each under the shared embed gate."""
