@@ -97,7 +97,7 @@ class _StubUnit:
 
 
 @final
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class _StubQueue:
     """A queue double for route tests: ``try_submit`` returns a canned verdict."""
 
@@ -357,6 +357,27 @@ def test_embed_concurrency_clamped_to_ceiling() -> None:
     )
     ctx = cast("DaemonContext", SimpleNamespace(settings=settings))
     assert IngestQueue._embed_concurrency(ctx) == iq.EMBED_CONCURRENCY_CEILING
+
+
+def test_drain_abort_fails_a_job_blocked_on_the_embed_gate() -> None:
+    """A job cancelled while awaiting the gate records failed, not stuck running."""
+
+    async def _run() -> None:
+        ledger = _Ledger()
+        queue = _make_queue(concurrency=1)
+        held = asyncio.Event()  # never set -> job A holds the embed gate forever
+        a = _state("a")
+        b = _state("b")
+        assert queue.try_submit("cA", _StubUnit("cA", "a", ledger, gate=held), a)
+        await asyncio.sleep(0.02)  # A's worker takes the gate and enters job.run
+        assert queue.try_submit("cB", _StubUnit("cB", "b", ledger), b)
+        await asyncio.sleep(0.02)  # B's worker dequeues and blocks awaiting the gate
+        assert b.status == "running"  # dequeued + gate-blocked (the #7 gap)
+        await queue.aclose(drain_timeout=0.05)  # drain times out -> abort
+        assert b.status == "failed"  # gate-blocked job now reaches a terminal state
+        assert a.status == "failed"
+
+    asyncio.run(_run())
 
 
 def test_idle_workers_are_reaped_so_client_keys_cannot_accrue() -> None:

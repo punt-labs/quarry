@@ -142,6 +142,14 @@ class CollectionWorker:
                 async with self._embed_gate:  # global embed-concurrency bound
                     await item.job.run(self._ctx, item.state)  # records terminal
             finally:
+                if item.state.status == "running":
+                    # Cancelled (drain abort) while awaiting the embed gate, so
+                    # job.run — and its task_terminal — never ran and never
+                    # recorded a terminal status.  Record it here so the drain's
+                    # "every dequeued job reaches a terminal state" holds for a
+                    # job stuck between dequeue and gate acquisition.
+                    item.state.status = "failed"
+                    item.state.error = "daemon shut down before ingest completed"
                 self._running = False
                 self._last_active = monotonic()
                 self._release_admit()

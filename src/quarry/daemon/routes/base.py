@@ -121,15 +121,15 @@ class RouteGroup:
 
         The queue serializes ingest per collection and bounds embed concurrency
         (DES-042).  A full queue returns ``503`` — retriable, never a silent
-        drop — and drops the task record so no orphan lingers in ``queued``; the
-        durable capture artifact remains recoverable via ``quarry backfill``.
+        drop — and drops the task record so no orphan lingers in ``queued``.
+        The message stays generic: ``remember``/``ingest`` share this path and
+        have no spooled local artifact, so it cannot promise backfill recovery.
         """
         if not self._ctx.ingest_queue.try_submit(collection, job, state):
             self._ctx.tasks.drop(state)
             return JSONResponse(
                 {
-                    "error": "ingest queue full; capture retained locally, "
-                    "retry via `quarry backfill`",
+                    "error": "ingest queue full; request not accepted, retry shortly",
                     "status": "rejected",
                 },
                 status_code=503,
