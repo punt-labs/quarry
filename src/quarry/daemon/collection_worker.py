@@ -4,8 +4,10 @@ A :class:`CollectionWorker` is the per-collection serialization the queue is
 built on: a single consumer coroutine draining one ``asyncio.Queue`` means only
 one ``progressive_insert`` caller per LanceDB collection is ever in flight —
 the single-writer precondition DES-034's ingest primitives assume.  Each unit
-runs under the shared embed gate and a per-job timeout so one hung ingest cannot
-hold the gate (and thus every other collection) forever.
+runs under the shared embed gate; its duration is bounded by the ingest work
+itself — the web fetch enforces a socket timeout and the embed and LanceDB write
+are finite — not by a coroutine-level deadline, which could not interrupt a
+non-cancellable threadpool ingest anyway.
 """
 
 from __future__ import annotations
@@ -45,7 +47,6 @@ class CollectionWorker:
     __slots__ = (
         "_ctx",
         "_embed_gate",
-        "_job_timeout",
         "_last_active",
         "_queue",
         "_release_admit",
@@ -55,7 +56,6 @@ class CollectionWorker:
 
     _ctx: DaemonContext
     _embed_gate: asyncio.Semaphore
-    _job_timeout: float
     _last_active: float
     _queue: asyncio.Queue[_Queued | None]
     _release_admit: Callable[[], None]
@@ -67,12 +67,10 @@ class CollectionWorker:
         ctx: DaemonContext,
         embed_gate: asyncio.Semaphore,
         release_admit: Callable[[], None],
-        job_timeout: float,
     ) -> Self:
         self = super().__new__(cls)
         self._ctx = ctx
         self._embed_gate = embed_gate
-        self._job_timeout = job_timeout
         self._queue = asyncio.Queue()
         self._release_admit = release_admit
         self._running = False
@@ -126,7 +124,7 @@ class CollectionWorker:
                 self._release_admit()
 
     async def _run(self) -> None:
-        """Drain jobs FIFO, one at a time, each under the gate and a job timeout."""
+        """Drain jobs FIFO, one at a time, each under the shared embed gate."""
         while True:
             item = await self._queue.get()
             if item is None:
@@ -135,16 +133,14 @@ class CollectionWorker:
             self._running = True
             try:
                 item.state.status = "running"  # queued -> running on dequeue
+                # No coroutine-level timeout: job.run offloads the ingest to a
+                # non-cancellable threadpool thread, so asyncio.wait_for could
+                # not interrupt a hang — it would await the thread anyway and
+                # hold the gate for the whole hang.  The one genuinely unbounded
+                # wait is the web fetch, which is bounded at its own socket
+                # timeout (web_fetch.py); embed + LanceDB write are finite.
                 async with self._embed_gate:  # global embed-concurrency bound
-                    await asyncio.wait_for(
-                        item.job.run(self._ctx, item.state), self._job_timeout
-                    )
-            except TimeoutError:
-                # Exiting the async-with already released the gate, so a hung
-                # unit frees every other collection; the durable artifact is
-                # recoverable via backfill.
-                item.state.status = "failed"
-                item.state.error = f"ingest exceeded {self._job_timeout:.0f}s timeout"
+                    await item.job.run(self._ctx, item.state)  # records terminal
             finally:
                 self._running = False
                 self._last_active = monotonic()

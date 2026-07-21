@@ -34,14 +34,11 @@ class Settings(BaseSettings):
     # Serialized capture/index queue (DES-042).  embed_concurrency is clamped to
     # the queue's hard ceiling regardless of this value; queue_depth bounds the
     # admitted (in-flight + waiting) jobs; drain_timeout_s bounds the shutdown
-    # drain so queued captures flush without hanging the daemon on exit.  The
-    # collection key is client-controlled, so the worker map is bounded too:
-    # max_workers caps resident workers, worker_idle_s reaps idle ones, and
-    # job_timeout_s frees the shared embed gate from a single hung ingest.
+    # drain.  The collection key is client-controlled, so max_workers caps
+    # resident workers and worker_idle_s reaps idle ones.
     ingest_embed_concurrency: int = Field(default=1, ge=1)
     ingest_queue_depth: int = Field(default=32, ge=1)
     ingest_drain_timeout_s: float = Field(default=30.0, ge=0)
-    ingest_job_timeout_s: float = Field(default=300.0, ge=1)
     ingest_max_workers: int = Field(default=256, ge=1)
     ingest_worker_idle_s: float = Field(default=60.0, ge=0)
 

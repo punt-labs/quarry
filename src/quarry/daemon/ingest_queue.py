@@ -60,7 +60,6 @@ class IngestQueue:
         "_ctx",
         "_depth",
         "_embed_gate",
-        "_job_timeout",
         "_max_depth",
         "_max_workers",
         "_worker_idle_s",
@@ -74,7 +73,6 @@ class IngestQueue:
     _max_depth: int
     _max_workers: int
     _worker_idle_s: float
-    _job_timeout: float
     _closing: bool
 
     def __new__(cls, ctx: DaemonContext) -> Self:
@@ -86,7 +84,6 @@ class IngestQueue:
         self._max_depth = ctx.settings.ingest_queue_depth
         self._max_workers = ctx.settings.ingest_max_workers
         self._worker_idle_s = ctx.settings.ingest_worker_idle_s
-        self._job_timeout = ctx.settings.ingest_job_timeout_s
         self._closing = False
         return self
 
@@ -169,9 +166,7 @@ class IngestQueue:
             return worker
         if len(self._workers) >= self._max_workers and not self._evict_reapable():
             return None
-        worker = CollectionWorker(
-            self._ctx, self._embed_gate, self._release_admit, self._job_timeout
-        )
+        worker = CollectionWorker(self._ctx, self._embed_gate, self._release_admit)
         self._workers[collection] = worker
         return worker
 
