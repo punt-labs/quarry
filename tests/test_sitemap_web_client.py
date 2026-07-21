@@ -95,6 +95,27 @@ class _FakeOpener:
         return _FakeResp(url, body)
 
 
+class _LandingOpener:
+    """Return a response whose final url differs from the requested url."""
+
+    def __init__(self, landed: str) -> None:
+        self._landed = landed
+
+    def open(
+        self, request: urllib.request.Request, timeout: float | None = None
+    ) -> _FakeResp:
+        return _FakeResp(self._landed, _urlset_xml("http://internal.example/x"))
+
+
+class _TimeoutOpener:
+    """An opener whose fetch times out at the transport layer."""
+
+    def open(
+        self, request: urllib.request.Request, timeout: float | None = None
+    ) -> _FakeResp:
+        raise TimeoutError("read timed out")
+
+
 class _BrokenReadResp:
     """A response whose body read raises IncompleteRead mid-stream."""
 
@@ -206,8 +227,42 @@ class TestGatedClientGet:
 
         assert isinstance(resp, AbstractWebClientSuccessResponse)
         assert resp.status_code() == 200
+        assert resp.status_message() == "OK"
         assert b"safe.example/p1" in resp.raw_data()
         assert opener.opened == [url]
+
+    def test_final_url_resolving_internal_is_blocked(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A fetch whose FINAL url resolves internal is refused, non-retryable.
+
+        The initial url passes the gate, but the response lands on a host that
+        resolves to a private address — the final-url gate must catch it.
+        """
+        start = "https://safe.example/sitemap.xml"
+        landed = "http://internal.example/final.xml"
+        monkeypatch.setattr(
+            _GETADDRINFO,
+            _resolver({"safe.example": _PUBLIC, "internal.example": "10.0.0.9"}),
+        )
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _LandingOpener(landed))
+        resp = GatedSitemapWebClient().get(start)
+        from usp.web_client.abstract_client import WebClientErrorResponse
+
+        assert isinstance(resp, WebClientErrorResponse)
+        assert resp.retryable() is False
+
+    def test_network_timeout_is_retryable_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A transport timeout is reported retryable, never raised."""
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _TimeoutOpener())
+        resp = GatedSitemapWebClient().get("https://safe.example/slow.xml")
+        from usp.web_client.abstract_client import WebClientErrorResponse
+
+        assert isinstance(resp, WebClientErrorResponse)
+        assert resp.retryable() is True
 
 
 class TestUspRecursionGated:
