@@ -543,7 +543,7 @@ class _FailingHandler(BaseHTTPRequestHandler):
 
 @pytest.fixture()
 def http_server() -> Generator[HTTPServer]:
-    """A real loopback HTTP server that fails every request (500 or 302)."""
+    """A real loopback HTTP server that fails every request (404 or 302)."""
     server = HTTPServer(("127.0.0.1", 0), _FailingHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
