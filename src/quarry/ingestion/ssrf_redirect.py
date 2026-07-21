@@ -12,6 +12,7 @@ hop before it.
 
 from __future__ import annotations
 
+import contextlib
 import urllib.request
 from typing import IO, TYPE_CHECKING, final
 
@@ -68,8 +69,10 @@ class SsrfGuardedRedirectHandler(urllib.request.HTTPRedirectHandler):
         if reason is not None:
             # urllib's http_error_30x calls this BEFORE it reads/closes fp, so
             # raising here would leak the intermediate 3xx response's fd on every
-            # blocked hop.  Close it first (Class-1 fd hygiene).
-            fp.close()
+            # blocked hop.  Close it first (Class-1 fd hygiene); a close failure
+            # must not mask the SSRF rejection, so it is suppressed.
+            with contextlib.suppress(Exception):
+                fp.close()
             raise RedirectRejectedError(f"redirect target rejected: {reason}")
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 

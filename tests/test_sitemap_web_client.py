@@ -8,9 +8,13 @@ fetched — the bypass a leaf-only test would hide.
 from __future__ import annotations
 
 import io
+import threading
 import urllib.request
+from collections.abc import Generator
 from email.message import Message
 from http.client import HTTPMessage
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
 
@@ -488,3 +492,75 @@ class _RedirectResp:
 
     def __exit__(self, *_a: Any) -> None:
         return None
+
+
+def _open_fd_count() -> int:
+    """Return the number of file descriptors this process currently holds."""
+    for fd_dir in ("/proc/self/fd", "/dev/fd"):
+        path = Path(fd_dir)
+        if path.is_dir():
+            return sum(1 for _ in path.iterdir())
+    pytest.skip("no /proc/self/fd or /dev/fd on this platform")
+
+
+class _FailingHandler(BaseHTTPRequestHandler):
+    """Loopback server: 500 on /err, a 302 to a metadata IP on /redir."""
+
+    def do_GET(self) -> None:
+        if self.path == "/redir":
+            self.send_response(302)
+            self.send_header("Location", "http://169.254.169.254/latest/meta-data/")
+        else:
+            self.send_response(500)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, format: str, *args: object) -> None:
+        """Silence the per-request stderr logging (matches the base signature)."""
+
+
+@pytest.fixture()
+def http_server() -> Generator[HTTPServer]:
+    """A real loopback HTTP server that fails every request (500 or 302)."""
+    server = HTTPServer(("127.0.0.1", 0), _FailingHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+
+
+@pytest.mark.resource
+def test_failing_fetches_do_not_leak_real_fds(
+    http_server: HTTPServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """N failing fetches over a REAL socket hold the process fd count flat.
+
+    Covers both fd-bearing error paths against a real server: the HTTPError
+    path (a 500 response holding a real socket fd, closed via ``exc.close()``)
+    and the RedirectRejectedError path (a real 302 intermediate response whose
+    fp is closed in the redirect handler).  The SSRF gate correctly blocks
+    loopback, so the resolver is mocked public to let the connection through to
+    the real 127.0.0.1 server; urllib still opens a real socket per request.
+    """
+    monkeypatch.setattr(_GETADDRINFO, lambda *a, **k: _addrinfo(_PUBLIC))
+    base = f"http://127.0.0.1:{http_server.server_port}"
+    client = GatedSitemapWebClient()
+
+    for _ in range(5):  # warm up connection/thread fds before sampling
+        client.get(f"{base}/err")
+        client.get(f"{base}/redir")
+
+    before = _open_fd_count()
+    for _ in range(200):
+        assert isinstance(client.get(f"{base}/err"), WebClientErrorResponse)
+        assert isinstance(client.get(f"{base}/redir"), WebClientErrorResponse)
+    after = _open_fd_count()
+
+    assert after - before <= 5, (
+        f"fd leak across 400 failing fetches: {before} -> {after} "
+        f"(delta {after - before}); a failed fetch is not releasing its fd"
+    )

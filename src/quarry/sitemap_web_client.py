@@ -18,6 +18,7 @@ and sub-sitemaps at every depth.
 
 from __future__ import annotations
 
+import contextlib
 import urllib.request
 from dataclasses import dataclass
 from http.client import HTTPException
@@ -107,7 +108,10 @@ class GatedSitemapWebClient(AbstractWebClient):
             # fd leaks -- over a crawl that is EMFILE -> daemon starvation.  5xx
             # and 429 are transient (retry); other 4xx are permanent.
             retryable = self._retryable_http(exc.code)
-            exc.close()
+            with contextlib.suppress(Exception):
+                # A close failure must not break get()'s never-raises contract;
+                # the kernel still frees the fd regardless.
+                exc.close()
             return self._error(f"HTTP {exc.code}", retryable=retryable)
         except (TimeoutError, URLError) as exc:
             return self._error(f"cannot reach {url}: {exc}", retryable=True)
