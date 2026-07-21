@@ -7,11 +7,11 @@
     "avg_lcom": 0.0
   },
   "src/quarry/__main__.py": {
-    "avg_lcom": 0.0,
-    "circular_imports": 0.0,
     "efferent_coupling": 12.0,
+    "public_names": 14.0,
+    "circular_imports": 0.0,
     "max_lcom": 0.0,
-    "public_names": 14.0
+    "avg_lcom": 0.0
   },
   "src/quarry/_frontmatter.py": {
     "avg_lcom": 0.0,
@@ -864,8 +864,8 @@
     "efferent_coupling": 6.0,
     "public_names": 4.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.331,
-    "avg_lcom": 0.331
+    "max_lcom": 0.287,
+    "avg_lcom": 0.287
   },
   "src/quarry/models.py": {
     "avg_lcom": 0.0,

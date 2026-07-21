@@ -154,6 +154,10 @@ class McpTools:
             agent_handle: Optional agent handle to filter by (e.g. "rmh").
             memory_type: Optional memory type filter (fact, observation, etc.).
         """
+        if err := self._reject_blank(query, "query"):
+            return err
+        if limit <= 0:
+            return f"Error: limit must be >= 1 (got {limit})."
         req = SearchRequest(
             query=query,
             limit=min(limit, 50),
@@ -229,6 +233,10 @@ class McpTools:
             memory_type: Memory classification: fact, observation, opinion, procedure.
             summary: One-line summary of the content.
         """
+        if err := self._reject_blank(document_name, "document_name"):
+            return err
+        if err := self._reject_blank(content, "content"):
+            return err
         # The MCP surface deliberately defaults overwrite=False (unlike the CLI and
         # the RememberRequest model default of True): an agent calling remember
         # should add, not silently replace. The value is always passed explicitly.
@@ -285,9 +293,15 @@ class McpTools:
             page_number: Page number (1-indexed). 0 means show metadata only.
             collection: Optional collection scope.
         """
+        if err := self._reject_blank(document_name, "document_name"):
+            return err
         client = self._connect()
+        # A page is 1-based: 0 or negative means "no page" (metadata), never a
+        # nonsensical page sent to the daemon.
         req = ShowRequest(
-            document=document_name, collection=collection, page=page_number or None
+            document=document_name,
+            collection=collection,
+            page=page_number if page_number > 0 else None,
         )
         try:
             if page_number > 0:
@@ -322,8 +336,10 @@ class McpTools:
             kind: What to delete — "document" or "collection".
             collection: Optional collection scope (only for kind="document").
         """
-        # Validate the input before reaching for the daemon: a bad kind is a
-        # caller error, answerable without a connection.
+        # Validate the input before reaching for the daemon: a blank name or bad
+        # kind is a caller error, answerable without a connection.
+        if err := self._reject_blank(name, "name"):
+            return err
         if kind not in ("document", "collection"):
             return f"Error: Invalid kind {kind!r}. Must be 'document' or 'collection'."
         client = self._connect()
@@ -347,6 +363,9 @@ class McpTools:
         """
         from pathlib import Path  # noqa: PLC0415 — path leaf only, no engine
 
+        # An empty directory would resolve to the cwd and silently register it.
+        if err := self._reject_blank(directory, "directory"):
+            return err
         resolved = Path(directory).expanduser().resolve()
         col = collection or resolved.name or "root"
         accepted = self._connect().register(
@@ -366,6 +385,8 @@ class McpTools:
             collection: Collection name to deregister.
             keep_data: If true, keep indexed data in LanceDB.
         """
+        if err := self._reject_blank(collection, "collection"):
+            return err
         accepted = self._connect().deregister(
             DeregisterRequest(collection=collection, keep_data=keep_data)
         )
@@ -408,6 +429,8 @@ class McpTools:
         # remote/explicit target it is IGNORED by TargetResolver — so refuse
         # rather than report a switch that silently doesn't take effect and could
         # read or destroy data on the wrong (remote) daemon.
+        if err := self._reject_blank(name, "name"):
+            return err
         if not TargetResolver.selects_local_db():
             return (
                 "Error: no local switch — a remote quarry target is active "
@@ -443,6 +466,15 @@ class McpTools:
     def _list_registrations(self, _collection: str) -> str:
         regs = self._connect().list_registrations()
         return format_registrations([reg.model_dump() for reg in regs.registrations])
+
+    @staticmethod
+    def _reject_blank(value: str, label: str) -> str | None:
+        # Returns an Error: string for a blank required arg, else None. None is
+        # the documented "valid" signal (no error) — the caller proceeds on None,
+        # so this is an appropriate Optional, not a give-up value.
+        if value.strip():
+            return None
+        return f"Error: {label} is required (got an empty value)."
 
 
 _tools = McpTools()

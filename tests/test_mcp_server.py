@@ -542,3 +542,83 @@ class TestDaemonDown:
     def test_remember_returns_error_string(self) -> None:
         result = self._down_tools().remember("x", "n.md")
         assert result.startswith("Error:")
+
+
+class TestInputValidation:
+    """Malformed inputs are rejected/normalized without hitting the daemon.
+
+    Blank required args and non-positive numbers are caller errors — they short-
+    circuit before ``_connect``, so a client that raises on connect proves the
+    guard fired first. Valid inputs keep the exact behavior mdm verified.
+    """
+
+    @staticmethod
+    def _tools() -> McpTools:
+        def _connect() -> QuarryClient:
+            raise AssertionError("guard must short-circuit before connecting")
+
+        return McpTools(connect=_connect)
+
+    def test_find_blank_query(self) -> None:
+        result = self._tools().find("   ")
+        assert result.startswith("Error:")
+        assert "query" in result
+
+    def test_find_non_positive_limit(self) -> None:
+        result = self._tools().find("q", limit=0)
+        assert result.startswith("Error:")
+        assert "limit" in result
+
+    def test_remember_blank_content(self) -> None:
+        result = self._tools().remember("   ", "notes.md")
+        assert result.startswith("Error:")
+        assert "content" in result
+
+    def test_remember_blank_document_name(self) -> None:
+        result = self._tools().remember("body", "  ")
+        assert result.startswith("Error:")
+        assert "document_name" in result
+
+    def test_delete_blank_name(self) -> None:
+        result = self._tools().delete("")
+        assert result.startswith("Error:")
+        assert "name" in result
+
+    def test_register_blank_directory(self) -> None:
+        result = self._tools().register_directory("   ")
+        assert result.startswith("Error:")
+        assert "directory" in result
+
+    def test_deregister_blank_collection(self) -> None:
+        result = self._tools().deregister_directory("")
+        assert result.startswith("Error:")
+        assert "collection" in result
+
+    def test_use_blank_name(self) -> None:
+        from quarry.config import Settings
+
+        original = Settings.active_db()
+        try:
+            Settings.set_active_db("start")
+            for name in ("", "   "):
+                result = self._tools().use_database(name)
+                assert result.startswith("Error:"), name
+                assert Settings.active_db() == "start", "must not switch on blank"
+        finally:
+            Settings.set_active_db(original or "")
+
+    def test_show_negative_page_is_metadata_not_daemon_error(
+        self, harness: _ToolHarness
+    ) -> None:
+        """page_number <= 0 means no page (metadata), never a daemon 400.
+
+        With a missing document the metadata path yields the friendly not-found,
+        proving -1 was NOT sent to the daemon as an invalid page.
+        """
+        for page in (-1, 0):
+            with patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
+                return_value=[],
+            ):
+                result = harness.tools.show("missing.pdf", page_number=page)
+            assert result == "Document 'missing.pdf' not found", page

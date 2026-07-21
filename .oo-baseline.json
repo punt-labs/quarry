@@ -1612,12 +1612,12 @@
     "public_attr_violations": 0.0
   },
   "src/quarry/mcp_server.py": {
-    "method_ratio": 0.895,
+    "method_ratio": 0.9,
     "encapsulation_ratio": 1.0,
     "avg_params": 2.0,
     "max_complexity": 6.0,
-    "avg_complexity": 2.1,
-    "module_size": 395.0,
+    "avg_complexity": 2.48,
+    "module_size": 426.0,
     "classes_per_module": 1.0,
     "class_to_func_ratio": 0.333,
     "init_violations": 0.0,
