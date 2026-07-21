@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 # Task GC: completed/failed tasks are evicted after this many seconds.
 TASK_TTL_SECONDS = 3600  # 1 hour
 
+# Terminal statuses eligible for GC.  A "queued" or "running" task is still live
+# and must never be evicted out from under a client polling it (DES-042 adds the
+# interim "queued" state that a worker flips to "running" on dequeue).
+_TERMINAL_STATUSES = frozenset({"completed", "failed"})
+
 
 @dataclass(slots=True)
 class TaskState:
@@ -87,7 +92,8 @@ class TaskRegistry:
         expired = [
             tid
             for tid, task in self._states.items()
-            if task.status != "running" and (now - task.created_at) > TASK_TTL_SECONDS
+            if task.status in _TERMINAL_STATUSES
+            and (now - task.created_at) > TASK_TTL_SECONDS
         ]
         for tid in expired:
             del self._states[tid]
@@ -96,6 +102,11 @@ class TaskRegistry:
         state = TaskState(task_id=task_id, kind=kind)
         self._states[task_id] = state
         return state
+
+    def drop(self, state: TaskState) -> None:
+        """Discard a task record so a rejected submit leaves no orphan behind."""
+        self._states.pop(state.task_id, None)
+        self._refs.pop(state.task_id, None)
 
     def track(self, state: TaskState, task: asyncio.Task[None]) -> None:
         """Retain *task* until it reaches a terminal state, then drop the ref."""

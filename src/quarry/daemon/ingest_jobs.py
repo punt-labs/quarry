@@ -86,17 +86,17 @@ class IngestJob:
 
     ``scrub`` set marks a web-fetch capture re-fetch (the hook's fallback): the
     URL is fetched once through the SSRF-checked path, scrubbed, and stored in
-    the project's ``<repo>-captures`` collection (``default-captures`` when the
-    working directory is unregistered) — never a sitemap crawl.  ``scrub`` unset
-    is a plain ``quarry ingest``: sitemap-aware and unscrubbed, since a
-    deliberately ingested document is stored byte-for-byte.  Capture-intent is
-    carried explicitly here, never inferred from whether ``cwd`` is empty.
+    the ``<repo>-captures`` collection the route already resolved into
+    ``collection`` (``default-captures`` when the working directory is
+    unregistered) — never a sitemap crawl.  ``scrub`` unset is a plain
+    ``quarry ingest``: sitemap-aware and unscrubbed, since a deliberately
+    ingested document is stored byte-for-byte.  ``collection`` is the routing key
+    the queue serializes on, so the route resolves it before the job is built.
     """
 
     source: str
     overwrite: bool
     collection: str
-    cwd: str
     scrub: bool
     agent_handle: str
     memory_type: str
@@ -112,23 +112,19 @@ class IngestJob:
     def _ingest(self, ctx: DaemonContext) -> dict[str, object]:
         """Run the capture re-fetch (scrubbed, captures collection) or plain ingest."""
         if self.scrub:
-            from quarry.captures_collection import CapturesCollection  # noqa: PLC0415
             from quarry.ingestion.pipeline import ingest_url  # noqa: PLC0415
             from quarry.scrub import scrub_and_log  # noqa: PLC0415
 
             def scrub(text: str) -> str:
                 return scrub_and_log(text, "web-fetch")
 
-            collection = CapturesCollection.for_registry_path(
-                self.cwd, ctx.settings.registry_path
-            ).name
             return dict(
                 ingest_url(
                     self.source,
                     ctx.database,
                     ctx.settings,
                     overwrite=self.overwrite,
-                    collection=collection,
+                    collection=self.collection,
                     content_scrubber=scrub,
                     agent_handle=self.agent_handle,
                     memory_type=self.memory_type,
@@ -170,6 +166,11 @@ class CaptureIngestJob:
 
     inline: ScrubbedIngestJob
     source_url: str
+
+    @property
+    def collection(self) -> str:
+        """Return the captures collection this job writes (the queue routing key)."""
+        return self.inline.collection
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Ingest inline, re-fetching the source on empty, tracking task state."""

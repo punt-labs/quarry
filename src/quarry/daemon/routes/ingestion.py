@@ -13,6 +13,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from quarry.captures_collection import CapturesCollection
 from quarry.daemon.ingest_jobs import IngestJob, ScrubbedIngestJob
 from quarry.daemon.routes.base import RouteGroup
 from quarry.daemon.url_safety import UrlSafetyCheck
@@ -40,7 +41,7 @@ class IngestionRoutes(RouteGroup):
             return job
 
         state = self.ctx.tasks.begin("remember")
-        return self.accept(state, job.run(self.ctx, state))
+        return self.submit(job.collection, job, state)
 
     async def ingest(self, request: Request) -> JSONResponse:
         """Ingest a URL as a background task.
@@ -63,12 +64,12 @@ class IngestionRoutes(RouteGroup):
         if reason is not None:
             return JSONResponse({"error": f"URL rejected: {reason}"}, status_code=400)
 
-        job = self._ingest_job(body, source)
+        job = await self._ingest_job(body, source)
         if isinstance(job, JSONResponse):
             return job
 
         state = self.ctx.tasks.begin("ingest")
-        return self.accept(state, job.run(self.ctx, state))
+        return self.submit(job.collection, job, state)
 
     def _remember_job(
         self, body: dict[str, object]
@@ -95,7 +96,7 @@ class IngestionRoutes(RouteGroup):
             summary=self._str_field(body, "summary", ""),
         )
 
-    def _ingest_job(
+    async def _ingest_job(
         self, body: dict[str, object], source: str
     ) -> IngestJob | JSONResponse:
         """Validate an ingest body into an :class:`IngestJob` or a 400."""
@@ -105,13 +106,31 @@ class IngestionRoutes(RouteGroup):
         scrub = RequestGuards.coerce_bool_field(body, "scrub", default=False)
         if isinstance(scrub, JSONResponse):
             return scrub
+        collection = await self._ingest_collection(body, scrub=scrub)
         return IngestJob(
             source=source,
             overwrite=overwrite,
-            collection=self._str_field(body, "collection", ""),
-            cwd=self._str_field(body, "cwd", ""),
+            collection=collection,
             scrub=scrub,
             agent_handle=self._str_field(body, "agent_handle", ""),
             memory_type=self._str_field(body, "memory_type", ""),
             summary=self._str_field(body, "summary", ""),
         )
+
+    async def _ingest_collection(self, body: dict[str, object], *, scrub: bool) -> str:
+        """Resolve the collection the queue keys on: captures for a web-fetch.
+
+        A web-fetch capture (``scrub``) writes the ``<repo>-captures`` collection
+        derived from ``cwd`` — resolved here, before the job is built, so the
+        queue can route it.  ``for_registry_path`` reads the registry, so it runs
+        off the event loop.  A plain ingest keeps the body's collection (the
+        pipeline derives a hostname when it is empty).
+        """
+        if scrub:
+            captures = await run_in_threadpool(
+                CapturesCollection.for_registry_path,
+                self._str_field(body, "cwd", ""),
+                self.ctx.settings.registry_path,
+            )
+            return captures.name
+        return self._str_field(body, "collection", "")

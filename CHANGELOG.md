@@ -16,6 +16,21 @@ across `transform`, `index`, and `connector`).
 
 ### Added
 
+- **index (daemon)**: serialized capture/index queue (DES-042) — the daemon now
+  drains capture, remember, and ingest jobs through a per-collection FIFO worker
+  instead of firing an unbounded `asyncio.create_task` per request. One in-flight
+  writer per LanceDB collection restores DES-034's single-writer precondition
+  under a burst (two same-document overwrites no longer interleave into two
+  resident chunk sets), and a global embed semaphore (hard-clamped to one job at
+  a time — DES-032) bounds CPU oversubscription. Admission is a non-blocking
+  bounded gate: a full queue returns `503` (retriable; the durable capture
+  artifact stays recoverable via `quarry backfill`) rather than blocking the hook
+  or silently dropping. A background task now begins in a new interim `queued`
+  status that the worker flips to `running` on dequeue; the `/v1/tasks` response
+  shape is unchanged and existing clients already poll through it. Tunable via
+  `ingest_embed_concurrency`, `ingest_queue_depth`, and `ingest_drain_timeout_s`;
+  a clean shutdown drains queued jobs within the drain timeout.
+
 - **tool (daemon REST)**: `POST /v1/capture` — the capture front door, sharing
   one always-scrubbing `ScrubbedIngestJob` with `remember`. The daemon derives
   the target `<repo>-captures` collection server-side from the client's working

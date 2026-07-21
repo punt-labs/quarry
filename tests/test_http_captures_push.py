@@ -19,6 +19,11 @@ def _mock_settings(tmp_path: Path) -> MagicMock:
     settings.lancedb_path = tmp_path / "lancedb"
     settings.lancedb_path.mkdir(parents=True)
     settings.registry_path = tmp_path / "registry.db"
+    settings.ingest_queue_depth = 32
+    settings.ingest_embed_concurrency = 1
+    settings.ingest_drain_timeout_s = 30.0
+    settings.ingest_max_workers = 256
+    settings.ingest_worker_idle_s = 60.0
     return settings
 
 
