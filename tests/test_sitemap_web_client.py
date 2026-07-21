@@ -555,6 +555,13 @@ def http_server() -> Generator[HTTPServer]:
         server.server_close()
 
 
+# Real-socket OS-fd invariant test: it needs a live loopback HTTP server, which
+# is CI-network-fragile (connection hangs on the runner), so it is tiered OUT of
+# the fast CI unit suite (-m "not slow", via the slow marker) and runs in the
+# integration tier instead.  The deterministic close-count unit tests above are
+# the CI-tier fd guard.
+@pytest.mark.slow
+@pytest.mark.integration
 @pytest.mark.resource
 def test_failing_fetches_do_not_leak_real_fds(
     http_server: HTTPServer, monkeypatch: pytest.MonkeyPatch
