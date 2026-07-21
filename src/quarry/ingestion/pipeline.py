@@ -603,19 +603,23 @@ def _bulk_ingest_entries(
     workers = max(1, workers)
     total_discovered = len(entries)
 
+    # Apply the path-glob filter WITHOUT the limit: capping here would take the
+    # first `limit` entries and only then drop the unsafe ones, under-delivering
+    # when an internal URL sorts early.  The limit is applied by the SSRF gate
+    # below so it counts SAFE entries, not raw ones.
     filtered = SitemapDiscovery.filter_entries(
         entries,
         include=include,
         exclude=exclude,
-        limit=limit,
     )
     after_filter = len(filtered)
     progress("After filtering: %d URLs", after_filter)
 
     # SSRF gate: a sitemap is attacker-controlled, so drop any entry whose URL
     # resolves to an internal address before it is fetched (fail-closed, the
-    # safe entries still proceed).  reject_unsafe logs each drop.
-    filtered = SitemapDiscovery.reject_unsafe(filtered)
+    # safe entries still proceed).  Gating with the limit yields up to `limit`
+    # SAFE pages while resolving only about as many hosts as needed to fill it.
+    filtered = SitemapDiscovery.reject_unsafe(filtered, limit=limit)
     progress("After SSRF gate: %d URLs", len(filtered))
 
     # Build lookup of existing documents for lastmod dedup

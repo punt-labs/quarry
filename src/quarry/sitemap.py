@@ -98,8 +98,10 @@ class SitemapDiscovery:
         return entries
 
     @staticmethod
-    def reject_unsafe(entries: list[SitemapEntry]) -> list[SitemapEntry]:
-        """Return only entries whose URL passes the SSRF gate, fail-closed.
+    def reject_unsafe(
+        entries: list[SitemapEntry], *, limit: int = 0
+    ) -> list[SitemapEntry]:
+        """Return the SSRF-safe entries, fail-closed, up to *limit* if positive.
 
         A sitemap is attacker-controlled content: its entries may point at
         internal addresses (link-local, loopback, RFC-1918, CGNAT, metadata).
@@ -109,14 +111,21 @@ class SitemapDiscovery:
         internal URLs triggers no internal fetch.  Complementary to pinning the
         resolved IP (a separate follow-up): this gates each listed URL, not the
         connection.
+
+        When *limit* > 0 the scan stops once *limit* SAFE entries are gathered,
+        so the result is *limit* safe pages -- not *limit* minus the unsafe ones
+        that happened to sort first -- and only about enough hosts to fill the
+        limit are resolved rather than the whole (possibly huge) sitemap.
         """
         safe: list[SitemapEntry] = []
         for entry in entries:
             reason = UrlSafetyCheck.reject_reason(entry.loc)
-            if reason is None:
-                safe.append(entry)
-            else:
+            if reason is not None:
                 logger.warning("Dropping unsafe sitemap URL %s: %s", entry.loc, reason)
+                continue
+            safe.append(entry)
+            if limit > 0 and len(safe) >= limit:
+                break
         return safe
 
     @staticmethod

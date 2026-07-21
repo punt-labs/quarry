@@ -1023,6 +1023,72 @@ class TestRejectUnsafe:
             SitemapDiscovery.reject_unsafe(entries)
         assert "https://loops.example/x" in caplog.text
 
+    def test_limit_counts_safe_entries_not_raw(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With an internal entry first, limit still yields `limit` SAFE pages.
+
+        Regression: applying the limit before the gate would take the first
+        `limit` entries then drop the unsafe ones, under-delivering.
+        """
+        resolve = {"internal.example": "10.0.0.9"}
+
+        def _resolver(host: str, *_a: object, **_k: object) -> object:
+            return _addrinfo(resolve.get(host, "93.184.216.34"))
+
+        monkeypatch.setattr(_GETADDRINFO, _resolver)
+        entries = [
+            SitemapEntry(loc="https://internal.example/x", lastmod=None),
+            SitemapEntry(loc="https://safe.example/a", lastmod=None),
+            SitemapEntry(loc="https://safe.example/b", lastmod=None),
+            SitemapEntry(loc="https://safe.example/c", lastmod=None),
+        ]
+        safe = SitemapDiscovery.reject_unsafe(entries, limit=2)
+        assert [e.loc for e in safe] == [
+            "https://safe.example/a",
+            "https://safe.example/b",
+        ]
+
+    def test_limit_bounds_resolution_and_gates_each_considered(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The gate runs on every considered entry and stops once limit is filled.
+
+        Only ~enough hosts to fill the limit are resolved -- a huge sitemap is
+        not fully resolved -- and every entry looked at goes through the gate.
+        """
+        resolved: list[str] = []
+
+        def _resolver(host: str, *_a: object, **_k: object) -> object:
+            resolved.append(host)
+            return _addrinfo("93.184.216.34")
+
+        monkeypatch.setattr(_GETADDRINFO, _resolver)
+        entries = [
+            SitemapEntry(loc=f"https://safe{i}.example/p", lastmod=None)
+            for i in range(50)
+        ]
+        safe = SitemapDiscovery.reject_unsafe(entries, limit=3)
+        assert len(safe) == 3
+        assert resolved == ["safe0.example", "safe1.example", "safe2.example"]
+
+    def test_fewer_safe_than_limit_returns_all_no_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A sitemap with fewer safe entries than the limit returns all safe ones."""
+        resolve = {"internal.example": "127.0.0.1"}
+
+        def _resolver(host: str, *_a: object, **_k: object) -> object:
+            return _addrinfo(resolve.get(host, "93.184.216.34"))
+
+        monkeypatch.setattr(_GETADDRINFO, _resolver)
+        entries = [
+            SitemapEntry(loc="https://safe.example/a", lastmod=None),
+            SitemapEntry(loc="https://internal.example/x", lastmod=None),
+        ]
+        safe = SitemapDiscovery.reject_unsafe(entries, limit=5)
+        assert [e.loc for e in safe] == ["https://safe.example/a"]
+
 
 class TestBulkIngestSsrfGate:
     """The gate runs inside _bulk_ingest_entries, so every ingest surface is covered.
@@ -1068,4 +1134,50 @@ class TestBulkIngestSsrfGate:
         assert result["ingested"] == 1  # only the safe entry
         fetched = [call.args[0] for call in mock_ingest.call_args_list]
         assert fetched == ["https://safe.example/page"]
+        assert "https://internal.example/secret" not in fetched
+
+    @patch("quarry.ingestion.pipeline.ingest_url")
+    @patch("quarry.db.chunk_catalog.ChunkCatalog.list_documents")
+    @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
+    def test_limit_delivers_limit_safe_pages_despite_early_internal(
+        self,
+        mock_discover: MagicMock,
+        mock_list_docs: MagicMock,
+        mock_ingest: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """limit=2 with an internal URL first ingests 2 SAFE pages, not 1.
+
+        Reproduces the under-delivery bug (limit applied before the gate) and
+        proves the fix: the internal URL is never fetched, and the limit counts
+        safe pages.
+        """
+        from quarry.ingestion.pipeline import ingest_sitemap
+
+        resolve = {"internal.example": "10.0.0.9"}
+
+        def _resolver(host: str, *_a: object, **_k: object) -> object:
+            return _addrinfo(resolve.get(host, "93.184.216.34"))
+
+        monkeypatch.setattr(_GETADDRINFO, _resolver)
+        mock_discover.return_value = [
+            SitemapEntry(loc="https://internal.example/secret", lastmod=None),
+            SitemapEntry(loc="https://safe.example/a", lastmod=None),
+            SitemapEntry(loc="https://safe.example/b", lastmod=None),
+            SitemapEntry(loc="https://safe.example/c", lastmod=None),
+        ]
+        mock_list_docs.return_value = []
+        mock_ingest.return_value = _MOCK_RESULT
+
+        result = ingest_sitemap(
+            "https://safe.example/sitemap.xml",
+            Database(MagicMock()),
+            MagicMock(),
+            collection="test",
+            limit=2,
+        )
+
+        assert result["ingested"] == 2  # two SAFE pages, not limit-minus-internal
+        fetched = [call.args[0] for call in mock_ingest.call_args_list]
+        assert fetched == ["https://safe.example/a", "https://safe.example/b"]
         assert "https://internal.example/secret" not in fetched
