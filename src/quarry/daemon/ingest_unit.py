@@ -9,14 +9,13 @@ never imports a concrete job type.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.tasks import TaskState
 
 
-@runtime_checkable
 class IngestUnit(Protocol):
     """A self-executing ingest job keyed by its target collection.
 

@@ -110,12 +110,22 @@ class _StubQueue:
         return self.admit
 
 
-def _make_queue(*, depth: int = 32, concurrency: int = 1) -> IngestQueue:
+def _make_queue(
+    *,
+    depth: int = 32,
+    concurrency: int = 1,
+    job_timeout: float = 300.0,
+    max_workers: int = 256,
+    worker_idle: float = 60.0,
+) -> IngestQueue:
     """Build an ``IngestQueue`` over a fake context carrying only settings."""
     settings = SimpleNamespace(
         ingest_embed_concurrency=concurrency,
         ingest_queue_depth=depth,
         ingest_drain_timeout_s=30.0,
+        ingest_job_timeout_s=job_timeout,
+        ingest_max_workers=max_workers,
+        ingest_worker_idle_s=worker_idle,
     )
     ctx = SimpleNamespace(settings=settings)
     return IngestQueue(cast("DaemonContext", ctx))
@@ -341,7 +351,76 @@ def test_route_submit_accepts_with_byte_identical_202_body() -> None:
 def test_embed_concurrency_clamped_to_ceiling() -> None:
     """A configured concurrency above the ceiling is clamped, never honored raw."""
     settings = SimpleNamespace(
-        ingest_embed_concurrency=99, ingest_queue_depth=32, ingest_drain_timeout_s=30.0
+        ingest_embed_concurrency=99,
+        ingest_queue_depth=32,
+        ingest_drain_timeout_s=30.0,
+        ingest_job_timeout_s=300.0,
+        ingest_max_workers=256,
+        ingest_worker_idle_s=60.0,
     )
     ctx = cast("DaemonContext", SimpleNamespace(settings=settings))
     assert IngestQueue._embed_concurrency(ctx) == iq.EMBED_CONCURRENCY_CEILING
+
+
+def test_idle_workers_are_reaped_so_client_keys_cannot_accrue() -> None:
+    """Distinct collection names do not grow the worker map without bound.
+
+    With a zero idle interval, each submit reaps the previous now-idle worker, so
+    a caller sending one job per distinct collection never accumulates resident
+    workers.  A reaped collection is recreated on demand and still completes.
+    """
+
+    async def _run() -> None:
+        ledger = _Ledger()
+        queue = _make_queue(worker_idle=0.0)
+        for i in range(6):
+            collection = f"c{i}"
+            assert queue.try_submit(
+                collection, _StubUnit(collection, collection, ledger), _state(f"j{i}")
+            )
+            await asyncio.sleep(0.02)  # let the worker finish and go idle
+            assert len(queue._workers) <= 1  # prior idle worker reaped on next submit
+        await queue.aclose(drain_timeout=2.0)
+        assert len(ledger.completions) == 6
+
+    asyncio.run(_run())
+
+
+def test_worker_cap_rejects_when_all_workers_busy() -> None:
+    """At the worker cap with every collection busy, a new key is shed with 503."""
+
+    async def _run() -> None:
+        ledger = _Ledger()
+        queue = _make_queue(max_workers=2)
+        gate = asyncio.Event()
+        for col in ("c0", "c1"):
+            unit = _StubUnit(col, col, ledger, gate=gate)
+            assert queue.try_submit(col, unit, _state(col))
+        await asyncio.sleep(0.02)  # both workers dequeue and become busy
+        # Cap is full and neither worker is reapable -> no admission (route 503s).
+        overflow = _StubUnit("c2", "c2", ledger, gate=gate)
+        assert not queue.try_submit("c2", overflow, _state("c2"))
+        gate.set()
+        await queue.aclose(drain_timeout=2.0)
+        assert set(ledger.completions) == {"c0", "c1"}
+
+    asyncio.run(_run())
+
+
+def test_hung_job_times_out_and_frees_gate_for_others() -> None:
+    """A unit that hangs past the timeout is failed and never wedges other work."""
+
+    async def _run() -> None:
+        ledger = _Ledger()
+        queue = _make_queue(job_timeout=0.05)
+        never = asyncio.Event()  # never set -> c0 hangs past the job timeout
+        hung = _state("hung")
+        ok = _state("ok")
+        assert queue.try_submit("c0", _StubUnit("c0", "hung", ledger, gate=never), hung)
+        assert queue.try_submit("c1", _StubUnit("c1", "ok", ledger), ok)
+        await queue.aclose(drain_timeout=2.0)
+        assert hung.status == "failed"
+        assert "timeout" in hung.error
+        assert ok.status == "completed"  # the gate was freed; c1 proceeds
+
+    asyncio.run(_run())

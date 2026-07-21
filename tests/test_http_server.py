@@ -63,6 +63,9 @@ def _mock_settings(tmp_path: Path) -> MagicMock:
     s.ingest_queue_depth = 32
     s.ingest_embed_concurrency = 1
     s.ingest_drain_timeout_s = 30.0
+    s.ingest_job_timeout_s = 300.0
+    s.ingest_max_workers = 256
+    s.ingest_worker_idle_s = 60.0
     return s
 
 

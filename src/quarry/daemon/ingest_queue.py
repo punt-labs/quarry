@@ -8,10 +8,11 @@ same-document overwrites so both chunk sets survive (DES-042 §2.1).
 
 This module supplies the missing top layer above DES-034's op-level ``_write_lock``
 and single-consumer ``ProgressiveIndexer``: exactly one in-flight
-``progressive_insert`` caller per collection (a per-collection FIFO worker), and
+``progressive_insert`` caller per collection (a :class:`CollectionWorker`), and
 at most ``EMBED_CONCURRENCY_CEILING`` embed jobs anywhere (a shared semaphore).
 Admission is a non-blocking bounded gate — a full queue is a 503, never a blocked
-hook (I-NOBLOCK).
+hook (I-NOBLOCK).  The collection key is client-controlled, so the resident
+worker map is itself bounded: idle workers are reaped and the map is capped.
 """
 
 from __future__ import annotations
@@ -19,12 +20,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import suppress
-from dataclasses import dataclass
+from time import monotonic
 from typing import TYPE_CHECKING, Self, final
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
+from quarry.daemon.collection_worker import CollectionWorker
 
+if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.ingest_unit import IngestUnit
     from quarry.daemon.tasks import TaskState
@@ -42,114 +43,38 @@ EMBED_CONCURRENCY_CEILING = 1
 
 
 @final
-@dataclass(frozen=True, slots=True)
-class _Queued:
-    """One admitted job paired with the task state it reports through."""
-
-    job: IngestUnit
-    state: TaskState
-
-
-@final
-class CollectionWorker:
-    """One collection's FIFO worker: drains its queue under the shared embed gate.
-
-    The worker *is* the per-collection serialization — a single consumer means
-    only one ``progressive_insert`` caller for this collection is ever in flight,
-    which is the single-writer precondition DES-034's ingest primitives assume.
-    ``None`` on the queue is the drain sentinel; it never carries an admit slot,
-    so it is not counted against the queue's admission bound.
-    """
-
-    __slots__ = ("_ctx", "_embed_gate", "_queue", "_release_admit", "_task")
-
-    _ctx: DaemonContext
-    _embed_gate: asyncio.Semaphore
-    _queue: asyncio.Queue[_Queued | None]
-    _release_admit: Callable[[], None]
-    _task: asyncio.Task[None]
-
-    def __new__(
-        cls,
-        ctx: DaemonContext,
-        embed_gate: asyncio.Semaphore,
-        release_admit: Callable[[], None],
-    ) -> Self:
-        self = super().__new__(cls)
-        self._ctx = ctx
-        self._embed_gate = embed_gate
-        self._queue = asyncio.Queue()
-        self._release_admit = release_admit
-        # Start the resident consumer now; try_submit only ever runs inside a
-        # request handler, so a running loop is guaranteed at creation.
-        self._task = asyncio.create_task(self._run())
-        return self
-
-    def enqueue(self, item: _Queued) -> None:
-        """Append *item* to this collection's FIFO queue (never blocks)."""
-        self._queue.put_nowait(item)
-
-    def stop(self) -> None:
-        """Enqueue the drain sentinel so the worker returns after its backlog."""
-        self._queue.put_nowait(None)
-
-    async def wait(self) -> None:
-        """Await the worker's natural completion (after it drains to the sentinel)."""
-        await self._task
-
-    def abort(self) -> None:
-        """Cancel the worker and fail every still-queued job (recoverable).
-
-        The in-flight job's own ``task_terminal`` records ``failed`` when the
-        cancellation reaches it; the jobs still waiting never ran, so this marks
-        them ``failed`` and frees their admit slots.  A durable capture artifact
-        outlives a ``failed`` task and is recoverable via ``quarry backfill``.
-        """
-        self._task.cancel()
-        while True:
-            try:
-                item = self._queue.get_nowait()
-            except asyncio.QueueEmpty:
-                return
-            if item is not None:
-                item.state.status = "failed"
-                item.state.error = "daemon shut down before ingest completed"
-                self._release_admit()
-
-    async def _run(self) -> None:
-        """Drain jobs FIFO, one at a time, each inside the shared embed gate."""
-        while True:
-            item = await self._queue.get()
-            if item is None:
-                self._queue.task_done()
-                return
-            try:
-                item.state.status = "running"  # queued -> running on dequeue
-                async with self._embed_gate:  # global embed-concurrency bound
-                    await item.job.run(self._ctx, item.state)  # records terminal
-            finally:
-                self._release_admit()
-                self._queue.task_done()
-
-
-@final
 class IngestQueue:
     """Daemon-owned queue: one FIFO writer per collection, bounded embed globally.
 
     Two orthogonal bounds: a per-collection worker (a correctness bound — one
     writer per LanceDB table) and a shared embed semaphore (a performance bound —
-    at most ``EMBED_CONCURRENCY_CEILING`` embed jobs anywhere).  A third bound,
-    the admission counter, caps how many jobs may be admitted (in-flight +
-    waiting) before the queue sheds load with a 503.
+    at most ``EMBED_CONCURRENCY_CEILING`` embed jobs anywhere).  An admission
+    counter caps how many jobs may be admitted (in-flight + waiting) before the
+    queue sheds load with a 503, and — because the collection key is
+    client-controlled — the resident worker map is itself bounded: idle workers
+    are reaped and the map is capped at ``ingest_max_workers``.
     """
 
-    __slots__ = ("_closing", "_ctx", "_depth", "_embed_gate", "_max_depth", "_workers")
+    __slots__ = (
+        "_closing",
+        "_ctx",
+        "_depth",
+        "_embed_gate",
+        "_job_timeout",
+        "_max_depth",
+        "_max_workers",
+        "_worker_idle_s",
+        "_workers",
+    )
 
     _ctx: DaemonContext
     _workers: dict[str, CollectionWorker]
     _embed_gate: asyncio.Semaphore
     _depth: int
     _max_depth: int
+    _max_workers: int
+    _worker_idle_s: float
+    _job_timeout: float
     _closing: bool
 
     def __new__(cls, ctx: DaemonContext) -> Self:
@@ -159,6 +84,9 @@ class IngestQueue:
         self._embed_gate = asyncio.Semaphore(cls._embed_concurrency(ctx))
         self._depth = 0
         self._max_depth = ctx.settings.ingest_queue_depth
+        self._max_workers = ctx.settings.ingest_max_workers
+        self._worker_idle_s = ctx.settings.ingest_worker_idle_s
+        self._job_timeout = ctx.settings.ingest_job_timeout_s
         self._closing = False
         return self
 
@@ -176,18 +104,22 @@ class IngestQueue:
         return min(configured, EMBED_CONCURRENCY_CEILING)
 
     def try_submit(self, collection: str, job: IngestUnit, state: TaskState) -> bool:
-        """Admit *job* onto *collection*'s FIFO worker; ``False`` if the queue is full.
+        """Admit *job* onto *collection*'s FIFO worker; ``False`` if it cannot.
 
-        Non-blocking: takes an admission slot without waiting, marks the task
-        ``queued``, lazily starts the collection's worker, and hands off.  The
-        caller returns 202 on ``True``, 503 on ``False`` — never awaits I/O, so
-        the hook's 202 stays immediate (I-NOBLOCK).
+        Non-blocking: reaps stale workers, takes an admission slot without
+        waiting, marks the task ``queued``, lazily starts the collection's
+        worker, and hands off.  Returns ``False`` (the caller 503s) when the
+        depth bound is hit or the worker cap is full of busy collections — never
+        awaits I/O, so the hook's 202 stays immediate (I-NOBLOCK).
         """
         if self._closing or self._depth >= self._max_depth:
             return False
+        worker = self._worker_for(collection)
+        if worker is None:
+            return False
         self._depth += 1
         state.status = "queued"
-        self._worker_for(collection).enqueue(_Queued(job, state))
+        worker.enqueue(job, state)
         return True
 
     async def aclose(self, *, drain_timeout: float) -> None:
@@ -224,13 +156,53 @@ class IngestQueue:
         for worker in self._workers.values():
             worker.abort()
 
-    def _worker_for(self, collection: str) -> CollectionWorker:
-        """Return *collection*'s worker, starting it on first use."""
+    def _worker_for(self, collection: str) -> CollectionWorker | None:
+        """Return *collection*'s worker, reaping idle ones and honoring the cap.
+
+        ``None`` means the worker cap is full of busy collections and the caller
+        must shed load (503).  Reaping runs synchronously here, so no submit or
+        worker can interleave between the idle check and the removal.
+        """
+        self._reap_idle(exclude=collection)
         worker = self._workers.get(collection)
-        if worker is None:
-            worker = CollectionWorker(self._ctx, self._embed_gate, self._release_admit)
-            self._workers[collection] = worker
+        if worker is not None:
+            return worker
+        if len(self._workers) >= self._max_workers and not self._evict_reapable():
+            return None
+        worker = CollectionWorker(
+            self._ctx, self._embed_gate, self._release_admit, self._job_timeout
+        )
+        self._workers[collection] = worker
         return worker
+
+    def _reap_idle(self, *, exclude: str) -> None:
+        """Drop workers idle past the reap interval so client keys can't accrue.
+
+        Synchronous: the empty/idle check and the removal cannot be split by a
+        racing enqueue, so a reaped worker never strands a just-submitted job.
+        A reaped collection is recreated lazily on its next submit and is, again,
+        the sole writer for that collection.
+        """
+        now = monotonic()
+        stale = [
+            collection
+            for collection, worker in self._workers.items()
+            if collection != exclude
+            and worker.is_reapable()
+            and worker.idle_seconds(now) >= self._worker_idle_s
+        ]
+        for collection in stale:
+            self._workers.pop(collection).shutdown()
+
+    def _evict_reapable(self) -> bool:
+        """Drop one idle worker to free a cap slot; ``False`` if all are busy."""
+        victim = next(
+            (c for c, worker in self._workers.items() if worker.is_reapable()), None
+        )
+        if victim is None:
+            return False
+        self._workers.pop(victim).shutdown()
+        return True
 
     def _release_admit(self) -> None:
         """Free one admission slot when a job leaves the queue."""
