@@ -434,6 +434,27 @@ class TestUseDatabase:
         finally:
             Settings.set_active_db(original or "")
 
+    def test_loopback_login_still_switches(
+        self, harness: _ToolHarness, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The post-install case: a `quarry login localhost` loopback login is
+        LOCAL, so use() switches normally — not the remote-refusal regression.
+        """
+        from quarry.config import Settings
+
+        monkeypatch.delenv("QUARRY_URL", raising=False)
+        login = {"quarry": {"url": "wss://127.0.0.1:8420"}}
+        monkeypatch.setattr("quarry.client.resolver.read_proxy_config", lambda: login)
+        original = Settings.active_db()
+        try:
+            Settings.set_active_db("start")
+            result = harness.tools.use_database("coding")
+            assert not result.startswith("Error:"), result
+            assert "coding" in result
+            assert Settings.active_db() == "coding"
+        finally:
+            Settings.set_active_db(original or "")
+
     def test_default_selects_literal_default_not_persistent(
         self, harness: _ToolHarness, monkeypatch: pytest.MonkeyPatch
     ) -> None:

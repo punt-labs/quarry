@@ -76,15 +76,30 @@ class TargetResolver:
         """Return whether a database selection governs the resolved target.
 
         The ``--db`` / MCP ``use`` selection only picks among LOCAL databases via
-        the loopback run dir (tier 3). When ``QUARRY_URL`` or a stored remote
-        login is present (tiers 1-2), :meth:`resolve` short-circuits before the
-        run dir, so the selected db is ignored and the target daemon is fixed to
-        its own database. A caller must know the selection has no effect there.
-        Mirrors :meth:`resolve`'s precedence exactly, without opening a connection.
+        the loopback run dir. It applies iff the effective target — resolved with
+        the SAME precedence as :meth:`resolve` (``QUARRY_URL`` → stored login url →
+        loopback default) — has a LOOPBACK host. A genuinely remote host is fixed
+        to its own database, so the selection has no effect there.
+
+        Classify by the WINNING target's host, not merely "a login exists": the
+        install runs ``quarry login localhost``, so a normal LOCAL install stores
+        a loopback login — that must still count as local. Uses the name-tolerant
+        loopback predicate (127.0.0.0/8, ::1, ``localhost``), and never opens a
+        connection.
         """
-        if os.environ.get("QUARRY_URL"):
-            return False
-        return cls._stored_login() is None
+        env_url = os.environ.get("QUARRY_URL")
+        if env_url:
+            return cls._is_loopback_target(env_url)
+        login = cls._stored_login()
+        if login is not None:
+            return cls._is_loopback_target(str(login.get("url", "")))
+        return True
+
+    @staticmethod
+    def _is_loopback_target(url: str) -> bool:
+        """Return whether *url*'s host is a loopback host (127/8, ::1, localhost)."""
+        host = urllib.parse.urlparse(ws_to_http(url)).hostname or ""
+        return LoopbackPolicy(host).is_loopback
 
     @classmethod
     def _from_stored_login(cls, login: Mapping[str, object]) -> ClientConfig:

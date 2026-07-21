@@ -504,7 +504,20 @@ def _configure_claude_code() -> CheckResult:
         )
     # An entry already exists and blocks the direct add. Remove it and re-add;
     # only now — with the entry confirmed present — do we risk a removal.
-    _run_claude(claude_path, "mcp", "remove", _MCP_SERVER_NAME)
+    remove = _run_claude(claude_path, "mcp", "remove", _MCP_SERVER_NAME)
+    if remove.returncode != 0:
+        # The remove failed: the stale entry is likely still present, so do NOT
+        # re-add blindly or claim a removal that did not happen.
+        return CheckResult(
+            name="Claude Code MCP",
+            passed=False,
+            message=(
+                "a stale quarry MCP entry blocks the add but could not be "
+                f"removed: {remove.stderr.strip()}. Inspect with "
+                "'claude mcp list' and re-run 'quarry install'."
+            ),
+            required=False,
+        )
     retry = _run_claude(claude_path, *add_argv)
     if retry.returncode == 0:
         return ok
