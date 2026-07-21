@@ -13,6 +13,8 @@ from datetime import datetime
 from fnmatch import fnmatch
 from urllib.parse import urlparse
 
+from quarry.url_safety import UrlSafetyCheck
+
 logger = logging.getLogger(__name__)
 
 
@@ -91,6 +93,28 @@ class SitemapDiscovery:
         entries = SitemapDiscovery._pages_to_entries(sitemap.all_pages())
         logger.info("Parsed %d pages from %s", len(entries), url)
         return entries
+
+    @staticmethod
+    def reject_unsafe(entries: list[SitemapEntry]) -> list[SitemapEntry]:
+        """Return only entries whose URL passes the SSRF gate, fail-closed.
+
+        A sitemap is attacker-controlled content: its entries may point at
+        internal addresses (link-local, loopback, RFC-1918, CGNAT, metadata).
+        Each URL is gated against its resolved address -- the same check the
+        ingest route runs on the initial source -- and an unsafe entry is
+        dropped and logged rather than fetched, so a public sitemap listing
+        internal URLs triggers no internal fetch.  Complementary to pinning the
+        resolved IP (a separate follow-up): this gates each listed URL, not the
+        connection.
+        """
+        safe: list[SitemapEntry] = []
+        for entry in entries:
+            reason = UrlSafetyCheck.reject_reason(entry.loc)
+            if reason is None:
+                safe.append(entry)
+            else:
+                logger.warning("Dropping unsafe sitemap URL %s: %s", entry.loc, reason)
+        return safe
 
     @staticmethod
     def filter_entries(

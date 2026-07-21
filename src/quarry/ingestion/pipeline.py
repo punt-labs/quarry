@@ -612,6 +612,12 @@ def _bulk_ingest_entries(
     after_filter = len(filtered)
     progress("After filtering: %d URLs", after_filter)
 
+    # SSRF gate: a sitemap is attacker-controlled, so drop any entry whose URL
+    # resolves to an internal address before it is fetched (fail-closed, the
+    # safe entries still proceed).  reject_unsafe logs each drop.
+    filtered = SitemapDiscovery.reject_unsafe(filtered)
+    progress("After SSRF gate: %d URLs", len(filtered))
+
     # Build lookup of existing documents for lastmod dedup
     existing_docs = database.catalog.list_documents(collection_filter=collection)
     existing_timestamps: dict[str, str] = {

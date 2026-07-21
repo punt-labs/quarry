@@ -7,12 +7,34 @@ from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+import pytest
 
 from quarry.db import Database
 from quarry.sitemap import (
     SitemapDiscovery,
     SitemapEntry,
 )
+
+_GETADDRINFO = "quarry.url_safety.socket_module.getaddrinfo"
+
+
+def _addrinfo(ip: str) -> list[tuple[int, int, int, str, tuple[object, ...]]]:
+    """One getaddrinfo record resolving to *ip*."""
+    family = 10 if ":" in ip else 2
+    sockaddr: tuple[object, ...] = (ip, 0, 0, 0) if ":" in ip else (ip, 0)
+    return [(family, 1, 6, "", sockaddr)]
+
+
+@pytest.fixture(autouse=True)
+def _resolve_public(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Resolve every host to a public address by default.
+
+    The sitemap ingest now SSRF-gates each entry (resolving its host), so an
+    un-mocked test would hit real DNS or drop entries in CI; the SSRF tests
+    below override this with host-specific internal addresses.
+    """
+    monkeypatch.setattr(_GETADDRINFO, lambda *a, **k: _addrinfo("93.184.216.34"))
+
 
 # ---------------------------------------------------------------------------
 # discover_pages via USP sitemap_tree_for_homepage
@@ -925,3 +947,121 @@ class TestIngestAuto:
 
         assert "document_name" in result
         mock_ingest_url.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# SSRF gate — reject_unsafe drops attacker-controlled sitemap entries
+# ---------------------------------------------------------------------------
+
+
+class TestRejectUnsafe:
+    """SitemapDiscovery.reject_unsafe drops entries resolving to internal IPs."""
+
+    @pytest.mark.parametrize(
+        "resolved",
+        [
+            "169.254.169.254",
+            "127.0.0.1",
+            "::1",
+            "10.0.0.5",
+            "192.168.1.1",
+            "100.64.0.1",
+        ],
+    )
+    def test_drops_entry_resolving_to_blocked_class(
+        self, resolved: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An entry whose host RESOLVES to any blocked class is dropped."""
+        monkeypatch.setattr(_GETADDRINFO, lambda *a, **k: _addrinfo(resolved))
+        entries = [SitemapEntry(loc="https://listed.attacker.test/x", lastmod=None)]
+        assert SitemapDiscovery.reject_unsafe(entries) == []
+
+    def test_drops_metadata_host_without_dns(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A literal cloud-metadata IP is dropped by hostname, before any DNS."""
+
+        def _boom(*_a: object, **_k: object) -> object:
+            raise AssertionError("getaddrinfo must not run for a metadata IP")
+
+        monkeypatch.setattr(_GETADDRINFO, _boom)
+        entries = [SitemapEntry(loc="http://169.254.169.254/latest/", lastmod=None)]
+        assert SitemapDiscovery.reject_unsafe(entries) == []
+
+    def test_keeps_safe_and_drops_unsafe_in_mixed_list(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only the internal-resolving entry is dropped; safe entries survive."""
+        resolve = {"safe.example": "93.184.216.34", "internal.example": "10.0.0.9"}
+
+        def _resolver(host: str, *_a: object, **_k: object) -> object:
+            return _addrinfo(resolve.get(host, "93.184.216.34"))
+
+        monkeypatch.setattr(_GETADDRINFO, _resolver)
+        entries = [
+            SitemapEntry(loc="https://safe.example/a", lastmod=None),
+            SitemapEntry(loc="https://internal.example/secret", lastmod=None),
+            SitemapEntry(loc="https://safe.example/b", lastmod=None),
+        ]
+        safe = SitemapDiscovery.reject_unsafe(entries)
+        locs = [e.loc for e in safe]
+        assert locs == ["https://safe.example/a", "https://safe.example/b"]
+
+    def test_logs_each_drop(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A dropped entry is logged with its URL and reason."""
+        import logging
+
+        monkeypatch.setattr(_GETADDRINFO, lambda *a, **k: _addrinfo("127.0.0.1"))
+        entries = [SitemapEntry(loc="https://loops.example/x", lastmod=None)]
+        with caplog.at_level(logging.WARNING, logger="quarry.sitemap"):
+            SitemapDiscovery.reject_unsafe(entries)
+        assert "https://loops.example/x" in caplog.text
+
+
+class TestBulkIngestSsrfGate:
+    """The gate runs inside _bulk_ingest_entries, so every ingest surface is covered.
+
+    Both CLI (`quarry ingest`) and MCP ingest reach ``ingest_sitemap`` /
+    ``ingest_auto`` in the daemon, which funnel through ``_bulk_ingest_entries``;
+    gating there closes the sitemap bypass for both surfaces at one choke point.
+    """
+
+    @patch("quarry.ingestion.pipeline.ingest_url")
+    @patch("quarry.db.chunk_catalog.ChunkCatalog.list_documents")
+    @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
+    def test_internal_entry_dropped_batch_continues(
+        self,
+        mock_discover: MagicMock,
+        mock_list_docs: MagicMock,
+        mock_ingest: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A sitemap listing an internal URL fetches only the safe entries."""
+        from quarry.ingestion.pipeline import ingest_sitemap
+
+        resolve = {"safe.example": "93.184.216.34", "internal.example": "10.0.0.9"}
+
+        def _resolver(host: str, *_a: object, **_k: object) -> object:
+            return _addrinfo(resolve.get(host, "93.184.216.34"))
+
+        monkeypatch.setattr(_GETADDRINFO, _resolver)
+        mock_discover.return_value = [
+            SitemapEntry(loc="https://safe.example/page", lastmod=None),
+            SitemapEntry(loc="https://internal.example/secret", lastmod=None),
+        ]
+        mock_list_docs.return_value = []
+        mock_ingest.return_value = _MOCK_RESULT
+
+        result = ingest_sitemap(
+            "https://safe.example/sitemap.xml",
+            Database(MagicMock()),
+            MagicMock(),
+            collection="test",
+        )
+
+        assert result["ingested"] == 1  # only the safe entry
+        fetched = [call.args[0] for call in mock_ingest.call_args_list]
+        assert fetched == ["https://safe.example/page"]
+        assert "https://internal.example/secret" not in fetched
