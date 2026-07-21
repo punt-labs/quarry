@@ -1,4 +1,4 @@
-.PHONY: help test lint lint-docs type check check-full check-oo audit-oo update-oo check-coupling update-coupling check-suppressions update-suppressions check-openapi openapi report format install build test-wheel clean depot bench-cuda docs docs-clean metrics coverage eval eval-baseline
+.PHONY: help test lint lint-docs type check check-full check-oo audit-oo update-oo check-coupling update-coupling check-suppressions update-suppressions check-imports check-openapi openapi report format install build test-wheel clean depot bench-cuda docs docs-clean metrics coverage eval eval-baseline
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -32,7 +32,7 @@ OO_BASE ?=
 COUPLING_BASE ?=
 SUPPRESSION_BASE ?=
 
-check: lint type test check-oo check-coupling check-suppressions check-openapi ## Run all quality gates
+check: lint type test check-oo check-coupling check-suppressions check-imports check-openapi ## Run all quality gates
 
 openapi: ## Regenerate docs/openapi.json from the daemon FastAPI app
 	uv run python tools/generate_openapi.py
@@ -63,6 +63,13 @@ update-coupling: ## Update coupling baseline (stage .oo-coupling-baseline.json a
 check-suppressions: ## Suppression ratchet — base-commit scoped, count must not increase
 	uv run python tools/suppression_ratchet.py src/quarry/ --check $(SUPPRESSION_BASE)
 
+# DES-031 I1 client/engine boundary. A static contract over the import graph:
+# no client process (quarry.__main__/hooks/mcp_server) or client library
+# (quarry.client/api) may import an engine package. A violating import fails
+# here — not in review. Companion to the runtime engine-sabotage test.
+check-imports: ## Import-linter — enforce the DES-031 client/engine package boundary
+	uv run lint-imports --config .importlinter
+
 update-suppressions: ## Update suppression baseline after justified additions
 	uv run python tools/suppression_ratchet.py src/quarry/ --update
 
@@ -72,6 +79,7 @@ report: ## Full diagnostics (OO score + all checks, no fail-fast)
 	-uv run ruff format --check .
 	-uv run ruff check --preview --select PLR6301,PLR0913,UP035,UP040,UP007,N,I,SIM,C1901,S101 .
 	-PYRIGHT_PYTHON_FORCE_VERSION=$(PYRIGHT_VERSION) uv run pyright src/ tests/
+	-uv run lint-imports --config .importlinter
 	-uv run pytest
 	@echo "Report complete."
 

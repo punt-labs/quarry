@@ -59,6 +59,8 @@ dev = [
     "pytest-cov>=6.0.0",
     "pytest-timeout>=2.3.0",
     "types-PyYAML>=6.0.0",
+    # Enforces the DES-031 I1 client/engine package boundary (make check-imports).
+    "import-linter>=2.0",
 ]
 # Eval-only. NEVER a core dependency, NEVER a dependency of `make check` or any
 # CI job. ranx pulls Numba/llvmlite (a C-JIT stack, not pure Python); it must
@@ -144,7 +146,7 @@ ignore = [
 # route groups must import Request at runtime, not under TYPE_CHECKING (TC002).
 "src/quarry/daemon/routes/*.py" = ["TC002"]
 "src/quarry/__main__.py" = ["T20", "FBT"]
-"src/quarry/mcp_server.py" = ["T20", "FBT"]
+"src/quarry/mcp_server.py" = ["FBT"]  # typer boolean flags; T20 retired — no prints after the client-tier split
 "src/quarry/cli_captures.py" = ["FBT"]  # typer boolean CLI flags
 "src/quarry/cli_search.py" = ["FBT"]  # typer boolean CLI flags
 "src/quarry/cli_ingest.py" = ["FBT"]  # typer boolean CLI flags

@@ -1,0 +1,58 @@
+# DES-031 v2 I1 — the client/engine package boundary, enforced structurally.
+#
+# A *client process* (any process whose entry point is not `quarryd`) and the
+# two client-tier libraries it rests on (`quarry.client`, `quarry.api`) must
+# never pull the engine — `quarry.db`, `quarry.embeddings`, `quarry.ingestion`,
+# `quarry.retrieval`, `quarry.sync`, `quarry.daemon` — into their import graph.
+# A violating import fails CI (`make check-imports`), not review.
+#
+# The engine's own entry point (`quarry.daemon.launcher`, the `quarryd` console
+# script) lives INSIDE `quarry.daemon`, so it is engine-side and never a source
+# here. The runtime engine-sabotage test (tests/test_init.py) is the companion
+# guard that no engine leaks to a client module's MODULE scope — import-linter
+# checks the static graph, the sabotage test checks the eager import behaviour.
+
+[importlinter]
+root_package = quarry
+
+[importlinter:contract:client-never-imports-engine]
+name = Client processes and libraries must never import the engine
+type = forbidden
+source_modules =
+    quarry.__main__
+    quarry.hooks
+    quarry.mcp_server
+    quarry.client
+    quarry.api
+forbidden_modules =
+    quarry.db
+    quarry.embeddings
+    quarry.ingestion
+    quarry.retrieval
+    quarry.sync
+    quarry.daemon
+# The one sanctioned exception: the host-admin diagnostic commands (`quarry
+# doctor` / `quarry install` / `quarry uninstall`) inspect the LOCAL engine
+# environment — model cache, GPU runtime, on-disk LanceDB — so they can report
+# WHY a daemon is unhealthy even when it is down. `quarry.__main__` reaches
+# these only through function-body (lazy) imports, so the heavy engine is
+# deferred to those rare, explicit invocations and never loaded on the hot
+# CLI/hook path (the sabotage test proves module-scope engine-freeness). Each
+# edge below is one such lazy diagnostic touch; a NEW engine import from any
+# other client-reachable module still fails the contract.
+ignore_imports =
+    quarry.doctor -> quarry.db.facade
+    quarry.doctor -> quarry.db.schema
+    quarry.doctor -> quarry.db.storage
+    quarry.doctor -> quarry.embeddings
+    quarry.doctor -> quarry.ingestion.ocr_local
+    quarry.doctor -> quarry.ingestion.provider
+    quarry.doctor_captures -> quarry.db.facade
+    quarry.onnx_session -> quarry.ingestion.provider
+
+[importlinter:contract:api-sits-below-client]
+name = The wire contract (quarry.api) sits below the transport client
+type = layers
+layers =
+    quarry.client
+    quarry.api

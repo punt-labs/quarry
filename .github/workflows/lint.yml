@@ -37,6 +37,10 @@ jobs:
       # node-pyright binary to the uv.lock-pinned wrapper version — the same pin
       # `make type` uses — so local and CI always run the identical checker.
       - run: PYRIGHT_PYTHON_FORCE_VERSION=$(uv run python -c "import importlib.metadata as m; print(m.version('pyright'))") uv run pyright src/ tests/
+      # DES-031 I1: a client module importing an engine package fails CI here,
+      # not in review. Static contract over the import graph (import-linter).
+      - name: Import boundary (client/engine)
+        run: make check-imports
       # Completeness guard: every scored file must be recorded in the committed
       # baseline. Runs on the committed, post-update-oo state where code and
       # baseline are in sync — see the audit-oo comment in the Makefile.
