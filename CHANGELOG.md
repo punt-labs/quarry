@@ -201,6 +201,18 @@ across `transform`, `index`, and `connector`).
   `localhost`/`::1`/`127.0.0.0/8` (the old `127.0.0.1`-literal check
   misclassified them) while treating `0.0.0.0` and unresolved names as
   remote (fail closed — an operator key is required).
+- **ingest (SSRF, redirect + sitemap)**: server-side fetches now re-run the
+  SSRF address gate at every hop, not only on the initial source. Previously a
+  caller-supplied public URL that HTTP-redirected to a private, loopback,
+  link-local, CGNAT, or cloud-metadata address was followed with no per-hop
+  check, and attacker-controlled sitemap entries were fetched ungated — either
+  could drive the daemon to reach internal services. A guarded redirect handler
+  rejects each 30x `Location` against its resolved address before the hop is
+  followed (no connection to the internal target is attempted), the final
+  resolved URL's host/address is validated, and each sitemap entry is gated and
+  dropped fail-closed before fetch. Both CLI and MCP ingest are covered (they
+  share the daemon fetch path). Complementary to resolved-IP pinning, which
+  remains a separate follow-up for the residual DNS-rebind TOCTOU.
 
 ## [1.19.0] - 2026-07-14
 
