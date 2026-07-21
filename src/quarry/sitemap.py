@@ -13,6 +13,7 @@ from datetime import datetime
 from fnmatch import fnmatch
 from urllib.parse import urlparse
 
+from quarry.sitemap_web_client import GatedSitemapWebClient
 from quarry.url_safety import UrlSafetyCheck
 
 logger = logging.getLogger(__name__)
@@ -67,7 +68,7 @@ class SitemapDiscovery:
         homepage = f"{parsed.scheme}://{parsed.netloc}/"
 
         logger.info("Discovering sitemaps for %s", homepage)
-        tree = sitemap_tree_for_homepage(homepage)
+        tree = sitemap_tree_for_homepage(homepage, web_client=GatedSitemapWebClient())
         entries = SitemapDiscovery._pages_to_entries(tree.all_pages())
         logger.info("Discovered %d pages from %s", len(entries), homepage)
         return entries
@@ -88,7 +89,9 @@ class SitemapDiscovery:
         from usp.fetch_parse import SitemapFetcher  # noqa: PLC0415
 
         logger.info("Fetching sitemap: %s", url)
-        fetcher = SitemapFetcher(url=url, recursion_level=0)
+        fetcher = SitemapFetcher(
+            url=url, recursion_level=0, web_client=GatedSitemapWebClient()
+        )
         sitemap = fetcher.sitemap()
         entries = SitemapDiscovery._pages_to_entries(sitemap.all_pages())
         logger.info("Parsed %d pages from %s", len(entries), url)

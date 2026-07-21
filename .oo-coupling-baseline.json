@@ -1043,11 +1043,18 @@
     "public_names": 1.0
   },
   "src/quarry/sitemap.py": {
-    "efferent_coupling": 1.0,
+    "efferent_coupling": 2.0,
     "public_names": 3.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
+  },
+  "src/quarry/sitemap_web_client.py": {
+    "efferent_coupling": 2.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 1.0,
+    "avg_lcom": 0.75
   },
   "src/quarry/sync.py": {
     "avg_lcom": 0.0,

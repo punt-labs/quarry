@@ -14,6 +14,7 @@ from quarry.sitemap import (
     SitemapDiscovery,
     SitemapEntry,
 )
+from quarry.sitemap_web_client import GatedSitemapWebClient
 
 _GETADDRINFO = "quarry.url_safety.socket_module.getaddrinfo"
 
@@ -57,7 +58,9 @@ class TestDiscoverPages:
 
         entries = SitemapDiscovery.discover_pages("https://example.com/docs/guide")
         assert len(entries) == 2
-        mock_tree_fn.assert_called_once_with("https://example.com/")
+        call = mock_tree_fn.call_args
+        assert call.args == ("https://example.com/",)
+        assert isinstance(call.kwargs["web_client"], GatedSitemapWebClient)
 
     @patch("usp.tree.sitemap_tree_for_homepage")
     def test_returns_empty_when_no_pages(self, mock_tree_fn: MagicMock) -> None:
@@ -124,9 +127,10 @@ class TestDiscoverUrls:
         entries = SitemapDiscovery.discover_urls("https://example.com/sitemap.xml")
         assert len(entries) == 2
         assert entries[0].loc == "https://example.com/page1"
-        mock_fetcher_cls.assert_called_once_with(
-            url="https://example.com/sitemap.xml", recursion_level=0
-        )
+        call = mock_fetcher_cls.call_args
+        assert call.kwargs["url"] == "https://example.com/sitemap.xml"
+        assert call.kwargs["recursion_level"] == 0
+        assert isinstance(call.kwargs["web_client"], GatedSitemapWebClient)
 
     @patch("usp.fetch_parse.SitemapFetcher")
     def test_deduplicates_pages(self, mock_fetcher_cls: MagicMock) -> None:

@@ -85,6 +85,11 @@ class UrlSafetyCheck:
             addr = ipaddress.ip_address(raw_addr)
         except ValueError:
             return f"cannot parse resolved address for {host!r}"
+        # Judge an IPv4-mapped IPv6 (``::ffff:a.b.c.d``) by its embedded IPv4;
+        # otherwise a mapped CGNAT address slips the IPv4-only CGNAT check below.
+        mapped = getattr(addr, "ipv4_mapped", None)
+        if mapped is not None:
+            addr = mapped
         if cls._is_blocked(addr):
             return f"host {host!r} resolves to blocked address {addr}"
         if addr.version == 4 and addr in cls._CGNAT_NETWORK:
