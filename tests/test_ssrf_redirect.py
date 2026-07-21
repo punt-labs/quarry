@@ -132,7 +132,7 @@ class TestSharedOpener:
         """WebFetcher and the sitemap client bind the same opener object.
 
         The module ``__dict__`` is read directly because the name is imported,
-        not re-exported — an attribute access would trip mypy's implicit-reexport
+        not re-exported — an attribute access would trip pyright's implicit-reexport
         check, yet identity of the shared object is exactly what must be proven.
         """
         assert wf.__dict__["GUARDED_OPENER"] is GUARDED_OPENER

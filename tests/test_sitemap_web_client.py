@@ -522,14 +522,18 @@ def _open_fd_count() -> int:
 
 
 class _FailingHandler(BaseHTTPRequestHandler):
-    """Loopback server: 500 on /err, a 302 to a metadata IP on /redir."""
+    """Loopback server: 404 on /err, a 302 to a metadata IP on /redir.
+
+    404 is non-retryable, so USP issues exactly ONE request per fetch -- no
+    retry storm (a 5xx would be retryable and multiply the real round-trips).
+    """
 
     def do_GET(self) -> None:
         if self.path == "/redir":
             self.send_response(302)
             self.send_header("Location", "http://169.254.169.254/latest/meta-data/")
         else:
-            self.send_response(500)
+            self.send_response(404)
         self.send_header("Content-Length", "0")
         self.end_headers()
 
@@ -558,11 +562,14 @@ def test_failing_fetches_do_not_leak_real_fds(
     """N failing fetches over a REAL socket hold the process fd count flat.
 
     Covers both fd-bearing error paths against a real server: the HTTPError
-    path (a 500 response holding a real socket fd, closed via ``exc.close()``)
+    path (a 404 response holding a real socket fd, closed via ``exc.close()``)
     and the RedirectRejectedError path (a real 302 intermediate response whose
-    fp is closed in the redirect handler).  The SSRF gate correctly blocks
+    fp is closed in the redirect handler).  404 is non-retryable, so each fetch
+    is exactly one round-trip -- no retry storm.  The SSRF gate correctly blocks
     loopback, so the resolver is mocked public to let the connection through to
-    the real 127.0.0.1 server; urllib still opens a real socket per request.
+    the real 127.0.0.1 server; urllib still opens a real socket per request.  A
+    1-fd-per-fetch leak over 200 fetches is delta ~200, far above the tolerance,
+    so this detects a leak just as surely as a larger count while staying fast.
     """
     monkeypatch.setattr(_GETADDRINFO, lambda *a, **k: _addrinfo(_PUBLIC))
     base = f"http://127.0.0.1:{http_server.server_port}"
@@ -573,12 +580,12 @@ def test_failing_fetches_do_not_leak_real_fds(
         client.get(f"{base}/redir")
 
     before = _open_fd_count()
-    for _ in range(200):
+    for _ in range(100):
         assert isinstance(client.get(f"{base}/err"), WebClientErrorResponse)
         assert isinstance(client.get(f"{base}/redir"), WebClientErrorResponse)
     after = _open_fd_count()
 
     assert after - before <= 5, (
-        f"fd leak across 400 failing fetches: {before} -> {after} "
+        f"fd leak across 200 failing fetches: {before} -> {after} "
         f"(delta {after - before}); a failed fetch is not releasing its fd"
     )
