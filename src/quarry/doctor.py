@@ -438,40 +438,19 @@ def _check_enable_status(registry_path: Path, cwd: str) -> CheckResult:
 _MCP_SERVER_NAME = "quarry"
 
 
-def _mcp_fallback_script(*, resolve_paths: bool = False) -> tuple[str, list[str]]:
-    """Build ``sh -c`` command preferring mcp-proxy --config quarry.
+def _mcp_command(*, resolve_paths: bool = False) -> tuple[str, list[str]]:
+    """Return the command that runs the quarry MCP server directly.
 
-    Uses ``mcp-proxy --config quarry`` which reads TLS and bearer token
-    settings from ``~/.punt-labs/mcp-proxy/quarry.toml``.  Falls back to
-    ``quarry mcp`` (direct stdio) when mcp-proxy is not installed or the
-    TOML profile does not exist.
+    ``quarry mcp`` is a stdio FastMCP client of the daemon (DES-031 v2.2): the
+    server reaches quarryd through ``QuarryClient``, so there is no mcp-proxy
+    shim and no ``sh -c`` wrapper.  Remote access is carried by the client's own
+    TLS + pinned-CA login config, not a proxy.
 
-    When *resolve_paths* is True (Claude Desktop), embeds shell-quoted
-    absolute paths because Desktop runs with a minimal PATH.  The
-    ``command -v`` check always uses bare names so the fallback works
-    even if the binary is removed after install.
+    When *resolve_paths* is True (Claude Desktop runs with a minimal PATH) the
+    ``quarry`` binary is resolved to an absolute path.
     """
-    import shlex  # noqa: PLC0415
-
-    toml_path = "${HOME}/.punt-labs/mcp-proxy/quarry.toml"
-
-    if resolve_paths:
-        proxy_exec = shlex.quote(shutil.which("mcp-proxy") or "mcp-proxy")
-        quarry_exec = shlex.quote(shutil.which("quarry") or "quarry")
-        sh = shutil.which("sh") or "/bin/sh"
-    else:
-        proxy_exec = "mcp-proxy"
-        quarry_exec = "quarry"
-        sh = "sh"
-
-    script = (
-        "if command -v mcp-proxy >/dev/null 2>&1"
-        f' && [ -f "{toml_path}" ]'
-        f" && grep -q '^\\[quarry\\]' \"{toml_path}\"; "
-        f"then exec {proxy_exec} --config quarry; "
-        f"else exec {quarry_exec} mcp; fi"
-    )
-    return sh, ["-c", script]
+    quarry_exec = shutil.which("quarry") or "quarry" if resolve_paths else "quarry"
+    return quarry_exec, ["mcp"]
 
 
 _DESKTOP_CONFIG_PATH = (
@@ -483,8 +462,26 @@ _DESKTOP_CONFIG_PATH = (
 )
 
 
+def _run_claude(claude_path: str, *argv: str) -> subprocess.CompletedProcess[str]:
+    """Run the ``claude`` CLI with *argv*, capturing output (the one S603 site)."""
+    return subprocess.run(  # noqa: S603
+        [claude_path, *argv], capture_output=True, text=True
+    )
+
+
 def _configure_claude_code() -> CheckResult:
-    """Add quarry MCP server to Claude Code via `claude mcp add`."""
+    """Register the quarry MCP server with Claude Code, replacing any stale entry.
+
+    Add-first, remove-only-if-blocked: try ``claude mcp add`` and act on the
+    result. A fresh slot succeeds outright. Only when the add reports the entry
+    already exists (e.g. the retired mcp-proxy shim shadowing the direct entry)
+    do we remove and re-add — so a failing add on a fresh install never leaves
+    Claude Code with no quarry entry. If the re-add fails after a removal, that
+    is surfaced loudly (the user must re-run), never reported as configured.
+    """
+    ok = CheckResult(
+        name="Claude Code MCP", passed=True, message="configured (scope: local)"
+    )
     claude_path = shutil.which("claude")
     if claude_path is None:
         return CheckResult(
@@ -493,30 +490,46 @@ def _configure_claude_code() -> CheckResult:
             message="claude CLI not found on PATH",
             required=False,
         )
-    command, args = _mcp_fallback_script()
-    result = subprocess.run(  # noqa: S603
-        [claude_path, "mcp", "add", _MCP_SERVER_NAME, "--", command, *args],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        stderr = result.stderr.strip()
-        if "already exists" in stderr:
-            return CheckResult(
-                name="Claude Code MCP",
-                passed=True,
-                message="already configured",
-            )
+    command, args = _mcp_command()
+    add_argv = ["mcp", "add", _MCP_SERVER_NAME, "--", command, *args]
+    result = _run_claude(claude_path, *add_argv)
+    if result.returncode == 0:
+        return ok
+    if "already exists" not in result.stderr:
         return CheckResult(
             name="Claude Code MCP",
             passed=False,
-            message=f"claude mcp add failed: {stderr}",
+            message=f"claude mcp add failed: {result.stderr.strip()}",
             required=False,
         )
+    # An entry already exists and blocks the direct add. Remove it and re-add;
+    # only now — with the entry confirmed present — do we risk a removal.
+    remove = _run_claude(claude_path, "mcp", "remove", _MCP_SERVER_NAME)
+    if remove.returncode != 0:
+        # The remove failed: the stale entry is likely still present, so do NOT
+        # re-add blindly or claim a removal that did not happen.
+        return CheckResult(
+            name="Claude Code MCP",
+            passed=False,
+            message=(
+                "a stale quarry MCP entry blocks the add but could not be "
+                f"removed: {remove.stderr.strip()}. Inspect with "
+                "'claude mcp list' and re-run 'quarry install'."
+            ),
+            required=False,
+        )
+    retry = _run_claude(claude_path, *add_argv)
+    if retry.returncode == 0:
+        return ok
     return CheckResult(
         name="Claude Code MCP",
-        passed=True,
-        message="configured (scope: local)",
+        passed=False,
+        message=(
+            "removed the stale quarry MCP entry but the re-add failed: "
+            f"{retry.stderr.strip()}. Re-run 'quarry install' or "
+            "'claude mcp add quarry -- quarry mcp'."
+        ),
+        required=False,
     )
 
 
@@ -534,7 +547,7 @@ def _configure_claude_desktop() -> CheckResult:
             required=False,
         )
 
-    command, args = _mcp_fallback_script(resolve_paths=True)
+    command, args = _mcp_command(resolve_paths=True)
     server_entry = {"command": command, "args": args}
 
     config = json.loads(config_path.read_text()) if config_path.exists() else {}

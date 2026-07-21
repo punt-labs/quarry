@@ -422,3 +422,61 @@ class TestTrustBoundary:
         ):
             TargetResolver.resolve()
         token.assert_not_called()
+
+
+class TestSelectsLocalDb:
+    """``selects_local_db`` classifies by the WINNING target's host.
+
+    The install runs ``quarry login localhost``, so the post-install common case
+    is a LOOPBACK stored login — it must classify as local (a db selection
+    applies), not remote. Only a genuinely non-loopback host is remote.
+    """
+
+    def test_no_target_is_local(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _no_env(monkeypatch)
+        with patch("quarry.client.resolver.read_proxy_config", return_value={}):
+            assert TargetResolver.selects_local_db() is True
+
+    def test_loopback_ip_stored_login_is_local(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _no_env(monkeypatch)
+        login = {"quarry": {"url": "wss://127.0.0.1:8420"}}
+        with patch("quarry.client.resolver.read_proxy_config", return_value=login):
+            assert TargetResolver.selects_local_db() is True
+
+    def test_localhost_stored_login_is_local(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A `quarry login localhost` install must count as local, not remote."""
+        _no_env(monkeypatch)
+        login = {"quarry": {"url": "wss://localhost:8420"}}
+        with patch("quarry.client.resolver.read_proxy_config", return_value=login):
+            assert TargetResolver.selects_local_db() is True
+
+    def test_remote_stored_login_is_remote(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _no_env(monkeypatch)
+        login = {"quarry": {"url": "wss://okinos.local:8420"}}
+        with patch("quarry.client.resolver.read_proxy_config", return_value=login):
+            assert TargetResolver.selects_local_db() is False
+
+    def test_quarry_url_loopback_is_local(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("QUARRY_URL", "wss://127.0.0.1:8420")
+        assert TargetResolver.selects_local_db() is True
+
+    def test_quarry_url_remote_is_remote(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("QUARRY_URL", "wss://okinos.local:8420")
+        assert TargetResolver.selects_local_db() is False
+
+    def test_quarry_url_takes_precedence_over_stored_login(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Remote QUARRY_URL wins even over a loopback stored login (precedence)."""
+        monkeypatch.setenv("QUARRY_URL", "wss://okinos.local:8420")
+        login = {"quarry": {"url": "wss://127.0.0.1:8420"}}
+        with patch("quarry.client.resolver.read_proxy_config", return_value=login):
+            assert TargetResolver.selects_local_db() is False

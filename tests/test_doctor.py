@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Self
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -23,7 +24,7 @@ from quarry.doctor import (
     _configure_claude_desktop,
     _configure_ethos_ext,
     _human_size,
-    _mcp_fallback_script,
+    _mcp_command,
     _quiet_logging,
     check_environment,
     run_install,
@@ -1024,111 +1025,142 @@ def _mock_install_deps(monkeypatch: MP) -> None:
     monkeypatch.setattr("quarry.service._launchd_install", lambda: None)
 
 
-class TestMcpFallbackScript:
-    """Tests for the sh -c command that bridges mcp-proxy or quarry mcp."""
+class TestMcpCommand:
+    """The MCP command runs ``quarry mcp`` directly — no mcp-proxy shim (R2)."""
 
-    def test_uses_mcp_proxy_config_quarry(self) -> None:
-        """Script must use 'mcp-proxy --config quarry', not bare ws:// URL."""
-        _sh, args = _mcp_fallback_script()
-        script = args[1]
-        assert "--config quarry" in script
-        assert "ws://localhost" not in script
+    def test_direct_quarry_mcp(self) -> None:
+        """No proxy, no sh -c wrapper: the command is ``quarry`` with ``["mcp"]``."""
+        command, args = _mcp_command()
+        assert command == "quarry"
+        assert args == ["mcp"]
 
-    def test_checks_toml_exists(self) -> None:
-        """Script must check that the TOML profile exists before using mcp-proxy."""
-        _sh, args = _mcp_fallback_script()
-        script = args[1]
-        assert "quarry.toml" in script
-        assert "[ -f" in script
+    def test_no_proxy_shim(self) -> None:
+        """The command must not reference mcp-proxy, its TOML, or a shell shim."""
+        command, args = _mcp_command()
+        joined = command + " " + " ".join(args)
+        assert "mcp-proxy" not in joined
+        assert "quarry.toml" not in joined
+        assert "-c" not in args
 
-    def test_checks_toml_has_quarry_section(self) -> None:
-        """Script must grep for [quarry] section in TOML before using mcp-proxy."""
-        _sh, args = _mcp_fallback_script()
-        script = args[1]
-        assert "grep" in script
-        # The [quarry] pattern is shell-escaped in the grep argument
-        assert "quarry" in script
-        assert "grep -q" in script
-
-    def test_falls_back_to_quarry_mcp(self) -> None:
-        """Script must fall back to 'quarry mcp' when mcp-proxy is unavailable."""
-        _sh, args = _mcp_fallback_script()
-        script = args[1]
-        assert "quarry mcp" in script
-
-    def test_resolve_paths_uses_absolute_paths(self, monkeypatch: MP) -> None:
-        """When resolve_paths=True, paths are resolved via shutil.which."""
+    def test_resolve_paths_uses_absolute_quarry(self, monkeypatch: MP) -> None:
+        """When resolve_paths=True (Desktop), quarry resolves to an absolute path."""
         monkeypatch.setattr(
             "quarry.doctor.shutil.which",
             lambda name: f"/usr/local/bin/{name}",
         )
-        sh, args = _mcp_fallback_script(resolve_paths=True)
-        script = args[1]
-        assert "/usr/local/bin/mcp-proxy" in script
-        assert "/usr/local/bin/quarry" in script
-        assert sh == "/usr/local/bin/sh"
+        command, args = _mcp_command(resolve_paths=True)
+        assert command == "/usr/local/bin/quarry"
+        assert args == ["mcp"]
 
-    def test_default_uses_bare_names(self) -> None:
-        """Default (resolve_paths=False) uses bare command names."""
-        sh, args = _mcp_fallback_script()
-        assert sh == "sh"
-        script = args[1]
-        # Should not contain absolute paths
-        assert "/usr/" not in script
+    def test_default_uses_bare_name(self) -> None:
+        """Default (resolve_paths=False) uses the bare ``quarry`` name."""
+        command, _args = _mcp_command()
+        assert command == "quarry"
+        assert not command.startswith("/")
+
+
+class _ScriptedClaude:
+    """A mock ``claude`` binary: record each argv, return scripted results.
+
+    Class-5 pattern — hand it a list of ``(returncode, stderr)`` in call order;
+    it records every ``subprocess.run`` argv so a test can assert the add/remove
+    sequence the add-first replace performs.
+    """
+
+    __slots__ = ("_calls", "_results")
+
+    _results: list[tuple[int, str]]
+    _calls: list[list[str]]
+
+    def __new__(cls, results: list[tuple[int, str]]) -> Self:
+        self = super().__new__(cls)
+        self._results = results
+        self._calls = []
+        return self
+
+    def run(self, argv: list[str], **_kw: object) -> object:
+        self._calls.append(argv)
+        code, stderr = self._results[len(self._calls) - 1]
+        return type("CP", (), {"returncode": code, "stdout": "", "stderr": stderr})()
+
+    @property
+    def verbs(self) -> list[list[str]]:
+        """Return the (verb, server-name) pair of each recorded call."""
+        return [c[2:4] for c in self._calls]
+
+    @property
+    def calls(self) -> list[list[str]]:
+        return self._calls
 
 
 class TestConfigureClaudeCode:
+    @staticmethod
+    def _install(monkeypatch: MP, results: list[tuple[int, str]]) -> _ScriptedClaude:
+        monkeypatch.setattr(
+            "quarry.doctor.shutil.which", lambda _name: "/usr/bin/claude"
+        )
+        claude = _ScriptedClaude(results)
+        monkeypatch.setattr("quarry.doctor.subprocess.run", claude.run)
+        return claude
+
     def test_claude_not_on_path(self, monkeypatch: MP):
         monkeypatch.setattr("quarry.doctor.shutil.which", lambda _name: None)
         result = _configure_claude_code()
         assert result.passed is False
         assert "not found" in result.message
 
-    def test_claude_mcp_add_succeeds(self, monkeypatch: MP):
-        monkeypatch.setattr(
-            "quarry.doctor.shutil.which", lambda _name: "/usr/bin/claude"
-        )
-        mock_result = type(
-            "CompletedProcess", (), {"returncode": 0, "stdout": "", "stderr": ""}
-        )()
-        monkeypatch.setattr(
-            "quarry.doctor.subprocess.run", lambda *_a, **_kw: mock_result
-        )
+    def test_fresh_add_succeeds_without_remove(self, monkeypatch: MP):
+        """A fresh slot: the add succeeds outright, no remove is ever issued."""
+        claude = self._install(monkeypatch, [(0, "")])
         result = _configure_claude_code()
         assert result.passed is True
         assert "configured" in result.message
+        assert ["remove", "quarry"] not in claude.verbs
 
-    def test_claude_mcp_add_already_exists(self, monkeypatch: MP):
-        monkeypatch.setattr(
-            "quarry.doctor.shutil.which", lambda _name: "/usr/bin/claude"
-        )
-        mock_result = type(
-            "CompletedProcess",
-            (),
-            {"returncode": 1, "stdout": "", "stderr": "already exists"},
-        )()
-        monkeypatch.setattr(
-            "quarry.doctor.subprocess.run", lambda *_a, **_kw: mock_result
+    def test_replaces_stale_entry(self, monkeypatch: MP):
+        """A stale ``quarry`` entry blocks the add → remove → re-add wins (djb).
+
+        The add is tried first; only its "already exists" failure triggers the
+        remove, then the direct ``quarry mcp`` is re-added.
+        """
+        claude = self._install(monkeypatch, [(1, "already exists"), (0, ""), (0, "")])
+        result = _configure_claude_code()
+
+        assert result.passed is True
+        assert claude.verbs == [
+            ["add", "quarry"],
+            ["remove", "quarry"],
+            ["add", "quarry"],
+        ]
+        # The successful re-add registers the direct `quarry mcp`, not a proxy.
+        add_argv = claude.calls[-1]
+        assert add_argv[-2:] == ["quarry", "mcp"]
+        assert "mcp-proxy" not in " ".join(add_argv)
+
+    def test_removed_then_readd_fails_is_surfaced(self, monkeypatch: MP):
+        """remove-succeeds + re-add-fails is NOT reported as configured (djb).
+
+        The user is told the entry was removed and the re-add failed, so they
+        know to re-run — never a silent wipe reported as success.
+        """
+        claude = self._install(
+            monkeypatch, [(1, "already exists"), (0, ""), (1, "boom")]
         )
         result = _configure_claude_code()
-        assert result.passed is True
-        assert "already configured" in result.message
 
-    def test_claude_mcp_add_fails(self, monkeypatch: MP):
-        monkeypatch.setattr(
-            "quarry.doctor.shutil.which", lambda _name: "/usr/bin/claude"
-        )
-        mock_result = type(
-            "CompletedProcess",
-            (),
-            {"returncode": 1, "stdout": "", "stderr": "permission denied"},
-        )()
-        monkeypatch.setattr(
-            "quarry.doctor.subprocess.run", lambda *_a, **_kw: mock_result
-        )
+        assert result.passed is False
+        assert ["remove", "quarry"] in claude.verbs
+        assert "removed" in result.message
+        assert "re-add failed" in result.message
+        assert "boom" in result.message
+
+    def test_fresh_add_fails_leaves_no_remove(self, monkeypatch: MP):
+        """A non-"already exists" add failure surfaces and never removes."""
+        claude = self._install(monkeypatch, [(1, "permission denied")])
         result = _configure_claude_code()
         assert result.passed is False
         assert "permission denied" in result.message
+        assert ["remove", "quarry"] not in claude.verbs
 
 
 class TestConfigureClaudeDesktop:
@@ -1148,10 +1180,9 @@ class TestConfigureClaudeDesktop:
         assert result.passed is True
         config = json.loads(config_path.read_text())
         server = config["mcpServers"]["quarry"]
-        assert server["command"].endswith("sh")
-        assert server["args"][0] == "-c"
-        assert "mcp-proxy" in server["args"][1]
-        assert "quarry mcp" in server["args"][1]
+        assert server["command"].endswith("quarry")
+        assert server["args"] == ["mcp"]
+        assert "mcp-proxy" not in json.dumps(server)
 
     def test_preserves_existing_servers(self, tmp_path: Path, monkeypatch: MP):
         config_path = tmp_path / "claude_desktop_config.json"

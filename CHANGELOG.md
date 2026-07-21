@@ -74,6 +74,20 @@ across `transform`, `index`, and `connector`).
 
 ### Changed
 
+- **tool (MCP)**: `quarry mcp` is now a thin FastMCP client of the daemon
+  (DES-031 v2.2, R1/R2). Every tool body calls `QuarryClient` over the daemon's
+  `/v1` REST API instead of loading `Database`/embeddings/ingestion in-process,
+  so `import quarry.mcp_server` and running `quarry mcp` load zero engine (no
+  LanceDB/ONNX); the in-process engine MCP path is deleted, not shimmed. The
+  eleven-tool surface (`find`, `ingest`, `remember`, `list`, `show`, `delete`,
+  `register_directory`, `deregister_directory`, `sync_all_registrations`,
+  `status`, `use`) is unchanged. A down daemon surfaces as a clean MCP error
+  string, never an in-process fallback. Remote MCP now rides `QuarryClient`'s
+  TLS + pinned-CA login config. The Claude Code plugin (`plugin.json`) and the
+  `quarry install` MCP-client config now spawn `quarry mcp` directly, dropping
+  the `mcp-proxy … else quarry mcp` shim; mcp-proxy itself is untouched and
+  remains a supported tool for other consumers.
+
 - **index (captures)**: the session-compaction and web-fetch hooks post to the
   running daemon instead of spawning a cold ~1.6 GB engine subprocess per
   compaction — ending the load-average spike from many concurrent cold-starts.

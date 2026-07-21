@@ -231,21 +231,21 @@ Once enabled, the captures dir becomes a standalone nested git repo. `quarry cap
 
 ## How It Works
 
-Quarry runs as a daemon — one `quarryd` process per machine holds the engine (embedding model, LanceDB, pipeline, sync registry) and serves a versioned REST API under `/v1`. The CLI and Claude Code hooks reach it over HTTP; Claude Code's MCP tools run through the stdio `quarry mcp` server.
+Quarry runs as a daemon — one `quarryd` process per machine holds the engine (embedding model, LanceDB, pipeline, sync registry) and serves a versioned REST API under `/v1`. The CLI and Claude Code hooks reach it over HTTP; Claude Code's MCP tools run through the stdio `quarry mcp` server, which is itself a thin REST client of the daemon — it loads no engine.
 
 ```text
                        HTTP /v1 (TLS, pinned CA)
 CLI + hooks  <--------------------------------------->  quarryd
                                                         (one engine)
-                       stdio, MCP JSON-RPC
-Claude Code  <--------------------------------------->  quarry mcp
+              stdio, MCP JSON-RPC        HTTP /v1
+Claude Code  <-------------------->  quarry mcp  <----->  quarryd
 ```
 
 One resident engine means the CLI and hooks reuse the daemon's loaded model instead of a per-invocation ~200 MB reload. Remote and loopback REST connections use TLS with a self-signed, pinned CA — even on localhost.
 
-The **target** is that *every* interface — CLI, library, and MCP — is a thin client of that one daemon over a versioned REST/WebSocket contract; this daemon-first model is specified in [DES-031 v2](DESIGN.md) (ACCEPTED, in implementation). Today the CLI and library still load the engine in-process on local calls, and MCP can fall back to an in-process `quarry mcp` when mcp-proxy is absent; those local-engine paths are being removed.
+The **target** is that *every* interface — CLI, library, and MCP — is a thin client of that one daemon over a versioned REST contract; this daemon-first model is specified in [DES-031 v2](DESIGN.md) (ACCEPTED, in implementation). MCP is now a pure client: `quarry mcp` reaches the daemon through `QuarryClient` (loopback token, or a remote login's TLS + pinned CA), loading no engine of its own. The CLI and library still load the engine in-process on some local calls; those remaining local-engine paths are being removed.
 
-`quarry install` downloads mcp-proxy (SHA256-verified, correct platform) and configures MCP clients.
+Claude Code's plugin runs `quarry mcp` directly — no mcp-proxy in quarry's MCP path. `quarry install` still downloads mcp-proxy (SHA256-verified, correct platform) because it remains a supported tool for other consumers, and configures MCP clients to spawn `quarry mcp`.
 
 ### Managing the daemon
 

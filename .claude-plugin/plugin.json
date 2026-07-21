@@ -9,11 +9,8 @@
   "mcpServers": {
     "quarry": {
       "type": "stdio",
-      "command": "sh",
-      "args": [
-        "-c",
-        "if command -v mcp-proxy >/dev/null 2>&1 && [ -f \"${HOME}/.punt-labs/mcp-proxy/quarry.toml\" ] && grep -q '^\\[quarry\\]' \"${HOME}/.punt-labs/mcp-proxy/quarry.toml\"; then exec mcp-proxy --config quarry; else exec quarry mcp; fi"
-      ]
+      "command": "quarry",
+      "args": ["mcp"]
     }
   }
 }
