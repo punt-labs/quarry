@@ -21,6 +21,7 @@ from quarry.extractors.html_extractor import HtmlExtractor
 from quarry.extractors.image_extractor import SUPPORTED_IMAGE_EXTENSIONS, ImageExtractor
 from quarry.extractors.pdf_extractor import PdfExtractor
 from quarry.extractors.text_extractor import TextExtractor
+from quarry.ingest_collection import IngestCollection
 from quarry.ingestion.backends import get_ocr_backend
 from quarry.ingestion.image_prep import ImagePreparer
 from quarry.ingestion.ingest_stats import IngestStats
@@ -738,14 +739,10 @@ def ingest_sitemap(
     Returns:
         SitemapResult with counts and error details.
     """
-    from urllib.parse import urlparse  # noqa: PLC0415
-
     from quarry.sitemap import SitemapDiscovery  # noqa: PLC0415
 
     progress = _make_progress(progress_callback)
-
-    if not collection:
-        collection = urlparse(url).hostname or "default"
+    collection = IngestCollection.resolve(url, collection).name
 
     progress("Fetching sitemap: %s", url)
     entries = SitemapDiscovery.discover_urls(url)
@@ -818,8 +815,7 @@ def ingest_auto(
     progress = _make_progress(progress_callback)
     parsed = urlparse(url)
 
-    if not collection:
-        collection = parsed.hostname or "default"
+    collection = IngestCollection.resolve(url, collection).name
 
     # If the URL itself is a sitemap, skip discovery and crawl directly.
     # Match sitemap files (*.xml, *.xml.gz) and /sitemap paths, but not

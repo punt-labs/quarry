@@ -62,6 +62,7 @@ class IngestQueue:
         "_embed_gate",
         "_max_depth",
         "_max_workers",
+        "_reaped",
         "_worker_idle_s",
         "_workers",
     )
@@ -74,6 +75,11 @@ class IngestQueue:
     _max_workers: int
     _worker_idle_s: float
     _closing: bool
+    # Cancelled worker tasks retained until their cancellation completes: asyncio
+    # keeps only a weak reference, so a reaped worker's still-pending task would
+    # be garbage-collected mid-flight ("Task was destroyed but it is pending")
+    # without a strong reference held here until the done-callback discards it.
+    _reaped: set[asyncio.Task[None]]
 
     def __new__(cls, ctx: DaemonContext) -> Self:
         self = super().__new__(cls)
@@ -85,6 +91,7 @@ class IngestQueue:
         self._max_workers = ctx.settings.ingest_max_workers
         self._worker_idle_s = ctx.settings.ingest_worker_idle_s
         self._closing = False
+        self._reaped = set()
         return self
 
     @staticmethod
@@ -151,7 +158,7 @@ class IngestQueue:
         """
         self._closing = True
         for worker in self._workers.values():
-            worker.abort()
+            self._retain(worker.abort())
 
     def _worker_for(self, collection: str) -> CollectionWorker | None:
         """Return *collection*'s worker, reaping idle ones and honoring the cap.
@@ -187,7 +194,7 @@ class IngestQueue:
             and worker.idle_seconds(now) >= self._worker_idle_s
         ]
         for collection in stale:
-            self._workers.pop(collection).shutdown()
+            self._retain(self._workers.pop(collection).shutdown())
 
     def _evict_reapable(self) -> bool:
         """Drop one idle worker to free a cap slot; ``False`` if all are busy."""
@@ -196,9 +203,21 @@ class IngestQueue:
         )
         if victim is None:
             return False
-        self._workers.pop(victim).shutdown()
+        self._retain(self._workers.pop(victim).shutdown())
         return True
 
     def _release_admit(self) -> None:
         """Free one admission slot when a job leaves the queue."""
         self._depth -= 1
+
+    def _retain(self, task: asyncio.Task[None]) -> None:
+        """Hold a cancelled worker task until its cancellation runs out.
+
+        asyncio keeps only a weak reference to a task, so a reaped or aborted
+        worker's still-pending task would be garbage-collected mid-cancel.
+        Retaining it here — dropped by the done-callback once it finishes — keeps
+        it alive to complete its cancellation, the synchronous counterpart of
+        ``aclose`` awaiting ``worker.wait()`` under ``suppress(CancelledError)``.
+        """
+        self._reaped.add(task)
+        task.add_done_callback(self._reaped.discard)

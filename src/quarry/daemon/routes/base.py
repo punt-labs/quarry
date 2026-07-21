@@ -114,18 +114,17 @@ class RouteGroup:
             status_code=409,
         )
 
-    def submit(
-        self, collection: str, job: IngestUnit, state: TaskState
-    ) -> JSONResponse:
-        """Enqueue *job* on *collection*'s FIFO worker, returning 202 or 503.
+    def submit(self, job: IngestUnit, state: TaskState) -> JSONResponse:
+        """Enqueue *job* on its collection's FIFO worker, returning 202 or 503.
 
-        The queue serializes ingest per collection and bounds embed concurrency
-        (DES-042).  A full queue returns ``503`` — retriable, never a silent
-        drop — and drops the task record so no orphan lingers in ``queued``.
-        The message stays generic: ``remember``/``ingest`` share this path and
-        have no spooled local artifact, so it cannot promise backfill recovery.
+        The routing key is ``job.collection`` — the queue serializes ingest per
+        collection and bounds embed concurrency (DES-042).  A full queue returns
+        ``503`` — retriable, never a silent drop — and drops the task record so
+        no orphan lingers in ``queued``.  The message stays generic:
+        ``remember``/``ingest`` share this path and have no spooled local
+        artifact, so it cannot promise backfill recovery.
         """
-        if not self._ctx.ingest_queue.try_submit(collection, job, state):
+        if not self._ctx.ingest_queue.try_submit(job.collection, job, state):
             self._ctx.tasks.drop(state)
             return JSONResponse(
                 {

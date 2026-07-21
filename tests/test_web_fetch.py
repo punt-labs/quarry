@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from quarry.ingestion import web_fetch as wf
 from quarry.ingestion.web_fetch import WebFetcher
 
 
@@ -89,15 +90,49 @@ class TestWebFetcher:
         WebFetcher(timeout=7).fetch("https://example.com")
         assert mock_urlopen.call_args.kwargs["timeout"] == 7
 
+    @patch("urllib.request.urlopen")
+    def test_oversize_body_fails_at_the_cap(self, mock_urlopen: MagicMock) -> None:
+        """A body past the size cap fails cleanly instead of streaming forever."""
+        oversize = b"x" * (wf._MAX_RESPONSE_BYTES + 1)
+        mock_urlopen.return_value = _mock_response(oversize, "text/html")
+        with pytest.raises(ValueError, match=r"exceeds .*-byte cap"):
+            WebFetcher().fetch("https://example.com/huge")
+
+    @patch("urllib.request.urlopen")
+    def test_slow_drip_aborts_at_the_deadline(
+        self, mock_urlopen: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A body that never ends is aborted once the wall-clock deadline passes.
+
+        The fake clock stays put while the deadline is computed, then jumps past
+        it, so the read loop trips ``TimeoutError`` rather than draining a body
+        that keeps producing chunks under every per-socket-op timeout.
+        """
+        drip = _mock_response(b"", "text/html")
+        drip.read.side_effect = None
+        drip.read.return_value = b"x" * 16  # always more bytes, never EOF
+        clock = iter([0.0, 0.0, 1_000_000.0, 1_000_000.0, 1_000_000.0])
+        monkeypatch.setattr(wf, "monotonic", lambda: next(clock))
+        mock_urlopen.return_value = drip
+        # fetch() wraps the deadline TimeoutError with the URL so concurrent
+        # fetches are distinguishable in logs.
+        with pytest.raises(TimeoutError, match="time budget") as excinfo:
+            WebFetcher().fetch("https://example.com/slow")
+        assert "https://example.com/slow" in str(excinfo.value)
+
 
 def _mock_response(
     body: bytes,
     content_type: str,
     final_url: str = "https://example.com",
 ) -> MagicMock:
-    """Create a mock HTTP response with headers and context manager."""
+    """Create a mock HTTP response yielding *body* once, then EOF.
+
+    ``read`` returns the whole body on its first chunked call and an empty
+    ``bytes`` afterwards, matching the fetcher's read-to-EOF loop.
+    """
     mock_resp = MagicMock(spec=HTTPResponse)
-    mock_resp.read.return_value = body
+    mock_resp.read.side_effect = [body, b""]
     mock_resp.headers = _make_headers(content_type)
     # urllib sets ``.url`` on the response at runtime; it is not a class
     # attribute, so a spec'd mock only exposes it once assigned explicitly.

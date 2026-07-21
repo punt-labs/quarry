@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
+    from quarry.daemon.job_spool import SpoolRecord
     from quarry.daemon.tasks import TaskState
 
 
@@ -32,4 +33,14 @@ class IngestUnit(Protocol):
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Execute the ingest, recording completion/failure on *state*."""
+        ...
+
+    def spool_record(self) -> SpoolRecord | None:
+        """Return a recoverable snapshot if this job has no durable client copy.
+
+        ``None`` means a durable client-side artifact already outlives an abort
+        (a capture's transcript ``.md``), so the shutdown drain need not spool
+        it.  A ``remember`` or plain ``ingest`` has no such artifact and returns
+        a scrubbed record so an abort never silently drops admitted knowledge.
+        """
         ...

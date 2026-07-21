@@ -18,6 +18,7 @@ from quarry.daemon.ingest_jobs import IngestJob, ScrubbedIngestJob
 from quarry.daemon.routes.base import RouteGroup
 from quarry.daemon.url_safety import UrlSafetyCheck
 from quarry.http_guards import RequestGuards
+from quarry.ingest_collection import IngestCollection
 
 # Maximum request body sizes.  Remember accepts content, ingest only a URL.
 MAX_REMEMBER_BODY_BYTES = 50 * 1024 * 1024
@@ -41,7 +42,7 @@ class IngestionRoutes(RouteGroup):
             return job
 
         state = self.ctx.tasks.begin("remember")
-        return self.submit(job.collection, job, state)
+        return self.submit(job, state)
 
     async def ingest(self, request: Request) -> JSONResponse:
         """Ingest a URL as a background task.
@@ -69,7 +70,7 @@ class IngestionRoutes(RouteGroup):
             return job
 
         state = self.ctx.tasks.begin("ingest")
-        return self.submit(job.collection, job, state)
+        return self.submit(job, state)
 
     def _remember_job(
         self, body: dict[str, object]
@@ -107,6 +108,10 @@ class IngestionRoutes(RouteGroup):
         if isinstance(scrub, JSONResponse):
             return scrub
         collection = await self._ingest_collection(body, scrub=scrub)
+        # Key the queue on the ACTUAL table: the explicit/captures name if set,
+        # else the URL hostname — the SAME resolver the pipeline applies, so the
+        # queue key never diverges from the table the job writes (single writer).
+        collection = IngestCollection.resolve(source, collection).name
         return IngestJob(
             source=source,
             overwrite=overwrite,
@@ -118,13 +123,14 @@ class IngestionRoutes(RouteGroup):
         )
 
     async def _ingest_collection(self, body: dict[str, object], *, scrub: bool) -> str:
-        """Resolve the collection the queue keys on: captures for a web-fetch.
+        """Resolve the base collection: captures for a web-fetch, else the body.
 
         A web-fetch capture (``scrub``) writes the ``<repo>-captures`` collection
-        derived from ``cwd`` — resolved here, before the job is built, so the
-        queue can route it.  ``for_registry_path`` reads the registry, so it runs
-        off the event loop.  A plain ingest keeps the body's collection (the
-        pipeline derives a hostname when it is empty).
+        derived from ``cwd`` — resolved here, off the event loop, since
+        ``for_registry_path`` reads the registry.  A plain ingest returns the
+        body's collection (possibly empty); ``_ingest_job`` then routes it
+        through the shared :class:`IngestCollection` resolver so the queue key is
+        the concrete table the job writes.
         """
         if scrub:
             captures = await run_in_threadpool(

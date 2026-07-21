@@ -5,9 +5,9 @@ built on: a single consumer coroutine draining one ``asyncio.Queue`` means only
 one ``progressive_insert`` caller per LanceDB collection is ever in flight —
 the single-writer precondition DES-034's ingest primitives assume.  Each unit
 runs under the shared embed gate; its duration is bounded by the ingest work
-itself — the web fetch enforces a socket timeout and the embed and LanceDB write
-are finite — not by a coroutine-level deadline, which could not interrupt a
-non-cancellable threadpool ingest anyway.
+itself — the web fetch enforces a total deadline + size cap and the embed and
+LanceDB write are finite — not by a coroutine-level deadline, which could not
+interrupt a non-cancellable threadpool ingest anyway.
 """
 
 from __future__ import annotations
@@ -16,6 +16,8 @@ import asyncio
 from dataclasses import dataclass
 from time import monotonic
 from typing import TYPE_CHECKING, Self, final
+
+from quarry.daemon.job_spool import JobSpool
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -100,28 +102,63 @@ class CollectionWorker:
         """Return seconds since the worker last finished a job (or was created)."""
         return now - self._last_active
 
-    def shutdown(self) -> None:
-        """Cancel an idle worker's task; the caller guarantees an empty queue."""
-        self._task.cancel()
+    def shutdown(self) -> asyncio.Task[None]:
+        """Cancel an idle worker's task and return it for the caller to retain.
 
-    def abort(self) -> None:
-        """Cancel the worker and fail every still-queued job (recoverable).
-
-        The in-flight job's own ``task_terminal`` records ``failed`` when the
-        cancellation reaches it; the jobs still waiting never ran, so this marks
-        them ``failed`` and frees their admit slots.  A durable capture artifact
-        outlives a ``failed`` task and is recoverable via ``quarry backfill``.
+        The caller guarantees an empty queue.  Returning the cancelled task lets
+        a synchronous reaper hold a strong reference (and a done-callback) until
+        the cancellation completes, so the pending task is never garbage-collected
+        mid-flight — asyncio keeps only a weak reference of its own.
         """
         self._task.cancel()
+        return self._task
+
+    def abort(self) -> asyncio.Task[None]:
+        """Cancel the worker, fail every still-queued job, and return the task.
+
+        Cancelling the task aborts the in-flight job, which ``_run`` spools as it
+        unwinds (it still holds that job; by here it is already gone from the
+        queue).  The jobs still waiting never ran, so this marks them ``failed``
+        and frees their admit slots.  A job with a durable client artifact (a
+        capture's transcript ``.md``) is recoverable via ``quarry backfill``; one
+        without (``remember``/``ingest``) is spooled so an admitted job — queued
+        OR in flight — is never *silently* dropped.  The cancelled task is
+        returned so a sync caller can retain it the way ``aclose`` awaits it.
+        """
+        self._task.cancel()
+        spool = JobSpool.for_settings(self._ctx.settings)
         while True:
             try:
                 item = self._queue.get_nowait()
             except asyncio.QueueEmpty:
-                return
+                return self._task
             if item is not None:
-                item.state.status = "failed"
-                item.state.error = "daemon shut down before ingest completed"
-                self._release_admit()
+                self._fail_aborted(item, spool)
+
+    def _fail_aborted(self, item: _Queued, spool: JobSpool) -> None:
+        """Fail a still-queued job, spooling it when it has no durable copy."""
+        item.state.status = "failed"
+        item.state.error = self._abort_reason(item.job, spool)
+        self._release_admit()
+
+    @staticmethod
+    def _abort_reason(job: IngestUnit, spool: JobSpool) -> str:
+        """Return the truthful terminal error for a drain-aborted job.
+
+        A job with a durable client copy (a capture's transcript ``.md``) is
+        recoverable via ``quarry backfill``.  One without is spooled — but ONLY a
+        spool write that actually succeeded may claim recoverability, so a failed
+        write (already logged) records the loss truthfully rather than a false
+        "spooled" claim that would hide the exact silent-loss this path prevents.
+        """
+        record = job.spool_record()
+        if record is None:
+            return "daemon shut down before ingest completed"
+        if spool.write(record):
+            return "daemon shut down before ingest; spooled for recovery"
+        return (
+            "daemon shut down before ingest; spool write failed, content not recovered"
+        )
 
     async def _run(self) -> None:
         """Drain jobs FIFO, one at a time, each under the shared embed gate."""
@@ -137,20 +174,29 @@ class CollectionWorker:
                 # non-cancellable threadpool thread, so asyncio.wait_for could
                 # not interrupt a hang — it would await the thread anyway and
                 # hold the gate for the whole hang.  The one genuinely unbounded
-                # wait is the web fetch, which is bounded at its own socket
-                # timeout (web_fetch.py); embed + LanceDB write are finite.
+                # wait is the web fetch, bounded by its own total deadline + size
+                # cap (web_fetch.py); embed + LanceDB write are finite.
                 async with self._embed_gate:  # global embed-concurrency bound
                     await item.job.run(self._ctx, item.state)  # records terminal
+            except asyncio.CancelledError:
+                # The drain-timeout abort cancels this task through the await
+                # chain, so the in-flight job is aborted HERE — not in abort(),
+                # which by now sees it already gone from the queue.  Spool it (a
+                # capture returns None; its .md survives) so an admitted
+                # remember/ingest is never silently lost, then let the
+                # cancellation propagate.  This also covers a job cancelled while
+                # still awaiting the embed gate (its task_terminal never ran).
+                self._mark_aborted(item)
+                raise
             finally:
-                if item.state.status == "running":
-                    # Cancelled (drain abort) while awaiting the embed gate, so
-                    # job.run — and its task_terminal — never ran and never
-                    # recorded a terminal status.  Record it here so the drain's
-                    # "every dequeued job reaches a terminal state" holds for a
-                    # job stuck between dequeue and gate acquisition.
-                    item.state.status = "failed"
-                    item.state.error = "daemon shut down before ingest completed"
                 self._running = False
                 self._last_active = monotonic()
                 self._release_admit()
                 self._queue.task_done()
+
+    def _mark_aborted(self, item: _Queued) -> None:
+        """Record a drain-cancelled in-flight job as failed, spooling it first."""
+        item.state.status = "failed"
+        item.state.error = self._abort_reason(
+            item.job, JobSpool.for_settings(self._ctx.settings)
+        )
