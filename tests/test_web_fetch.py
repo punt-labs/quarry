@@ -171,6 +171,8 @@ class TestRedirectGate:
             ("private.test", "10.0.0.5"),  # RFC 1918
             ("private192.test", "192.168.1.10"),  # RFC 1918
             ("cgnat.test", "100.64.1.1"),  # RFC 6598
+            ("mapped-ll.test", "::ffff:169.254.169.254"),  # IPv4-mapped link-local
+            ("mapped-unspec.test", "::ffff:0.0.0.0"),  # IPv4-mapped unspecified
         ],
     )
     def test_redirect_to_blocked_resolved_address_is_refused(

@@ -95,6 +95,29 @@ class _FakeOpener:
         return _FakeResp(url, body)
 
 
+class _BrokenReadResp:
+    """A response whose body read raises IncompleteRead mid-stream."""
+
+    def __init__(self, url: str) -> None:
+        self.status = 200
+        self.reason = "OK"
+        self.url = url
+        headers = HTTPMessage()
+        headers["Content-Type"] = "application/xml"
+        self.headers = headers
+
+    def read(self, amt: int | None = None) -> bytes:
+        from http.client import IncompleteRead
+
+        raise IncompleteRead(b"partial")
+
+    def __enter__(self) -> _BrokenReadResp:
+        return self
+
+    def __exit__(self, *_a: Any) -> None:
+        return None
+
+
 _BLOCKED_CLASSES = [
     ("link-local", "169.254.169.254"),
     ("loopback-v4", "127.0.0.1"),
@@ -104,6 +127,8 @@ _BLOCKED_CLASSES = [
     ("cgnat", "100.64.2.3"),
     ("ipv4-mapped-cgnat", "::ffff:100.64.2.3"),
     ("ipv4-mapped-loopback", "::ffff:127.0.0.1"),
+    ("ipv4-mapped-link-local", "::ffff:169.254.169.254"),
+    ("ipv4-mapped-unspecified", "::ffff:0.0.0.0"),
 ]
 
 
@@ -152,6 +177,24 @@ class TestGatedClientGet:
 
         assert isinstance(resp, WebClientErrorResponse)
         assert opener.opened == []
+
+    def test_body_read_error_does_not_propagate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A body-read failure (IncompleteRead) is returned, never raised."""
+        url = "https://safe.example/sitemap.xml"
+
+        class _BrokenReadOpener:
+            def open(self, request: Any, timeout: float | None = None) -> Any:
+                return _BrokenReadResp(url)
+
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _BrokenReadOpener())
+        resp = GatedSitemapWebClient().get(url)
+        from usp.web_client.abstract_client import WebClientErrorResponse
+
+        assert isinstance(resp, WebClientErrorResponse)
+        assert resp.retryable() is False
 
     def test_safe_url_is_fetched(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(_GETADDRINFO, _resolver({}))

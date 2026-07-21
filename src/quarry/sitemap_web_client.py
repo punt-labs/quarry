@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import urllib.request
 from dataclasses import dataclass
+from http.client import HTTPException
 from typing import TYPE_CHECKING, Self, final
 from urllib.error import HTTPError, URLError
 
@@ -105,8 +106,12 @@ class GatedSitemapWebClient(AbstractWebClient):
             return self._error(f"HTTP {exc.code}", retryable=False)
         except (TimeoutError, URLError) as exc:
             return self._error(f"cannot reach {url}: {exc}", retryable=True)
-        except ValueError as exc:
-            return self._error(str(exc), retryable=False)
+        except (OSError, HTTPException, ValueError) as exc:
+            # A body-read/transport failure (e.g. IncompleteRead) or a decode
+            # error must not escape: USP catches it in nested recursion, but the
+            # top-level discover_* path would propagate it. Fail closed — no
+            # connection to an internal address happens on this path either way.
+            return self._error(f"fetch failed for {url}: {exc}", retryable=False)
 
     def _fetch(self, url: str) -> AbstractWebClientResponse:
         """Open *url* through the guarded opener and gate the final URL."""
