@@ -1,15 +1,41 @@
-"""Tests for quarry.ingestion.web_fetch — HTTP(S) fetch with HTML validation."""
+"""Tests for quarry.ingestion.web_fetch — HTTP(S) fetch with HTML + SSRF validation."""
 
 from __future__ import annotations
 
-from http.client import HTTPResponse
+import io
+import urllib.request
+from http.client import HTTPMessage, HTTPResponse
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from quarry.ingestion import web_fetch as wf
+from quarry.ingestion.ssrf_redirect import (
+    RedirectRejectedError,
+    SsrfGuardedRedirectHandler,
+)
 from quarry.ingestion.web_fetch import WebFetcher
+
+_PUBLIC_ADDR = "93.184.216.34"
+_GETADDRINFO = "quarry.url_safety.socket_module.getaddrinfo"
+
+
+def _addrinfo(ip: str) -> list[tuple[int, int, int, str, tuple[Any, ...]]]:
+    """One getaddrinfo record for *ip* (v6 sockaddr is a 4-tuple, v4 a 2-tuple)."""
+    family = 10 if ":" in ip else 2
+    sockaddr: tuple[Any, ...] = (ip, 0, 0, 0) if ":" in ip else (ip, 0)
+    return [(family, 1, 6, "", sockaddr)]
+
+
+@pytest.fixture(autouse=True)
+def _resolve_public(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Resolve every host to a public address by default.
+
+    fetch now gates the final URL's resolved address, so an un-mocked test
+    would hit real DNS; individual SSRF tests override this with a blocked IP.
+    """
+    monkeypatch.setattr(_GETADDRINFO, lambda *a, **k: _addrinfo(_PUBLIC_ADDR))
 
 
 class TestWebFetcher:
@@ -23,49 +49,74 @@ class TestWebFetcher:
         with pytest.raises(ValueError, match="Only HTTP"):
             WebFetcher().fetch("file:///etc/passwd")
 
-    @patch("urllib.request.urlopen")
-    def test_fetches_html(self, mock_urlopen: MagicMock) -> None:
+    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    def test_fetches_html(self, mock_open: MagicMock) -> None:
         body = b"<html><body><p>Hello</p></body></html>"
-        mock_urlopen.return_value = _mock_response(body, "text/html; charset=utf-8")
+        mock_open.return_value = _mock_response(body, "text/html; charset=utf-8")
         assert "Hello" in WebFetcher().fetch("https://example.com")
 
-    @patch("urllib.request.urlopen")
-    def test_rejects_non_html_content_type(self, mock_urlopen: MagicMock) -> None:
-        mock_urlopen.return_value = _mock_response(b"%PDF-1.4", "application/pdf")
+    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    def test_uppercase_scheme_accepted(self, mock_open: MagicMock) -> None:
+        """An uppercase scheme is accepted, consistent with UrlSafetyCheck."""
+        body = b"<html><body><p>OK</p></body></html>"
+        mock_open.return_value = _mock_response(body, "text/html")
+        assert "OK" in WebFetcher().fetch("HTTP://example.com")
+
+    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    def test_rejects_non_html_content_type(self, mock_open: MagicMock) -> None:
+        mock_open.return_value = _mock_response(b"%PDF-1.4", "application/pdf")
         with pytest.raises(ValueError, match="non-HTML"):
             WebFetcher().fetch("https://example.com/report.pdf")
 
-    @patch("urllib.request.urlopen")
-    def test_accepts_xhtml(self, mock_urlopen: MagicMock) -> None:
+    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    def test_accepts_xhtml(self, mock_open: MagicMock) -> None:
         body = b"<html><body><p>XHTML</p></body></html>"
-        mock_urlopen.return_value = _mock_response(body, "application/xhtml+xml")
+        mock_open.return_value = _mock_response(body, "application/xhtml+xml")
         assert "XHTML" in WebFetcher().fetch("https://example.com")
 
-    @patch("urllib.request.urlopen")
-    def test_content_type_case_insensitive(self, mock_urlopen: MagicMock) -> None:
+    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    def test_content_type_case_insensitive(self, mock_open: MagicMock) -> None:
         body = b"<html><body><p>OK</p></body></html>"
-        mock_urlopen.return_value = _mock_response(body, "Text/HTML; charset=UTF-8")
+        mock_open.return_value = _mock_response(body, "Text/HTML; charset=UTF-8")
         assert "OK" in WebFetcher().fetch("https://example.com")
 
-    @patch("urllib.request.urlopen")
-    def test_missing_content_type_allowed(self, mock_urlopen: MagicMock) -> None:
+    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    def test_missing_content_type_allowed(self, mock_open: MagicMock) -> None:
         body = b"<html><body><p>No CT</p></body></html>"
-        mock_urlopen.return_value = _mock_response(body, "")
+        mock_open.return_value = _mock_response(body, "")
         assert "No CT" in WebFetcher().fetch("https://example.com")
 
-    @patch("urllib.request.urlopen")
-    def test_rejects_redirect_to_non_http(self, mock_urlopen: MagicMock) -> None:
+    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    def test_rejects_final_url_non_http(self, mock_open: MagicMock) -> None:
         mock_resp = _mock_response(b"", "text/html")
         mock_resp.url = "ftp://evil.com/file"
-        mock_urlopen.return_value = mock_resp
-        with pytest.raises(ValueError, match="Redirect left HTTP"):
+        mock_open.return_value = mock_resp
+        with pytest.raises(ValueError, match="final URL rejected"):
             WebFetcher().fetch("https://example.com/redirect")
 
-    @patch("urllib.request.urlopen")
-    def test_http_error_raises_valueerror(self, mock_urlopen: MagicMock) -> None:
+    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    def test_rejects_final_url_internal_address(
+        self, mock_open: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A fetch that lands on a host resolving to loopback is refused."""
+        mock_resp = _mock_response(b"<html></html>", "text/html")
+        mock_resp.url = "http://landed.internal/"
+        mock_open.return_value = mock_resp
+        # The initial URL resolves public (passes the initial gate); only the
+        # landed final URL resolves loopback, so the final-URL check is what fires.
+        resolve = {"landed.internal": "127.0.0.1"}
+        monkeypatch.setattr(
+            _GETADDRINFO,
+            lambda host, *a, **k: _addrinfo(resolve.get(host, _PUBLIC_ADDR)),
+        )
+        with pytest.raises(ValueError, match="final URL rejected"):
+            WebFetcher().fetch("https://example.com/redirect")
+
+    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    def test_http_error_raises_valueerror(self, mock_open: MagicMock) -> None:
         from urllib.error import HTTPError
 
-        mock_urlopen.side_effect = HTTPError(
+        mock_open.side_effect = HTTPError(
             "https://example.com/missing",
             404,
             "Not Found",
@@ -75,32 +126,32 @@ class TestWebFetcher:
         with pytest.raises(ValueError, match="HTTP 404"):
             WebFetcher().fetch("https://example.com/missing")
 
-    @patch("urllib.request.urlopen")
-    def test_url_error_raises_oserror(self, mock_urlopen: MagicMock) -> None:
+    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    def test_url_error_raises_oserror(self, mock_open: MagicMock) -> None:
         from urllib.error import URLError
 
-        mock_urlopen.side_effect = URLError("Name or service not known")
+        mock_open.side_effect = URLError("Name or service not known")
         with pytest.raises(OSError, match="Cannot reach"):
             WebFetcher().fetch("https://nonexistent.invalid")
 
-    @patch("urllib.request.urlopen")
-    def test_custom_timeout_passed_through(self, mock_urlopen: MagicMock) -> None:
+    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    def test_custom_timeout_passed_through(self, mock_open: MagicMock) -> None:
         body = b"<html><body><p>Hi</p></body></html>"
-        mock_urlopen.return_value = _mock_response(body, "text/html")
+        mock_open.return_value = _mock_response(body, "text/html")
         WebFetcher(timeout=7).fetch("https://example.com")
-        assert mock_urlopen.call_args.kwargs["timeout"] == 7
+        assert mock_open.call_args.kwargs["timeout"] == 7
 
-    @patch("urllib.request.urlopen")
-    def test_oversize_body_fails_at_the_cap(self, mock_urlopen: MagicMock) -> None:
+    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    def test_oversize_body_fails_at_the_cap(self, mock_open: MagicMock) -> None:
         """A body past the size cap fails cleanly instead of streaming forever."""
         oversize = b"x" * (wf._MAX_RESPONSE_BYTES + 1)
-        mock_urlopen.return_value = _mock_response(oversize, "text/html")
+        mock_open.return_value = _mock_response(oversize, "text/html")
         with pytest.raises(ValueError, match=r"exceeds .*-byte cap"):
             WebFetcher().fetch("https://example.com/huge")
 
-    @patch("urllib.request.urlopen")
+    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
     def test_slow_drip_aborts_at_the_deadline(
-        self, mock_urlopen: MagicMock, monkeypatch: pytest.MonkeyPatch
+        self, mock_open: MagicMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A body that never ends is aborted once the wall-clock deadline passes.
 
@@ -113,12 +164,260 @@ class TestWebFetcher:
         drip.read.return_value = b"x" * 16  # always more bytes, never EOF
         clock = iter([0.0, 0.0, 1_000_000.0, 1_000_000.0, 1_000_000.0])
         monkeypatch.setattr(wf, "monotonic", lambda: next(clock))
-        mock_urlopen.return_value = drip
+        mock_open.return_value = drip
         # fetch() wraps the deadline TimeoutError with the URL so concurrent
         # fetches are distinguishable in logs.
         with pytest.raises(TimeoutError, match="time budget") as excinfo:
             WebFetcher().fetch("https://example.com/slow")
         assert "https://example.com/slow" in str(excinfo.value)
+
+
+class TestInitialUrlGate:
+    """WebFetcher self-gates its initial URL before opening any socket."""
+
+    @pytest.mark.parametrize(
+        "resolved",
+        [
+            "127.0.0.1",
+            "::1",
+            "169.254.169.254",
+            "10.0.0.5",
+            "192.168.1.1",
+            "100.64.1.1",
+        ],
+    )
+    def test_initial_internal_url_rejected_no_socket(
+        self, resolved: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Each internal class is rejected on the initial URL; no socket opened.
+
+        The gate resolves the host, so a public-looking name pointing at an
+        internal address is caught; the opener is never called.
+        """
+        monkeypatch.setattr(_GETADDRINFO, lambda *a, **k: _addrinfo(resolved))
+        opener = MagicMock()
+        monkeypatch.setattr(wf, "GUARDED_OPENER", opener)
+        with pytest.raises(ValueError, match="URL rejected"):
+            WebFetcher().fetch("https://evil.test/x")
+        assert opener.open.call_count == 0  # gate ran before any socket
+
+    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    def test_public_initial_url_still_fetches(self, mock_open: MagicMock) -> None:
+        """A public initial URL passes the gate and is fetched (resolver public)."""
+        body = b"<html><body><p>OK</p></body></html>"
+        mock_open.return_value = _mock_response(body, "text/html")
+        assert "OK" in WebFetcher().fetch("https://example.com")
+
+    def test_close_failure_does_not_mask_the_real_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A close() raising OSError is suppressed; the HTTP error still surfaces."""
+        from http.client import HTTPMessage
+        from urllib.error import HTTPError
+
+        class _BadCloseError(HTTPError):
+            def close(self) -> None:
+                raise OSError("close failed")
+
+        def _open(_req: object, timeout: float | None = None) -> object:
+            raise _BadCloseError(
+                "https://example.com/x", 404, "nf", HTTPMessage(), None
+            )
+
+        monkeypatch.setattr("quarry.ingestion.web_fetch.GUARDED_OPENER.open", _open)
+        with pytest.raises(ValueError, match="HTTP 404"):
+            WebFetcher().fetch("https://example.com/x")
+
+
+class TestRedirectGate:
+    """The per-hop SSRF gate on redirect targets (SsrfGuardedRedirectHandler)."""
+
+    @pytest.mark.parametrize(
+        ("host", "resolved"),
+        [
+            ("link-local.test", "169.254.169.254"),  # cloud metadata range
+            ("loopback4.test", "127.0.0.1"),
+            ("loopback6.test", "::1"),
+            ("private.test", "10.0.0.5"),  # RFC 1918
+            ("private192.test", "192.168.1.10"),  # RFC 1918
+            ("cgnat.test", "100.64.1.1"),  # RFC 6598
+            ("mapped-ll.test", "::ffff:169.254.169.254"),  # IPv4-mapped link-local
+            ("mapped-unspec.test", "::ffff:0.0.0.0"),  # IPv4-mapped unspecified
+        ],
+    )
+    def test_redirect_to_blocked_resolved_address_is_refused(
+        self, host: str, resolved: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A redirect whose host RESOLVES to a blocked address is refused.
+
+        The gate runs against the resolved address, so a public-looking hostname
+        pointing at an internal IP is caught, and the handler raises before it
+        can return a Request — the internal target is never opened.
+        """
+        seen: list[str] = []
+
+        def _resolver(name: str, *a: Any, **k: Any) -> Any:
+            seen.append(name)
+            return _addrinfo(resolved)
+
+        monkeypatch.setattr(_GETADDRINFO, _resolver)
+        handler = SsrfGuardedRedirectHandler()
+        req = urllib.request.Request("https://public.example/start")
+        with pytest.raises(RedirectRejectedError, match="redirect target rejected"):
+            handler.redirect_request(
+                req, io.BytesIO(b""), 302, "Found", HTTPMessage(), f"http://{host}/x"
+            )
+        assert host in seen  # the gate resolved the redirect target's host
+
+    def test_redirect_to_metadata_ip_is_refused_without_dns(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A literal cloud-metadata IP is blocked by hostname, before any DNS."""
+        monkeypatch.setattr(_GETADDRINFO, _boom)
+        handler = SsrfGuardedRedirectHandler()
+        req = urllib.request.Request("https://public.example/start")
+        with pytest.raises(RedirectRejectedError, match="redirect target rejected"):
+            handler.redirect_request(
+                req,
+                io.BytesIO(b""),
+                302,
+                "Found",
+                HTTPMessage(),
+                "http://169.254.169.254/latest/meta-data/",
+            )
+
+    def test_safe_redirect_is_followed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A redirect to a public address returns a Request for the new URL."""
+        monkeypatch.setattr(_GETADDRINFO, lambda *a, **k: _addrinfo(_PUBLIC_ADDR))
+        handler = SsrfGuardedRedirectHandler()
+        req = urllib.request.Request("https://public.example/start")
+        result = handler.redirect_request(
+            req,
+            io.BytesIO(b""),
+            302,
+            "Found",
+            HTTPMessage(),
+            "https://public.example/next",
+        )
+        assert result is not None
+        assert result.full_url == "https://public.example/next"
+
+    def test_fetch_never_opens_internal_redirect_target(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """End-to-end: a public URL that 302s internal fails; internal is never opened.
+
+        A recording handler intercepts every open and returns a 302 to an
+        internal host for the start URL.  The guard resolves that host to a
+        private address and aborts, so only the start URL is ever opened.
+        """
+        start = "https://public.example/start"
+        internal = "http://internal.service/secret"
+        # Public start passes the initial-URL gate; the redirect TARGET resolves
+        # internal so the per-hop gate blocks it.
+        resolve = {"public.example": _PUBLIC_ADDR, "internal.service": "10.0.0.9"}
+        monkeypatch.setattr(
+            _GETADDRINFO,
+            lambda host, *a, **k: _addrinfo(resolve.get(host, _PUBLIC_ADDR)),
+        )
+        recorder = _RecordingHandler(start, internal)
+        opener = urllib.request.OpenerDirector()
+        opener.add_handler(SsrfGuardedRedirectHandler())
+        opener.add_handler(urllib.request.HTTPErrorProcessor())
+        opener.add_handler(recorder)
+        monkeypatch.setattr(wf, "GUARDED_OPENER", opener)
+        with pytest.raises(ValueError, match="redirect target rejected"):
+            WebFetcher().fetch(start)
+        assert recorder.opened == [start]  # internal target never fetched
+
+
+class TestGuardedOpenerProxy:
+    """GUARDED_OPENER must not honor env proxies (would route around the gate)."""
+
+    def test_env_proxy_is_not_honored(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """With HTTP(S)_PROXY set, the guarded opener routes to no proxy.
+
+        The gate resolves and checks the TARGET host; if urllib honored an env
+        proxy the socket would instead connect to the proxy -- a host the gate
+        never vetted -- reintroducing SSRF via an internal/attacker proxy.
+        """
+        monkeypatch.setenv("HTTP_PROXY", "http://10.0.0.1:3128")
+        monkeypatch.setenv("HTTPS_PROXY", "http://10.0.0.1:3128")
+        # Sanity: urllib does see the env proxy, and a DEFAULT opener would use it.
+        assert urllib.request.getproxies().get("http") == "http://10.0.0.1:3128"
+
+        def _routes_to_proxy(opener: urllib.request.OpenerDirector) -> bool:
+            # .handlers / ProxyHandler.proxies are runtime attrs absent from
+            # typeshed; read them via getattr to stay type-clean.
+            handlers = getattr(opener, "handlers", [])
+            return any(
+                isinstance(h, urllib.request.ProxyHandler)
+                and getattr(h, "proxies", None)
+                for h in handlers
+            )
+
+        # Sanity: a DEFAULT opener WOULD route to the env proxy.
+        assert _routes_to_proxy(urllib.request.build_opener())
+        # The guarded opener honors no proxy -- direct, gated connection only.
+        assert not _routes_to_proxy(SsrfGuardedRedirectHandler.build_opener())
+
+
+def _boom(*_a: Any, **_k: Any) -> Any:
+    """A resolver that must never be called."""
+    raise AssertionError("getaddrinfo should not be called for a literal metadata IP")
+
+
+class _FakeResp:
+    """Minimal response object for a fake urllib handler."""
+
+    def __init__(self, code: int, headers: HTTPMessage, url: str) -> None:
+        self.code = code
+        self.msg = "Found" if code == 302 else "OK"
+        self._headers = headers
+        self.url = url
+
+    def info(self) -> HTTPMessage:
+        return self._headers
+
+    def read(self, *_a: Any) -> bytes:
+        return b""
+
+    def close(self) -> None:
+        return None
+
+    def geturl(self) -> str:
+        return self.url
+
+    def __enter__(self) -> _FakeResp:
+        return self
+
+    def __exit__(self, *_a: Any) -> None:
+        return None
+
+
+class _RecordingHandler(urllib.request.BaseHandler):
+    """Intercept opens: 302 the start URL to *internal*, record every URL."""
+
+    def __init__(self, start: str, internal: str) -> None:
+        self._start = start
+        self._internal = internal
+        self.opened: list[str] = []
+
+    def _open(self, req: urllib.request.Request) -> _FakeResp:
+        url = req.full_url
+        self.opened.append(url)
+        headers = HTTPMessage()
+        if url == self._start:
+            headers["Location"] = self._internal
+            return _FakeResp(302, headers, url)
+        headers["Content-Type"] = "text/html"
+        return _FakeResp(200, headers, url)
+
+    def http_open(self, req: urllib.request.Request) -> _FakeResp:
+        return self._open(req)
+
+    def https_open(self, req: urllib.request.Request) -> _FakeResp:
+        return self._open(req)
 
 
 def _mock_response(
@@ -144,9 +443,7 @@ def _mock_response(
 
 def _make_headers(content_type: str) -> Any:
     """Create a mock headers object with Content-Type."""
-    from email.message import Message
-
-    msg = Message()
+    msg = HTTPMessage()
     if content_type:
         msg["Content-Type"] = content_type
     return msg

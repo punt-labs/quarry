@@ -1,4 +1,4 @@
-"""SSRF guard for daemon-fetched URLs (``POST /ingest`` and the capture re-fetch)."""
+"""SSRF guard for URLs fetched server-side, gated at every hop of a fetch."""
 
 from __future__ import annotations
 
@@ -42,10 +42,10 @@ class UrlSafetyCheck:
         caller acts on presence-of-reason, not on a produced value.
 
         Note: this shares a known DNS-rebinding race with the downstream
-        fetcher — the two resolutions are independent, so an attacker
-        controlling DNS could return a safe IP here and a private IP at fetch.
-        ``POST /ingest`` is authenticated-only, so exploiting it requires a
-        compromised API key; pinning the resolved IP is tracked as follow-up.
+        fetcher — the two resolutions are independent, so DNS an attacker
+        controls could return a safe IP here and a private IP at the socket.
+        Gating every hop against the resolved address is complementary to
+        pinning the resolved IP through to connect (tracked as follow-up).
         """
         parsed = urlsplit(url)
         if parsed.scheme.lower() not in {"http", "https"}:
@@ -85,6 +85,11 @@ class UrlSafetyCheck:
             addr = ipaddress.ip_address(raw_addr)
         except ValueError:
             return f"cannot parse resolved address for {host!r}"
+        # Judge an IPv4-mapped IPv6 (``::ffff:a.b.c.d``) by its embedded IPv4;
+        # otherwise a mapped CGNAT address slips the IPv4-only CGNAT check below.
+        mapped = getattr(addr, "ipv4_mapped", None)
+        if mapped is not None:
+            addr = mapped
         if cls._is_blocked(addr):
             return f"host {host!r} resolves to blocked address {addr}"
         if addr.version == 4 and addr in cls._CGNAT_NETWORK:

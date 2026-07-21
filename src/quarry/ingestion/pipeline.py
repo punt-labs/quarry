@@ -603,14 +603,23 @@ def _bulk_ingest_entries(
     workers = max(1, workers)
     total_discovered = len(entries)
 
-    filtered = SitemapDiscovery.filter_entries(
+    # One lazy pass: glob-filter -> SSRF-gate -> cap at `limit` SAFE entries.
+    # A sitemap is attacker-controlled, so every considered entry is gated
+    # fail-closed before it can be fetched; capping on SAFE entries (not raw
+    # ones) avoids under-delivering when an internal URL sorts early, and the
+    # single pass keeps urlparse + DNS resolution proportional to `limit`, not
+    # to the whole (possibly huge) sitemap.
+    filtered = SitemapDiscovery.select_safe(
         entries,
         include=include,
         exclude=exclude,
         limit=limit,
     )
+    # after_filter reflects what is actually considered for ingest (post-glob,
+    # post-gate, post-limit), so the summary is not inflated by URLs that were
+    # dropped by the gate or never scanned past the limit.
     after_filter = len(filtered)
-    progress("After filtering: %d URLs", after_filter)
+    progress("Selected %d safe URLs to ingest", after_filter)
 
     # Build lookup of existing documents for lastmod dedup
     existing_docs = database.catalog.list_documents(collection_filter=collection)

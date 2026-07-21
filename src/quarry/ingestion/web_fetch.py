@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import contextlib
 import urllib.request
 from dataclasses import dataclass
 from functools import partial
 from time import monotonic
 from typing import TYPE_CHECKING, ClassVar, final
 from urllib.error import HTTPError, URLError
+
+from quarry.ingestion.ssrf_redirect import GUARDED_OPENER
+from quarry.url_safety import UrlSafetyCheck
 
 if TYPE_CHECKING:
     from http.client import HTTPResponse
@@ -54,8 +58,16 @@ class WebFetcher:
                 the body exceeds the size cap.
             OSError: On network errors or once the total-time deadline passes.
         """
-        if not url.startswith(("http://", "https://")):
+        if not url.lower().startswith(("http://", "https://")):
             msg = f"Only HTTP(S) URLs are supported: {url}"
+            raise ValueError(msg)
+        # Self-gate the initial URL (host + resolved address) BEFORE opening the
+        # socket -- defence in depth behind the route boundary, and so a direct
+        # caller cannot reach an internal address.  Redirect hops are gated by
+        # GUARDED_OPENER; this covers the first hop.
+        reason = UrlSafetyCheck.reject_reason(url)
+        if reason is not None:
+            msg = f"URL rejected: {reason}"
             raise ValueError(msg)
 
         request = urllib.request.Request(  # noqa: S310
@@ -64,12 +76,14 @@ class WebFetcher:
         )
         deadline = monotonic() + self.timeout + self._DEADLINE_MARGIN_S
         try:
-            with urllib.request.urlopen(  # noqa: S310
-                request, timeout=self.timeout
-            ) as resp:
+            with GUARDED_OPENER.open(request, timeout=self.timeout) as resp:
                 return self._decode_html(resp, deadline)
         except HTTPError as exc:
+            # HTTPError IS an open response holding a socket fd; close it before
+            # re-raising or a failed fetch leaks an fd (EMFILE over a crawl).
             msg = f"HTTP {exc.code} fetching {url}"
+            with contextlib.suppress(OSError, ValueError):
+                exc.close()
             raise ValueError(msg) from exc
         except URLError as exc:
             msg = f"Cannot reach {url}: {exc.reason}"
@@ -90,10 +104,10 @@ class WebFetcher:
 
     @staticmethod
     def _reject_non_html(resp: HTTPResponse) -> None:
-        """Raise if the final URL left HTTP(S) or the body is not HTML."""
-        final_url: str = resp.url
-        if not final_url.startswith(("http://", "https://")):
-            msg = f"Redirect left HTTP(S): {final_url}"
+        """Raise if the final URL is unsafe (non-HTTP(S)/internal) or non-HTML."""
+        reason = UrlSafetyCheck.reject_reason(resp.url)
+        if reason is not None:
+            msg = f"final URL rejected: {reason}"
             raise ValueError(msg)
         content_type: str = resp.headers.get("Content-Type", "")
         media_type = content_type.split(";", 1)[0].strip().lower()

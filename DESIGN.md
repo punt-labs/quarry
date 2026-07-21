@@ -1650,3 +1650,97 @@ security-gate growth on pure-schema/re-export files that carry no offsettable me
 and verified against the merge-base. quarry-lxrk (the serialized per-collection queue)
 remains the follow-on that bounds bursty concurrent captures; quarry-czf3 decides
 whether an unregistered cwd should nudge-to-register rather than fall back at all.
+
+## DES-042: Daemon-owned serialized capture/index queue
+
+**Status:** Accepted (2026-07-20) · **Bead:** quarry-lxrk (queue portion) · **Full design:** `docs/des-capture-queue.md` (PR #371)
+
+**Context.** DES-041 made captures fire-and-forget to the daemon, but bursty
+concurrent captures (a compaction and a web-fetch landing together, several
+sessions compacting at once) fired unbounded `asyncio.create_task` ingests that
+oversubscribed the box — the load-90 starvation (quarry-lnog). The per-collection
+LanceDB writer assumes a single caller; concurrent overwrite delete-then-adds
+interleave so both chunk sets survive (lost update).
+
+**Decision.** A daemon-owned serialized queue: one resident FIFO worker per
+collection — one in-flight `progressive_insert` per LanceDB table, the
+daemon-scope generalization of DES-034's single-writer invariant (not a fork;
+`_write_lock`/`ProgressiveIndexer` untouched) — plus a global embed `Semaphore`
+hard-clamped to 1 (DES-032: >1 buys no matmul parallelism behind the shared ONNX
+session mutex and re-adds arena contention), and non-blocking bounded admission
+(→ 503 on full, never a silent drop). The worker map is reaped when idle and
+hard-capped so client-controlled collection keys can't accrue resident workers.
+Drain-on-shutdown is bounded; an aborted un-durable job (remember/ingest) is
+spooled to a private `0600` file with a truthful task status. No wire change.
+
+**Rejected alternatives.** Reusing sync's `CollectionIngestor` (per-sync lifetime and
+registry-coupled); a coroutine-level per-job timeout (inert against the
+non-cancellable `run_in_threadpool` ingest — the hang is instead bounded at the
+fetch's own socket timeout); `abandon_on_cancel=True` (detaches a thread that can
+re-open the delete-then-add lost-update).
+
+**Consequence.** Bursty-capture starvation is structurally closed. Follow-ons
+filed as beads: remember-durability under drain-abort, total-deadline fetch
+hardening, plain-ingest collection-key precision, abandon-safe interruptible
+timeout, ingest-queue asyncio cleanup. The always-on watch/index loop
+(quarry-lxrk residual) remains.
+
+## DES-043: Fetch-safety — the SSRF gate runs on every fetch hop (redirects + sitemap crawl)
+
+**Status:** Accepted (2026-07-21) · **Bead:** quarry-5pg1 · **Full design:** this entry
+
+**Context.** The SSRF guard (`UrlSafetyCheck.reject_reason`) ran only on the
+INITIAL source at the route boundary (`/v1/ingest`, `/v1/capture`) and was never
+re-run downstream, so two categories of URLs reached the fetcher ungated.
+(1) **Redirect targets** — `WebFetcher` delegated redirect-following to urllib's
+auto-redirect, and the only post-redirect check (`_reject_non_html`) validated
+the final URL's *scheme*, not its host/address, so a caller-controlled public
+server could `302` to `169.254.169.254`, loopback, or a private range.
+(2) **Sitemap-crawl URLs** — the crawl runs through `ultimate-sitemap-parser`
+(USP), which fetched every sitemap-index, `robots.txt`, and sub-sitemap
+server-side with its own `requests` client, recursing (to depth ~11) *before*
+quarry saw any leaf entry; gating only the flattened leaf output missed all of
+it. Both vectors are authenticated-only (a valid API key) and reachable
+identically via CLI or MCP ingest — the daemon fetch is the shared choke point.
+Distinct from, and a superset of, the DNS-rebind TOCTOU beads
+(quarry-ljym/quarry-kmzo): entire URL categories never reached the gate, no DNS
+trickery required.
+
+**Decision.** Gate every fetch hop against the RESOLVED address, at the fetch
+boundary, fail-closed — never after the fetch. `UrlSafetyCheck` relocates
+daemon→core (`src/quarry/url_safety.py`) so the daemon route and the ingestion
+fetch layer share one classifier without a package cycle. Two guarded seams,
+both over a single module-level `GUARDED_OPENER`:
+
+- **Redirects** — `SsrfGuardedRedirectHandler` (`ingestion/ssrf_redirect.py`)
+  re-runs the gate on every 30x `Location` before opening it; `WebFetcher`'s
+  final-URL check now validates the resolved host/address, not just the scheme.
+- **Sitemap crawl** — `GatedSitemapWebClient` (`sitemap_web_client.py`)
+  implements USP's `AbstractWebClient` and runs the gate on the initial URL and
+  every redirect hop *before the socket opens*, threaded into BOTH USP entry
+  points (`sitemap_tree_for_homepage`, `SitemapFetcher`), so index recursion,
+  `robots.txt` `Sitemap:` lines, and nested sub-sitemaps are gated at every
+  depth; a blocked target returns a non-retryable error so USP skips it and
+  never connects. Discovered leaf entries are re-gated (`reject_unsafe`) as
+  defense-in-depth.
+
+The classifier rejects link-local, loopback, RFC-1918, CGNAT, unspecified,
+IPv4-mapped-IPv6 variants (normalized to the embedded IPv4), and the NAT64
+well-known prefix; it loops all `getaddrinfo` records (multi-record DNS → any
+internal record rejects) and fails closed on a resolution error. No
+TLS/connection-layer change.
+
+**Rejected alternatives.** Gating only the leaf sitemap output (USP has already
+fetched the indexes/robots/redirects server-side — the trap a mocked test hid);
+IP-pinning the resolved address here (that is the DNS-rebind TOCTOU fix,
+quarry-kmzo/ljym — a connection-layer change; gate-every-hop is complementary and
+closes the redirect/sitemap gap without it); trusting the scheme-only
+`_reject_non_html` check as sufficient.
+
+**Consequence.** The redirect and sitemap SSRF vectors are closed at the fetch
+boundary for both CLI and MCP callers, with dedicated unit coverage for the
+classifier and both guarded seams and sitemap tests that drive USP's real
+recursion (no wholesale mock). A residual DNS-rebind TOCTOU (the gate resolves,
+the socket re-resolves) and network-specific NAT64 prefixes remain the tracked
+pinning follow-up (quarry-kmzo/ljym), to be unified as validate-then-pin every
+hop.

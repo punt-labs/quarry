@@ -255,6 +255,7 @@ timeout = 30
 markers = [
     "slow: marks tests as slow (run with -m slow)",
     "resource: long-lived-process resource-invariant tests (fd/memory leak guards)",
+    "integration: real-socket/live-server tests, also slow so excluded from the fast CI suite and run via -m integration",
 ]
 
 [tool.coverage.run]

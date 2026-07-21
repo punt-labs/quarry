@@ -9,7 +9,9 @@ Fix 5: Async sync endpoint (202 Accepted, task_id, GET /sync/<id>)
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -561,14 +563,35 @@ def _fake_public_addrinfo(
     return [(None, None, None, "", ("93.184.216.34", 0))]
 
 
+def _poll_task_done(
+    tc: TestClient, task_id: str, max_polls: int = 100
+) -> dict[str, Any]:
+    """Poll GET /tasks/{id} until terminal, so the async worker drains UNDER the
+    active mocks.
+
+    Without draining, the ingest job stays queued past the mock scope and the
+    collection worker later runs the REAL ``ingest_auto`` against the source
+    host -- a real network call that floods USP 404 logging into a closed
+    capture stream and hangs offline CI (the quarry-ngpm real-network/ordering
+    bug).  Draining here keeps ``ingest_auto`` mocked for the worker's whole run.
+    """
+    for _ in range(max_polls):
+        data: dict[str, Any] = tc.get(f"/v1/tasks/{task_id}").json()
+        if data["status"] not in {"queued", "running"}:
+            return data
+        time.sleep(0.05)
+    msg = f"task {task_id} still pending after {max_polls} polls"
+    raise AssertionError(msg)
+
+
 class TestAsyncIngestEndpoint:
     """POST /ingest returns 202 + task_id; GET /ingest/<id> returns status."""
 
     def test_post_returns_202_with_task_id(self, tmp_path: Path) -> None:
-        client = _make_client(tmp_path)
         with (
+            _make_client(tmp_path) as client,
             patch(
-                "quarry.daemon.url_safety.socket_module.getaddrinfo",
+                "quarry.url_safety.socket_module.getaddrinfo",
                 side_effect=_fake_public_addrinfo,
             ),
             patch(
@@ -579,11 +602,13 @@ class TestAsyncIngestEndpoint:
             resp = client.post(
                 "/v1/ingest", json={"source": "https://example.com/docs"}
             )
-        assert resp.status_code == 202
-        data = resp.json()
-        assert "task_id" in data
-        assert data["status"] == "accepted"
-        assert data["task_id"].startswith("ingest-")
+            assert resp.status_code == 202
+            data = resp.json()
+            assert "task_id" in data
+            assert data["status"] == "accepted"
+            assert data["task_id"].startswith("ingest-")
+            # Drain under the mock so the worker never runs the real ingest_auto.
+            _poll_task_done(client, data["task_id"])
 
     def test_get_unknown_task_returns_404(self, tmp_path: Path) -> None:
         client = _make_client(tmp_path)
@@ -644,10 +669,10 @@ class TestAsyncIngestEndpoint:
 
     def test_concurrent_ingests_allowed(self, tmp_path: Path) -> None:
         """Two POST /ingest requests should both return 202 with different task_ids."""
-        client = _make_client(tmp_path)
         with (
+            _make_client(tmp_path) as client,
             patch(
-                "quarry.daemon.url_safety.socket_module.getaddrinfo",
+                "quarry.url_safety.socket_module.getaddrinfo",
                 side_effect=_fake_public_addrinfo,
             ),
             patch(
@@ -657,10 +682,13 @@ class TestAsyncIngestEndpoint:
         ):
             resp1 = client.post("/v1/ingest", json={"source": "https://example.com/a"})
             resp2 = client.post("/v1/ingest", json={"source": "https://example.com/b"})
-        assert resp1.status_code == 202
-        assert resp2.status_code == 202
-        id1 = resp1.json()["task_id"]
-        id2 = resp2.json()["task_id"]
-        assert id1 != id2
-        assert id1.startswith("ingest-")
-        assert id2.startswith("ingest-")
+            assert resp1.status_code == 202
+            assert resp2.status_code == 202
+            id1 = resp1.json()["task_id"]
+            id2 = resp2.json()["task_id"]
+            assert id1 != id2
+            assert id1.startswith("ingest-")
+            assert id2.startswith("ingest-")
+            # Drain both under the mock so neither worker runs the real ingest_auto.
+            _poll_task_done(client, id1)
+            _poll_task_done(client, id2)

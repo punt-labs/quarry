@@ -201,6 +201,24 @@ across `transform`, `index`, and `connector`).
   `localhost`/`::1`/`127.0.0.0/8` (the old `127.0.0.1`-literal check
   misclassified them) while treating `0.0.0.0` and unresolved names as
   remote (fail closed — an operator key is required).
+- **ingest (SSRF, redirect + sitemap crawl)**: server-side fetches now re-run
+  the SSRF address gate at every hop, not only on the initial source. Three
+  bypasses are closed. (1) A caller-supplied public URL that HTTP-redirected to
+  a private, loopback, link-local, CGNAT, or cloud-metadata address was followed
+  with no per-hop check — a guarded redirect handler now rejects each 30x
+  `Location` against its resolved address before the hop is followed, and the
+  final resolved URL is validated. (2) The sitemap crawler (ultimate-sitemap-
+  parser) fetched sitemap-indexes, `robots.txt` `Sitemap:` lines, and nested
+  sub-sitemaps server-side and recursed through them before quarry saw any leaf
+  URL, so an internal address listed at any depth was fetched ungated — the
+  crawler now runs through a web client that SSRF-gates every URL it fetches at
+  every recursion depth, refusing blocked targets fail-closed (the crawl skips
+  them, never connects). (3) An IPv4-mapped IPv6 address (`::ffff:100.64.x`)
+  carrying a CGNAT address slipped the IPv4-only CGNAT check — the gate now
+  judges a mapped address by its embedded IPv4. Both CLI and MCP ingest are
+  covered (they share the daemon fetch path). Complementary to resolved-IP
+  pinning, which remains a separate follow-up for the residual DNS-rebind
+  TOCTOU.
 
 ## [1.19.0] - 2026-07-14
 

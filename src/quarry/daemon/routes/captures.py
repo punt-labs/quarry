@@ -11,8 +11,8 @@ from starlette.responses import JSONResponse
 from quarry.captures_collection import CapturesCollection
 from quarry.daemon.ingest_jobs import CaptureIngestJob, ScrubbedIngestJob
 from quarry.daemon.routes.base import RouteGroup
-from quarry.daemon.url_safety import UrlSafetyCheck
 from quarry.http_guards import RequestGuards
+from quarry.url_safety import UrlSafetyCheck
 
 if TYPE_CHECKING:
     from quarry.config import Settings
