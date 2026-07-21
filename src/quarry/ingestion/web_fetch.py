@@ -9,6 +9,9 @@ from time import monotonic
 from typing import TYPE_CHECKING, ClassVar, final
 from urllib.error import HTTPError, URLError
 
+from quarry.ingestion.ssrf_redirect import GUARDED_OPENER
+from quarry.url_safety import UrlSafetyCheck
+
 if TYPE_CHECKING:
     from http.client import HTTPResponse
 
@@ -64,9 +67,7 @@ class WebFetcher:
         )
         deadline = monotonic() + self.timeout + self._DEADLINE_MARGIN_S
         try:
-            with urllib.request.urlopen(  # noqa: S310
-                request, timeout=self.timeout
-            ) as resp:
+            with GUARDED_OPENER.open(request, timeout=self.timeout) as resp:
                 return self._decode_html(resp, deadline)
         except HTTPError as exc:
             msg = f"HTTP {exc.code} fetching {url}"
@@ -90,10 +91,10 @@ class WebFetcher:
 
     @staticmethod
     def _reject_non_html(resp: HTTPResponse) -> None:
-        """Raise if the final URL left HTTP(S) or the body is not HTML."""
-        final_url: str = resp.url
-        if not final_url.startswith(("http://", "https://")):
-            msg = f"Redirect left HTTP(S): {final_url}"
+        """Raise if the final URL is unsafe (non-HTTP(S)/internal) or non-HTML."""
+        reason = UrlSafetyCheck.reject_reason(resp.url)
+        if reason is not None:
+            msg = f"final URL rejected: {reason}"
             raise ValueError(msg)
         content_type: str = resp.headers.get("Content-Type", "")
         media_type = content_type.split(";", 1)[0].strip().lower()
