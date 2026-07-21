@@ -116,13 +116,14 @@ class CollectionWorker:
     def abort(self) -> asyncio.Task[None]:
         """Cancel the worker, fail every still-queued job, and return the task.
 
-        The in-flight job's own ``task_terminal`` records ``failed`` when the
-        cancellation reaches it; the jobs still waiting never ran, so this marks
-        them ``failed`` and frees their admit slots.  A job with a durable client
-        artifact (a capture's transcript ``.md``) is recoverable via ``quarry
-        backfill``; one without (``remember``/``ingest``) is spooled here so an
-        admitted job is never *silently* dropped.  The cancelled task is returned
-        so a sync caller can retain it the way ``aclose`` awaits it.
+        Cancelling the task aborts the in-flight job, which ``_run`` spools as it
+        unwinds (it still holds that job; by here it is already gone from the
+        queue).  The jobs still waiting never ran, so this marks them ``failed``
+        and frees their admit slots.  A job with a durable client artifact (a
+        capture's transcript ``.md``) is recoverable via ``quarry backfill``; one
+        without (``remember``/``ingest``) is spooled so an admitted job — queued
+        OR in flight — is never *silently* dropped.  The cancelled task is
+        returned so a sync caller can retain it the way ``aclose`` awaits it.
         """
         self._task.cancel()
         spool = JobSpool.for_settings(self._ctx.settings)
@@ -136,15 +137,23 @@ class CollectionWorker:
 
     def _fail_aborted(self, item: _Queued, spool: JobSpool) -> None:
         """Fail a still-queued job, spooling it when it has no durable copy."""
-        record = item.job.spool_record()
-        if record is not None:
-            spool.write(record)
-            reason = "daemon shut down before ingest; spooled for recovery"
-        else:
-            reason = "daemon shut down before ingest completed"
+        spooled = self._spool(item.job, spool)
         item.state.status = "failed"
-        item.state.error = reason
+        item.state.error = (
+            "daemon shut down before ingest; spooled for recovery"
+            if spooled
+            else "daemon shut down before ingest completed"
+        )
         self._release_admit()
+
+    @staticmethod
+    def _spool(job: IngestUnit, spool: JobSpool) -> bool:
+        """Spool *job*'s recoverable snapshot; ``False`` if it has a durable copy."""
+        record = job.spool_record()
+        if record is None:
+            return False
+        spool.write(record)
+        return True
 
     async def _run(self) -> None:
         """Drain jobs FIFO, one at a time, each under the shared embed gate."""
@@ -164,16 +173,28 @@ class CollectionWorker:
                 # cap (web_fetch.py); embed + LanceDB write are finite.
                 async with self._embed_gate:  # global embed-concurrency bound
                     await item.job.run(self._ctx, item.state)  # records terminal
+            except asyncio.CancelledError:
+                # The drain-timeout abort cancels this task through the await
+                # chain, so the in-flight job is aborted HERE — not in abort(),
+                # which by now sees it already gone from the queue.  Spool it (a
+                # capture returns None; its .md survives) so an admitted
+                # remember/ingest is never silently lost, then let the
+                # cancellation propagate.  This also covers a job cancelled while
+                # still awaiting the embed gate (its task_terminal never ran).
+                self._mark_aborted(item)
+                raise
             finally:
-                if item.state.status == "running":
-                    # Cancelled (drain abort) while awaiting the embed gate, so
-                    # job.run — and its task_terminal — never ran and never
-                    # recorded a terminal status.  Record it here so the drain's
-                    # "every dequeued job reaches a terminal state" holds for a
-                    # job stuck between dequeue and gate acquisition.
-                    item.state.status = "failed"
-                    item.state.error = "daemon shut down before ingest completed"
                 self._running = False
                 self._last_active = monotonic()
                 self._release_admit()
                 self._queue.task_done()
+
+    def _mark_aborted(self, item: _Queued) -> None:
+        """Record a drain-cancelled in-flight job as failed, spooling it first."""
+        spooled = self._spool(item.job, JobSpool.for_settings(self._ctx.settings))
+        item.state.status = "failed"
+        item.state.error = (
+            "daemon shut down before ingest; spooled for recovery"
+            if spooled
+            else "daemon shut down before ingest completed"
+        )

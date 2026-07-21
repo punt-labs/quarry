@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
@@ -78,19 +80,57 @@ class JobSpool:
         return cls(settings.quarry_root / "spool")
 
     def write(self, record: SpoolRecord) -> None:
-        """Persist *record* atomically; never raise into the shutdown path.
+        """Persist *record* atomically and privately; never raise into shutdown.
 
-        A spool-file problem must not wedge daemon shutdown, so a write failure
-        is logged (with the collection, so the loss is at least visible) rather
+        The spool holds best-effort-scrubbed content (DES-036 is regex redaction,
+        not a guarantee), so it is created private — the dir ``0o700`` and the
+        file ``0o600`` from the start, never group/other-readable even for an
+        instant.  A spool-file problem must not wedge daemon shutdown, so a
+        failure is logged (with the collection, so the loss stays visible) rather
         than propagated — the abort loop keeps failing the remaining jobs.
         """
         try:
-            self._dir.mkdir(parents=True, exist_ok=True)
-            path = self._dir / record.filename()
-            tmp = path.with_name(path.name + ".tmp")
-            tmp.write_text(record.as_json(), encoding="utf-8")
-            tmp.replace(path)
+            self._ensure_private_dir()
+            self._atomic_write(self._dir / record.filename(), record.as_json())
         except OSError:
             logger.exception(
                 "failed to spool aborted %s job for %s", record.kind, record.collection
             )
+
+    def _ensure_private_dir(self) -> None:
+        """Create the spool dir ``0o700``, tightening it if it exists looser.
+
+        ``<quarry_root>`` itself is not created restrictively, so an existing
+        spool dir left world-readable by an earlier run is re-tightened here.
+        """
+        self._dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self._dir.chmod(0o700)
+
+    @staticmethod
+    def _atomic_write(path: Path, content: str) -> None:
+        """Write *content* to a ``0o600`` temp file, then atomically rename it in.
+
+        ``os.open`` with ``O_CREAT|O_EXCL`` and mode ``0o600`` creates the file
+        private from the start — no chmod-after window.  ``os.fdopen`` can raise
+        before adopting the fd, so that path closes the fd explicitly (the
+        success path hands ownership to the ``with`` block, so the fd is closed
+        exactly once).  The temp file is removed on any failure, and the atomic
+        rename is inside the try so a rename failure leaves no temp behind.
+        """
+        tmp = path.with_name(path.name + ".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            handle = os.fdopen(fd, "w", encoding="utf-8")
+        except OSError:
+            os.close(fd)
+            with suppress(OSError):
+                tmp.unlink()
+            raise
+        try:
+            with handle:
+                handle.write(content)
+            tmp.replace(path)
+        except OSError:
+            with suppress(OSError):
+                tmp.unlink()
+            raise

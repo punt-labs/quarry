@@ -325,8 +325,8 @@
     "efferent_coupling": 1.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.467,
-    "avg_lcom": 0.467
+    "max_lcom": 0.491,
+    "avg_lcom": 0.491
   },
   "src/quarry/daemon/context.py": {
     "efferent_coupling": 3.0,

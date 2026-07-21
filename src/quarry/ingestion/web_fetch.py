@@ -93,9 +93,9 @@ class WebFetcher:
     def _read_body(resp: HTTPResponse, deadline: float) -> bytes:
         """Read the body in chunks under the size cap and wall-clock deadline.
 
-        The deadline is checked before each chunk (a slow-drip body is aborted)
-        and the running total after each (an oversize body fails without being
-        buffered whole).
+        The deadline and the running total are both checked after each read
+        returns: a slow-drip body is aborted once the deadline has passed, and an
+        oversize body fails without being buffered whole.
         """
         chunks: list[bytes] = []
         total = 0

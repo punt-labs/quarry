@@ -487,6 +487,32 @@ def test_aborted_queued_job_without_durable_copy_is_spooled(tmp_path: Path) -> N
     asyncio.run(_run())
 
 
+def test_aborted_in_flight_job_without_durable_copy_is_spooled(tmp_path: Path) -> None:
+    """The single in-flight job (not in the FIFO) is spooled on a hard abort.
+
+    quarry-atsz: the already-dequeued job is tracked as ``_current``; a hard
+    drain-timeout abort must spool it too, else the one in-flight remember/ingest
+    is silently lost even though the queued ones are recovered.
+    """
+
+    async def _run() -> None:
+        ledger = _Ledger()
+        queue = _make_queue(quarry_root=tmp_path)
+        gate = asyncio.Event()  # never set -> the job stays in flight, blocked
+        record = SpoolRecord("remember", "c", "note", "in-flight content")
+        unit = _StubUnit("c", "j", ledger, gate=gate, spool=record)
+        state = _state("j")
+        assert queue.try_submit("c", unit, state)
+        await asyncio.sleep(0.02)  # dequeued -> in flight, blocked on the gate
+        await queue.aclose(drain_timeout=0.05)  # times out -> abort
+        assert state.status == "failed"
+        files = list((tmp_path / "spool").glob("remember-*.json"))
+        assert len(files) == 1
+        assert json.loads(files[0].read_text())["payload"] == "in-flight content"
+
+    asyncio.run(_run())
+
+
 def test_aborted_queued_job_with_durable_copy_is_not_spooled(tmp_path: Path) -> None:
     """A capture (durable .md) aborted at drain fails without a spool file."""
 
