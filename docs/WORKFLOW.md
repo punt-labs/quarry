@@ -121,7 +121,7 @@ EnterBatch ≙ [ LoopState ]                -- no precondition: the backlog loop
                                           -- is a do-while(true); intake always
                                           -- has standing to run
 
-ExitBatch ≙ [ Δ LoopState |
+ExitBatch ≙ [ Δ LoopState; mergedPRs : ℙ PR |   -- the PRs merged this batch
   intakeDisposed(signals)                 -- every signal observed at this
                                           --   iteration's intake became a bead
                                           --   or was closed at the door with a
