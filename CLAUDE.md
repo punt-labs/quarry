@@ -18,6 +18,21 @@ Local semantic search for AI agents and humans. Indexes 20+ document formats, em
 - **MCP server**: `quarry mcp` (stdio) or `mcp-proxy` → daemon (`/mcp` WebSocket); there is no `quarry-server` entry point
 - **Python**: 3.13+, managed with `uv`
 
+## Mandatory Reading
+
+Source-of-truth documents, `@`-imported so they stay in context. Read them
+before writing code.
+
+- [`docs/WORKFLOW.md`](docs/WORKFLOW.md) is the authoritative development
+  process: three nested loops (backlog → PR → mission), each with pseudocode
+  for its control flow and a Z schema for its entry/exit doorway conditions.
+  The [Development Loop](#development-loop) section below is a pointer to it,
+  not a second copy.
+- [`DESIGN.md`](DESIGN.md) is the ADR log (DES-001+); on any conflict about
+  settled architecture, it wins. Read it before proposing changes.
+
+@docs/WORKFLOW.md
+
 ## Architecture
 
 ### How a query works
@@ -204,40 +219,43 @@ Use `standard` pipeline (design → implement → test → review) for any chang
 
 ## Development Loop
 
-Two nested loops govern all code changes. See `punt-kit/standards/pr-review.md` for the authoritative reference.
+**The authoritative process is [`docs/WORKFLOW.md`](docs/WORKFLOW.md)** (`@`-imported
+under [Mandatory Reading](#mandatory-reading)) — three nested loops, each with
+pseudocode for its control flow and a Z schema for its entry/exit doorway. This
+section is a map, not a second copy; the specifics live there in full.
 
-### Inner loop — one mission
+```text
+Level 1 — Backlog loop   one iteration = one work batch     (beads)
+  Level 2 — PR loop      one iteration = one pull request
+    Level 3 — Mission    one iteration = one delegated mission (a do-while)
+```
 
-Execute after every agent delegation that produces sizeable code changes.
+- **Level 1 (backlog)** keeps the bead tracker true and picks what's next:
+  intake every signal → a bead or closed at the door; validate against current
+  main; order automatically (security → broken journeys → active epic → debt →
+  features); escalate only a genuine fork. `EnterBatch`/`ExitBatch`.
+- **Level 2 (PR)** turns one throughput-sized unit into one merged,
+  rollback-coherent PR: missions build it (design mission first for
+  architectural units, `designRatified` before code); full-diff local review to
+  a zero-findings round; the **demo gate** — build + install the wheel, restart
+  the daemon, exercise the real entry point, observe real output; then PR, a
+  **boolean merge gate** (bots are advisory — the leader owns the stop
+  decision), squash-merge without asking, close-out with the recap.
+  `EnterPR`/`ExitPR`.
+- **Level 3 (mission)** is one delegated piece of work, a do-while: the worker
+  codes/tests, a *different* specialist evaluates, reflect-and-fix until a round
+  is clean. The leader owns every git/GitHub operation and monitors by the
+  filesystem, never by commit activity; concurrency-class work gets a djb
+  adversarial pass before acceptance. `EnterMission`/`ExitMission`.
 
-1. **Delegate** to the right ethos specialist (see pairing table above). Do not use bare `Agent()` for implementation work.
-2. **`make check`** — must pass before proceeding. Zero exceptions.
-3. **`make install`** — builds wheel and installs it locally. `make check` passing is not installation.
-4. **`make test`** against the installed artifact — not from source.
-5. **`/feature-dev:code-reviewer`** on the mission diff.
-6. **`/pr-review-toolkit:silent-failure-hunter`** on the mission diff.
-7. **Fix every finding.** To dismiss one: document (a) the exact finding, (b) the specific reason it does not apply, (c) the code reference. "Pre-existing" and "by design" are not reasons.
-8. **Re-run both agents.** Exit the fix loop only when both return zero findings.
-9. **Exercise manually** — write expected output first, then compare actual. Cover one failure mode, one boundary condition.
-10. **Commit.**
-
-### Outer loop — one PR (one rollback-coherent unit)
-
-After all missions for the feature complete and each has passed its inner loop:
-
-1. **`make check`** on the full accumulated diff.
-2. **Both local review agents** on the complete diff — cross-mission issues only appear at this level.
-3. **Fix all findings** using the same documentation standard.
-4. **Human IDE review** of the full diff.
-5. **`make install`** then exercise the complete user-facing workflow end-to-end, paste actual output.
-6. **Re-run agents** until clean.
-7. **Open PR.** A PR opened before step 6 is clean is a procedural violation.
-
-### PR boundaries
-
-Split by **rollback granularity**, not size. Ask: if this broke production, what reverts together? That is one PR. "The diff is large" and "separate concern" are prohibited split reasons. Independent rollback capability and sequential dependency are valid.
-
-**PRs do not need to be "pure," and purity is never a reason to hold back an improvement.** These PRs are agent-reviewed and squash-merged — the whole branch collapses to one commit on `main`, so the "normal fencing" (one-concern-per-PR, keep-the-diff-minimal, split-out-the-unrelated-bit) does not apply. Do not spend time policing scope: a docs tweak, an OO/complexity paydown, or an adjacent bug fix riding along with a feature PR is welcome, not a violation. **The operator explicitly rejects rules that make it harder to improve code.** If you are in a file and can make it better, do it — never revert or defer a genuine improvement to keep a PR "clean," and never open a separate PR solely for purity. The one real constraint is mechanical, not stylistic: when multiple agents share one worktree, don't let them edit the same uncommitted lines simultaneously — sequence them so no one's work is clobbered. That is about not losing work, not about scope.
+Two directives that govern all three and are the most-corrected failures here:
+**defects flow inward, scope flows outward** — a reviewer-flagged defect in an
+open PR is fixed in that PR, never laundered into a "follow-up bead"; and **PRs
+need not be pure** — a docs tweak, an OO paydown, or an adjacent fix riding
+along is welcome, an improvement is never held back for tidiness, and the
+operator explicitly rejects rules that make it harder to improve code. Rollback
+coherence is the one structural split criterion; "the diff is large" and
+"separate concern" are not.
 
 ## Release
 
