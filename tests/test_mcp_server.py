@@ -316,11 +316,21 @@ class TestIngest:
         assert "register" in result
 
     def test_url_dispatches(self, harness: _ToolHarness) -> None:
-        with patch(
-            "quarry.daemon.routes.ingestion.UrlSafetyCheck.reject_reason",
-            return_value=None,
+        # Mock ingest_auto so the async worker never runs a REAL fetch of the
+        # example.com URL when it drains the queued job (the reject_reason patch
+        # only gates the route, not the worker's later pipeline call).
+        with (
+            patch(
+                "quarry.daemon.routes.ingestion.UrlSafetyCheck.reject_reason",
+                return_value=None,
+            ),
+            patch(
+                "quarry.ingestion.pipeline.ingest_auto",
+                return_value={"document_name": "x", "collection": "c", "chunks": 1},
+            ),
         ):
             result = harness.tools.ingest("https://example.com/doc")
+            harness.http.get("/v1/tasks")  # let the worker drain the job under the mock
         assert "task" in result
 
 

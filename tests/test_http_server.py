@@ -1860,11 +1860,12 @@ class TestIngest:
             patch("quarry.ingestion.pipeline.ingest_auto", return_value=mock_result),
         ):
             resp = tc.post("/v1/ingest", json={"source": "https://example.com/docs"})
-
-        assert resp.status_code == 202
-        data = resp.json()
-        assert data["status"] == "accepted"
-        assert data["task_id"].startswith("ingest-")
+            assert resp.status_code == 202
+            data = resp.json()
+            assert data["status"] == "accepted"
+            assert data["task_id"].startswith("ingest-")
+            # Drain under the mock so the worker never runs the real ingest_auto.
+            _poll_task_done(tc, data["task_id"])
 
     def test_scrub_capture_with_empty_cwd_scrubs_not_ingest_auto(
         self, tmp_path: Path
@@ -2146,9 +2147,11 @@ class TestIngest:
             patch("quarry.ingestion.pipeline.ingest_auto", return_value=mock_result),
         ):
             resp = tc.post("/v1/ingest", json={"source": "HTTPS://example.com/docs"})
-
-        assert resp.status_code == 202
-        assert resp.json()["task_id"].startswith("ingest-")
+            assert resp.status_code == 202
+            task_id = resp.json()["task_id"]
+            assert task_id.startswith("ingest-")
+            # Drain under the mock so the worker never runs the real ingest_auto.
+            _poll_task_done(tc, task_id)
 
     def test_rejects_cgnat(self, client: TestClient) -> None:
         """RFC 6598 CGNAT addresses (100.64.0.0/10) must be blocked."""

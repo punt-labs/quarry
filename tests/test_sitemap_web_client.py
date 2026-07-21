@@ -309,6 +309,24 @@ class TestGatedClientGet:
             assert isinstance(resp, WebClientErrorResponse)
         assert _TrackedFp.closed_count == 20  # one close per failed fetch
 
+    def test_error_response_readable_after_fd_closed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """message() and retryable() are readable AFTER the fd is closed.
+
+        Capture-before-close: USP logs response.message() after get() returns,
+        so the returned response must expose plain captured values, never a
+        lazy read of the now-closed HTTPError response.
+        """
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _HttpErrorOpener(404))
+        resp = GatedSitemapWebClient().get("https://safe.example/x.xml")
+        assert isinstance(resp, WebClientErrorResponse)
+        # Readable with no "I/O operation on closed file" -- values were captured
+        # before exc.close().
+        assert resp.message() == "HTTP 404"
+        assert resp.retryable() is False
+
     @pytest.mark.parametrize("code", [500, 503, 429])
     def test_transient_http_errors_are_retryable(
         self, code: int, monkeypatch: pytest.MonkeyPatch

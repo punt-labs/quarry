@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import urllib.request
 from dataclasses import dataclass
 from functools import partial
@@ -70,7 +71,11 @@ class WebFetcher:
             with GUARDED_OPENER.open(request, timeout=self.timeout) as resp:
                 return self._decode_html(resp, deadline)
         except HTTPError as exc:
+            # HTTPError IS an open response holding a socket fd; close it before
+            # re-raising or a failed fetch leaks an fd (EMFILE over a crawl).
             msg = f"HTTP {exc.code} fetching {url}"
+            with contextlib.suppress(Exception):
+                exc.close()
             raise ValueError(msg) from exc
         except URLError as exc:
             msg = f"Cannot reach {url}: {exc.reason}"

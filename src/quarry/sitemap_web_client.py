@@ -104,15 +104,19 @@ class GatedSitemapWebClient(AbstractWebClient):
         except RedirectRejectedError as exc:
             return self._error(str(exc), retryable=False)
         except HTTPError as exc:
-            # HTTPError IS an open response holding a socket fd; close it or the
-            # fd leaks -- over a crawl that is EMFILE -> daemon starvation.  5xx
-            # and 429 are transient (retry); other 4xx are permanent.
+            # Capture everything USP reads (status code + message) into plain
+            # locals and BUILD the response BEFORE closing: HTTPError IS an open
+            # response holding a socket fd, and USP later logs response.message()
+            # -- a response built from captured values never lazily reads the
+            # now-closed fd.  5xx and 429 are transient (retry); other 4xx are
+            # permanent.  Then close the fd (or it leaks -> EMFILE -> starvation).
             retryable = self._retryable_http(exc.code)
+            error = self._error(f"HTTP {exc.code}", retryable=retryable)
             with contextlib.suppress(Exception):
                 # A close failure must not break get()'s never-raises contract;
                 # the kernel still frees the fd regardless.
                 exc.close()
-            return self._error(f"HTTP {exc.code}", retryable=retryable)
+            return error
         except (TimeoutError, URLError) as exc:
             return self._error(f"cannot reach {url}: {exc}", retryable=True)
         except (OSError, HTTPException, ValueError) as exc:
