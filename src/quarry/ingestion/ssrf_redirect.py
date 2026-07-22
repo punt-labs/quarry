@@ -40,27 +40,37 @@ class SsrfGuardedRedirectHandler(urllib.request.HTTPRedirectHandler):
 
     @classmethod
     def build_opener(cls) -> urllib.request.OpenerDirector:
-        """Return the one gated, pinned, proxy-less opener for server-side fetches.
+        """Return the one gated, pinned, http(s)-only opener for server fetches.
 
-        ``build_opener`` swaps urllib's default redirect handler for this SSRF
-        gate and its default HTTP(S) handlers for the pinned ones (it drops a
-        default when passed a subclass), so every hop is BOTH re-gated on
-        redirect AND connected to a connect-time-validated IP
-        (:mod:`quarry.ingestion.pinned_connection`).  The HTTPS handler is given
-        an explicit ``create_default_context`` -- system trust store,
-        ``check_hostname`` on -- because the pin narrows the address, not the
-        trust (the opposite of the daemon-RPC pinned-CA context).  The empty
-        ``ProxyHandler({})`` replaces the default proxy handler so HTTP_PROXY/
-        HTTPS_PROXY in the daemon env are NOT honored: the fetch goes DIRECT to
-        the gated, pinned host -- never to an unvalidated proxy that would
-        reintroduce SSRF.  Matches the client's trust_env=False posture.
+        Assembled by hand rather than via ``urllib.request.build_opener`` so the
+        handler set is a closed allowlist, not a default set minus overrides:
+        the per-hop SSRF redirect gate, the pinned HTTP(S) handlers (each hop
+        connects to a connect-time-validated IP -- see
+        :mod:`quarry.ingestion.pinned_connection`), an empty ``ProxyHandler({})``
+        so HTTP_PROXY/HTTPS_PROXY are NOT honored (the fetch goes DIRECT, never
+        to an unvalidated proxy that would reintroduce SSRF), and the two error
+        handlers http needs.  ``build_opener`` would additionally install
+        ``FTPHandler``/``FileHandler``/``DataHandler``; omitting them makes the
+        opener STRUCTURALLY unable to open ``ftp://``, ``file://``, or ``data:``
+        -- ``UnknownHandler`` turns any non-http(s) scheme into a ``URLError`` --
+        so a caller that forgets its own scheme pre-check still cannot reach a
+        non-http(s) surface.  The pinned HTTPS handler gets an explicit
+        ``create_default_context`` (system trust store, ``check_hostname`` on):
+        the pin narrows the address, not the trust (the opposite of the
+        daemon-RPC pinned-CA context).
         """
-        return urllib.request.build_opener(
-            cls(),
+        opener = urllib.request.OpenerDirector()
+        for handler in (
+            cls(),  # per-hop SSRF redirect gate (301/302/303/307/308)
             PinnedHTTPHandler(),
             PinnedHTTPSHandler(context=ssl.create_default_context()),
-            urllib.request.ProxyHandler({}),
-        )
+            urllib.request.ProxyHandler({}),  # empty: ignore env proxies
+            urllib.request.HTTPErrorProcessor(),  # route status codes to handlers
+            urllib.request.HTTPDefaultErrorHandler(),  # unhandled code -> HTTPError
+            urllib.request.UnknownHandler(),  # any non-http(s) scheme -> URLError
+        ):
+            opener.add_handler(handler)
+        return opener
 
     def redirect_request(
         self,

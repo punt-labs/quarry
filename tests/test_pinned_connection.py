@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ssl
 from typing import Any, cast
+from urllib.error import URLError
 
 import pytest
 from usp.web_client.abstract_client import WebClientErrorResponse
@@ -23,7 +24,7 @@ from quarry.ingestion.pinned_connection import (
     PinnedHTTPSConnection,
 )
 from quarry.ingestion.pinned_opener import PinnedHTTPSHandler
-from quarry.ingestion.ssrf_redirect import SsrfGuardedRedirectHandler
+from quarry.ingestion.ssrf_redirect import GUARDED_OPENER, SsrfGuardedRedirectHandler
 from quarry.ingestion.web_fetch import WebFetcher
 from quarry.sitemap_web_client import GatedSitemapWebClient
 from quarry.url_safety import SafeTarget, UrlRejectedError, UrlSafetyCheck
@@ -333,3 +334,32 @@ class TestExceptionBoundaries:
         reason = UrlSafetyCheck.reject_reason("http://[")
         assert reason is not None
         assert "malformed URL" in reason
+
+
+class TestSchemeLockdown:
+    """The shared opener serves http(s) ONLY — non-http(s) schemes cannot open.
+
+    Defense in depth behind each caller's scheme pre-check: the opener carries
+    no FTP/File/Data handler, so an ``ftp://``/``file://``/``data:`` URL hits
+    ``UnknownHandler`` and raises ``URLError`` — it is never served, even if a
+    future caller forgets to gate the scheme itself.
+    """
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "file:///etc/passwd",
+            "ftp://internal.host/secret",
+            "data:text/html,<h1>hi</h1>",
+        ],
+    )
+    def test_non_http_scheme_is_refused_by_the_opener(self, url: str) -> None:
+        with pytest.raises(URLError):
+            GUARDED_OPENER.open(url, timeout=5)
+
+    def test_opener_carries_no_non_http_scheme_handler(self) -> None:
+        """No FTP/File/Data handler is installed; the pinned + redirect set is."""
+        names = {type(h).__name__ for h in cast("Any", GUARDED_OPENER).handlers}
+        assert names.isdisjoint({"FTPHandler", "FileHandler", "DataHandler"})
+        assert {"PinnedHTTPHandler", "PinnedHTTPSHandler"} <= names
+        assert "SsrfGuardedRedirectHandler" in names
