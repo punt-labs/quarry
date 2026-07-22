@@ -715,17 +715,17 @@
     "future_annotations": 1.0
   },
   "src/quarry/daemon/ingest_unit.py": {
-    "avg_complexity": 1.0,
-    "avg_params": 0.67,
-    "class_to_func_ratio": 1.0,
-    "classes_per_module": 0.0,
-    "encapsulation_ratio": 1.0,
-    "future_annotations": 1.0,
-    "init_violations": 0.0,
-    "max_complexity": 1.0,
     "method_ratio": 1.0,
-    "module_size": 35.0,
-    "public_attr_violations": 0.0
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.67,
+    "max_complexity": 1.0,
+    "avg_complexity": 1.0,
+    "module_size": 37.0,
+    "classes_per_module": 0.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/quarry/daemon/job_spool.py": {
     "avg_complexity": 1.43,
