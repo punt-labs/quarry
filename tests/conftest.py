@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Generator, Iterable
+from collections.abc import Generator, Iterable, Iterator
 from pathlib import Path
 from typing import Self, final
 from unittest.mock import patch
@@ -18,12 +18,33 @@ from quarry.api import (
     RegistrationList,
     TaskAccepted,
 )
+from quarry.client import QuarryClient
 from quarry.config import Settings
 from quarry.db import Database
 from quarry.db.storage import get_db
 from quarry.types import LanceDB
+from tests.inproc_daemon import InProcessDaemon
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture(scope="session")
+def asgi_daemon(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[QuarryClient]:
+    """A hermetic in-process daemon: real handlers over ASGI, no socket, no ONNX.
+
+    Session-scoped so the app and its (empty) tmp database build once. Yields a
+    :class:`QuarryClient` wired to the real daemon app; a CLI/MCP test patches
+    ``TargetResolver.connect`` to return this client and exercises the real
+    ``CLI → client → daemon → LanceDB`` request path with NO live ``quarryd``
+    running — the guarantee the "daemon-mandatory tests must be hermetic" rule
+    demands (verifiable with the daemon STOPPED).
+    """
+    data_dir = tmp_path_factory.mktemp("asgi-daemon")
+    daemon = InProcessDaemon(data_dir)
+    with daemon.client() as client:
+        yield client
 
 
 class GitSandbox:

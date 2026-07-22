@@ -33,10 +33,16 @@ class QuarryResources:
     """
 
     _settings: Settings
+    # None => build the real ONNX embedder lazily; a test injects a stand-in so
+    # warm() AND queries skip the model (the one embedder on every path).
+    _embedder_override: EmbeddingBackend | None
 
-    def __new__(cls, settings: Settings) -> Self:
+    def __new__(
+        cls, settings: Settings, *, embedder: EmbeddingBackend | None = None
+    ) -> Self:
         self = super().__new__(cls)
         self._settings = settings
+        self._embedder_override = embedder
         return self
 
     @property
@@ -56,7 +62,15 @@ class QuarryResources:
 
     @cached_property
     def embedder(self) -> EmbeddingBackend:
-        """ONNX session for queries, isolated from the sync worker (DES-032)."""
+        """The query embedding backend: the isolated ONNX session (DES-032) by
+        default, or the injected override when one was supplied (the test seam).
+
+        The override is THE embedder on every path — the query path and
+        ``warm()`` both read this property, so supplying one makes ``warm()``
+        skip the ONNX build (the hermetic-daemon seam).
+        """
+        if self._embedder_override is not None:
+            return self._embedder_override
         return new_embedding_backend()
 
     def warm(self) -> None:
@@ -70,6 +84,11 @@ class QuarryResources:
         _ = self.database
         logger.info("Warming isolated query database connection...")
         _ = self.query_database
-        logger.info("Loading query ONNX embedding session...")
+        # Only the real-load path builds ONNX; an injected override just returns
+        # itself, so claiming an ONNX load there would be a misleading log.
+        if self._embedder_override is None:
+            logger.info("Loading query ONNX embedding session...")
+        else:
+            logger.info("Using injected embedder (test seam); skipping ONNX load")
         _ = self.embedder
         logger.info("Daemon resources ready")

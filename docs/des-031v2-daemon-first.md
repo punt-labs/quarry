@@ -262,16 +262,25 @@ CLI-local; the chunk purge crosses to the daemon. `disable` is therefore a
    `quarry.client`, `quarry.__main__` (minus the `serve`/`mcp` engine-owning
    modules), `quarry.hooks` → any engine package. A violating import fails CI,
    not review.
-2. **The `serve`/`mcp` host-local exception uses a LAZY engine import in the
-   command body, not a module-level import.** import-linter is a *static*
-   analyzer over the module import graph; a top-level `from quarry.db import …`
-   in `__main__` would trip the contract even for the two legitimately
-   engine-owning commands. Importing the engine *inside* the command function
-   body keeps it out of the static client graph, so the layers contract stays
-   clean and only the two commands that genuinely need the engine pull it in at
-   call time. Because import-linter cannot see the lazy import, the guard for
-   these two commands is the **runtime sabotage test** (enforcement #3), not
-   import-linter.
+2. **The host-admin exception is an ENUMERATED `ignore_imports` list, not
+   lazy-import invisibility (corrected as built — PR-6).** The original text here
+   assumed import-linter cannot see function-body lazy imports; with the current
+   toolchain (grimp 3.15) that is **false** — grimp resolves lazy imports, so a
+   deferred `from quarry.db import …` inside a command body *is* seen by the
+   contract. The boundary therefore does not depend on invisibility. Two facts
+   make it hold: (a) the engine's only entry point, `quarry.daemon.launcher` (the
+   `quarryd` console script), lives **inside** `quarry.daemon`, so it is
+   engine-side and never a contract *source*; and (b) the one sanctioned
+   client-side exception — the host-admin diagnostics (`doctor`, and through it
+   `install`/`uninstall`) that probe the local engine environment (model cache,
+   ONNX runtime, on-disk LanceDB) to report *why* a daemon is unhealthy even when
+   it is down — is an explicit, self-documenting `ignore_imports` list of the
+   host-admin diagnostic lazy edges (`doctor`/`doctor_captures`) in `.importlinter`. Those imports are function-body lazy
+   so the heavy engine never loads on the hot CLI/hook path, and the **runtime
+   sabotage test** (enforcement #3) proves that module-scope engine-freeness. A
+   new engine import from any *other* client-reachable module still fails the
+   contract. (`quarry mcp` is no longer part of this exception — PR-4 made it a
+   pure client with no engine import; only `quarryd`/`serve` is engine-owning.)
 3. **`quarry.api` and `quarry.client` have zero engine imports** — a unit test
    imports each in a subprocess with `sys.modules` sabotaged so that importing
    lancedb/onnxruntime raises, proving the contract/client libs are

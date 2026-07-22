@@ -41,9 +41,12 @@ class DaemonContext:
         *,
         api_key: str | None = None,
         cors_origins: frozenset[str] | None = None,
+        # Test seam: inject a stand-in embedder so a hermetic daemon skips ONNX.
+        # Threaded into QuarryResources so warm() and queries both honor it.
+        embedder: EmbeddingBackend | None = None,
     ) -> Self:
         self = super().__new__(cls)
-        self._resources = QuarryResources(settings)
+        self._resources = QuarryResources(settings, embedder=embedder)
         self._api_key = api_key
         self._cors_origins = cors_origins or DEFAULT_CORS_ORIGINS
         self._start_time = time.monotonic()

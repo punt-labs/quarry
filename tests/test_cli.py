@@ -194,17 +194,51 @@ class TestListFieldParity:
         _run(["list", "documents", "--collection", "c"])
         assert transport.params_for("GET", "/v1/documents")["collection"] == "c"
 
-    def test_collections_route(self, transport: RecordingTransport) -> None:
-        _run(["list", "collections"])
-        transport.params_for("GET", "/v1/collections")
 
-    def test_registrations_route(self, transport: RecordingTransport) -> None:
-        _run(["list", "registrations"])
-        transport.params_for("GET", "/v1/registrations")
+class TestCliAgainstRealDaemon:
+    """The CLI driven end-to-end against the REAL daemon handlers, in-process.
 
-    def test_databases_route(self, transport: RecordingTransport) -> None:
-        _run(["list", "databases"])
-        transport.params_for("GET", "/v1/databases")
+    Proof of the hermetic ASGI daemon fixture (DES-031): patch the client
+    factory to the in-process daemon and each command runs through its real
+    ``/v1`` route on a real (empty) LanceDB — no live ``quarryd``, no ONNX. These
+    migrate the ``list collections/registrations/databases`` route checks off the
+    canned-body ``RecordingTransport`` (which replayed a fixed body and so could
+    not catch a handler that stopped returning the empty shape) onto the real
+    handler, and add the ``status`` and ``find`` read paths for good measure.
+    """
+
+    @pytest.fixture
+    def real_daemon(self, asgi_daemon: QuarryClient) -> Iterator[None]:
+        """Point the CLI's client factory at the in-process daemon."""
+        with patch.object(TargetResolver, "connect", return_value=asgi_daemon):
+            yield
+
+    @pytest.mark.usefixtures("real_daemon")
+    def test_list_collections_empty(self) -> None:
+        assert _run(["list", "collections"]) == []
+
+    @pytest.mark.usefixtures("real_daemon")
+    def test_list_registrations_empty(self) -> None:
+        assert _run(["list", "registrations"]) == []
+
+    @pytest.mark.usefixtures("real_daemon")
+    def test_list_databases_reports_the_single_fixed_db(self) -> None:
+        data = _run(["list", "databases"])
+        assert isinstance(data, list)
+        assert len(data) == 1
+        assert data[0]["document_count"] == 0
+
+    @pytest.mark.usefixtures("real_daemon")
+    def test_status_reports_empty_database(self) -> None:
+        data = _run(["status"])
+        assert isinstance(data, dict)
+        assert data["document_count"] == 0
+        assert data["collection_count"] == 0
+        assert data["chunk_count"] == 0
+
+    @pytest.mark.usefixtures("real_daemon")
+    def test_find_returns_no_results_on_empty_index(self) -> None:
+        assert _run(["find", "anything"]) == []
 
 
 class TestDelete:

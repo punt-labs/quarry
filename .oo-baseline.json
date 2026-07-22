@@ -613,10 +613,10 @@
   "src/quarry/daemon/context.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 0.23,
+    "avg_params": 0.31,
     "max_complexity": 2.0,
     "avg_complexity": 1.08,
-    "module_size": 91.0,
+    "module_size": 94.0,
     "classes_per_module": 1.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
@@ -1326,17 +1326,17 @@
     "public_attr_violations": 0.0
   },
   "src/quarry/http_resources.py": {
-    "avg_complexity": 1.0,
-    "avg_params": 0.17,
-    "class_to_func_ratio": 1.0,
-    "classes_per_module": 1.0,
-    "encapsulation_ratio": 1.0,
-    "future_annotations": 1.0,
-    "init_violations": 0.0,
-    "max_complexity": 1.0,
     "method_ratio": 1.0,
-    "module_size": 58.0,
-    "public_attr_violations": 0.0
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.33,
+    "max_complexity": 2.0,
+    "avg_complexity": 1.33,
+    "module_size": 76.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/quarry/ingest_collection.py": {
     "method_ratio": 1.0,

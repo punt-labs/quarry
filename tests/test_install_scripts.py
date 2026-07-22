@@ -453,6 +453,36 @@ def test_network_mode_fails_without_quarry_api_key(
     )
 
 
+def test_network_mode_fails_when_daemon_never_becomes_ready(
+    env: dict[str, str], mock_bin: Path
+) -> None:
+    """(Class 5) --network install exits non-zero when the daemon never readies.
+
+    The health gate must fail CLOSED: a daemon stuck warming (``/health`` keeps
+    returning ``state=="starting"``) must drain the retry budget and exit
+    non-zero with an actionable message — never hang, never green-light an
+    unready daemon. ``curl`` is mocked to always return the warming body; the
+    ``sleep`` symlink is replaced with an instant no-op so the loop drains fast.
+    """
+    # /health always reports warming, never ready.
+    _write_mock(
+        mock_bin / "curl",
+        'printf \'{"state":"starting"}\\n\'\nexit 0\n',
+    )
+    # Replace the real-sleep symlink with an instant no-op so the retry budget
+    # drains in milliseconds (write_text would follow the symlink to /bin/sleep).
+    (mock_bin / "sleep").unlink()
+    _write_mock(mock_bin / "sleep", "exit 0\n")
+
+    result = _run_script(INSTALL_SH, env, args=["--network"])
+    assert result.returncode != 0, (
+        "install must exit non-zero when the daemon never becomes ready"
+    )
+    assert "did not become healthy" in result.stdout, (
+        "the failure must carry the actionable 'did not become healthy' message"
+    )
+
+
 def test_network_mode_runs_quarry_install(env: dict[str, str]) -> None:
     """--network mode runs ``quarry install`` with QUARRY_SERVE_HOST=0.0.0.0."""
     result = _run_script(INSTALL_SH, env, args=["--network"])

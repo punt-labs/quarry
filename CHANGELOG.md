@@ -16,6 +16,23 @@ across `transform`, `index`, and `connector`).
 
 ### Added
 
+- **infra (boundary)**: DES-031 v2 client/engine boundary lock (PR-6) — the
+  daemon-first split is now enforced structurally, not by convention. A new
+  import-linter contract (`.importlinter`, wired into `make check` via
+  `check-imports` and into CI) fails the build if any client process
+  (`quarry.__main__`, `quarry.hooks`, `quarry.mcp_server`) or client library
+  (`quarry.client`, `quarry.api`) imports an engine package (`quarry.db`,
+  `quarry.embeddings`, `quarry.ingestion`, `quarry.retrieval`, `quarry.sync`,
+  `quarry.daemon`); the only sanctioned exceptions are the host-admin diagnostic
+  commands' lazy engine imports. The runtime engine-sabotage guard now covers the
+  full client surface (poisons `lancedb`/`onnxruntime`/`pyarrow` and imports each
+  client module), catching a lazy engine import that leaks to module scope where
+  the static contract cannot see it. A reusable in-process ASGI daemon fixture
+  (real handlers over Starlette, no socket, no ONNX) makes daemon-mandatory
+  CLI/MCP tests hermetic — verifiable with the daemon stopped — and one
+  real-loopback-TLS smoke (`make test-slow`) proves the pinned-CA wire contract
+  end-to-end without destabilising the fast CI suite.
+
 - **index (daemon)**: serialized capture/index queue (DES-042) — the daemon now
   drains capture, remember, and ingest jobs through a per-collection FIFO worker
   instead of firing an unbounded `asyncio.create_task` per request. One in-flight

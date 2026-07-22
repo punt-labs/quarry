@@ -31,11 +31,27 @@ _ENGINE = (
     "onnxruntime",
     "pyarrow",
     "quarry.db",
+    "quarry.embeddings",
     "quarry.ingestion",
     "quarry.retrieval",
     "quarry.sync",
+    "quarry.daemon",
 )
-_POISONED = ("lancedb", "onnxruntime")
+_POISONED = ("lancedb", "onnxruntime", "pyarrow")
+
+# The full client surface DES-031 I1 locks: every client PROCESS and the two
+# client-tier LIBRARIES must import with zero engine, even when the engine's own
+# heavy deps are poisoned. This is the runtime companion to the import-linter
+# contract (.importlinter): import-linter checks the static graph, this checks
+# the eager import behaviour — including that the host-admin lazy imports in
+# `__main__` (doctor/install/uninstall) have NOT leaked to module scope.
+_CLIENT_SURFACE = (
+    "quarry.__main__",
+    "quarry.hooks",
+    "quarry.mcp_server",
+    "quarry.client",
+    "quarry.api",
+)
 
 _REMOVED_ENGINE_NAMES = (
     "Database",
@@ -116,6 +132,36 @@ def _down():
 result = mcp_server.McpTools(connect=_down).status()
 assert result.startswith("Error:"), result
 
+loaded = [m for m in check if m in sys.modules]
+assert not loaded, loaded
+print("engine-free")
+"""
+    result = _run(program)
+    assert result.returncode == 0, result.stderr
+    assert "engine-free" in result.stdout
+
+
+@pytest.mark.parametrize("module", _CLIENT_SURFACE)
+def test_client_surface_imports_engine_free_under_sabotage(module: str) -> None:
+    """Every client process and library imports with zero engine, engine poisoned.
+
+    A fresh interpreter poisons ``lancedb``/``onnxruntime``/``pyarrow`` to
+    ``None`` so any eager engine import on the client module's path raises
+    ``ImportError`` — then imports the module and asserts no engine package
+    reached ``sys.modules``. This locks DES-031 I1 for the WHOLE client surface
+    (not just ``import quarry``): a future top-level ``from quarry.db import ...``
+    in ``__main__``/``hooks``/``mcp_server``, or a host-admin lazy engine import
+    that leaked to module scope, fails here. import-linter cannot see a lazy
+    (function-body) import's absence at module scope; this subprocess check can.
+    """
+    program = f"""
+import sys
+poison = {_POISONED!r}
+for _m in poison:
+    sys.modules[_m] = None  # any real import of these now raises ImportError
+import {module}
+engine = {_ENGINE!r}
+check = [m for m in engine if m not in poison]
 loaded = [m for m in check if m in sys.modules]
 assert not loaded, loaded
 print("engine-free")
