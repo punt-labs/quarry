@@ -320,3 +320,26 @@ def test_stop_tears_down_the_source(tmp_path: Path) -> None:
         assert source.stopped is True
 
     asyncio.run(_run())
+
+
+def test_request_scan_fails_umbrella_when_a_child_is_shed(tmp_path: Path) -> None:
+    """An explicit sync whose child scans are shed (503) fails the umbrella task.
+
+    request_scan must reflect the children — a shed/failed child fails the
+    umbrella with a count — never report silent success while collections go
+    unindexed (DES-045 djb fix 2).
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue(admit=False)  # every submit is shed
+        ctx, _root = _build(tmp_path, queue=queue)
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        umbrella = ctx.tasks.begin("sync")
+        await loop.request_scan(umbrella)
+        assert umbrella.status == "failed"
+        assert umbrella.results["failed"]  # a non-zero shed-child count
+        await loop.stop()
+
+    asyncio.run(_run())
