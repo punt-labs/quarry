@@ -62,10 +62,11 @@ class QuarryResources:
 
     @cached_property
     def embedder(self) -> EmbeddingBackend:
-        """ONNX session for queries, isolated from the sync worker (DES-032).
+        """The query embedding backend: the isolated ONNX session (DES-032) by
+        default, or the injected override when one was supplied (the test seam).
 
-        A test-injected override is THE embedder on every path — the query path
-        and ``warm()`` both read this property, so an override makes ``warm()``
+        The override is THE embedder on every path — the query path and
+        ``warm()`` both read this property, so supplying one makes ``warm()``
         skip the ONNX build (the hermetic-daemon seam).
         """
         if self._embedder_override is not None:

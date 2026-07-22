@@ -1,16 +1,20 @@
-"""One real-loopback-TLS contract smoke test for the DES-031 remote wire.
+"""Real-loopback-TLS contract tests for the DES-031 remote wire.
 
-A self-signed CA signs a server certificate carrying a ``127.0.0.1`` IP SAN; a
-real ``uvicorn`` TLS server binds an ephemeral loopback port; and the SHIPPED
-``QuarryClient`` — pinned to that CA (system roots excluded), presenting its
-bearer over the encrypted channel — completes ``/health`` plus one ``/v1``
-operation. That is the whole client↔daemon TLS contract exercised end-to-end
-against real code, not a TestClient stand-in.
+Two tests, both driving a real ``uvicorn`` TLS server on an ephemeral loopback
+port:
 
-Tiering (quarry-5pg1): a live server over a real socket is CI-fragile in the
-fast unit suite, so this ONE test is marked ``slow``. The fast job runs
-``-m 'not slow'`` and never starts the server; it runs in the wheel gate / via
-``-m slow``. Keep it to a single test — it is a wire smoke, not a route matrix.
+- the round-trip smoke: a self-signed CA signs a server cert carrying a
+  ``127.0.0.1`` IP SAN, and the SHIPPED ``QuarryClient`` — pinned to that CA
+  (system roots excluded), presenting its bearer over the encrypted channel —
+  completes ``/health`` plus one ``/v1`` operation. That is the whole
+  client↔daemon TLS contract exercised end-to-end against real code.
+- the startup-timeout resource-hygiene guard: a forced startup timeout must
+  still shut the server down and join its thread, leaking no live server or
+  bound socket (quarry-5pg1).
+
+Tiering: both use a live server over a real socket, so they carry ``slow`` (the
+fast job runs ``-m 'not slow'`` and never starts a server) and ``integration``
+(``-m integration`` selects them) — the marker pair the real-socket suite uses.
 """
 
 from __future__ import annotations
@@ -132,6 +136,7 @@ def tls_fixture(tmp_path: Path) -> _TlsFixture:
 
 
 @pytest.mark.slow
+@pytest.mark.integration
 def test_tls_loopback_client_round_trip(tls_fixture: _TlsFixture) -> None:
     """A real loopback quarryd over TLS answers a pinned-CA ``QuarryClient``.
 
@@ -157,6 +162,7 @@ def test_tls_loopback_client_round_trip(tls_fixture: _TlsFixture) -> None:
 
 
 @pytest.mark.slow
+@pytest.mark.integration
 def test_tls_server_releases_thread_on_startup_timeout(
     tls_fixture: _TlsFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
