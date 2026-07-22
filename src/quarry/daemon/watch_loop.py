@@ -257,7 +257,7 @@ class WatchLoop:
             name = self._document_name(root, path)
             if name is None:
                 continue
-            delete = DocumentDeleteJob(db, settings, batch.key.collection, name)
+            delete = DocumentDeleteJob(db, settings, batch.key.collection, (name,))
             if not self._submit(batch.key, delete, "delete"):
                 failed.append(FsEvent(path, deleted=True))
         return failed

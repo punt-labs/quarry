@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 
 from starlette.concurrency import run_in_threadpool
 
+from quarry.daemon.tasks import task_terminal
 from quarry.ingestion.file_indexer import SingleFileIndexer
 from quarry.sync import sync_collection
 from quarry.sync_registry import SyncRegistry
@@ -55,16 +56,19 @@ class FileIndexJob:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Index the file off-thread, recording per-file success or a soft error."""
         del ctx  # this job carries its own database; the queue's ctx is unused
-        outcome = await run_in_threadpool(self._index)
-        if outcome.error is not None:
-            state.status = "failed"
-            state.error = outcome.error
-            return
-        state.status = "completed"
-        state.results = {
-            "document": outcome.document_name,
-            "ingested": outcome.ingested,
-        }
+        # task_terminal so an UNEXPECTED failure records ``failed`` and never
+        # escapes to crash the queue worker (the queue's per-job contract).
+        with task_terminal(state):
+            outcome = await run_in_threadpool(self._index)
+            if outcome.error is not None:
+                state.status = "failed"
+                state.error = outcome.error
+                return
+            state.status = "completed"
+            state.results = {
+                "document": outcome.document_name,
+                "ingested": outcome.ingested,
+            }
 
     def spool_record(self) -> SpoolRecord | None:
         """Return ``None``: the file on disk is the recoverable artifact."""
@@ -88,37 +92,46 @@ class FileIndexJob:
 
 @dataclass(frozen=True, slots=True)
 class DocumentDeleteJob:
-    """Drop a removed file's chunks and its registry rows (same worker as insert).
+    """Drop one or more documents' chunks and registry rows (same worker as insert).
 
     Riding the same per-``(database, collection)`` worker as the inserts means a
-    delete can never interleave an insert for the same document.
+    delete can never interleave — or, for a deregister purge, be *resurrected*
+    by — an insert for the same collection: it runs FIFO behind every admitted
+    index/scan job, so a queued ``FileIndexJob`` for a just-removed collection
+    re-inserts *before* this purge deletes, never after (the single-writer
+    invariant a direct out-of-queue purge would violate).  ``documents`` carries
+    one name for a live delete event, or the whole removed set for a deregister
+    purge — one job, one admission slot, not one per document.
     """
 
     database: Database
     settings: Settings
     collection: str
-    document_name: str
+    documents: tuple[str, ...]
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
-        """Delete the document's chunks + registry rows off-thread."""
+        """Delete every document's chunks + registry rows off-thread."""
         del ctx
-        deleted = await run_in_threadpool(self._delete)
-        state.status = "completed"
-        state.results = {"document": self.document_name, "deleted": deleted}
+        with task_terminal(state):
+            deleted = await run_in_threadpool(self._delete)
+            state.status = "completed"
+            state.results = {"documents": len(self.documents), "deleted": deleted}
 
     def spool_record(self) -> SpoolRecord | None:
         """Return ``None``: a delete has no content to recover."""
         return None
 
     def _delete(self) -> int:
-        """Delete chunks then the matching registry rows in one transaction."""
-        deleted = self.database.store.delete_document(
-            self.document_name, collection=self.collection
+        """Delete chunks for every document, then their registry rows, in one txn."""
+        deleted = sum(
+            self.database.store.delete_document(name, collection=self.collection)
+            for name in self.documents
         )
+        wanted = set(self.documents)
         conn = SyncRegistry(self.settings.registry_path)
         try:
             for rec in conn.list_files(self.collection):
-                if rec.document_name == self.document_name:
+                if rec.document_name in wanted:
                     conn.delete_file(rec.path, commit=False)
             conn.commit()
         finally:
@@ -145,17 +158,18 @@ class CollectionSyncJob:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Run the bulk collection sync off-thread, recording its counts."""
         del ctx
-        result = await run_in_threadpool(self._sync)
-        state.status = "completed"
-        state.results = {
-            "collection": result.collection,
-            "ingested": result.ingested,
-            "refreshed": result.refreshed,
-            "deleted": result.deleted,
-            "skipped": result.skipped,
-            "failed": result.failed,
-            "errors": list(result.errors),
-        }
+        with task_terminal(state):
+            result = await run_in_threadpool(self._sync)
+            state.status = "completed"
+            state.results = {
+                "collection": result.collection,
+                "ingested": result.ingested,
+                "refreshed": result.refreshed,
+                "deleted": result.deleted,
+                "skipped": result.skipped,
+                "failed": result.failed,
+                "errors": list(result.errors),
+            }
 
     def spool_record(self) -> SpoolRecord | None:
         """Return ``None``: a bulk scan reconciles from disk, nothing to spool."""

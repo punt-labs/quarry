@@ -18,6 +18,8 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from quarry.daemon.finalize_job import CollectionPurgeJob
+from quarry.daemon.route_key import RouteKey
 from quarry.daemon.routes.base import RouteGroup
 from quarry.daemon.tasks import TaskState, task_terminal
 from quarry.http_guards import RequestGuards
@@ -27,6 +29,13 @@ logger = logging.getLogger(__name__)
 
 # The registrations body carries only a small option dict.
 MAX_REGISTRATIONS_BODY_BYTES = 16 * 1024
+
+# The deregister purge polls its queued delete job to completion.  A full queue
+# is transient (workers drain), and the purge MUST run — the registry rows are
+# already gone — so submission retries within a bounded window before failing.
+_PURGE_TERMINAL = frozenset({"completed", "failed"})
+_PURGE_POLL_S = 0.05
+_PURGE_SUBMIT_DEADLINE_S = 30.0
 
 
 @final
@@ -134,14 +143,17 @@ class RegistrationRoutes(RouteGroup):
             "deleted_chunks": 0,
             "type": "registration",
         }
-        purge_docs = [] if keep_data else removed_docs
-        if purge_docs:
+        if keep_data:
+            state.status = "completed"  # keep the chunks; nothing to purge
+        else:
+            # Purge unconditionally (even with no known removed docs): a
+            # FileIndexJob admitted before deregister may still be inserting
+            # chunks, and the collection-wide purge — FIFO behind it — clears
+            # whatever it wrote, so no orphan survives (DES-045).
             self.ctx.tasks.track(
                 state,
-                asyncio.create_task(self._run_purge(state, collection, purge_docs)),
+                asyncio.create_task(self._run_purge(state, collection)),
             )
-        else:
-            state.status = "completed"  # nothing to purge; complete immediately
 
         return JSONResponse(
             {
@@ -187,20 +199,48 @@ class RegistrationRoutes(RouteGroup):
                 state.status = "failed"
                 state.error = "task exited without setting terminal status"
 
-    async def _run_purge(
-        self, state: TaskState, collection: str, removed_docs: list[str]
-    ) -> None:
-        """Purge chunks for an already-deregistered collection; update state."""
+    async def _run_purge(self, state: TaskState, collection: str) -> None:
+        """Purge a deregistered collection's chunks THROUGH the queue.
 
-        def _purge() -> int:
-            store = self.ctx.database.store
-            return sum(
-                store.delete_document(d, collection=collection) for d in removed_docs
-            )
-
+        Routing the purge onto the collection's per-``(database, collection)``
+        FIFO worker (DES-045) makes it run behind any already-admitted
+        ``FileIndexJob`` for the same collection, so a queued insert can never
+        resurrect chunks *after* the purge — the single-writer invariant a direct
+        out-of-queue ``delete_document`` would violate.  The task polls the
+        queued job to completion so ``deleted_chunks`` still reflects the result.
+        """
         with task_terminal(state):
-            state.results["deleted_chunks"] = await run_in_threadpool(_purge)
-            state.status = "completed"
+            purge = self.ctx.tasks.begin("deregister-purge")
+            job = CollectionPurgeJob(self.ctx.database, collection)
+            key = RouteKey(self.ctx.database_name, collection)
+            await self._enqueue_purge(key, job, purge)
+            while purge.status not in _PURGE_TERMINAL:
+                await asyncio.sleep(_PURGE_POLL_S)
+            state.results["deleted_chunks"] = purge.results.get("deleted", 0)
+            if purge.status == "failed":
+                state.status = "failed"
+                state.error = purge.error or "purge failed"
+            else:
+                state.status = "completed"
+
+    async def _enqueue_purge(
+        self, key: RouteKey, job: CollectionPurgeJob, purge: TaskState
+    ) -> None:
+        """Admit the purge, retrying a transiently-full queue within the deadline.
+
+        The registry rows are already gone, so the purge MUST run or the
+        collection's chunks orphan.  A full queue drains as workers finish, so
+        submission retries until the deadline before marking the purge failed.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _PURGE_SUBMIT_DEADLINE_S
+        while not self.ctx.ingest_queue.try_submit(key, job, purge):
+            if loop.time() >= deadline:
+                self.ctx.tasks.drop(purge)
+                purge.status = "failed"
+                purge.error = "ingest queue full; purge not admitted"
+                return
+            await asyncio.sleep(_PURGE_POLL_S)
 
     @staticmethod
     def _list_sync(registry_path: Path) -> list[DirectoryRegistration]:

@@ -212,7 +212,7 @@ def test_delete_event_submits_document_delete_job(tmp_path: Path) -> None:
         await asyncio.sleep(0.15)
         deletes = queue.jobs(DocumentDeleteJob)
         assert len(deletes) == 1
-        assert cast("DocumentDeleteJob", deletes[0]).document_name == "gone.md"
+        assert cast("DocumentDeleteJob", deletes[0]).documents == ("gone.md",)
 
     asyncio.run(_run())
 

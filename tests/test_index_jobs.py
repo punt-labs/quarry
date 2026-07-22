@@ -16,7 +16,10 @@ from unittest.mock import patch
 import numpy as np
 
 from quarry.config import Settings
+from quarry.daemon.context import DaemonContext
 from quarry.daemon.index_jobs import CollectionSyncJob, DocumentDeleteJob, FileIndexJob
+from quarry.daemon.route_key import RouteKey
+from quarry.daemon.routes.registrations import RegistrationRoutes
 from quarry.daemon.tasks import TaskState
 from quarry.db import Database
 from quarry.ingestion.file_indexer import SingleFileIndexer
@@ -24,8 +27,6 @@ from quarry.sync_registry import SyncRegistry
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
-
-    from quarry.daemon.context import DaemonContext
 
 _DIM = 768
 
@@ -151,7 +152,8 @@ def test_document_delete_job_removes_chunks_and_rows(tmp_path: Path) -> None:
     assert "c.md" in _docs(db)
 
     state = TaskState(task_id="del", kind="delete")
-    asyncio.run(DocumentDeleteJob(db, settings, "col", "c.md").run(_dummy_ctx(), state))
+    job = DocumentDeleteJob(db, settings, "col", ("c.md",))
+    asyncio.run(job.run(_dummy_ctx(), state))
     assert state.status == "completed"
     assert "c.md" not in _docs(db)
     conn = SyncRegistry(settings.registry_path)
@@ -175,3 +177,56 @@ def test_collection_sync_job_bulk_indexes_all_files(tmp_path: Path) -> None:
     assert state.status == "completed"
     assert state.results["ingested"] == 2
     assert _docs(db) == {"one.md", "two.md"}
+
+
+def test_deregister_purge_after_queued_index_leaves_no_orphans(tmp_path: Path) -> None:
+    """A deregister purge cleans up even a racing queued index job (DES-045 blocker).
+
+    A FileIndexJob for the collection is admitted, then deregister removes the
+    registry rows and routes a collection-wide purge onto the SAME FIFO worker.
+    The insert runs first (and orphans its chunks — its registry upsert fails on
+    the now-gone directory), then the purge deletes the whole collection, so no
+    orphan chunk survives.  Routing the purge through the queue (not a direct
+    out-of-queue delete) is what orders it after the insert.
+    """
+    base = tmp_path / "data" / "testdb"
+    (base / "lancedb").mkdir(parents=True)
+    root = tmp_path / "proj"
+    root.mkdir()
+    settings = Settings(
+        lancedb_path=base / "lancedb", registry_path=base / "registry.db"
+    )
+    conn = SyncRegistry(settings.registry_path)
+    try:
+        conn.register_directory(root.resolve(), "col")
+    finally:
+        conn.close()
+    (root / "x.md").write_text("indexable body text that will orphan then purge")
+
+    async def _run() -> None:
+        ctx = DaemonContext(settings, embedder=_FakeEmbedder())
+        key = RouteKey(ctx.database_name, "col")
+        # 1. an index job for the collection is admitted (in-flight).
+        index_state = ctx.tasks.begin("index")
+        job = FileIndexJob(
+            ctx.database, ctx.settings, "col", root.resolve(), root.resolve() / "x.md"
+        )
+        assert ctx.ingest_queue.try_submit(key, job, index_state)
+        # 2. deregister drops the registry rows, then purges THROUGH the queue —
+        #    FIFO behind the index job, so it runs after the insert.
+        dconn = SyncRegistry(settings.registry_path)
+        try:
+            dconn.deregister_directory("col")
+        finally:
+            dconn.close()
+        purge_state = ctx.tasks.begin("deregister")
+        purge_state.results = {"deleted_chunks": 0}
+        await RegistrationRoutes(ctx)._run_purge(purge_state, "col")
+        await ctx.aclose_ingest_queue()
+        # 3. no orphan chunks survive for the deregistered collection.
+        assert _docs(ctx.database) == set()
+
+    with patch(
+        "quarry.ingestion.streaming.get_embedding_backend", return_value=_FakeEmbedder()
+    ):
+        asyncio.run(_run())

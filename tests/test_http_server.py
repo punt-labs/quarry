@@ -2819,8 +2819,11 @@ class TestRunPurgeTask:
         _inject_mocks(ctx)
         state = TaskState(task_id="deregister-x", kind="deregister")
         state.results = {"collection": "docs", "removed": 1, "deleted_chunks": 0}
-        with patch("quarry.db.chunk_store.ChunkStore.delete_document", return_value=3):
-            asyncio.run(RegistrationRoutes(ctx)._run_purge(state, "docs", ["a.pdf"]))
+        # DES-045: the purge is a collection-wide delete routed through the queue.
+        with patch(
+            "quarry.db.chunk_store.ChunkStore.delete_collection", return_value=3
+        ):
+            asyncio.run(RegistrationRoutes(ctx)._run_purge(state, "docs"))
         assert state.status == "completed"
         assert state.results["deleted_chunks"] == 3
         assert state.results["removed"] == 1
@@ -2833,10 +2836,10 @@ class TestRunPurgeTask:
         state = TaskState(task_id="deregister-y", kind="deregister")
         state.results = {"collection": "docs", "removed": 1, "deleted_chunks": 0}
         with patch(
-            "quarry.db.chunk_store.ChunkStore.delete_document",
+            "quarry.db.chunk_store.ChunkStore.delete_collection",
             side_effect=RuntimeError("purge boom"),
         ):
-            asyncio.run(RegistrationRoutes(ctx)._run_purge(state, "docs", ["a.pdf"]))
+            asyncio.run(RegistrationRoutes(ctx)._run_purge(state, "docs"))
         assert state.status == "failed"
         assert "purge boom" in state.error
 
