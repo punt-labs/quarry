@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Self, final
 from starlette.concurrency import run_in_threadpool
 
 from quarry.daemon.debounce import DebouncedDispatcher
+from quarry.daemon.fs_events import NullFsEventSource
 from quarry.daemon.fs_watchdog import WatchdogSource
 from quarry.daemon.route_key import RouteKey
 from quarry.daemon.tasks import task_terminal
@@ -85,16 +86,23 @@ class WatchLoop:
         return self
 
     async def start(self) -> None:
-        """Open roster connections, schedule every tree, and submit initial scans."""
+        """Build the roster (always) and, if enabled, the fs-watch observer.
+
+        The roster + submitter are built unconditionally so an explicit ``quarry
+        sync`` enqueues scans regardless of ``watch_enabled`` — the queue is
+        always up; only the always-on fs-watch observer is gated (DES-045:
+        watch_enabled gates the observer, not on-demand sync).
+        """
         settings = self._ctx.settings
-        if not settings.watch_enabled:
-            logger.info("watch: disabled (watch_enabled=false)")
-            return
         self._loop = asyncio.get_running_loop()
         if self._source is None:
-            self._source = WatchdogSource(
-                use_polling=settings.watch_use_polling,
-                poll_interval_s=settings.watch_poll_interval_s,
+            self._source = (
+                WatchdogSource(
+                    use_polling=settings.watch_use_polling,
+                    poll_interval_s=settings.watch_poll_interval_s,
+                )
+                if settings.watch_enabled
+                else NullFsEventSource()
             )
         self._roster = WatchRoster(
             self._source,
@@ -103,6 +111,9 @@ class WatchLoop:
             base_settings=settings,
         )
         self._submitter = WatchSubmitter(self._ctx, self._roster, self._loop)
+        if not settings.watch_enabled:
+            logger.info("watch: observer disabled; on-demand sync still enqueues")
+            return
         # The dispatcher's sink is the submitter; the submitter re-arms shed
         # events through the dispatcher — so create the sink first, then bind.
         self._dispatcher = DebouncedDispatcher(
@@ -120,8 +131,8 @@ class WatchLoop:
             self._safety_task = self._loop.create_task(self._safety_loop())
 
     async def stop(self) -> None:
-        """Tear down the observer and drop pending state (before the queue drain)."""
-        if not self._started:
+        """Tear down the observer + roster before the queue drain (any watch state)."""
+        if self._roster is None:  # start() never ran
             return
         self._started = False
         if self._safety_task is not None:
@@ -131,9 +142,8 @@ class WatchLoop:
             self._submitter.cancel_pending()  # cancel outstanding backoff re-arms
         if self._dispatcher is not None:
             self._dispatcher.cancel_all()
-        if self._roster is not None:
-            self._roster.unwatch_all()
-            self._roster.close()  # drop sibling conns so a restart can't leak them
+        self._roster.unwatch_all()
+        self._roster.close()  # drop sibling conns so a restart can't leak them
         if self._source is not None:
             # stop() joins the observer thread — off the loop so shutdown never blocks.
             await run_in_threadpool(self._source.stop)
@@ -169,9 +179,9 @@ class WatchLoop:
             self._summarize_scan(umbrella, children, timed_out=timed_out)
 
     def _submit_all_scans(self) -> list[TaskState]:
-        """Submit a scan+finalize for every active-DB registration; return states."""
+        """Scan+finalize every active-DB registration (runs even if observer off)."""
         roster, submitter = self._roster, self._submitter
-        if not (self._started and roster is not None and submitter is not None):
+        if roster is None or submitter is None:  # start() never ran
             return []
         name = self._ctx.database_name
         roster.ensure_database(name)

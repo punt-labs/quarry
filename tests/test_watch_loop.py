@@ -123,7 +123,7 @@ def _register(settings: Settings, directory: Path, collection: str) -> None:
 
 
 def _build(
-    tmp_path: Path, *, queue: _RecordingQueue, bulk: int = 5
+    tmp_path: Path, *, queue: _RecordingQueue, bulk: int = 5, enabled: bool = True
 ) -> tuple[DaemonContext, Path]:
     """Return a fake daemon context and the resolved watched root for 'col'."""
     data = tmp_path / "data"
@@ -134,6 +134,7 @@ def _build(
         quarry_root=data,
         lancedb_path=data / "testdb" / "lancedb",
         registry_path=data / "testdb" / "registry.db",
+        watch_enabled=enabled,
         watch_debounce_s=0.03,
         watch_max_delay_s=0.3,
         watch_bulk_threshold=bulk,
@@ -430,6 +431,33 @@ def test_safety_scan_picks_up_a_collection_registered_after_start(
         scans = [j for _key, j in queue.submitted if isinstance(j, CollectionSyncJob)]
         assert any(job.collection == "col2" for job in scans)
         assert source.watch_count == 2  # the new tree is now watched
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_explicit_sync_runs_with_observer_disabled(tmp_path: Path) -> None:
+    """`quarry sync` enqueues real scans even when watch_enabled=false (conf-80).
+
+    watch_enabled gates the always-on observer, not on-demand sync: the queue is
+    always up.  A disabled loop schedules no trees but must still run an explicit
+    sync, not report success while indexing nothing.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, _root = _build(tmp_path, queue=queue, enabled=False)
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        assert source.watch_count == 0  # observer disabled: nothing watched
+        assert queue.submitted == []  # no initial scan on start when disabled
+        umbrella = ctx.tasks.begin("sync")
+        await loop.request_scan(umbrella)
+        # the registered collection was really scanned, and status is truthful
+        assert len(queue.jobs(CollectionSyncJob)) == 1
+        assert umbrella.status == "completed"
+        assert umbrella.results["collections"] == 1
         await loop.stop()
 
     asyncio.run(_run())

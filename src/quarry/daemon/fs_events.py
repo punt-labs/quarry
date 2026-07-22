@@ -11,7 +11,7 @@ so the debounce/coalesce/submit logic is exercised deterministically.  Only
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol, final
+from typing import TYPE_CHECKING, Protocol, Self, final
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -54,3 +54,30 @@ class FsEventSource(Protocol):
     def stop(self) -> None:
         """Tear the source down, joining any background observer thread."""
         ...
+
+
+@final
+class NullFsEventSource:
+    """A do-nothing source for sync-only mode (``watch_enabled=false``).
+
+    The observer is disabled but an explicit ``quarry sync`` still enqueues
+    scans, so the watch loop's roster needs a source object it never actually
+    schedules against (Null Object, PY-DP-9).
+    """
+
+    __slots__ = ()
+
+    def __new__(cls) -> Self:
+        return super().__new__(cls)
+
+    def schedule(self, root: Path, on_event: Callable[[FsEvent], None]) -> object:
+        """Return no handle: nothing is watched in sync-only mode."""
+        del root, on_event
+        return None
+
+    def unschedule(self, handle: object) -> None:
+        """No-op: nothing was ever scheduled."""
+        del handle
+
+    def stop(self) -> None:
+        """No-op: there is no observer thread to join."""
