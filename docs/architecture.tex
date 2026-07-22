@@ -414,6 +414,58 @@ Registry   & \modpath{sync\_registry.py}  & SQLite registry of watched
 \end{tabular}
 \end{center}
 
+\subsection{Always-on Watch/Index Loop (DES-045)}
+
+Continuous incremental indexing --- the first-class daemon-first rationale
+(DES-031) --- is a daemon-owned \modpath{daemon/watch\_loop.py}
+\texttt{WatchLoop} that keeps every registered directory's index fresh with no
+human action. It is a \emph{producer only}: it watches the filesystem,
+debounces edit bursts, and submits index work to the existing DES-042 queue,
+writing no LanceDB table directly. So it inherits the whole serialization
+stack unchanged --- DES-042 per-table FIFO $\to$ DES-034
+\texttt{ProgressiveIndexer}/\texttt{\_write\_lock} $\to$ DES-026 WAL --- and the
+queue's routing key becomes \texttt{(database, collection)}, extending
+single-writer-per-table across the roster. Three producers (initial scan on
+start, the live watch, an explicit \texttt{quarry sync}) all feed the one queue
+and thus cannot race.
+
+\begin{center}
+\begin{tabular}{llp{6.6cm}}
+\toprule
+\textbf{Module} & \textbf{File} & \textbf{Responsibility} \\
+\midrule
+Watch loop  & \modpath{daemon/watch\_loop.py}   & The \texttt{WatchLoop}:
+              per-database watch sets + observer lifecycle, initial scan,
+              start/stop watching, \texttt{request\_scan}, FTS-rebuild
+              coalescer.  Producer into the queue. \\
+Roster      & \modpath{daemon/watch\_roster.py} & Per-database connections +
+              watch sets enumerated from the on-disk roster (trust boundary:
+              only roster DBs are opened). \\
+Events      & \modpath{daemon/fs\_events.py}    & \texttt{FsEvent} +
+              \texttt{FsEventSource} protocol seam (tests inject synthetic
+              events). \\
+Watchdog    & \modpath{daemon/fs\_watchdog.py}  & The sole \texttt{watchdog}
+              importer: FSEvents (macOS) / inotify (Linux) with a
+              \texttt{PollingObserver} fallback. \\
+Debounce    & \modpath{daemon/debounce.py}      & Per-path debounce window +
+              max-delay cap + bulk-threshold coalescing. \\
+Index jobs  & \modpath{daemon/index\_jobs.py}   & \texttt{FileIndexJob} /
+              \texttt{DocumentDeleteJob} / \texttt{CollectionSyncJob}
+              (\texttt{IngestUnit}s). \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+A small delta re-indexes as per-file jobs (embed gate released between files
+for cross-collection fairness); a burst above \texttt{watch\_bulk\_threshold}
+collapses to one \texttt{CollectionSyncJob} (DES-034's size-gated flush keeps
+the fragment budget). Per-file jobs \emph{never} rebuild the FTS index --- a
+lone finalize job runs post-quiescence per \texttt{(database, collection)}, so
+the daemon's persistent connection does not reopen the DES-045/quarry-0dss
+descriptor leak; a resource-invariant test proves the fd count plateaus across
+multiple databases. A full-queue 503 re-arms the event with capped backoff, never
+a silent drop.
+
 \subsection{Surfaces}
 
 \begin{center}
