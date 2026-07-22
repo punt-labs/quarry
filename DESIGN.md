@@ -1776,3 +1776,70 @@ recursion (no wholesale mock). A residual DNS-rebind TOCTOU (the gate resolves,
 the socket re-resolves) and network-specific NAT64 prefixes remain the tracked
 pinning follow-up (quarry-kmzo/ljym), to be unified as validate-then-pin every
 hop.
+
+## DES-044: Fetch IP-pinning — connect to a connect-time-validated address (DNS-rebind)
+
+**Status:** Accepted (2026-07-22) · **Bead:** quarry-kmzo + quarry-ljym · **Full design:** `docs` design note (`.tmp/design/dns-rebind-pinning.md`) + this entry
+
+**Context.** DES-043 gates every fetch hop against the resolved address, but the
+gate (`UrlSafetyCheck.reject_reason`) and the socket connect resolved DNS
+*independently*: `reject_reason` ran `getaddrinfo` and validated, then threw the
+result away, and `http.client`'s `connect` re-resolved the hostname at socket
+time. A party controlling both an attacker-reachable URL (an `/ingest` source, a
+capture `source_url`, a sitemap `loc`, a redirect `Location`) and an
+authoritative DNS server could return a safe public IP at gate time and a
+blocked internal/metadata IP at connect time (classic DNS rebinding). The window
+was documented at `url_safety.py:44-48`; the metadata-name denylist did not close
+the address-rebind.
+
+**Decision.** Pin AND re-validate as **one** connect, so the change is
+*impossible by construction* rather than merely mitigated. `PinnedHTTPConnection`
+/ `PinnedHTTPSConnection` (`src/quarry/ingestion/pinned_connection.py`) perform
+exactly one `getaddrinfo` on the safety path — inside `connect`, via
+`UrlSafetyCheck.validated_addresses(host)` — and connect the socket to a
+validated IP **literal** drawn from that same result set. There is no second,
+independent resolution. The seam is the stdlib's own instance attribute
+`HTTPConnection._create_connection` (set to `socket.create_connection` and called
+by `connect`); the pinned classes override `connect()` to rebind it to a
+validating connector, then call `super().connect()` — no `__init__` override
+(PY-CC-1 clean), and via the MRO `PinnedHTTPSConnection(HTTPSConnection,
+PinnedHTTPConnection)` the HTTPS `connect` still runs
+`wrap_socket(server_hostname=self.host)` after the pinned TCP connect. One shared
+`GUARDED_OPENER` composes the per-hop `SsrfGuardedRedirectHandler` + the pinned
+HTTP(S) handlers + `ProxyHandler({})`; both attacker-reachable surfaces
+(`WebFetcher.fetch`, `GatedSitemapWebClient.get`/USP crawl) use it, and each
+redirect hop opens a fresh pinned connection that re-resolves-and-re-validates
+the new host. `UrlSafetyCheck` gains a `SafeTarget` value object,
+`validated_addresses` (raises `UrlRejectedError`, returns the validated set,
+fail-closed, all-records-reject-if-any-blocked) and `resolve`; `reject_reason` is
+retained verbatim as the None-means-safe route-admission wrapper (now pure
+defense-in-depth whose divergence is irrelevant to safety).
+
+**Trust-domain invariant.** The pin narrows the *address*, not the *trust*.
+`self.host` is never mutated → SNI = hostname, cert verified against the hostname
+(never the pinned IP), `Host` header = hostname. The public-fetch context stays
+`ssl.create_default_context()` (system trust store, `check_hostname=True`,
+`CERT_REQUIRED`) — deliberately **not** the daemon-RPC pinned-CA context in
+`client/`/`tls.py`, which is untouched.
+
+**Rejected alternatives.** `reject_reason` returning `(reason, addrs)` and
+rebuilding a per-fetch opener with those pinned addresses (P2) — reintroduces two
+resolutions that must be proven equal and adds per-request plumbing to a
+module-global opener for no security gain; switching the fetch path to `httpx`
+with a custom resolver (the fetch path is entirely `urllib`; httpx lives only in
+the daemon-RPC client — the switch would rewrite the redirect gate, size cap,
+wall-clock deadline, and the USP `AbstractWebClient` adapter for nothing);
+overriding `__init__` to rebind the seam (the `connect()` rebind is PY-CC-1
+clean and needs no `__init__`); deleting `reject_reason` (churns route admission
+and the final-URL checks for no safety gain).
+
+**Consequence.** The DNS-rebind TOCTOU is eliminated on every attacker-reachable
+fetch path (ingest, capture, sitemap crawl, redirect hops) with no TLS-trust
+weakening, closing quarry-kmzo + quarry-ljym and completing the "validate-then-
+pin every hop" mechanism DES-043 deferred. Covered by a headline rebinding
+simulation (safe-at-gate / blocked-at-connect → `socket.create_connection` never
+reached with a blocked literal) plus the five recurring bug classes (TLS
+semantics, socket-leak failure injection, remote/local equivalence, exception
+boundaries). `_create_connection` is a semi-private stdlib seam; a pin-target
+assertion test fails loudly if a future CPython refactor bypasses it. `proxy.py`
+(hardcoded GitHub hosts, install-time) is out of scope — not attacker-supplied.
