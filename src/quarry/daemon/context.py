@@ -111,6 +111,18 @@ class DaemonContext:
     def settings(self) -> Settings:
         return self._resources.settings
 
+    @property
+    def database_name(self) -> str:
+        """Return the name of the database this daemon is bound to at startup.
+
+        The name is the directory beneath ``quarry_root`` that holds the
+        LanceDB data dir (``.../<name>/lancedb``), matching what ``quarry
+        databases`` lists.  It is the ``database`` half of every content job's
+        :class:`RouteKey`, so a capture/remember/ingest routes to the same
+        per-table worker the watch loop uses for that database (DES-045).
+        """
+        return self._resources.settings.lancedb_path.parent.name or "default"
+
     def warm(self) -> None:
         """Build cached resources single-threaded before serving (DES-032)."""
         self._resources.warm()

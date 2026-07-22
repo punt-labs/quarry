@@ -42,6 +42,20 @@ class Settings(BaseSettings):
     ingest_max_workers: int = Field(default=256, ge=1)
     ingest_worker_idle_s: float = Field(default=60.0, ge=0)
 
+    # Always-on filesystem watch loop, a DES-042 queue producer across every
+    # database in the roster (DES-045).  ``debounce_s`` coalesces an edit burst;
+    # ``max_delay_s`` caps a continuously-rearmed path (anti-starvation); a delta
+    # above ``bulk_threshold`` distinct paths collapses to one bulk scan (fragment
+    # budget + admission bound); ``use_polling`` forces watchdog's stat-walk
+    # observer; ``safety_scan_s`` is an optional periodic reconcile (0 = off).
+    watch_enabled: bool = True
+    watch_debounce_s: float = Field(default=1.0, ge=0)
+    watch_max_delay_s: float = Field(default=5.0, ge=0)
+    watch_bulk_threshold: int = Field(default=50, ge=1)
+    watch_use_polling: bool = False
+    watch_poll_interval_s: float = Field(default=2.0, gt=0)
+    watch_safety_scan_s: float = Field(default=0.0, ge=0)
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
     _DEFAULT_LANCEDB: ClassVar[Path] = quarry_root / "default" / "lancedb"

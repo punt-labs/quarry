@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, Self
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 
+from quarry.daemon.route_key import RouteKey
 from quarry.daemon.tasks import TaskState, task_terminal
 from quarry.http_guards import RequestGuards
 
@@ -124,7 +125,8 @@ class RouteGroup:
         ``remember``/``ingest`` share this path and have no spooled local
         artifact, so it cannot promise backfill recovery.
         """
-        if not self._ctx.ingest_queue.try_submit(job.collection, job, state):
+        key = RouteKey(self._ctx.database_name, job.collection)
+        if not self._ctx.ingest_queue.try_submit(key, job, state):
             self._ctx.tasks.drop(state)
             return JSONResponse(
                 {

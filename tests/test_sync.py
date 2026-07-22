@@ -793,7 +793,7 @@ class TestSyncCollectionProgressive:
 
         with (
             _patched_embedder(_FakeEmbedder()),
-            patch("quarry.sync_ingest.plan_file_chunks", side_effect=flaky),
+            patch("quarry.ingestion.file_indexer.plan_file_chunks", side_effect=flaky),
         ):
             result = sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert result.ingested == 1
@@ -1094,7 +1094,7 @@ class TestStaleClearOnFailure:
 
         with (
             _patched_embedder(_FakeEmbedder()),
-            patch("quarry.sync_ingest.plan_file_chunks", side_effect=boom),
+            patch("quarry.ingestion.file_indexer.plan_file_chunks", side_effect=boom),
         ):
             result = sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert result.ingested == 0
@@ -1115,7 +1115,7 @@ class TestStaleClearOnFailure:
 
         with (
             _patched_embedder(_FakeEmbedder()),
-            patch("quarry.sync_ingest.plan_file_chunks", side_effect=boom),
+            patch("quarry.ingestion.file_indexer.plan_file_chunks", side_effect=boom),
         ):
             result = sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert result.failed == 1
@@ -1290,7 +1290,7 @@ class TestConcurrencyLiveness:
 
         with (
             _patched_embedder(_FakeEmbedder()),
-            patch("quarry.sync_ingest.plan_file_chunks", side_effect=flaky),
+            patch("quarry.ingestion.file_indexer.plan_file_chunks", side_effect=flaky),
         ):
             result = _run_with_timeout(
                 lambda: sync_collection(d, "col", db, settings, conn, max_workers=2)

@@ -1,25 +1,20 @@
-"""Progressive per-collection ingest: producer/consumer with within-file resume."""
+"""Progressive per-collection ingest: producer/consumer over a shared file core."""
 
 from __future__ import annotations
 
 import logging
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
-from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from queue import Queue
 from typing import TYPE_CHECKING, Self
 
-from quarry.db.chunk_table import ChunkTable, DocumentRef
-from quarry.ingestion.pipeline import plan_file_chunks
+from quarry.db.chunk_table import ChunkTable
+from quarry.ingestion.file_indexer import SingleFileIndexer
 from quarry.ingestion.progressive import ProgressiveIndexer
 from quarry.ingestion.streaming import DocumentStreamer
-from quarry.sync_discovery import FileDiscovery
 from quarry.sync_messages import FileMeta, WindowMsg
-from quarry.sync_registry import FileRecord
-from quarry.sync_resume import ResumePolicy
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -31,7 +26,7 @@ if TYPE_CHECKING:
     from quarry.db.chunk_store import ChunkStore
     from quarry.ingestion.progressive import FlushCheckpoint
     from quarry.models import Chunk
-    from quarry.sync_registry import SyncRegistry
+    from quarry.sync_registry import FileRecord, SyncRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -45,15 +40,21 @@ class CollectionIngestor:
     plan + embed in bounded windows; the single consumer thread performs every
     LanceDB write (delete and add) and registry write. Producers always emit one
     sentinel and the consumer catches every error, so neither side can dead-lock.
+
+    The per-file steps — plan, reconcile the store, build the checkpoint row —
+    are delegated to a composed :class:`SingleFileIndexer`, the same core the
+    watch loop's ``FileIndexJob`` uses (DES-045); this class owns only the bulk
+    orchestration (producer pool, single consumer, abort/liveness) and the ONE
+    cross-file ``ProgressiveIndexer`` that keeps the fragment budget.
     """
 
     __slots__ = (
         "_aborted",
         "_collection",
+        "_file_indexer",
         "_indexer",
         "_max_workers",
         "_meta",
-        "_policy",
         "_progress",
         "_queue",
         "_records",
@@ -74,8 +75,8 @@ class CollectionIngestor:
     _meta: dict[str, FileMeta]
     _records: dict[str, FileRecord | None]
     _indexer: ProgressiveIndexer
+    _file_indexer: SingleFileIndexer
     _aborted: bool
-    _policy: ResumePolicy
 
     def __new__(
         cls,
@@ -100,7 +101,9 @@ class CollectionIngestor:
         self._meta = {}
         self._records = {}
         self._aborted = False
-        self._policy = ResumePolicy()
+        self._file_indexer = SingleFileIndexer(
+            store, registry, settings, collection=collection, resolved=resolved
+        )
         self._indexer = ProgressiveIndexer(
             self, flush_bytes=settings.sync_flush_mb * 1024 * 1024
         )
@@ -118,12 +121,7 @@ class CollectionIngestor:
         """Commit every touched file's watermark in one registry transaction (G4)."""
         for checkpoint in checkpoints:
             meta = self._meta[checkpoint.file_id]
-            partial = self._policy.partial_mark(checkpoint, meta.record.content_hash)
-            row = replace(
-                meta.record,
-                chunks_committed=checkpoint.chunks_committed,
-                partial_hash=partial,
-            )
+            row = self._file_indexer.checkpoint_row(meta, checkpoint)
             self._registry.upsert_file(row, commit=False)
         self._registry.commit()
 
@@ -172,25 +170,11 @@ class CollectionIngestor:
         document_name = str(file_path.relative_to(self._resolved))
         error: str | None = None
         try:
-            chunks, deterministic = plan_file_chunks(
-                file_path,
-                self._settings,
-                collection=self._collection,
-                document_name=document_name,
-            )
-            content_hash = self._safe_hash(file_path)
-            record = self._records.get(file_id)
-            watermark = self._policy.resume_watermark(
-                record, content_hash, len(chunks), deterministic=deterministic
-            )
-            self._meta[file_id] = FileMeta(
-                record=self._build_record(file_path, document_name, content_hash),
-                resume_watermark=watermark,
-                total_chunks=len(chunks),
-            )
+            plan = self._file_indexer.plan_file(file_path, self._records.get(file_id))
+            self._meta[file_id] = plan.meta
             streamer = DocumentStreamer(self._settings)
             for batch, vectors in streamer.stream_batches(
-                chunks, start_index=watermark
+                plan.chunks, start_index=plan.meta.resume_watermark
             ):
                 self._queue.put(WindowMsg(file_id, batch, vectors))
         except _RECOVERABLE as exc:
@@ -200,8 +184,8 @@ class CollectionIngestor:
             logger.exception("Unexpected ingest failure for %s", document_name)
             error = f"{document_name}: {exc}"
         finally:
-            stale = error is not None and self._policy.clear_stale_on_failure(
-                self._records.get(file_id), self._safe_hash(file_path)
+            stale = error is not None and self._file_indexer.should_clear_stale(
+                self._records.get(file_id), file_path
             )
             self._queue.put(
                 WindowMsg(file_id, [], None, final=True, error=error, clear_stale=stale)
@@ -268,11 +252,7 @@ class CollectionIngestor:
         Runs on the single-writer consumer, never a producer, so it cannot race the
         LanceDB writes. The stored record names the exact scope to clear in Lance.
         """
-        record = self._records.get(file_id)
-        if record is not None:
-            self._store.delete_document(
-                record.document_name, collection=self._collection, count=False
-            )
+        self._file_indexer.clear_stale(self._records.get(file_id))
 
     def _ensure_begun(self, file_id: str, begun: set[str]) -> None:
         """Reconcile-delete (on the consumer → single-writer) then register the file.
@@ -282,39 +262,10 @@ class CollectionIngestor:
         if file_id in begun:
             return
         meta = self._meta[file_id]
-        document_name, watermark = meta.record.document_name, meta.resume_watermark
-        if watermark > 0:
-            self._store.delete_document_tail(
-                DocumentRef(document_name, self._collection, watermark)
-            )
-        else:
-            self._store.delete_document(
-                document_name, collection=self._collection, count=False
-            )
+        self._file_indexer.reconcile_store(meta)
         self._indexer.begin_file(
-            file_id, resume_watermark=watermark, total_chunks=meta.total_chunks
+            file_id,
+            resume_watermark=meta.resume_watermark,
+            total_chunks=meta.total_chunks,
         )
         begun.add(file_id)
-
-    def _build_record(
-        self, file_path: Path, document_name: str, content_hash: str | None
-    ) -> FileRecord:
-        """Build the base registry row for *file_path* at its current disk state."""
-        stat = file_path.stat()
-        return FileRecord(
-            path=str(file_path),
-            collection=self._collection,
-            document_name=document_name,
-            mtime=stat.st_mtime,
-            size=stat.st_size,
-            ingested_at=datetime.now(UTC).isoformat(),
-            content_hash=content_hash,
-        )
-
-    @staticmethod
-    def _safe_hash(file_path: Path) -> str | None:
-        """Return the file's content hash, or ``None`` when it cannot be read."""
-        try:
-            return FileDiscovery.content_hash(file_path)
-        except OSError:
-            return None

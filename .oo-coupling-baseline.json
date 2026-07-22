@@ -332,8 +332,43 @@
     "efferent_coupling": 3.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.692,
-    "avg_lcom": 0.692
+    "max_lcom": 0.67,
+    "avg_lcom": 0.67
+  },
+  "src/quarry/daemon/debounce.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 3.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.5,
+    "avg_lcom": 0.428
+  },
+  "src/quarry/daemon/finalize_job.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 1.0,
+    "avg_lcom": 1.0
+  },
+  "src/quarry/daemon/fs_events.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/quarry/daemon/fs_watchdog.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.667,
+    "avg_lcom": 0.334
+  },
+  "src/quarry/daemon/index_jobs.py": {
+    "efferent_coupling": 3.0,
+    "public_names": 3.0,
+    "circular_imports": 0.0,
+    "max_lcom": 1.0,
+    "avg_lcom": 1.0
   },
   "src/quarry/daemon/ingest_jobs.py": {
     "efferent_coupling": 2.0,
@@ -370,6 +405,13 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
+  "src/quarry/daemon/route_key.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
   "src/quarry/daemon/route_table.py": {
     "efferent_coupling": 2.0,
     "public_names": 2.0,
@@ -385,7 +427,7 @@
     "public_names": 12.0
   },
   "src/quarry/daemon/routes/base.py": {
-    "efferent_coupling": 3.0,
+    "efferent_coupling": 4.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.286,
@@ -488,6 +530,13 @@
     "circular_imports": 0.0,
     "max_lcom": 0.222,
     "avg_lcom": 0.222
+  },
+  "src/quarry/daemon/watch_roster.py": {
+    "efferent_coupling": 3.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.545,
+    "avg_lcom": 0.545
   },
   "src/quarry/db/__init__.py": {
     "avg_lcom": 0.0,
@@ -740,6 +789,13 @@
     "efferent_coupling": 1.0,
     "max_lcom": 0.0,
     "public_names": 2.0
+  },
+  "src/quarry/ingestion/file_indexer.py": {
+    "efferent_coupling": 8.0,
+    "public_names": 4.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.615,
+    "avg_lcom": 0.615
   },
   "src/quarry/ingestion/hyphenation.py": {
     "avg_lcom": 0.0,
@@ -1092,11 +1148,11 @@
     "public_names": 2.0
   },
   "src/quarry/sync_ingest.py": {
-    "avg_lcom": 0.6,
+    "efferent_coupling": 5.0,
+    "public_names": 2.0,
     "circular_imports": 0.0,
-    "efferent_coupling": 8.0,
-    "max_lcom": 0.6,
-    "public_names": 2.0
+    "max_lcom": 0.667,
+    "avg_lcom": 0.667
   },
   "src/quarry/sync_messages.py": {
     "avg_lcom": 0.0,
