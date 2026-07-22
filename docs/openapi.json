@@ -590,7 +590,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "description": "Body for ingesting historical session transcripts.\n\nOver the daemon, ``limit`` is clamped into ``1..500``: a missing or\nnon-positive value and any value above the cap both resolve to 500, so a\nremote request can never trigger an unbounded scan.  (The local CLI still\ntreats ``0`` as \"all\".)  ``collection``/``project`` narrow the scan.",
+                "description": "Body for ingesting historical session transcripts.\n\n``limit`` is a pure pagination knob, identical on the local and remote\npaths: ``0`` (the default) means \"all\" and a positive value caps the scan,\nwith no ceiling \u2014 a run is bounded by construction (one transcript at a\ntime, no descriptor leak).  ``collection``/``project`` narrow the scan.",
                 "properties": {
                   "collection": {
                     "default": "",

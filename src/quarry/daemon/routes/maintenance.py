@@ -22,12 +22,6 @@ from quarry.http_guards import RequestGuards
 # Both bodies carry only small option dicts.
 MAX_MAINTENANCE_BODY_BYTES = 16 * 1024
 
-# A remote backfill with no positive limit is capped here so an empty body ({})
-# cannot trigger an unbounded scan-and-ingest over the daemon.  The local CLI
-# path (``backfill_sessions(limit=0)``) keeps 0 == "all"; only this remote route
-# clamps, so the two paths stay independent.
-DEFAULT_REMOTE_BACKFILL_LIMIT = 500
-
 
 @dataclass(frozen=True, slots=True)
 class BackfillArgs:
@@ -43,18 +37,27 @@ class BackfillArgs:
 class MaintenanceRoutes(RouteGroup):
     """Serve table optimization and session backfill as singleton 202 tasks."""
 
+    def _preflight(self, request: Request) -> JSONResponse | None:
+        """Reject an unauthorized or over-size maintenance request, else ``None``.
+
+        The guard prefix both maintenance routes share: authentication first,
+        then the small-body ceiling. ``None`` means the request cleared both and
+        the route may parse its body and dispatch.
+        """
+        auth_resp = self.reject_unauthorized(request)
+        if auth_resp is not None:
+            return auth_resp
+        return RequestGuards.check_body_size(request, MAX_MAINTENANCE_BODY_BYTES)
+
     async def optimize(self, request: Request) -> JSONResponse:
         """Compact the table and rebuild indexes as a singleton background task.
 
         A second optimize while one is in flight is rejected with 409 and the
         running task's id, so concurrent runs never contend for the table lock.
         """
-        auth_resp = self.reject_unauthorized(request)
-        if auth_resp is not None:
-            return auth_resp
-        size_err = RequestGuards.check_body_size(request, MAX_MAINTENANCE_BODY_BYTES)
-        if size_err is not None:
-            return size_err
+        pre = self._preflight(request)
+        if pre is not None:
+            return pre
 
         force = await self._body_flag(request, "force", default=False)
         if isinstance(force, JSONResponse):
@@ -74,12 +77,9 @@ class MaintenanceRoutes(RouteGroup):
         running task's id; concurrent scans would double-ingest the same
         sessions and write duplicate chunks.
         """
-        auth_resp = self.reject_unauthorized(request)
-        if auth_resp is not None:
-            return auth_resp
-        size_err = RequestGuards.check_body_size(request, MAX_MAINTENANCE_BODY_BYTES)
-        if size_err is not None:
-            return size_err
+        pre = self._preflight(request)
+        if pre is not None:
+            return pre
 
         args = await self._backfill_args(request)
         if isinstance(args, JSONResponse):
@@ -153,16 +153,15 @@ class MaintenanceRoutes(RouteGroup):
     async def _backfill_args(self, request: Request) -> BackfillArgs | JSONResponse:
         """Validate a backfill request body into :class:`BackfillArgs`.
 
-        A missing or non-positive ``limit`` is bounded rather than treated as
-        "all", so an empty remote request cannot start an unbounded backfill.
+        ``limit`` is a pure pagination knob: ``0`` (the wire default, and an
+        empty body) means "all", a positive value caps the scan.  The remote and
+        local paths share this contract — a backfill run is bounded by
+        construction (it streams one transcript at a time and never accumulates
+        descriptors, proven by ``test_large_backfill_does_not_leak_descriptors``),
+        so no magic-number cap stands in for resource safety.
         """
         if int(request.headers.get("content-length", "0") or "0") <= 0:
-            return BackfillArgs(
-                dry_run=False,
-                collection="",
-                project="",
-                limit=DEFAULT_REMOTE_BACKFILL_LIMIT,
-            )
+            return BackfillArgs(dry_run=False, collection="", project="", limit=0)
         body = await self.json_object(request)
         if isinstance(body, JSONResponse):
             return body
@@ -177,19 +176,5 @@ class MaintenanceRoutes(RouteGroup):
             dry_run=dry_run,
             collection=str(body.get("collection") or ""),
             project=str(body.get("project") or ""),
-            limit=self._bounded_limit(limit),
+            limit=max(0, limit),
         )
-
-    @staticmethod
-    def _bounded_limit(limit: int) -> int:
-        """Clamp a remote ``limit`` into ``1..DEFAULT_REMOTE_BACKFILL_LIMIT``.
-
-        The remote path never runs unbounded: ``limit <= 0`` (the wire default)
-        and any value above the cap both resolve to
-        :data:`DEFAULT_REMOTE_BACKFILL_LIMIT`, so neither an empty body nor a
-        single ``{"limit": 1_000_000_000}`` can full-scan the corpus.  A
-        positive limit within the cap passes through unchanged.
-        """
-        if limit <= 0:
-            return DEFAULT_REMOTE_BACKFILL_LIMIT
-        return min(limit, DEFAULT_REMOTE_BACKFILL_LIMIT)

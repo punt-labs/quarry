@@ -91,6 +91,19 @@ across `transform`, `index`, and `connector`).
 
 ### Changed
 
+- **tool (daemon REST)**: `POST /v1/backfill-sessions` `limit` is now a pure
+  pagination knob that agrees with the local `backfill_sessions` path — `0` (the
+  wire default, and an empty body) means "all", a positive value caps the scan,
+  and no ceiling is imposed. The daemon previously rewrote a missing/`<=0` limit
+  and any value above `500` into a `DEFAULT_REMOTE_BACKFILL_LIMIT = 500` cap,
+  which silently diverged from the CLI's `limit=0` "all" default (bug class 3,
+  remote/local divergence). The 500 cap was a magic number standing in for
+  resource safety; a resource-invariant test (`resource` marker) proves a
+  single-connection backfill of hundreds of transcripts holds open file
+  descriptors flat (growth 0 across 250 transcripts), so the run is bounded by
+  construction — it streams one transcript at a time and never rebuilds the FTS
+  index per transcript — and needs no transcript-count cap.
+
 - **tool (MCP)**: `quarry mcp` is now a thin FastMCP client of the daemon
   (DES-031 v2.2, R1/R2). Every tool body calls `QuarryClient` over the daemon's
   `/v1` REST API instead of loading `Database`/embeddings/ingestion in-process,

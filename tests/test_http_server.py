@@ -3152,29 +3152,44 @@ class TestMaintenance:
         resp = client.post("/v1/backfill-sessions", json={"limit": "lots"})
         assert resp.status_code == 400
 
+    def test_backfill_rejects_non_bool_dry_run(self, client: TestClient) -> None:
+        """A non-bool ``dry_run`` is a 400, never a truthy coercion (Class 2)."""
+        resp = client.post("/v1/backfill-sessions", json={"dry_run": "yes"})
+        assert resp.status_code == 400
+
+    def test_backfill_rejects_non_object_body(self, client: TestClient) -> None:
+        """A JSON array body is rejected before any field is read (Class 2)."""
+        resp = client.post("/v1/backfill-sessions", json=[1, 2, 3])
+        assert resp.status_code == 400
+
     @pytest.mark.parametrize(
-        ("json_body", "headers"),
+        ("json_body", "headers", "expected"),
         [
-            (None, {"Content-Type": "application/json"}),
-            ({"limit": 0}, None),
-            ({"limit": -5}, None),
-            ({"limit": 1_000_000_000}, None),
+            (None, {"Content-Type": "application/json"}, 0),
+            ({"limit": 0}, None, 0),
+            ({"limit": -5}, None, 0),
+            ({"limit": 5}, None, 5),
+            ({"limit": 1_000_000_000}, None, 1_000_000_000),
         ],
     )
-    def test_backfill_limit_is_clamped_to_bound(
+    def test_backfill_limit_is_pagination_not_a_safety_cap(
         self,
         tmp_path: Path,
         json_body: dict[str, int] | None,
         headers: dict[str, str] | None,
+        expected: int,
     ) -> None:
-        """Remote backfill limit is clamped into the safe bound on both ends.
+        """Remote ``limit`` is a pure pagination knob that agrees with local.
 
-        The wire default (``limit=0``) meant "all" locally; over the daemon that
-        is an unbounded scan-and-ingest. Empty / ``<=0`` and an absurdly large
-        limit both resolve to the cap, so neither can full-scan the corpus.
+        A backfill run is bounded by construction — it streams one transcript at
+        a time and does not leak descriptors (proven by
+        ``test_large_backfill_does_not_leak_descriptors``) — so no magic-number
+        cap stands in for resource safety. ``limit=0``/empty/negative resolves to
+        "all" (``0``), matching ``backfill_sessions(limit=0)``; a positive limit
+        passes through unchanged with no ceiling. This is the remote half of the
+        local/remote equivalence (bug class 3): the daemon no longer silently
+        rewrites the CLI's ``limit=0`` default into a 500-transcript cap.
         """
-        from quarry.daemon.routes.maintenance import DEFAULT_REMOTE_BACKFILL_LIMIT
-
         ctx = DaemonContext(_mock_settings(tmp_path))
         _inject_mocks(ctx)
         captured: dict[str, object] = {}
@@ -3198,7 +3213,48 @@ class TestMaintenance:
             assert resp.status_code == 202
             _poll_task_done(tc, resp.json()["task_id"])
 
-        assert captured["limit"] == DEFAULT_REMOTE_BACKFILL_LIMIT
+        assert captured["limit"] == expected
+
+    @pytest.mark.parametrize("limit", [0, 7, 5000])
+    def test_cli_backfill_request_limit_reaches_engine_unchanged(
+        self, tmp_path: Path, limit: int
+    ) -> None:
+        """The CLI's ``BackfillRequest`` limit reaches ``backfill_sessions`` intact.
+
+        The local/remote equivalence for the pagination knob (bug class 3): the
+        CLI builds a ``BackfillRequest`` and the client posts ``model_dump()`` as
+        the body, so serializing that exact contract and driving the route must
+        hand ``backfill_sessions`` the same ``limit`` the CLI asked for — no
+        silent rewrite of ``0`` into a cap. This locks the field name and the
+        ``0 == all`` semantics across the wire boundary.
+        """
+        from quarry.api import BackfillRequest
+
+        ctx = DaemonContext(_mock_settings(tmp_path))
+        _inject_mocks(ctx)
+        captured: dict[str, object] = {}
+
+        def _fake_backfill(
+            _settings: object,
+            *,
+            dry_run: bool,
+            collection_override: str,
+            project_filter: str,
+            limit: int,
+        ) -> BackfillStats:
+            captured["limit"] = limit
+            return BackfillStats()
+
+        body = BackfillRequest(limit=limit).model_dump()
+        with (
+            TestClient(build_app(ctx), raise_server_exceptions=False) as tc,
+            patch("quarry.backfill.backfill_sessions", _fake_backfill),
+        ):
+            resp = tc.post("/v1/backfill-sessions", json=body)
+            assert resp.status_code == 202
+            _poll_task_done(tc, resp.json()["task_id"])
+
+        assert captured["limit"] == limit
 
     def test_optimize_accepts_empty_body(self, client: TestClient) -> None:
         """Empty body is accepted (its documented requestBody is optional)."""
