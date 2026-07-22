@@ -115,9 +115,13 @@ class InProcessDaemon:
         )
         # With api_key set the routes enforce bearer auth — the TLS smoke uses it
         # to exercise the authenticated wire; None (default) leaves routes open.
-        ctx = DaemonContext(settings, api_key=api_key)
-        # Short-circuit the cached_property so no ONNX session is ever built.
-        ctx._resources.__dict__["embedder"] = FakeEmbedder(settings.embedding_dimension)
+        # The fake embedder goes through DaemonContext's public DI seam, so no
+        # ONNX session is ever built and no private resource internals are touched.
+        ctx = DaemonContext(
+            settings,
+            api_key=api_key,
+            embedder=FakeEmbedder(settings.embedding_dimension),
+        )
         self._ctx = ctx
         self._app = build_app(ctx)
         return self

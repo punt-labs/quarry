@@ -34,6 +34,9 @@ class DaemonContext:
     _tasks: TaskRegistry
     _ingest_queue: IngestQueue
     _ready: bool
+    # None => build the real ONNX embedder lazily; a test injects a fake to run
+    # the engine-free (DI seam for hermetic daemon tests — never set in production).
+    _embedder_override: EmbeddingBackend | None
 
     def __new__(
         cls,
@@ -41,9 +44,12 @@ class DaemonContext:
         *,
         api_key: str | None = None,
         cors_origins: frozenset[str] | None = None,
+        # Test seam: inject a stand-in embedder so a hermetic daemon skips ONNX.
+        embedder: EmbeddingBackend | None = None,
     ) -> Self:
         self = super().__new__(cls)
         self._resources = QuarryResources(settings)
+        self._embedder_override = embedder
         self._api_key = api_key
         self._cors_origins = cors_origins or DEFAULT_CORS_ORIGINS
         self._start_time = time.monotonic()
@@ -102,6 +108,9 @@ class DaemonContext:
 
     @property
     def embedder(self) -> EmbeddingBackend:
+        """The query embedder — a test-injected override, else the real ONNX one."""
+        if self._embedder_override is not None:
+            return self._embedder_override
         return self._resources.embedder
 
     @property

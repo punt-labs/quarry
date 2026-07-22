@@ -613,10 +613,10 @@
   "src/quarry/daemon/context.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 0.23,
+    "avg_params": 0.31,
     "max_complexity": 2.0,
-    "avg_complexity": 1.08,
-    "module_size": 91.0,
+    "avg_complexity": 1.15,
+    "module_size": 100.0,
     "classes_per_module": 1.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,

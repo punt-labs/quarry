@@ -18,6 +18,7 @@ from __future__ import annotations
 import threading
 import time
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Self, final
 
 import pytest
@@ -62,34 +63,53 @@ class _ThreadedTlsServer:
 
     @contextmanager
     def running(self) -> Generator[int]:
-        """Start the server, yield the bound port, and shut it down on exit."""
+        """Start the server, yield the bound port, and shut it down on exit.
+
+        The readiness wait is INSIDE the try, so a startup timeout still runs
+        the finally — signalling the server to exit and joining the thread.
+        Otherwise a raised timeout would leave the thread running and its bound
+        socket held, leaking a live server into later tests (quarry-5pg1).
+        """
         self._thread.start()
+        try:
+            self._await_started()
+            yield self._bound_port()
+        finally:
+            self._server.should_exit = True
+            self._thread.join(timeout=_SHUTDOWN_TIMEOUT_S)
+
+    def _await_started(self) -> None:
+        """Block until the server reports started, raising on the startup timeout."""
         deadline = time.monotonic() + _STARTUP_TIMEOUT_S
         while not self._server.started:
             if time.monotonic() > deadline:
                 msg = "TLS server did not start within the startup timeout"
                 raise RuntimeError(msg)
             time.sleep(0.05)
-        try:
-            yield self._bound_port()
-        finally:
-            self._server.should_exit = True
-            self._thread.join(timeout=_SHUTDOWN_TIMEOUT_S)
 
     def _bound_port(self) -> int:
         """Return the ephemeral port uvicorn bound after startup."""
         return int(self._server.servers[0].sockets[0].getsockname()[1])
 
+    @property
+    def is_thread_alive(self) -> bool:
+        """Whether the server thread is still running (for leak assertions)."""
+        return self._thread.is_alive()
 
-@pytest.mark.slow
-def test_tls_loopback_client_round_trip(tmp_path: Path) -> None:
-    """A real loopback quarryd over TLS answers a pinned-CA ``QuarryClient``.
 
-    Asserts the full wire: the pinned-CA HTTPS handshake (the server cert's
-    ``127.0.0.1`` IP SAN verifies, system roots excluded), the bearer over the
-    encrypted channel, and both the unversioned ``/health`` and a ``/v1`` route
-    returning the expected empty state on a fresh database.
-    """
+@final
+@dataclass(frozen=True, slots=True)
+class _TlsFixture:
+    """A configured (not-yet-started) TLS server plus the client's pinned CA."""
+
+    server: _ThreadedTlsServer
+    ca_cert: Path
+    token: str
+
+
+@pytest.fixture
+def tls_fixture(tmp_path: Path) -> _TlsFixture:
+    """Generate a pinned CA + loopback server cert and wire an in-process daemon."""
     ca_cert_pem, ca_key_pem = generate_ca()
     server_cert_pem, server_key_pem = generate_server_cert(
         ca_cert_pem, ca_key_pem, "127.0.0.1"
@@ -108,12 +128,24 @@ def test_tls_loopback_client_round_trip(tmp_path: Path) -> None:
     server = _ThreadedTlsServer(
         daemon.app, certfile=str(crt_path), keyfile=str(key_path)
     )
-    with server.running() as port:
+    return _TlsFixture(server=server, ca_cert=ca_path, token=auth)
+
+
+@pytest.mark.slow
+def test_tls_loopback_client_round_trip(tls_fixture: _TlsFixture) -> None:
+    """A real loopback quarryd over TLS answers a pinned-CA ``QuarryClient``.
+
+    Asserts the full wire: the pinned-CA HTTPS handshake (the server cert's
+    ``127.0.0.1`` IP SAN verifies, system roots excluded), the bearer over the
+    encrypted channel, and both the unversioned ``/health`` and a ``/v1`` route
+    returning the expected empty state on a fresh database.
+    """
+    with tls_fixture.server.running() as port:
         transport = HttpxTransport.from_mapping(
             {
                 "url": f"https://127.0.0.1:{port}",
-                "ca_cert": str(ca_path),
-                "headers": {"Authorization": f"Bearer {auth}"},
+                "ca_cert": str(tls_fixture.ca_cert),
+                "headers": {"Authorization": f"Bearer {tls_fixture.token}"},
             }
         )
         with transport:
@@ -122,3 +154,22 @@ def test_tls_loopback_client_round_trip(tmp_path: Path) -> None:
             assert health.status == "ok"
             collections = client.list_collections()
             assert collections.total_collections == 0
+
+
+@pytest.mark.slow
+def test_tls_server_releases_thread_on_startup_timeout(
+    tls_fixture: _TlsFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A startup timeout shuts the server down — no leaked thread or bound port.
+
+    Force the readiness deadline into the past so ``_await_started`` raises on its
+    first check (before uvicorn can bind). The raised ``RuntimeError`` must still
+    run ``running()``'s finally, which signals ``should_exit`` and joins the
+    thread — so no live server is left holding a socket (quarry-5pg1). A negative
+    timeout makes the deadline already-elapsed, killing any start-vs-timeout race.
+    """
+    monkeypatch.setattr("tests.test_tls_smoke._STARTUP_TIMEOUT_S", -1.0)
+    server = tls_fixture.server
+    with pytest.raises(RuntimeError, match="did not start"), server.running():
+        pass  # unreachable — the readiness wait times out first
+    assert not server.is_thread_alive, "server thread leaked past a startup timeout"
