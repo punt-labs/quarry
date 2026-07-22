@@ -84,6 +84,11 @@ class QuarryResources:
         _ = self.database
         logger.info("Warming isolated query database connection...")
         _ = self.query_database
-        logger.info("Loading query ONNX embedding session...")
+        # Only the real-load path builds ONNX; an injected override just returns
+        # itself, so claiming an ONNX load there would be a misleading log.
+        if self._embedder_override is None:
+            logger.info("Loading query ONNX embedding session...")
+        else:
+            logger.info("Using injected embedder (test seam); skipping ONNX load")
         _ = self.embedder
         logger.info("Daemon resources ready")

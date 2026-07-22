@@ -130,20 +130,30 @@ class TestQuarryResources:
             assert connect.call_count == 2
             assert factory.call_count == 1
 
-    def test_warm_honors_embedder_override_and_skips_onnx(self, tmp_path: Path) -> None:
+    def test_warm_honors_embedder_override_and_skips_onnx(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         # An injected embedder is THE embedder on every path: warm() must NOT
         # build the real ONNX backend when an override is set, and every read of
         # .embedder returns the override. This is what makes the in-process
         # daemon fixture hermetic even for a code path that triggers warm().
         settings = _mock_settings(tmp_path)
         override = MagicMock(name="OverrideEmbedder")
-        with _patch_connect() as connect, _patch_new_embedding_backend() as factory:
+        with (
+            _patch_connect() as connect,
+            _patch_new_embedding_backend() as factory,
+            caplog.at_level(logging.INFO, logger="quarry.http_resources"),
+        ):
             resources = QuarryResources(settings, embedder=override)
             resources.warm()
             factory.assert_not_called()
             assert resources.embedder is override
             # The DB connections are still warmed — only the ONNX build is skipped.
             assert connect.call_count == 2
+        # The log must not claim an ONNX load on the override path.
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("injected embedder" in m for m in messages)
+        assert not any("Loading query ONNX" in m for m in messages)
 
     def test_warm_logs_each_phase_distinctly(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
