@@ -42,13 +42,16 @@ _BACKOFF_MAX_S = 30.0
 class WatchSubmitter:
     """Submit watch-derived IngestUnits to the queue, re-arming shed ones."""
 
-    __slots__ = ("_backoff", "_ctx", "_dispatcher", "_loop", "_roster")
+    __slots__ = ("_backoff", "_ctx", "_dispatcher", "_loop", "_pending_scan", "_roster")
 
     _ctx: DaemonContext
     _roster: WatchRoster
     _loop: asyncio.AbstractEventLoop
     _dispatcher: DebouncedDispatcher | None
     _backoff: dict[RouteKey, float]
+    # Route keys whose bulk scan was shed by a full queue — the safety scan
+    # re-submits these so a scan past the admission bound is never lost.
+    _pending_scan: set[RouteKey]
 
     def __new__(
         cls, ctx: DaemonContext, roster: WatchRoster, loop: asyncio.AbstractEventLoop
@@ -59,6 +62,7 @@ class WatchSubmitter:
         self._loop = loop
         self._dispatcher = None
         self._backoff = {}
+        self._pending_scan = set()
         return self
 
     def bind(self, dispatcher: DebouncedDispatcher) -> None:
@@ -66,8 +70,19 @@ class WatchSubmitter:
         self._dispatcher = dispatcher
 
     def forget(self, key: RouteKey) -> None:
-        """Drop *key*'s backoff state (deregister/stop-watching)."""
+        """Drop *key*'s backoff + pending-scan state (deregister/stop-watching)."""
         self._backoff.pop(key, None)
+        self._pending_scan.discard(key)
+
+    def take_pending_scans(self) -> tuple[RouteKey, ...]:
+        """Return and clear the keys whose scan was shed (the safety scan retries).
+
+        Cleared on read so a still-full queue re-adds the key on the next
+        :meth:`submit_scan`, and a since-succeeded one is not retried forever.
+        """
+        pending = tuple(self._pending_scan)
+        self._pending_scan.clear()
+        return pending
 
     def on_batch(self, batch: FlushBatch) -> None:
         """Dispatcher sink: turn one quiescent batch into queue submissions."""
@@ -87,14 +102,21 @@ class WatchSubmitter:
         self._submit_finalize(batch.key, db, settings)
 
     def submit_scan(self, key: RouteKey, root: Path) -> list[TaskState]:
-        """Submit a bulk scan then its coalesced finalize; return their task states."""
+        """Submit a bulk scan then its coalesced finalize; return their task states.
+
+        A scan shed by a full queue is recorded in ``_pending_scan`` so the
+        safety scan retries it (a bulk scan past the admission bound is never
+        lost); a successful scan clears any prior pending mark.
+        """
         db = self._roster.database_of(key.database)
         settings = self._roster.settings_of(key.database)
         scan = CollectionSyncJob(db, settings, key.collection, root)
-        return [
-            self._submit_tracked(key, scan, "sync"),
-            self._submit_finalize(key, db, settings),
-        ]
+        scan_state = self._submit_tracked(key, scan, "sync")
+        if scan_state.status == "failed":
+            self._pending_scan.add(key)
+        else:
+            self._pending_scan.discard(key)
+        return [scan_state, self._submit_finalize(key, db, settings)]
 
     def _submit_deltas(
         self, batch: FlushBatch, db: Database, settings: Settings, root: Path

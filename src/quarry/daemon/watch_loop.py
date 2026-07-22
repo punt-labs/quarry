@@ -53,6 +53,7 @@ class WatchLoop:
         "_dispatcher",
         "_loop",
         "_roster",
+        "_safety_task",
         "_source",
         "_started",
         "_submitter",
@@ -64,6 +65,7 @@ class WatchLoop:
     _dispatcher: DebouncedDispatcher | None
     _submitter: WatchSubmitter | None
     _loop: asyncio.AbstractEventLoop | None
+    _safety_task: asyncio.Task[None] | None
     _started: bool
 
     def __new__(
@@ -78,6 +80,7 @@ class WatchLoop:
         self._dispatcher = None
         self._submitter = None
         self._loop = None
+        self._safety_task = None
         self._started = False
         return self
 
@@ -113,12 +116,17 @@ class WatchLoop:
         self._started = True
         for name in self._roster.roster_names():
             self._start_database(name)
+        if settings.watch_safety_scan_s > 0:
+            self._safety_task = self._loop.create_task(self._safety_loop())
 
     async def stop(self) -> None:
         """Tear down the observer and drop pending state (before the queue drain)."""
         if not self._started:
             return
         self._started = False
+        if self._safety_task is not None:
+            self._safety_task.cancel()
+            self._safety_task = None
         if self._dispatcher is not None:
             self._dispatcher.cancel_all()
         if self._roster is not None:
@@ -244,3 +252,40 @@ class WatchLoop:
                 return True
             await asyncio.sleep(_SCAN_POLL_S)
         return False
+
+    async def _safety_loop(self) -> None:
+        """Periodically reconcile the roster (``watch_safety_scan_s``)."""
+        interval = self._ctx.settings.watch_safety_scan_s
+        try:
+            while self._started:
+                await asyncio.sleep(interval)
+                if self._started:
+                    self._reconcile()
+        except asyncio.CancelledError:
+            return
+
+    def _reconcile(self) -> None:
+        """Pick up new databases/collections and retry any shed bulk scans.
+
+        The single backstop that fully retires quarry-uae: it watches a database
+        or collection registered since ``start()`` (e.g. a sibling DB created via
+        the CLI) and re-submits a ``CollectionSyncJob`` for any collection whose
+        initial/explicit scan the queue shed past the admission bound.  Never
+        propagates — a bad registry read is logged, the loop keeps running.
+        """
+        roster, submitter = self._roster, self._submitter
+        if roster is None or submitter is None:
+            return
+        try:
+            watched = set(roster.keys())
+            for name in roster.roster_names():
+                roster.ensure_database(name)
+                for collection, root in roster.registrations(name):
+                    if RouteKey(name, collection) not in watched:
+                        self._begin_collection(name, collection, root)
+            for key in submitter.take_pending_scans():
+                scan_root = roster.resolved_root(key)
+                if scan_root is not None:
+                    submitter.submit_scan(key, scan_root)
+        except (OSError, ValueError) as exc:
+            logger.warning("watch: safety-scan reconcile failed: %s", exc)

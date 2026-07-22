@@ -36,16 +36,16 @@ if TYPE_CHECKING:
 class _RecordingQueue:
     """Capture every submission; admit or shed per configuration."""
 
-    __slots__ = ("_admit", "boom", "submitted")
+    __slots__ = ("admit", "boom", "submitted")
 
     submitted: list[tuple[RouteKey, IngestUnit]]
     boom: bool
-    _admit: bool
+    admit: bool
 
     def __new__(cls, *, admit: bool = True, boom: bool = False) -> Self:
         self = super().__new__(cls)
         self.submitted = []
-        self._admit = admit
+        self.admit = admit
         self.boom = boom
         return self
 
@@ -54,8 +54,8 @@ class _RecordingQueue:
             msg = "queue boom"
             raise RuntimeError(msg)
         self.submitted.append((key, job))
-        state.status = "queued" if self._admit else "failed"
-        return self._admit
+        state.status = "queued" if self.admit else "failed"
+        return self.admit
 
     def jobs(self, kind: type) -> list[IngestUnit]:
         """Return every submitted job that is an instance of *kind*."""
@@ -122,6 +122,7 @@ def _build(
         watch_debounce_s=0.03,
         watch_max_delay_s=0.3,
         watch_bulk_threshold=bulk,
+        watch_safety_scan_s=0.0,  # drive _reconcile directly; no background timer
     )
     _register(settings, watched.resolve(), "col")
     ctx = SimpleNamespace(
@@ -340,6 +341,54 @@ def test_request_scan_fails_umbrella_when_a_child_is_shed(tmp_path: Path) -> Non
         await loop.request_scan(umbrella)
         assert umbrella.status == "failed"
         assert umbrella.results["failed"]  # a non-zero shed-child count
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_safety_scan_retries_a_shed_bulk_scan(tmp_path: Path) -> None:
+    """A bulk scan shed by a full queue is re-submitted by the reconcile (fix 3)."""
+
+    async def _run() -> None:
+        queue = _RecordingQueue(admit=False)  # initial scan is shed on start
+        ctx, _root = _build(tmp_path, queue=queue)
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        assert queue.jobs(CollectionSyncJob)  # attempted but shed
+        queue.submitted.clear()
+        queue.admit = True  # queue drained
+        loop._reconcile()  # the safety scan retries the shed scan
+        assert len(queue.jobs(CollectionSyncJob)) == 1
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_safety_scan_picks_up_a_collection_registered_after_start(
+    tmp_path: Path,
+) -> None:
+    """A collection registered since start() is watched + scanned by the reconcile.
+
+    Stands in for a sibling database (or collection) created via the CLI while
+    the daemon runs — the backstop that retires quarry-uae (fix 3).
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, _root = _build(tmp_path, queue=queue)
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        queue.submitted.clear()
+        # register a new collection after start(), then reconcile
+        extra = tmp_path / "proj2"
+        extra.mkdir()
+        _register(ctx.settings, extra.resolve(), "col2")
+        loop._reconcile()
+        scans = [j for _key, j in queue.submitted if isinstance(j, CollectionSyncJob)]
+        assert any(job.collection == "col2" for job in scans)
+        assert source.watch_count == 2  # the new tree is now watched
         await loop.stop()
 
     asyncio.run(_run())

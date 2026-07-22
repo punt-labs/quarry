@@ -47,14 +47,16 @@ class Settings(BaseSettings):
     # ``max_delay_s`` caps a continuously-rearmed path (anti-starvation); a delta
     # above ``bulk_threshold`` distinct paths collapses to one bulk scan (fragment
     # budget + admission bound); ``use_polling`` forces watchdog's stat-walk
-    # observer; ``safety_scan_s`` is an optional periodic reconcile (0 = off).
+    # observer; ``safety_scan_s`` is the periodic roster reconcile that re-scans
+    # collections whose scan was shed and picks up databases/collections
+    # registered since start — the backstop that retires the uae timer (0 = off).
     watch_enabled: bool = True
     watch_debounce_s: float = Field(default=1.0, ge=0)
     watch_max_delay_s: float = Field(default=5.0, ge=0)
     watch_bulk_threshold: int = Field(default=50, ge=1)
     watch_use_polling: bool = False
     watch_poll_interval_s: float = Field(default=2.0, gt=0)
-    watch_safety_scan_s: float = Field(default=0.0, ge=0)
+    watch_safety_scan_s: float = Field(default=300.0, ge=0)
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
