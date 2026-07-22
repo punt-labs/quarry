@@ -37,7 +37,9 @@ import pytest
 from quarry.backfill import backfill_sessions, encode_project_path
 from quarry.config import Settings
 from quarry.db import Database
+from quarry.ingestion.file_indexer import SingleFileIndexer
 from quarry.models import Chunk
+from quarry.sync_finalize import SyncFinalizer
 from quarry.sync_registry import SyncRegistry
 
 if TYPE_CHECKING:
@@ -312,4 +314,115 @@ def test_large_backfill_does_not_leak_descriptors(tmp_path: Path) -> None:
         f"open fds grew by {trajectory.growth():.1f} across "
         f"{_BACKFILL_TRANSCRIPTS} backfilled transcripts (peak {trajectory.peak}); "
         f"descriptor leak in the backfill ingest path"
+    )
+
+
+_WATCH_EDITS = 120
+_WATCH_DATABASES = 2
+_FINALIZE_EVERY = 10
+_DISTINCT_FILES = 5
+
+
+@final
+class _ConstantEmbedder:
+    """A hermetic embedder returning random vectors of the configured width."""
+
+    __slots__ = ("_dim",)
+
+    _dim: int
+
+    def __new__(cls, *, dimension: int) -> Self:
+        self = super().__new__(cls)
+        self._dim = dimension
+        return self
+
+    @property
+    def dimension(self) -> int:
+        """Embedding width the fake vectors are shaped to."""
+        return self._dim
+
+    @property
+    def model_name(self) -> str:
+        """Identify the fake backend in diagnostics."""
+        return "watch-fd-fake"
+
+    def embed_texts(self, texts: list[str]) -> NDArray[np.float32]:
+        """Return one random vector per text."""
+        return _random_vectors(len(texts))
+
+    def embed_query(self, query: str) -> NDArray[np.float32]:
+        """Return a single random query vector (unused here)."""
+        vector: NDArray[np.float32] = _random_vectors(1)[0]
+        return vector
+
+
+def _watch_database(tmp_path: Path, index: int) -> tuple[Database, Settings, Path]:
+    """Build one database's persistent connection, settings, and watched root."""
+    base = tmp_path / f"db{index}"
+    (base / "lancedb").mkdir(parents=True)
+    root = tmp_path / f"proj{index}"
+    root.mkdir()
+    settings = Settings.load().resolve_db_paths(None)
+    settings = settings.model_copy(
+        update={
+            "lancedb_path": base / "lancedb",
+            "registry_path": base / "registry.db",
+        }
+    )
+    # The files table FKs the directories row, so the watched root must be
+    # registered before any file under it is indexed (as register does in prod).
+    conn = SyncRegistry(settings.registry_path)
+    try:
+        conn.register_directory(root.resolve(), "col")
+    finally:
+        conn.close()
+    return Database.connect(base / "lancedb"), settings, root.resolve()
+
+
+def _watch_index_one(db: Database, settings: Settings, root: Path, doc: Path) -> None:
+    """Index one file through a fresh thread-bound registry, as FileIndexJob does."""
+    conn = SyncRegistry(settings.registry_path)
+    try:
+        SingleFileIndexer(
+            db.store, conn, settings, collection="col", resolved=root
+        ).index_one(doc)
+    finally:
+        conn.close()
+
+
+# Hundreds of small single-file edits across two databases' own connections, with
+# the FTS rebuild coalesced to a periodic finalize (not per file) — the DES-045
+# §9 shape. Its own headroom, like the sibling resource tests.
+@pytest.mark.timeout(180)
+@pytest.mark.usefixtures("_raised_fd_limit")
+def test_watch_session_does_not_leak_descriptors(tmp_path: Path) -> None:
+    """A long watch session over >=2 databases must plateau the aggregate fds.
+
+    This is the proof that per-file indexing (``FileIndexJob`` → ``index_one``)
+    with the FTS rebuild coalesced to a post-quiescence ``CollectionFinalizeJob``
+    does not reopen quarry-0dss across the daemon's multiple persistent
+    connections. If per-file indexing rebuilt the FTS, or the finalize ran per
+    file, the trajectory would ramp; the coalesced design holds it flat.
+    """
+    databases = [_watch_database(tmp_path, i) for i in range(_WATCH_DATABASES)]
+    trajectory = FdTrajectory()
+    embedder = _ConstantEmbedder(dimension=_EMBEDDING_DIM)
+
+    with patch(
+        "quarry.ingestion.streaming.get_embedding_backend", return_value=embedder
+    ):
+        for edit in range(_WATCH_EDITS):
+            db, settings, root = databases[edit % _WATCH_DATABASES]
+            doc = root / f"note{edit % _DISTINCT_FILES}.md"
+            doc.write_text(f"watch probe {edit} lorem ipsum dolor sit amet consectetur")
+            _watch_index_one(db, settings, root, doc)
+            # Coalesced FTS rebuild — once per quiescent batch, never per file.
+            if edit % _FINALIZE_EVERY == 0:
+                SyncFinalizer(db.db, settings).run()
+            trajectory.record(_open_fd_count())
+
+    assert trajectory.plateaus(slack=_PLATEAU_SLACK), (
+        f"open fds grew by {trajectory.growth():.1f} across {_WATCH_EDITS} watch "
+        f"edits over {_WATCH_DATABASES} databases (peak {trajectory.peak}); the "
+        f"coalesced FTS rebuild (DES-045 §9) is not holding the descriptor count"
     )

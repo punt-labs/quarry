@@ -198,9 +198,10 @@ class WatchLoop:
         Never propagates: a raising marshal (loop closed mid-shutdown) is logged,
         so the observer thread survives (bug-class 2).
         """
-        if self._loop is None or self._dispatcher is None:
+        if self._loop is None or self._dispatcher is None or self._roster is None:
             return
-        if not self._accept(event.path):
+        root = self._roster.resolved_root(key)
+        if root is None or not self._accept(root, event.path):
             return
         try:
             self._loop.call_soon_threadsafe(self._dispatcher.feed, key, event)
@@ -208,11 +209,20 @@ class WatchLoop:
             logger.debug("watch: dropped event after loop close: %s", exc)
 
     @staticmethod
-    def _accept(path: Path) -> bool:
-        """Return whether *path* is an indexable, non-hidden supported file."""
+    def _accept(root: Path, path: Path) -> bool:
+        """Return whether *path* is an indexable, non-hidden file within *root*.
+
+        Hidden parts are checked *relative to root* — a watched tree may itself
+        live under a dotted directory (``~/.config/...``); only dotted segments
+        inside the tree (``.git/``, a dotfile) are skipped, matching the scan.
+        """
         if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
             return False
-        return not any(part.startswith(".") for part in path.parts)
+        try:
+            relative = path.relative_to(root)
+        except ValueError:
+            return False
+        return not any(part.startswith(".") for part in relative.parts)
 
     def _on_batch(self, batch: FlushBatch) -> None:
         """Dispatcher sink: turn one quiescent batch into queue submissions."""

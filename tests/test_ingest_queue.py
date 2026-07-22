@@ -618,3 +618,54 @@ def test_worker_cap_rejects_when_all_workers_busy() -> None:
         assert set(ledger.completions) == {"c0", "c1"}
 
     asyncio.run(_run())
+
+
+def test_same_route_key_serializes_under_an_interleaved_burst(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Four rapid submits on one (database, collection) run one-at-a-time, FIFO.
+
+    The single-writer-per-table invariant, re-asserted through the composite
+    RouteKey the watch loop uses (DES-045): even with the embed gate lifted, one
+    ``(database, collection)`` never has two in-flight runs.
+    """
+    _lift_ceiling(monkeypatch, 4)
+
+    async def _run() -> None:
+        ledger = _Ledger()
+        queue = _make_queue(concurrency=4)
+        key = RouteKey("dbA", "col")
+        for i in range(4):
+            assert queue.try_submit(
+                key, _StubUnit("col", f"j{i}", ledger, delay=0.01), _state(f"j{i}")
+            )
+        await queue.aclose(drain_timeout=2.0)
+        assert ledger.peak_per["col"] == 1  # one writer per (database, collection)
+        assert ledger.completions == [f"j{i}" for i in range(4)]  # FIFO
+
+    asyncio.run(_run())
+
+
+def test_same_collection_in_two_databases_runs_on_two_workers(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """The same collection name in two databases is two tables — two workers.
+
+    ``(dbA, col)`` and ``(dbB, col)`` route to independent FIFO workers, so with
+    the embed gate lifted both embed at once — no false cross-database
+    serialization on a shared collection name.
+    """
+    _lift_ceiling(monkeypatch, 4)
+
+    async def _run() -> None:
+        ledger = _Ledger()
+        queue = _make_queue(concurrency=4)
+        barrier = asyncio.Barrier(2)
+        job_a = _StubUnit("dbA", "a", ledger, barrier=barrier)
+        job_b = _StubUnit("dbB", "b", ledger, barrier=barrier)
+        assert queue.try_submit(RouteKey("dbA", "col"), job_a, _state("a"))
+        assert queue.try_submit(RouteKey("dbB", "col"), job_b, _state("b"))
+        await queue.aclose(drain_timeout=2.0)
+        assert ledger.peak == 2  # both inside the embed section -> distinct workers
+
+    asyncio.run(_run())
