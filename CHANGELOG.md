@@ -236,6 +236,22 @@ across `transform`, `index`, and `connector`).
   covered (they share the daemon fetch path). Complementary to resolved-IP
   pinning, which remains a separate follow-up for the residual DNS-rebind
   TOCTOU.
+- **ingest (SSRF, DNS-rebind pin)**: server-side fetches now connect only to the
+  address they validated, closing the residual DNS-rebinding TOCTOU noted above.
+  Previously the admission gate resolved a host and rejected on a blocked
+  address, but `http.client` re-resolved the host independently at connect, so
+  an attacker's DNS could return a public address at admission and an internal
+  one at connect. New pinned HTTP(S) connections perform exactly one
+  `getaddrinfo` inside `connect`, validate every returned address fail-closed
+  (all-records: any blocked address refuses the whole connection), and connect
+  the socket to a validated IP literal from that same result — there is no
+  second, independently-resolved lookup for a rebinder to poison. TLS is
+  untouched: SNI, certificate verification, and the `Host` header stay bound to
+  the hostname (never the pinned IP), and the public-fetch context keeps the
+  system trust store (deliberately not the daemon-RPC pinned-CA context — the
+  pin narrows the address, not the trust). Both CLI and MCP ingest are covered
+  (they share the daemon fetch path), and every redirect hop re-pins its new
+  host. Closes the DNS-rebind follow-up (quarry-kmzo, quarry-ljym).
 
 ## [1.19.0] - 2026-07-14
 

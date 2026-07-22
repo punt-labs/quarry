@@ -372,13 +372,27 @@ Sitemap client & \modpath{sitemap\_web\_client.py} &
                  \texttt{robots.txt}, and sub-sitemap fetch at every
                  recursion depth (a block is non-retryable, so USP
                  never connects). \\
+Pinned connection & \modpath{ingestion/pinned\_connection.py} &
+                 \texttt{PinnedHTTP(S)Connection} --- performs one
+                 \texttt{getaddrinfo}, validates every record, and connects
+                 the socket to a validated IP literal from that same set; no
+                 second resolution exists, so the gate-vs-connect DNS-rebind
+                 window is eliminated by construction (DES-044).  Installed
+                 into the shared \texttt{GUARDED\_OPENER}, so every fetch path
+                 and redirect hop inherits the pin. \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-A residual DNS-rebind TOCTOU (the gate resolves, the socket
-re-resolves) is the tracked validate-then-pin follow-up
-(quarry-kmzo/quarry-ljym).
+A single \texttt{getaddrinfo} per connection eliminates the
+gate-vs-socket DNS-rebind TOCTOU by construction: the socket connects
+to an address the gate has just validated, never an independent
+re-resolution (DES-044, closing quarry-kmzo/quarry-ljym).  The pin
+narrows the \emph{address}, not the \emph{trust} --- \texttt{self.host}
+is never mutated, so SNI, the \texttt{Host} header, and certificate
+verification stay on the hostname (never the pinned IP), and the
+public-fetch context keeps the system trust store, kept separate from
+the daemon-RPC pinned-CA context.
 
 \subsection{Sync and Registry}
 
