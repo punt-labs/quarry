@@ -52,6 +52,10 @@ class PinnedHTTPConnection(http.client.HTTPConnection):
     def _pinned_create_connection(
         self,
         address: tuple[str, int],
+        # timeout and source_address are forwarded verbatim to
+        # socket.create_connection; the stdlib passes its own values (the real
+        # default is the socket._GLOBAL_DEFAULT_TIMEOUT sentinel, source_address
+        # None), so the ``| None`` here only spans what the seam hands through.
         timeout: float | None = None,
         source_address: tuple[str, int] | None = None,
     ) -> socket.socket:
@@ -61,8 +65,8 @@ class PinnedHTTPConnection(http.client.HTTPConnection):
         source_address)`` signature so it is a drop-in for the stdlib seam.
         Every candidate is an already-validated IP literal, so the delegated
         ``socket.create_connection`` does a no-op parse (no second DNS) and owns
-        per-attempt socket close on failure — no raw fd is held here (Class 1).
-        A blocked resolution raises ``UrlRejectedError`` before any socket is opened.
+        per-attempt socket close on failure, so no raw fd is held here.  A
+        blocked resolution raises ``UrlRejectedError`` before any socket opens.
         """
         host, port = address
         last_error: OSError | None = None

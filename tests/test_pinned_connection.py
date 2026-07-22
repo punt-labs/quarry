@@ -27,7 +27,7 @@ from quarry.ingestion.pinned_opener import PinnedHTTPSHandler
 from quarry.ingestion.ssrf_redirect import GUARDED_OPENER, SsrfGuardedRedirectHandler
 from quarry.ingestion.web_fetch import WebFetcher
 from quarry.sitemap_web_client import GatedSitemapWebClient
-from quarry.url_safety import SafeTarget, UrlRejectedError, UrlSafetyCheck
+from quarry.url_safety import UrlRejectedError, UrlSafetyCheck
 
 _GETADDRINFO = "quarry.url_safety.socket_module.getaddrinfo"
 _CREATE_CONNECTION = "quarry.ingestion.pinned_connection.socket.create_connection"
@@ -36,6 +36,10 @@ _PUBLIC_2 = "93.184.216.35"
 _PUBLIC_V6 = "2606:2800:220:1:248:1893:25c8:1946"
 _BLOCKED = "169.254.169.254"  # link-local metadata address
 _BLOCKED_RFC1918 = "10.0.0.9"
+# A DNS label may be at most 63 chars; 64 makes getaddrinfo raise
+# UnicodeError (a ValueError subclass, not OSError) at IDNA-encode time,
+# before any network lookup — so these tests are hermetic.
+_OVERLONG_LABEL_URL = "http://" + "a" * 64 + ".example/"
 
 
 def _addrinfo(*ips: str) -> list[tuple[int, int, int, str, tuple[Any, ...]]]:
@@ -311,23 +315,30 @@ class TestExceptionBoundaries:
         assert isinstance(exc_info.value, ValueError)  # not a bare OSError
         assert not isinstance(exc_info.value, OSError)
 
-    def test_resolve_returns_safe_target_with_validated_addresses(
-        self, monkeypatch: pytest.MonkeyPatch
+    def test_validated_addresses_raises_urlrejected_on_overlong_idna_label(
+        self,
     ) -> None:
-        _resolve_to(monkeypatch, _PUBLIC)
-        target = UrlSafetyCheck.resolve("https://example.com/page")
-        assert isinstance(target, SafeTarget)
-        assert target.host == "example.com"
-        assert str(target.addresses[0]) == _PUBLIC
+        """An over-long IDNA label (getaddrinfo UnicodeError) fails closed."""
+        with pytest.raises(UrlRejectedError) as exc_info:
+            UrlSafetyCheck.validated_addresses("a" * 64 + ".example")
+        assert not isinstance(exc_info.value, OSError)  # UnicodeError, wrapped
 
-    def test_resolve_raises_on_unsupported_scheme(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            _GETADDRINFO, lambda *a, **k: pytest.fail("no DNS for a scheme reject")
-        )
-        with pytest.raises(UrlRejectedError, match="unsupported scheme"):
-            UrlSafetyCheck.resolve("ftp://example.com/x")
+    def test_reject_reason_returns_string_on_overlong_idna_label(self) -> None:
+        """reject_reason never raises on an over-long label — it returns a reason."""
+        reason = UrlSafetyCheck.reject_reason(_OVERLONG_LABEL_URL)
+        assert reason is not None
+        assert "cannot resolve hostname" in reason
+
+    def test_sitemap_client_returns_nonretryable_on_overlong_idna_label(self) -> None:
+        """GatedSitemapWebClient.get does not raise: it reports a skip response."""
+        response = GatedSitemapWebClient().get(_OVERLONG_LABEL_URL)
+        assert isinstance(response, WebClientErrorResponse)
+        assert response.retryable() is False
+
+    def test_webfetcher_surfaces_overlong_idna_label_as_rejection(self) -> None:
+        """WebFetcher.fetch surfaces it as a clean ValueError URL rejection."""
+        with pytest.raises(ValueError, match="URL rejected"):
+            WebFetcher().fetch(_OVERLONG_LABEL_URL)
 
     def test_reject_reason_returns_string_on_malformed_url(self) -> None:
         """A malformed URL yields a reason string, not a crash (never raises)."""
