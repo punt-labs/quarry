@@ -7,26 +7,38 @@ readers open — one leaked descriptor per generation — until the process hits
 ``RLIMIT_NOFILE`` and ``quarry find`` starts returning HTTP 500. A short-lived CLI
 never notices; only a long-lived process accumulates.
 
-This test stands in for the daemon: one connection, many optimize cycles. On the
-leaking code the open-fd count rises monotonically; the fix recycles the connection
-so the count plateaus. The soft fd limit is raised to the hard limit for the
-duration so the leaking path fails as a clean assertion rather than an ``EMFILE``
-crash mid-run.
+Two workloads exercise the same invariant. The optimize-loop test stands in for
+the daemon's sync: one connection, many ``optimize`` cycles, each an FTS rebuild.
+The backfill test stands in for a single ``backfill-sessions`` run: one connection
+ingesting hundreds of transcripts back-to-back, each ingest reopening the table
+and touching the FTS index. In both, the leaking code path lets open fds ramp
+with the workload; a bounded implementation plateaus. The backfill test is the
+regression guard that lets ``--limit`` be a pure pagination knob rather than a
+magic-number safety belt: it proves the run is bounded by construction, not by a
+500-transcript cap.
+
+The soft fd limit is raised to the hard limit for the duration so the leaking
+path fails as a clean assertion rather than an ``EMFILE`` crash mid-run.
 """
 
 from __future__ import annotations
 
 import gc
+import json
 import resource
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING, Self, final
+from unittest.mock import patch
 
 import numpy as np
 import pytest
 
+from quarry.backfill import backfill_sessions, encode_project_path
+from quarry.config import Settings
 from quarry.db import Database
 from quarry.models import Chunk
+from quarry.sync_registry import SyncRegistry
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -166,4 +178,138 @@ def test_optimize_loop_does_not_leak_descriptors(tmp_path: Path) -> None:
     assert trajectory.plateaus(slack=_PLATEAU_SLACK), (
         f"open fds grew by {trajectory.growth():.1f} across {_ITERATIONS} optimize "
         f"cycles (peak {trajectory.peak}); descriptor leak in the connection layer"
+    )
+
+
+_BACKFILL_TRANSCRIPTS = 250
+
+
+@final
+class _FdSamplingEmbedder:
+    """A stand-in embedding backend that samples open fds on every call.
+
+    Backfill embeds each transcript in one bounded window, so ``embed_texts`` is
+    invoked once per transcript. Recording the descriptor count here turns the
+    embed hook into a per-transcript fd probe without touching the real ONNX
+    model, keeping the test hermetic and CI-runnable.
+    """
+
+    __slots__ = ("_dim", "_trajectory")
+
+    _dim: int
+    _trajectory: FdTrajectory
+
+    def __new__(cls, trajectory: FdTrajectory, *, dimension: int) -> Self:
+        self = super().__new__(cls)
+        self._trajectory = trajectory
+        self._dim = dimension
+        return self
+
+    @property
+    def dimension(self) -> int:
+        """Embedding width the fake vectors are shaped to."""
+        return self._dim
+
+    @property
+    def model_name(self) -> str:
+        """Identify the fake backend in any diagnostic output."""
+        return "fd-sampling-fake"
+
+    def embed_texts(self, texts: list[str]) -> NDArray[np.float32]:
+        """Sample open fds, then return one random vector per text."""
+        self._trajectory.record(_open_fd_count())
+        return _random_vectors(len(texts))
+
+    def embed_query(self, query: str) -> NDArray[np.float32]:
+        """Return a single random query vector (unused by backfill)."""
+        vector: NDArray[np.float32] = _random_vectors(1)[0]
+        return vector
+
+
+def _write_transcript(path: Path, index: int) -> None:
+    """Write a minimal one-exchange JSONL transcript with unique text."""
+    lines = [
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": f"probe question {index}"}],
+            },
+        },
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": f"probe answer {index} lorem"}],
+            },
+        },
+    ]
+    with path.open("w") as f:
+        for line in lines:
+            f.write(json.dumps(line) + "\n")
+
+
+def _fabricate_backfill_corpus(tmp_path: Path, count: int) -> tuple[Settings, Path]:
+    """Build *count* transcripts, a registry, and settings for one backfill run.
+
+    Returns the settings and the fake ``~/.claude/projects`` root the backfill
+    scans (patched into the module under test by the caller).
+    """
+    project = tmp_path / "myproject"
+    project.mkdir()
+    encoded = encode_project_path(str(project.resolve()))
+    project_dir = tmp_path / ".claude" / "projects" / encoded
+    project_dir.mkdir(parents=True)
+    for i in range(count):
+        _write_transcript(project_dir / f"{i:08d}-0000-0000-0000-000000000000.jsonl", i)
+
+    registry_path = tmp_path / "registry.db"
+    conn = SyncRegistry(registry_path)
+    try:
+        conn.register_directory(project, "myproject")
+    finally:
+        conn.close()
+
+    settings = Settings.load().resolve_db_paths(None)
+    settings = settings.model_copy(
+        update={"lancedb_path": tmp_path / "lancedb", "registry_path": registry_path}
+    )
+    return settings, tmp_path / ".claude" / "projects"
+
+
+# One backfill run ingesting hundreds of transcripts is heavier per iteration
+# than the optimize loop (file read + scrub + capture write + table reopen), so
+# give it its own headroom rather than shrinking the corpus into insignificance.
+@pytest.mark.timeout(180)
+@pytest.mark.usefixtures("_raised_fd_limit")
+def test_large_backfill_does_not_leak_descriptors(tmp_path: Path) -> None:
+    """A single-connection backfill of hundreds of transcripts must plateau fds.
+
+    This is the invariant that lets ``--limit`` be a pagination convenience
+    rather than a resource-safety belt: if open fds are bounded by construction
+    across the whole run, no 500-transcript cap is protecting anything. The fake
+    embedder samples fds once per transcript; a leak in the ingest/reopen path
+    would ramp the trajectory, a bounded path holds it flat.
+    """
+    settings, projects_dir = _fabricate_backfill_corpus(tmp_path, _BACKFILL_TRANSCRIPTS)
+    trajectory = FdTrajectory()
+    embedder = _FdSamplingEmbedder(trajectory, dimension=_EMBEDDING_DIM)
+
+    with (
+        patch("quarry.backfill.CLAUDE_PROJECTS_DIR", projects_dir),
+        patch(
+            "quarry.ingestion.streaming.get_embedding_backend",
+            return_value=embedder,
+        ),
+    ):
+        stats = backfill_sessions(settings)
+
+    assert stats.ingested == _BACKFILL_TRANSCRIPTS, (
+        f"backfill ingested {stats.ingested} of {_BACKFILL_TRANSCRIPTS} "
+        f"transcripts; errors={stats.errors[:3]}"
+    )
+    assert trajectory.plateaus(slack=_PLATEAU_SLACK), (
+        f"open fds grew by {trajectory.growth():.1f} across "
+        f"{_BACKFILL_TRANSCRIPTS} backfilled transcripts (peak {trajectory.peak}); "
+        f"descriptor leak in the backfill ingest path"
     )
