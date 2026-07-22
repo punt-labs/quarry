@@ -33,10 +33,16 @@ class QuarryResources:
     """
 
     _settings: Settings
+    # None => build the real ONNX embedder lazily; a test injects a stand-in so
+    # warm() AND queries skip the model (the one embedder on every path).
+    _embedder_override: EmbeddingBackend | None
 
-    def __new__(cls, settings: Settings) -> Self:
+    def __new__(
+        cls, settings: Settings, *, embedder: EmbeddingBackend | None = None
+    ) -> Self:
         self = super().__new__(cls)
         self._settings = settings
+        self._embedder_override = embedder
         return self
 
     @property
@@ -56,7 +62,14 @@ class QuarryResources:
 
     @cached_property
     def embedder(self) -> EmbeddingBackend:
-        """ONNX session for queries, isolated from the sync worker (DES-032)."""
+        """ONNX session for queries, isolated from the sync worker (DES-032).
+
+        A test-injected override is THE embedder on every path — the query path
+        and ``warm()`` both read this property, so an override makes ``warm()``
+        skip the ONNX build (the hermetic-daemon seam).
+        """
+        if self._embedder_override is not None:
+            return self._embedder_override
         return new_embedding_backend()
 
     def warm(self) -> None:
