@@ -1,26 +1,22 @@
-"""SSRF policy: resolve a URL or host to a validated, pinnable address set.
+"""SSRF policy: validate a URL or host against the block policy.
 
 ``POST /ingest`` and every server-side fetch take a caller-supplied URL, so an
 unguarded resolve-and-connect is an SSRF primitive.  This module owns the single
 block policy — non-``http(s)`` schemes, a metadata/``.local`` hostname denylist,
 and the private/loopback/link-local/reserved/multicast/CGNAT address classes —
-and exposes it three ways that all share one classifier:
+and exposes it two ways that share one classifier:
 
 * :meth:`UrlSafetyCheck.reject_reason` — the ``None``-means-safe admission gate
-  callers already use (route admission, final-URL re-checks).
+  callers use (route admission, final-URL re-checks).
 * :meth:`UrlSafetyCheck.validated_addresses` — the fail-closed resolver the
   pinned connection calls *inside* ``connect`` so the socket targets an address
   drawn from the same resolution that was validated (no independent re-resolve).
-* :meth:`UrlSafetyCheck.resolve` — the typed producer returning a
-  :class:`SafeTarget` value object for callers that resolve without fetching.
 """
 
 from __future__ import annotations
 
 import ipaddress
 import socket as socket_module
-from dataclasses import dataclass
-from typing import final
 from urllib.parse import urlsplit
 
 type IpAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
@@ -34,31 +30,6 @@ class UrlRejectedError(ValueError):
     rejection rather than a network error, and so ``RedirectRejectedError``
     remains its sibling.
     """
-
-
-@final
-@dataclass(frozen=True, slots=True)
-class SafeTarget:
-    """A host and the addresses it resolves to, every one validated safe.
-
-    The "reason AND pinned address set" value object: it exists so a caller that
-    resolves without fetching gets the exact address set that passed the policy,
-    exposed read-only so the validated invariant cannot be mutated after the
-    fact (PY-EN-1/2).
-    """
-
-    _host: str
-    _addresses: tuple[IpAddress, ...]
-
-    @property
-    def host(self) -> str:
-        """Return the original hostname (never an IP literal)."""
-        return self._host
-
-    @property
-    def addresses(self) -> tuple[IpAddress, ...]:
-        """Return the validated addresses, in resolver order."""
-        return self._addresses
 
 
 class UrlSafetyCheck:
@@ -80,39 +51,16 @@ class UrlSafetyCheck:
     _CGNAT_NETWORK = ipaddress.ip_network("100.64.0.0/10")
 
     @classmethod
-    def resolve(cls, url: str) -> SafeTarget:
-        """Parse *url*, enforce scheme, and return its validated address set.
-
-        Raises:
-            UrlRejectedError: if the scheme is not ``http(s)``, the host is missing,
-                the URL is malformed, resolution fails, or any resolved address
-                is blocked.
-        """
-        try:
-            parsed = urlsplit(url)
-            scheme = parsed.scheme.lower()
-            host = parsed.hostname
-        except ValueError as exc:
-            # A malformed URL (bad IPv6 brackets, invalid port) must reject, not
-            # crash: ``urlsplit`` and lazy ``.hostname``/``.port`` both raise.
-            raise UrlRejectedError(f"malformed URL: {exc}") from exc
-        if scheme not in {"http", "https"}:
-            raise UrlRejectedError(f"unsupported scheme {scheme!r}")
-        if not host:
-            raise UrlRejectedError("missing hostname")
-        return SafeTarget(host, cls.validated_addresses(host))
-
-    @classmethod
     def validated_addresses(cls, host: str) -> tuple[IpAddress, ...]:
         """Resolve *host* once and return every address, all validated safe.
 
         Fail-closed and all-records: the hostname denylist runs first, then a
         single ``getaddrinfo``, then every returned address is classified; the
         first blocked address (or a resolution/parse failure) raises
-        :class:`UrlRejectedError`.  The result is therefore never empty — the method
-        either raises or returns at least one safe address, which is what lets
-        the pinned connection connect to a member of this set without a second,
-        independently-resolved lookup.
+        :class:`UrlRejectedError`.  The result is therefore never empty — the
+        method either raises or returns at least one safe address, which is what
+        lets the pinned connection connect to a member of this set without a
+        second, independently-resolved lookup.
         """
         cls._reject_hostname(host)
         addresses = cls._resolve_host(host)
@@ -124,13 +72,25 @@ class UrlSafetyCheck:
     def reject_reason(cls, url: str) -> str | None:
         """Return ``None`` if *url* is safe to fetch, else a rejection reason.
 
-        A thin wrapper over :meth:`resolve`: the ``None``-means-safe contract
-        mirrors a boolean guard (PY-EH-4), and it never raises for malformed
-        input — every rejection path raises :class:`UrlRejectedError`, which is
-        caught here and rendered as the reason string.
+        The ``None``-means-safe contract mirrors a boolean guard (PY-EH-4) and
+        never raises for malformed input: a parse failure returns a reason, a
+        bad scheme/host returns a reason, and every resolution/address rejection
+        raised by :meth:`validated_addresses` is caught and rendered as one.
         """
         try:
-            cls.resolve(url)
+            parsed = urlsplit(url)
+            scheme = parsed.scheme.lower()
+            host = parsed.hostname
+        except ValueError as exc:
+            # A malformed URL (bad IPv6 brackets, invalid port) must reject, not
+            # crash: ``urlsplit`` and lazy ``.hostname``/``.port`` both raise.
+            return f"malformed URL: {exc}"
+        if scheme not in {"http", "https"}:
+            return f"unsupported scheme {scheme!r}"
+        if not host:
+            return "missing hostname"
+        try:
+            cls.validated_addresses(host)
         except UrlRejectedError as exc:
             return str(exc)
         return None
@@ -149,7 +109,11 @@ class UrlSafetyCheck:
         """Resolve *host* once, returning every address parsed to a value."""
         try:
             infos = socket_module.getaddrinfo(host, None)
-        except OSError as exc:
+        except (OSError, UnicodeError) as exc:
+            # getaddrinfo raises UnicodeError (a ValueError subclass, NOT an
+            # OSError) on an over-long IDNA label (>63 chars); catch both so the
+            # resolution boundary always fails closed as UrlRejectedError rather
+            # than letting a bare ValueError escape past the fetch boundary.
             raise UrlRejectedError(f"cannot resolve hostname {host!r}: {exc}") from exc
         return tuple(cls._parse_address(host, str(info[4][0])) for info in infos)
 
