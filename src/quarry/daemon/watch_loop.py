@@ -127,10 +127,13 @@ class WatchLoop:
         if self._safety_task is not None:
             self._safety_task.cancel()
             self._safety_task = None
+        if self._submitter is not None:
+            self._submitter.cancel_pending()  # cancel outstanding backoff re-arms
         if self._dispatcher is not None:
             self._dispatcher.cancel_all()
         if self._roster is not None:
             self._roster.unwatch_all()
+            self._roster.close()  # drop sibling conns so a restart can't leak them
         if self._source is not None:
             # stop() joins the observer thread — off the loop so shutdown never blocks.
             await run_in_threadpool(self._source.stop)

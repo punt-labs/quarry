@@ -42,7 +42,15 @@ _BACKOFF_MAX_S = 30.0
 class WatchSubmitter:
     """Submit watch-derived IngestUnits to the queue, re-arming shed ones."""
 
-    __slots__ = ("_backoff", "_ctx", "_dispatcher", "_loop", "_pending_scan", "_roster")
+    __slots__ = (
+        "_backoff",
+        "_ctx",
+        "_dispatcher",
+        "_loop",
+        "_pending_scan",
+        "_roster",
+        "_timers",
+    )
 
     _ctx: DaemonContext
     _roster: WatchRoster
@@ -52,6 +60,8 @@ class WatchSubmitter:
     # Route keys whose bulk scan was shed by a full queue — the safety scan
     # re-submits these so a scan past the admission bound is never lost.
     _pending_scan: set[RouteKey]
+    # Pending backoff re-arm timers, tracked so shutdown can cancel them.
+    _timers: set[asyncio.TimerHandle]
 
     def __new__(
         cls, ctx: DaemonContext, roster: WatchRoster, loop: asyncio.AbstractEventLoop
@@ -63,7 +73,14 @@ class WatchSubmitter:
         self._dispatcher = None
         self._backoff = {}
         self._pending_scan = set()
+        self._timers = set()
         return self
+
+    def cancel_pending(self) -> None:
+        """Cancel every outstanding backoff re-arm timer (shutdown)."""
+        for timer in self._timers:
+            timer.cancel()
+        self._timers.clear()
 
     def bind(self, dispatcher: DebouncedDispatcher) -> None:
         """Wire the debouncer used to re-arm shed events (sink is created first)."""
@@ -163,7 +180,11 @@ class WatchSubmitter:
         """Re-arm shed events after an exponential-backoff delay (never dropped)."""
         delay = self._backoff.get(key, _BACKOFF_BASE_S)
         self._backoff[key] = min(delay * 2, _BACKOFF_MAX_S)
-        self._loop.call_later(delay, self._refeed, key, tuple(events))
+        # Prune fired handles so the set stays bounded, then track the new one so
+        # shutdown can cancel a still-pending re-arm (no stray timer post-stop).
+        now = self._loop.time()
+        self._timers = {timer for timer in self._timers if timer.when() > now}
+        self._timers.add(self._loop.call_later(delay, self._refeed, key, tuple(events)))
 
     def _refeed(self, key: RouteKey, events: Sequence[FsEvent]) -> None:
         """Feed deferred events back through the debouncer for another attempt."""

@@ -16,6 +16,7 @@ within an already-open database, never a path to open.  Keep it that way.
 
 from __future__ import annotations
 
+import gc
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -162,3 +163,17 @@ class WatchRoster:
         """Unschedule every watched tree (the source itself is stopped elsewhere)."""
         for key in list(self._watches):
             self.unwatch(key)
+
+    def close(self) -> None:
+        """Drop sibling database connections (the active DB's is owned elsewhere).
+
+        A fresh ``start()`` after ``stop()`` would otherwise stack a second set
+        of sibling connections; dropping the references and forcing a cyclic
+        collect releases the LanceDB descriptors the binding holds in a reference
+        cycle (plain refcounting does not free them — see ``LanceConnection``).
+        """
+        for name in list(self._conns):
+            if name != self._active_db:
+                self._conns.pop(name, None)
+                self._db_settings.pop(name, None)
+        gc.collect()
