@@ -123,6 +123,10 @@ class RegistrationRoutes(RouteGroup):
         if not found:
             return not_found
 
+        # Stop watching BEFORE the purge so no in-flight fs-event re-enqueues a
+        # file for this collection mid-purge (DES-045 §6).
+        self.ctx.watch_loop.stop_watching(collection)
+
         state = self.ctx.tasks.begin("deregister")
         state.results = {
             "collection": collection,
@@ -165,6 +169,8 @@ class RegistrationRoutes(RouteGroup):
                 "collection": reg.collection,
                 "registered_at": reg.registered_at,
             }
+            # Begin watching the new tree and submit its initial scan (DES-045 §6).
+            self.ctx.watch_loop.start_watching(collection, resolved)
         except asyncio.CancelledError:
             state.status = "failed"
             state.error = "task was cancelled"

@@ -91,9 +91,9 @@ def _make_client(tmp_path: Path) -> TestClient:
 
 
 class TestSyncLock:
-    """Fix 1: concurrent POST /sync returns 409."""
+    """DES-045: concurrent POST /sync enqueues transparently (no 409)."""
 
-    def test_second_post_while_running_returns_409(self, tmp_path: Path) -> None:
+    def test_second_post_while_running_enqueues(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
         ctx = DaemonContext(settings)
         _inject(ctx)
@@ -106,11 +106,14 @@ class TestSyncLock:
         app = build_app(ctx)
         client = TestClient(app, raise_server_exceptions=False)
 
+        # DES-045 drops the 409: the per-collection FIFO queue is the concurrency
+        # control now, so a second sync enqueues behind the first (202) rather
+        # than being rejected.
         resp = client.post("/v1/sync", json={})
-        assert resp.status_code == 409
+        assert resp.status_code == 202
         data = resp.json()
-        assert data["task_id"] == "sync-existing"
-        assert "already in progress" in data["error"].lower()
+        assert data["status"] == "accepted"
+        assert data["task_id"] != "sync-existing"
 
     def test_post_allowed_after_previous_completed(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
@@ -535,8 +538,8 @@ class TestAsyncSyncEndpoint:
         assert data["status"] == "failed"
         assert data["error"] == "disk full"
 
-    def test_409_includes_existing_task_id(self, tmp_path: Path) -> None:
-        """409 response includes the task_id of the running sync."""
+    def test_concurrent_sync_gets_a_fresh_task(self, tmp_path: Path) -> None:
+        """A sync while one runs returns 202 with a distinct task_id (DES-045)."""
         settings = _mock_settings(tmp_path)
         ctx = DaemonContext(settings)
         _inject(ctx)
@@ -544,9 +547,9 @@ class TestAsyncSyncEndpoint:
 
         client = TestClient(build_app(ctx), raise_server_exceptions=False)
         resp = client.post("/v1/sync", json={})
-        assert resp.status_code == 409
+        assert resp.status_code == 202
         data = resp.json()
-        assert data["task_id"] == "sync-running"
+        assert data["task_id"] != "sync-running"
 
 
 # ---------------------------------------------------------------------------

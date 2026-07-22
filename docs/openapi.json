@@ -1168,7 +1168,7 @@
     },
     "/v1/sync": {
       "post": {
-        "description": "Accept a sync request and run ``sync_all`` as a background task.\n\nUses a non-blocking check to reject concurrent requests with HTTP 409.\nReturns 202 Accepted immediately with a task_id; the actual sync runs\nas an asyncio background task, polled by that task id.",
+        "description": "Accept a sync request and enqueue a scan per registered collection.\n\nDES-045 drops the DES-026 409: with the watch loop always active a 409\nwould reject every explicit sync the moment the daemon indexes anything.\nThe request instead enqueues ``CollectionSyncJob``(s) behind the live\nwatch work and returns 202 + task_id \u2014 the same poll-to-completion shape\nthe CLI already uses.  The ``reject_if_running`` 409 stays on\noptimize/backfill, which are genuine singletons with no per-collection\nqueue.  The 202 body and ``/v1/tasks`` schema are byte-identical to\nbefore; only the failure mode (409 \u2192 transparent enqueue) changed.",
         "operationId": "sync_v1_sync_post",
         "requestBody": {
           "content": {

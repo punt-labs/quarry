@@ -2248,8 +2248,13 @@ class TestSync:
         assert resp.status_code == 413
         assert "too large" in resp.json()["error"].lower()
 
-    def test_concurrent_sync_returns_409(self, tmp_path: Path) -> None:
-        """Second POST while sync is running returns 409 with task_id."""
+    def test_concurrent_sync_enqueues_not_409(self, tmp_path: Path) -> None:
+        """A second sync while one runs now enqueues (202), never 409 (DES-045).
+
+        With the watch loop always active a 409 would reject every explicit
+        sync, so the request enqueues behind the live work and returns 202 + a
+        fresh task_id; the per-collection FIFO queue is the concurrency control.
+        """
         settings = _mock_settings(tmp_path)
         ctx = DaemonContext(settings)
         _inject_mocks(ctx)
@@ -2261,9 +2266,9 @@ class TestSync:
         ctx.tasks.seed(TaskState(task_id=task_id, kind="sync", status="running"))
 
         resp = sync_client.post("/v1/sync", json={})
-        assert resp.status_code == 409
-        assert resp.json()["task_id"] == task_id
-        assert "already in progress" in resp.json()["error"].lower()
+        assert resp.status_code == 202
+        assert resp.json()["status"] == "accepted"
+        assert resp.json()["task_id"] != task_id  # a distinct, freshly-enqueued task
 
     def test_sync_status_not_found(self, client: TestClient) -> None:
         """GET /v1/tasks/<task_id> returns 404 for unknown task."""
