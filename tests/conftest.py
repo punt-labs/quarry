@@ -8,7 +8,6 @@ from unittest.mock import patch
 
 import pytest
 from rich.console import Console
-from starlette.testclient import TestClient
 
 from quarry.api import (
     DeleteCollectionRequest,
@@ -44,8 +43,8 @@ def asgi_daemon(
     """
     data_dir = tmp_path_factory.mktemp("asgi-daemon")
     daemon = InProcessDaemon(data_dir)
-    with TestClient(daemon.app, raise_server_exceptions=False) as testclient:
-        yield daemon.client(testclient)
+    with daemon.client() as client:
+        yield client
 
 
 class GitSandbox:

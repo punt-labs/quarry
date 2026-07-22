@@ -1,24 +1,29 @@
 """In-process daemon for hermetic daemon-mandatory tests (DES-031).
 
-Serves the REAL daemon FastAPI app through Starlette's ASGI ``TestClient`` — no
-socket, no ONNX model — so a CLI/MCP test that would otherwise run ``resolve()``
-and hit a LIVE ``quarryd`` instead drives the real request handlers in-process.
-Patch ``TargetResolver.connect`` to return :meth:`InProcessDaemon.client` and the
-whole ``CLI → QuarryClient → daemon → LanceDB`` round-trip runs against real code
-on a real (empty) tmp database and passes with NO daemon running — the
+Drives the REAL daemon FastAPI app through ``httpx.ASGITransport`` — no socket,
+no ONNX model — so a CLI/MCP test that would otherwise run ``resolve()`` and hit
+a LIVE ``quarryd`` instead exercises the real request handlers in-process. Patch
+``TargetResolver.connect`` to return the client from :meth:`InProcessDaemon.client`
+and the whole ``CLI → QuarryClient → daemon → LanceDB`` round-trip runs against
+real code on a real (empty) tmp database and passes with NO daemon running — the
 "daemon-mandatory tests must be hermetic" rule, enforceable with the daemon
 STOPPED.
 
-The response path delegates to the production ``HttpxTransport._parse`` so the
-hermetic transport cannot drift from the wire behaviour it stands in for
-(bug-class-3): identical status→error mapping, body truncation, and JSON
-handling as the shipped client.
+The transport is a genuine ``httpx`` client over ``httpx.ASGITransport``: it
+returns a real ``httpx.Response`` that the production ``HttpxTransport._parse``
+consumes unchanged, so the hermetic path matches the shipped client's wire
+behaviour byte-for-byte (bug-class-3). ``QuarryClient`` is synchronous, so an
+``anyio`` blocking portal bridges its calls onto the async ASGI client.
 """
 
 from __future__ import annotations
 
+import functools
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Self, final
 
+import anyio.from_thread
+import httpx
 import numpy as np
 
 from quarry.client import QuarryClient
@@ -28,12 +33,12 @@ from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Generator, Mapping
     from pathlib import Path
 
+    from anyio.from_thread import BlockingPortal
     from fastapi import FastAPI
     from numpy.typing import NDArray
-    from starlette.testclient import TestClient
 
 
 @final
@@ -69,13 +74,22 @@ class FakeEmbedder:
 
 @final
 class AsgiTransport:
-    """A ``QuarryClient`` transport over the daemon app via ``TestClient``."""
+    """A ``QuarryClient`` transport over ``httpx.ASGITransport`` (no socket).
 
-    _client: TestClient
+    Holds an async ``httpx`` client bound to the daemon's ASGI app and a blocking
+    portal that runs each request on the portal's event loop, so a synchronous
+    ``QuarryClient`` call reaches the async client. The genuine ``httpx.Response``
+    it produces is handed to the production ``HttpxTransport._parse`` unchanged,
+    so the hermetic path cannot drift from the shipped wire behaviour.
+    """
 
-    def __new__(cls, client: TestClient) -> Self:
+    _client: httpx.AsyncClient
+    _portal: BlockingPortal
+
+    def __new__(cls, client: httpx.AsyncClient, portal: BlockingPortal) -> Self:
         self = super().__new__(cls)
         self._client = client
+        self._portal = portal
         return self
 
     def request(
@@ -88,12 +102,15 @@ class AsgiTransport:
         # timeout is irrelevant in-process (no socket); accepted for protocol parity.
         timeout: float | None = None,
     ) -> Response:
-        """Route the request through the ASGI app and parse it as production does."""
-        resp = self._client.request(
-            method,
-            path,
-            params=dict(params) if params else None,
-            json=dict(json_body) if json_body is not None else None,
+        """Run the request on the portal loop and parse it as production does."""
+        resp = self._portal.call(
+            functools.partial(
+                self._client.request,
+                method,
+                path,
+                params=dict(params) if params else None,
+                json=dict(json_body) if json_body is not None else None,
+            )
         )
         # Reuse the shipped parser so the hermetic path matches the wire exactly.
         return HttpxTransport._parse(resp)
@@ -128,7 +145,7 @@ class InProcessDaemon:
 
     @property
     def app(self) -> FastAPI:
-        """The daemon's ASGI application (wrap with ``TestClient`` to drive it)."""
+        """The daemon's ASGI application (drive it via :meth:`client`)."""
         return self._app
 
     @property
@@ -136,6 +153,17 @@ class InProcessDaemon:
         """The daemon context, for tests that inspect tasks or the ingest queue."""
         return self._ctx
 
-    def client(self, testclient: TestClient) -> QuarryClient:
-        """Return a ``QuarryClient`` whose transport is this in-process app."""
-        return QuarryClient(AsgiTransport(testclient))
+    @contextmanager
+    def client(self) -> Generator[QuarryClient]:
+        """Yield a ``QuarryClient`` driving this app over ``httpx.ASGITransport``.
+
+        A blocking portal owns the event loop for the async client's lifetime and
+        closes it on exit, so no loop or connection leaks past the ``with`` block.
+        """
+        transport = httpx.ASGITransport(app=self._app, raise_app_exceptions=False)
+        http_client = httpx.AsyncClient(transport=transport, base_url="http://daemon")
+        with anyio.from_thread.start_blocking_portal() as portal:
+            try:
+                yield QuarryClient(AsgiTransport(http_client, portal))
+            finally:
+                portal.call(http_client.aclose)
