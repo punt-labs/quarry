@@ -1,4 +1,4 @@
-"""A urllib opener that re-runs the SSRF gate on every redirect hop.
+"""A urllib opener that re-gates every redirect hop and pins every connection.
 
 urllib's default ``HTTPRedirectHandler`` follows 30x responses automatically
 with no per-hop check, so a caller-supplied public URL that 302s to a private,
@@ -6,16 +6,20 @@ loopback, link-local, CGNAT, or cloud-metadata address would reach an internal
 service.  :data:`GUARDED_OPENER` replaces that handler with one that gates each
 redirect target against its resolved address -- the same :class:`UrlSafetyCheck`
 the ingest route runs on the initial source -- and refuses an unsafe hop before
-it is opened.  The whole chain is covered because every hop is the target of the
-hop before it.
+it is opened.  It also replaces urllib's default HTTP(S) handlers with the pinned
+ones (:mod:`quarry.ingestion.pinned_opener`), so each hop is connected to a
+connect-time-validated IP, closing the DNS-rebinding TOCTOU window.  The whole
+chain is covered because every hop is the target of the hop before it.
 """
 
 from __future__ import annotations
 
 import contextlib
+import ssl
 import urllib.request
 from typing import IO, TYPE_CHECKING, final
 
+from quarry.ingestion.pinned_opener import PinnedHTTPHandler, PinnedHTTPSHandler
 from quarry.url_safety import UrlSafetyCheck
 
 if TYPE_CHECKING:
@@ -36,18 +40,27 @@ class SsrfGuardedRedirectHandler(urllib.request.HTTPRedirectHandler):
 
     @classmethod
     def build_opener(cls) -> urllib.request.OpenerDirector:
-        """Return an opener whose redirect handler is this SSRF gate, no proxy.
+        """Return the one gated, pinned, proxy-less opener for server-side fetches.
 
-        ``build_opener`` swaps urllib's default redirect handler for this
-        subclass (it replaces a default handler when given a subclass of it) and
-        keeps every other default handler.  The empty ``ProxyHandler({})``
-        replaces the default proxy handler so HTTP_PROXY/HTTPS_PROXY in the
-        daemon env are NOT honored: the fetch goes DIRECT to the gated host.
-        Otherwise the socket would connect to the proxy -- a host the gate never
-        resolved or checked -- reintroducing SSRF through an internal/attacker
-        proxy.  Matches the client's trust_env=False posture.
+        ``build_opener`` swaps urllib's default redirect handler for this SSRF
+        gate and its default HTTP(S) handlers for the pinned ones (it drops a
+        default when passed a subclass), so every hop is BOTH re-gated on
+        redirect AND connected to a connect-time-validated IP
+        (:mod:`quarry.ingestion.pinned_connection`).  The HTTPS handler is given
+        an explicit ``create_default_context`` -- system trust store,
+        ``check_hostname`` on -- because the pin narrows the address, not the
+        trust (the opposite of the daemon-RPC pinned-CA context).  The empty
+        ``ProxyHandler({})`` replaces the default proxy handler so HTTP_PROXY/
+        HTTPS_PROXY in the daemon env are NOT honored: the fetch goes DIRECT to
+        the gated, pinned host -- never to an unvalidated proxy that would
+        reintroduce SSRF.  Matches the client's trust_env=False posture.
         """
-        return urllib.request.build_opener(cls(), urllib.request.ProxyHandler({}))
+        return urllib.request.build_opener(
+            cls(),
+            PinnedHTTPHandler(),
+            PinnedHTTPSHandler(context=ssl.create_default_context()),
+            urllib.request.ProxyHandler({}),
+        )
 
     def redirect_request(
         self,
@@ -64,6 +77,8 @@ class SsrfGuardedRedirectHandler(urllib.request.HTTPRedirectHandler):
         ``OpenerDirector`` never opens the target, so no connection to the
         internal address is attempted.  The gate resolves ``newurl``'s host, so
         a public hostname that resolves to an internal address is caught too.
+        This pre-check is defense in depth ahead of the connection-level pin,
+        and it closes the intermediate 3xx response.
         """
         reason = UrlSafetyCheck.reject_reason(newurl)
         if reason is not None:
@@ -77,7 +92,8 @@ class SsrfGuardedRedirectHandler(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-# One shared opener for all server-side fetches: every redirect hop is gated.
+# One shared opener for all server-side fetches: every redirect hop is gated and
+# every connection is pinned to a connect-time-validated address.
 GUARDED_OPENER: urllib.request.OpenerDirector = (
     SsrfGuardedRedirectHandler.build_opener()
 )
