@@ -164,26 +164,57 @@ class WatchLoop:
         shed/failed or the poll deadline hit — no silent success.
         """
         with task_terminal(umbrella):
-            children: list[TaskState] = []
-            roster, submitter = self._roster, self._submitter
-            if self._started and roster is not None and submitter is not None:
-                name = self._ctx.database_name
-                roster.ensure_database(name)
-                for collection, root in roster.registrations(name):
-                    children.extend(
-                        submitter.submit_scan(RouteKey(name, collection), root)
-                    )
+            children = self._submit_all_scans()
             timed_out = await self._await_children(children)
-            failed = sum(1 for child in children if child.status == "failed")
-            umbrella.results = {"collections": len(children) // 2, "failed": failed}
-            if timed_out:
-                umbrella.status = "failed"
-                umbrella.error = "scan timed out before all jobs completed"
-            elif failed:
-                umbrella.status = "failed"
-                umbrella.error = f"{failed} scan job(s) failed"
-            else:
-                umbrella.status = "completed"
+            self._summarize_scan(umbrella, children, timed_out=timed_out)
+
+    def _submit_all_scans(self) -> list[TaskState]:
+        """Submit a scan+finalize for every active-DB registration; return states."""
+        roster, submitter = self._roster, self._submitter
+        if not (self._started and roster is not None and submitter is not None):
+            return []
+        name = self._ctx.database_name
+        roster.ensure_database(name)
+        children: list[TaskState] = []
+        for collection, root in roster.registrations(name):
+            children.extend(submitter.submit_scan(RouteKey(name, collection), root))
+        return children
+
+    @staticmethod
+    def _summarize_scan(
+        umbrella: TaskState, children: list[TaskState], *, timed_out: bool
+    ) -> None:
+        """Roll the child scans' per-file failures + errors up into *umbrella*.
+
+        A ``CollectionSyncJob`` completes even when N files failed (it records
+        ``failed``/``errors`` in its own state), so counting only child *status*
+        would report silent success.  Aggregate both the shed-job count and the
+        per-file failure count/errors, and fail the umbrella if either is nonzero.
+        """
+        shed = sum(1 for child in children if child.status == "failed")
+        file_failures = 0
+        errors: list[str] = []
+        for child in children:
+            failed = child.results.get("failed", 0)
+            if isinstance(failed, int):
+                file_failures += failed
+            child_errors = child.results.get("errors")
+            if isinstance(child_errors, list):
+                errors.extend(str(error) for error in child_errors)
+        umbrella.results = {
+            "collections": len(children) // 2,
+            "failed": file_failures,
+            "shed": shed,
+            "errors": errors,
+        }
+        if timed_out:
+            umbrella.status = "failed"
+            umbrella.error = "scan timed out before all jobs completed"
+        elif shed or file_failures:
+            umbrella.status = "failed"
+            umbrella.error = f"{shed} scan job(s) shed, {file_failures} file(s) failed"
+        else:
+            umbrella.status = "completed"
 
     # -- internals ----------------------------------------------------------
 

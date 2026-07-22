@@ -36,17 +36,25 @@ if TYPE_CHECKING:
 class _RecordingQueue:
     """Capture every submission; admit or shed per configuration."""
 
-    __slots__ = ("admit", "boom", "submitted")
+    __slots__ = ("admit", "boom", "scan_result", "submitted")
 
     submitted: list[tuple[RouteKey, IngestUnit]]
     boom: bool
     admit: bool
+    scan_result: dict[str, object]
 
-    def __new__(cls, *, admit: bool = True, boom: bool = False) -> Self:
+    def __new__(
+        cls,
+        *,
+        admit: bool = True,
+        boom: bool = False,
+        scan_result: dict[str, object] | None = None,
+    ) -> Self:
         self = super().__new__(cls)
         self.submitted = []
         self.admit = admit
         self.boom = boom
+        self.scan_result = scan_result or {}
         return self
 
     def try_submit(self, key: RouteKey, job: IngestUnit, state: TaskState) -> bool:
@@ -54,8 +62,15 @@ class _RecordingQueue:
             msg = "queue boom"
             raise RuntimeError(msg)
         self.submitted.append((key, job))
-        state.status = "queued" if self.admit else "failed"
-        return self.admit
+        if not self.admit:
+            state.status = "failed"
+            return False
+        # Simulate the worker running the job to completion; a CollectionSyncJob
+        # reports the injected per-file result (failed/errors) it would produce.
+        state.status = "completed"
+        if isinstance(job, CollectionSyncJob):
+            state.results = dict(self.scan_result)
+        return True
 
     def jobs(self, kind: type) -> list[IngestUnit]:
         """Return every submitted job that is an instance of *kind*."""
@@ -340,7 +355,33 @@ def test_request_scan_fails_umbrella_when_a_child_is_shed(tmp_path: Path) -> Non
         umbrella = ctx.tasks.begin("sync")
         await loop.request_scan(umbrella)
         assert umbrella.status == "failed"
-        assert umbrella.results["failed"]  # a non-zero shed-child count
+        assert umbrella.results["shed"]  # a non-zero shed-job count
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_request_scan_reports_per_file_failures(tmp_path: Path) -> None:
+    """A scan that completes with failed files fails the umbrella (fix 1).
+
+    A CollectionSyncJob completes even when N files failed to index (it records
+    ``failed``/``errors`` in its own state); request_scan must roll those up so
+    an explicit ``quarry sync`` never reports silent success.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue(
+            scan_result={"failed": 2, "errors": ["a.md: boom", "b.md: boom"]}
+        )
+        ctx, _root = _build(tmp_path, queue=queue)
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        umbrella = ctx.tasks.begin("sync")
+        await loop.request_scan(umbrella)
+        assert umbrella.status == "failed"
+        assert umbrella.results["failed"] == 2  # aggregated per-file failures
+        assert umbrella.results["errors"] == ["a.md: boom", "b.md: boom"]
         await loop.stop()
 
     asyncio.run(_run())
