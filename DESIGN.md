@@ -1809,11 +1809,14 @@ PinnedHTTPConnection)` the HTTPS `connect` still runs
 HTTP(S) handlers + `ProxyHandler({})`; both attacker-reachable surfaces
 (`WebFetcher.fetch`, `GatedSitemapWebClient.get`/USP crawl) use it, and each
 redirect hop opens a fresh pinned connection that re-resolves-and-re-validates
-the new host. `UrlSafetyCheck` gains a `SafeTarget` value object,
-`validated_addresses` (raises `UrlRejectedError`, returns the validated set,
-fail-closed, all-records-reject-if-any-blocked) and `resolve`; `reject_reason` is
-retained verbatim as the None-means-safe route-admission wrapper (now pure
-defense-in-depth whose divergence is irrelevant to safety).
+the new host. `UrlSafetyCheck` gains `validated_addresses` (raises
+`UrlRejectedError`, returns the validated address set, fail-closed,
+all-records-reject-if-any-blocked) — the single seam the pinned connection calls
+inside `connect`; `reject_reason` is retained as the None-means-safe
+route-admission wrapper (it calls `validated_addresses` directly and is now pure
+defense-in-depth whose divergence from the connect-time result is irrelevant to
+safety). The block predicates (metadata denylist, CGNAT, IPv4-mapped
+normalization) are one policy shared by both the admission and connect paths.
 
 **Trust-domain invariant.** The pin narrows the *address*, not the *trust*.
 `self.host` is never mutated → SNI = hostname, cert verified against the hostname
