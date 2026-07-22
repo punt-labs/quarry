@@ -43,12 +43,18 @@ class FsEventSource(Protocol):
     thread (the watchdog observer thread does exactly that).
     """
 
-    def schedule(self, root: Path, on_event: Callable[[FsEvent], None]) -> object:
-        """Begin watching *root*; return an opaque handle for :meth:`unschedule`."""
+    def schedule(
+        self, root: Path, on_event: Callable[[FsEvent], None]
+    ) -> object | None:
+        """Begin watching *root*; return an opaque handle for :meth:`unschedule`.
+
+        ``None`` means the tree could not be watched (inotify ``ENOSPC``, or a
+        source that never watches) — the caller must fall back to disk scans.
+        """
         ...
 
-    def unschedule(self, handle: object) -> None:
-        """Stop watching the tree associated with *handle*."""
+    def unschedule(self, handle: object | None) -> None:
+        """Stop watching the tree for *handle* (a ``None`` handle is a no-op)."""
         ...
 
     def stop(self) -> None:
@@ -70,12 +76,14 @@ class NullFsEventSource:
     def __new__(cls) -> Self:
         return super().__new__(cls)
 
-    def schedule(self, root: Path, on_event: Callable[[FsEvent], None]) -> object:
-        """Return no handle: nothing is watched in sync-only mode."""
+    def schedule(
+        self, root: Path, on_event: Callable[[FsEvent], None]
+    ) -> object | None:
+        """Return ``None``: nothing is watched in sync-only mode."""
         del root, on_event
         return None
 
-    def unschedule(self, handle: object) -> None:
+    def unschedule(self, handle: object | None) -> None:
         """No-op: nothing was ever scheduled."""
         del handle
 

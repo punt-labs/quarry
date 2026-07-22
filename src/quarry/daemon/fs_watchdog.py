@@ -97,7 +97,9 @@ class WatchdogSource:
         self._observer = observer
         return self
 
-    def schedule(self, root: Path, on_event: Callable[[FsEvent], None]) -> object:
+    def schedule(
+        self, root: Path, on_event: Callable[[FsEvent], None]
+    ) -> object | None:
         """Begin watching *root* recursively; ``None`` if the tree cannot be watched.
 
         Returns the watchdog ``ObservedWatch`` handle, or ``None`` when the OS
@@ -112,7 +114,7 @@ class WatchdogSource:
             logger.warning("watch: cannot watch %s (%s); relying on scans", root, exc)
             return None
 
-    def unschedule(self, handle: object) -> None:
+    def unschedule(self, handle: object | None) -> None:
         """Stop watching the tree associated with *handle* (a no-op if ``None``)."""
         if handle is not None:
             self._observer.unschedule(cast("ObservedWatch", handle))

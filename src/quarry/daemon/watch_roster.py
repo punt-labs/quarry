@@ -38,10 +38,14 @@ logger = logging.getLogger(__name__)
 @final
 @dataclass(slots=True)
 class _CollectionWatch:
-    """One watched tree: its resolved root and the observer handle to unschedule."""
+    """One watched tree: its resolved root and the observer handle to unschedule.
+
+    ``handle`` is ``None`` when the tree could not be observed (inotify
+    ``ENOSPC``, or sync-only mode) — the reconcile disk-scans it regardless.
+    """
 
     resolved_root: Path
-    handle: object
+    handle: object | None
 
 
 @final
