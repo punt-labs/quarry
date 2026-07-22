@@ -309,18 +309,19 @@ class WatchLoop:
             return
 
     def _reconcile(self) -> None:
-        """Pick up new databases/collections and retry any shed bulk scans.
+        """Reconcile the roster: new DBs/collections, shed scans, failed jobs.
 
-        The single backstop that fully retires quarry-uae: it watches a database
-        or collection registered since ``start()`` (e.g. a sibling DB created via
-        the CLI) and re-submits a ``CollectionSyncJob`` for any collection whose
-        initial/explicit scan the queue shed past the admission bound.  Never
-        propagates — a bad registry read is logged, the loop keeps running.
+        The backstop that retires quarry-uae — picks up a database/collection
+        registered since ``start()`` and re-scans any collection whose scan was
+        shed past the admission bound or whose admitted per-file job then failed.
+        Never propagates — a bad registry read is logged, the loop continues.
         """
         roster, submitter = self._roster, self._submitter
         if roster is None or submitter is None:
             return
         try:
+            submitter.reap_failures()  # failed per-file jobs -> pending rescan
+
             watched = set(roster.keys())
             for name in roster.roster_names():
                 roster.ensure_database(name)

@@ -36,11 +36,12 @@ if TYPE_CHECKING:
 class _RecordingQueue:
     """Capture every submission; admit or shed per configuration."""
 
-    __slots__ = ("admit", "boom", "scan_result", "submitted")
+    __slots__ = ("admit", "boom", "fail_index", "scan_result", "submitted")
 
     submitted: list[tuple[RouteKey, IngestUnit]]
     boom: bool
     admit: bool
+    fail_index: bool
     scan_result: dict[str, object]
 
     def __new__(
@@ -48,12 +49,14 @@ class _RecordingQueue:
         *,
         admit: bool = True,
         boom: bool = False,
+        fail_index: bool = False,
         scan_result: dict[str, object] | None = None,
     ) -> Self:
         self = super().__new__(cls)
         self.submitted = []
         self.admit = admit
         self.boom = boom
+        self.fail_index = fail_index
         self.scan_result = scan_result or {}
         return self
 
@@ -65,11 +68,15 @@ class _RecordingQueue:
         if not self.admit:
             state.status = "failed"
             return False
-        # Simulate the worker running the job to completion; a CollectionSyncJob
-        # reports the injected per-file result (failed/errors) it would produce.
+        # Simulate the worker running the admitted job: a CollectionSyncJob
+        # reports its injected per-file result; a FileIndexJob fails at run time
+        # when fail_index is set (the admitted-then-failed case).
         state.status = "completed"
         if isinstance(job, CollectionSyncJob):
             state.results = dict(self.scan_result)
+        elif isinstance(job, FileIndexJob) and self.fail_index:
+            state.status = "failed"
+            state.error = "index boom"
         return True
 
     def jobs(self, kind: type) -> list[IngestUnit]:
@@ -458,6 +465,33 @@ def test_explicit_sync_runs_with_observer_disabled(tmp_path: Path) -> None:
         assert len(queue.jobs(CollectionSyncJob)) == 1
         assert umbrella.status == "completed"
         assert umbrella.results["collections"] == 1
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_admitted_then_failed_file_job_is_rescanned(tmp_path: Path) -> None:
+    """An admitted per-file job that FAILS at run time is reconciled from disk.
+
+    The 503 backoff only re-arms SHED jobs; an admitted job that then fails would
+    be logged and forgotten — stale until restart. reap_failures (run by the
+    safety scan) marks its collection for a from-disk rescan (fix 2).
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue(fail_index=True)  # admitted, then fails at run
+        ctx, root = _build(tmp_path, queue=queue)
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        queue.submitted.clear()
+        source.emit(root, _fs(root / "a.md"))  # live edit -> FileIndexJob
+        await asyncio.sleep(0.15)
+        assert queue.jobs(FileIndexJob)  # admitted (then failed at run)
+        queue.submitted.clear()
+        queue.fail_index = False  # the rescan will succeed
+        loop._reconcile()  # reaps the failed job's key -> re-scans the collection
+        assert len(queue.jobs(CollectionSyncJob)) == 1
         await loop.stop()
 
     asyncio.run(_run())

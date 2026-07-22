@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 # 503 backoff: a shed submit re-arms after this delay, doubling to the cap.
 _BACKOFF_BASE_S = 1.0
 _BACKOFF_MAX_S = 30.0
+_TERMINAL = frozenset({"completed", "failed"})
 
 
 @final
@@ -50,6 +51,7 @@ class WatchSubmitter:
         "_pending_scan",
         "_roster",
         "_timers",
+        "_watched",
     )
 
     _ctx: DaemonContext
@@ -62,6 +64,9 @@ class WatchSubmitter:
     _pending_scan: set[RouteKey]
     # Pending backoff re-arm timers, tracked so shutdown can cancel them.
     _timers: set[asyncio.TimerHandle]
+    # Admitted per-file jobs, reaped by the safety scan: one that ran and FAILED
+    # marks its collection for a from-disk rescan (never stale-until-restart).
+    _watched: list[tuple[RouteKey, TaskState]]
 
     def __new__(
         cls, ctx: DaemonContext, roster: WatchRoster, loop: asyncio.AbstractEventLoop
@@ -74,7 +79,24 @@ class WatchSubmitter:
         self._backoff = {}
         self._pending_scan = set()
         self._timers = set()
+        self._watched = []
         return self
+
+    def reap_failures(self) -> None:
+        """Mark the collection of any admitted-then-failed per-file job for rescan.
+
+        A ``FileIndexJob``/``DocumentDeleteJob`` admitted to the queue that then
+        FAILS at run time is otherwise logged and forgotten — its change stale
+        until restart. The safety scan calls this so the collection is
+        reconciled from disk; still-running jobs are kept for the next pass.
+        """
+        survivors: list[tuple[RouteKey, TaskState]] = []
+        for key, state in self._watched:
+            if state.status not in _TERMINAL:
+                survivors.append((key, state))
+            elif state.status == "failed":
+                self._pending_scan.add(key)
+        self._watched = survivors
 
     def cancel_pending(self) -> None:
         """Cancel every outstanding backoff re-arm timer (shutdown)."""
@@ -169,9 +191,14 @@ class WatchSubmitter:
         return state
 
     def _submit(self, key: RouteKey, job: IngestUnit, kind: str) -> bool:
-        """Submit *job*; drop its task record and return False if the queue is full."""
+        """Submit *job*; drop its task record and return False if the queue is full.
+
+        A successfully-admitted per-file job is tracked so the safety scan can
+        later reap it and rescan the collection if it ran and failed.
+        """
         state = self._ctx.tasks.begin(kind)
         if self._ctx.ingest_queue.try_submit(key, job, state):
+            self._watched.append((key, state))
             return True
         self._ctx.tasks.drop(state)
         return False
