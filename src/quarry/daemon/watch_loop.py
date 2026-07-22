@@ -157,8 +157,8 @@ class WatchLoop:
     async def request_scan(self, umbrella: TaskState) -> None:
         """Enqueue a scan+finalize per active-DB registration; complete *umbrella*.
 
-        Replaces the old ``run_in_threadpool(sync_all)`` path: every collection
-        rides the queue, so an explicit ``quarry sync`` serializes behind the
+        Every collection rides the queue rather than a direct threadpool sync,
+        so an explicit ``quarry sync`` serializes behind the
         live watch work.  The umbrella reflects the children: it completes only
         when all reach ``completed``, and fails (with a count) if any child was
         shed/failed or the poll deadline hit — no silent success.

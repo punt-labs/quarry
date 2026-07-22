@@ -2184,10 +2184,7 @@ class TestSync:
         ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
-        with (
-            TestClient(app, raise_server_exceptions=False) as tc,
-            patch("quarry.sync.sync_all", return_value={}),
-        ):
+        with TestClient(app, raise_server_exceptions=False) as tc:
             resp = tc.post("/v1/sync", json={})
 
         assert resp.status_code == 202
@@ -2200,10 +2197,7 @@ class TestSync:
         ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
-        with (
-            TestClient(app, raise_server_exceptions=False) as tc,
-            patch("quarry.sync.sync_all", return_value={}),
-        ):
+        with TestClient(app, raise_server_exceptions=False) as tc:
             resp = tc.post(
                 "/v1/sync",
                 content=b"",
@@ -2228,12 +2222,11 @@ class TestSync:
         assert resp.status_code == 401
 
     def test_auth_allows_with_key(self, auth_client: TestClient) -> None:
-        with patch("quarry.sync.sync_all", return_value={}):
-            resp = auth_client.post(
-                "/v1/sync",
-                json={},
-                headers={"Authorization": f"Bearer {_TEST_API_KEY}"},
-            )
+        resp = auth_client.post(
+            "/v1/sync",
+            json={},
+            headers={"Authorization": f"Bearer {_TEST_API_KEY}"},
+        )
         assert resp.status_code == 202
 
     def test_rejects_oversized_body(self, client: TestClient) -> None:

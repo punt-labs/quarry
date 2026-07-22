@@ -14,7 +14,6 @@ from quarry.config import Settings
 from quarry.db import ChunkStore
 from quarry.ingestion.pipeline import SUPPORTED_EXTENSIONS
 from quarry.sync_discovery import FileDiscovery
-from quarry.sync_finalize import SyncFinalizer
 from quarry.sync_ingest import CollectionIngestor
 from quarry.sync_registry import FileRecord, SyncRegistry
 from quarry.types import LanceDB
@@ -299,40 +298,3 @@ def sync_collection(
         failed=failed,
         errors=errors,
     )
-
-
-def sync_all(
-    db: LanceDB,
-    settings: Settings,
-    *,
-    max_workers: int = 1,
-    progress_callback: Callable[[str], None] | None = None,
-) -> dict[str, SyncResult]:
-    """Sync all registered directories.
-
-    Opens the registry, iterates all registrations, syncs each,
-    then optimizes the LanceDB table.
-    """
-    t_all_start = time.perf_counter()
-    conn = SyncRegistry(settings.registry_path)
-    try:
-        registrations = conn.list_registrations()
-        results: dict[str, SyncResult] = {}
-        for reg in registrations:
-            results[reg.collection] = sync_collection(
-                Path(reg.directory),
-                reg.collection,
-                db,
-                settings,
-                conn,
-                max_workers=max_workers,
-                progress_callback=progress_callback,
-            )
-        SyncFinalizer(db, settings).run()
-        logger.info(
-            "sync: all collections completed in %.2fs",
-            time.perf_counter() - t_all_start,
-        )
-        return results
-    finally:
-        conn.close()

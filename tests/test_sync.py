@@ -21,7 +21,7 @@ from quarry.db.storage import get_db
 from quarry.ingestion.pipeline import plan_file_chunks
 from quarry.ingestion.progressive import FlushCheckpoint, ProgressiveIndexer
 from quarry.models import PageContent, PageType
-from quarry.sync import compute_sync_plan, sync_all, sync_collection
+from quarry.sync import compute_sync_plan, sync_collection
 from quarry.sync_discovery import _DEFAULT_IGNORE_PATTERNS, FileDiscovery
 from quarry.sync_ingest import CollectionIngestor
 from quarry.sync_messages import FileMeta
@@ -1562,25 +1562,3 @@ class TestConcurrencyLiveness:
         # queue never *exceeds* maxsize is a stdlib guarantee, not ours to test).
         assert max(observed) == capacity
         conn.close()
-
-
-class TestSyncAll:
-    def test_syncs_all_registered(self, tmp_path: Path):
-        settings = _settings(tmp_path)
-        conn = SyncRegistry(settings.registry_path)
-        d1 = tmp_path / "a"
-        d1.mkdir()
-        (d1 / "one.txt").write_text(_SENTENCE * 2)
-        d2 = tmp_path / "b"
-        d2.mkdir()
-        (d2 / "two.txt").write_text(_SENTENCE * 2)
-        conn.register_directory(d1, "alpha")
-        conn.register_directory(d2, "beta")
-        conn.close()
-
-        db = get_db(settings.lancedb_path)
-        with _patched_embedder(_FakeEmbedder()):
-            results = sync_all(db, settings, max_workers=1)
-
-        assert results["alpha"].ingested == 1
-        assert results["beta"].ingested == 1

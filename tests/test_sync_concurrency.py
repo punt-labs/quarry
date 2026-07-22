@@ -126,8 +126,7 @@ class TestSyncLock:
         app = build_app(ctx)
         client = TestClient(app, raise_server_exceptions=False)
 
-        with patch("quarry.sync.sync_all", return_value={}):
-            resp = client.post("/v1/sync", json={})
+        resp = client.post("/v1/sync", json={})
         assert resp.status_code == 202
 
     def test_post_allowed_after_previous_failed(self, tmp_path: Path) -> None:
@@ -145,8 +144,7 @@ class TestSyncLock:
         app = build_app(ctx)
         client = TestClient(app, raise_server_exceptions=False)
 
-        with patch("quarry.sync.sync_all", return_value={}):
-            resp = client.post("/v1/sync", json={})
+        resp = client.post("/v1/sync", json={})
         assert resp.status_code == 202
 
     def test_lock_released_after_sync_completes(self, tmp_path: Path) -> None:
@@ -160,8 +158,7 @@ class TestSyncLock:
         # A new POST should succeed, not 409.
         app = build_app(ctx)
         client = TestClient(app, raise_server_exceptions=False)
-        with patch("quarry.sync.sync_all", return_value={}):
-            resp = client.post("/v1/sync", json={})
+        resp = client.post("/v1/sync", json={})
         assert resp.status_code == 202
 
 
@@ -474,8 +471,7 @@ class TestAsyncSyncEndpoint:
 
     def test_post_returns_202_with_task_id(self, tmp_path: Path) -> None:
         client = _make_client(tmp_path)
-        with patch("quarry.sync.sync_all", return_value={}):
-            resp = client.post("/v1/sync", json={})
+        resp = client.post("/v1/sync", json={})
         assert resp.status_code == 202
         data = resp.json()
         assert "task_id" in data
