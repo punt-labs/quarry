@@ -37,6 +37,7 @@ import pytest
 from quarry.backfill import backfill_sessions, encode_project_path
 from quarry.config import Settings
 from quarry.db import Database
+from quarry.db.connection import RecyclingTable
 from quarry.ingestion.file_indexer import SingleFileIndexer
 from quarry.models import Chunk
 from quarry.sync_finalize import SyncFinalizer
@@ -395,7 +396,9 @@ def _watch_index_one(db: Database, settings: Settings, root: Path, doc: Path) ->
 # §9 shape. Its own headroom, like the sibling resource tests.
 @pytest.mark.timeout(180)
 @pytest.mark.usefixtures("_raised_fd_limit")
-def test_watch_session_does_not_leak_descriptors(tmp_path: Path) -> None:
+def test_watch_session_does_not_leak_descriptors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A long watch session over >=2 databases must plateau the aggregate fds.
 
     This is the proof that per-file indexing (``FileIndexJob`` → ``index_one``)
@@ -403,11 +406,33 @@ def test_watch_session_does_not_leak_descriptors(tmp_path: Path) -> None:
     does not reopen quarry-0dss across the daemon's multiple persistent
     connections. If per-file indexing rebuilt the FTS, or the finalize ran per
     file, the trajectory would ramp; the coalesced design holds it flat.
+
+    The fd plateau alone is held partly by ``SyncFinalizer``'s ``gc.collect``, so
+    it would still pass if a per-file FTS rebuild were reintroduced. To actually
+    guard the coalescing invariant, the number of ``create_fts_index`` calls is
+    asserted to equal the finalize count — once per quiescence, never per file.
     """
     databases = [_watch_database(tmp_path, i) for i in range(_WATCH_DATABASES)]
     trajectory = FdTrajectory()
     embedder = _ConstantEmbedder(dimension=_EMBEDDING_DIM)
 
+    # Count only replace=True rebuilds — the generation-superseding calls that
+    # leak descriptors (quarry-0dss). The replace=False "ensure index exists"
+    # call on every insert is a no-op skip when the index is present and does
+    # not leak, so it is not the coalescing the invariant guards.
+    fts_rebuilds: list[str] = []
+    real_create_fts = RecyclingTable.create_fts_index
+
+    def _spy_create_fts(
+        table: RecyclingTable, column: str, *, replace: bool = False
+    ) -> None:
+        if replace:
+            fts_rebuilds.append(column)
+        real_create_fts(table, column, replace=replace)
+
+    monkeypatch.setattr(RecyclingTable, "create_fts_index", _spy_create_fts)
+
+    finalizes = 0
     with patch(
         "quarry.ingestion.streaming.get_embedding_backend", return_value=embedder
     ):
@@ -419,10 +444,18 @@ def test_watch_session_does_not_leak_descriptors(tmp_path: Path) -> None:
             # Coalesced FTS rebuild — once per quiescent batch, never per file.
             if edit % _FINALIZE_EVERY == 0:
                 SyncFinalizer(db.db, settings).run()
+                finalizes += 1
             trajectory.record(_open_fd_count())
 
     assert trajectory.plateaus(slack=_PLATEAU_SLACK), (
         f"open fds grew by {trajectory.growth():.1f} across {_WATCH_EDITS} watch "
         f"edits over {_WATCH_DATABASES} databases (peak {trajectory.peak}); the "
         f"coalesced FTS rebuild (DES-045 §9) is not holding the descriptor count"
+    )
+    # The coalescing invariant itself: exactly one FTS rebuild per finalize, not
+    # one per edit. A reintroduced per-file rebuild would make this ~_WATCH_EDITS.
+    assert len(fts_rebuilds) == finalizes, (
+        f"create_fts_index fired {len(fts_rebuilds)}x across {_WATCH_EDITS} edits; "
+        f"expected once per finalize ({finalizes}). A per-file FTS rebuild reopens "
+        f"quarry-0dss (DES-045 §9 coalescing broken)."
     )
