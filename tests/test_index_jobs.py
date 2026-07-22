@@ -26,6 +26,7 @@ from quarry.ingestion.file_indexer import SingleFileIndexer
 from quarry.sync_registry import SyncRegistry
 
 if TYPE_CHECKING:
+    import pytest
     from numpy.typing import NDArray
 
 _DIM = 768
@@ -118,6 +119,35 @@ def test_index_one_missing_file_is_graceful(tmp_path: Path) -> None:
     assert outcome.error is not None
     assert outcome.ingested == 0
     assert "never_existed.md" in outcome.error
+
+
+def test_index_one_mid_stream_error_is_graceful(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A recoverable error mid-stream is a soft failure outcome, never a raise."""
+    db, settings, root = _fixture(tmp_path)
+    (root / "d.md").write_text("body text that would index")
+
+    def _boom(_self: object, _chunks: object, *, start_index: int = 0) -> object:
+        del start_index
+        msg = "stream boom"
+        raise OSError(msg)
+
+    monkeypatch.setattr(
+        "quarry.ingestion.streaming.DocumentStreamer.stream_batches", _boom
+    )
+    with patch(
+        "quarry.ingestion.streaming.get_embedding_backend", return_value=_FakeEmbedder()
+    ):
+        conn = SyncRegistry(settings.registry_path)
+        try:
+            outcome = SingleFileIndexer(
+                db.store, conn, settings, collection="col", resolved=root
+            ).index_one(root / "d.md")
+        finally:
+            conn.close()
+    assert outcome.error is not None
+    assert "stream boom" in outcome.error
 
 
 def test_file_index_job_run_completes(tmp_path: Path) -> None:

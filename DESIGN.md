@@ -1916,8 +1916,11 @@ per-`(database,collection)` FIFO (single writer). The explicit-sync 409 is
 dropped in favor of transparent enqueue (202 + poll; the 409 stays for
 `optimize`/`backfill`). `watch_enabled` defaults on (installing `quarryd` is
 already the opt-in to a background engine; reverses the prior uae opt-in
-posture). **Known limitation:** a non-active database *created while the daemon
-runs* is picked up at the next daemon start or an active-DB register, not
-instantly — the roster is enumerated at `start()`. `watch_safety_scan_s` is
-wired as a knob but does not yet drive periodic roster reconciliation; closing
-that fully retires `quarry-uae` for the mid-run-creation edge (tracked follow-up).
+posture). **`quarry-uae` fully retired:** a periodic roster reconcile
+(`watch_safety_scan_s`, default 300 s) re-enumerates the roster each interval —
+it begins watching databases created after `start()` (the mid-run-creation edge)
+and re-submits any bulk scan the queue shed under load, so no registered
+directory is left unindexed and no timer-based periodic sync is needed. The
+reconcile runs synchronously on the loop between intervals (no interleave with
+register/deregister) and is the single backstop for both the new-database and
+shed-scan cases.

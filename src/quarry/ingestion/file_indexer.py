@@ -231,6 +231,15 @@ class SingleFileIndexer:
                 indexer.add_window(file_id, batch, vectors)
             indexer.complete_file(file_id)
             indexer.drain()
+        except _RECOVERABLE as exc:
+            # Honor the contract: a mid-stream I/O/DB error (the file changed or
+            # vanished, a flush failed) is a graceful per-file failure, not a
+            # raise. The partial write is left for the next reconcile to
+            # overwrite (its registry row reads partial → re-ingested).
+            logger.warning("Watch index failed for %s: %s", document_name, exc)
+            return FileIndexOutcome(
+                document_name, indexer.inserted_count, error=f"{document_name}: {exc}"
+            )
         finally:
             self._pending = None
         return FileIndexOutcome(document_name, indexer.inserted_count, error=None)
