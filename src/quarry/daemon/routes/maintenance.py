@@ -153,12 +153,9 @@ class MaintenanceRoutes(RouteGroup):
     async def _backfill_args(self, request: Request) -> BackfillArgs | JSONResponse:
         """Validate a backfill request body into :class:`BackfillArgs`.
 
-        ``limit`` is a pure pagination knob: ``0`` (the wire default, and an
-        empty body) means "all", a positive value caps the scan.  The remote and
-        local paths share this contract — a backfill run is bounded by
-        construction (it streams one transcript at a time and never accumulates
-        descriptors, proven by ``test_large_backfill_does_not_leak_descriptors``),
-        so no magic-number cap stands in for resource safety.
+        An empty body yields the all-defaults args (``limit=0`` → scan all).
+        Each field is narrowed at the boundary; ``limit`` is validated by
+        :meth:`_coerce_limit`, which owns the pagination-knob contract.
         """
         if int(request.headers.get("content-length", "0") or "0") <= 0:
             return BackfillArgs(dry_run=False, collection="", project="", limit=0)
@@ -169,12 +166,29 @@ class MaintenanceRoutes(RouteGroup):
         dry_run = RequestGuards.coerce_bool_field(body, "dry_run", default=False)
         if isinstance(dry_run, JSONResponse):
             return dry_run
-        limit = RequestGuards.coerce_int_field(body, "limit", default=0)
+        limit = self._coerce_limit(body)
         if isinstance(limit, JSONResponse):
             return limit
         return BackfillArgs(
             dry_run=dry_run,
             collection=str(body.get("collection") or ""),
             project=str(body.get("project") or ""),
-            limit=max(0, limit),
+            limit=limit,
         )
+
+    @staticmethod
+    def _coerce_limit(body: dict[str, object]) -> int | JSONResponse:
+        """Return a non-negative ``limit`` from *body*, or a 400 response.
+
+        ``0`` (the default, and an absent field) means "all"; a positive value
+        caps the scan; a negative value is rejected rather than normalised, so
+        the caller can trust ``limit >= 0`` (PY-EH-8).
+        """
+        limit = RequestGuards.coerce_int_field(body, "limit", default=0)
+        if isinstance(limit, JSONResponse):
+            return limit
+        if limit < 0:
+            return JSONResponse(
+                {"error": f"Field {'limit'!r} must be >= 0"}, status_code=400
+            )
+        return limit

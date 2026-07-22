@@ -529,6 +529,29 @@ class TestBackfillCLI:
         assert "--limit" in result.output
 
 
+class TestBackfillLimitDefaultIsAll:
+    """The ``limit`` default is 0 ("all") on both the CLI and the wire contract.
+
+    The exact divergence this feature removed was a non-zero default acting as a
+    silent transcript cap. These assertions fail if a regression re-introduces
+    one — e.g. ``limit: int = 500`` on ``BackfillRequest`` or a Typer default of
+    500 on the ``--limit`` option — before it can reach a user.
+    """
+
+    def test_request_contract_default(self) -> None:
+        from quarry.api import BackfillRequest
+
+        assert BackfillRequest().limit == 0
+
+    def test_cli_option_default(self) -> None:
+        import inspect
+
+        from quarry.cli_maintenance import MaintenanceCli
+
+        params = inspect.signature(MaintenanceCli._backfill).parameters
+        assert params["limit"].default == 0
+
+
 class TestBackfillCaptureRedaction:
     """The backfill producer writes a PII-clean capture file (bug class 3)."""
 

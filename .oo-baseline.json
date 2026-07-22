@@ -195,17 +195,17 @@
     "public_attr_violations": 0.0
   },
   "src/quarry/api/maintenance.py": {
-    "avg_complexity": 0.0,
-    "avg_params": 0.0,
-    "class_to_func_ratio": 1.0,
-    "classes_per_module": 2.0,
-    "encapsulation_ratio": 1.0,
-    "future_annotations": 1.0,
-    "init_violations": 0.0,
-    "max_complexity": 0.0,
     "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.0,
+    "max_complexity": 0.0,
+    "avg_complexity": 0.0,
     "module_size": 19.0,
-    "public_attr_violations": 0.0
+    "classes_per_module": 2.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/quarry/api/meta.py": {
     "avg_complexity": 0.0,
@@ -795,10 +795,10 @@
   "src/quarry/daemon/routes/maintenance.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 1.57,
+    "avg_params": 1.5,
     "max_complexity": 8.0,
-    "avg_complexity": 3.57,
-    "module_size": 148.0,
+    "avg_complexity": 3.5,
+    "module_size": 160.0,
     "classes_per_module": 2.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
