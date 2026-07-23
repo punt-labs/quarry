@@ -181,18 +181,21 @@ class RegistrationRoutes(RouteGroup):
                 "registered_at": reg.registered_at,
                 "subsumed": subsumed,
             }
-            # Begin watching the new tree and submit its initial scan.
-            self.ctx.watch_loop.start_watching(collection, resolved)
-            # Tear down and purge each collection the new parent subsumed — its
-            # directories row is gone, so a lingering watch would double-index
-            # and an in-flight FileIndexJob would FK-fail into orphan chunks.  A
-            # purge the saturated queue defeats leaves those orphans behind, so
-            # surface the failed children rather than reporting a clean success.
+            # Tear down + purge each subsumed collection BEFORE installing the
+            # parent watch.  directories.collection is UNIQUE, so re-registering a
+            # collection under a wider directory puts the parent's OWN name in
+            # `subsumed`: its old (narrower-root) rows were deleted in-transaction
+            # and the wider row committed.  Purging first clears the stale chunks;
+            # only then does start_watching install the watch and submit the fresh
+            # full-tree scan, so the scan owns the collection on a clean slate — no
+            # orphans, and never a torn-down parent watch.  A purge the saturated
+            # queue defeats leaves orphans behind, so surface the failed children.
             failed = [
                 child for child in subsumed if not await self._teardown_subsumed(child)
             ]
             if failed:
                 state.results["subsume_purge_failed"] = failed
+            self.ctx.watch_loop.start_watching(collection, resolved)
         except asyncio.CancelledError:
             state.status = "failed"
             state.error = "task was cancelled"

@@ -16,10 +16,11 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Self, cast, final
 
 from quarry.config import Settings
-from quarry.daemon.finalize_job import CollectionFinalizeJob
+from quarry.daemon.finalize_job import CollectionFinalizeJob, CollectionPurgeJob
 from quarry.daemon.fs_events import FsEvent
 from quarry.daemon.index_jobs import CollectionSyncJob, DocumentDeleteJob, FileIndexJob
 from quarry.daemon.route_key import RouteKey
+from quarry.daemon.routes.registrations import RegistrationRoutes
 from quarry.daemon.tasks import TaskRegistry
 from quarry.daemon.watch_loop import WatchLoop
 from quarry.sync_registry import SyncRegistry
@@ -650,6 +651,69 @@ def test_symlink_escaping_the_tree_is_never_submitted(tmp_path: Path) -> None:
         source.emit(root, _fs(escape))  # live edit of the escaping symlink
         await asyncio.sleep(0.15)
         assert not queue.jobs(FileIndexJob)  # rejected before any content read
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_same_name_reregistration_purges_before_rewatch(tmp_path: Path) -> None:
+    """Re-registering "docs" under a wider dir purges old chunks, THEN re-watches.
+
+    directories.collection is UNIQUE, so registering /root as "docs" when
+    /root/sub is already "docs" subsumes "docs" itself.  _run_register must purge
+    the stale (sub-relative) chunks and only THEN install the parent watch + scan
+    — never tear the freshly installed watch down or purge its scan.  Proven by
+    the job order (the purge precedes the re-install scan) and the surviving watch.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        data = tmp_path / "data"
+        (data / "testdb").mkdir(parents=True)
+        root = tmp_path / "proj"
+        sub = root / "sub"
+        sub.mkdir(parents=True)
+        settings = Settings(
+            quarry_root=data,
+            lancedb_path=data / "testdb" / "lancedb",
+            registry_path=data / "testdb" / "registry.db",
+            watch_enabled=True,
+            watch_debounce_s=0.03,
+            watch_max_delay_s=0.3,
+            watch_bulk_threshold=5,
+            watch_safety_scan_s=0.0,  # no background timer
+        )
+        _register(settings, sub.resolve(), "docs")
+        ns = SimpleNamespace(
+            settings=settings,
+            ingest_queue=queue,
+            tasks=TaskRegistry(),
+            database=object(),
+            database_name="testdb",
+        )
+        source = _FakeSource()
+        loop = WatchLoop(cast("DaemonContext", ns), source=source)
+        ns.watch_loop = loop  # RegistrationRoutes reaches ctx.watch_loop
+        await loop.start()
+        assert source.watch_count == 1  # /root/sub watched as "docs"
+        queue.submitted.clear()
+
+        key = RouteKey("testdb", "docs")
+        reg = ns.tasks.begin("register")
+        await RegistrationRoutes(cast("DaemonContext", ns))._run_register(
+            reg, root.resolve(), "docs"
+        )
+        assert reg.status == "completed"
+        assert reg.results["subsumed"] == ["docs"]  # subsumed its own name
+        # "docs" is watched again — re-installed at the parent, not torn down.
+        assert source.watch_count == 1
+        # Job order on "docs": the purge precedes the re-install scan, so the
+        # scan's chunks survive (no orphan, no scan-then-purge emptiness).
+        docs_jobs = [job for k, job in queue.submitted if k == key]
+        purge_idx = next(
+            i for i, j in enumerate(docs_jobs) if isinstance(j, CollectionPurgeJob)
+        )
+        assert any(isinstance(j, CollectionSyncJob) for j in docs_jobs[purge_idx + 1 :])
         await loop.stop()
 
     asyncio.run(_run())
