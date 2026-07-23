@@ -111,6 +111,42 @@ class WatchSubmitter:
             self._submit_finalize(key, db, settings),
         ]
 
+    @staticmethod
+    def summarize_scan(
+        umbrella: TaskState, children: list[TaskState], *, timed_out: bool
+    ) -> None:
+        """Roll the child scans' per-file failures + errors up into *umbrella*.
+
+        A ``CollectionSyncJob`` completes even when N files failed (it records
+        ``failed``/``errors`` in its own state), so counting only child *status*
+        would report silent success.  Aggregate both the shed-job count and the
+        per-file failure count/errors, and fail the umbrella if either is nonzero.
+        """
+        shed = sum(1 for child in children if child.status == "failed")
+        file_failures = 0
+        errors: list[str] = []
+        for child in children:
+            failed = child.results.get("failed", 0)
+            if isinstance(failed, int):
+                file_failures += failed
+            child_errors = child.results.get("errors")
+            if isinstance(child_errors, list):
+                errors.extend(str(error) for error in child_errors)
+        umbrella.results = {
+            "collections": len(children) // 2,
+            "failed": file_failures,
+            "shed": shed,
+            "errors": errors,
+        }
+        if timed_out:
+            umbrella.status = "failed"
+            umbrella.error = "scan timed out before all jobs completed"
+        elif shed or file_failures:
+            umbrella.status = "failed"
+            umbrella.error = f"{shed} scan job(s) shed, {file_failures} file(s) failed"
+        else:
+            umbrella.status = "completed"
+
     def _submit_deltas(
         self, batch: FlushBatch, db: Database, settings: Settings, root: Path
     ) -> list[FsEvent]:

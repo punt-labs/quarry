@@ -531,3 +531,35 @@ def test_reconcile_scans_a_none_handle_tree(tmp_path: Path) -> None:
         await loop.stop()
 
     asyncio.run(_run())
+
+
+def test_start_stop_start_rebuilds_a_live_source(tmp_path: Path) -> None:
+    """A second start() after stop() rebuilds fresh, live collaborators.
+
+    stop() joins the observer thread (a joined watchdog observer cannot be
+    restarted), so it drops the built collaborators; a subsequent start() must
+    reconstruct them, not silently reuse a dead observer that watches nothing.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, root = _build(tmp_path, queue=queue)
+        loop = WatchLoop(ctx, source=_FakeSource())
+        await loop.start()
+        await loop.stop()
+        # The built collaborators are dropped so a restart can't reuse a joined
+        # (dead) observer that would watch nothing.
+        assert loop._source is None
+
+        # Restart with a fresh source (production start() builds a new observer);
+        # the rebuilt loop must deliver a live edit as a job.
+        source = _FakeSource()
+        loop._source = source
+        await loop.start()
+        queue.submitted.clear()
+        source.emit(root, _fs(_write(root, "z.md")))
+        await asyncio.sleep(0.15)
+        assert queue.jobs(FileIndexJob)  # the rebuilt loop is live
+        await loop.stop()
+
+    asyncio.run(_run())

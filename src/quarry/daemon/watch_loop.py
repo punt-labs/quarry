@@ -13,6 +13,7 @@ itself and invents no second queue, inheriting the whole serialization stack
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from functools import partial
 from pathlib import Path
@@ -138,7 +139,10 @@ class WatchLoop:
         self._started = False
         if self._safety_task is not None:
             self._safety_task.cancel()
-            self._safety_task = None
+            # Await so the task is fully retired (a bare cancel() can leave
+            # "Task was destroyed but it is pending").
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._safety_task
         if self._submitter is not None:
             self._submitter.cancel_pending()  # cancel outstanding backoff re-arms
         if self._dispatcher is not None:
@@ -148,6 +152,11 @@ class WatchLoop:
         if self._source is not None:
             # stop() joins the observer thread — off the loop so shutdown never blocks.
             await run_in_threadpool(self._source.stop)
+        # Drop the built collaborators so a subsequent start() rebuilds cleanly —
+        # a joined watchdog observer cannot be restarted (reusing it watches
+        # nothing).  A fresh start() reconstructs source + roster.
+        self._safety_task = None
+        self._source = self._roster = self._dispatcher = self._submitter = None
 
     def start_watching(self, collection: str, resolved_root: Path) -> None:
         """Begin watching *collection* in the active database + submit its scan."""
@@ -177,7 +186,7 @@ class WatchLoop:
         with task_terminal(umbrella):
             children = self._submit_all_scans()
             timed_out = await self._await_children(children)
-            self._summarize_scan(umbrella, children, timed_out=timed_out)
+            WatchSubmitter.summarize_scan(umbrella, children, timed_out=timed_out)
 
     def _submit_all_scans(self) -> list[TaskState]:
         """Scan+finalize every active-DB registration (runs even if observer off)."""
@@ -190,42 +199,6 @@ class WatchLoop:
         for collection, root in roster.registrations(name):
             children.extend(submitter.submit_scan(RouteKey(name, collection), root))
         return children
-
-    @staticmethod
-    def _summarize_scan(
-        umbrella: TaskState, children: list[TaskState], *, timed_out: bool
-    ) -> None:
-        """Roll the child scans' per-file failures + errors up into *umbrella*.
-
-        A ``CollectionSyncJob`` completes even when N files failed (it records
-        ``failed``/``errors`` in its own state), so counting only child *status*
-        would report silent success.  Aggregate both the shed-job count and the
-        per-file failure count/errors, and fail the umbrella if either is nonzero.
-        """
-        shed = sum(1 for child in children if child.status == "failed")
-        file_failures = 0
-        errors: list[str] = []
-        for child in children:
-            failed = child.results.get("failed", 0)
-            if isinstance(failed, int):
-                file_failures += failed
-            child_errors = child.results.get("errors")
-            if isinstance(child_errors, list):
-                errors.extend(str(error) for error in child_errors)
-        umbrella.results = {
-            "collections": len(children) // 2,
-            "failed": file_failures,
-            "shed": shed,
-            "errors": errors,
-        }
-        if timed_out:
-            umbrella.status = "failed"
-            umbrella.error = "scan timed out before all jobs completed"
-        elif shed or file_failures:
-            umbrella.status = "failed"
-            umbrella.error = f"{shed} scan job(s) shed, {file_failures} file(s) failed"
-        else:
-            umbrella.status = "completed"
 
     # -- internals ----------------------------------------------------------
 
