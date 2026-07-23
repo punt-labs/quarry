@@ -19,6 +19,8 @@ from quarry.daemon.finalize_job import CollectionFinalizeJob
 from quarry.daemon.fs_events import FsEvent
 from quarry.daemon.index_jobs import CollectionSyncJob, DocumentDeleteJob, FileIndexJob
 from quarry.daemon.route_key import RouteKey
+from quarry.ingestion.pipeline import SUPPORTED_EXTENSIONS
+from quarry.sync_discovery import FileDiscovery
 
 if TYPE_CHECKING:
     import asyncio
@@ -150,13 +152,25 @@ class WatchSubmitter:
     def _submit_deltas(
         self, batch: FlushBatch, db: Database, settings: Settings, root: Path
     ) -> list[FsEvent]:
-        """Submit each per-file index/delete job; return the events the queue shed."""
+        """Submit each per-file index/delete job; return the events the queue shed.
+
+        The authoritative filter runs here, post-debounce (once per distinct path
+        per window, off the observer thread): ``is_indexable`` resolves the real
+        path and rejects a symlink escaping the tree (security) plus applies the
+        ignore rules BEFORE any content is read; a delete gets lexical
+        ``is_deletable``.  A rejected path is dropped, not re-armed.
+        """
+        discovery = FileDiscovery(root)
         failed: list[FsEvent] = []
         for path in batch.modified:
+            if not discovery.is_indexable(path, SUPPORTED_EXTENSIONS):
+                continue
             job = FileIndexJob(db, settings, batch.key.collection, root, path)
             if not self._submit(batch.key, job, "index"):
                 failed.append(FsEvent(path, deleted=False))
         for path in batch.deleted:
+            if not discovery.is_deletable(path, SUPPORTED_EXTENSIONS):
+                continue
             name = self._document_name(root, path)
             if name is None:
                 continue

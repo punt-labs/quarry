@@ -595,3 +595,61 @@ def test_start_survives_unreadable_roster_root(
         await loop.stop()
 
     asyncio.run(_run())
+
+
+def test_reconcile_drops_a_watch_whose_registration_was_removed(tmp_path: Path) -> None:
+    """A registration removed from disk has its watch torn down on reconcile (#2).
+
+    A removed/renamed directory fires no delete event, so without this the
+    observer for the gone collection would persist forever.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, _root = _build(tmp_path, queue=queue)  # registers "col"
+        extra = tmp_path / "proj2"
+        extra.mkdir()
+        _register(ctx.settings, extra.resolve(), "col2")
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        assert source.watch_count == 2  # both collections watched
+
+        conn = SyncRegistry(ctx.settings.registry_path)
+        try:
+            conn.deregister_directory("col2")  # remove col2's registration
+        finally:
+            conn.close()
+        loop._reconcile()
+        assert source.watch_count == 1  # col2's observer was torn down
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_symlink_escaping_the_tree_is_never_submitted(tmp_path: Path) -> None:
+    """A symlink whose target escapes the watched root is not indexed (security).
+
+    The cheap observer-thread pre-filter no longer resolves; the authoritative
+    symlink-escape check runs post-debounce in the submitter BEFORE any content
+    is read.  A symlink pointing outside the tree must produce no FileIndexJob.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, root = _build(tmp_path, queue=queue)
+        secret = tmp_path / "outside" / "secret.md"
+        secret.parent.mkdir()
+        secret.write_text("private", encoding="utf-8")
+        escape = root / "escape.md"
+        escape.symlink_to(secret)  # target resolves outside the watched root
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        queue.submitted.clear()
+        source.emit(root, _fs(escape))  # live edit of the escaping symlink
+        await asyncio.sleep(0.15)
+        assert not queue.jobs(FileIndexJob)  # rejected before any content read
+        await loop.stop()
+
+    asyncio.run(_run())

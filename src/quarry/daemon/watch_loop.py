@@ -28,8 +28,6 @@ from quarry.daemon.route_key import RouteKey
 from quarry.daemon.tasks import task_terminal
 from quarry.daemon.watch_roster import WatchRoster
 from quarry.daemon.watch_submit import WatchSubmitter
-from quarry.ingestion.pipeline import SUPPORTED_EXTENSIONS
-from quarry.sync_discovery import FileDiscovery
 
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
@@ -165,10 +163,15 @@ class WatchLoop:
         self._begin_collection(self._ctx.database_name, collection, resolved_root)
 
     def stop_watching(self, collection: str) -> None:
-        """Stop watching *collection* and drop its pending changes (before purge)."""
-        if not self._started or self._roster is None or self._dispatcher is None:
+        """Stop watching *collection* in the active database (before purge)."""
+        if not self._started:
             return
-        key = RouteKey(self._ctx.database_name, collection)
+        self._teardown(RouteKey(self._ctx.database_name, collection))
+
+    def _teardown(self, key: RouteKey) -> None:
+        """Unwatch *key*'s tree and drop its pending + backoff state."""
+        if self._roster is None or self._dispatcher is None:
+            return
         self._roster.unwatch(key)
         self._dispatcher.cancel(key)
         if self._submitter is not None:
@@ -234,7 +237,11 @@ class WatchLoop:
         if self._loop is None or self._dispatcher is None or self._roster is None:
             return
         root = self._roster.resolved_root(key)
-        if root is None or not self._accepts(root, event):
+        # Observer thread stays cheap: only a lexical dot-segment reject here (no
+        # resolve, no .gitignore reads), so a hot writer never backs up the
+        # observer queue.  The authoritative filter — suffix (at the source),
+        # symlink-escape, and ignore rules — runs post-debounce in the submitter.
+        if root is None or self._has_hidden_segment(root, event.path):
             return
         try:
             self._loop.call_soon_threadsafe(self._dispatcher.feed, key, event)
@@ -242,18 +249,13 @@ class WatchLoop:
             logger.debug("watch: dropped event after loop close: %s", exc)
 
     @staticmethod
-    def _accepts(root: Path, event: FsEvent) -> bool:
-        """Filter one event against the same rules the bulk scan uses (live == bulk).
-
-        A write reads content, so it gets FileDiscovery's full filter — symlink
-        resolution (a target escaping the tree is rejected, closing the path-
-        escape leak) + ignore rules.  A delete reads no content, so a now-gone
-        file gets a lexical check; the reconcile is the backstop either way.
-        """
-        discovery = FileDiscovery(root)
-        if event.deleted:
-            return discovery.is_deletable(event.path, SUPPORTED_EXTENSIONS)
-        return discovery.is_indexable(event.path, SUPPORTED_EXTENSIONS)
+    def _has_hidden_segment(root: Path, path: Path) -> bool:
+        """Return whether *path* has a dot-segment inside *root* (a cheap reject)."""
+        try:
+            relative = path.relative_to(root)
+        except ValueError:
+            return True
+        return any(part.startswith((".", "._")) for part in relative.parts)
 
     async def _await_children(self, children: list[TaskState]) -> bool:
         """Poll children to a terminal status; return True if the deadline hit.
@@ -294,13 +296,20 @@ class WatchLoop:
             return
         try:
             watched = set(roster.keys())
+            current: set[RouteKey] = set()
             for name in roster.roster_names():
                 roster.ensure_database(name)
                 for collection, root in roster.registrations(name):
                     key = RouteKey(name, collection)
+                    current.add(key)
                     if key not in watched:
                         self._begin_collection(name, collection, root)
                     else:
                         submitter.submit_scan(key, root.resolve())
+            # Tear down watches whose registration disappeared from disk — a
+            # removed/renamed directory fires no delete event, so its observer
+            # would otherwise persist forever.
+            for gone in watched - current:
+                self._teardown(gone)
         except (OSError, ValueError) as exc:
             logger.warning("watch: safety-scan reconcile failed: %s", exc)
