@@ -290,3 +290,57 @@ def test_deregister_purge_after_queued_index_leaves_no_orphans(tmp_path: Path) -
         "quarry.ingestion.streaming.get_embedding_backend", return_value=_FakeEmbedder()
     ):
         asyncio.run(_run())
+
+
+def test_registering_a_parent_purges_subsumed_child_chunks(tmp_path: Path) -> None:
+    """Registering a parent over a child tears it down and purges its chunks.
+
+    A child collection has an in-flight FileIndexJob whose chunks orphan once the
+    parent registration deletes the child's directories row.  _run_register must
+    route a collection-wide purge onto the child's FIFO — behind the insert — so
+    no orphan chunk survives in the subsumed collection.
+    """
+    base = tmp_path / "data" / "testdb"
+    (base / "lancedb").mkdir(parents=True)
+    parent = tmp_path / "proj"
+    child = parent / "sub"
+    child.mkdir(parents=True)
+    settings = Settings(
+        lancedb_path=base / "lancedb", registry_path=base / "registry.db"
+    )
+    conn = SyncRegistry(settings.registry_path)
+    try:
+        conn.register_directory(child.resolve(), "child-col")
+    finally:
+        conn.close()
+    (child / "x.md").write_text("indexable body text that will orphan then purge")
+
+    async def _run() -> None:
+        ctx = DaemonContext(settings, embedder=_FakeEmbedder())
+        key = RouteKey(ctx.database_name, "child-col")
+        # 1. an index job for the child collection is admitted (in-flight).
+        index_state = ctx.tasks.begin("index")
+        job = FileIndexJob(
+            ctx.database,
+            ctx.settings,
+            "child-col",
+            child.resolve(),
+            child.resolve() / "x.md",
+        )
+        assert ctx.ingest_queue.try_submit(key, job, index_state)
+        # 2. registering the parent subsumes child-col and purges it THROUGH the
+        #    queue — FIFO behind the index job, so the purge runs after the insert.
+        reg_state = ctx.tasks.begin("register")
+        await RegistrationRoutes(ctx)._run_register(
+            reg_state, parent.resolve(), "parent-col"
+        )
+        assert reg_state.status == "completed"
+        assert reg_state.results["subsumed"] == ["child-col"]
+        await ctx.aclose_ingest_queue()
+        # 3. no orphan chunks survive in the subsumed child collection.
+        assert _docs(ctx.database) == set()
+
+    with patch(
+        "quarry.ingestion.streaming.get_embedding_backend", return_value=_FakeEmbedder()
+    ):
+        asyncio.run(_run())

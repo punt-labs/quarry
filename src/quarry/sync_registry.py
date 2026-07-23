@@ -120,7 +120,7 @@ class SyncRegistry:
         self,
         directory: Path,
         collection: str,
-    ) -> DirectoryRegistration:
+    ) -> tuple[DirectoryRegistration, list[str]]:
         """Register a directory for incremental sync.
 
         Subsumption rules:
@@ -129,6 +129,11 @@ class SyncRegistry:
           are deregistered (the parent subsumes them).
         - If an existing registration is an ancestor of *directory*, the
           registration is rejected — the child is already covered.
+
+        Return the new registration and the collections it subsumed, so the
+        caller can tear down each subsumed child's watch and purge its chunks
+        (whose ``directories`` row this call just deleted).  The list is empty
+        unless *directory* was a parent of existing registrations.
 
         Raises:
             FileNotFoundError: If *directory* does not exist.
@@ -141,7 +146,7 @@ class SyncRegistry:
             msg = f"Directory not found: {resolved}"
             raise FileNotFoundError(msg)
 
-        self._enforce_subsumption(resolved)
+        subsumed = self._enforce_subsumption(resolved)
 
         now = datetime.now(UTC).isoformat()
         try:
@@ -156,14 +161,15 @@ class SyncRegistry:
             self._conn.rollback()
             raise
         self._conn.commit()
-        return DirectoryRegistration(
+        registration = DirectoryRegistration(
             directory=str(resolved),
             collection=collection,
             registered_at=now,
         )
+        return registration, subsumed
 
-    def _enforce_subsumption(self, resolved: Path) -> None:
-        """Reject child-of-parent, evict children of new parent."""
+    def _enforce_subsumption(self, resolved: Path) -> list[str]:
+        """Reject child-of-parent, evict children of new parent, return them."""
         existing_regs = self.list_registrations()
         for reg in existing_regs:
             reg_path = Path(reg.directory).resolve()
@@ -188,6 +194,7 @@ class SyncRegistry:
             self._conn.execute(
                 "DELETE FROM directories WHERE collection = ?", (child_collection,)
             )
+        return subsumed
 
     def _raise_for_integrity(self, resolved: Path, collection: str) -> None:
         """Translate an INSERT IntegrityError into a precise ValueError."""

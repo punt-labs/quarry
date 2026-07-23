@@ -169,7 +169,7 @@ class RegistrationRoutes(RouteGroup):
     ) -> None:
         """Execute register_directory in background and update task state."""
         try:
-            reg = await run_in_threadpool(
+            reg, subsumed = await run_in_threadpool(
                 self._register_sync,
                 self.ctx.settings.registry_path,
                 resolved,
@@ -180,9 +180,15 @@ class RegistrationRoutes(RouteGroup):
                 "directory": reg.directory,
                 "collection": reg.collection,
                 "registered_at": reg.registered_at,
+                "subsumed": subsumed,
             }
-            # Begin watching the new tree and submit its initial scan (DES-045 §6).
+            # Begin watching the new tree and submit its initial scan.
             self.ctx.watch_loop.start_watching(collection, resolved)
+            # Tear down and purge each collection the new parent subsumed — its
+            # directories row is gone, so a lingering watch would double-index
+            # and an in-flight FileIndexJob would FK-fail into orphan chunks.
+            for child in subsumed:
+                await self._teardown_subsumed(child)
         except asyncio.CancelledError:
             state.status = "failed"
             state.error = "task was cancelled"
@@ -200,28 +206,42 @@ class RegistrationRoutes(RouteGroup):
                 state.error = "task exited without setting terminal status"
 
     async def _run_purge(self, state: TaskState, collection: str) -> None:
-        """Purge a deregistered collection's chunks THROUGH the queue.
-
-        Routing the purge onto the collection's per-``(database, collection)``
-        FIFO worker (DES-045) makes it run behind any already-admitted
-        ``FileIndexJob`` for the same collection, so a queued insert can never
-        resurrect chunks *after* the purge — the single-writer invariant a direct
-        out-of-queue ``delete_document`` would violate.  The task polls the
-        queued job to completion so ``deleted_chunks`` still reflects the result.
-        """
+        """Purge a deregistered collection's chunks THROUGH the queue."""
         with task_terminal(state):
-            purge = self.ctx.tasks.begin("deregister-purge")
-            job = CollectionPurgeJob(self.ctx.database, collection)
-            key = RouteKey(self.ctx.database_name, collection)
-            await self._enqueue_purge(key, job, purge)
-            while purge.status not in _PURGE_TERMINAL:
-                await asyncio.sleep(_PURGE_POLL_S)
+            purge = await self._purge_collection(collection, "deregister-purge")
             state.results["deleted_chunks"] = purge.results.get("deleted", 0)
             if purge.status == "failed":
                 state.status = "failed"
                 state.error = purge.error or "purge failed"
             else:
                 state.status = "completed"
+
+    async def _teardown_subsumed(self, collection: str) -> None:
+        """Stop watching a subsumed child and purge its now-orphaned chunks.
+
+        The child's ``directories`` row was deleted by the parent registration,
+        so an in-flight ``FileIndexJob`` for it would FK-fail into orphan chunks
+        in the dead collection; stopping the watch also prevents a double-index.
+        """
+        self.ctx.watch_loop.stop_watching(collection)
+        await self._purge_collection(collection, "subsume-purge")
+
+    async def _purge_collection(self, collection: str, label: str) -> TaskState:
+        """Purge *collection*'s chunks through its FIFO worker; poll to completion.
+
+        Routing the purge onto the per-``(database, collection)`` FIFO makes it
+        run behind any already-admitted ``FileIndexJob`` for the same collection,
+        so a queued insert can never resurrect chunks *after* the purge — the
+        single-writer invariant a direct out-of-queue ``delete_document`` would
+        violate.
+        """
+        purge = self.ctx.tasks.begin(label)
+        job = CollectionPurgeJob(self.ctx.database, collection)
+        key = RouteKey(self.ctx.database_name, collection)
+        await self._enqueue_purge(key, job, purge)
+        while purge.status not in _PURGE_TERMINAL:
+            await asyncio.sleep(_PURGE_POLL_S)
+        return purge
 
     async def _enqueue_purge(
         self, key: RouteKey, job: CollectionPurgeJob, purge: TaskState
@@ -254,11 +274,12 @@ class RegistrationRoutes(RouteGroup):
     @staticmethod
     def _register_sync(
         registry_path: Path, resolved: Path, collection: str
-    ) -> DirectoryRegistration:
+    ) -> tuple[DirectoryRegistration, list[str]]:
         """Open registry, register, close — all in the caller's thread.
 
         SQLite connections are bound to the thread that created them, so the
-        open/use/close lifecycle must stay inside the worker thread.
+        open/use/close lifecycle must stay inside the worker thread.  Return the
+        registration and the collections it subsumed.
         """
         conn = SyncRegistry(registry_path)
         try:

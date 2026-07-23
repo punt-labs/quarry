@@ -74,10 +74,11 @@ class TestRegisterDirectory:
         conn = SyncRegistry(tmp_path / "r.db")
         course_dir = tmp_path / "ml-101"
         course_dir.mkdir()
-        reg = conn.register_directory(course_dir, "ml-101")
+        reg, subsumed = conn.register_directory(course_dir, "ml-101")
         assert reg.collection == "ml-101"
         assert reg.directory == str(course_dir.resolve())
         assert reg.registered_at != ""
+        assert subsumed == []  # no existing registrations to subsume
         conn.close()
 
     def test_register_nonexistent_directory(self, tmp_path: Path):
