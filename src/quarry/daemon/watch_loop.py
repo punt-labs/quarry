@@ -308,28 +308,26 @@ class WatchLoop:
             return
 
     def _reconcile(self) -> None:
-        """Reconcile the roster: new DBs/collections, shed scans, failed jobs.
+        """A full disk-vs-registry pass over EVERY registered collection.
 
-        The backstop that retires quarry-uae — picks up a database/collection
-        registered since ``start()`` and re-scans any collection whose scan was
-        shed past the admission bound or whose admitted per-file job then failed.
-        Never propagates — a bad registry read is logged, the loop continues.
+        The backstop that retires quarry-uae: each collection is re-scanned via a
+        ``CollectionSyncJob`` (its ``sync_collection`` ingests new/changed and
+        deletes gone documents), self-healing a removed directory, a shed FTS
+        finalize, and unwatchable (``None``-handle) or new trees — regardless of
+        live watch state.  Never propagates (a bad registry read is logged).
         """
         roster, submitter = self._roster, self._submitter
         if roster is None or submitter is None:
             return
         try:
-            submitter.reap_failures()  # failed per-file jobs -> pending rescan
-
             watched = set(roster.keys())
             for name in roster.roster_names():
                 roster.ensure_database(name)
                 for collection, root in roster.registrations(name):
-                    if RouteKey(name, collection) not in watched:
+                    key = RouteKey(name, collection)
+                    if key not in watched:
                         self._begin_collection(name, collection, root)
-            for key in submitter.take_pending_scans():
-                scan_root = roster.resolved_root(key)
-                if scan_root is not None:
-                    submitter.submit_scan(key, scan_root)
+                    else:
+                        submitter.submit_scan(key, root.resolve())
         except (OSError, ValueError) as exc:
             logger.warning("watch: safety-scan reconcile failed: %s", exc)

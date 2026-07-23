@@ -88,23 +88,29 @@ class _RecordingQueue:
 class _FakeSource:
     """A synthetic FsEventSource: record scheduled trees, emit events on demand."""
 
-    __slots__ = ("_watches", "stopped")
+    __slots__ = ("_watches", "null_handle", "stopped")
 
     _watches: dict[object, tuple[Path, Callable[[FsEvent], None]]]
+    null_handle: bool
     stopped: bool
 
-    def __new__(cls) -> Self:
+    def __new__(cls, *, null_handle: bool = False) -> Self:
         self = super().__new__(cls)
         self._watches = {}
+        self.null_handle = null_handle
         self.stopped = False
         return self
 
-    def schedule(self, root: Path, on_event: Callable[[FsEvent], None]) -> object:
-        handle = object()
+    def schedule(
+        self, root: Path, on_event: Callable[[FsEvent], None]
+    ) -> object | None:
+        # null_handle mimics inotify ENOSPC: the tree is scheduled but no handle
+        # is returned, so the roster records it as watched-but-unobserved.
+        handle = None if self.null_handle else object()
         self._watches[handle] = (Path(root), on_event)
         return handle
 
-    def unschedule(self, handle: object) -> None:
+    def unschedule(self, handle: object | None) -> None:
         self._watches.pop(handle, None)
 
     def stop(self) -> None:
@@ -480,9 +486,9 @@ def test_explicit_sync_runs_with_observer_disabled(tmp_path: Path) -> None:
 def test_admitted_then_failed_file_job_is_rescanned(tmp_path: Path) -> None:
     """An admitted per-file job that FAILS at run time is reconciled from disk.
 
-    The 503 backoff only re-arms SHED jobs; an admitted job that then fails would
-    be logged and forgotten — stale until restart. reap_failures (run by the
-    safety scan) marks its collection for a from-disk rescan (fix 2).
+    An admitted job that then fails would otherwise be logged and forgotten. The
+    periodic disk-vs-registry reconcile re-scans every registered collection, so
+    the failed file's collection is re-synced from disk — never stale-forever.
     """
 
     async def _run() -> None:
@@ -497,8 +503,31 @@ def test_admitted_then_failed_file_job_is_rescanned(tmp_path: Path) -> None:
         assert queue.jobs(FileIndexJob)  # admitted (then failed at run)
         queue.submitted.clear()
         queue.fail_index = False  # the rescan will succeed
-        loop._reconcile()  # reaps the failed job's key -> re-scans the collection
+        loop._reconcile()  # full disk-vs-registry pass re-scans the collection
         assert len(queue.jobs(CollectionSyncJob)) == 1
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_reconcile_scans_a_none_handle_tree(tmp_path: Path) -> None:
+    """A tree whose schedule() returns None is still reconciled from disk (#6).
+
+    A None handle (inotify ENOSPC / unwatchable) means no live events arrive, so
+    the tree must not be treated as "already watched and fresh" — the periodic
+    disk-vs-registry reconcile re-scans it regardless of handle state.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, _root = _build(tmp_path, queue=queue)
+        source = _FakeSource(null_handle=True)  # schedule() returns no handle
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        assert source.watch_count == 1  # scheduled, but with no observer handle
+        queue.submitted.clear()
+        loop._reconcile()
+        assert len(queue.jobs(CollectionSyncJob)) == 1  # disk-scanned anyway
         await loop.stop()
 
     asyncio.run(_run())

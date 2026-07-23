@@ -209,6 +209,36 @@ def test_collection_sync_job_bulk_indexes_all_files(tmp_path: Path) -> None:
     assert _docs(db) == {"one.md", "two.md"}
 
 
+def test_collection_sync_job_deletes_documents_gone_from_disk(tmp_path: Path) -> None:
+    """A re-scan removes documents whose files vanished — the dir-delete self-heal.
+
+    Directory-removal fires no per-file event, so the periodic reconcile relies
+    on this: CollectionSyncJob's disk-vs-registry delta deletes documents no
+    longer on disk. Here a file is indexed, then removed, then re-scanned.
+    """
+    db, settings, root = _fixture(tmp_path)
+    (root / "keep.md").write_text("still here")
+    (root / "gone.md").write_text("about to vanish")
+    with patch(
+        "quarry.ingestion.streaming.get_embedding_backend", return_value=_FakeEmbedder()
+    ):
+        asyncio.run(
+            CollectionSyncJob(db, settings, "col", root).run(
+                _dummy_ctx(), TaskState(task_id="scan1", kind="sync")
+            )
+        )
+        assert _docs(db) == {"keep.md", "gone.md"}
+
+        (root / "gone.md").unlink()  # simulate the file/dir removal
+        state = TaskState(task_id="scan2", kind="sync")
+        rescan = CollectionSyncJob(db, settings, "col", root)
+        asyncio.run(rescan.run(_dummy_ctx(), state))
+
+    assert state.status == "completed"
+    assert state.results["deleted"] == 1
+    assert _docs(db) == {"keep.md"}  # the gone document was purged from the index
+
+
 def test_deregister_purge_after_queued_index_leaves_no_orphans(tmp_path: Path) -> None:
     """A deregister purge cleans up even a racing queued index job (DES-045 blocker).
 
