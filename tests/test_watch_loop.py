@@ -25,7 +25,9 @@ from quarry.daemon.watch_loop import WatchLoop
 from quarry.sync_registry import SyncRegistry
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
+
+    import pytest
 
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.ingest_unit import IngestUnit
@@ -560,6 +562,36 @@ def test_start_stop_start_rebuilds_a_live_source(tmp_path: Path) -> None:
         source.emit(root, _fs(_write(root, "z.md")))
         await asyncio.sleep(0.15)
         assert queue.jobs(FileIndexJob)  # the rebuilt loop is live
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_start_survives_unreadable_roster_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unreadable quarry_root does not crash boot; the active DB still watches.
+
+    roster_names() iterates quarry_root to find sibling databases; an OSError
+    there must fall back to the active database, never bring down daemon boot.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, _root = _build(tmp_path, queue=queue)
+        real_iterdir = Path.iterdir
+
+        def boom(self: Path) -> Iterator[Path]:
+            if self == ctx.settings.quarry_root:
+                msg = "permission denied"
+                raise OSError(msg)
+            return real_iterdir(self)
+
+        monkeypatch.setattr(Path, "iterdir", boom)
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()  # must not raise
+        assert source.watch_count == 1  # the active DB's collection still watched
         await loop.stop()
 
     asyncio.run(_run())

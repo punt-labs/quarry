@@ -97,12 +97,17 @@ class WatchRoster:
         """
         names = {self._active_db}
         root = self._base_settings.quarry_root
-        if root.exists():
-            names.update(
-                entry.name
-                for entry in root.iterdir()
-                if entry.is_dir() and (entry / "registry.db").exists()
-            )
+        try:
+            if root.exists():
+                names.update(
+                    entry.name
+                    for entry in root.iterdir()
+                    if entry.is_dir() and (entry / "registry.db").exists()
+                )
+        except OSError as exc:
+            # An unreadable/racing root must never crash daemon boot — the active
+            # database is always watchable; siblings reconcile on the next scan.
+            logger.warning("watch: cannot enumerate roster under %s: %s", root, exc)
         return sorted(names)
 
     def ensure_database(self, name: str) -> None:
