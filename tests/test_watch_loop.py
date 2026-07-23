@@ -900,3 +900,101 @@ def test_partial_reconcile_does_not_tear_down_or_purge(
         await loop.stop()
 
     asyncio.run(_run())
+
+
+def test_failed_deregister_purge_is_retried_on_reconcile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A deregister-purge the full queue rejects is deferred and retried.
+
+    Symmetric with the subsume path (the z-spec I2 fix): without the deferral a
+    shed deregister-purge would orphan the collection's chunks with no backstop —
+    its registry rows are gone, so a plain reconcile would never revisit it.
+    """
+    monkeypatch.setattr("quarry.daemon.purge_service._PURGE_SUBMIT_DEADLINE_S", 0.0)
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        loop, ctx, _source, _root = _reregister_setup(
+            tmp_path, queue=queue, collection="col"
+        )
+        await loop.start()
+        assert loop._submitter is not None
+        col = RouteKey("testdb", "col")
+        # Deregister "col": the registry rows are removed, then the purge sheds.
+        conn = SyncRegistry(ctx.settings.registry_path)
+        try:
+            conn.deregister_directory("col")
+        finally:
+            conn.close()
+        queue.admit = False
+        purge_state = ctx.tasks.begin("deregister")
+        purge_state.results = {"deleted_chunks": 0}
+        await RegistrationRoutes(ctx)._run_purge(purge_state, "col")
+        assert purge_state.status == "failed"
+        assert col in loop._submitter._pending_purges  # deferred, not orphaned
+        # The queue drains; the next reconcile re-submits the purge ("col" is
+        # absent from the roster, so the drain purges it).
+        queue.admit = True
+        queue.submitted.clear()
+        loop._reconcile()
+        assert col not in loop._submitter._pending_purges
+        assert queue.jobs(CollectionPurgeJob)
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_self_subsume_with_shed_purge_stays_live_and_unqueued(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A same-name re-register whose subsume-purge sheds keeps the parent live.
+
+    The compound path: re-registering "docs" to a wider root while the queue is
+    full sheds the subsume-purge, but discard-on-begin supersedes the stale
+    purge — so the now-live parent is watched and NOT queued for a purge that
+    would wipe its fresh chunks.
+    """
+    monkeypatch.setattr("quarry.daemon.purge_service._PURGE_SUBMIT_DEADLINE_S", 0.0)
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        loop, ctx, source, root = _reregister_setup(tmp_path, queue=queue)  # "docs"
+        await loop.start()
+        assert source.watch_count == 1
+        key = RouteKey("testdb", "docs")
+        queue.admit = False  # the subsume-purge will shed
+        reg = ctx.tasks.begin("register")
+        await RegistrationRoutes(ctx)._run_register(reg, root.resolve(), "docs")
+        assert loop._submitter is not None
+        # discard-on-begin fired: the now-live parent is not queued for a purge.
+        assert key not in loop._submitter._pending_purges
+        assert source.watch_count == 1  # and it is watched
+        assert reg.status == "completed"
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_reconcile_drain_reshed_keeps_pending(tmp_path: Path) -> None:
+    """A drain re-submission that is itself shed keeps the orphan pending.
+
+    The queue is still full when the reconcile drain retries, so the purge sheds
+    again; the entry must survive in the pending set for the next cycle (I2 stays
+    satisfied — the orphan stays tracked, never lost).
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue(admit=False)  # full throughout
+        ctx, _root = _build(tmp_path, queue=queue)
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        assert loop._submitter is not None
+        gone = RouteKey("testdb", "gone")
+        loop._submitter.defer_purge(gone)
+        loop._reconcile()  # drain re-submits, but the full queue sheds it again
+        assert gone in loop._submitter._pending_purges  # survives for the next cycle
+        await loop.stop()
+
+    asyncio.run(_run())

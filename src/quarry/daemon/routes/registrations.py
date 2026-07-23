@@ -226,6 +226,11 @@ class RegistrationRoutes(RouteGroup):
             )
             state.results["deleted_chunks"] = purge.results.get("deleted", 0)
             if purge.status == "failed":
+                # Symmetric with _teardown_subsumed: a shed deregister-purge would
+                # otherwise orphan the collection's chunks with no backstop (the
+                # rows are gone from the registry, so reconcile never revisits it).
+                # Defer it so the reconcile drains the orphan when the queue frees.
+                self.ctx.watch_loop.defer_purge(collection)
                 state.status = "failed"
                 state.error = purge.error or "purge failed"
             else:
