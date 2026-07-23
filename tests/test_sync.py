@@ -410,6 +410,80 @@ class TestDiscoverFiles:
         assert names == ["app.py", "app.py", "debug.log"]
 
 
+class TestIsIndexable:
+    """The per-file live filter must match bulk discover (live == bulk)."""
+
+    def test_symlink_escaping_root_is_not_indexable(self, tmp_path: Path):
+        """A symlink to a secret OUTSIDE the tree is rejected — never indexed."""
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        secret = outside / "secret.txt"
+        secret.write_text("top secret")
+        root = tmp_path / "root"
+        root.mkdir()
+        (root / "escape.md").symlink_to(secret)
+
+        discovery = FileDiscovery(root)
+        assert discovery.is_indexable(root / "escape.md", frozenset({".md"})) is False
+
+    def test_real_file_inside_root_is_indexable(self, tmp_path: Path):
+        root = tmp_path / "root"
+        root.mkdir()
+        (root / "real.md").write_text("hello")
+        assert FileDiscovery(root).is_indexable(root / "real.md", frozenset({".md"}))
+
+    def test_symlink_inside_root_is_indexable(self, tmp_path: Path):
+        root = tmp_path / "root"
+        root.mkdir()
+        (root / "real.md").write_text("content")
+        (root / "link.md").symlink_to(root / "real.md")
+        assert FileDiscovery(root).is_indexable(root / "link.md", frozenset({".md"}))
+
+    def test_quarryignored_file_is_not_indexable(self, tmp_path: Path):
+        """A live edit to a .quarryignore'd file is skipped, matching the scan."""
+        root = tmp_path / "root"
+        root.mkdir()
+        (root / ".quarryignore").write_text("ignored.md\n")
+        (root / "ignored.md").write_text("secret notes")
+        (root / "kept.md").write_text("keep me")
+
+        discovery = FileDiscovery(root)
+        exts = frozenset({".md"})
+        assert discovery.is_indexable(root / "ignored.md", exts) is False
+        assert discovery.is_indexable(root / "kept.md", exts) is True
+
+    def test_nested_gitignored_file_is_not_indexable(self, tmp_path: Path):
+        root = tmp_path / "root"
+        root.mkdir()
+        sub = root / "sub"
+        sub.mkdir()
+        (sub / ".gitignore").write_text("*.log\n")
+        (sub / "debug.log").write_text("noise")
+        assert (
+            FileDiscovery(root).is_indexable(sub / "debug.log", frozenset({".log"}))
+            is False
+        )
+
+    def test_hidden_file_is_not_indexable(self, tmp_path: Path):
+        root = tmp_path / "root"
+        root.mkdir()
+        (root / ".hidden.md").write_text("dotfile")
+        assert (
+            FileDiscovery(root).is_indexable(root / ".hidden.md", frozenset({".md"}))
+            is False
+        )
+
+    def test_is_deletable_is_lexical_for_a_gone_file(self, tmp_path: Path):
+        """A removed (nonexistent) supported file is deletable without resolving."""
+        root = tmp_path / "root"
+        root.mkdir()
+        discovery = FileDiscovery(root)
+        exts = frozenset({".md"})
+        assert discovery.is_deletable(root / "gone.md", exts) is True
+        assert discovery.is_deletable(root / "gone.txt", exts) is False
+        assert discovery.is_deletable(root / ".hidden.md", exts) is False
+
+
 class TestLoadIgnoreSpec:
     def test_default_patterns_present(self):
         assert "venv/" in _DEFAULT_IGNORE_PATTERNS

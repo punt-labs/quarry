@@ -162,6 +162,13 @@ def _fs(path: Path, *, deleted: bool = False) -> FsEvent:
     return FsEvent(path, deleted=deleted)
 
 
+def _write(root: Path, name: str) -> Path:
+    """Create an indexable file under *root* (a real modify event implies it exists)."""
+    path = root / name
+    path.write_text("indexable body text")
+    return path
+
+
 def test_start_submits_initial_scan_and_finalize_per_collection(tmp_path: Path) -> None:
     """On start, each registered collection gets a bulk scan + a finalize."""
 
@@ -189,7 +196,7 @@ def test_ten_edits_coalesce_to_one_file_index_job(tmp_path: Path) -> None:
         loop = WatchLoop(ctx, source=source)
         await loop.start()
         queue.submitted.clear()
-        target = root / "a.md"
+        target = _write(root, "a.md")
         for _ in range(10):
             source.emit(root, _fs(target))
         await asyncio.sleep(0.15)
@@ -214,7 +221,7 @@ def test_burst_above_threshold_collapses_to_one_scan(tmp_path: Path) -> None:
         await loop.start()
         queue.submitted.clear()
         for i in range(6):
-            source.emit(root, _fs(root / f"f{i}.md"))
+            source.emit(root, _fs(_write(root, f"f{i}.md")))
         await asyncio.sleep(0.15)
         assert len(queue.jobs(CollectionSyncJob)) == 1
         assert queue.jobs(FileIndexJob) == []
@@ -301,7 +308,7 @@ def test_shed_submit_defers_and_skips_finalize(tmp_path: Path) -> None:
         loop = WatchLoop(ctx, source=source)
         await loop.start()
         queue.submitted.clear()
-        source.emit(root, _fs(root / "a.md"))
+        source.emit(root, _fs(_write(root, "a.md")))
         await asyncio.sleep(0.15)
         # The file job was attempted but shed; NO finalize follows a shed batch,
         # so a full queue never coalesces-and-forgets a still-stale index.
@@ -322,7 +329,7 @@ def test_raising_queue_never_crashes_the_loop(tmp_path: Path) -> None:
         loop = WatchLoop(ctx, source=source)
         await loop.start()
         queue.boom = True  # the next submit (from the debounce sink) raises
-        source.emit(root, _fs(root / "a.md"))
+        source.emit(root, _fs(_write(root, "a.md")))
         await asyncio.sleep(0.1)  # the batch sink raises inside _flush, is caught
         # The loop survived: stop() runs cleanly and the observer is torn down.
         await loop.stop()
@@ -485,7 +492,7 @@ def test_admitted_then_failed_file_job_is_rescanned(tmp_path: Path) -> None:
         loop = WatchLoop(ctx, source=source)
         await loop.start()
         queue.submitted.clear()
-        source.emit(root, _fs(root / "a.md"))  # live edit -> FileIndexJob
+        source.emit(root, _fs(_write(root, "a.md")))  # live edit -> FileIndexJob
         await asyncio.sleep(0.15)
         assert queue.jobs(FileIndexJob)  # admitted (then failed at run)
         queue.submitted.clear()

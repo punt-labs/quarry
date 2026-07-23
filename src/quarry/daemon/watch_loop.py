@@ -28,6 +28,7 @@ from quarry.daemon.tasks import task_terminal
 from quarry.daemon.watch_roster import WatchRoster
 from quarry.daemon.watch_submit import WatchSubmitter
 from quarry.ingestion.pipeline import SUPPORTED_EXTENSIONS
+from quarry.sync_discovery import FileDiscovery
 
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
@@ -260,7 +261,7 @@ class WatchLoop:
         if self._loop is None or self._dispatcher is None or self._roster is None:
             return
         root = self._roster.resolved_root(key)
-        if root is None or not self._accept(root, event.path):
+        if root is None or not self._accepts(root, event):
             return
         try:
             self._loop.call_soon_threadsafe(self._dispatcher.feed, key, event)
@@ -268,20 +269,18 @@ class WatchLoop:
             logger.debug("watch: dropped event after loop close: %s", exc)
 
     @staticmethod
-    def _accept(root: Path, path: Path) -> bool:
-        """Return whether *path* is an indexable, non-hidden file within *root*.
+    def _accepts(root: Path, event: FsEvent) -> bool:
+        """Filter one event against the same rules the bulk scan uses (live == bulk).
 
-        Hidden parts are checked *relative to root* — a watched tree may itself
-        live under a dotted directory (``~/.config/...``); only dotted segments
-        inside the tree (``.git/``, a dotfile) are skipped, matching the scan.
+        A write reads content, so it gets FileDiscovery's full filter — symlink
+        resolution (a target escaping the tree is rejected, closing the path-
+        escape leak) + ignore rules.  A delete reads no content, so a now-gone
+        file gets a lexical check; the reconcile is the backstop either way.
         """
-        if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
-            return False
-        try:
-            relative = path.relative_to(root)
-        except ValueError:
-            return False
-        return not any(part.startswith(".") for part in relative.parts)
+        discovery = FileDiscovery(root)
+        if event.deleted:
+            return discovery.is_deletable(event.path, SUPPORTED_EXTENSIONS)
+        return discovery.is_indexable(event.path, SUPPORTED_EXTENSIONS)
 
     async def _await_children(self, children: list[TaskState]) -> bool:
         """Poll children to a terminal status; return True if the deadline hit.

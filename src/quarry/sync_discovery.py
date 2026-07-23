@@ -110,6 +110,73 @@ class FileDiscovery:
 
         return result
 
+    def is_indexable(self, path: Path, extensions: frozenset[str]) -> bool:
+        """Return whether *path* would be indexed by :meth:`discover` (live == bulk).
+
+        Applies discover's rules to ONE path so a live watch edit and a bulk scan
+        agree: the file's real path must resolve *inside* the real root (a symlink
+        whose target escapes the tree is rejected — never indexed, closing the
+        path-escape leak), the suffix must be supported, no path segment may be
+        hidden, and neither the root nor any per-directory ignore spec may match.
+        """
+        if self._root_resolved is None:
+            return False
+        try:
+            resolved = path.resolve(strict=True)
+        except (OSError, RuntimeError):
+            return False
+        try:
+            resolved.relative_to(self._root_resolved)  # symlink-escape guard
+        except ValueError:
+            return False
+        if path.suffix.lower() not in extensions:
+            return False
+        try:
+            rel = path.relative_to(self._directory)
+        except ValueError:
+            return False
+        parts = rel.parts
+        if any(part.startswith((".", "._")) for part in parts):
+            return False
+        if self.load_ignore_spec().match_file(str(rel)):
+            return False
+        return not self._nested_ignored(parts)
+
+    def _nested_ignored(self, parts: tuple[str, ...]) -> bool:
+        """Whether a per-directory ``.gitignore`` along *parts* excludes the file.
+
+        Mirrors :meth:`discover`'s walk: each intermediate directory's own
+        ``.gitignore`` governs its direct child (a trailing ``/`` for a
+        subdirectory, none for the final file).  The root is covered by
+        :meth:`load_ignore_spec`, so it is skipped here.
+        """
+        current = self._directory
+        last = len(parts) - 1
+        for index, segment in enumerate(parts):
+            if current != self._directory:
+                local = self._read_local_ignore(current)
+                marker = "" if index == last else "/"
+                if local is not None and local.match_file(segment + marker):
+                    return True
+            current = current / segment
+        return False
+
+    def is_deletable(self, path: Path, extensions: frozenset[str]) -> bool:
+        """Return whether a REMOVED *path* names a document worth a delete job.
+
+        A delete reads no content (no symlink-escape risk) and
+        ``delete_document`` is idempotent, so this is a purely lexical check —
+        the file is already gone and cannot be resolved.  A false accept is a
+        harmless no-op; the disk-vs-registry reconcile is the robust backstop.
+        """
+        if self._root_resolved is None or path.suffix.lower() not in extensions:
+            return False
+        try:
+            rel = path.relative_to(self._directory)
+        except ValueError:
+            return False
+        return not any(part.startswith((".", "._")) for part in rel.parts)
+
     @staticmethod
     def content_hash(path: Path) -> str:
         """Return a fast content hash of *path* for change detection.
