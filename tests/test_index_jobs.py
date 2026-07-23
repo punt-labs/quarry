@@ -20,8 +20,8 @@ from quarry.config import Settings
 from quarry.daemon.context import DaemonContext
 from quarry.daemon.index_jobs import CollectionSyncJob, DocumentDeleteJob, FileIndexJob
 from quarry.daemon.ingest_queue import IngestQueue
+from quarry.daemon.registration_lifecycle import RegistrationLifecycle
 from quarry.daemon.route_key import RouteKey
-from quarry.daemon.routes.registrations import RegistrationRoutes
 from quarry.daemon.tasks import TaskState
 from quarry.db import Database
 from quarry.ingestion.file_indexer import SingleFileIndexer
@@ -283,7 +283,7 @@ def test_deregister_purge_after_queued_index_leaves_no_orphans(tmp_path: Path) -
             dconn.close()
         purge_state = ctx.tasks.begin("deregister")
         purge_state.results = {"deleted_chunks": 0}
-        await RegistrationRoutes(ctx)._run_purge(purge_state, "col")
+        await RegistrationLifecycle(ctx).run_purge(purge_state, "col")
         await ctx.aclose_ingest_queue()
         # 3. no orphan chunks survive for the deregistered collection.
         assert _docs(ctx.database) == set()
@@ -333,7 +333,7 @@ def test_registering_a_parent_purges_subsumed_child_chunks(tmp_path: Path) -> No
         # 2. registering the parent subsumes child-col and purges it THROUGH the
         #    queue — FIFO behind the index job, so the purge runs after the insert.
         reg_state = ctx.tasks.begin("register")
-        await RegistrationRoutes(ctx)._run_register(
+        await RegistrationLifecycle(ctx).run_register(
             reg_state, parent.resolve(), "parent-col"
         )
         assert reg_state.status == "completed"
@@ -383,7 +383,7 @@ def test_subsume_purge_failure_is_logged_and_reported(
         monkeypatch.setattr(IngestQueue, "try_submit", lambda *_a, **_k: False)
         reg_state = ctx.tasks.begin("register")
         with caplog.at_level(logging.WARNING):
-            await RegistrationRoutes(ctx)._run_register(
+            await RegistrationLifecycle(ctx).run_register(
                 reg_state, parent.resolve(), "parent-col"
             )
         # Register succeeds; the failed child is both logged and reported.

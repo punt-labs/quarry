@@ -766,6 +766,19 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/quarry/daemon/registration_lifecycle.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 2.0,
+    "max_complexity": 8.0,
+    "avg_complexity": 3.2,
+    "module_size": 135.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/quarry/daemon/route_key.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
@@ -912,10 +925,10 @@
   "src/quarry/daemon/routes/registrations.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 1.46,
-    "max_complexity": 8.0,
-    "avg_complexity": 3.77,
-    "module_size": 305.0,
+    "avg_params": 1.11,
+    "max_complexity": 7.0,
+    "avg_complexity": 3.78,
+    "module_size": 198.0,
     "classes_per_module": 1.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,

@@ -19,8 +19,8 @@ from quarry.config import Settings
 from quarry.daemon.finalize_job import CollectionFinalizeJob, CollectionPurgeJob
 from quarry.daemon.fs_events import FsEvent
 from quarry.daemon.index_jobs import CollectionSyncJob, DocumentDeleteJob, FileIndexJob
+from quarry.daemon.registration_lifecycle import RegistrationLifecycle
 from quarry.daemon.route_key import RouteKey
-from quarry.daemon.routes.registrations import RegistrationRoutes
 from quarry.daemon.tasks import TaskRegistry
 from quarry.daemon.watch_loop import WatchLoop
 from quarry.daemon.watch_reconcile import WatchReconciler
@@ -723,7 +723,7 @@ def test_same_name_reregistration_purges_before_rewatch(tmp_path: Path) -> None:
 
         key = RouteKey("testdb", "docs")
         reg = ctx.tasks.begin("register")
-        await RegistrationRoutes(ctx)._run_register(reg, root.resolve(), "docs")
+        await RegistrationLifecycle(ctx).run_register(reg, root.resolve(), "docs")
         assert reg.status == "completed"
         assert reg.results["subsumed"] == ["docs"]  # subsumed its own name
         # "docs" is watched again — re-installed at the parent, not torn down.
@@ -764,7 +764,7 @@ def test_failed_subsume_purge_is_retried_on_reconcile(
         # cannot be admitted, so the child is deferred, never silently dropped.
         queue.admit = False
         reg = ctx.tasks.begin("register")
-        await RegistrationRoutes(ctx)._run_register(reg, root.resolve(), "parent")
+        await RegistrationLifecycle(ctx).run_register(reg, root.resolve(), "parent")
         assert reg.results["subsume_purge_failed"] == ["child"]
         assert loop._submitter is not None
         assert child in _reconciler(loop)._pending_purges
@@ -862,7 +862,7 @@ def test_register_status_completed_only_after_watch_installed(
         reg_holder.append(reg)
         fresh = tmp_path / "fresh"  # unrelated tree — a clean register, no subsume
         fresh.mkdir()
-        await RegistrationRoutes(ctx)._run_register(reg, fresh.resolve(), "newcol")
+        await RegistrationLifecycle(ctx).run_register(reg, fresh.resolve(), "newcol")
         assert status_at_watch == ["running"]  # not completed when the watch installs
         assert reg.status == "completed"  # completed only after the watch is live
         await loop.stop()
@@ -938,7 +938,7 @@ def test_failed_deregister_purge_is_retried_on_reconcile(
         queue.admit = False
         purge_state = ctx.tasks.begin("deregister")
         purge_state.results = {"deleted_chunks": 0}
-        await RegistrationRoutes(ctx)._run_purge(purge_state, "col")
+        await RegistrationLifecycle(ctx).run_purge(purge_state, "col")
         assert purge_state.status == "failed"
         assert col in _reconciler(loop)._pending_purges  # deferred, not orphaned
         # The queue drains; the next reconcile re-submits the purge ("col" is
@@ -973,7 +973,7 @@ def test_self_subsume_with_shed_purge_stays_live_and_unqueued(
         key = RouteKey("testdb", "docs")
         queue.admit = False  # the subsume-purge will shed
         reg = ctx.tasks.begin("register")
-        await RegistrationRoutes(ctx)._run_register(reg, root.resolve(), "docs")
+        await RegistrationLifecycle(ctx).run_register(reg, root.resolve(), "docs")
         assert loop._submitter is not None
         # discard-on-begin fired: the now-live parent is not queued for a purge.
         assert key not in _reconciler(loop)._pending_purges
