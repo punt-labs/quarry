@@ -574,3 +574,43 @@ class TestResumeWatermark:
         assert got.chunks_committed == 0
         assert got.partial_hash is None
         conn.close()
+
+
+class TestRetainedCollections:
+    """The durable keep-data marker the orphan sweep consults."""
+
+    def test_keep_data_deregister_marks_retained(self, tmp_path: Path):
+        conn = SyncRegistry(tmp_path / "r.db")
+        directory = tmp_path / "docs"
+        directory.mkdir()
+        try:
+            conn.register_directory(directory, "docs")
+            assert conn.list_retained() == []
+            conn.deregister_directory("docs", keep_data=True)
+            assert conn.list_retained() == ["docs"]  # kept → retained, spared
+        finally:
+            conn.close()
+
+    def test_plain_deregister_does_not_retain(self, tmp_path: Path):
+        conn = SyncRegistry(tmp_path / "r.db")
+        directory = tmp_path / "docs"
+        directory.mkdir()
+        try:
+            conn.register_directory(directory, "docs")
+            conn.deregister_directory("docs")  # keep_data defaults False
+            assert conn.list_retained() == []  # no marker → sweep may purge
+        finally:
+            conn.close()
+
+    def test_reregister_clears_retained(self, tmp_path: Path):
+        conn = SyncRegistry(tmp_path / "r.db")
+        directory = tmp_path / "docs"
+        directory.mkdir()
+        try:
+            conn.register_directory(directory, "docs")
+            conn.deregister_directory("docs", keep_data=True)
+            assert conn.list_retained() == ["docs"]
+            conn.register_directory(directory, "docs")  # live again
+            assert conn.list_retained() == []  # marker cleared on re-register
+        finally:
+            conn.close()

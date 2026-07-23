@@ -155,6 +155,12 @@ class SyncRegistry:
                 "VALUES (?, ?, ?)",
                 (str(resolved), collection, now),
             )
+            # A re-registered collection is live again — drop any retained marker
+            # so the orphan sweep stops treating its chunks as keep-data.
+            self._conn.execute(
+                "DELETE FROM retained_collections WHERE collection = ?",
+                (collection,),
+            )
         except sqlite3.IntegrityError:
             self._raise_for_integrity(resolved, collection)
         except sqlite3.Error:
@@ -212,11 +218,15 @@ class SyncRegistry:
             msg = f"Collection name already in use: '{collection}'"
         raise ValueError(msg) from None
 
-    def deregister_directory(self, collection: str) -> list[str]:
+    def deregister_directory(
+        self, collection: str, *, keep_data: bool = False
+    ) -> list[str]:
         """Remove a directory registration and its file records.
 
-        Return document_names of files that were tracked, so the
-        caller can clean them from LanceDB.
+        When *keep_data* is set, record the collection as retained IN THE SAME
+        transaction as the row removal, so a crash can never leave the chunks
+        looking like an orphan the sweep would delete.  Return the document_names
+        of files that were tracked, so the caller can clean them from LanceDB.
         """
         rows = self._conn.execute(
             "SELECT DISTINCT document_name FROM files WHERE collection = ? "
@@ -229,8 +239,21 @@ class SyncRegistry:
             "DELETE FROM directories WHERE collection = ?",
             (collection,),
         )
+        if keep_data:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO retained_collections "
+                "(collection, retained_at) VALUES (?, ?)",
+                (collection, datetime.now(UTC).isoformat()),
+            )
         self._conn.commit()
         return document_names
+
+    def list_retained(self) -> list[str]:
+        """Return the collections whose chunks were deliberately kept on deregister."""
+        rows = self._conn.execute(
+            "SELECT collection FROM retained_collections ORDER BY collection"
+        ).fetchall()
+        return [r[0] for r in rows]
 
     def list_registrations(self) -> list[DirectoryRegistration]:
         """Return all registered directories."""

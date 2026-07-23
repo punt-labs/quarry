@@ -123,7 +123,10 @@ class RegistrationRoutes(RouteGroup):
         # Registry mutation off-thread; an unknown collection is a 404 below, and any
         # unexpected error propagates to the global 500 handler (no raw text echoed).
         found, removed_docs = await run_in_threadpool(
-            self._deregister_sync, self.ctx.settings.registry_path, collection
+            self._deregister_sync,
+            self.ctx.settings.registry_path,
+            collection,
+            keep_data=keep_data,
         )
         if not found:
             return not_found
@@ -172,15 +175,19 @@ class RegistrationRoutes(RouteGroup):
 
     @staticmethod
     def _deregister_sync(
-        registry_path: Path, collection: str
+        registry_path: Path, collection: str, *, keep_data: bool
     ) -> tuple[bool, list[str]]:
-        """Open registry, deregister, close — all in one thread."""
+        """Open registry, deregister, close — all in one thread.
+
+        With *keep_data*, the deregister records the collection as retained in the
+        same transaction, so the orphan sweep never deletes the kept chunks.
+        """
         conn = SyncRegistry(registry_path)
         try:
             existing = conn.get_registration(collection)
             if existing is None:
                 return False, []
-            removed_docs = conn.deregister_directory(collection)
+            removed_docs = conn.deregister_directory(collection, keep_data=keep_data)
             return True, removed_docs
         finally:
             conn.close()
