@@ -89,17 +89,30 @@ class WatchSubmitter:
         """
         self._pending_purges.add(key)
 
-    def drain_pending_purges(self) -> None:
-        """Re-submit every deferred purge; drop the ones the queue now admits.
+    def discard_pending_purge(self, key: RouteKey) -> None:
+        """Cancel a deferred purge because *key* is registered (and live) again.
 
-        Once admitted the ``CollectionPurgeJob`` runs a reliable
-        ``delete_collection``, so admission is the retry's success condition — a
-        still-full queue keeps the key for the next reconcile.
+        A same-name re-registration makes a collection live at a new root before
+        the next reconcile; its earlier orphans are moot and purging would wipe
+        the live parent's fresh chunks — so a re-watch supersedes the stale purge.
+        """
+        self._pending_purges.discard(key)
+
+    def drain_pending_purges(self, live: set[RouteKey]) -> None:
+        """Re-submit each deferred purge whose collection is no longer registered.
+
+        A key that is *live* (in the on-disk roster) was re-registered after its
+        purge was deferred; purging it now would destroy the live collection's
+        chunks, so it is dropped WITHOUT submitting.  For a still-absent key,
+        admission of the ``CollectionPurgeJob`` is the retry's success condition —
+        a still-full queue keeps it for the next reconcile.
         """
         if not self._pending_purges:
             return
         still: set[RouteKey] = set()
         for key in self._pending_purges:
+            if key in live:
+                continue  # re-registered — its orphans are moot; never purge live
             task = self._ctx.tasks.begin("subsume-purge-retry")
             job = CollectionPurgeJob(self._ctx.database, key.collection)
             if not self._ctx.ingest_queue.try_submit(key, job, task):

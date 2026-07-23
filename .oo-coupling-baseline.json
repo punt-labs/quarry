@@ -556,8 +556,8 @@
     "efferent_coupling": 6.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.758,
-    "avg_lcom": 0.758
+    "max_lcom": 0.762,
+    "avg_lcom": 0.762
   },
   "src/quarry/db/__init__.py": {
     "avg_lcom": 0.0,

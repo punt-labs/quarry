@@ -235,6 +235,9 @@ class WatchLoop:
             return
         resolved = root.resolve()
         key = RouteKey(database, collection)
+        # A re-registration makes the collection live again — cancel any stale
+        # orphan-purge immediately so drain never wipes the fresh chunks.
+        self._submitter.discard_pending_purge(key)
         self._roster.watch(key, resolved, partial(self._on_fs_event, key))
         self._submitter.submit_scan(key, resolved)
 
@@ -304,9 +307,11 @@ class WatchLoop:
         roster, submitter = self._roster, self._submitter
         if roster is None or submitter is None:
             return
+        # Bound before the try so the purge drain always sees a defined live set,
+        # even if a registry read raises partway through.
+        current: set[RouteKey] = set()
         try:
             watched = set(roster.keys())
-            current: set[RouteKey] = set()
             for name in roster.roster_names():
                 roster.ensure_database(name)
                 for collection, root in roster.registrations(name):
@@ -324,6 +329,7 @@ class WatchLoop:
         except (OSError, ValueError) as exc:
             logger.warning("watch: safety-scan reconcile failed: %s", exc)
         # Re-attempt any subsume-purge a full queue rejected — the one backstop
-        # for orphan chunks a gone collection's teardown never cleans.  Guarded
-        # separately: it needs no registry read, so a bad read never skips it.
-        submitter.drain_pending_purges()
+        # for orphan chunks a gone collection's teardown never cleans.  A key that
+        # is live again (re-registered) is dropped, never purged, so the drain
+        # cannot wipe a re-created collection's chunks.
+        submitter.drain_pending_purges(live=current)

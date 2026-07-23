@@ -657,12 +657,14 @@ def test_symlink_escaping_the_tree_is_never_submitted(tmp_path: Path) -> None:
 
 
 def _reregister_setup(
-    tmp_path: Path, *, queue: _RecordingQueue
+    tmp_path: Path, *, queue: _RecordingQueue, collection: str = "docs"
 ) -> tuple[WatchLoop, DaemonContext, _FakeSource, Path]:
-    """Register /root/sub as "docs"; return the unstarted loop, ctx, source, /root.
+    """Register /root/sub as *collection*; return the loop, ctx, source, /root.
 
-    The shared fixture for same-name re-registration: /root is a strict parent of
-    the already-"docs" /root/sub, so registering /root subsumes "docs" itself.
+    /root is a strict parent of /root/sub, so registering /root subsumes the
+    child.  Same *collection* on both makes it a self-subsume (same-name
+    re-registration); a different parent name makes the child a distinct
+    subsumed collection.
     """
     data = tmp_path / "data"
     (data / "testdb").mkdir(parents=True, exist_ok=True)
@@ -679,7 +681,7 @@ def _reregister_setup(
         watch_bulk_threshold=5,
         watch_safety_scan_s=0.0,  # drive _reconcile directly; no background timer
     )
-    _register(settings, sub.resolve(), "docs")
+    _register(settings, sub.resolve(), collection)
     ns = SimpleNamespace(
         settings=settings,
         ingest_queue=queue,
@@ -732,35 +734,93 @@ def test_same_name_reregistration_purges_before_rewatch(tmp_path: Path) -> None:
 def test_failed_subsume_purge_is_retried_on_reconcile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A subsume-purge the full queue rejects is retried until reconcile admits it.
+    """A distinct subsumed child's failed purge is retried until reconcile admits it.
 
-    reconcile-drop tears a gone collection's watch down but never purges its
-    chunks, so a rejected subsume-purge would leak orphans forever.  The failed
-    child is deferred and re-submitted on the next reconcile; once the queue
-    admits it the delete runs and the pending entry clears.
+    Registering /root as "parent" over /root/sub "child" subsumes "child" (a
+    distinct collection that does NOT become live).  Its purge fails on a full
+    queue, so it is deferred and re-submitted on the next reconcile; once the
+    queue admits it the delete runs and the pending entry clears.
     """
     # A zero admission deadline makes the register-time purge fail immediately.
     monkeypatch.setattr("quarry.daemon.purge_service._PURGE_SUBMIT_DEADLINE_S", 0.0)
 
     async def _run() -> None:
         queue = _RecordingQueue()
-        loop, ctx, _source, root = _reregister_setup(tmp_path, queue=queue)
+        loop, ctx, _source, root = _reregister_setup(
+            tmp_path, queue=queue, collection="child"
+        )
         await loop.start()
-        key = RouteKey("testdb", "docs")
-        # The queue is full: registering the parent subsumes "docs" but its purge
+        child = RouteKey("testdb", "child")
+        # The queue is full: registering the parent subsumes "child" but its purge
         # cannot be admitted, so the child is deferred, never silently dropped.
         queue.admit = False
         reg = ctx.tasks.begin("register")
-        await RegistrationRoutes(ctx)._run_register(reg, root.resolve(), "docs")
-        assert reg.results["subsume_purge_failed"] == ["docs"]
+        await RegistrationRoutes(ctx)._run_register(reg, root.resolve(), "parent")
+        assert reg.results["subsume_purge_failed"] == ["child"]
         assert loop._submitter is not None
-        assert key in loop._submitter._pending_purges
-        # The queue drains; the next reconcile re-submits the purge and it lands.
+        assert child in loop._submitter._pending_purges
+        # The queue drains; the next reconcile re-submits the purge and it lands
+        # ("child" is absent from the roster, so the drain purges it).
         queue.admit = True
         queue.submitted.clear()
         loop._reconcile()
         assert not loop._submitter._pending_purges  # retry succeeded, entry cleared
         assert queue.jobs(CollectionPurgeJob)  # a fresh purge was submitted
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_reconcile_drain_skips_live_collections_and_purges_absent_ones(
+    tmp_path: Path,
+) -> None:
+    """A re-registered (live) collection supersedes its stale deferred purge.
+
+    A same-name re-register can leave a collection both live and in the pending
+    set.  The drain must skip a live key — purging it would wipe the re-created
+    collection's fresh chunks — while still purging a key absent from the roster.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, _root = _build(tmp_path, queue=queue)  # registers "col" (live)
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        assert loop._submitter is not None
+        live = RouteKey("testdb", "col")  # registered → live in the roster
+        gone = RouteKey("testdb", "gone")  # never registered → absent
+        loop._submitter.defer_purge(live)
+        loop._submitter.defer_purge(gone)
+        queue.submitted.clear()
+        loop._reconcile()
+        purged = {k for k, j in queue.submitted if isinstance(j, CollectionPurgeJob)}
+        assert live not in purged  # never wipe a live collection
+        assert gone in purged  # a genuinely absent orphan is still purged
+        assert not loop._submitter._pending_purges  # both resolved
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_begin_collection_cancels_a_stale_deferred_purge(tmp_path: Path) -> None:
+    """Beginning a watch for a collection cancels any stale deferred purge at once.
+
+    Defense-in-depth: a re-registration supersedes an orphan-purge immediately,
+    not only at the next reconcile, so a mid-window drain can never wipe it.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, root = _build(tmp_path, queue=queue)
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        assert loop._submitter is not None
+        extra = RouteKey("testdb", "extra")
+        loop._submitter.defer_purge(extra)
+        loop.start_watching("extra", root)  # re-registration makes it live
+        assert extra not in loop._submitter._pending_purges  # cancelled at once
         await loop.stop()
 
     asyncio.run(_run())
