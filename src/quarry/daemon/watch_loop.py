@@ -307,8 +307,35 @@ class WatchLoop:
         roster, submitter = self._roster, self._submitter
         if roster is None or submitter is None:
             return
-        # Bound before the try so the purge drain always sees a defined live set,
-        # even if a registry read raises partway through.
+        watched, current, complete = self._sync_enumerated(roster, submitter)
+        # Removals require a COMPLETE enumeration: a partial `current` (a registry
+        # read raised partway) would make a live collection look absent, so
+        # tearing down `watched - current` or purging by `current` could destroy a
+        # live watch or its chunks.  Skip both this cycle — a stale watch that
+        # lingers one cycle self-heals on the next full reconcile; a wiped live
+        # collection does not.  The add/rescan already ran for what enumerated.
+        if not complete:
+            return
+        # Tear down watches whose registration disappeared from disk — a
+        # removed/renamed directory fires no delete event, so its observer would
+        # otherwise persist forever.
+        for gone in watched - current:
+            self._teardown(gone)
+        # Re-attempt any subsume-purge a full queue rejected — the one backstop
+        # for orphan chunks a gone collection's teardown never cleans.  A key that
+        # is live again (re-registered) is dropped, never purged, so the drain
+        # cannot wipe a re-created collection's chunks.
+        submitter.drain_pending_purges(live=current)
+
+    def _sync_enumerated(
+        self, roster: WatchRoster, submitter: WatchSubmitter
+    ) -> tuple[set[RouteKey], set[RouteKey], bool]:
+        """Add/rescan every enumerated collection; return (watched, live, complete).
+
+        ``complete`` is False when a registry read raised partway: ``current`` is
+        then only a partial view of what is registered, so the caller must skip
+        every removal action.  Never propagates — a bad read is logged.
+        """
         current: set[RouteKey] = set()
         try:
             watched = set(roster.keys())
@@ -321,15 +348,7 @@ class WatchLoop:
                         self._begin_collection(name, collection, root)
                     else:
                         submitter.submit_scan(key, root.resolve())
-            # Tear down watches whose registration disappeared from disk — a
-            # removed/renamed directory fires no delete event, so its observer
-            # would otherwise persist forever.
-            for gone in watched - current:
-                self._teardown(gone)
         except (OSError, ValueError) as exc:
             logger.warning("watch: safety-scan reconcile failed: %s", exc)
-        # Re-attempt any subsume-purge a full queue rejected — the one backstop
-        # for orphan chunks a gone collection's teardown never cleans.  A key that
-        # is live again (re-registered) is dropped, never purged, so the drain
-        # cannot wipe a re-created collection's chunks.
-        submitter.drain_pending_purges(live=current)
+            return set(), current, False
+        return watched, current, True

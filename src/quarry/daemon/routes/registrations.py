@@ -174,8 +174,7 @@ class RegistrationRoutes(RouteGroup):
                 resolved,
                 collection,
             )
-            state.status = "completed"
-            state.results = {
+            results: dict[str, object] = {
                 "directory": reg.directory,
                 "collection": reg.collection,
                 "registered_at": reg.registered_at,
@@ -194,8 +193,15 @@ class RegistrationRoutes(RouteGroup):
                 child for child in subsumed if not await self._teardown_subsumed(child)
             ]
             if failed:
-                state.results["subsume_purge_failed"] = failed
+                results["subsume_purge_failed"] = failed
             self.ctx.watch_loop.start_watching(collection, resolved)
+            # Set the terminal status LAST — only now is the register truly done:
+            # registered AND watched AND cleanup-attempted.  A client polling
+            # mid-flight must never see "completed" while the parent is unwatched,
+            # and a raise in teardown/start_watching must land as failed, not a
+            # stale completed.
+            state.results = results
+            state.status = "completed"
         except asyncio.CancelledError:
             state.status = "failed"
             state.error = "task was cancelled"

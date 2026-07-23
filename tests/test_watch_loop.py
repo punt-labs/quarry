@@ -23,6 +23,7 @@ from quarry.daemon.route_key import RouteKey
 from quarry.daemon.routes.registrations import RegistrationRoutes
 from quarry.daemon.tasks import TaskRegistry
 from quarry.daemon.watch_loop import WatchLoop
+from quarry.daemon.watch_roster import WatchRoster
 from quarry.sync_registry import SyncRegistry
 
 if TYPE_CHECKING:
@@ -821,6 +822,81 @@ def test_begin_collection_cancels_a_stale_deferred_purge(tmp_path: Path) -> None
         loop._submitter.defer_purge(extra)
         loop.start_watching("extra", root)  # re-registration makes it live
         assert extra not in loop._submitter._pending_purges  # cancelled at once
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_register_status_completed_only_after_watch_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A poll never sees 'completed' before the parent watch is installed.
+
+    The terminal status is set at the END of _run_register, so at the instant
+    start_watching runs the task is still 'running'.  The old order set
+    'completed' first, exposing an unwatched-but-completed window to a client.
+    """
+    status_at_watch: list[str] = []
+    reg_holder: list[TaskState] = []
+    original = WatchLoop.start_watching
+
+    def spy(self: WatchLoop, collection: str, resolved: Path) -> None:
+        status_at_watch.append(reg_holder[0].status)
+        original(self, collection, resolved)
+
+    monkeypatch.setattr(WatchLoop, "start_watching", spy)
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        loop, ctx, _source, _root = _reregister_setup(tmp_path, queue=queue)
+        await loop.start()
+        reg = ctx.tasks.begin("register")
+        reg_holder.append(reg)
+        fresh = tmp_path / "fresh"  # unrelated tree — a clean register, no subsume
+        fresh.mkdir()
+        await RegistrationRoutes(ctx)._run_register(reg, fresh.resolve(), "newcol")
+        assert status_at_watch == ["running"]  # not completed when the watch installs
+        assert reg.status == "completed"  # completed only after the watch is live
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_partial_reconcile_does_not_tear_down_or_purge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reconcile whose enumeration raises partway drives NO removal actions.
+
+    With `current` only partially built, tearing down `watched - current` or
+    draining purges by `current` could destroy a live watch or its chunks — so
+    both removal actions wait for a fully-successful enumeration.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, _root = _build(tmp_path, queue=queue)  # registers "col"
+        extra = tmp_path / "proj2"
+        extra.mkdir()
+        _register(ctx.settings, extra.resolve(), "col2")
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        assert source.watch_count == 2  # both collections watched
+        assert loop._submitter is not None
+        gone = RouteKey("testdb", "gone")
+        loop._submitter.defer_purge(gone)  # an absent orphan awaiting purge
+        queue.submitted.clear()
+
+        # Enumeration now raises → the reconcile cannot complete.
+        def boom(self: WatchRoster, name: str) -> list[tuple[str, Path]]:
+            raise OSError("registry read failed")
+
+        monkeypatch.setattr(WatchRoster, "registrations", boom)
+        loop._reconcile()
+        # No live watch torn down; no purge drained this cycle.
+        assert source.watch_count == 2
+        assert gone in loop._submitter._pending_purges
+        assert not queue.jobs(CollectionPurgeJob)
         await loop.stop()
 
     asyncio.run(_run())
