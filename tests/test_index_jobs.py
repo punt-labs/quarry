@@ -9,6 +9,7 @@ and the run is a graceful per-file error, never a crash).
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, cast, final
 from unittest.mock import patch
@@ -18,6 +19,7 @@ import numpy as np
 from quarry.config import Settings
 from quarry.daemon.context import DaemonContext
 from quarry.daemon.index_jobs import CollectionSyncJob, DocumentDeleteJob, FileIndexJob
+from quarry.daemon.ingest_queue import IngestQueue
 from quarry.daemon.route_key import RouteKey
 from quarry.daemon.routes.registrations import RegistrationRoutes
 from quarry.daemon.tasks import TaskState
@@ -344,3 +346,49 @@ def test_registering_a_parent_purges_subsumed_child_chunks(tmp_path: Path) -> No
         "quarry.ingestion.streaming.get_embedding_backend", return_value=_FakeEmbedder()
     ):
         asyncio.run(_run())
+
+
+def test_subsume_purge_failure_is_logged_and_reported(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A subsumed child whose purge cannot be admitted is surfaced, never swallowed.
+
+    With the queue permanently full and a zero admission deadline, the subsume
+    purge fails.  Register itself still completes, but the failed child must be
+    logged and recorded in the task result — an unpurged child leaves orphan
+    chunks with no reconcile backstop, so silence would hide unrecoverable data.
+    """
+    base = tmp_path / "data" / "testdb"
+    (base / "lancedb").mkdir(parents=True)
+    parent = tmp_path / "proj"
+    child = parent / "sub"
+    child.mkdir(parents=True)
+    settings = Settings(
+        lancedb_path=base / "lancedb", registry_path=base / "registry.db"
+    )
+    conn = SyncRegistry(settings.registry_path)
+    try:
+        conn.register_directory(child.resolve(), "child-col")
+    finally:
+        conn.close()
+
+    monkeypatch.setattr("quarry.daemon.purge_service._PURGE_SUBMIT_DEADLINE_S", 0.0)
+
+    async def _run() -> None:
+        ctx = DaemonContext(settings, embedder=_FakeEmbedder())
+        # A permanently-full queue: the purge can never be admitted.  Patch the
+        # class (IngestQueue is __slots__ed, so the instance attr is read-only).
+        monkeypatch.setattr(IngestQueue, "try_submit", lambda *_a, **_k: False)
+        reg_state = ctx.tasks.begin("register")
+        with caplog.at_level(logging.WARNING):
+            await RegistrationRoutes(ctx)._run_register(
+                reg_state, parent.resolve(), "parent-col"
+            )
+        # Register succeeds; the failed child is both logged and reported.
+        assert reg_state.status == "completed"
+        assert reg_state.results["subsume_purge_failed"] == ["child-col"]
+        assert "subsume purge failed for collection child-col" in caplog.text
+
+    asyncio.run(_run())

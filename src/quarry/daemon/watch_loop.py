@@ -255,7 +255,7 @@ class WatchLoop:
             relative = path.relative_to(root)
         except ValueError:
             return True
-        return any(part.startswith((".", "._")) for part in relative.parts)
+        return any(part.startswith(".") for part in relative.parts)
 
     async def _await_children(self, children: list[TaskState]) -> bool:
         """Poll children to a terminal status; return True if the deadline hit.

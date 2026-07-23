@@ -11,6 +11,7 @@ import asyncio
 import logging
 import os
 import pwd
+from collections.abc import Mapping
 from pathlib import Path
 from typing import final
 
@@ -18,8 +19,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from quarry.daemon.finalize_job import CollectionPurgeJob
-from quarry.daemon.route_key import RouteKey
+from quarry.daemon.purge_service import CollectionPurger
 from quarry.daemon.routes.base import RouteGroup
 from quarry.daemon.tasks import TaskState, task_terminal
 from quarry.http_guards import RequestGuards
@@ -29,13 +29,6 @@ logger = logging.getLogger(__name__)
 
 # The registrations body carries only a small option dict.
 MAX_REGISTRATIONS_BODY_BYTES = 16 * 1024
-
-# The deregister purge polls its queued delete job to completion.  A full queue
-# is transient (workers drain), and the purge MUST run — the registry rows are
-# already gone — so submission retries within a bounded window before failing.
-_PURGE_TERMINAL = frozenset({"completed", "failed"})
-_PURGE_POLL_S = 0.05
-_PURGE_SUBMIT_DEADLINE_S = 30.0
 
 
 @final
@@ -82,16 +75,12 @@ class RegistrationRoutes(RouteGroup):
         if isinstance(body, JSONResponse):
             return body
 
-        directory = body.get("directory")
-        if not isinstance(directory, str) or not directory.strip():
-            return JSONResponse(
-                {"error": "Missing required field: directory"}, status_code=400
-            )
-        collection = body.get("collection")
-        if not isinstance(collection, str) or not collection.strip():
-            return JSONResponse(
-                {"error": "Missing required field: collection"}, status_code=400
-            )
+        directory = self._required_field(body, "directory")
+        if isinstance(directory, JSONResponse):
+            return directory
+        collection = self._required_field(body, "collection")
+        if isinstance(collection, JSONResponse):
+            return collection
 
         resolved, reason = self._resolve_path(directory)
         if resolved is None:
@@ -103,6 +92,16 @@ class RegistrationRoutes(RouteGroup):
 
         state = self.ctx.tasks.begin("register")
         return self.accept(state, self._run_register(state, resolved, collection))
+
+    @staticmethod
+    def _required_field(body: Mapping[str, object], field: str) -> str | JSONResponse:
+        """Return the non-empty string *field* from *body*, or a 400 response."""
+        value = body.get(field)
+        if not isinstance(value, str) or not value.strip():
+            return JSONResponse(
+                {"error": f"Missing required field: {field}"}, status_code=400
+            )
+        return value
 
     async def _delete(self, request: Request) -> JSONResponse:
         """Deregister synchronously (existence + registry row); purge chunks async."""
@@ -186,9 +185,14 @@ class RegistrationRoutes(RouteGroup):
             self.ctx.watch_loop.start_watching(collection, resolved)
             # Tear down and purge each collection the new parent subsumed — its
             # directories row is gone, so a lingering watch would double-index
-            # and an in-flight FileIndexJob would FK-fail into orphan chunks.
-            for child in subsumed:
-                await self._teardown_subsumed(child)
+            # and an in-flight FileIndexJob would FK-fail into orphan chunks.  A
+            # purge the saturated queue defeats leaves those orphans behind, so
+            # surface the failed children rather than reporting a clean success.
+            failed = [
+                child for child in subsumed if not await self._teardown_subsumed(child)
+            ]
+            if failed:
+                state.results["subsume_purge_failed"] = failed
         except asyncio.CancelledError:
             state.status = "failed"
             state.error = "task was cancelled"
@@ -208,7 +212,9 @@ class RegistrationRoutes(RouteGroup):
     async def _run_purge(self, state: TaskState, collection: str) -> None:
         """Purge a deregistered collection's chunks THROUGH the queue."""
         with task_terminal(state):
-            purge = await self._purge_collection(collection, "deregister-purge")
+            purge = await CollectionPurger(self.ctx).purge(
+                collection, "deregister-purge"
+            )
             state.results["deleted_chunks"] = purge.results.get("deleted", 0)
             if purge.status == "failed":
                 state.status = "failed"
@@ -216,51 +222,27 @@ class RegistrationRoutes(RouteGroup):
             else:
                 state.status = "completed"
 
-    async def _teardown_subsumed(self, collection: str) -> None:
+    async def _teardown_subsumed(self, collection: str) -> bool:
         """Stop watching a subsumed child and purge its now-orphaned chunks.
 
         The child's ``directories`` row was deleted by the parent registration,
         so an in-flight ``FileIndexJob`` for it would FK-fail into orphan chunks
         in the dead collection; stopping the watch also prevents a double-index.
+
+        Return whether the purge completed.  A saturated queue can defeat it, and
+        an unpurged child leaves orphan chunks with no reconcile backstop — so a
+        failure is logged and reported, never swallowed into a clean success.
         """
         self.ctx.watch_loop.stop_watching(collection)
-        await self._purge_collection(collection, "subsume-purge")
-
-    async def _purge_collection(self, collection: str, label: str) -> TaskState:
-        """Purge *collection*'s chunks through its FIFO worker; poll to completion.
-
-        Routing the purge onto the per-``(database, collection)`` FIFO makes it
-        run behind any already-admitted ``FileIndexJob`` for the same collection,
-        so a queued insert can never resurrect chunks *after* the purge — the
-        single-writer invariant a direct out-of-queue ``delete_document`` would
-        violate.
-        """
-        purge = self.ctx.tasks.begin(label)
-        job = CollectionPurgeJob(self.ctx.database, collection)
-        key = RouteKey(self.ctx.database_name, collection)
-        await self._enqueue_purge(key, job, purge)
-        while purge.status not in _PURGE_TERMINAL:
-            await asyncio.sleep(_PURGE_POLL_S)
-        return purge
-
-    async def _enqueue_purge(
-        self, key: RouteKey, job: CollectionPurgeJob, purge: TaskState
-    ) -> None:
-        """Admit the purge, retrying a transiently-full queue within the deadline.
-
-        The registry rows are already gone, so the purge MUST run or the
-        collection's chunks orphan.  A full queue drains as workers finish, so
-        submission retries until the deadline before marking the purge failed.
-        """
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + _PURGE_SUBMIT_DEADLINE_S
-        while not self.ctx.ingest_queue.try_submit(key, job, purge):
-            if loop.time() >= deadline:
-                self.ctx.tasks.drop(purge)
-                purge.status = "failed"
-                purge.error = "ingest queue full; purge not admitted"
-                return
-            await asyncio.sleep(_PURGE_POLL_S)
+        purge = await CollectionPurger(self.ctx).purge(collection, "subsume-purge")
+        if purge.status == "failed":
+            logger.warning(
+                "subsume purge failed for collection %s: %s",
+                collection,
+                purge.error or "unknown",
+            )
+            return False
+        return True
 
     @staticmethod
     def _list_sync(registry_path: Path) -> list[DirectoryRegistration]:
