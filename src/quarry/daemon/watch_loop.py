@@ -177,6 +177,16 @@ class WatchLoop:
         if self._submitter is not None:
             self._submitter.forget(key)
 
+    def defer_purge(self, collection: str) -> None:
+        """Retry a failed subsume-purge on the next reconcile (durability backstop).
+
+        The register route calls this when a subsume-purge's admission failed; the
+        reconcile drains the deferred set, so an orphaned collection is cleaned up
+        even though its watch was already torn down.
+        """
+        if self._submitter is not None:
+            self._submitter.defer_purge(RouteKey(self._ctx.database_name, collection))
+
     async def request_scan(self, umbrella: TaskState) -> None:
         """Enqueue a scan+finalize per active-DB registration; complete *umbrella*.
 
@@ -313,3 +323,7 @@ class WatchLoop:
                 self._teardown(gone)
         except (OSError, ValueError) as exc:
             logger.warning("watch: safety-scan reconcile failed: %s", exc)
+        # Re-attempt any subsume-purge a full queue rejected — the one backstop
+        # for orphan chunks a gone collection's teardown never cleans.  Guarded
+        # separately: it needs no registry read, so a bad read never skips it.
+        submitter.drain_pending_purges()

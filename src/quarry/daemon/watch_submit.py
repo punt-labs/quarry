@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Self, final
 
-from quarry.daemon.finalize_job import CollectionFinalizeJob
+from quarry.daemon.finalize_job import CollectionFinalizeJob, CollectionPurgeJob
 from quarry.daemon.fs_events import FsEvent
 from quarry.daemon.index_jobs import CollectionSyncJob, DocumentDeleteJob, FileIndexJob
 from quarry.daemon.route_key import RouteKey
@@ -46,7 +46,15 @@ _BACKOFF_MAX_S = 30.0
 class WatchSubmitter:
     """Submit watch-derived IngestUnits to the queue, re-arming shed live events."""
 
-    __slots__ = ("_backoff", "_ctx", "_dispatcher", "_loop", "_roster", "_timers")
+    __slots__ = (
+        "_backoff",
+        "_ctx",
+        "_dispatcher",
+        "_loop",
+        "_pending_purges",
+        "_roster",
+        "_timers",
+    )
 
     _ctx: DaemonContext
     _roster: WatchRoster
@@ -55,6 +63,8 @@ class WatchSubmitter:
     _backoff: dict[RouteKey, float]
     # Pending backoff re-arm timers, tracked so shutdown can cancel them.
     _timers: set[asyncio.TimerHandle]
+    # Subsume-purges the queue rejected, retried on the next reconcile.
+    _pending_purges: set[RouteKey]
 
     def __new__(
         cls, ctx: DaemonContext, roster: WatchRoster, loop: asyncio.AbstractEventLoop
@@ -66,7 +76,36 @@ class WatchSubmitter:
         self._dispatcher = None
         self._backoff = {}
         self._timers = set()
+        self._pending_purges = set()
         return self
+
+    def defer_purge(self, key: RouteKey) -> None:
+        """Queue a failed subsume-purge for reconcile-driven re-admission.
+
+        A subsume-purge the saturated queue rejected leaves orphan chunks with no
+        other backstop — reconcile-drop tears a gone collection's watch down but
+        never purges its chunks — so the collection is retried until the queue
+        admits the delete.
+        """
+        self._pending_purges.add(key)
+
+    def drain_pending_purges(self) -> None:
+        """Re-submit every deferred purge; drop the ones the queue now admits.
+
+        Once admitted the ``CollectionPurgeJob`` runs a reliable
+        ``delete_collection``, so admission is the retry's success condition — a
+        still-full queue keeps the key for the next reconcile.
+        """
+        if not self._pending_purges:
+            return
+        still: set[RouteKey] = set()
+        for key in self._pending_purges:
+            task = self._ctx.tasks.begin("subsume-purge-retry")
+            job = CollectionPurgeJob(self._ctx.database, key.collection)
+            if not self._ctx.ingest_queue.try_submit(key, job, task):
+                self._ctx.tasks.drop(task)
+                still.add(key)
+        self._pending_purges = still
 
     def cancel_pending(self) -> None:
         """Cancel every outstanding backoff re-arm timer (shutdown)."""

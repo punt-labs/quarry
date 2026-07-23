@@ -232,9 +232,10 @@ class RegistrationRoutes(RouteGroup):
         so an in-flight ``FileIndexJob`` for it would FK-fail into orphan chunks
         in the dead collection; stopping the watch also prevents a double-index.
 
-        Return whether the purge completed.  A saturated queue can defeat it, and
-        an unpurged child leaves orphan chunks with no reconcile backstop — so a
-        failure is logged and reported, never swallowed into a clean success.
+        Return whether the purge completed.  A saturated queue can defeat it; the
+        failure is logged, reported, AND deferred for a reconcile-driven retry —
+        the one backstop, since reconcile-drop tears the watch down but never
+        purges — so an unpurged child is never swallowed into a clean success.
         """
         self.ctx.watch_loop.stop_watching(collection)
         purge = await CollectionPurger(self.ctx).purge(collection, "subsume-purge")
@@ -244,6 +245,7 @@ class RegistrationRoutes(RouteGroup):
                 collection,
                 purge.error or "unknown",
             )
+            self.ctx.watch_loop.defer_purge(collection)  # retry on next reconcile
             return False
         return True
 

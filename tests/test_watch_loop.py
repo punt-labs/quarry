@@ -656,6 +656,43 @@ def test_symlink_escaping_the_tree_is_never_submitted(tmp_path: Path) -> None:
     asyncio.run(_run())
 
 
+def _reregister_setup(
+    tmp_path: Path, *, queue: _RecordingQueue
+) -> tuple[WatchLoop, DaemonContext, _FakeSource, Path]:
+    """Register /root/sub as "docs"; return the unstarted loop, ctx, source, /root.
+
+    The shared fixture for same-name re-registration: /root is a strict parent of
+    the already-"docs" /root/sub, so registering /root subsumes "docs" itself.
+    """
+    data = tmp_path / "data"
+    (data / "testdb").mkdir(parents=True, exist_ok=True)
+    root = tmp_path / "proj"
+    sub = root / "sub"
+    sub.mkdir(parents=True, exist_ok=True)
+    settings = Settings(
+        quarry_root=data,
+        lancedb_path=data / "testdb" / "lancedb",
+        registry_path=data / "testdb" / "registry.db",
+        watch_enabled=True,
+        watch_debounce_s=0.03,
+        watch_max_delay_s=0.3,
+        watch_bulk_threshold=5,
+        watch_safety_scan_s=0.0,  # drive _reconcile directly; no background timer
+    )
+    _register(settings, sub.resolve(), "docs")
+    ns = SimpleNamespace(
+        settings=settings,
+        ingest_queue=queue,
+        tasks=TaskRegistry(),
+        database=object(),
+        database_name="testdb",
+    )
+    source = _FakeSource()
+    loop = WatchLoop(cast("DaemonContext", ns), source=source)
+    ns.watch_loop = loop  # RegistrationRoutes reaches ctx.watch_loop
+    return loop, cast("DaemonContext", ns), source, root
+
+
 def test_same_name_reregistration_purges_before_rewatch(tmp_path: Path) -> None:
     """Re-registering "docs" under a wider dir purges old chunks, THEN re-watches.
 
@@ -668,41 +705,14 @@ def test_same_name_reregistration_purges_before_rewatch(tmp_path: Path) -> None:
 
     async def _run() -> None:
         queue = _RecordingQueue()
-        data = tmp_path / "data"
-        (data / "testdb").mkdir(parents=True)
-        root = tmp_path / "proj"
-        sub = root / "sub"
-        sub.mkdir(parents=True)
-        settings = Settings(
-            quarry_root=data,
-            lancedb_path=data / "testdb" / "lancedb",
-            registry_path=data / "testdb" / "registry.db",
-            watch_enabled=True,
-            watch_debounce_s=0.03,
-            watch_max_delay_s=0.3,
-            watch_bulk_threshold=5,
-            watch_safety_scan_s=0.0,  # no background timer
-        )
-        _register(settings, sub.resolve(), "docs")
-        ns = SimpleNamespace(
-            settings=settings,
-            ingest_queue=queue,
-            tasks=TaskRegistry(),
-            database=object(),
-            database_name="testdb",
-        )
-        source = _FakeSource()
-        loop = WatchLoop(cast("DaemonContext", ns), source=source)
-        ns.watch_loop = loop  # RegistrationRoutes reaches ctx.watch_loop
+        loop, ctx, source, root = _reregister_setup(tmp_path, queue=queue)
         await loop.start()
         assert source.watch_count == 1  # /root/sub watched as "docs"
         queue.submitted.clear()
 
         key = RouteKey("testdb", "docs")
-        reg = ns.tasks.begin("register")
-        await RegistrationRoutes(cast("DaemonContext", ns))._run_register(
-            reg, root.resolve(), "docs"
-        )
+        reg = ctx.tasks.begin("register")
+        await RegistrationRoutes(ctx)._run_register(reg, root.resolve(), "docs")
         assert reg.status == "completed"
         assert reg.results["subsumed"] == ["docs"]  # subsumed its own name
         # "docs" is watched again — re-installed at the parent, not torn down.
@@ -714,6 +724,43 @@ def test_same_name_reregistration_purges_before_rewatch(tmp_path: Path) -> None:
             i for i, j in enumerate(docs_jobs) if isinstance(j, CollectionPurgeJob)
         )
         assert any(isinstance(j, CollectionSyncJob) for j in docs_jobs[purge_idx + 1 :])
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_failed_subsume_purge_is_retried_on_reconcile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A subsume-purge the full queue rejects is retried until reconcile admits it.
+
+    reconcile-drop tears a gone collection's watch down but never purges its
+    chunks, so a rejected subsume-purge would leak orphans forever.  The failed
+    child is deferred and re-submitted on the next reconcile; once the queue
+    admits it the delete runs and the pending entry clears.
+    """
+    # A zero admission deadline makes the register-time purge fail immediately.
+    monkeypatch.setattr("quarry.daemon.purge_service._PURGE_SUBMIT_DEADLINE_S", 0.0)
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        loop, ctx, _source, root = _reregister_setup(tmp_path, queue=queue)
+        await loop.start()
+        key = RouteKey("testdb", "docs")
+        # The queue is full: registering the parent subsumes "docs" but its purge
+        # cannot be admitted, so the child is deferred, never silently dropped.
+        queue.admit = False
+        reg = ctx.tasks.begin("register")
+        await RegistrationRoutes(ctx)._run_register(reg, root.resolve(), "docs")
+        assert reg.results["subsume_purge_failed"] == ["docs"]
+        assert loop._submitter is not None
+        assert key in loop._submitter._pending_purges
+        # The queue drains; the next reconcile re-submits the purge and it lands.
+        queue.admit = True
+        queue.submitted.clear()
+        loop._reconcile()
+        assert not loop._submitter._pending_purges  # retry succeeded, entry cleared
+        assert queue.jobs(CollectionPurgeJob)  # a fresh purge was submitted
         await loop.stop()
 
     asyncio.run(_run())
