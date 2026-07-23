@@ -1846,3 +1846,81 @@ semantics, socket-leak failure injection, remote/local equivalence, exception
 boundaries). `_create_connection` is a semi-private stdlib seam; a pin-target
 assertion test fails loudly if a future CPython refactor bypasses it. `proxy.py`
 (hardcoded GitHub hosts, install-time) is out of scope — not attacker-supplied.
+
+## DES-045: Always-on filesystem watch/index loop (daemon-owned, all databases)
+
+**Status:** Accepted (2026-07-22) · **Bead:** quarry-lxrk (watch-loop residual; the
+DES-042 queue portion merged earlier) · **Full design:**
+`.tmp/design/watch-index-loop.md` + this entry
+
+**Context.** DES-031 named always-on incremental indexing as *the* first-class
+rationale for the daemon: a per-invocation CLI cannot keep an index fresh as
+files change. DES-042 landed the concurrency-critical half — the serialized
+per-collection queue — but the daemon still only indexed on an explicit
+`quarry sync`. The residual was the watch loop itself, and a prior draft was
+non-ratifiable because it never reconciled its serialization against the
+existing DES-042 / DES-034 / DES-026 layers.
+
+**Decision.** The daemon runs one `WatchLoop` that is a **producer only**: it
+watches the registered directories of **every** database in the on-disk roster,
+debounces edit bursts, and submits `IngestUnit`s to the **existing DES-042
+queue**. It invents no second queue and writes no LanceDB table directly, so it
+inherits the whole stack unchanged — DES-042 per-table FIFO → DES-034
+`ProgressiveIndexer`/`_write_lock` → DES-026 WAL + `busy_timeout`. The queue's
+routing key becomes `(database, collection)` (`RouteKey`), extending
+single-writer-per-table across the entire roster. Three producers (initial scan
+on start, live watch, explicit `quarry sync`) all feed the one queue and thus
+cannot race or double-write.
+
+The fragment-budget-vs-fairness reconciliation (the crux the draft missed): a
+small delta re-indexes as per-file `FileIndexJob`/`DocumentDeleteJob` (fragment
+cost negligible, embed gate released between files for cross-collection
+fairness); a burst above `watch_bulk_threshold` (default 50) for one collection
+collapses to a single `CollectionSyncJob` running the unchanged
+`CollectionIngestor` (DES-034's size-gated flush preserves the fragment budget).
+The per-file DES-034 core is extracted as `SingleFileIndexer`, shared by both the
+bulk path and `FileIndexJob` (a real paydown: `sync_ingest.py` module_size
+285→237, efferent 8→5).
+
+**FTS-rebuild coalescing is a hard resource constraint, not an option.** All
+index writes use the daemon's persistent LanceDB connection, and
+`create_fts_index(replace=True)` pins deleted-file readers the LanceDB Rust core
+never evicts — so a per-file FTS rebuild would reopen the quarry-0dss fd leak.
+`FileIndexJob` therefore never rebuilds FTS; a lone `CollectionFinalizeJob`
+(`SyncFinalizer`) runs post-quiescence per `(database, collection)`, FIFO behind
+the file jobs. `test_watch_session_does_not_leak_descriptors` proves the fd count
+plateaus over hundreds of edits across two databases — the 0dss shape.
+
+**All-databases (operator ruling, 2026-07-22).** The operator chose to watch
+every registered database, not only the startup-active one. Each database gets
+its own persistent connection + observer set (macOS FSEvents stream / Linux
+inotify with a `PollingObserver` fallback on `ENOSPC`); the fd-plateau invariant
+holds across all of them. **Trust invariant:** the only path to opening a
+non-active database is enumerating the on-disk roster (`quarry_root` subdirs
+holding a `registry.db`); no network/registry-request field can steer a DB-root
+open — verified, no remotely-steerable path. This retires `quarry-uae`'s
+rationale (continuous freshness without a timer) for every roster database.
+
+**Rejected alternatives.** A parallel `asyncio.Queue` for the same tables (the
+draft's sin — two writers, race hazard); a resident cross-job `ProgressiveIndexer`
+per collection (a `delete_document` on a document whose windows are still
+buffered resurrects stale chunks — needs a drain-before-foreign-job coupling not
+worth it); one coarse `CollectionSyncJob` per fs-event (full rescan per keystroke,
+holds the embed gate, breaks fairness); native inotify/FSEvents hand-rolling (two
+platform paths watchdog already solves); polling-only as the primary (poll
+latency + CPU walking large trees — the interim behavior being retired).
+
+**Consequences.** Continuous freshness with no human action, bounded by
+construction: embed-gate=1 (CPU), DES-034 windows (memory), coalesced FTS (fds),
+per-`(database,collection)` FIFO (single writer). The explicit-sync 409 is
+dropped in favor of transparent enqueue (202 + poll; the 409 stays for
+`optimize`/`backfill`). `watch_enabled` defaults on (installing `quarryd` is
+already the opt-in to a background engine; reverses the prior uae opt-in
+posture). **`quarry-uae` fully retired:** a periodic roster reconcile
+(`watch_safety_scan_s`, default 300 s) re-enumerates the roster each interval —
+it begins watching databases created after `start()` (the mid-run-creation edge)
+and re-submits any bulk scan the queue shed under load, so no registered
+directory is left unindexed and no timer-based periodic sync is needed. The
+reconcile runs synchronously on the loop between intervals (no interleave with
+register/deregister) and is the single backstop for both the new-database and
+shed-scan cases.

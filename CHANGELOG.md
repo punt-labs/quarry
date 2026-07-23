@@ -16,6 +16,21 @@ across `transform`, `index`, and `connector`).
 
 ### Added
 
+- **index (watch)**: DES-045 always-on filesystem watch loop — the daemon now
+  watches every registered directory across every database in its roster and
+  indexes changes continuously, as a producer onto the existing DES-042
+  serialized queue (no second queue, no direct LanceDB writes). A debounced edit
+  burst coalesces to one reindex of the final bytes (`watch_debounce_s`, default
+  1.0s); a continuously-rewritten file still indexes via `watch_max_delay_s`
+  (5.0s); a large burst (> `watch_bulk_threshold`, 50 distinct paths) collapses
+  to a single bulk scan rather than thousands of admissions. Small deltas submit
+  per-file jobs; deletes remove the document; the FTS rebuild is coalesced to a
+  single post-quiescence pass so per-file indexing never reopens the quarry-0dss
+  descriptor leak (proven across ≥2 databases by a resource-invariant test). The
+  queue's routing key is now `(database, collection)`, extending the
+  single-writer-per-table invariant across the whole roster. Watching is on by
+  default (`watch_enabled=true`); `watch_use_polling` selects watchdog's
+  stat-walk fallback. New core dependency: `watchdog>=4.0`.
 - **infra (boundary)**: DES-031 v2 client/engine boundary lock (PR-6) — the
   daemon-first split is now enforced structurally, not by convention. A new
   import-linter contract (`.importlinter`, wired into `make check` via

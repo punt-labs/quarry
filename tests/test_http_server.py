@@ -65,6 +65,9 @@ def _mock_settings(tmp_path: Path) -> MagicMock:
     s.ingest_drain_timeout_s = 30.0
     s.ingest_max_workers = 256
     s.ingest_worker_idle_s = 60.0
+    # These HTTP tests do not exercise the watch loop; keep it inert so a
+    # lifespan-running test never starts a real observer or safety timer.
+    s.watch_enabled = False
     return s
 
 
@@ -2181,10 +2184,7 @@ class TestSync:
         ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
-        with (
-            TestClient(app, raise_server_exceptions=False) as tc,
-            patch("quarry.sync.sync_all", return_value={}),
-        ):
+        with TestClient(app, raise_server_exceptions=False) as tc:
             resp = tc.post("/v1/sync", json={})
 
         assert resp.status_code == 202
@@ -2197,10 +2197,7 @@ class TestSync:
         ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
-        with (
-            TestClient(app, raise_server_exceptions=False) as tc,
-            patch("quarry.sync.sync_all", return_value={}),
-        ):
+        with TestClient(app, raise_server_exceptions=False) as tc:
             resp = tc.post(
                 "/v1/sync",
                 content=b"",
@@ -2225,12 +2222,11 @@ class TestSync:
         assert resp.status_code == 401
 
     def test_auth_allows_with_key(self, auth_client: TestClient) -> None:
-        with patch("quarry.sync.sync_all", return_value={}):
-            resp = auth_client.post(
-                "/v1/sync",
-                json={},
-                headers={"Authorization": f"Bearer {_TEST_API_KEY}"},
-            )
+        resp = auth_client.post(
+            "/v1/sync",
+            json={},
+            headers={"Authorization": f"Bearer {_TEST_API_KEY}"},
+        )
         assert resp.status_code == 202
 
     def test_rejects_oversized_body(self, client: TestClient) -> None:
@@ -2248,8 +2244,13 @@ class TestSync:
         assert resp.status_code == 413
         assert "too large" in resp.json()["error"].lower()
 
-    def test_concurrent_sync_returns_409(self, tmp_path: Path) -> None:
-        """Second POST while sync is running returns 409 with task_id."""
+    def test_concurrent_sync_enqueues_not_409(self, tmp_path: Path) -> None:
+        """A second sync while one runs now enqueues (202), never 409 (DES-045).
+
+        With the watch loop always active a 409 would reject every explicit
+        sync, so the request enqueues behind the live work and returns 202 + a
+        fresh task_id; the per-collection FIFO queue is the concurrency control.
+        """
         settings = _mock_settings(tmp_path)
         ctx = DaemonContext(settings)
         _inject_mocks(ctx)
@@ -2261,9 +2262,9 @@ class TestSync:
         ctx.tasks.seed(TaskState(task_id=task_id, kind="sync", status="running"))
 
         resp = sync_client.post("/v1/sync", json={})
-        assert resp.status_code == 409
-        assert resp.json()["task_id"] == task_id
-        assert "already in progress" in resp.json()["error"].lower()
+        assert resp.status_code == 202
+        assert resp.json()["status"] == "accepted"
+        assert resp.json()["task_id"] != task_id  # a distinct, freshly-enqueued task
 
     def test_sync_status_not_found(self, client: TestClient) -> None:
         """GET /v1/tasks/<task_id> returns 404 for unknown task."""
@@ -2814,8 +2815,11 @@ class TestRunPurgeTask:
         _inject_mocks(ctx)
         state = TaskState(task_id="deregister-x", kind="deregister")
         state.results = {"collection": "docs", "removed": 1, "deleted_chunks": 0}
-        with patch("quarry.db.chunk_store.ChunkStore.delete_document", return_value=3):
-            asyncio.run(RegistrationRoutes(ctx)._run_purge(state, "docs", ["a.pdf"]))
+        # DES-045: the purge is a collection-wide delete routed through the queue.
+        with patch(
+            "quarry.db.chunk_store.ChunkStore.delete_collection", return_value=3
+        ):
+            asyncio.run(RegistrationRoutes(ctx)._run_purge(state, "docs"))
         assert state.status == "completed"
         assert state.results["deleted_chunks"] == 3
         assert state.results["removed"] == 1
@@ -2828,10 +2832,10 @@ class TestRunPurgeTask:
         state = TaskState(task_id="deregister-y", kind="deregister")
         state.results = {"collection": "docs", "removed": 1, "deleted_chunks": 0}
         with patch(
-            "quarry.db.chunk_store.ChunkStore.delete_document",
+            "quarry.db.chunk_store.ChunkStore.delete_collection",
             side_effect=RuntimeError("purge boom"),
         ):
-            asyncio.run(RegistrationRoutes(ctx)._run_purge(state, "docs", ["a.pdf"]))
+            asyncio.run(RegistrationRoutes(ctx)._run_purge(state, "docs"))
         assert state.status == "failed"
         assert "purge boom" in state.error
 

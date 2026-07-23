@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Self, cast, final
 from quarry.daemon import ingest_queue as iq
 from quarry.daemon.ingest_queue import IngestQueue
 from quarry.daemon.job_spool import SpoolRecord
+from quarry.daemon.route_key import RouteKey
 from quarry.daemon.routes.base import RouteGroup
 from quarry.daemon.tasks import TaskRegistry, TaskState, task_terminal
 
@@ -28,6 +29,16 @@ if TYPE_CHECKING:
 
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.ingest_unit import IngestUnit
+
+
+def _rk(collection: str) -> RouteKey:
+    """Build a single-database route key so the tests key workers by collection.
+
+    Every unit here targets one database, so the ``(database, collection)`` key
+    reduces to the collection name for routing — distinct collections still map
+    to distinct workers, same collection to the same worker.
+    """
+    return RouteKey("db", collection)
 
 
 @final
@@ -110,11 +121,11 @@ class _StubQueue:
     """A queue double for route tests: ``try_submit`` returns a canned verdict."""
 
     admit: bool
-    calls: list[tuple[str, str]] = field(default_factory=list)
+    calls: list[tuple[RouteKey, str]] = field(default_factory=list)
 
-    def try_submit(self, collection: str, _job: object, state: TaskState) -> bool:
+    def try_submit(self, key: RouteKey, _job: object, state: TaskState) -> bool:
         """Record the call and return the canned admission verdict."""
-        self.calls.append((collection, state.task_id))
+        self.calls.append((key, state.task_id))
         return self.admit
 
 
@@ -173,7 +184,9 @@ def test_same_collection_runs_one_writer_at_a_time(monkeypatch: MonkeyPatch) -> 
         queue = _make_queue(concurrency=4)
         for i in range(5):
             assert queue.try_submit(
-                "solo", _StubUnit("solo", f"j{i}", ledger, delay=0.01), _state(f"j{i}")
+                _rk("solo"),
+                _StubUnit("solo", f"j{i}", ledger, delay=0.01),
+                _state(f"j{i}"),
             )
         await queue.aclose(drain_timeout=2.0)
         assert ledger.peak_per["solo"] == 1
@@ -193,7 +206,7 @@ def test_different_collections_run_concurrently(monkeypatch: MonkeyPatch) -> Non
         for i in range(4):
             col = f"c{i}"
             assert queue.try_submit(
-                col, _StubUnit(col, col, ledger, barrier=barrier), _state(col)
+                _rk(col), _StubUnit(col, col, ledger, barrier=barrier), _state(col)
             )
         await queue.aclose(drain_timeout=2.0)
         assert ledger.peak == 4  # all four inside the embed section together
@@ -211,7 +224,7 @@ def test_embed_gate_bounds_total_in_flight_at_default() -> None:
         for i in range(4):
             col = f"c{i}"
             assert queue.try_submit(
-                col, _StubUnit(col, col, ledger, delay=0.01), _state(col)
+                _rk(col), _StubUnit(col, col, ledger, delay=0.01), _state(col)
             )
         await queue.aclose(drain_timeout=2.0)
         assert ledger.peak == 1  # global embed bound holds across collections
@@ -229,11 +242,11 @@ def test_full_queue_rejects_without_dropping() -> None:
         gate = asyncio.Event()
         first = _StubUnit("c", "first", ledger, gate=gate)
         second = _StubUnit("c", "second", ledger, gate=gate)
-        assert queue.try_submit("c", first, _state("first"))  # depth 1 (in flight)
-        assert queue.try_submit("c", second, _state("second"))  # depth 2 (waiting)
+        assert queue.try_submit(_rk("c"), first, _state("first"))  # depth 1 (in flight)
+        assert queue.try_submit(_rk("c"), second, _state("second"))  # depth 2 (waiting)
         await asyncio.sleep(0.02)  # let the worker pick up "first"
         overflow = _StubUnit("c", "overflow", ledger, gate=gate)
-        assert not queue.try_submit("c", overflow, _state("overflow"))  # full -> 503
+        assert not queue.try_submit(_rk("c"), overflow, _state("overflow"))  # full->503
         gate.set()
         await queue.aclose(drain_timeout=2.0)
         assert set(ledger.completions) == {"first", "second"}  # overflow never ran
@@ -249,10 +262,12 @@ def test_hot_collection_does_not_starve_a_cold_one() -> None:
         queue = _make_queue(concurrency=1)
         for i in range(6):
             assert queue.try_submit(
-                "hot", _StubUnit("hot", f"hot{i}", ledger, delay=0.01), _state(f"h{i}")
+                _rk("hot"),
+                _StubUnit("hot", f"hot{i}", ledger, delay=0.01),
+                _state(f"h{i}"),
             )
         assert queue.try_submit(
-            "cold", _StubUnit("cold", "cold", ledger, delay=0.01), _state("cold")
+            _rk("cold"), _StubUnit("cold", "cold", ledger, delay=0.01), _state("cold")
         )
         await queue.aclose(drain_timeout=3.0)
         cold_index = ledger.completions.index("cold")
@@ -271,7 +286,8 @@ def test_status_moves_queued_then_running_then_completed() -> None:
         queue = _make_queue(concurrency=1)
         gate = asyncio.Event()
         state = _state("job")
-        assert queue.try_submit("c", _StubUnit("c", "job", ledger, gate=gate), state)
+        unit = _StubUnit("c", "job", ledger, gate=gate)
+        assert queue.try_submit(_rk("c"), unit, state)
         assert state.status == "queued"
         await asyncio.sleep(0.02)  # worker dequeues and flips to running
         assert state.status == "running"
@@ -290,8 +306,9 @@ def test_raising_job_records_failed_without_crashing_worker() -> None:
         queue = _make_queue(concurrency=1)
         boom = _state("boom")
         ok = _state("ok")
-        assert queue.try_submit("c", _StubUnit("c", "boom", ledger, boom=True), boom)
-        assert queue.try_submit("c", _StubUnit("c", "ok", ledger), ok)
+        boom_unit = _StubUnit("c", "boom", ledger, boom=True)
+        assert queue.try_submit(_rk("c"), boom_unit, boom)
+        assert queue.try_submit(_rk("c"), _StubUnit("c", "ok", ledger), ok)
         await queue.aclose(drain_timeout=2.0)
         assert boom.status == "failed"
         assert ok.status == "completed"  # worker survived the raise and kept draining
@@ -308,7 +325,7 @@ def test_shutdown_drains_queued_jobs() -> None:
         states = [_state(f"j{i}") for i in range(5)]
         for i, state in enumerate(states):
             assert queue.try_submit(
-                "c", _StubUnit("c", f"j{i}", ledger, delay=0.01), state
+                _rk("c"), _StubUnit("c", f"j{i}", ledger, delay=0.01), state
             )
         await queue.aclose(drain_timeout=3.0)
         assert all(s.status == "completed" for s in states)
@@ -327,7 +344,7 @@ def test_shutdown_timeout_fails_remaining_jobs() -> None:
         states = [_state(f"j{i}") for i in range(3)]
         for i, state in enumerate(states):
             assert queue.try_submit(
-                "c", _StubUnit("c", f"j{i}", ledger, gate=gate), state
+                _rk("c"), _StubUnit("c", f"j{i}", ledger, gate=gate), state
             )
         await queue.aclose(drain_timeout=0.1)
         assert all(s.status == "failed" for s in states)
@@ -340,7 +357,7 @@ def test_route_submit_rejects_full_queue_with_503_and_no_task() -> None:
     tasks = TaskRegistry()
     state = tasks.begin("capture")
     queue = _StubQueue(admit=False)
-    ctx = SimpleNamespace(ingest_queue=queue, tasks=tasks)
+    ctx = SimpleNamespace(ingest_queue=queue, tasks=tasks, database_name="testdb")
     group = RouteGroup(cast("DaemonContext", ctx))
 
     resp = group.submit(cast("IngestUnit", SimpleNamespace(collection="c")), state)
@@ -354,7 +371,7 @@ def test_route_submit_accepts_with_byte_identical_202_body() -> None:
     tasks = TaskRegistry()
     state = tasks.begin("capture")
     queue = _StubQueue(admit=True)
-    ctx = SimpleNamespace(ingest_queue=queue, tasks=tasks)
+    ctx = SimpleNamespace(ingest_queue=queue, tasks=tasks, database_name="testdb")
     group = RouteGroup(cast("DaemonContext", ctx))
 
     resp = group.submit(cast("IngestUnit", SimpleNamespace(collection="c")), state)
@@ -364,7 +381,8 @@ def test_route_submit_accepts_with_byte_identical_202_body() -> None:
         "task_id": state.task_id,
         "status": "accepted",
     }
-    assert queue.calls == [("c", state.task_id)]
+    # The route pairs the daemon's own database with the job's collection.
+    assert queue.calls == [(RouteKey("testdb", "c"), state.task_id)]
 
 
 def test_embed_concurrency_clamped_to_ceiling() -> None:
@@ -389,9 +407,9 @@ def test_drain_abort_fails_a_job_blocked_on_the_embed_gate() -> None:
         held = asyncio.Event()  # never set -> job A holds the embed gate forever
         a = _state("a")
         b = _state("b")
-        assert queue.try_submit("cA", _StubUnit("cA", "a", ledger, gate=held), a)
+        assert queue.try_submit(_rk("cA"), _StubUnit("cA", "a", ledger, gate=held), a)
         await asyncio.sleep(0.02)  # A's worker takes the gate and enters job.run
-        assert queue.try_submit("cB", _StubUnit("cB", "b", ledger), b)
+        assert queue.try_submit(_rk("cB"), _StubUnit("cB", "b", ledger), b)
         await asyncio.sleep(0.02)  # B's worker dequeues and blocks awaiting the gate
         assert b.status == "running"  # dequeued + gate-blocked (the #7 gap)
         await queue.aclose(drain_timeout=0.05)  # drain times out -> abort
@@ -414,9 +432,8 @@ def test_idle_workers_are_reaped_so_client_keys_cannot_accrue() -> None:
         queue = _make_queue(worker_idle=0.0)
         for i in range(6):
             collection = f"c{i}"
-            assert queue.try_submit(
-                collection, _StubUnit(collection, collection, ledger), _state(f"j{i}")
-            )
+            unit = _StubUnit(collection, collection, ledger)
+            assert queue.try_submit(_rk(collection), unit, _state(f"j{i}"))
             await asyncio.sleep(0.02)  # let the worker finish and go idle
             assert len(queue._workers) <= 1  # prior idle worker reaped on next submit
         await queue.aclose(drain_timeout=2.0)
@@ -437,9 +454,9 @@ def test_reaped_worker_task_is_retained_then_discarded() -> None:
     async def _run() -> None:
         ledger = _Ledger()
         queue = _make_queue(worker_idle=0.0)
-        assert queue.try_submit("c0", _StubUnit("c0", "c0", ledger), _state("j0"))
+        assert queue.try_submit(_rk("c0"), _StubUnit("c0", "c0", ledger), _state("j0"))
         await asyncio.sleep(0.02)  # c0 finishes its job and goes idle
-        assert queue.try_submit("c1", _StubUnit("c1", "c1", ledger), _state("j1"))
+        assert queue.try_submit(_rk("c1"), _StubUnit("c1", "c1", ledger), _state("j1"))
         assert queue._reaped  # the reaped c0 task is retained, not garbage
         await asyncio.sleep(0.02)  # let the cancellation complete
         assert not queue._reaped  # done-callback discarded the finished task
@@ -456,7 +473,7 @@ def test_cancel_workers_retains_aborted_tasks_until_done() -> None:
         queue = _make_queue()
         gate = asyncio.Event()  # never set -> the job blocks until aborted
         unit = _StubUnit("c", "c", ledger, gate=gate)
-        assert queue.try_submit("c", unit, _state("j"))
+        assert queue.try_submit(_rk("c"), unit, _state("j"))
         await asyncio.sleep(0.02)  # worker dequeues and runs the blocked job
         queue.cancel_workers()
         assert queue._reaped  # the aborted task is retained
@@ -483,9 +500,9 @@ def test_aborted_queued_job_without_durable_copy_is_spooled(tmp_path: Path) -> N
         record = SpoolRecord("remember", "c", "note", "remembered content")
         b = _StubUnit("c", "b", ledger, gate=gate, spool=record)
         state_b = _state("b")
-        assert queue.try_submit("c", a, _state("a"))
+        assert queue.try_submit(_rk("c"), a, _state("a"))
         await asyncio.sleep(0.02)  # A dequeued and blocked; B enqueued behind it
-        assert queue.try_submit("c", b, state_b)
+        assert queue.try_submit(_rk("c"), b, state_b)
         await queue.aclose(drain_timeout=0.05)  # times out -> abort
         assert state_b.status == "failed"
         assert "spooled" in state_b.error
@@ -513,7 +530,7 @@ def test_aborted_in_flight_job_without_durable_copy_is_spooled(tmp_path: Path) -
         record = SpoolRecord("remember", "c", "note", "in-flight content")
         unit = _StubUnit("c", "j", ledger, gate=gate, spool=record)
         state = _state("j")
-        assert queue.try_submit("c", unit, state)
+        assert queue.try_submit(_rk("c"), unit, state)
         await asyncio.sleep(0.02)  # dequeued -> in flight, blocked on the gate
         await queue.aclose(drain_timeout=0.05)  # times out -> abort
         assert state.status == "failed"
@@ -534,9 +551,9 @@ def test_aborted_queued_job_with_durable_copy_is_not_spooled(tmp_path: Path) -> 
         a = _StubUnit("c", "a", ledger, gate=gate)
         b = _StubUnit("c", "b", ledger, gate=gate)  # spool=None -> durable copy
         state_b = _state("b")
-        assert queue.try_submit("c", a, _state("a"))
+        assert queue.try_submit(_rk("c"), a, _state("a"))
         await asyncio.sleep(0.02)
-        assert queue.try_submit("c", b, state_b)
+        assert queue.try_submit(_rk("c"), b, state_b)
         await queue.aclose(drain_timeout=0.05)
         assert state_b.status == "failed"
         assert not list((tmp_path / "spool").glob("*.json"))
@@ -570,9 +587,9 @@ def test_failed_spool_write_records_the_truth_not_a_recovery_claim(
         record = SpoolRecord("remember", "c", "note", "lost content")
         b = _StubUnit("c", "b", ledger, gate=gate, spool=record)
         state_b = _state("b")
-        assert queue.try_submit("c", a, _state("a"))
+        assert queue.try_submit(_rk("c"), a, _state("a"))
         await asyncio.sleep(0.02)  # A dequeued and blocked; B enqueued behind it
-        assert queue.try_submit("c", b, state_b)
+        assert queue.try_submit(_rk("c"), b, state_b)
         await queue.aclose(drain_timeout=0.05)  # times out -> abort -> spool fails
         assert state_b.status == "failed"
         assert "not recovered" in state_b.error
@@ -591,13 +608,64 @@ def test_worker_cap_rejects_when_all_workers_busy() -> None:
         gate = asyncio.Event()
         for col in ("c0", "c1"):
             unit = _StubUnit(col, col, ledger, gate=gate)
-            assert queue.try_submit(col, unit, _state(col))
+            assert queue.try_submit(_rk(col), unit, _state(col))
         await asyncio.sleep(0.02)  # both workers dequeue and become busy
         # Cap is full and neither worker is reapable -> no admission (route 503s).
         overflow = _StubUnit("c2", "c2", ledger, gate=gate)
-        assert not queue.try_submit("c2", overflow, _state("c2"))
+        assert not queue.try_submit(_rk("c2"), overflow, _state("c2"))
         gate.set()
         await queue.aclose(drain_timeout=2.0)
         assert set(ledger.completions) == {"c0", "c1"}
+
+    asyncio.run(_run())
+
+
+def test_same_route_key_serializes_under_an_interleaved_burst(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Four rapid submits on one (database, collection) run one-at-a-time, FIFO.
+
+    The single-writer-per-table invariant, re-asserted through the composite
+    RouteKey the watch loop uses (DES-045): even with the embed gate lifted, one
+    ``(database, collection)`` never has two in-flight runs.
+    """
+    _lift_ceiling(monkeypatch, 4)
+
+    async def _run() -> None:
+        ledger = _Ledger()
+        queue = _make_queue(concurrency=4)
+        key = RouteKey("dbA", "col")
+        for i in range(4):
+            assert queue.try_submit(
+                key, _StubUnit("col", f"j{i}", ledger, delay=0.01), _state(f"j{i}")
+            )
+        await queue.aclose(drain_timeout=2.0)
+        assert ledger.peak_per["col"] == 1  # one writer per (database, collection)
+        assert ledger.completions == [f"j{i}" for i in range(4)]  # FIFO
+
+    asyncio.run(_run())
+
+
+def test_same_collection_in_two_databases_runs_on_two_workers(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """The same collection name in two databases is two tables — two workers.
+
+    ``(dbA, col)`` and ``(dbB, col)`` route to independent FIFO workers, so with
+    the embed gate lifted both embed at once — no false cross-database
+    serialization on a shared collection name.
+    """
+    _lift_ceiling(monkeypatch, 4)
+
+    async def _run() -> None:
+        ledger = _Ledger()
+        queue = _make_queue(concurrency=4)
+        barrier = asyncio.Barrier(2)
+        job_a = _StubUnit("dbA", "a", ledger, barrier=barrier)
+        job_b = _StubUnit("dbB", "b", ledger, barrier=barrier)
+        assert queue.try_submit(RouteKey("dbA", "col"), job_a, _state("a"))
+        assert queue.try_submit(RouteKey("dbB", "col"), job_b, _state("b"))
+        await queue.aclose(drain_timeout=2.0)
+        assert ledger.peak == 2  # both inside the embed section -> distinct workers
 
     asyncio.run(_run())

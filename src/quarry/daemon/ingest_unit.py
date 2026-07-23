@@ -2,9 +2,11 @@
 
 A unit names the LanceDB collection it writes (so the queue can route it to that
 collection's single FIFO worker) and owns its own background execution against a
-:class:`~quarry.daemon.tasks.TaskState`.  The three daemon jobs — inline scrub,
-URL ingest, and web-fetch capture — all satisfy it structurally, so the queue
-never imports a concrete job type.
+:class:`~quarry.daemon.tasks.TaskState`.  Every daemon job satisfies it
+structurally, so the queue never imports a concrete job type: the content jobs
+(inline scrub, URL ingest, web-fetch capture) and the watch-loop jobs
+(``FileIndexJob``, ``DocumentDeleteJob``, ``CollectionSyncJob``,
+``CollectionFinalizeJob``, ``CollectionPurgeJob`` — DES-045).
 """
 
 from __future__ import annotations

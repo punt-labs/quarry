@@ -11,8 +11,11 @@ and single-consumer ``ProgressiveIndexer``: exactly one in-flight
 ``progressive_insert`` caller per collection (a :class:`CollectionWorker`), and
 at most ``EMBED_CONCURRENCY_CEILING`` embed jobs anywhere (a shared semaphore).
 Admission is a non-blocking bounded gate — a full queue is a 503, never a blocked
-hook (I-NOBLOCK).  The collection key is client-controlled, so the resident
-worker map is itself bounded: idle workers are reaped and the map is capped.
+hook (I-NOBLOCK).  The route key is client-controlled, so the resident worker map
+is itself bounded: idle workers are reaped and the map is capped.  The routing
+key is a :class:`RouteKey` — ``(database, collection)`` — so the always-on watch
+loop (DES-045) can feed jobs for every database in the roster onto the same queue
+without two databases' same-named collections ever sharing a worker.
 """
 
 from __future__ import annotations
@@ -28,6 +31,7 @@ from quarry.daemon.collection_worker import CollectionWorker
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.ingest_unit import IngestUnit
+    from quarry.daemon.route_key import RouteKey
     from quarry.daemon.tasks import TaskState
 
 logger = logging.getLogger(__name__)
@@ -44,15 +48,16 @@ EMBED_CONCURRENCY_CEILING = 1
 
 @final
 class IngestQueue:
-    """Daemon-owned queue: one FIFO writer per collection, bounded embed globally.
+    """Daemon-owned queue: one FIFO writer per route key, bounded embed globally.
 
-    Two orthogonal bounds: a per-collection worker (a correctness bound — one
-    writer per LanceDB table) and a shared embed semaphore (a performance bound —
-    at most ``EMBED_CONCURRENCY_CEILING`` embed jobs anywhere).  An admission
-    counter caps how many jobs may be admitted (in-flight + waiting) before the
-    queue sheds load with a 503, and — because the collection key is
-    client-controlled — the resident worker map is itself bounded: idle workers
-    are reaped and the map is capped at ``ingest_max_workers``.
+    Two orthogonal bounds: a per-route-key worker (a correctness bound — one
+    writer per LanceDB table, keyed ``(database, collection)``) and a shared
+    embed semaphore (a performance bound — at most ``EMBED_CONCURRENCY_CEILING``
+    embed jobs anywhere).  An admission counter caps how many jobs may be
+    admitted (in-flight + waiting) before the queue sheds load with a 503, and —
+    because the route key is client-controlled — the resident worker map is
+    itself bounded: idle workers are reaped and the map is capped at
+    ``ingest_max_workers``.
     """
 
     __slots__ = (
@@ -68,7 +73,7 @@ class IngestQueue:
     )
 
     _ctx: DaemonContext
-    _workers: dict[str, CollectionWorker]
+    _workers: dict[RouteKey, CollectionWorker]
     _embed_gate: asyncio.Semaphore
     _depth: int
     _max_depth: int
@@ -107,18 +112,18 @@ class IngestQueue:
             )
         return min(configured, EMBED_CONCURRENCY_CEILING)
 
-    def try_submit(self, collection: str, job: IngestUnit, state: TaskState) -> bool:
-        """Admit *job* onto *collection*'s FIFO worker; ``False`` if it cannot.
+    def try_submit(self, key: RouteKey, job: IngestUnit, state: TaskState) -> bool:
+        """Admit *job* onto *key*'s FIFO worker; ``False`` if it cannot.
 
         Non-blocking: reaps stale workers, takes an admission slot without
-        waiting, marks the task ``queued``, lazily starts the collection's
+        waiting, marks the task ``queued``, lazily starts the route key's
         worker, and hands off.  Returns ``False`` (the caller 503s) when the
-        depth bound is hit or the worker cap is full of busy collections — never
+        depth bound is hit or the worker cap is full of busy route keys — never
         awaits I/O, so the hook's 202 stays immediate (I-NOBLOCK).
         """
         if self._closing or self._depth >= self._max_depth:
             return False
-        worker = self._worker_for(collection)
+        worker = self._worker_for(key)
         if worker is None:
             return False
         self._depth += 1
@@ -160,46 +165,46 @@ class IngestQueue:
         for worker in self._workers.values():
             self._retain(worker.abort())
 
-    def _worker_for(self, collection: str) -> CollectionWorker | None:
-        """Return *collection*'s worker, reaping idle ones and honoring the cap.
+    def _worker_for(self, key: RouteKey) -> CollectionWorker | None:
+        """Return *key*'s worker, reaping idle ones and honoring the cap.
 
-        ``None`` means the worker cap is full of busy collections and the caller
+        ``None`` means the worker cap is full of busy route keys and the caller
         must shed load (503).  Reaping runs synchronously here, so no submit or
         worker can interleave between the idle check and the removal.
         """
-        self._reap_idle(exclude=collection)
-        worker = self._workers.get(collection)
+        self._reap_idle(exclude=key)
+        worker = self._workers.get(key)
         if worker is not None:
             return worker
         if len(self._workers) >= self._max_workers and not self._evict_reapable():
             return None
         worker = CollectionWorker(self._ctx, self._embed_gate, self._release_admit)
-        self._workers[collection] = worker
+        self._workers[key] = worker
         return worker
 
-    def _reap_idle(self, *, exclude: str) -> None:
+    def _reap_idle(self, *, exclude: RouteKey) -> None:
         """Drop workers idle past the reap interval so client keys can't accrue.
 
         Synchronous: the empty/idle check and the removal cannot be split by a
         racing enqueue, so a reaped worker never strands a just-submitted job.
-        A reaped collection is recreated lazily on its next submit and is, again,
-        the sole writer for that collection.
+        A reaped route key is recreated lazily on its next submit and is, again,
+        the sole writer for that ``(database, collection)`` table.
         """
         now = monotonic()
         stale = [
-            collection
-            for collection, worker in self._workers.items()
-            if collection != exclude
+            key
+            for key, worker in self._workers.items()
+            if key != exclude
             and worker.is_reapable()
             and worker.idle_seconds(now) >= self._worker_idle_s
         ]
-        for collection in stale:
-            self._retain(self._workers.pop(collection).shutdown())
+        for key in stale:
+            self._retain(self._workers.pop(key).shutdown())
 
     def _evict_reapable(self) -> bool:
         """Drop one idle worker to free a cap slot; ``False`` if all are busy."""
         victim = next(
-            (c for c, worker in self._workers.items() if worker.is_reapable()), None
+            (k for k, worker in self._workers.items() if worker.is_reapable()), None
         )
         if victim is None:
             return False

@@ -1,15 +1,13 @@
-"""The sync route: run ``sync_all`` as a singleton background task."""
+"""The sync route: enqueue a scan per registered collection onto the watch loop."""
 
 from __future__ import annotations
 
 from typing import final
 
-from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from quarry.daemon.routes.base import RouteGroup
-from quarry.daemon.tasks import TaskState, task_terminal
 from quarry.http_guards import RequestGuards
 
 # The sync body carries only small option dicts.
@@ -18,14 +16,19 @@ MAX_SYNC_BODY_BYTES = 16 * 1024
 
 @final
 class SyncRoutes(RouteGroup):
-    """Serve the sync request — reject concurrent syncs with 409, else 202."""
+    """Serve the sync request — enqueue collection scans, always 202 (DES-045)."""
 
     async def sync(self, request: Request) -> JSONResponse:
-        """Accept a sync request and run ``sync_all`` as a background task.
+        """Accept a sync request and enqueue a scan per registered collection.
 
-        Uses a non-blocking check to reject concurrent requests with HTTP 409.
-        Returns 202 Accepted immediately with a task_id; the actual sync runs
-        as an asyncio background task, polled by that task id.
+        DES-045 drops the DES-026 409: with the watch loop always active a 409
+        would reject every explicit sync the moment the daemon indexes anything.
+        The request instead enqueues ``CollectionSyncJob``(s) behind the live
+        watch work and returns 202 + task_id — the same poll-to-completion shape
+        the CLI already uses.  The ``reject_if_running`` 409 stays on
+        optimize/backfill, which are genuine singletons with no per-collection
+        queue.  The 202 body and ``/v1/tasks`` schema are byte-identical to
+        before; only the failure mode (409 → transparent enqueue) changed.
         """
         auth_resp = self.reject_unauthorized(request)
         if auth_resp is not None:
@@ -41,30 +44,5 @@ class SyncRoutes(RouteGroup):
             if isinstance(body, JSONResponse):
                 return body
 
-        conflict = self.reject_if_running("sync", "Sync")
-        if conflict is not None:
-            return conflict
-
         state = self.ctx.tasks.begin("sync")
-        return self.accept(state, self._run_sync(state))
-
-    async def _run_sync(self, state: TaskState) -> None:
-        """Execute sync_all in a background thread and update *state*."""
-        from quarry.sync import sync_all  # noqa: PLC0415
-
-        with task_terminal(state):
-            results = await run_in_threadpool(
-                sync_all, self.ctx.database.db, self.ctx.settings
-            )
-            state.status = "completed"
-            state.results = {
-                collection: {
-                    "ingested": res.ingested,
-                    "refreshed": res.refreshed,
-                    "deleted": res.deleted,
-                    "skipped": res.skipped,
-                    "failed": res.failed,
-                    "errors": list(res.errors),
-                }
-                for collection, res in results.items()
-            }
+        return self.accept(state, self.ctx.watch_loop.request_scan(state))

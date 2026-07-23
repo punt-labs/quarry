@@ -251,11 +251,16 @@ class DaemonServer:
         # Runs for the daemon's lifetime; cancelled on shutdown below.
         ctx = cast("DaemonContext", app.state.ctx)
         monitor = asyncio.create_task(FdTelemetry(_FD_TELEMETRY_INTERVAL_SECONDS).run())
+        # Warm + queue are ready by now; start watching every roster database so
+        # continuous indexing runs as a queue producer (DES-045).
+        await ctx.start_watch_loop()
         try:
             yield
         finally:
-            # Drain queued captures before touching sidecars so a clean shutdown
-            # does not silently lose an admitted-but-unwritten capture (DES-042).
+            # Stop the watch loop FIRST so no fresh index job enqueues mid-drain,
+            # THEN drain queued captures before touching sidecars so a clean
+            # shutdown loses no admitted-but-unwritten capture (DES-045/DES-042).
+            await ctx.aclose_watch_loop()
             await ctx.aclose_ingest_queue()
             monitor.cancel()
             # Remove ONLY the sidecars this instance wrote after its own
