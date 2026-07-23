@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Self, final
 
-from quarry.daemon.finalize_job import CollectionFinalizeJob, CollectionPurgeJob
+from quarry.daemon.finalize_job import CollectionFinalizeJob
 from quarry.daemon.fs_events import FsEvent
 from quarry.daemon.index_jobs import CollectionSyncJob, DocumentDeleteJob, FileIndexJob
 from quarry.daemon.route_key import RouteKey
@@ -51,7 +51,6 @@ class WatchSubmitter:
         "_ctx",
         "_dispatcher",
         "_loop",
-        "_pending_purges",
         "_roster",
         "_timers",
     )
@@ -63,8 +62,6 @@ class WatchSubmitter:
     _backoff: dict[RouteKey, float]
     # Pending backoff re-arm timers, tracked so shutdown can cancel them.
     _timers: set[asyncio.TimerHandle]
-    # Subsume-purges the queue rejected, retried on the next reconcile.
-    _pending_purges: set[RouteKey]
 
     def __new__(
         cls, ctx: DaemonContext, roster: WatchRoster, loop: asyncio.AbstractEventLoop
@@ -76,49 +73,7 @@ class WatchSubmitter:
         self._dispatcher = None
         self._backoff = {}
         self._timers = set()
-        self._pending_purges = set()
         return self
-
-    def defer_purge(self, key: RouteKey) -> None:
-        """Queue a failed subsume-purge for reconcile-driven re-admission.
-
-        A subsume-purge the saturated queue rejected leaves orphan chunks with no
-        other backstop — reconcile-drop tears a gone collection's watch down but
-        never purges its chunks — so the collection is retried until the queue
-        admits the delete.
-        """
-        self._pending_purges.add(key)
-
-    def discard_pending_purge(self, key: RouteKey) -> None:
-        """Cancel a deferred purge because *key* is registered (and live) again.
-
-        A same-name re-registration makes a collection live at a new root before
-        the next reconcile; its earlier orphans are moot and purging would wipe
-        the live parent's fresh chunks — so a re-watch supersedes the stale purge.
-        """
-        self._pending_purges.discard(key)
-
-    def drain_pending_purges(self, live: set[RouteKey]) -> None:
-        """Re-submit each deferred purge whose collection is no longer registered.
-
-        A key that is *live* (in the on-disk roster) was re-registered after its
-        purge was deferred; purging it now would destroy the live collection's
-        chunks, so it is dropped WITHOUT submitting.  For a still-absent key,
-        admission of the ``CollectionPurgeJob`` is the retry's success condition —
-        a still-full queue keeps it for the next reconcile.
-        """
-        if not self._pending_purges:
-            return
-        still: set[RouteKey] = set()
-        for key in self._pending_purges:
-            if key in live:
-                continue  # re-registered — its orphans are moot; never purge live
-            task = self._ctx.tasks.begin("subsume-purge-retry")
-            job = CollectionPurgeJob(self._ctx.database, key.collection)
-            if not self._ctx.ingest_queue.try_submit(key, job, task):
-                self._ctx.tasks.drop(task)
-                still.add(key)
-        self._pending_purges = still
 
     def cancel_pending(self) -> None:
         """Cancel every outstanding backoff re-arm timer (shutdown)."""

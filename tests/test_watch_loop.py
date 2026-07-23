@@ -23,8 +23,16 @@ from quarry.daemon.route_key import RouteKey
 from quarry.daemon.routes.registrations import RegistrationRoutes
 from quarry.daemon.tasks import TaskRegistry
 from quarry.daemon.watch_loop import WatchLoop
+from quarry.daemon.watch_reconcile import WatchReconciler
 from quarry.daemon.watch_roster import WatchRoster
 from quarry.sync_registry import SyncRegistry
+
+
+def _reconciler(loop: WatchLoop) -> WatchReconciler:
+    """Return the started loop's reconciler (present once ``start`` ran)."""
+    assert loop._reconciler is not None
+    return loop._reconciler
+
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -424,7 +432,7 @@ def test_safety_scan_retries_a_shed_bulk_scan(tmp_path: Path) -> None:
         assert queue.jobs(CollectionSyncJob)  # attempted but shed
         queue.submitted.clear()
         queue.admit = True  # queue drained
-        loop._reconcile()  # the safety scan retries the shed scan
+        _reconciler(loop).run_once()  # the safety scan retries the shed scan
         assert len(queue.jobs(CollectionSyncJob)) == 1
         await loop.stop()
 
@@ -451,7 +459,7 @@ def test_safety_scan_picks_up_a_collection_registered_after_start(
         extra = tmp_path / "proj2"
         extra.mkdir()
         _register(ctx.settings, extra.resolve(), "col2")
-        loop._reconcile()
+        _reconciler(loop).run_once()
         scans = [j for _key, j in queue.submitted if isinstance(j, CollectionSyncJob)]
         assert any(job.collection == "col2" for job in scans)
         assert source.watch_count == 2  # the new tree is now watched
@@ -507,7 +515,7 @@ def test_admitted_then_failed_file_job_is_rescanned(tmp_path: Path) -> None:
         assert queue.jobs(FileIndexJob)  # admitted (then failed at run)
         queue.submitted.clear()
         queue.fail_index = False  # the rescan will succeed
-        loop._reconcile()  # full disk-vs-registry pass re-scans the collection
+        _reconciler(loop).run_once()  # full disk-vs-registry pass re-scans
         assert len(queue.jobs(CollectionSyncJob)) == 1
         await loop.stop()
 
@@ -530,7 +538,7 @@ def test_reconcile_scans_a_none_handle_tree(tmp_path: Path) -> None:
         await loop.start()
         assert source.watch_count == 1  # scheduled, but with no observer handle
         queue.submitted.clear()
-        loop._reconcile()
+        _reconciler(loop).run_once()
         assert len(queue.jobs(CollectionSyncJob)) == 1  # disk-scanned anyway
         await loop.stop()
 
@@ -622,7 +630,7 @@ def test_reconcile_drops_a_watch_whose_registration_was_removed(tmp_path: Path) 
             conn.deregister_directory("col2")  # remove col2's registration
         finally:
             conn.close()
-        loop._reconcile()
+        _reconciler(loop).run_once()
         assert source.watch_count == 1  # col2's observer was torn down
         await loop.stop()
 
@@ -759,13 +767,13 @@ def test_failed_subsume_purge_is_retried_on_reconcile(
         await RegistrationRoutes(ctx)._run_register(reg, root.resolve(), "parent")
         assert reg.results["subsume_purge_failed"] == ["child"]
         assert loop._submitter is not None
-        assert child in loop._submitter._pending_purges
+        assert child in _reconciler(loop)._pending_purges
         # The queue drains; the next reconcile re-submits the purge and it lands
         # ("child" is absent from the roster, so the drain purges it).
         queue.admit = True
         queue.submitted.clear()
-        loop._reconcile()
-        assert not loop._submitter._pending_purges  # retry succeeded, entry cleared
+        _reconciler(loop).run_once()
+        assert not _reconciler(loop)._pending_purges  # retry succeeded, entry cleared
         assert queue.jobs(CollectionPurgeJob)  # a fresh purge was submitted
         await loop.stop()
 
@@ -791,14 +799,14 @@ def test_reconcile_drain_skips_live_collections_and_purges_absent_ones(
         assert loop._submitter is not None
         live = RouteKey("testdb", "col")  # registered → live in the roster
         gone = RouteKey("testdb", "gone")  # never registered → absent
-        loop._submitter.defer_purge(live)
-        loop._submitter.defer_purge(gone)
+        _reconciler(loop).defer_purge(live)
+        _reconciler(loop).defer_purge(gone)
         queue.submitted.clear()
-        loop._reconcile()
+        _reconciler(loop).run_once()
         purged = {k for k, j in queue.submitted if isinstance(j, CollectionPurgeJob)}
         assert live not in purged  # never wipe a live collection
         assert gone in purged  # a genuinely absent orphan is still purged
-        assert not loop._submitter._pending_purges  # both resolved
+        assert not _reconciler(loop)._pending_purges  # both resolved
         await loop.stop()
 
     asyncio.run(_run())
@@ -819,9 +827,9 @@ def test_begin_collection_cancels_a_stale_deferred_purge(tmp_path: Path) -> None
         await loop.start()
         assert loop._submitter is not None
         extra = RouteKey("testdb", "extra")
-        loop._submitter.defer_purge(extra)
+        _reconciler(loop).defer_purge(extra)
         loop.start_watching("extra", root)  # re-registration makes it live
-        assert extra not in loop._submitter._pending_purges  # cancelled at once
+        assert extra not in _reconciler(loop)._pending_purges  # cancelled at once
         await loop.stop()
 
     asyncio.run(_run())
@@ -884,7 +892,7 @@ def test_partial_reconcile_does_not_tear_down_or_purge(
         assert source.watch_count == 2  # both collections watched
         assert loop._submitter is not None
         gone = RouteKey("testdb", "gone")
-        loop._submitter.defer_purge(gone)  # an absent orphan awaiting purge
+        _reconciler(loop).defer_purge(gone)  # an absent orphan awaiting purge
         queue.submitted.clear()
 
         # Enumeration now raises → the reconcile cannot complete.
@@ -892,10 +900,10 @@ def test_partial_reconcile_does_not_tear_down_or_purge(
             raise OSError("registry read failed")
 
         monkeypatch.setattr(WatchRoster, "registrations", boom)
-        loop._reconcile()
+        _reconciler(loop).run_once()
         # No live watch torn down; no purge drained this cycle.
         assert source.watch_count == 2
-        assert gone in loop._submitter._pending_purges
+        assert gone in _reconciler(loop)._pending_purges
         assert not queue.jobs(CollectionPurgeJob)
         await loop.stop()
 
@@ -932,13 +940,13 @@ def test_failed_deregister_purge_is_retried_on_reconcile(
         purge_state.results = {"deleted_chunks": 0}
         await RegistrationRoutes(ctx)._run_purge(purge_state, "col")
         assert purge_state.status == "failed"
-        assert col in loop._submitter._pending_purges  # deferred, not orphaned
+        assert col in _reconciler(loop)._pending_purges  # deferred, not orphaned
         # The queue drains; the next reconcile re-submits the purge ("col" is
         # absent from the roster, so the drain purges it).
         queue.admit = True
         queue.submitted.clear()
-        loop._reconcile()
-        assert col not in loop._submitter._pending_purges
+        _reconciler(loop).run_once()
+        assert col not in _reconciler(loop)._pending_purges
         assert queue.jobs(CollectionPurgeJob)
         await loop.stop()
 
@@ -968,7 +976,7 @@ def test_self_subsume_with_shed_purge_stays_live_and_unqueued(
         await RegistrationRoutes(ctx)._run_register(reg, root.resolve(), "docs")
         assert loop._submitter is not None
         # discard-on-begin fired: the now-live parent is not queued for a purge.
-        assert key not in loop._submitter._pending_purges
+        assert key not in _reconciler(loop)._pending_purges
         assert source.watch_count == 1  # and it is watched
         assert reg.status == "completed"
         await loop.stop()
@@ -992,9 +1000,9 @@ def test_reconcile_drain_reshed_keeps_pending(tmp_path: Path) -> None:
         await loop.start()
         assert loop._submitter is not None
         gone = RouteKey("testdb", "gone")
-        loop._submitter.defer_purge(gone)
-        loop._reconcile()  # drain re-submits, but the full queue sheds it again
-        assert gone in loop._submitter._pending_purges  # survives for the next cycle
+        _reconciler(loop).defer_purge(gone)
+        _reconciler(loop).run_once()  # drain re-submits, but the full queue sheds
+        assert gone in _reconciler(loop)._pending_purges  # survives the next cycle
         await loop.stop()
 
     asyncio.run(_run())

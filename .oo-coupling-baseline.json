@@ -539,11 +539,18 @@
     "avg_lcom": 0.222
   },
   "src/quarry/daemon/watch_loop.py": {
-    "efferent_coupling": 7.0,
+    "efferent_coupling": 8.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.458,
-    "avg_lcom": 0.458
+    "max_lcom": 0.423,
+    "avg_lcom": 0.423
+  },
+  "src/quarry/daemon/watch_reconcile.py": {
+    "efferent_coupling": 2.0,
+    "public_names": 3.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.286,
+    "avg_lcom": 0.286
   },
   "src/quarry/daemon/watch_roster.py": {
     "efferent_coupling": 3.0,
@@ -556,8 +563,8 @@
     "efferent_coupling": 6.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.762,
-    "avg_lcom": 0.762
+    "max_lcom": 0.742,
+    "avg_lcom": 0.742
   },
   "src/quarry/db/__init__.py": {
     "avg_lcom": 0.0,
