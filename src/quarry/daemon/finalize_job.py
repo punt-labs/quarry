@@ -62,6 +62,13 @@ class CollectionFinalizeJob:
 
     def _finalize(self) -> None:
         """Rebuild the index, optimize, push shadows, then GC (SyncFinalizer)."""
+        # SAFETY: create_fts_index / optimize touch the shared physical table
+        # WITHOUT _write_lock, so per-(database, collection) FIFO ordering is NOT
+        # enough — two collections in one database would race their rebuilds. It
+        # is safe only because EMBED_CONCURRENCY_CEILING == 1: the global embed
+        # gate serializes every job's run() body, so no two finalizes overlap. If
+        # that ceiling is ever raised for embed parallelism, finalize must
+        # serialize per-DATABASE (per physical table), not per-(database, collection).
         SyncFinalizer(self.database.db, self.settings).run()
 
 
