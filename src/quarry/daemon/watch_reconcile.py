@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import sqlite3
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Self, final
 
@@ -32,11 +31,6 @@ if TYPE_CHECKING:
     from quarry.daemon.watch_submit import WatchSubmitter
 
 logger = logging.getLogger(__name__)
-
-# Transient per-operation DB/IO failures the orphan sweep tolerates: a bad chunk
-# scan or registry read skips this cycle (self-heals next reconcile) rather than
-# raising out and permanently killing the safety loop.
-_RECOVERABLE = (sqlite3.Error, OSError, ValueError, RuntimeError, TimeoutError)
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,16 +116,22 @@ class WatchReconciler:
         up even across a restart, without relying on the in-process pending set.
 
         Data-safety invariant (I6): the swept set is a subset of chunks minus
-        (registered union retained).  Both ``registered`` and ``retained`` are
-        read from ONE registry connection inside :meth:`_read_orphans`, so a
-        collection re-registered during this pass is never misclassified as an
-        orphan (see there).  A transient chunk-scan or registry-read failure
-        fail-closes: log and skip this cycle, never let it kill the safety loop.
+        (registered union retained).  ``registered`` and ``retained`` are read
+        inside ONE registry transaction in :meth:`_read_orphans`, so a concurrent
+        register/keep-data deregister is invisible to both reads and no live or
+        kept collection is ever misclassified as an orphan (see there).
+
+        This backstop must never die: it is the only cleanup for a shed/failed
+        purge, so a read failure of ANY kind fail-closes — log and skip this
+        cycle (self-heal next reconcile), never let it escape and kill the loop.
+        Skipping errs toward not-deleting, the safe direction.
         """
         ctx = self._deps.ctx
         try:
             orphans = await run_in_threadpool(self._read_orphans)
-        except _RECOVERABLE as exc:
+        except Exception as exc:  # noqa: BLE001 — backstop liveness: a read error of
+            # any type (incl. LanceDB/pyarrow errors outside the stdlib hierarchy)
+            # must skip the cycle, never kill the safety loop; fails toward safety.
             logger.warning("watch: orphan sweep read failed, skipping cycle: %s", exc)
             return
         active = ctx.database_name
@@ -145,23 +145,29 @@ class WatchReconciler:
     def _read_orphans(self) -> set[str]:
         """Off-thread: collections with chunks but neither registered nor retained.
 
-        Derives BOTH ``registered`` and ``retained`` from ONE ``SyncRegistry``
-        connection so the classification is a single consistent read.  Because
-        register commits the directory-row insert and the retained-marker delete
-        atomically, a collection re-registered while this scan runs is always seen
-        in ``directories`` (or still in ``retained``) — never in neither, which
-        would misclassify it as an orphan and purge an operator's kept chunks.
-        Deriving ``registered`` from the roster snapshot instead would race that
-        window (the snapshot predates the re-register).  Pure reads through
-        ``ctx.database`` (cross-thread-safe) and the registry — NO roster access,
-        so nothing races the loop thread's watch scheduling.
+        Reads ``registered`` and ``retained`` inside ONE explicit transaction so
+        both SELECTs see a single consistent snapshot.  This is load-bearing, not
+        cosmetic: Python's sqlite3 opens an implicit transaction only before DML,
+        never before a SELECT, so without the ``BEGIN`` the two reads are
+        independent point-in-time queries.  A register (retained→directories) or
+        a keep-data deregister (directories→retained) committing BETWEEN them
+        would then fall through both sets and the collection — live or
+        operator-kept — would be misclassified as an orphan and purged.  Within
+        one transaction the mid-read commit is invisible to both SELECTs, so a
+        collection is always in exactly one of directories/retained, never
+        neither, closing both mutation directions regardless of read order.
+
+        Pure reads through ``ctx.database`` (cross-thread-safe) and the registry —
+        NO roster access, so nothing races the loop thread's watch scheduling.
         """
         ctx = self._deps.ctx
         chunk_cols = {c["collection"] for c in ctx.database.catalog.list_collections()}
         conn = SyncRegistry(ctx.settings.registry_path)
         try:
+            conn.execute("BEGIN")  # one read snapshot spans both SELECTs
             registered = {reg.collection for reg in conn.list_registrations()}
             retained = set(conn.list_retained())
+            conn.commit()
         finally:
             conn.close()
         return chunk_cols - registered - retained

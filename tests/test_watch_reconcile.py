@@ -23,6 +23,7 @@ from quarry.db.chunk_catalog import ChunkCatalog
 from quarry.sync_registry import SyncRegistry
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
     from numpy.typing import NDArray
@@ -30,9 +31,20 @@ if TYPE_CHECKING:
     from quarry.daemon.watch_roster import WatchRoster
     from quarry.daemon.watch_submit import WatchSubmitter
     from quarry.results import CollectionSummary
+    from quarry.sync_registry import DirectoryRegistration
 
 _DIM = 768
 _TERMINAL = frozenset({"completed", "failed"})
+
+
+@final
+class _AlienScanError(Exception):
+    """A scan failure subclassing none of the stdlib recoverable types.
+
+    Stands in for a LanceDB/pyarrow error outside ``(OSError, ValueError,
+    sqlite3.Error, RuntimeError, TimeoutError)`` — the backstop must still
+    fail-closed on it, not just on the enumerated stdlib set.
+    """
 
 
 @final
@@ -150,16 +162,46 @@ def test_sweep_never_touches_registered_or_retained_collections(tmp_path: Path) 
         asyncio.run(_run())
 
 
-def test_reregister_during_sweep_spares_retained_collection(tmp_path: Path) -> None:
-    """A collection re-registered mid-sweep is NOT purged (djb item 3, data loss).
+def _between_reads_mutation(
+    settings: Settings, mutate: Callable[[SyncRegistry], object]
+) -> Callable[[SyncRegistry], list[DirectoryRegistration]]:
+    """Patch for ``list_registrations`` that commits *mutate* between the reads.
 
-    ``keep`` is chunk-bearing and keep-data-deregistered (retained).  During the
-    off-thread chunk scan, ``keep`` is re-registered — which atomically commits
-    its directory row AND clears its retained marker.  Because the sweep reads
-    ``registered`` and ``retained`` from ONE registry connection AFTER the scan,
-    it sees ``keep`` back in ``directories`` and spares it.  Deriving
-    ``registered`` from a pre-scan roster snapshot would misclassify ``keep`` as
-    an orphan and wipe the operator's kept chunks.
+    ``_read_orphans`` reads ``list_registrations`` then ``list_retained``. This
+    wrapper runs the real first read, then commits *mutate* on a separate
+    connection — landing the commit in the window BETWEEN the two SELECTs, the
+    exact interleaving the read-transaction fix must make invisible. A one-shot
+    guard fires the mutation only for the outer read (``register``/``deregister``
+    themselves call ``list_registrations`` and must not re-enter it).
+    """
+    real = SyncRegistry.list_registrations
+    fired: list[bool] = []
+
+    def _wrapper(reg: SyncRegistry) -> list[DirectoryRegistration]:
+        result = real(reg)
+        if not fired:
+            fired.append(True)
+            writer = SyncRegistry(settings.registry_path)
+            try:
+                mutate(writer)
+            finally:
+                writer.close()
+        return result
+
+    return _wrapper
+
+
+def test_reregister_between_sweep_reads_spares_collection(tmp_path: Path) -> None:
+    """A re-register committing BETWEEN the two sweep reads spares the collection.
+
+    ``keep`` is chunk-bearing and keep-data-deregistered (retained).  The
+    re-register (retained→directories) commits AFTER ``list_registrations`` is
+    read but BEFORE ``list_retained`` — so without one read snapshot, ``keep`` is
+    absent from ``registered`` (read pre-commit, still only retained) AND absent
+    from ``retained`` (read post-commit, marker cleared): it falls through both
+    sets and its kept chunks are purged.  The ``BEGIN`` read transaction makes
+    the mid-read commit invisible to both SELECTs, so ``keep`` is seen retained
+    and spared.  This FAILS without the transaction and passes with it.
     """
     settings = _fresh_settings(tmp_path)
     roots = {name: (tmp_path / name).resolve() for name in ("keep", "orphan")}
@@ -176,25 +218,58 @@ def test_reregister_during_sweep_spares_retained_collection(tmp_path: Path) -> N
         finally:
             conn.close()
 
-        # Re-register "keep" as a side effect of the sweep's chunk scan, i.e. in
-        # the window the stale-snapshot bug read across. The single-connection
-        # read that follows must observe it. Patched at the class — the slotted
-        # catalog instance has no settable attribute.
-        real_scan = ChunkCatalog.list_collections
-
-        def _reregister_keep_then_scan(cat: ChunkCatalog) -> list[CollectionSummary]:
-            live = SyncRegistry(settings.registry_path)
-            try:
-                live.register_directory(roots["keep"], "keep")
-            finally:
-                live.close()
-            return real_scan(cat)
-
-        with patch.object(ChunkCatalog, "list_collections", _reregister_keep_then_scan):
+        patched = _between_reads_mutation(
+            settings, lambda w: w.register_directory(roots["keep"], "keep")
+        )
+        with patch.object(SyncRegistry, "list_registrations", patched):
             await WatchReconciler(_sweep_only_deps(ctx))._sweep_orphans()
         await ctx.aclose_ingest_queue()
 
-        # "keep" re-registered mid-sweep → spared; "orphan" still swept.
+        # "keep" re-registered mid-read → spared; "orphan" still swept.
+        assert _live_collections(ctx) == {"keep"}
+
+    with patch(
+        "quarry.ingestion.streaming.get_embedding_backend",
+        return_value=_FakeEmbedder(),
+    ):
+        asyncio.run(_run())
+
+
+def test_keepdata_deregister_between_sweep_reads_spares_collection(
+    tmp_path: Path,
+) -> None:
+    """The symmetric direction: a keep-data deregister BETWEEN the reads is safe.
+
+    ``keep`` starts registered and chunk-bearing.  A keep-data deregister
+    (directories→retained) commits between ``list_registrations`` and
+    ``list_retained``.  Under a single read snapshot ``keep`` is seen registered
+    (its pre-commit state) and spared.  This is the direction a future reordering
+    of the two reads would expose to the same fall-through, so the transaction —
+    not the read order — is what guarantees safety.  ``orphan`` is a genuine
+    orphan and must still be swept, proving the sweep ran.
+    """
+    settings = _fresh_settings(tmp_path)
+    roots = {name: (tmp_path / name).resolve() for name in ("keep", "orphan")}
+    _register_with_bodies(settings, roots)
+
+    async def _run() -> None:
+        ctx = DaemonContext(settings, embedder=_FakeEmbedder())
+        await _index_and_wait(ctx, roots)
+
+        conn = SyncRegistry(settings.registry_path)
+        try:
+            conn.deregister_directory("orphan")  # a genuine orphan
+        finally:
+            conn.close()
+
+        patched = _between_reads_mutation(
+            settings, lambda w: w.deregister_directory("keep", keep_data=True)
+        )
+        with patch.object(SyncRegistry, "list_registrations", patched):
+            await WatchReconciler(_sweep_only_deps(ctx))._sweep_orphans()
+        await ctx.aclose_ingest_queue()
+
+        # "keep" kept (retained mid-read) → spared; "orphan" swept.
         assert _live_collections(ctx) == {"keep"}
 
     with patch(
@@ -211,7 +286,9 @@ def test_sweep_fail_closed_on_scan_error(tmp_path: Path) -> None:
     SQLite error propagated out of ``run_safety_loop`` (which catches only
     ``CancelledError``) and permanently stopped all reconciles.  Now a failed
     read fail-closes: the sweep logs and returns, the orphan survives this cycle,
-    and the very next sweep — with the scan healthy — purges it.
+    and the very next sweep — with the scan healthy — purges it.  The raised
+    error subclasses none of the stdlib recoverable types, proving the guard
+    catches ANY read failure (incl. LanceDB/pyarrow errors), not just those.
     """
     settings = _fresh_settings(tmp_path)
     roots = {"orphan": (tmp_path / "orphan").resolve()}
@@ -230,7 +307,7 @@ def test_sweep_fail_closed_on_scan_error(tmp_path: Path) -> None:
         reconciler = WatchReconciler(_sweep_only_deps(ctx))
 
         def _raise_scan(_catalog: ChunkCatalog) -> list[CollectionSummary]:
-            raise OSError("transient scan failure")
+            raise _AlienScanError("transient scan failure")
 
         with patch.object(ChunkCatalog, "list_collections", _raise_scan):
             await reconciler._sweep_orphans()  # must NOT raise
