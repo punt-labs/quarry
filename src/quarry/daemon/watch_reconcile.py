@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Self, final
 
@@ -31,6 +32,11 @@ if TYPE_CHECKING:
     from quarry.daemon.watch_submit import WatchSubmitter
 
 logger = logging.getLogger(__name__)
+
+# Transient per-operation DB/IO failures the orphan sweep tolerates: a bad chunk
+# scan or registry read skips this cycle (self-heals next reconcile) rather than
+# raising out and permanently killing the safety loop.
+_RECOVERABLE = (sqlite3.Error, OSError, ValueError, RuntimeError, TimeoutError)
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,25 +112,29 @@ class WatchReconciler:
         for gone in watched - current:
             self._deps.teardown(gone)
         self._drain_pending(live=current)
-        await self._sweep_orphans(current)
+        await self._sweep_orphans()
 
-    async def _sweep_orphans(self, live: set[RouteKey]) -> None:
+    async def _sweep_orphans(self) -> None:
         """Purge chunks of any collection neither registered nor retained.
 
         The durable backstop: orphans are derived from actual DB + registry state
         every reconcile, so a shed/failed purge (deregister OR subsume) is cleaned
         up even across a restart, without relying on the in-process pending set.
 
-        Data-safety invariant (I6): the swept set is a subset of
-        chunks minus (registered union retained).  ``registered`` comes from the
-        live roster snapshot and ``retained`` from the durable keep-data marker,
-        so a registered or operator-kept collection is NEVER swept.  The blocking
-        chunk scan + registry read run off the loop.
+        Data-safety invariant (I6): the swept set is a subset of chunks minus
+        (registered union retained).  Both ``registered`` and ``retained`` are
+        read from ONE registry connection inside :meth:`_read_orphans`, so a
+        collection re-registered during this pass is never misclassified as an
+        orphan (see there).  A transient chunk-scan or registry-read failure
+        fail-closes: log and skip this cycle, never let it kill the safety loop.
         """
         ctx = self._deps.ctx
+        try:
+            orphans = await run_in_threadpool(self._read_orphans)
+        except _RECOVERABLE as exc:
+            logger.warning("watch: orphan sweep read failed, skipping cycle: %s", exc)
+            return
         active = ctx.database_name
-        registered = {key.collection for key in live if key.database == active}
-        orphans = await run_in_threadpool(self._read_orphans, registered)
         for collection in orphans:
             task = ctx.tasks.begin("orphan-sweep-purge")
             job = CollectionPurgeJob(ctx.database, collection)
@@ -132,17 +142,25 @@ class WatchReconciler:
             if not ctx.ingest_queue.try_submit(key, job, task):
                 ctx.tasks.drop(task)  # full queue → the next reconcile re-sweeps
 
-    def _read_orphans(self, registered: set[str]) -> set[str]:
+    def _read_orphans(self) -> set[str]:
         """Off-thread: collections with chunks but neither registered nor retained.
 
-        Pure reads through ``ctx.database`` (cross-thread-safe, as the queue
-        workers already share it) and a fresh registry connection — NO roster
-        access, so nothing races the loop thread's watch scheduling.
+        Derives BOTH ``registered`` and ``retained`` from ONE ``SyncRegistry``
+        connection so the classification is a single consistent read.  Because
+        register commits the directory-row insert and the retained-marker delete
+        atomically, a collection re-registered while this scan runs is always seen
+        in ``directories`` (or still in ``retained``) — never in neither, which
+        would misclassify it as an orphan and purge an operator's kept chunks.
+        Deriving ``registered`` from the roster snapshot instead would race that
+        window (the snapshot predates the re-register).  Pure reads through
+        ``ctx.database`` (cross-thread-safe) and the registry — NO roster access,
+        so nothing races the loop thread's watch scheduling.
         """
         ctx = self._deps.ctx
         chunk_cols = {c["collection"] for c in ctx.database.catalog.list_collections()}
         conn = SyncRegistry(ctx.settings.registry_path)
         try:
+            registered = {reg.collection for reg in conn.list_registrations()}
             retained = set(conn.list_retained())
         finally:
             conn.close()
