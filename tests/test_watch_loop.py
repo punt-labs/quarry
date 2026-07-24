@@ -97,6 +97,27 @@ class _RecordingQueue:
 
 
 @final
+class _FakeDatabase:
+    """Stand-in DB whose catalog reports no chunks, so the orphan sweep is a no-op."""
+
+    __slots__ = ("_cols",)
+
+    _cols: list[dict[str, object]]
+
+    def __new__(cls) -> Self:
+        self = super().__new__(cls)
+        self._cols = []
+        return self
+
+    @property
+    def catalog(self) -> Self:
+        return self
+
+    def list_collections(self) -> list[dict[str, object]]:
+        return self._cols
+
+
+@final
 class _FakeSource:
     """A synthetic FsEventSource: record scheduled trees, emit events on demand."""
 
@@ -170,7 +191,7 @@ def _build(
         settings=settings,
         ingest_queue=queue,
         tasks=TaskRegistry(),
-        database=object(),
+        database=_FakeDatabase(),
         database_name="testdb",
     )
     return cast("DaemonContext", ctx), watched.resolve()
@@ -432,7 +453,7 @@ def test_safety_scan_retries_a_shed_bulk_scan(tmp_path: Path) -> None:
         assert queue.jobs(CollectionSyncJob)  # attempted but shed
         queue.submitted.clear()
         queue.admit = True  # queue drained
-        _reconciler(loop).run_once()  # the safety scan retries the shed scan
+        await _reconciler(loop).run_once()  # the safety scan retries the shed scan
         assert len(queue.jobs(CollectionSyncJob)) == 1
         await loop.stop()
 
@@ -459,7 +480,7 @@ def test_safety_scan_picks_up_a_collection_registered_after_start(
         extra = tmp_path / "proj2"
         extra.mkdir()
         _register(ctx.settings, extra.resolve(), "col2")
-        _reconciler(loop).run_once()
+        await _reconciler(loop).run_once()
         scans = [j for _key, j in queue.submitted if isinstance(j, CollectionSyncJob)]
         assert any(job.collection == "col2" for job in scans)
         assert source.watch_count == 2  # the new tree is now watched
@@ -515,7 +536,7 @@ def test_admitted_then_failed_file_job_is_rescanned(tmp_path: Path) -> None:
         assert queue.jobs(FileIndexJob)  # admitted (then failed at run)
         queue.submitted.clear()
         queue.fail_index = False  # the rescan will succeed
-        _reconciler(loop).run_once()  # full disk-vs-registry pass re-scans
+        await _reconciler(loop).run_once()  # full disk-vs-registry pass re-scans
         assert len(queue.jobs(CollectionSyncJob)) == 1
         await loop.stop()
 
@@ -538,7 +559,7 @@ def test_reconcile_scans_a_none_handle_tree(tmp_path: Path) -> None:
         await loop.start()
         assert source.watch_count == 1  # scheduled, but with no observer handle
         queue.submitted.clear()
-        _reconciler(loop).run_once()
+        await _reconciler(loop).run_once()
         assert len(queue.jobs(CollectionSyncJob)) == 1  # disk-scanned anyway
         await loop.stop()
 
@@ -630,7 +651,7 @@ def test_reconcile_drops_a_watch_whose_registration_was_removed(tmp_path: Path) 
             conn.deregister_directory("col2")  # remove col2's registration
         finally:
             conn.close()
-        _reconciler(loop).run_once()
+        await _reconciler(loop).run_once()
         assert source.watch_count == 1  # col2's observer was torn down
         await loop.stop()
 
@@ -695,7 +716,7 @@ def _reregister_setup(
         settings=settings,
         ingest_queue=queue,
         tasks=TaskRegistry(),
-        database=object(),
+        database=_FakeDatabase(),
         database_name="testdb",
     )
     source = _FakeSource()
@@ -772,7 +793,7 @@ def test_failed_subsume_purge_is_retried_on_reconcile(
         # ("child" is absent from the roster, so the drain purges it).
         queue.admit = True
         queue.submitted.clear()
-        _reconciler(loop).run_once()
+        await _reconciler(loop).run_once()
         assert not _reconciler(loop)._pending_purges  # retry succeeded, entry cleared
         assert queue.jobs(CollectionPurgeJob)  # a fresh purge was submitted
         await loop.stop()
@@ -802,7 +823,7 @@ def test_reconcile_drain_skips_live_collections_and_purges_absent_ones(
         _reconciler(loop).defer_purge(live)
         _reconciler(loop).defer_purge(gone)
         queue.submitted.clear()
-        _reconciler(loop).run_once()
+        await _reconciler(loop).run_once()
         purged = {k for k, j in queue.submitted if isinstance(j, CollectionPurgeJob)}
         assert live not in purged  # never wipe a live collection
         assert gone in purged  # a genuinely absent orphan is still purged
@@ -900,7 +921,7 @@ def test_partial_reconcile_does_not_tear_down_or_purge(
             raise OSError("registry read failed")
 
         monkeypatch.setattr(WatchRoster, "registrations", boom)
-        _reconciler(loop).run_once()
+        await _reconciler(loop).run_once()
         # No live watch torn down; no purge drained this cycle.
         assert source.watch_count == 2
         assert gone in _reconciler(loop)._pending_purges
@@ -945,7 +966,7 @@ def test_failed_deregister_purge_is_retried_on_reconcile(
         # absent from the roster, so the drain purges it).
         queue.admit = True
         queue.submitted.clear()
-        _reconciler(loop).run_once()
+        await _reconciler(loop).run_once()
         assert col not in _reconciler(loop)._pending_purges
         assert queue.jobs(CollectionPurgeJob)
         await loop.stop()
@@ -1001,7 +1022,7 @@ def test_reconcile_drain_reshed_keeps_pending(tmp_path: Path) -> None:
         assert loop._submitter is not None
         gone = RouteKey("testdb", "gone")
         _reconciler(loop).defer_purge(gone)
-        _reconciler(loop).run_once()  # drain re-submits, but the full queue sheds
+        await _reconciler(loop).run_once()  # drain re-submits, but the full queue sheds
         assert gone in _reconciler(loop)._pending_purges  # survives the next cycle
         await loop.stop()
 

@@ -16,8 +16,11 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Self, final
 
+from starlette.concurrency import run_in_threadpool
+
 from quarry.daemon.finalize_job import CollectionPurgeJob
 from quarry.daemon.route_key import RouteKey
+from quarry.sync_registry import SyncRegistry
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -84,18 +87,18 @@ class WatchReconciler:
         try:
             while True:
                 await asyncio.sleep(interval)
-                self.run_once()
+                await self.run_once()
         except asyncio.CancelledError:
             return
 
-    def run_once(self) -> None:
-        """A full disk-vs-registry pass: rescan, tear down removed, drain purges.
+    async def run_once(self) -> None:
+        """A full disk-vs-registry pass: rescan, tear down removed, purge orphans.
 
         Removals require a COMPLETE enumeration: a partial ``current`` (a registry
         read raised partway) would make a live collection look absent, so tearing
-        down ``watched - current`` or draining by ``current`` could destroy a live
-        watch or its chunks.  A partial cycle skips both; the next full reconcile
-        self-heals.
+        down ``watched - current`` or purging by ``current`` could destroy a live
+        watch or its chunks.  A partial cycle skips every removal; the next full
+        reconcile self-heals.
         """
         watched, current, complete = self._sync_enumerated()
         if not complete:
@@ -103,6 +106,47 @@ class WatchReconciler:
         for gone in watched - current:
             self._deps.teardown(gone)
         self._drain_pending(live=current)
+        await self._sweep_orphans(current)
+
+    async def _sweep_orphans(self, live: set[RouteKey]) -> None:
+        """Purge chunks of any collection neither registered nor retained.
+
+        The durable backstop: orphans are derived from actual DB + registry state
+        every reconcile, so a shed/failed purge (deregister OR subsume) is cleaned
+        up even across a restart, without relying on the in-process pending set.
+
+        Data-safety invariant (I6): the swept set is a subset of
+        chunks minus (registered union retained).  ``registered`` comes from the
+        live roster snapshot and ``retained`` from the durable keep-data marker,
+        so a registered or operator-kept collection is NEVER swept.  The blocking
+        chunk scan + registry read run off the loop.
+        """
+        ctx = self._deps.ctx
+        active = ctx.database_name
+        registered = {key.collection for key in live if key.database == active}
+        orphans = await run_in_threadpool(self._read_orphans, registered)
+        for collection in orphans:
+            task = ctx.tasks.begin("orphan-sweep-purge")
+            job = CollectionPurgeJob(ctx.database, collection)
+            key = RouteKey(active, collection)
+            if not ctx.ingest_queue.try_submit(key, job, task):
+                ctx.tasks.drop(task)  # full queue → the next reconcile re-sweeps
+
+    def _read_orphans(self, registered: set[str]) -> set[str]:
+        """Off-thread: collections with chunks but neither registered nor retained.
+
+        Pure reads through ``ctx.database`` (cross-thread-safe, as the queue
+        workers already share it) and a fresh registry connection — NO roster
+        access, so nothing races the loop thread's watch scheduling.
+        """
+        ctx = self._deps.ctx
+        chunk_cols = {c["collection"] for c in ctx.database.catalog.list_collections()}
+        conn = SyncRegistry(ctx.settings.registry_path)
+        try:
+            retained = set(conn.list_retained())
+        finally:
+            conn.close()
+        return chunk_cols - registered - retained
 
     def _sync_enumerated(self) -> tuple[set[RouteKey], set[RouteKey], bool]:
         """Add/rescan every enumerated collection; return (watched, live, complete).
