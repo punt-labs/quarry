@@ -130,9 +130,9 @@ class DocumentDeleteJob:
         wanted = set(self.documents)
         conn = SyncRegistry(self.settings.registry_path)
         try:
-            for rec in conn.list_files(self.collection):
+            for rec in conn.files.list_files(self.collection):
                 if rec.document_name in wanted:
-                    conn.delete_file(rec.path, commit=False)
+                    conn.files.delete_file(rec.path, commit=False)
             conn.commit()
         finally:
             conn.close()

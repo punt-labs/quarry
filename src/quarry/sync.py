@@ -14,8 +14,9 @@ from quarry.config import Settings
 from quarry.db import ChunkStore
 from quarry.ingestion.pipeline import SUPPORTED_EXTENSIONS
 from quarry.sync_discovery import FileDiscovery
+from quarry.sync_file_store import FileRecord
 from quarry.sync_ingest import CollectionIngestor
-from quarry.sync_registry import FileRecord, SyncRegistry
+from quarry.sync_registry import SyncRegistry
 from quarry.types import LanceDB
 
 logger = logging.getLogger(__name__)
@@ -84,7 +85,7 @@ def compute_sync_plan(
     discovery = FileDiscovery(directory)
     disk_files = discovery.discover(extensions)
     disk_paths = {str(p) for p in disk_files}
-    known_files = {r.path: r for r in conn.list_files(collection)}
+    known_files = {r.path: r for r in conn.files.list_files(collection)}
 
     to_ingest: list[Path] = []
     to_refresh: list[tuple[Path, str]] = []
@@ -152,7 +153,7 @@ def _refresh_files(
                 logger.info("File changed since plan, skipping refresh: %s", fp)
                 continue
             document_name = str(fp.relative_to(ctx.resolved))
-            ctx.conn.upsert_file(
+            ctx.conn.files.upsert_file(
                 FileRecord(
                     path=str(fp),
                     collection=ctx.collection,
@@ -185,7 +186,7 @@ def _delete_documents(
     """
     t_delete_start = time.perf_counter()
     files_by_document_name: dict[str, list[FileRecord]] = {}
-    for rec in ctx.conn.list_files(ctx.collection):
+    for rec in ctx.conn.files.list_files(ctx.collection):
         files_by_document_name.setdefault(rec.document_name, []).append(rec)
 
     deleted = 0
@@ -197,7 +198,7 @@ def _delete_documents(
                 document_name, collection=ctx.collection, count=False
             )
             for rec in files_by_document_name.get(document_name, []):
-                ctx.conn.delete_file(rec.path, commit=False)
+                ctx.conn.files.delete_file(rec.path, commit=False)
             deleted += 1
             ctx.progress(f"[{ctx.collection}] Deleted {document_name}")
         except _RECOVERABLE as exc:

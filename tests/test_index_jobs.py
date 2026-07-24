@@ -190,7 +190,7 @@ def test_document_delete_job_removes_chunks_and_rows(tmp_path: Path) -> None:
     assert "c.md" not in _docs(db)
     conn = SyncRegistry(settings.registry_path)
     try:
-        assert all(rec.document_name != "c.md" for rec in conn.list_files("col"))
+        assert all(rec.document_name != "c.md" for rec in conn.files.list_files("col"))
     finally:
         conn.close()
 

@@ -201,10 +201,7 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
     only fires when no coverage exists.  If cwd is a parent of existing
     child registrations, auto-register is skipped to prevent subsumption.
     """
-    from quarry.sync_registry import (  # noqa: PLC0415
-        SyncRegistry,
-        _is_ancestor_of,  # pyright: ignore[reportPrivateUsage]
-    )
+    from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
 
     cwd = _as_dir(payload.get("cwd"))
     if not cwd:
@@ -233,7 +230,7 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
             # subsume existing child registrations, causing data loss.
             registrations = conn.list_registrations()
             has_children = any(
-                _is_ancestor_of(directory, Path(r.directory))  # pyright: ignore[reportPrivateUsage]
+                conn._is_ancestor_of(directory, Path(r.directory))  # pyright: ignore[reportPrivateUsage]
                 for r in registrations
             )
             if has_children:

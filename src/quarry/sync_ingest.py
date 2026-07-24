@@ -26,7 +26,8 @@ if TYPE_CHECKING:
     from quarry.db.chunk_store import ChunkStore
     from quarry.ingestion.progressive import FlushCheckpoint
     from quarry.models import Chunk
-    from quarry.sync_registry import FileRecord, SyncRegistry
+    from quarry.sync_file_store import FileRecord
+    from quarry.sync_registry import SyncRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +123,7 @@ class CollectionIngestor:
         for checkpoint in checkpoints:
             meta = self._meta[checkpoint.file_id]
             row = self._file_indexer.checkpoint_row(meta, checkpoint)
-            self._registry.upsert_file(row, commit=False)
+            self._registry.files.upsert_file(row, commit=False)
         self._registry.commit()
 
     def run(self, files: list[Path]) -> tuple[int, int, list[str]]:
@@ -131,7 +132,9 @@ class CollectionIngestor:
             return 0, 0, []
         # Pre-read registry rows here so producers never race the consumer's
         # writes on the shared sqlite connection (SQLITE_MISUSE).
-        self._records = {str(fp): self._registry.get_file(str(fp)) for fp in files}
+        self._records = {
+            str(fp): self._registry.files.get_file(str(fp)) for fp in files
+        }
         with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
             for file_path in files:
                 executor.submit(self._produce, file_path)

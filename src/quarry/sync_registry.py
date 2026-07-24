@@ -6,8 +6,9 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Self, cast
+from typing import Self
 
+from quarry.sync_file_store import FileStore
 from quarry.sync_schema import SyncSchema
 
 
@@ -18,49 +19,18 @@ class DirectoryRegistration:
     registered_at: str
 
 
-@dataclass(frozen=True, slots=True)
-class FileRecord:
-    path: str
-    collection: str
-    document_name: str
-    mtime: float
-    size: int
-    ingested_at: str
-    content_hash: str | None = None
-    # Within-file resume watermark (DES-034). ``chunks_committed`` counts the
-    # contiguous chunks ``[0, chunks_committed)`` durable in LanceDB and reflected
-    # here; ``partial_hash`` is the content hash the watermark was computed against
-    # and, when non-NULL, marks the row incomplete so the next sync resumes within
-    # the file. Both reset (0 / NULL) on completion.
-    chunks_committed: int = 0
-    partial_hash: str | None = None
-
-    def __post_init__(self) -> None:
-        if self.chunks_committed < 0:
-            msg = f"chunks_committed must be >= 0, got {self.chunks_committed}"
-            raise ValueError(msg)
-        # A mid-file (partial) row must have made progress; a complete row leaves
-        # partial_hash NULL. This rejects the incoherent "partial at watermark 0".
-        if self.partial_hash is not None and self.chunks_committed <= 0:
-            msg = "a partial resume row must have chunks_committed > 0"
-            raise ValueError(msg)
-
-    @property
-    def is_partial(self) -> bool:
-        """Return True when the row is a mid-file resume watermark, not complete."""
-        return self.partial_hash is not None
-
-
 class SyncRegistry:
-    """Manages the SQLite registry for directory registrations and file state.
+    """Manages the SQLite registry for directory registrations and retained state.
 
-    Wraps a sqlite3.Connection and exposes both the high-level registry
-    operations (register, deregister, list, get, upsert, delete) and
-    the low-level connection interface (execute, commit, close) so that
-    callers holding a SyncRegistry can also run ad-hoc SQL.
+    Wraps a sqlite3.Connection and exposes the directory-registration operations
+    (register, deregister, list, get) plus the low-level connection interface
+    (execute, commit, close) so callers can also run ad-hoc SQL. Per-file rows
+    live in a composed :class:`FileStore`, reachable via :attr:`files` and backed
+    by this same connection so its writes share the registry's transaction.
     """
 
     _conn: sqlite3.Connection
+    _files: FileStore
 
     def __new__(cls, path: Path) -> Self:
         self = super().__new__(cls)
@@ -74,7 +44,13 @@ class SyncRegistry:
         except Exception:
             self._conn.close()
             raise
+        self._files = FileStore(self._conn)
         return self
+
+    @property
+    def files(self) -> FileStore:
+        """Return the per-file row store sharing this registry's connection."""
+        return self._files
 
     def _ensure_schema(self) -> None:
         """Set connection pragmas, create tables, and apply migrations."""
@@ -179,7 +155,7 @@ class SyncRegistry:
         existing_regs = self.list_registrations()
         for reg in existing_regs:
             reg_path = Path(reg.directory).resolve()
-            if _is_ancestor_of(reg_path, resolved):
+            if self._is_ancestor_of(reg_path, resolved):
                 msg = (
                     f"directory already covered by parent registration "
                     f"'{reg.collection}' ({reg.directory})"
@@ -191,7 +167,7 @@ class SyncRegistry:
         subsumed = [
             reg.collection
             for reg in existing_regs
-            if _is_ancestor_of(resolved, Path(reg.directory).resolve())
+            if self._is_ancestor_of(resolved, Path(reg.directory).resolve())
         ]
         for child_collection in subsumed:
             self._conn.execute(
@@ -279,82 +255,11 @@ class SyncRegistry:
             directory=row[0], collection=row[1], registered_at=row[2]
         )
 
-    def get_file(self, path: str) -> FileRecord | None:
-        """Look up a file record by absolute path."""
-        row = self._conn.execute(
-            "SELECT path, collection, document_name, mtime, size, ingested_at, "
-            "content_hash, chunks_committed, partial_hash FROM files WHERE path = ?",
-            (path,),
-        ).fetchone()
-        if row is None:
-            return None
-        return self._row_to_record(row)
-
-    def upsert_file(self, record: FileRecord, *, commit: bool = True) -> None:
-        """Insert or replace a file record, including its resume watermark."""
-        self._conn.execute(
-            "INSERT OR REPLACE INTO files "
-            "(path, collection, document_name, mtime, size, ingested_at, "
-            "content_hash, chunks_committed, partial_hash) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                record.path,
-                record.collection,
-                record.document_name,
-                record.mtime,
-                record.size,
-                record.ingested_at,
-                record.content_hash,
-                record.chunks_committed,
-                record.partial_hash,
-            ),
-        )
-        if commit:
-            self._conn.commit()
-
-    def list_files(self, collection: str) -> list[FileRecord]:
-        """Return all file records for a collection."""
-        rows = self._conn.execute(
-            "SELECT path, collection, document_name, mtime, size, ingested_at, "
-            "content_hash, chunks_committed, partial_hash FROM files "
-            "WHERE collection = ? ORDER BY path",
-            (collection,),
-        ).fetchall()
-        return [self._row_to_record(r) for r in rows]
-
-    def delete_file(self, path: str, *, commit: bool = True) -> None:
-        """Delete a single file record by path."""
-        self._conn.execute("DELETE FROM files WHERE path = ?", (path,))
-        if commit:
-            self._conn.commit()
-
     @staticmethod
-    def _row_to_record(row: tuple[object, ...]) -> FileRecord:
-        """Build a FileRecord from a row in ``_SELECT_COLUMNS`` order."""
-        return FileRecord(
-            path=cast("str", row[0]),
-            collection=cast("str", row[1]),
-            document_name=cast("str", row[2]),
-            mtime=cast("float", row[3]),
-            size=cast("int", row[4]),
-            ingested_at=cast("str", row[5]),
-            content_hash=cast("str | None", row[6]),
-            chunks_committed=cast("int", row[7]),
-            partial_hash=cast("str | None", row[8]),
-        )
+    def _is_ancestor_of(ancestor: Path, descendant: Path) -> bool:
+        """Return True if *ancestor* is a strict ancestor of *descendant*.
 
-
-def _is_ancestor_of(ancestor: Path, descendant: Path) -> bool:
-    """Return True if *ancestor* is a strict ancestor of *descendant*.
-
-    Both paths should be resolved (absolute, no symlinks).  Uses
-    ``Path.relative_to()`` in a try/except for the containment check
-    and requires strict inequality (same path is not an ancestor).
-    """
-    if ancestor == descendant:
-        return False
-    try:
-        descendant.relative_to(ancestor)
-    except ValueError:
-        return False
-    return True
+        Both paths should be resolved (absolute, no symlinks); strict inequality
+        means a path is not its own ancestor.
+        """
+        return ancestor != descendant and descendant.is_relative_to(ancestor)

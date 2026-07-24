@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Self
 
 if TYPE_CHECKING:
     from quarry.ingestion.progressive import FlushCheckpoint
-    from quarry.sync_registry import FileRecord
+    from quarry.sync_file_store import FileRecord
 
 # A ``partial_hash`` marker meaning the content hash was unknown when the
 # watermark was written (hashing failed on a mid-file flush). The value is not a

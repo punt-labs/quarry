@@ -29,8 +29,8 @@ from quarry.ingestion.pipeline import plan_file_chunks
 from quarry.ingestion.progressive import ProgressiveIndexer
 from quarry.ingestion.streaming import DocumentStreamer
 from quarry.sync_discovery import FileDiscovery
+from quarry.sync_file_store import FileRecord
 from quarry.sync_messages import FileMeta
-from quarry.sync_registry import FileRecord
 from quarry.sync_resume import ResumePolicy
 
 if TYPE_CHECKING:
@@ -208,7 +208,7 @@ class SingleFileIndexer:
         """
         document_name = str(file_path.relative_to(self._resolved))
         file_id = str(file_path)
-        record = self._registry.get_file(file_id)
+        record = self._registry.files.get_file(file_id)
         try:
             plan = self.plan_file(file_path, record)
         except _RECOVERABLE as exc:
@@ -255,7 +255,7 @@ class SingleFileIndexer:
         logger.warning("Watch index failed for %s: %s", document_name, exc)
         if self.should_clear_stale(record, file_path):
             self.clear_stale(record)
-            self._registry.delete_file(str(file_path), commit=True)
+            self._registry.files.delete_file(str(file_path), commit=True)
         return FileIndexOutcome(document_name, 0, error=f"{document_name}: {exc}")
 
     # -- FlushTarget for the single-file index_one path ---------------------
@@ -275,7 +275,7 @@ class SingleFileIndexer:
         if self._pending is None:
             return
         for checkpoint in checkpoints:
-            self._registry.upsert_file(
+            self._registry.files.upsert_file(
                 self.checkpoint_row(self._pending, checkpoint), commit=False
             )
         self._registry.commit()
