@@ -1,0 +1,329 @@
+\documentclass[a4paper]{article}
+\usepackage{fuzz}
+
+%% Z specification of quarry's daemon watch registration / removal lifecycle
+%% (DES-045).  Type-checks clean under Spivey's fuzz; animates and
+%% model-checks under ProB (probcli).  The companion prose in
+%% docs/spec/README.md records the abstraction boundary, the TTF partition
+%% matrix, and the model-check results.
+
+\begin{document}
+\title{The watch registration / removal lifecycle}
+\author{Z specification --- DES-045}
+\date{}
+\maketitle
+
+\section{Carrier and abstraction}
+
+A single database is modelled; the daemon's route key $(database, collection)$
+collapses to a collection, because $directories.collection$ is unique within a
+database and every invariant of interest is stated per route key.  The
+directory tree and its ancestor relation --- the layer that
+\textit{SyncRegistry} enforces --- are abstracted away: their only effect on the
+daemon state is the set of collections a register call \textit{subsumes}, which
+enters the model as the input $subsumed?$.  Three collections suffice to exhibit
+a parent, a distinct child, and a same-name self-subsume.
+
+\begin{zed}
+  COLL ::= ca | cb | cc
+\end{zed}
+
+\section{State}
+
+The lifecycle state records, per collection, five facts: whether it is
+registered (has a $directories$ row), whether the loop watches it, whether a
+shed orphan-purge is deferred against it, whether its chunks are present in
+LanceDB, and whether its chunks were deliberately retained by a
+$keep\_data$ deregister.  The schema carries typing only: no safety predicate
+is baked in, so every operation is feasible into any type-correct after-state
+and a safety violation, if one is reachable, is actually reached rather than
+silently pruned by the schema of the primed state.
+
+\begin{schema}{Watch}
+  registered : \power COLL \\
+  watched : \power COLL \\
+  pending : \power COLL \\
+  chunks : \power COLL \\
+  retained : \power COLL
+\end{schema}
+
+Initially nothing is registered, watched, pending, chunked, or retained.
+
+\begin{schema}{Init}
+  Watch \\
+  \where
+  registered = \emptyset \\
+  watched = \emptyset \\
+  pending = \emptyset \\
+  chunks = \emptyset \\
+  retained = \emptyset
+\end{schema}
+
+\section{The safety invariant}
+
+The five properties the design must maintain are collected in $SafetyOK$.  It is
+\textit{not} an ancestor of any operation --- it is the predicate whose negation
+the model checker searches for as a reachable state.
+
+\begin{schema}{SafetyOK}
+  Watch \\
+  \where
+  registered \cap pending = \emptyset \\
+  chunks \setminus (registered \cup retained) \subseteq pending \\
+  registered \subseteq watched \\
+  watched \cap pending = \emptyset
+\end{schema}
+
+The four conjuncts are, in order, I1, I2, I3 and I5.  I1: a registered
+collection never carries a deferred purge.  I2: a collection whose chunks exist
+while it is neither registered nor deliberately retained is tracked for purging.
+I3: a registered collection is watched (a null observer handle is still a
+watched key; the reconcile disk-scan is its correctness backstop).  I5: a
+watched collection --- one whose observer feeds inserts --- never simultaneously
+carries a deferred purge, so the single writer per route key is never split
+between an inserting watch and a deleting purge.  I4 (reconcile never tears down
+a live watch) is a property of the $Reconcile$ transitions rather than of a
+single state, and is discharged below by observing that each preserves I3.
+I6 (the disk-derived sweep deletes only true orphans --- never a registered or
+retained collection) is likewise a property of the $Sweep$ transition, discharged
+by its delete set $chunks \setminus (registered \cup retained)$, which excludes
+$registered \cup retained$ by construction.
+
+\section{Producing chunks}
+
+A watch or scan turns files on disk into chunks.  Chunks may appear for any
+registered collection.
+
+\begin{schema}{IndexProduce}
+  \Delta Watch \\
+  c? : COLL \\
+  \where
+  c? \in registered \\
+  chunks' = chunks \cup \{ c? \} \\
+  registered' = registered \\
+  watched' = watched \\
+  pending' = pending \\
+  retained' = retained
+\end{schema}
+
+\section{Register}
+
+Registration resolves the client directory, writes the $directories$ row, and
+--- because $directories.collection$ is unique and register subsumes every
+existing registration whose directory is a descendant of the new one --- may
+delete a set $subsumed?$ of rows in the same transaction.  The parent's own name
+appears in $subsumed?$ exactly in the same-name self-subsume case ($c? \in
+subsumed?$).  Each subsumed child is torn down and its chunks purged
+\textit{before} the parent watch is installed; a purge the saturated queue sheds
+($shed?$) is deferred for a reconcile retry.  Installing the parent watch runs
+$begin\_collection$, which discards any deferred purge standing against the
+parent --- so a live re-registration supersedes a stale deferred purge.
+
+\begin{schema}{Register}
+  \Delta Watch \\
+  c? : COLL \\
+  subsumed? : \power COLL \\
+  shed? : \power COLL \\
+  \where
+  subsumed? \subseteq registered \cup \{ c? \} \\
+  shed? \subseteq subsumed? \\
+  registered' = (registered \setminus subsumed?) \cup \{ c? \} \\
+  watched' = (watched \setminus subsumed?) \cup \{ c? \} \\
+  chunks' = chunks \setminus (subsumed? \setminus shed?) \\
+  pending' = (pending \cup shed?) \setminus \{ c? \} \\
+  retained' = retained \setminus (\{ c? \} \cup subsumed?)
+\end{schema}
+
+The purge of a non-shed child clears its chunks; a shed child keeps its chunks
+but is placed in $pending$, so it stays tracked.  The parent is removed from
+$pending$ last, capturing the discard that lets a self-subsume whose purge shed
+still leave the now-live parent free of a deferred purge.
+
+\section{Deregister}
+
+Deregistration removes the row synchronously, stops the watch \textit{before}
+any purge so no in-flight event re-enqueues the collection mid-purge, and then
+--- unless $keep\_data$ was asked --- purges the chunks through the per-key
+FIFO.  The purge is admitted with a bounded retry; its two outcomes are distinct
+operations.
+
+The purge is admitted and drains the chunks.
+
+\begin{schema}{DeregisterPurge}
+  \Delta Watch \\
+  c? : COLL \\
+  \where
+  c? \in registered \\
+  registered' = registered \setminus \{ c? \} \\
+  watched' = watched \setminus \{ c? \} \\
+  chunks' = chunks \setminus \{ c? \} \\
+  pending' = pending \setminus \{ c? \} \\
+  retained' = retained \setminus \{ c? \}
+\end{schema}
+
+The queue stays saturated past the admission deadline, so the purge is never
+admitted.  The deregister path, unlike the subsume path, does \textit{not} defer
+the failed purge for a reconcile retry.
+
+\begin{schema}{DeregisterPurgeShed}
+  \Delta Watch \\
+  c? : COLL \\
+  \where
+  c? \in registered \\
+  registered' = registered \setminus \{ c? \} \\
+  watched' = watched \setminus \{ c? \} \\
+  chunks' = chunks \\
+  pending' = pending \\
+  retained' = retained \setminus \{ c? \}
+\end{schema}
+
+With $keep\_data$ the chunks are kept on purpose; the collection joins
+$retained$ and no purge is scheduled.
+
+\begin{schema}{DeregisterKeep}
+  \Delta Watch \\
+  c? : COLL \\
+  \where
+  c? \in registered \\
+  registered' = registered \setminus \{ c? \} \\
+  watched' = watched \setminus \{ c? \} \\
+  chunks' = chunks \\
+  retained' = retained \cup \{ c? \} \\
+  pending' = pending \setminus \{ c? \}
+\end{schema}
+
+\section{Begin collection}
+
+$begin\_collection$ installs a watch for a registered collection and discards any
+deferred purge standing against it.
+
+\begin{schema}{BeginCollection}
+  \Delta Watch \\
+  c? : COLL \\
+  \where
+  c? \in registered \\
+  watched' = watched \cup \{ c? \} \\
+  pending' = pending \setminus \{ c? \} \\
+  registered' = registered \\
+  chunks' = chunks \\
+  retained' = retained
+\end{schema}
+
+\section{Purge retry}
+
+The reconcile drain re-submits each deferred purge whose collection is no longer
+registered; a collection that is registered again is dropped, never purged, lest
+the drain wipe the live collection's fresh chunks.  The two branches are
+distinct operations.
+
+The target is still absent: the purge is re-submitted and drains the chunks.
+
+\begin{schema}{PurgeRetryAbsent}
+  \Delta Watch \\
+  c? : COLL \\
+  \where
+  c? \in pending \\
+  c? \notin registered \\
+  chunks' = chunks \setminus \{ c? \} \\
+  pending' = pending \setminus \{ c? \} \\
+  registered' = registered \\
+  watched' = watched \\
+  retained' = retained
+\end{schema}
+
+The target was re-registered: it is dropped from $pending$ without a purge.
+
+\begin{schema}{PurgeRetryLive}
+  \Delta Watch \\
+  c? : COLL \\
+  \where
+  c? \in pending \\
+  c? \in registered \\
+  pending' = pending \setminus \{ c? \} \\
+  chunks' = chunks \\
+  registered' = registered \\
+  watched' = watched \\
+  retained' = retained
+\end{schema}
+
+\section{Disk-derived sweep}
+
+The durable backstop derives orphans from actual state on every reconcile: it
+deletes the chunks of every collection that is neither registered nor retained.
+Unlike the pending drain it needs no in-process record, so it survives a restart
+and cleans up any shed purge --- deregister or subsume --- whose chunks were left
+behind.  Its delete set is exactly $chunks \setminus (registered \cup retained)$;
+a registered or deliberately-retained collection is therefore never swept, which
+is I6.  The blocking chunk scan and the retained read run off the event loop; the
+delete decision uses the live roster snapshot for $registered$ and the durable
+$keep\_data$ marker for $retained$.
+
+\begin{schema}{Sweep}
+  \Delta Watch \\
+  \where
+  chunks' = chunks \cap (registered \cup retained) \\
+  registered' = registered \\
+  watched' = watched \\
+  pending' = pending \\
+  retained' = retained
+\end{schema}
+
+The swept set $chunks \setminus chunks'$ equals $chunks \setminus (registered
+\cup retained)$, so the sweep preserves I2 (it purges exactly the orphans I2
+requires to be tracked) and cannot delete a registered or retained collection's
+chunks.
+
+\section{Reconcile}
+
+A reconcile pass adds a watch for each registered collection that lacks one,
+rescans the rest, and --- only on a fully enumerated roster --- tears down every
+watch whose registration has disappeared and drains the deferred purges,
+skipping any collection that is live again.
+
+On a complete enumeration the current roster is exactly $registered$.  Every
+registered collection ends watched (add-missing plus survive-teardown); every
+watch of a gone collection is removed; every deferred purge of an absent
+collection is drained (chunks cleared) and every deferred purge of a live
+collection is dropped --- so $pending$ empties.
+
+\begin{schema}{ReconcileComplete}
+  \Delta Watch \\
+  \where
+  watched' = registered \\
+  pending' = \emptyset \\
+  chunks' = chunks \setminus (pending \setminus registered) \\
+  registered' = registered \\
+  retained' = retained
+\end{schema}
+
+If the drain's re-submission sheds, the absent deferred purges stay pending and
+their chunks remain; the live ones are still dropped.
+
+\begin{schema}{ReconcileCompleteDrainShed}
+  \Delta Watch \\
+  \where
+  watched' = registered \\
+  pending' = pending \setminus registered \\
+  chunks' = chunks \\
+  registered' = registered \\
+  retained' = retained
+\end{schema}
+
+The enumeration raised partway: only a prefix $seen?$ of the roster was visited.
+The add / rescan already ran for what enumerated --- so those collections gain a
+watch and shed their deferred purge --- but every removal is skipped, because a
+partial roster would make a live collection look absent.
+
+\begin{schema}{ReconcilePartial}
+  \Delta Watch \\
+  seen? : \power COLL \\
+  \where
+  seen? \subseteq registered \\
+  watched' = watched \cup seen? \\
+  pending' = pending \setminus (seen? \setminus watched) \\
+  registered' = registered \\
+  chunks' = chunks \\
+  retained' = retained
+\end{schema}
+
+\end{document}
