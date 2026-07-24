@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from quarry.sync_registry import FileRecord, SyncRegistry
+from quarry.sync_file_store import FileRecord
+from quarry.sync_registry import SyncRegistry
 
 
 class TestOpenRegistry:
@@ -74,10 +75,11 @@ class TestRegisterDirectory:
         conn = SyncRegistry(tmp_path / "r.db")
         course_dir = tmp_path / "ml-101"
         course_dir.mkdir()
-        reg = conn.register_directory(course_dir, "ml-101")
+        reg, subsumed = conn.register_directory(course_dir, "ml-101")
         assert reg.collection == "ml-101"
         assert reg.directory == str(course_dir.resolve())
         assert reg.registered_at != ""
+        assert subsumed == []  # no existing registrations to subsume
         conn.close()
 
     def test_register_nonexistent_directory(self, tmp_path: Path):
@@ -244,8 +246,8 @@ class TestFileRecordOperations:
         conn = SyncRegistry(tmp_path / "r.db")
         self._register(conn, tmp_path, "c")
         rec = self._make_record()
-        conn.upsert_file(rec)
-        got = conn.get_file(rec.path)
+        conn.files.upsert_file(rec)
+        got = conn.files.get_file(rec.path)
         assert got is not None
         assert got.mtime == 1000.0
         assert got.size == 2048
@@ -255,7 +257,7 @@ class TestFileRecordOperations:
         conn = SyncRegistry(tmp_path / "r.db")
         self._register(conn, tmp_path, "c")
         rec = self._make_record()
-        conn.upsert_file(rec)
+        conn.files.upsert_file(rec)
         updated = FileRecord(
             path=rec.path,
             collection=rec.collection,
@@ -264,8 +266,8 @@ class TestFileRecordOperations:
             size=4096,
             ingested_at="2025-06-02T00:00:00",
         )
-        conn.upsert_file(updated)
-        got = conn.get_file(rec.path)
+        conn.files.upsert_file(updated)
+        got = conn.files.get_file(rec.path)
         assert got is not None
         assert got.mtime == 2000.0
         assert got.size == 4096
@@ -273,19 +275,19 @@ class TestFileRecordOperations:
 
     def test_get_file_not_found(self, tmp_path: Path):
         conn = SyncRegistry(tmp_path / "r.db")
-        assert conn.get_file("/nonexistent") is None
+        assert conn.files.get_file("/nonexistent") is None
         conn.close()
 
     def test_list_files_filters_by_collection(self, tmp_path: Path):
         conn = SyncRegistry(tmp_path / "r.db")
         self._register(conn, tmp_path, "alpha")
         self._register(conn, tmp_path, "beta")
-        conn.upsert_file(self._make_record("/a/1.pdf", "alpha"))
-        conn.upsert_file(self._make_record("/a/2.pdf", "alpha"))
-        conn.upsert_file(self._make_record("/b/3.pdf", "beta"))
-        alpha_files = conn.list_files("alpha")
+        conn.files.upsert_file(self._make_record("/a/1.pdf", "alpha"))
+        conn.files.upsert_file(self._make_record("/a/2.pdf", "alpha"))
+        conn.files.upsert_file(self._make_record("/b/3.pdf", "beta"))
+        alpha_files = conn.files.list_files("alpha")
         assert len(alpha_files) == 2
-        beta_files = conn.list_files("beta")
+        beta_files = conn.files.list_files("beta")
         assert len(beta_files) == 1
         conn.close()
 
@@ -293,9 +295,9 @@ class TestFileRecordOperations:
         conn = SyncRegistry(tmp_path / "r.db")
         self._register(conn, tmp_path, "c")
         rec = self._make_record()
-        conn.upsert_file(rec)
-        conn.delete_file(rec.path)
-        assert conn.get_file(rec.path) is None
+        conn.files.upsert_file(rec)
+        conn.files.delete_file(rec.path)
+        assert conn.files.get_file(rec.path) is None
         conn.close()
 
 
@@ -348,7 +350,7 @@ class TestContentHashColumn:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(files)")}
         assert "content_hash" in columns
 
-        rec = conn.get_file("/legacy/a.pdf")
+        rec = conn.files.get_file("/legacy/a.pdf")
         assert rec is not None
         assert rec.path == "/legacy/a.pdf"
         assert rec.content_hash is None
@@ -371,13 +373,13 @@ class TestContentHashColumn:
             ingested_at="2025-01-01",
             content_hash="deadbeef",
         )
-        conn.upsert_file(rec)
+        conn.files.upsert_file(rec)
 
-        got = conn.get_file("/p/a.pdf")
+        got = conn.files.get_file("/p/a.pdf")
         assert got is not None
         assert got.content_hash == "deadbeef"
 
-        listed = conn.list_files("c")
+        listed = conn.files.list_files("c")
         assert len(listed) == 1
         assert listed[0].content_hash == "deadbeef"
         conn.close()
@@ -393,9 +395,9 @@ class TestContentHashColumn:
             size=10,
             ingested_at="2025-01-01",
         )
-        conn.upsert_file(rec)
+        conn.files.upsert_file(rec)
 
-        got = conn.get_file("/p/a.pdf")
+        got = conn.files.get_file("/p/a.pdf")
         assert got is not None
         assert got.content_hash is None
         conn.close()
@@ -424,8 +426,8 @@ class TestResumeWatermark:
     def test_defaults_are_complete(self, tmp_path: Path):
         conn = SyncRegistry(tmp_path / "r.db")
         self._register(conn, tmp_path)
-        conn.upsert_file(self._record())
-        got = conn.get_file("/p/a.txt")
+        conn.files.upsert_file(self._record())
+        got = conn.files.get_file("/p/a.txt")
         assert got is not None
         assert got.chunks_committed == 0
         assert got.partial_hash is None
@@ -450,10 +452,10 @@ class TestResumeWatermark:
     def test_upsert_sets_partial_watermark(self, tmp_path: Path):
         conn = SyncRegistry(tmp_path / "r.db")
         self._register(conn, tmp_path)
-        conn.upsert_file(
+        conn.files.upsert_file(
             self._record(content_hash="cafe", chunks_committed=7, partial_hash="cafe")
         )
-        got = conn.get_file("/p/a.txt")
+        got = conn.files.get_file("/p/a.txt")
         assert got is not None
         assert got.chunks_committed == 7
         assert got.partial_hash == "cafe"
@@ -463,11 +465,11 @@ class TestResumeWatermark:
     def test_completion_clears_partial(self, tmp_path: Path):
         conn = SyncRegistry(tmp_path / "r.db")
         self._register(conn, tmp_path)
-        conn.upsert_file(
+        conn.files.upsert_file(
             self._record(content_hash="cafe", chunks_committed=7, partial_hash="cafe")
         )
-        conn.upsert_file(self._record(content_hash="cafe", chunks_committed=12))
-        got = conn.get_file("/p/a.txt")
+        conn.files.upsert_file(self._record(content_hash="cafe", chunks_committed=12))
+        got = conn.files.get_file("/p/a.txt")
         assert got is not None
         assert got.chunks_committed == 12
         assert got.partial_hash is None
@@ -479,11 +481,11 @@ class TestResumeWatermark:
         db_path = tmp_path / "r.db"
         conn = SyncRegistry(db_path)
         self._register(conn, tmp_path)
-        conn.upsert_file(
+        conn.files.upsert_file(
             self._record(path="/p/a.txt", content_hash="h", chunks_committed=5),
             commit=False,
         )
-        conn.upsert_file(
+        conn.files.upsert_file(
             self._record(
                 path="/p/b.txt",
                 document_name="b.txt",
@@ -495,8 +497,8 @@ class TestResumeWatermark:
         )
 
         verify = SyncRegistry(db_path)
-        a = verify.get_file("/p/a.txt")
-        b = verify.get_file("/p/b.txt")
+        a = verify.files.get_file("/p/a.txt")
+        b = verify.files.get_file("/p/b.txt")
         assert a is not None and a.chunks_committed == 5 and a.partial_hash is None
         assert b is not None and b.chunks_committed == 3 and b.partial_hash == "h"
         verify.close()
@@ -507,7 +509,7 @@ class TestResumeWatermark:
         db_path = tmp_path / "r.db"
         conn = SyncRegistry(db_path)
         self._register(conn, tmp_path)
-        conn.upsert_file(
+        conn.files.upsert_file(
             self._record(content_hash="h", chunks_committed=5, partial_hash="h"),
             commit=False,
         )
@@ -516,7 +518,7 @@ class TestResumeWatermark:
         conn.close()
 
         verify = SyncRegistry(db_path)
-        assert verify.get_file("/p/a.txt") is None
+        assert verify.files.get_file("/p/a.txt") is None
         verify.close()
 
     def test_migrate_schema_is_idempotent(self, tmp_path: Path):
@@ -526,7 +528,7 @@ class TestResumeWatermark:
         db_path = tmp_path / "r.db"
         conn = SyncRegistry(db_path)
         self._register(conn, tmp_path)
-        conn.upsert_file(
+        conn.files.upsert_file(
             self._record(content_hash="h", chunks_committed=4, partial_hash="h")
         )
 
@@ -534,7 +536,7 @@ class TestResumeWatermark:
         schema.migrate()
         schema.migrate()  # second run must be a no-op
 
-        got = conn.get_file("/p/a.txt")
+        got = conn.files.get_file("/p/a.txt")
         assert got is not None
         assert got.chunks_committed == 4
         assert got.partial_hash == "h"
@@ -567,9 +569,49 @@ class TestResumeWatermark:
         raw.close()
 
         conn = SyncRegistry(db_path)  # migration runs in __new__
-        got = conn.get_file("/p/a.txt")
+        got = conn.files.get_file("/p/a.txt")
         assert got is not None
         assert got.content_hash is None
         assert got.chunks_committed == 0
         assert got.partial_hash is None
         conn.close()
+
+
+class TestRetainedCollections:
+    """The durable keep-data marker the orphan sweep consults."""
+
+    def test_keep_data_deregister_marks_retained(self, tmp_path: Path):
+        conn = SyncRegistry(tmp_path / "r.db")
+        directory = tmp_path / "docs"
+        directory.mkdir()
+        try:
+            conn.register_directory(directory, "docs")
+            assert conn.list_retained() == []
+            conn.deregister_directory("docs", keep_data=True)
+            assert conn.list_retained() == ["docs"]  # kept → retained, spared
+        finally:
+            conn.close()
+
+    def test_plain_deregister_does_not_retain(self, tmp_path: Path):
+        conn = SyncRegistry(tmp_path / "r.db")
+        directory = tmp_path / "docs"
+        directory.mkdir()
+        try:
+            conn.register_directory(directory, "docs")
+            conn.deregister_directory("docs")  # keep_data defaults False
+            assert conn.list_retained() == []  # no marker → sweep may purge
+        finally:
+            conn.close()
+
+    def test_reregister_clears_retained(self, tmp_path: Path):
+        conn = SyncRegistry(tmp_path / "r.db")
+        directory = tmp_path / "docs"
+        directory.mkdir()
+        try:
+            conn.register_directory(directory, "docs")
+            conn.deregister_directory("docs", keep_data=True)
+            assert conn.list_retained() == ["docs"]
+            conn.register_directory(directory, "docs")  # live again
+            assert conn.list_retained() == []  # marker cleared on re-register
+        finally:
+            conn.close()

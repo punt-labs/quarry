@@ -26,10 +26,9 @@ from quarry.daemon.fs_events import NullFsEventSource
 from quarry.daemon.fs_watchdog import WatchdogSource
 from quarry.daemon.route_key import RouteKey
 from quarry.daemon.tasks import task_terminal
+from quarry.daemon.watch_reconcile import ReconcilerDeps, WatchReconciler
 from quarry.daemon.watch_roster import WatchRoster
 from quarry.daemon.watch_submit import WatchSubmitter
-from quarry.ingestion.pipeline import SUPPORTED_EXTENSIONS
-from quarry.sync_discovery import FileDiscovery
 
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
@@ -55,6 +54,7 @@ class WatchLoop:
         "_ctx",
         "_dispatcher",
         "_loop",
+        "_reconciler",
         "_roster",
         "_safety_task",
         "_source",
@@ -67,6 +67,7 @@ class WatchLoop:
     _roster: WatchRoster | None
     _dispatcher: DebouncedDispatcher | None
     _submitter: WatchSubmitter | None
+    _reconciler: WatchReconciler | None
     _loop: asyncio.AbstractEventLoop | None
     _safety_task: asyncio.Task[None] | None
     _started: bool
@@ -82,6 +83,7 @@ class WatchLoop:
         self._roster = None
         self._dispatcher = None
         self._submitter = None
+        self._reconciler = None
         self._loop = None
         self._safety_task = None
         self._started = False
@@ -126,11 +128,22 @@ class WatchLoop:
             sink=self._submitter.on_batch,
         )
         self._submitter.bind(self._dispatcher)
+        self._reconciler = WatchReconciler(
+            ReconcilerDeps(
+                self._ctx,
+                self._roster,
+                self._submitter,
+                begin=self._begin_collection,
+                teardown=self._teardown,
+            )
+        )
         self._started = True
         for name in self._roster.roster_names():
             self._start_database(name)
         if settings.watch_safety_scan_s > 0:
-            self._safety_task = self._loop.create_task(self._safety_loop())
+            self._safety_task = self._loop.create_task(
+                self._reconciler.run_safety_loop()
+            )
 
     async def stop(self) -> None:
         """Tear down the observer + roster before the queue drain (any watch state)."""
@@ -156,6 +169,7 @@ class WatchLoop:
         # a joined watchdog observer cannot be restarted (reusing it watches
         # nothing).  A fresh start() reconstructs source + roster.
         self._safety_task = None
+        self._reconciler = None
         self._source = self._roster = self._dispatcher = self._submitter = None
 
     def start_watching(self, collection: str, resolved_root: Path) -> None:
@@ -165,14 +179,29 @@ class WatchLoop:
         self._begin_collection(self._ctx.database_name, collection, resolved_root)
 
     def stop_watching(self, collection: str) -> None:
-        """Stop watching *collection* and drop its pending changes (before purge)."""
-        if not self._started or self._roster is None or self._dispatcher is None:
+        """Stop watching *collection* in the active database (before purge)."""
+        if not self._started:
             return
-        key = RouteKey(self._ctx.database_name, collection)
+        self._teardown(RouteKey(self._ctx.database_name, collection))
+
+    def _teardown(self, key: RouteKey) -> None:
+        """Unwatch *key*'s tree and drop its pending + backoff state."""
+        if self._roster is None or self._dispatcher is None:
+            return
         self._roster.unwatch(key)
         self._dispatcher.cancel(key)
         if self._submitter is not None:
             self._submitter.forget(key)
+
+    def defer_purge(self, collection: str) -> None:
+        """Retry a failed subsume-purge on the next reconcile (durability backstop).
+
+        The register route calls this when a subsume-purge's admission failed; the
+        reconcile drains the deferred set, so an orphaned collection is cleaned up
+        even though its watch was already torn down.
+        """
+        if self._reconciler is not None:
+            self._reconciler.defer_purge(RouteKey(self._ctx.database_name, collection))
 
     async def request_scan(self, umbrella: TaskState) -> None:
         """Enqueue a scan+finalize per active-DB registration; complete *umbrella*.
@@ -222,6 +251,10 @@ class WatchLoop:
             return
         resolved = root.resolve()
         key = RouteKey(database, collection)
+        # A re-registration makes the collection live again — cancel any stale
+        # orphan-purge immediately so drain never wipes the fresh chunks.
+        if self._reconciler is not None:
+            self._reconciler.discard_pending_purge(key)
         self._roster.watch(key, resolved, partial(self._on_fs_event, key))
         self._submitter.submit_scan(key, resolved)
 
@@ -234,7 +267,11 @@ class WatchLoop:
         if self._loop is None or self._dispatcher is None or self._roster is None:
             return
         root = self._roster.resolved_root(key)
-        if root is None or not self._accepts(root, event):
+        # Observer thread stays cheap: only a lexical dot-segment reject here (no
+        # resolve, no .gitignore reads), so a hot writer never backs up the
+        # observer queue.  The authoritative filter — suffix (at the source),
+        # symlink-escape, and ignore rules — runs post-debounce in the submitter.
+        if root is None or self._has_hidden_segment(root, event.path):
             return
         try:
             self._loop.call_soon_threadsafe(self._dispatcher.feed, key, event)
@@ -242,18 +279,13 @@ class WatchLoop:
             logger.debug("watch: dropped event after loop close: %s", exc)
 
     @staticmethod
-    def _accepts(root: Path, event: FsEvent) -> bool:
-        """Filter one event against the same rules the bulk scan uses (live == bulk).
-
-        A write reads content, so it gets FileDiscovery's full filter — symlink
-        resolution (a target escaping the tree is rejected, closing the path-
-        escape leak) + ignore rules.  A delete reads no content, so a now-gone
-        file gets a lexical check; the reconcile is the backstop either way.
-        """
-        discovery = FileDiscovery(root)
-        if event.deleted:
-            return discovery.is_deletable(event.path, SUPPORTED_EXTENSIONS)
-        return discovery.is_indexable(event.path, SUPPORTED_EXTENSIONS)
+    def _has_hidden_segment(root: Path, path: Path) -> bool:
+        """Return whether *path* has a dot-segment inside *root* (a cheap reject)."""
+        try:
+            relative = path.relative_to(root)
+        except ValueError:
+            return True
+        return any(part.startswith(".") for part in relative.parts)
 
     async def _await_children(self, children: list[TaskState]) -> bool:
         """Poll children to a terminal status; return True if the deadline hit.
@@ -268,39 +300,3 @@ class WatchLoop:
                 return True
             await asyncio.sleep(_SCAN_POLL_S)
         return False
-
-    async def _safety_loop(self) -> None:
-        """Periodically reconcile the roster (``watch_safety_scan_s``)."""
-        interval = self._ctx.settings.watch_safety_scan_s
-        try:
-            while self._started:
-                await asyncio.sleep(interval)
-                if self._started:
-                    self._reconcile()
-        except asyncio.CancelledError:
-            return
-
-    def _reconcile(self) -> None:
-        """A full disk-vs-registry pass over EVERY registered collection.
-
-        The backstop that retires quarry-uae: each collection is re-scanned via a
-        ``CollectionSyncJob`` (its ``sync_collection`` ingests new/changed and
-        deletes gone documents), self-healing a removed directory, a shed FTS
-        finalize, and unwatchable (``None``-handle) or new trees — regardless of
-        live watch state.  Never propagates (a bad registry read is logged).
-        """
-        roster, submitter = self._roster, self._submitter
-        if roster is None or submitter is None:
-            return
-        try:
-            watched = set(roster.keys())
-            for name in roster.roster_names():
-                roster.ensure_database(name)
-                for collection, root in roster.registrations(name):
-                    key = RouteKey(name, collection)
-                    if key not in watched:
-                        self._begin_collection(name, collection, root)
-                    else:
-                        submitter.submit_scan(key, root.resolve())
-        except (OSError, ValueError) as exc:
-            logger.warning("watch: safety-scan reconcile failed: %s", exc)

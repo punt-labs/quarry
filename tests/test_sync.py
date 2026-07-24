@@ -23,9 +23,10 @@ from quarry.ingestion.progressive import FlushCheckpoint, ProgressiveIndexer
 from quarry.models import PageContent, PageType
 from quarry.sync import compute_sync_plan, sync_collection
 from quarry.sync_discovery import _DEFAULT_IGNORE_PATTERNS, FileDiscovery
+from quarry.sync_file_store import FileRecord
 from quarry.sync_ingest import CollectionIngestor
 from quarry.sync_messages import FileMeta
-from quarry.sync_registry import FileRecord, SyncRegistry
+from quarry.sync_registry import SyncRegistry
 from quarry.sync_resume import HASH_UNKNOWN, ResumePolicy
 
 if TYPE_CHECKING:
@@ -541,7 +542,7 @@ class TestComputeSyncPlan:
         f = d / "existing.pdf"
         f.write_bytes(b"data")
         stat = f.stat()
-        conn.upsert_file(
+        conn.files.upsert_file(
             FileRecord(
                 path=str(f.resolve()),
                 collection="col",
@@ -560,7 +561,7 @@ class TestComputeSyncPlan:
         conn, d = self._setup(tmp_path)
         f = d / "changed.pdf"
         f.write_bytes(b"old")
-        conn.upsert_file(
+        conn.files.upsert_file(
             FileRecord(
                 path=str(f.resolve()),
                 collection="col",
@@ -580,7 +581,7 @@ class TestComputeSyncPlan:
 
     def test_deleted_file_detected(self, tmp_path: Path):
         conn, d = self._setup(tmp_path)
-        conn.upsert_file(
+        conn.files.upsert_file(
             FileRecord(
                 path=str((d / "gone.pdf").resolve()),
                 collection="col",
@@ -600,7 +601,7 @@ class TestComputeSyncPlan:
         # Unchanged file
         unch = d / "unchanged.pdf"
         unch.write_bytes(b"same")
-        conn.upsert_file(
+        conn.files.upsert_file(
             FileRecord(
                 path=str(unch.resolve()),
                 collection="col",
@@ -615,7 +616,7 @@ class TestComputeSyncPlan:
         (d / "brand-new.txt").write_bytes(b"hello")
 
         # Deleted file (in registry but not on disk)
-        conn.upsert_file(
+        conn.files.upsert_file(
             FileRecord(
                 path=str((d / "removed.pdf").resolve()),
                 collection="col",
@@ -642,7 +643,7 @@ class TestComputeSyncPlan:
     ) -> None:
         """Insert a FileRecord for *f* matching disk state, with *content_hash*."""
         stat = f.stat()
-        conn.upsert_file(
+        conn.files.upsert_file(
             FileRecord(
                 path=str(f.resolve()),
                 collection="col",
@@ -753,7 +754,7 @@ class TestComputeSyncPlan:
         f = d / "resume.txt"
         f.write_bytes(b"stable content")
         stat = f.stat()
-        conn.upsert_file(
+        conn.files.upsert_file(
             FileRecord(
                 path=str(f.resolve()),
                 collection="col",
@@ -819,7 +820,7 @@ def _seed_crash_state(
         )
     real_hash = FileDiscovery.content_hash(f)
     stored = real_hash if use_real_hash else partial_hash
-    conn.upsert_file(
+    conn.files.upsert_file(
         FileRecord(
             path=str(f.resolve()),
             collection="col",
@@ -845,7 +846,7 @@ class TestSyncCollectionProgressive:
         assert result.ingested == 1
         assert result.failed == 0
         assert ChunkStore(db).count(collection_filter="col") >= 1
-        files = conn.list_files("col")
+        files = conn.files.list_files("col")
         assert len(files) == 1
         assert files[0].partial_hash is None  # complete
         assert files[0].content_hash is not None
@@ -878,7 +879,7 @@ class TestSyncCollectionProgressive:
     def test_deletes_removed_files(self, tmp_path: Path):
         settings = _settings(tmp_path)
         db, conn, d = _make_collection(tmp_path, settings)
-        conn.upsert_file(
+        conn.files.upsert_file(
             FileRecord(
                 path=str((d / "gone.txt").resolve()),
                 collection="col",
@@ -891,7 +892,7 @@ class TestSyncCollectionProgressive:
         with _patched_embedder(_FakeEmbedder()):
             result = sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert result.deleted == 1
-        assert conn.get_file(str((d / "gone.txt").resolve())) is None
+        assert conn.files.get_file(str((d / "gone.txt").resolve())) is None
         conn.close()
 
     def test_idempotent_reingest(self, tmp_path: Path):
@@ -921,7 +922,7 @@ class TestWithinFileResume:
         assert result.ingested == 1
         assert embedder.embedded == [c.text for c in chunks[w:]]  # tail only
         assert _chunk_indexes(db, doc) == list(range(total))
-        rec = conn.get_file(str((d / "big.txt").resolve()))
+        rec = conn.files.get_file(str((d / "big.txt").resolve()))
         assert rec is not None and rec.partial_hash is None
         conn.close()
 
@@ -978,7 +979,7 @@ class TestWithinFileResume:
         w = total // 2
         content_hash = FileDiscovery.content_hash(img)
         ChunkStore(db).insert(chunks[:w], np.zeros((w, 768), dtype=np.float32))
-        conn.upsert_file(
+        conn.files.upsert_file(
             FileRecord(
                 path=str(img.resolve()),
                 collection="col",
@@ -1070,7 +1071,7 @@ class TestPartialHashSentinel:
         ingestor.on_flush(
             [FlushCheckpoint(file_id=file_id, chunks_committed=3, complete=False)]
         )
-        rec = conn.get_file(file_id)
+        rec = conn.files.get_file(file_id)
         assert rec is not None
         assert rec.is_partial is True  # before the fix this was False (silent skip)
         assert rec.chunks_committed == 3
@@ -1088,7 +1089,7 @@ class TestPartialHashSentinel:
         assert total >= 4
         w = total // 2
         ChunkStore(db).insert(chunks[:w], np.zeros((w, 768), dtype=np.float32))
-        conn.upsert_file(
+        conn.files.upsert_file(
             FileRecord(
                 path=str(f.resolve()),
                 collection="col",
@@ -1107,7 +1108,7 @@ class TestPartialHashSentinel:
         assert result.ingested == 1
         assert embedder.embedded == [c.text for c in chunks]  # full re-embed from 0
         assert _chunk_indexes(db, doc) == list(range(total))
-        rec = conn.get_file(str(f.resolve()))
+        rec = conn.files.get_file(str(f.resolve()))
         assert rec is not None and rec.partial_hash is None  # completed, mark cleared
         conn.close()
 
@@ -1291,7 +1292,7 @@ class TestFragmentBudgetAndExceptions:
         # Chunks were written to Lance before the failing commit — durable.
         assert ChunkStore(db).count(collection_filter="col") >= 1
         # But the registry rolled back: no committed row for the file.
-        assert conn.get_file(str(resolved / "a.txt")) is None
+        assert conn.files.get_file(str(resolved / "a.txt")) is None
 
         # A clean sync reconciles via delete-tail: exact chunks, no duplicates.
         embedder = _FakeEmbedder()
@@ -1309,7 +1310,7 @@ class TestFragmentBudgetAndExceptions:
             f, settings, collection="col", document_name="a.txt"
         )
         assert _chunk_indexes(db, "a.txt") == list(range(len(chunks)))
-        rec = conn.get_file(str(resolved / "a.txt"))
+        rec = conn.files.get_file(str(resolved / "a.txt"))
         assert rec is not None and rec.partial_hash is None
         conn.close()
 
@@ -1327,7 +1328,7 @@ class TestFragmentBudgetAndExceptions:
         with _patched_embedder(embedder):
             result = sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert result.failed == 1
-        rec = conn.get_file(str(f.resolve()))
+        rec = conn.files.get_file(str(f.resolve()))
         assert rec is not None
         assert rec.is_partial is True  # a torn-free resume watermark was stored
         assert 0 < rec.chunks_committed < total
@@ -1336,7 +1337,7 @@ class TestFragmentBudgetAndExceptions:
         with _patched_embedder(embedder2):
             sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert _chunk_indexes(db, "big.txt") == list(range(total))
-        rec2 = conn.get_file(str(f.resolve()))
+        rec2 = conn.files.get_file(str(f.resolve()))
         assert rec2 is not None and rec2.partial_hash is None
         conn.close()
 
@@ -1407,7 +1408,7 @@ class TestConcurrencyLiveness:
         for name in ("big.txt", "small.txt"):
             total = len(plan_file_chunks(d / name, settings, document_name=name)[0])
             assert _chunk_indexes(db, name) == list(range(total))
-        rows = {r.document_name: r for r in conn.list_files("col")}
+        rows = {r.document_name: r for r in conn.files.list_files("col")}
         assert rows["big.txt"].partial_hash is None
         assert rows["small.txt"].partial_hash is None
         conn.close()
@@ -1428,7 +1429,7 @@ class TestConcurrencyLiveness:
         # Each file's chunk indexes are contiguous [0, n) with no interleave gaps.
         a_chunks, _ = plan_file_chunks(d / "a.txt", settings, document_name="a.txt")
         assert _chunk_indexes(db, "a.txt") == list(range(len(a_chunks)))
-        rows = {r.document_name: r for r in conn.list_files("col")}
+        rows = {r.document_name: r for r in conn.files.list_files("col")}
         assert rows["a.txt"].partial_hash is None
         assert rows["b.txt"].partial_hash is None
         conn.close()
@@ -1476,8 +1477,8 @@ class TestConcurrencyLiveness:
         _ingested, failed, _errors = cast("tuple[int, int, list[str]]", result)
         assert failed >= 1
         # G4 atomicity: neither file committed a registry row at the failed flush.
-        assert conn.get_file(str(a_path)) is None
-        assert conn.get_file(str(b_path)) is None
+        assert conn.files.get_file(str(a_path)) is None
+        assert conn.files.get_file(str(b_path)) is None
 
         # Clean re-sync reconciles both — contiguous, zero duplicates across both.
         with _patched_embedder(_FakeEmbedder()):
@@ -1534,8 +1535,9 @@ class TestConcurrencyLiveness:
         assert result is not None
         _ingested, failed, _errors = cast("tuple[int, int, list[str]]", result)
         assert failed >= 1
-        assert conn.get_file(str(a_path)) is None  # neither committed (all-or-none)
-        assert conn.get_file(str(b_path)) is None
+        # neither committed (all-or-none)
+        assert conn.files.get_file(str(a_path)) is None
+        assert conn.files.get_file(str(b_path)) is None
 
         with _patched_embedder(_FakeEmbedder()):
             CollectionIngestor(

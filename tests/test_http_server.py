@@ -2809,7 +2809,7 @@ class TestRunPurgeTask:
     """Direct coroutine tests for the async chunk-purge task."""
 
     def test_purge_success_sets_completed_with_count(self, tmp_path: Path) -> None:
-        from quarry.daemon.routes.registrations import RegistrationRoutes
+        from quarry.daemon.registration_lifecycle import RegistrationLifecycle
 
         ctx = DaemonContext(_mock_settings(tmp_path))
         _inject_mocks(ctx)
@@ -2819,13 +2819,13 @@ class TestRunPurgeTask:
         with patch(
             "quarry.db.chunk_store.ChunkStore.delete_collection", return_value=3
         ):
-            asyncio.run(RegistrationRoutes(ctx)._run_purge(state, "docs"))
+            asyncio.run(RegistrationLifecycle(ctx).run_purge(state, "docs"))
         assert state.status == "completed"
         assert state.results["deleted_chunks"] == 3
         assert state.results["removed"] == 1
 
     def test_purge_failure_sets_failed(self, tmp_path: Path) -> None:
-        from quarry.daemon.routes.registrations import RegistrationRoutes
+        from quarry.daemon.registration_lifecycle import RegistrationLifecycle
 
         ctx = DaemonContext(_mock_settings(tmp_path))
         _inject_mocks(ctx)
@@ -2835,7 +2835,7 @@ class TestRunPurgeTask:
             "quarry.db.chunk_store.ChunkStore.delete_collection",
             side_effect=RuntimeError("purge boom"),
         ):
-            asyncio.run(RegistrationRoutes(ctx)._run_purge(state, "docs"))
+            asyncio.run(RegistrationLifecycle(ctx).run_purge(state, "docs"))
         assert state.status == "failed"
         assert "purge boom" in state.error
 

@@ -25,6 +25,10 @@ CREATE TABLE IF NOT EXISTS files (
 );
 CREATE INDEX IF NOT EXISTS idx_files_collection_path
     ON files(collection, path);
+CREATE TABLE IF NOT EXISTS retained_collections (
+    collection  TEXT PRIMARY KEY,
+    retained_at TEXT NOT NULL
+);
 """
 
 # Columns added to the ``files`` table after v1, with their SQL type clauses.

@@ -16,16 +16,28 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Self, cast, final
 
 from quarry.config import Settings
-from quarry.daemon.finalize_job import CollectionFinalizeJob
+from quarry.daemon.finalize_job import CollectionFinalizeJob, CollectionPurgeJob
 from quarry.daemon.fs_events import FsEvent
 from quarry.daemon.index_jobs import CollectionSyncJob, DocumentDeleteJob, FileIndexJob
+from quarry.daemon.registration_lifecycle import RegistrationLifecycle
 from quarry.daemon.route_key import RouteKey
 from quarry.daemon.tasks import TaskRegistry
 from quarry.daemon.watch_loop import WatchLoop
+from quarry.daemon.watch_reconcile import WatchReconciler
+from quarry.daemon.watch_roster import WatchRoster
 from quarry.sync_registry import SyncRegistry
 
+
+def _reconciler(loop: WatchLoop) -> WatchReconciler:
+    """Return the started loop's reconciler (present once ``start`` ran)."""
+    assert loop._reconciler is not None
+    return loop._reconciler
+
+
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
+
+    import pytest
 
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.ingest_unit import IngestUnit
@@ -82,6 +94,27 @@ class _RecordingQueue:
     def jobs(self, kind: type) -> list[IngestUnit]:
         """Return every submitted job that is an instance of *kind*."""
         return [job for _key, job in self.submitted if isinstance(job, kind)]
+
+
+@final
+class _FakeDatabase:
+    """Stand-in DB whose catalog reports no chunks, so the orphan sweep is a no-op."""
+
+    __slots__ = ("_cols",)
+
+    _cols: list[dict[str, object]]
+
+    def __new__(cls) -> Self:
+        self = super().__new__(cls)
+        self._cols = []
+        return self
+
+    @property
+    def catalog(self) -> Self:
+        return self
+
+    def list_collections(self) -> list[dict[str, object]]:
+        return self._cols
 
 
 @final
@@ -158,7 +191,7 @@ def _build(
         settings=settings,
         ingest_queue=queue,
         tasks=TaskRegistry(),
-        database=object(),
+        database=_FakeDatabase(),
         database_name="testdb",
     )
     return cast("DaemonContext", ctx), watched.resolve()
@@ -420,7 +453,7 @@ def test_safety_scan_retries_a_shed_bulk_scan(tmp_path: Path) -> None:
         assert queue.jobs(CollectionSyncJob)  # attempted but shed
         queue.submitted.clear()
         queue.admit = True  # queue drained
-        loop._reconcile()  # the safety scan retries the shed scan
+        await _reconciler(loop).run_once()  # the safety scan retries the shed scan
         assert len(queue.jobs(CollectionSyncJob)) == 1
         await loop.stop()
 
@@ -447,7 +480,7 @@ def test_safety_scan_picks_up_a_collection_registered_after_start(
         extra = tmp_path / "proj2"
         extra.mkdir()
         _register(ctx.settings, extra.resolve(), "col2")
-        loop._reconcile()
+        await _reconciler(loop).run_once()
         scans = [j for _key, j in queue.submitted if isinstance(j, CollectionSyncJob)]
         assert any(job.collection == "col2" for job in scans)
         assert source.watch_count == 2  # the new tree is now watched
@@ -503,7 +536,7 @@ def test_admitted_then_failed_file_job_is_rescanned(tmp_path: Path) -> None:
         assert queue.jobs(FileIndexJob)  # admitted (then failed at run)
         queue.submitted.clear()
         queue.fail_index = False  # the rescan will succeed
-        loop._reconcile()  # full disk-vs-registry pass re-scans the collection
+        await _reconciler(loop).run_once()  # full disk-vs-registry pass re-scans
         assert len(queue.jobs(CollectionSyncJob)) == 1
         await loop.stop()
 
@@ -526,7 +559,7 @@ def test_reconcile_scans_a_none_handle_tree(tmp_path: Path) -> None:
         await loop.start()
         assert source.watch_count == 1  # scheduled, but with no observer handle
         queue.submitted.clear()
-        loop._reconcile()
+        await _reconciler(loop).run_once()
         assert len(queue.jobs(CollectionSyncJob)) == 1  # disk-scanned anyway
         await loop.stop()
 
@@ -560,6 +593,437 @@ def test_start_stop_start_rebuilds_a_live_source(tmp_path: Path) -> None:
         source.emit(root, _fs(_write(root, "z.md")))
         await asyncio.sleep(0.15)
         assert queue.jobs(FileIndexJob)  # the rebuilt loop is live
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_start_survives_unreadable_roster_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unreadable quarry_root does not crash boot; the active DB still watches.
+
+    roster_names() iterates quarry_root to find sibling databases; an OSError
+    there must fall back to the active database, never bring down daemon boot.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, _root = _build(tmp_path, queue=queue)
+        real_iterdir = Path.iterdir
+
+        def boom(self: Path) -> Iterator[Path]:
+            if self == ctx.settings.quarry_root:
+                msg = "permission denied"
+                raise OSError(msg)
+            return real_iterdir(self)
+
+        monkeypatch.setattr(Path, "iterdir", boom)
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()  # must not raise
+        assert source.watch_count == 1  # the active DB's collection still watched
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_reconcile_drops_a_watch_whose_registration_was_removed(tmp_path: Path) -> None:
+    """A registration removed from disk has its watch torn down on reconcile (#2).
+
+    A removed/renamed directory fires no delete event, so without this the
+    observer for the gone collection would persist forever.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, _root = _build(tmp_path, queue=queue)  # registers "col"
+        extra = tmp_path / "proj2"
+        extra.mkdir()
+        _register(ctx.settings, extra.resolve(), "col2")
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        assert source.watch_count == 2  # both collections watched
+
+        conn = SyncRegistry(ctx.settings.registry_path)
+        try:
+            conn.deregister_directory("col2")  # remove col2's registration
+        finally:
+            conn.close()
+        await _reconciler(loop).run_once()
+        assert source.watch_count == 1  # col2's observer was torn down
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_symlink_escaping_the_tree_is_never_submitted(tmp_path: Path) -> None:
+    """A symlink whose target escapes the watched root is not indexed (security).
+
+    The cheap observer-thread pre-filter no longer resolves; the authoritative
+    symlink-escape check runs post-debounce in the submitter BEFORE any content
+    is read.  A symlink pointing outside the tree must produce no FileIndexJob.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, root = _build(tmp_path, queue=queue)
+        secret = tmp_path / "outside" / "secret.md"
+        secret.parent.mkdir()
+        secret.write_text("private", encoding="utf-8")
+        escape = root / "escape.md"
+        escape.symlink_to(secret)  # target resolves outside the watched root
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        queue.submitted.clear()
+        source.emit(root, _fs(escape))  # live edit of the escaping symlink
+        await asyncio.sleep(0.15)
+        assert not queue.jobs(FileIndexJob)  # rejected before any content read
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def _reregister_setup(
+    tmp_path: Path, *, queue: _RecordingQueue, collection: str = "docs"
+) -> tuple[WatchLoop, DaemonContext, _FakeSource, Path]:
+    """Register /root/sub as *collection*; return the loop, ctx, source, /root.
+
+    /root is a strict parent of /root/sub, so registering /root subsumes the
+    child.  Same *collection* on both makes it a self-subsume (same-name
+    re-registration); a different parent name makes the child a distinct
+    subsumed collection.
+    """
+    data = tmp_path / "data"
+    (data / "testdb").mkdir(parents=True, exist_ok=True)
+    root = tmp_path / "proj"
+    sub = root / "sub"
+    sub.mkdir(parents=True, exist_ok=True)
+    settings = Settings(
+        quarry_root=data,
+        lancedb_path=data / "testdb" / "lancedb",
+        registry_path=data / "testdb" / "registry.db",
+        watch_enabled=True,
+        watch_debounce_s=0.03,
+        watch_max_delay_s=0.3,
+        watch_bulk_threshold=5,
+        watch_safety_scan_s=0.0,  # drive _reconcile directly; no background timer
+    )
+    _register(settings, sub.resolve(), collection)
+    ns = SimpleNamespace(
+        settings=settings,
+        ingest_queue=queue,
+        tasks=TaskRegistry(),
+        database=_FakeDatabase(),
+        database_name="testdb",
+    )
+    source = _FakeSource()
+    loop = WatchLoop(cast("DaemonContext", ns), source=source)
+    ns.watch_loop = loop  # RegistrationRoutes reaches ctx.watch_loop
+    return loop, cast("DaemonContext", ns), source, root
+
+
+def test_same_name_reregistration_purges_before_rewatch(tmp_path: Path) -> None:
+    """Re-registering "docs" under a wider dir purges old chunks, THEN re-watches.
+
+    directories.collection is UNIQUE, so registering /root as "docs" when
+    /root/sub is already "docs" subsumes "docs" itself.  _run_register must purge
+    the stale (sub-relative) chunks and only THEN install the parent watch + scan
+    — never tear the freshly installed watch down or purge its scan.  Proven by
+    the job order (the purge precedes the re-install scan) and the surviving watch.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        loop, ctx, source, root = _reregister_setup(tmp_path, queue=queue)
+        await loop.start()
+        assert source.watch_count == 1  # /root/sub watched as "docs"
+        queue.submitted.clear()
+
+        key = RouteKey("testdb", "docs")
+        reg = ctx.tasks.begin("register")
+        await RegistrationLifecycle(ctx).run_register(reg, root.resolve(), "docs")
+        assert reg.status == "completed"
+        assert reg.results["subsumed"] == ["docs"]  # subsumed its own name
+        # "docs" is watched again — re-installed at the parent, not torn down.
+        assert source.watch_count == 1
+        # Job order on "docs": the purge precedes the re-install scan, so the
+        # scan's chunks survive (no orphan, no scan-then-purge emptiness).
+        docs_jobs = [job for k, job in queue.submitted if k == key]
+        purge_idx = next(
+            i for i, j in enumerate(docs_jobs) if isinstance(j, CollectionPurgeJob)
+        )
+        assert any(isinstance(j, CollectionSyncJob) for j in docs_jobs[purge_idx + 1 :])
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_failed_subsume_purge_is_retried_on_reconcile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A distinct subsumed child's failed purge is retried until reconcile admits it.
+
+    Registering /root as "parent" over /root/sub "child" subsumes "child" (a
+    distinct collection that does NOT become live).  Its purge fails on a full
+    queue, so it is deferred and re-submitted on the next reconcile; once the
+    queue admits it the delete runs and the pending entry clears.
+    """
+    # A zero admission deadline makes the register-time purge fail immediately.
+    monkeypatch.setattr("quarry.daemon.purge_service._PURGE_SUBMIT_DEADLINE_S", 0.0)
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        loop, ctx, _source, root = _reregister_setup(
+            tmp_path, queue=queue, collection="child"
+        )
+        await loop.start()
+        child = RouteKey("testdb", "child")
+        # The queue is full: registering the parent subsumes "child" but its purge
+        # cannot be admitted, so the child is deferred, never silently dropped.
+        queue.admit = False
+        reg = ctx.tasks.begin("register")
+        await RegistrationLifecycle(ctx).run_register(reg, root.resolve(), "parent")
+        assert reg.results["subsume_purge_failed"] == ["child"]
+        assert loop._submitter is not None
+        assert child in _reconciler(loop)._pending_purges
+        # The queue drains; the next reconcile re-submits the purge and it lands
+        # ("child" is absent from the roster, so the drain purges it).
+        queue.admit = True
+        queue.submitted.clear()
+        await _reconciler(loop).run_once()
+        assert not _reconciler(loop)._pending_purges  # retry succeeded, entry cleared
+        assert queue.jobs(CollectionPurgeJob)  # a fresh purge was submitted
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_reconcile_drain_skips_live_collections_and_purges_absent_ones(
+    tmp_path: Path,
+) -> None:
+    """A re-registered (live) collection supersedes its stale deferred purge.
+
+    A same-name re-register can leave a collection both live and in the pending
+    set.  The drain must skip a live key — purging it would wipe the re-created
+    collection's fresh chunks — while still purging a key absent from the roster.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, _root = _build(tmp_path, queue=queue)  # registers "col" (live)
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        assert loop._submitter is not None
+        live = RouteKey("testdb", "col")  # registered → live in the roster
+        gone = RouteKey("testdb", "gone")  # never registered → absent
+        _reconciler(loop).defer_purge(live)
+        _reconciler(loop).defer_purge(gone)
+        queue.submitted.clear()
+        await _reconciler(loop).run_once()
+        purged = {k for k, j in queue.submitted if isinstance(j, CollectionPurgeJob)}
+        assert live not in purged  # never wipe a live collection
+        assert gone in purged  # a genuinely absent orphan is still purged
+        assert not _reconciler(loop)._pending_purges  # both resolved
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_begin_collection_cancels_a_stale_deferred_purge(tmp_path: Path) -> None:
+    """Beginning a watch for a collection cancels any stale deferred purge at once.
+
+    Defense-in-depth: a re-registration supersedes an orphan-purge immediately,
+    not only at the next reconcile, so a mid-window drain can never wipe it.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, root = _build(tmp_path, queue=queue)
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        assert loop._submitter is not None
+        extra = RouteKey("testdb", "extra")
+        _reconciler(loop).defer_purge(extra)
+        loop.start_watching("extra", root)  # re-registration makes it live
+        assert extra not in _reconciler(loop)._pending_purges  # cancelled at once
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_register_status_completed_only_after_watch_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A poll never sees 'completed' before the parent watch is installed.
+
+    The terminal status is set at the END of _run_register, so at the instant
+    start_watching runs the task is still 'running'.  The old order set
+    'completed' first, exposing an unwatched-but-completed window to a client.
+    """
+    status_at_watch: list[str] = []
+    reg_holder: list[TaskState] = []
+    original = WatchLoop.start_watching
+
+    def spy(self: WatchLoop, collection: str, resolved: Path) -> None:
+        status_at_watch.append(reg_holder[0].status)
+        original(self, collection, resolved)
+
+    monkeypatch.setattr(WatchLoop, "start_watching", spy)
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        loop, ctx, _source, _root = _reregister_setup(tmp_path, queue=queue)
+        await loop.start()
+        reg = ctx.tasks.begin("register")
+        reg_holder.append(reg)
+        fresh = tmp_path / "fresh"  # unrelated tree — a clean register, no subsume
+        fresh.mkdir()
+        await RegistrationLifecycle(ctx).run_register(reg, fresh.resolve(), "newcol")
+        assert status_at_watch == ["running"]  # not completed when the watch installs
+        assert reg.status == "completed"  # completed only after the watch is live
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_partial_reconcile_does_not_tear_down_or_purge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reconcile whose enumeration raises partway drives NO removal actions.
+
+    With `current` only partially built, tearing down `watched - current` or
+    draining purges by `current` could destroy a live watch or its chunks — so
+    both removal actions wait for a fully-successful enumeration.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, _root = _build(tmp_path, queue=queue)  # registers "col"
+        extra = tmp_path / "proj2"
+        extra.mkdir()
+        _register(ctx.settings, extra.resolve(), "col2")
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        assert source.watch_count == 2  # both collections watched
+        assert loop._submitter is not None
+        gone = RouteKey("testdb", "gone")
+        _reconciler(loop).defer_purge(gone)  # an absent orphan awaiting purge
+        queue.submitted.clear()
+
+        # Enumeration now raises → the reconcile cannot complete.
+        def boom(self: WatchRoster, name: str) -> list[tuple[str, Path]]:
+            raise OSError("registry read failed")
+
+        monkeypatch.setattr(WatchRoster, "registrations", boom)
+        await _reconciler(loop).run_once()
+        # No live watch torn down; no purge drained this cycle.
+        assert source.watch_count == 2
+        assert gone in _reconciler(loop)._pending_purges
+        assert not queue.jobs(CollectionPurgeJob)
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_failed_deregister_purge_is_retried_on_reconcile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A deregister-purge the full queue rejects is deferred and retried.
+
+    Symmetric with the subsume path (the z-spec I2 fix): without the deferral a
+    shed deregister-purge would orphan the collection's chunks with no backstop —
+    its registry rows are gone, so a plain reconcile would never revisit it.
+    """
+    monkeypatch.setattr("quarry.daemon.purge_service._PURGE_SUBMIT_DEADLINE_S", 0.0)
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        loop, ctx, _source, _root = _reregister_setup(
+            tmp_path, queue=queue, collection="col"
+        )
+        await loop.start()
+        assert loop._submitter is not None
+        col = RouteKey("testdb", "col")
+        # Deregister "col": the registry rows are removed, then the purge sheds.
+        conn = SyncRegistry(ctx.settings.registry_path)
+        try:
+            conn.deregister_directory("col")
+        finally:
+            conn.close()
+        queue.admit = False
+        purge_state = ctx.tasks.begin("deregister")
+        purge_state.results = {"deleted_chunks": 0}
+        await RegistrationLifecycle(ctx).run_purge(purge_state, "col")
+        assert purge_state.status == "failed"
+        assert col in _reconciler(loop)._pending_purges  # deferred, not orphaned
+        # The queue drains; the next reconcile re-submits the purge ("col" is
+        # absent from the roster, so the drain purges it).
+        queue.admit = True
+        queue.submitted.clear()
+        await _reconciler(loop).run_once()
+        assert col not in _reconciler(loop)._pending_purges
+        assert queue.jobs(CollectionPurgeJob)
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_self_subsume_with_shed_purge_stays_live_and_unqueued(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A same-name re-register whose subsume-purge sheds keeps the parent live.
+
+    The compound path: re-registering "docs" to a wider root while the queue is
+    full sheds the subsume-purge, but discard-on-begin supersedes the stale
+    purge — so the now-live parent is watched and NOT queued for a purge that
+    would wipe its fresh chunks.
+    """
+    monkeypatch.setattr("quarry.daemon.purge_service._PURGE_SUBMIT_DEADLINE_S", 0.0)
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        loop, ctx, source, root = _reregister_setup(tmp_path, queue=queue)  # "docs"
+        await loop.start()
+        assert source.watch_count == 1
+        key = RouteKey("testdb", "docs")
+        queue.admit = False  # the subsume-purge will shed
+        reg = ctx.tasks.begin("register")
+        await RegistrationLifecycle(ctx).run_register(reg, root.resolve(), "docs")
+        assert loop._submitter is not None
+        # discard-on-begin fired: the now-live parent is not queued for a purge.
+        assert key not in _reconciler(loop)._pending_purges
+        assert source.watch_count == 1  # and it is watched
+        assert reg.status == "completed"
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_reconcile_drain_reshed_keeps_pending(tmp_path: Path) -> None:
+    """A drain re-submission that is itself shed keeps the orphan pending.
+
+    The queue is still full when the reconcile drain retries, so the purge sheds
+    again; the entry must survive in the pending set for the next cycle (I2 stays
+    satisfied — the orphan stays tracked, never lost).
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue(admit=False)  # full throughout
+        ctx, _root = _build(tmp_path, queue=queue)
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        assert loop._submitter is not None
+        gone = RouteKey("testdb", "gone")
+        _reconciler(loop).defer_purge(gone)
+        await _reconciler(loop).run_once()  # drain re-submits, but the full queue sheds
+        assert gone in _reconciler(loop)._pending_purges  # survives the next cycle
         await loop.stop()
 
     asyncio.run(_run())

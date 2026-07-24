@@ -9,6 +9,7 @@ and the run is a graceful per-file error, never a crash).
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, cast, final
 from unittest.mock import patch
@@ -18,8 +19,9 @@ import numpy as np
 from quarry.config import Settings
 from quarry.daemon.context import DaemonContext
 from quarry.daemon.index_jobs import CollectionSyncJob, DocumentDeleteJob, FileIndexJob
+from quarry.daemon.ingest_queue import IngestQueue
+from quarry.daemon.registration_lifecycle import RegistrationLifecycle
 from quarry.daemon.route_key import RouteKey
-from quarry.daemon.routes.registrations import RegistrationRoutes
 from quarry.daemon.tasks import TaskState
 from quarry.db import Database
 from quarry.ingestion.file_indexer import SingleFileIndexer
@@ -188,7 +190,7 @@ def test_document_delete_job_removes_chunks_and_rows(tmp_path: Path) -> None:
     assert "c.md" not in _docs(db)
     conn = SyncRegistry(settings.registry_path)
     try:
-        assert all(rec.document_name != "c.md" for rec in conn.list_files("col"))
+        assert all(rec.document_name != "c.md" for rec in conn.files.list_files("col"))
     finally:
         conn.close()
 
@@ -281,7 +283,7 @@ def test_deregister_purge_after_queued_index_leaves_no_orphans(tmp_path: Path) -
             dconn.close()
         purge_state = ctx.tasks.begin("deregister")
         purge_state.results = {"deleted_chunks": 0}
-        await RegistrationRoutes(ctx)._run_purge(purge_state, "col")
+        await RegistrationLifecycle(ctx).run_purge(purge_state, "col")
         await ctx.aclose_ingest_queue()
         # 3. no orphan chunks survive for the deregistered collection.
         assert _docs(ctx.database) == set()
@@ -290,3 +292,103 @@ def test_deregister_purge_after_queued_index_leaves_no_orphans(tmp_path: Path) -
         "quarry.ingestion.streaming.get_embedding_backend", return_value=_FakeEmbedder()
     ):
         asyncio.run(_run())
+
+
+def test_registering_a_parent_purges_subsumed_child_chunks(tmp_path: Path) -> None:
+    """Registering a parent over a child tears it down and purges its chunks.
+
+    A child collection has an in-flight FileIndexJob whose chunks orphan once the
+    parent registration deletes the child's directories row.  _run_register must
+    route a collection-wide purge onto the child's FIFO — behind the insert — so
+    no orphan chunk survives in the subsumed collection.
+    """
+    base = tmp_path / "data" / "testdb"
+    (base / "lancedb").mkdir(parents=True)
+    parent = tmp_path / "proj"
+    child = parent / "sub"
+    child.mkdir(parents=True)
+    settings = Settings(
+        lancedb_path=base / "lancedb", registry_path=base / "registry.db"
+    )
+    conn = SyncRegistry(settings.registry_path)
+    try:
+        conn.register_directory(child.resolve(), "child-col")
+    finally:
+        conn.close()
+    (child / "x.md").write_text("indexable body text that will orphan then purge")
+
+    async def _run() -> None:
+        ctx = DaemonContext(settings, embedder=_FakeEmbedder())
+        key = RouteKey(ctx.database_name, "child-col")
+        # 1. an index job for the child collection is admitted (in-flight).
+        index_state = ctx.tasks.begin("index")
+        job = FileIndexJob(
+            ctx.database,
+            ctx.settings,
+            "child-col",
+            child.resolve(),
+            child.resolve() / "x.md",
+        )
+        assert ctx.ingest_queue.try_submit(key, job, index_state)
+        # 2. registering the parent subsumes child-col and purges it THROUGH the
+        #    queue — FIFO behind the index job, so the purge runs after the insert.
+        reg_state = ctx.tasks.begin("register")
+        await RegistrationLifecycle(ctx).run_register(
+            reg_state, parent.resolve(), "parent-col"
+        )
+        assert reg_state.status == "completed"
+        assert reg_state.results["subsumed"] == ["child-col"]
+        await ctx.aclose_ingest_queue()
+        # 3. no orphan chunks survive in the subsumed child collection.
+        assert _docs(ctx.database) == set()
+
+    with patch(
+        "quarry.ingestion.streaming.get_embedding_backend", return_value=_FakeEmbedder()
+    ):
+        asyncio.run(_run())
+
+
+def test_subsume_purge_failure_is_logged_and_reported(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A subsumed child whose purge cannot be admitted is surfaced, never swallowed.
+
+    With the queue permanently full and a zero admission deadline, the subsume
+    purge fails.  Register itself still completes, but the failed child must be
+    logged and recorded in the task result — an unpurged child leaves orphan
+    chunks with no reconcile backstop, so silence would hide unrecoverable data.
+    """
+    base = tmp_path / "data" / "testdb"
+    (base / "lancedb").mkdir(parents=True)
+    parent = tmp_path / "proj"
+    child = parent / "sub"
+    child.mkdir(parents=True)
+    settings = Settings(
+        lancedb_path=base / "lancedb", registry_path=base / "registry.db"
+    )
+    conn = SyncRegistry(settings.registry_path)
+    try:
+        conn.register_directory(child.resolve(), "child-col")
+    finally:
+        conn.close()
+
+    monkeypatch.setattr("quarry.daemon.purge_service._PURGE_SUBMIT_DEADLINE_S", 0.0)
+
+    async def _run() -> None:
+        ctx = DaemonContext(settings, embedder=_FakeEmbedder())
+        # A permanently-full queue: the purge can never be admitted.  Patch the
+        # class (IngestQueue is __slots__ed, so the instance attr is read-only).
+        monkeypatch.setattr(IngestQueue, "try_submit", lambda *_a, **_k: False)
+        reg_state = ctx.tasks.begin("register")
+        with caplog.at_level(logging.WARNING):
+            await RegistrationLifecycle(ctx).run_register(
+                reg_state, parent.resolve(), "parent-col"
+            )
+        # Register succeeds; the failed child is both logged and reported.
+        assert reg_state.status == "completed"
+        assert reg_state.results["subsume_purge_failed"] == ["child-col"]
+        assert "subsume purge failed for collection child-col" in caplog.text
+
+    asyncio.run(_run())

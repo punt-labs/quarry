@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
     from quarry.models import Chunk
-    from quarry.sync_registry import FileRecord
+    from quarry.sync_file_store import FileRecord
 
 
 @dataclass(frozen=True, slots=True)

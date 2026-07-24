@@ -19,6 +19,7 @@ from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
 
 from quarry.daemon.fs_events import FsEvent
+from quarry.ingestion.pipeline import SUPPORTED_EXTENSIONS
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -66,9 +67,15 @@ class _WatchdogHandler(FileSystemEventHandler):
             logger.exception("watch: event handler failed for %r", event)
 
     def _emit(self, raw_path: str | bytes, *, deleted: bool) -> None:
-        """Normalize a watchdog path to :class:`FsEvent` and forward it."""
-        path = raw_path.decode() if isinstance(raw_path, bytes) else raw_path
-        self._on_event(FsEvent(Path(path), deleted=deleted))
+        """Forward a supported-suffix path as an :class:`FsEvent` (cheap pre-filter).
+
+        Filtering by suffix here, on the observer thread, keeps unsupported-file
+        churn out of the debouncer; the authoritative resolve/ignore filter runs
+        post-debounce in the submitter.
+        """
+        path = Path(raw_path.decode() if isinstance(raw_path, bytes) else raw_path)
+        if path.suffix.lower() in SUPPORTED_EXTENSIONS:
+            self._on_event(FsEvent(path, deleted=deleted))
 
 
 @final

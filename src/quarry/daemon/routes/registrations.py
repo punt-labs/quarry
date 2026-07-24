@@ -8,9 +8,9 @@ Registration resolves a client-supplied directory against the daemon's own home
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
 import pwd
+from collections.abc import Mapping
 from pathlib import Path
 from typing import final
 
@@ -18,24 +18,13 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from quarry.daemon.finalize_job import CollectionPurgeJob
-from quarry.daemon.route_key import RouteKey
+from quarry.daemon.registration_lifecycle import RegistrationLifecycle
 from quarry.daemon.routes.base import RouteGroup
-from quarry.daemon.tasks import TaskState, task_terminal
 from quarry.http_guards import RequestGuards
 from quarry.sync_registry import DirectoryRegistration, SyncRegistry
 
-logger = logging.getLogger(__name__)
-
 # The registrations body carries only a small option dict.
 MAX_REGISTRATIONS_BODY_BYTES = 16 * 1024
-
-# The deregister purge polls its queued delete job to completion.  A full queue
-# is transient (workers drain), and the purge MUST run — the registry rows are
-# already gone — so submission retries within a bounded window before failing.
-_PURGE_TERMINAL = frozenset({"completed", "failed"})
-_PURGE_POLL_S = 0.05
-_PURGE_SUBMIT_DEADLINE_S = 30.0
 
 
 @final
@@ -82,16 +71,12 @@ class RegistrationRoutes(RouteGroup):
         if isinstance(body, JSONResponse):
             return body
 
-        directory = body.get("directory")
-        if not isinstance(directory, str) or not directory.strip():
-            return JSONResponse(
-                {"error": "Missing required field: directory"}, status_code=400
-            )
-        collection = body.get("collection")
-        if not isinstance(collection, str) or not collection.strip():
-            return JSONResponse(
-                {"error": "Missing required field: collection"}, status_code=400
-            )
+        directory = self._required_field(body, "directory")
+        if isinstance(directory, JSONResponse):
+            return directory
+        collection = self._required_field(body, "collection")
+        if isinstance(collection, JSONResponse):
+            return collection
 
         resolved, reason = self._resolve_path(directory)
         if resolved is None:
@@ -102,7 +87,18 @@ class RegistrationRoutes(RouteGroup):
             )
 
         state = self.ctx.tasks.begin("register")
-        return self.accept(state, self._run_register(state, resolved, collection))
+        lifecycle = RegistrationLifecycle(self.ctx)
+        return self.accept(state, lifecycle.run_register(state, resolved, collection))
+
+    @staticmethod
+    def _required_field(body: Mapping[str, object], field: str) -> str | JSONResponse:
+        """Return the non-empty string *field* from *body*, or a 400 response."""
+        value = body.get(field)
+        if not isinstance(value, str) or not value.strip():
+            return JSONResponse(
+                {"error": f"Missing required field: {field}"}, status_code=400
+            )
+        return value
 
     async def _delete(self, request: Request) -> JSONResponse:
         """Deregister synchronously (existence + registry row); purge chunks async."""
@@ -127,7 +123,10 @@ class RegistrationRoutes(RouteGroup):
         # Registry mutation off-thread; an unknown collection is a 404 below, and any
         # unexpected error propagates to the global 500 handler (no raw text echoed).
         found, removed_docs = await run_in_threadpool(
-            self._deregister_sync, self.ctx.settings.registry_path, collection
+            self._deregister_sync,
+            self.ctx.settings.registry_path,
+            collection,
+            keep_data=keep_data,
         )
         if not found:
             return not_found
@@ -150,9 +149,10 @@ class RegistrationRoutes(RouteGroup):
             # FileIndexJob admitted before deregister may still be inserting
             # chunks, and the collection-wide purge — FIFO behind it — clears
             # whatever it wrote, so no orphan survives (DES-045).
+            lifecycle = RegistrationLifecycle(self.ctx)
             self.ctx.tasks.track(
                 state,
-                asyncio.create_task(self._run_purge(state, collection)),
+                asyncio.create_task(lifecycle.run_purge(state, collection)),
             )
 
         return JSONResponse(
@@ -164,84 +164,6 @@ class RegistrationRoutes(RouteGroup):
             status_code=202,
         )
 
-    async def _run_register(
-        self, state: TaskState, resolved: Path, collection: str
-    ) -> None:
-        """Execute register_directory in background and update task state."""
-        try:
-            reg = await run_in_threadpool(
-                self._register_sync,
-                self.ctx.settings.registry_path,
-                resolved,
-                collection,
-            )
-            state.status = "completed"
-            state.results = {
-                "directory": reg.directory,
-                "collection": reg.collection,
-                "registered_at": reg.registered_at,
-            }
-            # Begin watching the new tree and submit its initial scan (DES-045 §6).
-            self.ctx.watch_loop.start_watching(collection, resolved)
-        except asyncio.CancelledError:
-            state.status = "failed"
-            state.error = "task was cancelled"
-            raise
-        except (FileNotFoundError, ValueError) as exc:
-            state.status = "failed"
-            state.error = str(exc)
-        except Exception as exc:
-            logger.exception("Background register failed")
-            state.status = "failed"
-            state.error = str(exc)
-        finally:
-            if state.status == "running":
-                state.status = "failed"
-                state.error = "task exited without setting terminal status"
-
-    async def _run_purge(self, state: TaskState, collection: str) -> None:
-        """Purge a deregistered collection's chunks THROUGH the queue.
-
-        Routing the purge onto the collection's per-``(database, collection)``
-        FIFO worker (DES-045) makes it run behind any already-admitted
-        ``FileIndexJob`` for the same collection, so a queued insert can never
-        resurrect chunks *after* the purge — the single-writer invariant a direct
-        out-of-queue ``delete_document`` would violate.  The task polls the
-        queued job to completion so ``deleted_chunks`` still reflects the result.
-        """
-        with task_terminal(state):
-            purge = self.ctx.tasks.begin("deregister-purge")
-            job = CollectionPurgeJob(self.ctx.database, collection)
-            key = RouteKey(self.ctx.database_name, collection)
-            await self._enqueue_purge(key, job, purge)
-            while purge.status not in _PURGE_TERMINAL:
-                await asyncio.sleep(_PURGE_POLL_S)
-            state.results["deleted_chunks"] = purge.results.get("deleted", 0)
-            if purge.status == "failed":
-                state.status = "failed"
-                state.error = purge.error or "purge failed"
-            else:
-                state.status = "completed"
-
-    async def _enqueue_purge(
-        self, key: RouteKey, job: CollectionPurgeJob, purge: TaskState
-    ) -> None:
-        """Admit the purge, retrying a transiently-full queue within the deadline.
-
-        The registry rows are already gone, so the purge MUST run or the
-        collection's chunks orphan.  A full queue drains as workers finish, so
-        submission retries until the deadline before marking the purge failed.
-        """
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + _PURGE_SUBMIT_DEADLINE_S
-        while not self.ctx.ingest_queue.try_submit(key, job, purge):
-            if loop.time() >= deadline:
-                self.ctx.tasks.drop(purge)
-                purge.status = "failed"
-                purge.error = "ingest queue full; purge not admitted"
-                return
-            await asyncio.sleep(_PURGE_POLL_S)
-
     @staticmethod
     def _list_sync(registry_path: Path) -> list[DirectoryRegistration]:
         """Open registry, list, close — all in one thread."""
@@ -252,31 +174,20 @@ class RegistrationRoutes(RouteGroup):
             conn.close()
 
     @staticmethod
-    def _register_sync(
-        registry_path: Path, resolved: Path, collection: str
-    ) -> DirectoryRegistration:
-        """Open registry, register, close — all in the caller's thread.
-
-        SQLite connections are bound to the thread that created them, so the
-        open/use/close lifecycle must stay inside the worker thread.
-        """
-        conn = SyncRegistry(registry_path)
-        try:
-            return conn.register_directory(resolved, collection)
-        finally:
-            conn.close()
-
-    @staticmethod
     def _deregister_sync(
-        registry_path: Path, collection: str
+        registry_path: Path, collection: str, *, keep_data: bool
     ) -> tuple[bool, list[str]]:
-        """Open registry, deregister, close — all in one thread."""
+        """Open registry, deregister, close — all in one thread.
+
+        With *keep_data*, the deregister records the collection as retained in the
+        same transaction, so the orphan sweep never deletes the kept chunks.
+        """
         conn = SyncRegistry(registry_path)
         try:
             existing = conn.get_registration(collection)
             if existing is None:
                 return False, []
-            removed_docs = conn.deregister_directory(collection)
+            removed_docs = conn.deregister_directory(collection, keep_data=keep_data)
             return True, removed_docs
         finally:
             conn.close()
