@@ -162,8 +162,9 @@ The purge is admitted and drains the chunks.
 \end{schema}
 
 The queue stays saturated past the admission deadline, so the purge is never
-admitted.  The deregister path, unlike the subsume path, does \textit{not} defer
-the failed purge for a reconcile retry.
+admitted.  Symmetric with the subsume path, the deregister path defers the
+failed purge to $pending$ for a reconcile retry, so the still-chunked collection
+stays tracked until a later sweep admits the delete.
 
 \begin{schema}{DeregisterPurgeShed}
   \Delta Watch \\
@@ -173,7 +174,7 @@ the failed purge for a reconcile retry.
   registered' = registered \setminus \{ c? \} \\
   watched' = watched \setminus \{ c? \} \\
   chunks' = chunks \\
-  pending' = pending \\
+  pending' = pending \cup \{ c? \} \\
   retained' = retained \setminus \{ c? \}
 \end{schema}
 
