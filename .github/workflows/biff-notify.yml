@@ -1,7 +1,7 @@
 name: Biff CI Notifications
 on:
   workflow_run:
-    workflows: ["Lint", "Tests", "Docs"]
+    workflows: ["Docs", "Install harness", "Lint", "Release", "Tests"]
     types: [completed]
 
 permissions:
