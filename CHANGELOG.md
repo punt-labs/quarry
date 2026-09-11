@@ -35,6 +35,15 @@ across `transform`, `index`, and `connector`).
   `ExtractedDocument`, `InlineIngest`, `BulkOptions`) instead of ~10-15
   positional parameters. No behavior change on any surface; the fail-closed
   overwrite-delete gate is preserved. (quarry-hb9u)
+- infra: decomposed the `hooks.py` god module (783 → ~420 lines) — extracted
+  `sync_lock.py` (`SyncLock`, the background-sync file lock, now injectable) and
+  `session_start_templates.py` (`SessionStartTemplates`); `_SessionStartContext`
+  retained in `hooks.py` absorbing its helpers; `_as_str`/`_as_dir` removed in
+  favor of `HookPayload.as_str`/`as_dir`. No behavior change on the
+  session-start / post-web-fetch / pre-compact hook surfaces. Also hardened
+  `SyncLock` against two latent races carried over from the old code: an
+  `is_held()` TOCTOU (`FileNotFoundError` on a concurrently-reclaimed lockfile)
+  and an unchecked short `os.write` that could leave a truncated PID. (quarry-hb9u)
 
 ## [3.2.1] - 2026-09-03
 
