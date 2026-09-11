@@ -23,12 +23,15 @@ class SyncLock:
     before the daemon's scan itself finishes.  This lock's ``flock`` is held
     for exactly that dispatch subprocess's lifetime, so it prevents redundant
     or racing *launches* of the dispatcher — it does NOT, and is not meant to,
-    span the daemon's actual scan.  Single-flight over the scan itself is a
-    SEPARATE guarantee the daemon provides on its own: a second concurrent
-    sync request gets a 409 "already in progress" naming the in-flight
-    ``task_id``, which the CLI (``cli_sync.py``) maps to exit 0 rather than an
-    error.  Do not try to make this flock span the scan — that is the
-    daemon's job, and this class has no visibility into when the scan ends.
+    span the daemon's actual scan.  The daemon does NOT deduplicate or
+    coalesce scans either: per DES-045, the sync route always returns 202 and
+    enqueues a ``CollectionSyncJob`` per registered collection on every
+    request — there is no singleton-task 409 for sync (that guard exists only
+    for ``optimize``/``backfill``, which have no per-collection queue).  What
+    keeps concurrent scans from stepping on each other is DES-042's
+    daemon-owned FIFO ingest queue, which serializes work per collection.  Do
+    not try to make this flock span the scan or dedupe scan requests — that is
+    the daemon's queue's job, and this class has no visibility into it.
 
     One instance, one lockfile path.  Mutual exclusion for the dispatch is a
     kernel ``flock(2)`` on that path, not a PID written into it: the lock is
