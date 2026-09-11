@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import logging
 import os
@@ -15,28 +16,40 @@ logger = logging.getLogger(__name__)
 
 @final
 class SyncLock:
-    """Own the sync lockfile and arbitrate single-flight background syncs.
+    """Own the sync lockfile and arbitrate single-flight DISPATCH of ``quarry sync``.
 
-    One instance, one lockfile path.  Mutual exclusion is a kernel
-    ``flock(2)`` on that path, not a PID written into it: the lock is held
-    for the sync subprocess's entire lifetime (the child inherits the
-    parent's open file description via ``Popen(pass_fds=...)``) and is
+    Scope, precisely: ``quarry sync`` is dispatch-only — it POSTs a sync
+    request to the daemon and exits after the daemon's 202 acceptance, well
+    before the daemon's scan itself finishes.  This lock's ``flock`` is held
+    for exactly that dispatch subprocess's lifetime, so it prevents redundant
+    or racing *launches* of the dispatcher — it does NOT, and is not meant to,
+    span the daemon's actual scan.  Single-flight over the scan itself is a
+    SEPARATE guarantee the daemon provides on its own: a second concurrent
+    sync request gets a 409 "already in progress" naming the in-flight
+    ``task_id``, which the CLI (``cli_sync.py``) maps to exit 0 rather than an
+    error.  Do not try to make this flock span the scan — that is the
+    daemon's job, and this class has no visibility into when the scan ends.
+
+    One instance, one lockfile path.  Mutual exclusion for the dispatch is a
+    kernel ``flock(2)`` on that path, not a PID written into it: the lock is
+    held for the dispatch subprocess's entire lifetime (the child inherits
+    the parent's open file description via ``Popen(pass_fds=...)``) and is
     released automatically by the kernel when the child exits or dies —
     no PID parsing, no staleness detection, and therefore no reclaim race.
     A prior PID/``O_CREAT|O_EXCL`` design had exactly that race: two
     callers independently deciding the same stale PID was reclaimable
     could each ``unlink()`` and each recreate the lock, interleaving into
-    a duplicate sync — ``flock`` has no equivalent "decide staleness, then
-    act on it" step for a second caller to interleave with.
+    a duplicate dispatch — ``flock`` has no equivalent "decide staleness,
+    then act on it" step for a second caller to interleave with.
 
     The lockfile is never deleted BY THIS CLASS, but ``flock`` is bound to
-    the inode, not the path: if the file is deleted EXTERNALLY while a sync
-    holds it (an operator ``rm``, a future cleanup/doctor script), a
+    the inode, not the path: if the file is deleted EXTERNALLY while a
+    dispatch holds it (an operator ``rm``, a future cleanup/doctor script), a
     subsequent :meth:`acquire` happily ``O_CREAT``\\ s a fresh inode at the
     same path, unrelated to the still-locked old one — silently defeating
     single-flight.  Do not "fix" a lockfile that looks stuck by removing it
-    while a sync might be active; the flock, not the path, is the source of
-    truth for whether one is running.
+    while a dispatch might be active; the flock, not the path, is the source
+    of truth for whether one is running.
     """
 
     __slots__ = ("_path",)
@@ -101,7 +114,12 @@ class SyncLock:
             logger.error("session-start: flock probe failed: %s", exc)
             return True
         else:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            # Best-effort release: the finally-close below already releases
+            # the flock (closing the last fd on the open file description
+            # does), so a transient OSError unlocking explicitly here must
+            # not escape and turn this advisory probe into a raise.
+            with contextlib.suppress(OSError):
+                fcntl.flock(fd, fcntl.LOCK_UN)
             return False
         finally:
             os.close(fd)

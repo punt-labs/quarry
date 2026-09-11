@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import os
 import subprocess as _subprocess
 import sys
@@ -136,6 +137,33 @@ class TestSyncLockIsHeld:
             assert probe.is_held() is True
         finally:
             os.close(held_fd)
+
+    def test_transient_unlock_error_fails_open_not_raise(self, tmp_path: Path) -> None:
+        """A LOCK_UN OSError during the probe must not escape is_held().
+
+        Regression test: the explicit best-effort release after a successful
+        probe-acquire was unguarded -- a transient OSError from LOCK_UN would
+        propagate out of is_held() and make SessionStart raise, instead of
+        the intended fail-open (return False). The finally-close already
+        releases the flock regardless, so the explicit unlock is redundant
+        housekeeping and must never be allowed to raise.
+        """
+        pidfile = tmp_path / "sync.pid"
+        lock = SyncLock(path=pidfile)
+        real_flock = fcntl.flock
+
+        def fail_only_on_unlock(fd: int, operation: int) -> None:
+            if operation == fcntl.LOCK_UN:
+                raise OSError("transient unlock failure")
+            real_flock(fd, operation)
+
+        with patch("fcntl.flock", side_effect=fail_only_on_unlock):
+            assert lock.is_held() is False  # fails open, never raises
+        # The finally-close released the flock regardless of the failed
+        # explicit unlock -- a fresh acquire on the same path must succeed.
+        fd = lock.acquire()
+        assert fd is not None
+        os.close(fd)
 
 
 class TestSyncLockAcquire:
