@@ -49,7 +49,13 @@ class TestSyncLockLaunchBackgroundSync:
             assert lock.launch_background_sync() == "running"
 
     def test_pidfile_write_failure_still_returns_launched(self, tmp_path: Path) -> None:
-        """If Popen succeeds but PID write fails, sync is running — return launched."""
+        """If Popen succeeds but PID write fails, sync is running — return launched.
+
+        The lock is left in place on a persistent write failure: Popen already
+        succeeded (the sync IS running), so removing the lock would let the
+        next SessionStart see none and launch a DUPLICATE sync. A stale lock
+        costs one skipped sync; a removed one risks two running at once.
+        """
         lockfile = tmp_path / "sync.pid"
         mock_proc = MagicMock()
         mock_proc.pid = 99999
@@ -61,32 +67,37 @@ class TestSyncLockLaunchBackgroundSync:
         ):
             # Sync launched despite write failure.
             assert lock.launch_background_sync() == "launched"
-        # The corrupted (empty) lockfile is dropped, not left behind for a
-        # future is_held() to misread.
-        assert not lockfile.exists()
+        assert lockfile.exists()
 
-    def test_short_write_drops_corrupted_pidfile_but_still_launched(
+    def test_short_write_is_retried_until_the_full_pid_lands(
         self, tmp_path: Path
     ) -> None:
-        """A partial os.write leaves a truncated PID -- treat it as a failure.
+        """A partial os.write is retried with the remainder, never dropped.
 
         Regression test: an unchecked ``os.write`` return count would let a
         short write leave a truncated PID that ``is_held()`` still
         ``int()``-parses, possibly matching an unrelated live process and
-        wedging background sync forever.
+        wedging background sync forever. The fix must not solve that by
+        unlinking the lockfile either -- Popen already succeeded, so a
+        removed lock would let a concurrent SessionStart launch a duplicate
+        sync. The correct fix is a write-all retry loop.
         """
         lockfile = tmp_path / "sync.pid"
         mock_proc = MagicMock()
         mock_proc.pid = 99999
         lock = SyncLock(path=lockfile)
+        real_write = os.write
+
+        def one_byte_at_a_time(fd: int, data: bytes) -> int:
+            """Write only the first byte of *data*, simulating a short write."""
+            return real_write(fd, data[:1])
 
         with (
             patch.object(_subprocess, "Popen", return_value=mock_proc),
-            patch("os.write", return_value=1),  # "99999" is 5 bytes; only 1 written
+            patch("os.write", side_effect=one_byte_at_a_time),
         ):
             assert lock.launch_background_sync() == "launched"
-        # No truncated pidfile survives to misfire a later is_held().
-        assert not lockfile.exists()
+        assert lockfile.read_text() == "99999"
 
 
 class TestSyncLockIsHeld:
@@ -138,6 +149,17 @@ class TestSyncLockIsHeld:
         lock = SyncLock(path=pidfile)
         with patch.object(Path, "read_text", side_effect=FileNotFoundError):
             assert lock.is_held() is False
+
+
+class TestSyncLockAcquire:
+    def test_creates_lockfile_with_mode_0600(self, tmp_path: Path) -> None:
+        """The lockfile is created user-read/write-only, no group/other access."""
+        lockfile = tmp_path / "sync.pid"
+        lock = SyncLock(path=lockfile)
+        fd = lock.acquire()
+        assert fd is not None
+        os.close(fd)
+        assert lockfile.stat().st_mode & 0o777 == 0o600
 
 
 class TestSyncLockConstruction:

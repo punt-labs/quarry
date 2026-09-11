@@ -49,11 +49,13 @@ class SyncLock:
         Stale PID files (process no longer running) are cleaned up.
 
         Handles signal-0 results correctly:
-        - ProcessLookupError -> process is gone (stale)
+        - ProcessLookupError -> process is gone (stale, WE reclaim it)
         - PermissionError (EPERM) -> process exists, another user (running)
-        - ValueError -> corrupt PID file (stale)
-        - FileNotFoundError -> a concurrent is_held() reclaimed the file
-          between the exists() check above and read_text() below (stale)
+        - ValueError -> corrupt PID file (stale, WE reclaim it)
+        - FileNotFoundError -> a concurrent caller reclaimed the file between
+          the exists() check above and read_text() below; there is nothing
+          valid here for US to remove (and a fresh acquirer may have already
+          recreated it), so this branch never unlinks
         """
         if not self._path.exists():
             return False
@@ -66,9 +68,14 @@ class SyncLock:
         except PermissionError:
             # EPERM: process exists but we can't signal it — treat as running.
             return True
-        except (FileNotFoundError, ValueError, ProcessLookupError):
-            # Stale PID file — process is gone, PID is garbage, or a
-            # concurrent caller already unlinked it out from under us.
+        except FileNotFoundError:
+            # The file vanished under us — a concurrent caller's reclaim, or
+            # a fresh acquire(), already happened.  Nothing to unlink; doing
+            # so risks deleting a brand-new holder's lock.
+            return False
+        except (ValueError, ProcessLookupError):
+            # A genuinely stale PID file WE just parsed — process is gone or
+            # the PID is garbage.  Safe for us to reclaim it.
             with contextlib.suppress(OSError):
                 self._path.unlink()
             return False
@@ -142,21 +149,23 @@ class SyncLock:
 
         # Write the PID to the lock file (fd is already open).  A short write
         # (n < len(data)) would leave a truncated PID that is_held() still
-        # int()-parses — possibly matching an unrelated live process and
-        # wedging background sync forever — so an incomplete write is treated
-        # the same as an OSError: warn and drop the corrupted lock file.
+        # int()-parses, so retry with the unwritten remainder until every
+        # byte lands.  Popen already succeeded — the sync IS running — so
+        # this never drops the lock file on a partial write: doing so would
+        # let the next SessionStart see no lock and launch a DUPLICATE sync,
+        # trading a cosmetic truncated-PID risk for a real concurrency bug.
+        # Only a persistent OSError falls through to the warning, and even
+        # then the lock stays in place: a stale lock costs one skipped sync,
+        # a removed one risks two running at once.
         try:
             data = str(proc.pid).encode()
-            written = os.write(fd, data)
-            if written != len(data):
-                msg = f"short write ({written}/{len(data)} bytes)"
-                raise OSError(msg)
+            written = 0
+            while written < len(data):
+                written += os.write(fd, data[written:])
         except OSError as exc:
             logger.warning(
                 "session-start: sync launched but pidfile write failed: %s", exc
             )
-            with contextlib.suppress(OSError):
-                self._path.unlink()
         finally:
             os.close(fd)
 
