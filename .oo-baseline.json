@@ -1872,17 +1872,17 @@
     "public_attr_violations": 0.0
   },
   "src/quarry/hooks.py": {
-    "avg_complexity": 2.29,
-    "avg_params": 1.03,
-    "class_to_func_ratio": 0.125,
-    "classes_per_module": 2.0,
+    "method_ratio": 0.765,
     "encapsulation_ratio": 1.0,
-    "future_annotations": 1.0,
+    "avg_params": 0.88,
+    "max_complexity": 6.0,
+    "avg_complexity": 2.65,
+    "module_size": 417.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 0.2,
     "init_violations": 0.0,
-    "max_complexity": 7.0,
-    "method_ratio": 0.548,
-    "module_size": 674.0,
-    "public_attr_violations": 0.0
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/quarry/hooks_agent.py": {
     "avg_complexity": 3.89,
@@ -2729,6 +2729,19 @@
     "module_size": 422.0,
     "public_attr_violations": 0.0
   },
+  "src/quarry/session_start_templates.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.88,
+    "max_complexity": 1.0,
+    "avg_complexity": 1.0,
+    "module_size": 138.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/quarry/session_transcript.py": {
     "avg_complexity": 1.6,
     "avg_params": 2.2,
@@ -2949,6 +2962,19 @@
     "method_ratio": 1.0,
     "module_size": 240.0,
     "public_attr_violations": 0.0
+  },
+  "src/quarry/sync_lock.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.14,
+    "max_complexity": 6.0,
+    "avg_complexity": 2.57,
+    "module_size": 207.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/quarry/sync_messages.py": {
     "avg_complexity": 0.0,

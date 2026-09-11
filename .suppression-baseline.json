@@ -1,7 +1,7 @@
 {
-  "total": 218,
+  "total": 219,
   "by_category": {
-    "noqa": 181,
+    "noqa": 182,
     "type_ignore": 7,
     "pylint_disable": 0,
     "pyright_ignore": 1,
@@ -129,7 +129,7 @@
       "noqa": 2
     },
     "src/quarry/ingestion/sitemap_ingest.py": {
-      "noqa": 3
+      "noqa": 4
     },
     "src/quarry/ingestion/web_fetch.py": {
       "noqa": 1
@@ -181,5 +181,5 @@
       "noqa": 2
     }
   },
-  "updated_at": "2026-09-09T15:20:00Z"
+  "updated_at": "2026-09-11T05:07:14Z"
 }
