@@ -56,8 +56,9 @@ across `transform`, `index`, and `connector`).
   per-collection by the ingest queue (DES-042). (quarry-hb9u)
 
 - infra: bumped runtime dependencies `rapidocr` (3.6.0 → 3.9.2) and `uvicorn`
-  (0.51.0 → 0.52.4), plus the dev toolchain (`mypy`, `pytest-asyncio`,
-  `types-pyyaml`), via Dependabot.
+  (0.51.0 → 0.52.4), plus the dev toolchain — `mypy` (2.3.0 → 2.3.1),
+  `pytest-asyncio` (1.3.0 → 1.4.0), and `types-pyyaml`
+  (6.0.12.20260724 → 6.0.12.20260815) — via Dependabot.
 
 ## [3.2.1] - 2026-09-03
 
