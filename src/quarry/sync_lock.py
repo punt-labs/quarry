@@ -52,6 +52,8 @@ class SyncLock:
         - ProcessLookupError -> process is gone (stale)
         - PermissionError (EPERM) -> process exists, another user (running)
         - ValueError -> corrupt PID file (stale)
+        - FileNotFoundError -> a concurrent is_held() reclaimed the file
+          between the exists() check above and read_text() below (stale)
         """
         if not self._path.exists():
             return False
@@ -64,8 +66,9 @@ class SyncLock:
         except PermissionError:
             # EPERM: process exists but we can't signal it — treat as running.
             return True
-        except (ValueError, ProcessLookupError):
-            # Stale PID file — process is gone or PID is garbage.
+        except (FileNotFoundError, ValueError, ProcessLookupError):
+            # Stale PID file — process is gone, PID is garbage, or a
+            # concurrent caller already unlinked it out from under us.
             with contextlib.suppress(OSError):
                 self._path.unlink()
             return False
@@ -137,13 +140,23 @@ class SyncLock:
                 self._path.unlink()
             return "failed"
 
-        # Write the PID to the lock file (fd is already open).
+        # Write the PID to the lock file (fd is already open).  A short write
+        # (n < len(data)) would leave a truncated PID that is_held() still
+        # int()-parses — possibly matching an unrelated live process and
+        # wedging background sync forever — so an incomplete write is treated
+        # the same as an OSError: warn and drop the corrupted lock file.
         try:
-            os.write(fd, str(proc.pid).encode())
+            data = str(proc.pid).encode()
+            written = os.write(fd, data)
+            if written != len(data):
+                msg = f"short write ({written}/{len(data)} bytes)"
+                raise OSError(msg)
         except OSError as exc:
             logger.warning(
                 "session-start: sync launched but pidfile write failed: %s", exc
             )
+            with contextlib.suppress(OSError):
+                self._path.unlink()
         finally:
             os.close(fd)
 

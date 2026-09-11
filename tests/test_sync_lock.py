@@ -61,6 +61,32 @@ class TestSyncLockLaunchBackgroundSync:
         ):
             # Sync launched despite write failure.
             assert lock.launch_background_sync() == "launched"
+        # The corrupted (empty) lockfile is dropped, not left behind for a
+        # future is_held() to misread.
+        assert not lockfile.exists()
+
+    def test_short_write_drops_corrupted_pidfile_but_still_launched(
+        self, tmp_path: Path
+    ) -> None:
+        """A partial os.write leaves a truncated PID -- treat it as a failure.
+
+        Regression test: an unchecked ``os.write`` return count would let a
+        short write leave a truncated PID that ``is_held()`` still
+        ``int()``-parses, possibly matching an unrelated live process and
+        wedging background sync forever.
+        """
+        lockfile = tmp_path / "sync.pid"
+        mock_proc = MagicMock()
+        mock_proc.pid = 99999
+        lock = SyncLock(path=lockfile)
+
+        with (
+            patch.object(_subprocess, "Popen", return_value=mock_proc),
+            patch("os.write", return_value=1),  # "99999" is 5 bytes; only 1 written
+        ):
+            assert lock.launch_background_sync() == "launched"
+        # No truncated pidfile survives to misfire a later is_held().
+        assert not lockfile.exists()
 
 
 class TestSyncLockIsHeld:
@@ -96,6 +122,22 @@ class TestSyncLockIsHeld:
         lock = SyncLock(path=pidfile)
         assert lock.is_held() is False
         assert not pidfile.exists()
+
+    def test_file_removed_between_exists_and_read_text_is_not_held(
+        self, tmp_path: Path
+    ) -> None:
+        """A concurrent is_held() reclaiming the file mid-check must not raise.
+
+        Regression test: exists() and read_text() are two separate syscalls;
+        a second SessionStart hook that unlinks the stale lockfile in
+        between must be treated as "lock is gone", not propagate a
+        FileNotFoundError out of the hook.
+        """
+        pidfile = tmp_path / "sync.pid"
+        pidfile.write_text("12345")
+        lock = SyncLock(path=pidfile)
+        with patch.object(Path, "read_text", side_effect=FileNotFoundError):
+            assert lock.is_held() is False
 
 
 class TestSyncLockConstruction:
