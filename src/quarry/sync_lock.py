@@ -189,10 +189,14 @@ class SyncLock:
         # Survive execve(): pass_fds forces close_fds to skip this fd and
         # marks it inheritable for us, but clearing it explicitly here keeps
         # the exec-survival property visible and intentional in the code,
-        # not an implicit side effect of subprocess's internals.
-        inheritable = True
-        os.set_inheritable(fd, inheritable)
+        # not an implicit side effect of subprocess's internals.  This lives
+        # INSIDE the try, alongside Popen: if it raises, no child has
+        # inherited a copy yet, so the except's close(fd) must still run to
+        # release the lock -- an OSError here must not escape and leak the
+        # held descriptor for the rest of the hook process.
         try:
+            inheritable = True
+            os.set_inheritable(fd, inheritable)
             proc = subprocess.Popen(
                 [sys.executable, "-m", "quarry", "sync"],
                 stdin=subprocess.DEVNULL,
