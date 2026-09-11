@@ -28,6 +28,15 @@ class SyncLock:
     could each ``unlink()`` and each recreate the lock, interleaving into
     a duplicate sync — ``flock`` has no equivalent "decide staleness, then
     act on it" step for a second caller to interleave with.
+
+    The lockfile is never deleted BY THIS CLASS, but ``flock`` is bound to
+    the inode, not the path: if the file is deleted EXTERNALLY while a sync
+    holds it (an operator ``rm``, a future cleanup/doctor script), a
+    subsequent :meth:`acquire` happily ``O_CREAT``\\ s a fresh inode at the
+    same path, unrelated to the still-locked old one — silently defeating
+    single-flight.  Do not "fix" a lockfile that looks stuck by removing it
+    while a sync might be active; the flock, not the path, is the source of
+    truth for whether one is running.
     """
 
     __slots__ = ("_path",)
@@ -54,9 +63,15 @@ class SyncLock:
 
         The file is never deleted by this class — it is a permanent, shared
         scaffold for the kernel lock, reused across every session.
+        ``O_NOFOLLOW`` refuses to follow a symlink planted at the fixed path:
+        without it, a hostile or accidental ``sync.pid`` symlink would make
+        this open (and the later ``ftruncate``/``write``) target whatever the
+        symlink points at.  It only guards the final path component — the
+        parent directory is the trusted, user-owned one — which is exactly
+        the guarantee needed here.
         """
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        return os.open(str(self._path), os.O_CREAT | os.O_RDWR, 0o600)
+        return os.open(str(self._path), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
 
     def is_held(self) -> bool:
         """Return whether another process currently holds the sync lock.
@@ -71,11 +86,19 @@ class SyncLock:
         """
         try:
             fd = self._open_for_lock()
-        except OSError:
+        except OSError as exc:
+            logger.error("session-start: failed to open lock file for probe: %s", exc)
             return False
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
+        except BlockingIOError:
+            # Normal contention: another process holds it. Expected, not logged.
+            return True
+        except OSError as exc:
+            # A genuine kernel error (e.g. ENOLCK, lock-table exhausted) --
+            # never conflate this with routine contention, or it silently
+            # masquerades as "someone else is syncing" forever with no trace.
+            logger.error("session-start: flock probe failed: %s", exc)
             return True
         else:
             fcntl.flock(fd, fcntl.LOCK_UN)
@@ -99,7 +122,14 @@ class SyncLock:
             return None
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
+        except BlockingIOError:
+            # Normal contention: another process holds it. Expected, not logged.
+            os.close(fd)
+            return None
+        except OSError as exc:
+            # A genuine kernel error (e.g. ENOLCK) -- must be visible, not
+            # silently treated as routine contention.
+            logger.error("session-start: flock acquire failed: %s", exc)
             os.close(fd)
             return None
         return fd

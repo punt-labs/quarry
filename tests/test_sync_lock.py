@@ -172,6 +172,41 @@ class TestSyncLockAcquire:
         assert fd2 is not None
         os.close(fd2)
 
+    def test_refuses_a_symlinked_lock_path(self, tmp_path: Path) -> None:
+        """O_NOFOLLOW rejects a symlink planted at the fixed lock path.
+
+        Regression test for CWE-59 (symlink following): without
+        ``O_NOFOLLOW``, opening a symlinked ``sync.pid`` would follow it, and
+        the subsequent ``ftruncate``/``write`` would clobber whatever the
+        symlink points at instead of the lockfile itself.
+        """
+        target = tmp_path / "target.txt"
+        target.write_text("do not touch")
+        lockfile = tmp_path / "sync.pid"
+        lockfile.symlink_to(target)
+
+        lock = SyncLock(path=lockfile)
+        assert lock.acquire() is None
+        # The symlink target was never opened, let alone truncated/written.
+        assert target.read_text() == "do not touch"
+
+    def test_is_held_does_not_raise_on_a_symlinked_lock_path(
+        self, tmp_path: Path
+    ) -> None:
+        """is_held()'s probe fails open (False); the authoritative acquire()
+        still refuses the symlink, so launch_background_sync() ends up
+        "running" either way -- never a raised exception, never a follow.
+        """
+        target = tmp_path / "target.txt"
+        target.write_text("do not touch")
+        lockfile = tmp_path / "sync.pid"
+        lockfile.symlink_to(target)
+
+        lock = SyncLock(path=lockfile)
+        assert lock.is_held() is False
+        assert lock.acquire() is None
+        assert target.read_text() == "do not touch"
+
 
 class TestSyncLockSingleFlight:
     """Regression coverage for the reclaim race Copilot found in PR #518.
