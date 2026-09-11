@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, final
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -24,6 +24,7 @@ _TRIGGER_RULES = (
 )
 
 
+@final
 class SessionStartTemplates:
     """Produce every SessionStart ``additionalContext`` string.
 
