@@ -287,3 +287,4 @@ Use `/punt:auto release [version=X.Y.Z]`. Quarry is a CLI + Plugin Hybrid — re
 @.punt-labs/quarry/CLAUDE.md
 @.punt-labs/vox/CLAUDE.md
 @.punt-labs/ethos/CLAUDE.md
+@.punt-labs/beadle/CLAUDE.md
