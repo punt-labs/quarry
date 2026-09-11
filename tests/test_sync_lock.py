@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import subprocess as _subprocess
+import sys
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -16,37 +18,35 @@ class TestSyncLockLaunchBackgroundSync:
         mock_proc.pid = 99999
         lockfile = tmp_path / "sync.pid"
         lock = SyncLock(path=lockfile)
-        with patch.object(_subprocess, "Popen", return_value=mock_proc):
+        with patch.object(_subprocess, "Popen", return_value=mock_proc) as popen:
             assert lock.launch_background_sync() == "launched"
             assert lockfile.exists()
             assert lockfile.read_text() == "99999"
+        # The lock fd was passed to the child so its flock survives exec.
+        pass_fds = popen.call_args.kwargs["pass_fds"]
+        assert len(pass_fds) == 1
+        assert isinstance(pass_fds[0], int)
 
     def test_returns_failed_on_oserror(self, tmp_path: Path) -> None:
         lockfile = tmp_path / "sync.pid"
         lock = SyncLock(path=lockfile)
         with patch.object(_subprocess, "Popen", side_effect=OSError("No such file")):
             assert lock.launch_background_sync() == "failed"
-            assert not lockfile.exists()  # Lock cleaned up on failure
+        # The scaffold file is never deleted -- only its (never-held) flock
+        # was released.
+        assert lockfile.exists()
 
     def test_returns_running_when_already_running(self, tmp_path: Path) -> None:
+        """Another instance genuinely holding the flock blocks a new launch."""
         lockfile = tmp_path / "sync.pid"
-        lockfile.write_text(str(os.getpid()))  # Current process — definitely alive
-        lock = SyncLock(path=lockfile)
-        assert lock.launch_background_sync() == "running"
-
-    def test_returns_running_when_lock_held(self, tmp_path: Path) -> None:
-        """Atomic lock prevents TOCTOU race — second caller gets 'running'."""
-        lockfile = tmp_path / "sync.pid"
-        lockfile.write_text("12345")  # Pre-existing lock file, not a live PID
-        lock = SyncLock(path=lockfile)
-        with patch("os.kill", side_effect=ProcessLookupError):
-            # is_held() finds no live process and unlinks the stale file, but
-            # a concurrent acquirer recreated it before this caller's acquire()
-            # runs — modeled here by pre-seeding the file back after unlink.
-            assert lock.is_held() is False
-        lockfile.write_text("12345")
-        with patch("quarry.sync_lock.os.open", side_effect=FileExistsError):
+        holder = SyncLock(path=lockfile)
+        held_fd = holder.acquire()
+        assert held_fd is not None
+        try:
+            lock = SyncLock(path=lockfile)
             assert lock.launch_background_sync() == "running"
+        finally:
+            os.close(held_fd)
 
     def test_pidfile_write_failure_still_returns_launched(self, tmp_path: Path) -> None:
         """If Popen succeeds but PID write fails, sync is running — return launched.
@@ -75,12 +75,11 @@ class TestSyncLockLaunchBackgroundSync:
         """A partial os.write is retried with the remainder, never dropped.
 
         Regression test: an unchecked ``os.write`` return count would let a
-        short write leave a truncated PID that ``is_held()`` still
-        ``int()``-parses, possibly matching an unrelated live process and
-        wedging background sync forever. The fix must not solve that by
-        unlinking the lockfile either -- Popen already succeeded, so a
-        removed lock would let a concurrent SessionStart launch a duplicate
-        sync. The correct fix is a write-all retry loop.
+        short write leave a truncated PID observable to a human inspecting
+        the file. The fix must not solve that by unlinking the lockfile
+        either -- Popen already succeeded, so a removed lock would let a
+        concurrent SessionStart launch a duplicate sync. The correct fix is
+        a write-all retry loop.
         """
         lockfile = tmp_path / "sync.pid"
         mock_proc = MagicMock()
@@ -102,53 +101,41 @@ class TestSyncLockLaunchBackgroundSync:
 
 class TestSyncLockIsHeld:
     def test_no_pidfile_returns_false(self, tmp_path: Path) -> None:
-        lock = SyncLock(path=tmp_path / "sync.pid")
+        """Probing creates the shared lockfile scaffold but never holds it."""
+        lockfile = tmp_path / "sync.pid"
+        lock = SyncLock(path=lockfile)
         assert lock.is_held() is False
+        assert lockfile.exists()
 
-    def test_stale_pid_returns_false(self, tmp_path: Path) -> None:
-        pidfile = tmp_path / "sync.pid"
-        pidfile.write_text("999999999")  # PID that doesn't exist
-        lock = SyncLock(path=pidfile)
-        assert lock.is_held() is False
-        assert not pidfile.exists()  # Stale file cleaned up
-
-    def test_live_pid_returns_true(self, tmp_path: Path) -> None:
-        pidfile = tmp_path / "sync.pid"
-        pidfile.write_text(str(os.getpid()))  # Current process — definitely alive
-        lock = SyncLock(path=pidfile)
-        assert lock.is_held() is True
-
-    def test_eperm_treated_as_running(self, tmp_path: Path) -> None:
-        """PermissionError (EPERM) means process exists but not ours."""
-        pidfile = tmp_path / "sync.pid"
-        pidfile.write_text("1")  # PID 1 (init) — will get EPERM
-        lock = SyncLock(path=pidfile)
-        with patch("os.kill", side_effect=PermissionError("EPERM")):
-            assert lock.is_held() is True
-            assert pidfile.exists()  # Not cleaned up — process is alive
-
-    def test_negative_pid_treated_as_stale(self, tmp_path: Path) -> None:
-        pidfile = tmp_path / "sync.pid"
-        pidfile.write_text("-1")
-        lock = SyncLock(path=pidfile)
-        assert lock.is_held() is False
-        assert not pidfile.exists()
-
-    def test_file_removed_between_exists_and_read_text_is_not_held(
+    def test_unheld_lockfile_with_stale_content_is_not_held(
         self, tmp_path: Path
     ) -> None:
-        """A concurrent is_held() reclaiming the file mid-check must not raise.
+        """Leftover text content never gates the lock -- only flock does.
 
-        Regression test: exists() and read_text() are two separate syscalls;
-        a second SessionStart hook that unlinks the stale lockfile in
-        between must be treated as "lock is gone", not propagate a
-        FileNotFoundError out of the hook.
+        A pre-existing pidfile from a crashed prior run (no one currently
+        holds its flock, since the kernel released it when that process
+        died) must be freely acquirable, and its content is never inspected
+        or removed by this probe.
         """
         pidfile = tmp_path / "sync.pid"
-        pidfile.write_text("12345")
+        pidfile.write_text("999999999")
         lock = SyncLock(path=pidfile)
-        with patch.object(Path, "read_text", side_effect=FileNotFoundError):
-            assert lock.is_held() is False
+        assert lock.is_held() is False
+        assert pidfile.exists()
+        assert pidfile.read_text() == "999999999"
+
+    def test_returns_true_while_another_instance_holds_the_lock(
+        self, tmp_path: Path
+    ) -> None:
+        pidfile = tmp_path / "sync.pid"
+        holder = SyncLock(path=pidfile)
+        held_fd = holder.acquire()
+        assert held_fd is not None
+        try:
+            probe = SyncLock(path=pidfile)
+            assert probe.is_held() is True
+        finally:
+            os.close(held_fd)
 
 
 class TestSyncLockAcquire:
@@ -160,6 +147,126 @@ class TestSyncLockAcquire:
         assert fd is not None
         os.close(fd)
         assert lockfile.stat().st_mode & 0o777 == 0o600
+
+    def test_second_acquire_on_a_held_lock_returns_none(self, tmp_path: Path) -> None:
+        lockfile = tmp_path / "sync.pid"
+        first = SyncLock(path=lockfile)
+        fd = first.acquire()
+        assert fd is not None
+        try:
+            second = SyncLock(path=lockfile)
+            assert second.acquire() is None
+        finally:
+            os.close(fd)
+
+    def test_acquire_succeeds_again_once_the_holder_releases(
+        self, tmp_path: Path
+    ) -> None:
+        lockfile = tmp_path / "sync.pid"
+        first = SyncLock(path=lockfile)
+        fd = first.acquire()
+        assert fd is not None
+        os.close(fd)  # release
+        second = SyncLock(path=lockfile)
+        fd2 = second.acquire()
+        assert fd2 is not None
+        os.close(fd2)
+
+
+class TestSyncLockSingleFlight:
+    """Regression coverage for the reclaim race Copilot found in PR #518.
+
+    The old PID/``unlink``-based design let two callers independently decide
+    the same stale PID was reclaimable; each unlinked, each recreated the
+    lock via ``O_CREAT|O_EXCL``, and the second caller's later unlink could
+    delete the first caller's freshly created lock, letting both launch.
+    ``flock`` replaces that whole "decide staleness, then act on it" protocol
+    with a single kernel-arbitrated decision, so there is no window for a
+    second caller to interleave with.
+    """
+
+    def test_two_concurrent_racers_yield_exactly_one_winner(
+        self, tmp_path: Path
+    ) -> None:
+        """Two SyncLock instances racing on a pre-existing stale pidfile.
+
+        Both threads are released by the same barrier so their ``is_held()``
+        + ``acquire()`` sequence (the exact sequence ``launch_background_sync``
+        uses) races for real via the kernel, not via mocked interleaving.
+        Neither fd is closed until both threads have reported a result, so
+        the outcome depends only on the kernel's single-winner arbitration,
+        never on which thread happens to finish first.
+        """
+        lockfile = tmp_path / "sync.pid"
+        # Pre-existing content from a crashed prior run -- a "stale PID"
+        # under the old design.  flock arbitrates on the FILE, not this
+        # text, so it is irrelevant to the race and must survive untouched.
+        lockfile.write_text("999999999")
+        lock_a = SyncLock(path=lockfile)
+        lock_b = SyncLock(path=lockfile)
+        barrier = threading.Barrier(2)
+        results: dict[str, int | None] = {}
+        results_lock = threading.Lock()
+
+        def race(name: str, lock: SyncLock) -> None:
+            barrier.wait()
+            outcome = None if lock.is_held() else lock.acquire()
+            with results_lock:
+                results[name] = outcome
+
+        threads = [
+            threading.Thread(target=race, args=("a", lock_a)),
+            threading.Thread(target=race, args=("b", lock_b)),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        winners = [fd for fd in results.values() if fd is not None]
+        try:
+            assert len(winners) == 1, (
+                f"expected exactly one winner, got {len(winners)}: {results}"
+            )
+        finally:
+            for fd in winners:
+                os.close(fd)
+        # The winner's lock (the shared scaffold file itself) was never
+        # deleted by the loser -- this design never deletes it at all.
+        assert lockfile.exists()
+
+    def test_flock_survives_exec_and_blocks_concurrent_acquire(
+        self, tmp_path: Path
+    ) -> None:
+        """The child inherits the SAME open file description via pass_fds.
+
+        Launches a REAL subprocess (not mocked) that just sleeps briefly,
+        passing it the acquired lock fd, and confirms a second acquire()
+        attempt on the same path is denied WHILE the child is alive, then
+        succeeds once the child has exited -- proving the flock persists
+        across execve() rather than evaporating when this process closes
+        its own copy of the fd.
+        """
+        lockfile = tmp_path / "sync.pid"
+        lock = SyncLock(path=lockfile)
+        fd = lock.acquire()
+        assert fd is not None
+        inheritable = True
+        os.set_inheritable(fd, inheritable)
+        proc = _subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(0.4)"],
+            pass_fds=(fd,),
+        )
+        os.close(fd)  # our copy only -- the child's copy keeps it locked
+        try:
+            other = SyncLock(path=lockfile)
+            assert other.acquire() is None
+        finally:
+            proc.wait(timeout=5)
+        # The child has exited; the kernel has released its copy of the lock.
+        fd2 = other.acquire()
+        assert fd2 is not None
+        os.close(fd2)
 
 
 class TestSyncLockConstruction:
@@ -178,6 +285,10 @@ class TestSyncLockConstruction:
         """Distinct lockfile paths guard distinct sync flows independently."""
         a = SyncLock(path=tmp_path / "a.pid")
         b = SyncLock(path=tmp_path / "b.pid")
-        (tmp_path / "a.pid").write_text(str(os.getpid()))
-        assert a.is_held() is True
-        assert b.is_held() is False
+        fd = a.acquire()
+        assert fd is not None
+        try:
+            assert a.is_held() is True
+            assert b.is_held() is False
+        finally:
+            os.close(fd)

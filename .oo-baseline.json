@@ -2966,10 +2966,10 @@
   "src/quarry/sync_lock.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 0.17,
+    "avg_params": 0.14,
     "max_complexity": 6.0,
-    "avg_complexity": 3.0,
-    "module_size": 148.0,
+    "avg_complexity": 2.29,
+    "module_size": 154.0,
     "classes_per_module": 1.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,

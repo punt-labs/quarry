@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import contextlib
+import fcntl
 import logging
 import os
 import subprocess
@@ -15,12 +15,19 @@ logger = logging.getLogger(__name__)
 
 @final
 class SyncLock:
-    """Own the sync PID lockfile: presence, staleness, atomic acquire, launch.
+    """Own the sync lockfile and arbitrate single-flight background syncs.
 
-    One instance, one lockfile path — every method reads or mutates
-    ``self._path``.  The constructor's optional *path* is a real capability
-    a free-function lockfile-getter never had: tests inject a ``tmp_path``
-    lockfile directly instead of patching a private module function.
+    One instance, one lockfile path.  Mutual exclusion is a kernel
+    ``flock(2)`` on that path, not a PID written into it: the lock is held
+    for the sync subprocess's entire lifetime (the child inherits the
+    parent's open file description via ``Popen(pass_fds=...)``) and is
+    released automatically by the kernel when the child exits or dies —
+    no PID parsing, no staleness detection, and therefore no reclaim race.
+    A prior PID/``O_CREAT|O_EXCL`` design had exactly that race: two
+    callers independently deciding the same stale PID was reclaimable
+    could each ``unlink()`` and each recreate the lock, interleaving into
+    a duplicate sync — ``flock`` has no equivalent "decide staleness, then
+    act on it" step for a second caller to interleave with.
     """
 
     __slots__ = ("_path",)
@@ -42,65 +49,60 @@ class SyncLock:
         """Return the lockfile path this lock guards."""
         return self._path
 
-    def is_held(self) -> bool:
-        """Check whether a quarry sync process is already running via PID file.
+    def _open_for_lock(self) -> int:
+        """Open (creating if needed) the lockfile; caller owns the fd.
 
-        Returns True if a live sync process exists, False otherwise.
-        Stale PID files (process no longer running) are cleaned up.
-
-        Handles signal-0 results correctly:
-        - ProcessLookupError -> process is gone (stale, WE reclaim it)
-        - PermissionError (EPERM) -> process exists, another user (running)
-        - ValueError -> corrupt PID file (stale, WE reclaim it)
-        - FileNotFoundError -> a concurrent caller reclaimed the file between
-          the exists() check above and read_text() below; there is nothing
-          valid here for US to remove (and a fresh acquirer may have already
-          recreated it), so this branch never unlinks
-        """
-        if not self._path.exists():
-            return False
-        try:
-            pid = int(self._path.read_text().strip())
-            if pid <= 0:
-                raise ValueError("non-positive PID")
-            os.kill(pid, 0)
-            return True
-        except PermissionError:
-            # EPERM: process exists but we can't signal it — treat as running.
-            return True
-        except FileNotFoundError:
-            # The file vanished under us — a concurrent caller's reclaim, or
-            # a fresh acquire(), already happened.  Nothing to unlink; doing
-            # so risks deleting a brand-new holder's lock.
-            return False
-        except (ValueError, ProcessLookupError):
-            # A genuinely stale PID file WE just parsed — process is gone or
-            # the PID is garbage.  Safe for us to reclaim it.
-            with contextlib.suppress(OSError):
-                self._path.unlink()
-            return False
-
-    def acquire(self) -> int | None:
-        """Atomically create the lock file and return the fd.
-
-        Uses O_CREAT|O_EXCL to prevent TOCTOU races: if the file already
-        exists, os.open raises FileExistsError and no lock is acquired.
-
-        Returns the file descriptor on success, None if the lock is held
-        or on any OS error.
+        The file is never deleted by this class — it is a permanent, shared
+        scaffold for the kernel lock, reused across every session.
         """
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        return os.open(str(self._path), os.O_CREAT | os.O_RDWR, 0o600)
+
+    def is_held(self) -> bool:
+        """Return whether another process currently holds the sync lock.
+
+        This is an ADVISORY, non-mutating probe — a momentary snapshot, not
+        a reservation.  A ``False`` here does not guarantee a subsequent
+        :meth:`acquire` will succeed (a concurrent acquirer could win
+        first), and a ``True`` here can go stale the instant the holder
+        exits.  The only trustworthy single-winner decision is
+        :meth:`acquire`'s own ``flock(LOCK_EX | LOCK_NB)`` attempt; this
+        method exists purely as a cheap fast-path skip.
+        """
         try:
-            return os.open(
-                str(self._path),
-                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
-                0o600,
-            )
-        except FileExistsError:
-            return None
+            fd = self._open_for_lock()
+        except OSError:
+            return False
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return True
+        else:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            return False
+        finally:
+            os.close(fd)
+
+    def acquire(self) -> int | None:
+        """Attempt to take the sync lock; return the held fd, or ``None``.
+
+        ``flock(LOCK_EX | LOCK_NB)`` makes the kernel the single arbiter of
+        "who won" — there is no check-then-act window for a second caller
+        to exploit.  The returned fd is meant to be handed to the sync
+        subprocess via ``Popen(pass_fds=(fd,))`` so the lock survives for
+        the subprocess's whole lifetime.
+        """
+        try:
+            fd = self._open_for_lock()
         except OSError as exc:
-            logger.error("session-start: failed to create lock file: %s", exc)
+            logger.error("session-start: failed to open lock file: %s", exc)
             return None
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            return None
+        return fd
 
     def launch_background_sync(self) -> str:
         """Fire-and-forget sync via detached subprocess.
@@ -112,9 +114,11 @@ class SyncLock:
         exits.  The subprocess gets its own process group so it survives
         the hook process.
 
-        Guards against concurrent syncs via this lock's atomic PID file.
-        Uses O_CREAT|O_EXCL to prevent TOCTOU races between concurrent
-        SessionStart hooks.
+        The lock fd is marked inheritable and passed to the child via
+        ``pass_fds`` so the child's copy of the SAME open file description
+        keeps the ``flock`` held after this process closes its own copy —
+        the lock persists for exactly the sync's lifetime, released by the
+        kernel the instant the child exits or dies, live or crashed alike.
 
         Returns ``"launched"`` if the subprocess was started, ``"running"``
         if a sync is already in progress (or the lock is held), or
@@ -125,12 +129,18 @@ class SyncLock:
             logger.debug("session-start: sync already running, skipping")
             return "running"
 
-        # Atomic lock acquisition — prevents TOCTOU races.
+        # The one genuine single-winner decision — see is_held()'s docstring.
         fd = self.acquire()
         if fd is None:
             logger.debug("session-start: could not acquire sync lock, skipping")
             return "running"
 
+        # Survive execve(): pass_fds forces close_fds to skip this fd and
+        # marks it inheritable for us, but clearing it explicitly here keeps
+        # the exec-survival property visible and intentional in the code,
+        # not an implicit side effect of subprocess's internals.
+        inheritable = True
+        os.set_inheritable(fd, inheritable)
         try:
             proc = subprocess.Popen(
                 [sys.executable, "-m", "quarry", "sync"],
@@ -138,26 +148,20 @@ class SyncLock:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
+                pass_fds=(fd,),
             )
         except OSError as exc:
             logger.error("session-start: failed to launch background sync: %s", exc)
-            # Clean up the lock file since no sync is running.
+            # No child inherited a copy — closing ours fully releases the lock.
             os.close(fd)
-            with contextlib.suppress(OSError):
-                self._path.unlink()
             return "failed"
 
-        # Write the PID to the lock file (fd is already open).  A short write
-        # (n < len(data)) would leave a truncated PID that is_held() still
-        # int()-parses, so retry with the unwritten remainder until every
-        # byte lands.  Popen already succeeded — the sync IS running — so
-        # this never drops the lock file on a partial write: doing so would
-        # let the next SessionStart see no lock and launch a DUPLICATE sync,
-        # trading a cosmetic truncated-PID risk for a real concurrency bug.
-        # Only a persistent OSError falls through to the warning, and even
-        # then the lock stays in place: a stale lock costs one skipped sync,
-        # a removed one risks two running at once.
+        # Record the PID for observability only — the flock the child
+        # inherited, not this content, is now the actual lock.  A short
+        # write is retried until the full PID lands, so a later human
+        # inspecting the file never sees a truncated or stale value.
         try:
+            os.ftruncate(fd, 0)
             data = str(proc.pid).encode()
             written = 0
             while written < len(data):
@@ -167,6 +171,8 @@ class SyncLock:
                 "session-start: sync launched but pidfile write failed: %s", exc
             )
         finally:
+            # Close OUR copy — the child's inherited copy of the SAME open
+            # file description keeps the flock held until it exits or dies.
             os.close(fd)
 
         logger.info("session-start: background sync launched (pid=%d)", proc.pid)
