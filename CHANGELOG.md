@@ -40,10 +40,24 @@ across `transform`, `index`, and `connector`).
   `session_start_templates.py` (`SessionStartTemplates`); `_SessionStartContext`
   retained in `hooks.py` absorbing its helpers; `_as_str`/`_as_dir` removed in
   favor of `HookPayload.as_str`/`as_dir`. No behavior change on the
-  session-start / post-web-fetch / pre-compact hook surfaces. Also hardened
-  `SyncLock` against two latent races carried over from the old code: an
-  `is_held()` TOCTOU (`FileNotFoundError` on a concurrently-reclaimed lockfile)
-  and an unchecked short `os.write` that could leave a truncated PID. (quarry-hb9u)
+  session-start / post-web-fetch / pre-compact hook surfaces. As part of the
+  extraction, `SyncLock` replaces the previous PID-lockfile staleness-reclaim
+  scheme — which carried a double-launch race (two concurrent SessionStart hooks
+  reading the same stale PID could both reclaim and launch a sync, one caller's
+  unconditional unlink deleting the other's freshly acquired lock) — with a
+  kernel `fcntl.flock` held for the sync subprocess's lifetime via `Popen`
+  `pass_fds` fd inheritance, eliminating the race class by construction (a dead
+  holder's lock is released by the kernel; no PID parsing, staleness detection,
+  or reclaim unlink). Hardened further with `O_NOFOLLOW` on the lockfile open
+  (CWE-59: a hostile/accidental `sync.pid` symlink can no longer redirect the
+  write), `BlockingIOError` (contention) distinguished from genuine `flock`
+  errors, and a fail-open probe. Single-flight is over the dispatch subprocess
+  only; the daemon enqueues each sync (DES-045, always 202) serialized
+  per-collection by the ingest queue (DES-042). (quarry-hb9u)
+
+- infra: bumped runtime dependencies `rapidocr` (3.6.0 → 3.9.2) and `uvicorn`
+  (0.51.0 → 0.52.4), plus the dev toolchain (`mypy`, `pytest-asyncio`,
+  `types-pyyaml`), via Dependabot.
 
 ## [3.2.1] - 2026-09-03
 
