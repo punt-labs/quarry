@@ -37,32 +37,6 @@ class TestSyncLockLaunchBackgroundSync:
         # was released.
         assert lockfile.exists()
 
-    def test_set_inheritable_failure_releases_lock_and_returns_failed(
-        self, tmp_path: Path
-    ) -> None:
-        """An OSError from set_inheritable must not escape or leak the fd.
-
-        Regression test: os.set_inheritable(fd, True) ran after acquire()
-        returned the held fd but outside the try/except that closes it on
-        failure. An OSError there would escape launch_background_sync(),
-        breaking its "launched"/"running"/"failed" fail-open contract, AND
-        leak the held lock fd -- the flock would stay held for the rest of
-        the hook process, blocking every future sync.
-        """
-        lockfile = tmp_path / "sync.pid"
-        lock = SyncLock(path=lockfile)
-        with (
-            patch.object(_subprocess, "Popen") as popen,
-            patch("os.set_inheritable", side_effect=OSError("EBADF")),
-        ):
-            assert lock.launch_background_sync() == "failed"
-        popen.assert_not_called()
-        # The fd was closed (not leaked) -- a fresh acquire on the same path
-        # must succeed, proving the lock is not stuck.
-        fd = lock.acquire()
-        assert fd is not None
-        os.close(fd)
-
     def test_returns_running_when_already_running(self, tmp_path: Path) -> None:
         """Another instance genuinely holding the flock blocks a new launch."""
         lockfile = tmp_path / "sync.pid"

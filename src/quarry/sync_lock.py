@@ -165,11 +165,13 @@ class SyncLock:
         exits.  The subprocess gets its own process group so it survives
         the hook process.
 
-        The lock fd is marked inheritable and passed to the child via
-        ``pass_fds`` so the child's copy of the SAME open file description
-        keeps the ``flock`` held after this process closes its own copy —
-        the lock persists for exactly the sync's lifetime, released by the
-        kernel the instant the child exits or dies, live or crashed alike.
+        The lock fd is passed to the child via ``pass_fds`` alone — that is
+        what clears ``CLOEXEC`` for it, in the CHILD, after ``fork`` and
+        before ``exec``.  The parent's own copy is never marked inheritable,
+        so the child's copy of the SAME open file description keeps the
+        ``flock`` held after this process closes its own copy — the lock
+        persists for exactly the sync's lifetime, released by the kernel the
+        instant the child exits or dies, live or crashed alike.
 
         Returns ``"launched"`` if the subprocess was started, ``"running"``
         if a sync is already in progress (or the lock is held), or
@@ -186,17 +188,15 @@ class SyncLock:
             logger.debug("session-start: could not acquire sync lock, skipping")
             return "running"
 
-        # Survive execve(): pass_fds forces close_fds to skip this fd and
-        # marks it inheritable for us, but clearing it explicitly here keeps
-        # the exec-survival property visible and intentional in the code,
-        # not an implicit side effect of subprocess's internals.  This lives
-        # INSIDE the try, alongside Popen: if it raises, no child has
-        # inherited a copy yet, so the except's close(fd) must still run to
-        # release the lock -- an OSError here must not escape and leak the
-        # held descriptor for the rest of the hook process.
+        # pass_fds=(fd,) is the ONLY inheritance mechanism used: CPython's
+        # _posixsubprocess clears CLOEXEC on each pass_fds descriptor in the
+        # CHILD, after fork and before exec.  Marking the fd inheritable on
+        # the PARENT first (a prior version of this code did) would open a
+        # window where an unrelated thread's own subprocess/fork could
+        # inherit the lock fd and keep the flock held after this sync exits
+        # -- relying on pass_fds alone keeps the parent's copy CLOEXEC and
+        # closes that window.
         try:
-            inheritable = True
-            os.set_inheritable(fd, inheritable)
             proc = subprocess.Popen(
                 [sys.executable, "-m", "quarry", "sync"],
                 stdin=subprocess.DEVNULL,
