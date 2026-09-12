@@ -6,11 +6,17 @@ from pydantic import BaseModel
 
 
 class RememberRequest(BaseModel):
-    """Body for indexing inline text content."""
+    """Body for indexing inline text content.
+
+    ``collection`` is the empty-string sentinel: the daemon decides the effective
+    collection at ``_remember_job``. Explicit values pass through unchanged; an
+    empty value with an ``agent_handle`` routes to ``memory-<handle>``, and an
+    empty value with no handle falls back to ``default``.
+    """
 
     name: str
     content: str
-    collection: str = "default"
+    collection: str = ""
     format_hint: str = "auto"
     overwrite: bool = True
     agent_handle: str = ""
@@ -37,3 +43,18 @@ class IngestRequest(BaseModel):
     agent_handle: str = ""
     memory_type: str = ""
     summary: str = ""
+
+
+class LearnRequest(BaseModel):
+    """Body for saving a distilled lesson with retrieval preference.
+
+    ``cwd`` is never a caller-facing parameter on any surface (CLI, MCP,
+    slash, client) -- ``QuarryClient.learn()`` resolves it via ``Path.cwd()``
+    before this model is built, exactly the way ``CaptureIngestRequest.cwd``
+    is populated by the caller's own working directory, not the user.
+    """
+
+    lesson: str
+    topic: str = ""
+    name: str = ""
+    cwd: str = ""

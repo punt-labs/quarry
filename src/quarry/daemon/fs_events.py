@@ -57,6 +57,17 @@ class FsEventSource(Protocol):
         """Stop watching the tree for *handle* (a ``None`` handle is a no-op)."""
         ...
 
+    def is_alive(self, handle: object | None) -> bool:
+        """Whether the background thread backing *handle* is still running.
+
+        A live handle (:meth:`schedule` returned non-``None``) can still go
+        dark later — an unhandled exception on the source's own background
+        thread, or the process dying under it — leaving the caller's status
+        surface reporting "watched" for a tree nothing is watching anymore.
+        ``False`` for a ``None`` handle or one this source never issued.
+        """
+        ...
+
     def stop(self) -> None:
         """Tear the source down, joining any background observer thread."""
         ...
@@ -86,6 +97,11 @@ class NullFsEventSource:
     def unschedule(self, handle: object | None) -> None:
         """No-op: nothing was ever scheduled."""
         del handle
+
+    def is_alive(self, handle: object | None) -> bool:
+        """``False``: nothing is ever watched in sync-only mode."""
+        del handle
+        return False
 
     def stop(self) -> None:
         """No-op: there is no observer thread to join."""

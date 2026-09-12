@@ -268,7 +268,12 @@ uv.toml
 # Ethos org registry — was a git submodule here (~1 MB / 246 files: identities,
 # personalities, writing styles, talents, roles, teams). Quarry ships as a
 # marketplace plugin and Claude Code clones plugin repos with
-# --recurse-submodules, so the whole org roster landed on every consumer's disk.
-# Removed; the registry resolves from the global ~/.punt-labs/ethos/. Anchored
-# and directory-scoped so it does not shadow the tracked .punt-labs/ethos.yaml.
-/.punt-labs/ethos/
+# --recurse-submodules, so the whole org roster landed on every consumer's disk
+# as a gitlink. Now a pruned, plain-file vendored copy (quarry-teuk) — the
+# lux/cryptd pattern, not a submodule — scoped to the 8 identities the quarry
+# team roster needs. Only machine-local runtime state is ignored below; the
+# vendored registry itself is tracked.
+.punt-labs/ethos/missions/
+.punt-labs/ethos/missions.jsonl
+.punt-labs/ethos/sessions/
+.punt-labs/ethos/.biff

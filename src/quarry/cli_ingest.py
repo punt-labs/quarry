@@ -33,9 +33,10 @@ class IngestCli:
         return self
 
     def register(self, app: typer.Typer) -> None:
-        """Attach the ``ingest`` and ``remember`` commands to *app*."""
+        """Attach the ``ingest``, ``remember``, and ``learn`` commands to *app*."""
         app.command(name="ingest")(self._p.cli_errors(self._ingest))
         app.command(name="remember")(self._p.cli_errors(self._remember))
+        app.command(name="learn")(self._p.cli_errors(self._learn))
 
     def _ingest(
         self,
@@ -60,6 +61,9 @@ class IngestCli:
         ] = "",
     ) -> None:
         """Ingest a URL into the knowledge base.
+
+        remember = a specific durable fact, ingest = a URL, learn = a
+        distilled lesson that gets retrieval preference.
 
         Fetches an ``http(s)`` URL with sitemap discovery and single-page
         fallback.  For local files and directories, use ``quarry register <dir>``
@@ -92,8 +96,16 @@ class IngestCli:
             str, typer.Option("--name", "-n", help="Document name (required)")
         ] = "",
         collection: Annotated[
-            str, typer.Option("--collection", "-c", help="Collection name")
-        ] = "default",
+            str,
+            typer.Option(
+                "--collection",
+                "-c",
+                help=(
+                    "Collection name. Leave empty to route by --agent-handle "
+                    "(memory-<handle>) or fall back to 'default'."
+                ),
+            ),
+        ] = "",
         format_hint: Annotated[
             str,
             typer.Option("--format", help="Format hint: auto, plain, markdown, latex"),
@@ -119,6 +131,10 @@ class IngestCli:
         ] = "",
     ) -> None:
         """Ingest inline content from stdin.
+
+        remember = a specific durable fact, ingest = a URL, learn = a
+        distilled lesson that gets retrieval preference. ``memory_type
+        'lesson'`` is reserved for ``quarry learn``.
 
         Reads text from stdin and indexes it. Requires --name to set the document
         name. Overwrites by default; use --no-overwrite to skip an existing doc.
@@ -146,4 +162,27 @@ class IngestCli:
         self._p.emit(
             accepted.model_dump(),
             f"Remember {accepted.status}: task_id={accepted.task_id}",
+        )
+
+    def _learn(
+        self,
+        lesson: Annotated[str, typer.Argument(help="The distilled lesson text")],
+        topic: Annotated[
+            str, typer.Option("--topic", help="Domain tag for this lesson")
+        ] = "",
+        name: Annotated[
+            str,
+            typer.Option("--name", "-n", help="User-visible slug for later reference"),
+        ] = "",
+    ) -> None:
+        """Save a distilled lesson that gets retrieval preference.
+
+        remember = a specific durable fact, ingest = a URL, learn = a
+        distilled lesson that gets retrieval preference. Lessons are capped
+        at 500 characters -- use remember for anything longer.
+        """
+        accepted = self._p.client().learn(lesson, topic=topic, name=name)
+        self._p.emit(
+            accepted.model_dump(),
+            f"Learn {accepted.status}: task_id={accepted.task_id}",
         )

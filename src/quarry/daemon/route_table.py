@@ -17,8 +17,11 @@ from starlette.responses import JSONResponse, PlainTextResponse
 from quarry.api import (
     BackfillRequest,
     CaptureIngestRequest,
+    CapturesLookupRequest,
+    CapturesLookupResponse,
     CapturesPushResponse,
     CollectionList,
+    CoverageResponse,
     DatabaseList,
     DeregisterAccepted,
     DocumentInfo,
@@ -26,6 +29,7 @@ from quarry.api import (
     ErrorBody,
     HealthResponse,
     IngestRequest,
+    LearnRequest,
     OptimizeRequest,
     RegisterRequest,
     RegistrationList,
@@ -186,6 +190,14 @@ class RouteTable:
                 status_code=202,
             ),
             RouteSpec(
+                "/learn",
+                ingestion.learn,
+                ("POST",),
+                TaskAccepted,
+                request_model=LearnRequest,
+                status_code=202,
+            ),
+            RouteSpec(
                 "/capture",
                 captures.capture,
                 ("POST",),
@@ -201,6 +213,13 @@ class RouteTable:
                 captures.push,
                 ("POST",),
                 CapturesPushResponse,
+            ),
+            RouteSpec(
+                "/captures/lookup",
+                captures.lookup,
+                ("POST",),
+                CapturesLookupResponse,
+                request_model=CapturesLookupRequest,
             ),
             RouteSpec(
                 "/tasks/{task_id}",
@@ -230,6 +249,7 @@ class RouteTable:
                 status_code=202,
             ),
             RouteSpec("/status", meta.status, ("GET",), StatusResponse),
+            RouteSpec("/coverage", meta.coverage, ("GET",), CoverageResponse),
             RouteSpec(
                 "/optimize",
                 maint.optimize,

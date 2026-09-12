@@ -18,6 +18,10 @@ from quarry.sync_registry import SyncRegistry
 # The running package version, read once at import for the health snapshot.
 _QUARRY_VERSION = version("punt-quarry")
 
+# Naming symmetry with hooks._active_context: the daemon derives the captures
+# sibling from the caller's collection so a client never has to spell both.
+_CAPTURES_SUFFIX = "-captures"
+
 
 @final
 class MetaRoutes(RouteGroup):
@@ -106,3 +110,25 @@ class MetaRoutes(RouteGroup):
                 "embedding_dimension": settings.embedding_dimension,
             }
         )
+
+    def coverage(self, request: Request) -> JSONResponse:
+        """Return per-repo counts for ``collection`` and its captures sibling.
+
+        Reads ``?collection=<repo>`` from the query string; a missing or blank
+        value earns a 400. The captures sibling is derived server-side as
+        ``<collection>-captures`` so the wire contract carries one identifier,
+        not two — the CLI/hook never has to spell the naming rule.
+        """
+        auth_resp = self.reject_unauthorized(request)
+        if auth_resp is not None:
+            return auth_resp
+        collection = request.query_params.get("collection", "").strip()
+        if not collection:
+            return JSONResponse(
+                {"error": "Missing required parameter: collection"},
+                status_code=400,
+            )
+        counts = self.ctx.database.catalog.coverage(
+            collection, f"{collection}{_CAPTURES_SUFFIX}"
+        )
+        return JSONResponse(dict(counts))

@@ -198,9 +198,9 @@ Ten review cycles on the TLS remote-access feature revealed five classes of bugs
 
 ## Ethos & Delegation
 
-Identity: `agent: claude` per `.punt-labs/ethos.yaml`. Sub-agent calls (`Agent(subagent_type=…)`) match ethos identity handles.
+Identity: `agent: claude`, `team: quarry`, `resolution: repo-only` per `.punt-labs/ethos.yaml`. Sub-agent calls (`Agent(subagent_type=…)`) match ethos identity handles.
 
-**Do not add the `punt-labs/team` submodule here.** The org convention of mounting the identity registry at `.punt-labs/ethos/` does not apply to a repo that ships as a marketplace plugin: Claude Code clones plugin repos with `--recurse-submodules`, so the gitlink delivered ~1 MB of the org roster to every consumer. The registry resolves from the global `~/.punt-labs/ethos/`. The mount path is gitignored, which makes a re-add fail loudly rather than silently — `git submodule add` refuses an ignored path outright — but `-f` overrides that, so this instruction is what binds.
+**The identity registry is a vendored, self-contained copy at `.punt-labs/ethos/`** — plain committed files (the `lux`/`cryptd` pattern). A clone of this repo resolves every identity from files in the repo alone: no dependency on the developer's `~/.punt-labs/ethos/`, on the `..` workspace, or on the `../team` registry. It carries the 8-member `quarry` team (jfreeman, claude, rmh, gvr, kpz, djb, mdm, adb — the roster the pairing tables below use), their personalities, writing styles, talents, roles, and `teams/quarry.yaml`. `.punt-labs/ethos.yaml` pins `agent: claude`, `team: quarry`, `resolution: repo-only` — which bounds SessionStart context injection to this roster and forbids any global fallback. There is deliberately **no `.vendor.yaml`**. To refresh the roster, edit `.punt-labs/ethos/teams/quarry.yaml` and re-run the vendor+prune (`ethos vendor claude jfreeman rmh gvr kpz djb mdm adb --apply`, then prune back to the quarry-team closure: drop non-roster identities and their unreferenced attributes, keep `.punt-labs/ethos/teams/quarry.yaml`, re-run `ethos doctor`); the `../team` registry is not in this loop. The `ethos vendor` seed handles must match the roster in the team file — when you add or drop a member, change both together, or the vendor run reproduces the old set. Runtime state (`missions/`, `missions.jsonl`, `sessions/`, `.biff`) stays gitignored. **Do not add the `punt-labs/team` submodule here** — Claude Code clones plugin repos with `--recurse-submodules`, and `ethos enable` v4.15.0+ refuses submodule mounts outright (`ethos-e29s`).
 
 All code delegation uses ethos missions. Every non-trivial delegation has two phases: (1) **design mission** — describes the problem, constraints, and invariants but does NOT prescribe a write set; (2) **implementation mission** — uses the write set produced by the design phase. The design mission's output IS the write set — the specialist decides what to create, split, or extract. This is critical: prescribing a write set before design prevents refactoring and forces code into existing modules (which is how `__main__.py` reached 2,008 lines).
 
@@ -284,26 +284,7 @@ Use `/punt:auto release [version=X.Y.Z]`. Quarry is a CLI + Plugin Hybrid — re
 - `docs/smoke-test.md` — post-release manual smoke test
 - `docs/README.md` — docs index; `docs/archive/` holds completed build-plans, reviews, and superseded designs mapped to DES-### in DESIGN.md. ONNX provider auto-detection design (formerly `docs/provider-detection-design.md`) is now in `docs/architecture.tex` + DES-016.
 
-<!-- quarry:begin -->
-## Quarry
-
-Local semantic search is available via quarry. Use it to search indexed
-documents by meaning, ingest new content, and recall knowledge across sessions.
-
-- Before using WebSearch or WebFetch for research, run `/find` with the query
-  first. Quarry indexes this codebase, design docs, prior session transcripts,
-  and web pages from previous research. If quarry returns relevant results,
-  use them — do not re-research what has already been found.
-- Use grep for symbol lookups and value lookups; use quarry for "why", "how",
-  and "what did we decide about X" questions.
-- **Slash commands**: `/find`, `/ingest`, `/remember`, `/explain`, `/source`,
-  `/quarry`
-- **Research agent**: `researcher` — combines quarry local search with web
-  research. Use for deep investigation across local docs and the web.
-- **Auto-behaviors**: working directory is auto-indexed at session start;
-  URLs fetched via WebFetch are auto-ingested; transcripts are captured before
-  context compaction.
-- **Search tip**: natural language queries work best ("What were Q3 margins?"
-  outperforms "Q3 margins").
-<!-- quarry:end -->
+@.punt-labs/quarry/CLAUDE.md
 @.punt-labs/vox/CLAUDE.md
+@.punt-labs/ethos/CLAUDE.md
+@.punt-labs/beadle/CLAUDE.md

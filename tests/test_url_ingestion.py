@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import MagicMock, patch
 
-from quarry.daemon.ingest_jobs import IngestJob
+from quarry.daemon.ingest_jobs import IngestJob, ScrubbedIngestJob
 from quarry.daemon.routes.ingestion import IngestionRoutes
 from quarry.db import Database
 from quarry.extractors.html_extractor import HtmlExtractor
@@ -67,7 +67,8 @@ class TestIngestUrl:
 
     @patch(_FETCH)
     def test_end_to_end(self, mock_fetch: MagicMock):
-        from quarry.ingestion.pipeline import ingest_url
+        from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.web_ingest import UrlIngest, ingest_url
 
         mock_fetch.return_value = (
             "<html><head><title>Docs</title></head>"
@@ -82,10 +83,9 @@ class TestIngestUrl:
             patch("quarry.db.chunk_store.ChunkStore.insert_records", return_value=1),
         ):
             result = ingest_url(
-                "https://docs.example.com/api",
-                db,
-                settings,
-                collection="docs",
+                UrlIngest("https://docs.example.com/api"),
+                Progress(None),
+                IngestContext(db, settings, collection="docs"),
             )
 
         assert result["document_name"] == "https://docs.example.com/api"
@@ -95,7 +95,8 @@ class TestIngestUrl:
 
     @patch(_FETCH)
     def test_custom_document_name(self, mock_fetch: MagicMock):
-        from quarry.ingestion.pipeline import ingest_url
+        from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.web_ingest import UrlIngest, ingest_url
 
         mock_fetch.return_value = "<html><body><p>Content.</p></body></html>"
         settings = _fake_settings()
@@ -105,10 +106,9 @@ class TestIngestUrl:
             patch("quarry.db.chunk_store.ChunkStore.insert_records", return_value=1),
         ):
             result = ingest_url(
-                "https://example.com/page",
-                db,
-                settings,
-                document_name="my-page",
+                UrlIngest("https://example.com/page", document_name="my-page"),
+                Progress(None),
+                IngestContext(db, settings),
             )
 
         assert result["document_name"] == "my-page"
@@ -116,7 +116,8 @@ class TestIngestUrl:
     @patch(_FETCH)
     def test_capture_path_redacts_url_metadata(self, mock_fetch: MagicMock):
         """A capture (scrubber set) must not persist query/userinfo in metadata."""
-        from quarry.ingestion.pipeline import ingest_url
+        from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.web_ingest import UrlIngest, ingest_url
         from quarry.scrub import scrub_and_log
 
         mock_fetch.return_value = (
@@ -140,10 +141,9 @@ class TestIngestUrl:
             patch.object(HtmlExtractor, "extract_from_html", spy),
         ):
             result = ingest_url(
-                url,
-                db,
-                settings,
-                content_scrubber=lambda t: scrub_and_log(t, "test"),
+                UrlIngest(url, content_scrubber=lambda t: scrub_and_log(t, "test")),
+                Progress(None),
+                IngestContext(db, settings),
             )
 
         name = result["document_name"]
@@ -160,7 +160,8 @@ class TestIngestUrl:
     @patch(_FETCH)
     def test_plain_ingest_keeps_full_url(self, mock_fetch: MagicMock):
         """A user-initiated ingest (no scrubber) keeps the full URL as metadata."""
-        from quarry.ingestion.pipeline import ingest_url
+        from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.web_ingest import UrlIngest, ingest_url
 
         mock_fetch.return_value = "<html><body><p>Content.</p></body></html>"
         settings = _fake_settings()
@@ -170,9 +171,166 @@ class TestIngestUrl:
         with (
             patch("quarry.db.chunk_store.ChunkStore.insert_records", return_value=1),
         ):
-            result = ingest_url(url, db, settings)
+            result = ingest_url(
+                UrlIngest(url), Progress(None), IngestContext(db, settings)
+            )
 
         assert result["document_name"] == url
+
+    @patch(_FETCH)
+    def test_plain_ingest_progress_redacts_fetch_url(self, mock_fetch: MagicMock):
+        """The "Fetching: %s" progress line must redact the URL even for a
+        plain (unscrubbed) ingest -- meta_url is deliberately the raw URL for
+        document_name/document_path persistence (test_plain_ingest_keeps_full_url,
+        above), but a sitemap/bulk-crawl worker builds that same unscrubbed
+        UrlIngest for a program-discovered URL it never reviewed, and logging
+        it verbatim would leak a userinfo/query secret into quarry.log
+        (CWE-532) regardless of scrub status.
+
+        Checks only the "Fetching:" message: ChunkStoreFunnel._embed_and_store's
+        own "Done: %d chunks indexed from %s" progress line further downstream
+        still echoes document_name unredacted for a plain ingest -- that shared,
+        non-URL-aware choke point (used identically by ingest_content, which has
+        no URL at all) has no way to know a given document_name is a URL, so it
+        cannot redact one safely; reshaping it is separate work.
+        """
+        from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.web_ingest import UrlIngest, ingest_url
+
+        mock_fetch.return_value = "<html><body><p>Content.</p></body></html>"
+        settings = _fake_settings()
+        db = _fake_db()
+
+        url = "https://user:pass@x.test/reset?email=user@example.com&token=abc123secret"
+        messages: list[str] = []
+        with (
+            patch("quarry.db.chunk_store.ChunkStore.insert_records", return_value=1),
+        ):
+            result = ingest_url(
+                UrlIngest(url), Progress(messages.append), IngestContext(db, settings)
+            )
+
+        # Metadata persistence is untouched: the plain-ingest policy still
+        # keeps the full URL as the document's identity.
+        assert result["document_name"] == url
+        fetching = [m for m in messages if m.startswith("Fetching:")]
+        assert fetching
+        assert "user:pass" not in fetching[0]
+        assert "token=abc123secret" not in fetching[0]
+        # Exact match, not a host/path substring check (CodeQL
+        # py/incomplete-url-substring-sanitization): pins the whole
+        # redacted message rather than a fragment that could also match an
+        # unrelated look-alike string.
+        assert fetching == ["Fetching: https://x.test/reset"]
+
+    @patch(_FETCH)
+    def test_prefetched_html_skips_the_network_fetch(self, mock_fetch: MagicMock):
+        """A caller that already fetched the body must not pay for a second fetch.
+
+        The daemon's capture re-fetch (``CaptureIngestJob._refetch``) calls
+        ``WebFetcher.fetch_body`` itself to decide HTML vs. text routing;
+        ``prefetched_html`` lets ``ingest_url`` reuse that body instead of
+        fetching the URL again (Copilot round-4, PR #496).
+        """
+        from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.web_ingest import UrlIngest, ingest_url
+
+        settings = _fake_settings()
+        db = _fake_db()
+        html = (
+            "<html><body><h1>Already fetched</h1><p>Some body text.</p></body></html>"
+        )
+
+        with (
+            patch("quarry.db.chunk_store.ChunkStore.insert_records", return_value=1),
+        ):
+            result = ingest_url(
+                UrlIngest("https://example.com/page", prefetched_html=html),
+                Progress(None),
+                IngestContext(db, settings),
+            )
+
+        mock_fetch.assert_not_called()
+        assert result["chunks"] >= 1
+
+    @patch(_FETCH)
+    def test_delay_sleeps_before_fetching(self, mock_fetch: MagicMock):
+        """A positive delay sleeps (delay + sub-second jitter) before fetching."""
+        from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.web_ingest import UrlIngest, ingest_url
+
+        mock_fetch.return_value = "<html><body><p>Content.</p></body></html>"
+        settings = _fake_settings()
+        db = _fake_db()
+
+        with (
+            patch("quarry.db.chunk_store.ChunkStore.insert_records", return_value=1),
+            patch("quarry.ingestion.web_ingest.time.sleep") as mock_sleep,
+        ):
+            ingest_url(
+                UrlIngest("https://example.com/page", delay=0.5),
+                Progress(None),
+                IngestContext(db, settings),
+            )
+
+        mock_sleep.assert_called_once()
+        (slept,) = mock_sleep.call_args.args
+        assert 0.5 <= slept < 1.5  # delay plus up to 1s of sub-second jitter
+        mock_fetch.assert_called_once()
+
+    @patch(_FETCH)
+    def test_negative_delay_does_not_sleep_or_crash(self, mock_fetch: MagicMock):
+        """A negative delay must not reach time.sleep(delay + jitter) and raise."""
+        from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.web_ingest import UrlIngest, ingest_url
+
+        mock_fetch.return_value = "<html><body><p>Content.</p></body></html>"
+        settings = _fake_settings()
+        db = _fake_db()
+
+        with (
+            patch("quarry.db.chunk_store.ChunkStore.insert_records", return_value=1),
+            patch("quarry.ingestion.web_ingest.time.sleep") as mock_sleep,
+        ):
+            ingest_url(
+                UrlIngest("https://example.com/page", delay=-1.0),
+                Progress(None),
+                IngestContext(db, settings),
+            )
+
+        mock_sleep.assert_not_called()
+        mock_fetch.assert_called_once()
+
+
+class TestRememberCollectionRouting:
+    """Server-side sentinel: empty ``collection`` routes by ``agent_handle``.
+
+    One rule at the daemon chokepoint keeps the CLI/MCP/HTTP surfaces from
+    drifting (bug class 3): explicit collection wins; empty + handle lands in
+    ``memory-<handle>``; empty on both sides falls back to ``default``.
+    """
+
+    @staticmethod
+    def _job(body: dict[str, object]) -> ScrubbedIngestJob:
+        routes = IngestionRoutes(cast("DaemonContext", SimpleNamespace()))
+        payload = {"name": "note.md", "content": "hi", **body}
+        job = routes._remember_job(payload)
+        assert isinstance(job, ScrubbedIngestJob), job
+        return job
+
+    def test_handle_and_empty_collection_route_to_memory_bucket(self) -> None:
+        assert self._job({"agent_handle": "rmh"}).collection == "memory-rmh"
+
+    def test_explicit_collection_wins_over_agent_handle(self) -> None:
+        job = self._job({"agent_handle": "rmh", "collection": "notes"})
+        assert job.collection == "notes"
+
+    def test_empty_handle_and_empty_collection_fall_back_to_default(self) -> None:
+        assert self._job({}).collection == "default"
+
+    def test_empty_handle_with_explicit_collection_uses_that_collection(self) -> None:
+        job = self._job({"collection": "research"})
+        assert job.collection == "research"
 
 
 class TestIngestRouteKeying:

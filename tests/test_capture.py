@@ -47,7 +47,7 @@ def _request(
 
 
 def test_write_creates_scrubbed_capture(tmp_path: Path) -> None:
-    req = _request(tmp_path, text="path /Users/jane/x mail jmf@pobox.com")
+    req = _request(tmp_path, text="path /Users/jane/x mail jdoe@example.com")
     CaptureWriter().write(req)
 
     path = req.capture_path()
@@ -114,7 +114,7 @@ def test_write_failure_swallowed_leaves_no_partial(
 
 def test_producers_yield_byte_identical_files(tmp_path: Path) -> None:
     """Same input under each producer label produces byte-identical files."""
-    text = "body /Users/jane/x mail jmf@pobox.com"
+    text = "body /Users/jane/x mail jdoe@example.com"
     pre = _request(tmp_path / "pre", label="pre-compact", text=text)
     back = _request(tmp_path / "back", label="backfill", text=text)
 

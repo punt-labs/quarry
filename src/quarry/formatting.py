@@ -27,7 +27,7 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 # Column specification ────────────────────────────────────────────────────────
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ColumnSpec:
     """One column in a constrained-width table.
 
@@ -164,6 +164,27 @@ def format_table(specs: list[ColumnSpec], rows: list[list[str]]) -> str:
 # JSON-like structures with no single typed schema at this formatting boundary.
 
 
+@dataclass(frozen=True, slots=True)
+class _Listing:
+    """A count-headed table listing (documents, collections, ...).
+
+    The first line of the rendered output is an authoritative ``▶  N noun``
+    summary; the plugin's PostToolUse hook shows that line in the panel. A
+    count derived by counting rendered lines would over-count wrapped rows
+    when a variable-width column overflows — the summary must come from the
+    input length, not the output layout.
+    """
+
+    _noun: str
+    _specs: list[ColumnSpec]
+
+    def render(self, rows: list[list[str]]) -> str:
+        """Return ``▶  N noun(s)\\n<table>`` for *rows*."""
+        n = len(rows)
+        plural = self._noun if n == 1 else self._noun + "s"
+        return f"▶  {n} {plural}\n{format_table(self._specs, rows)}"
+
+
 def format_search_results(query: str, results: Sequence[Mapping[str, Any]]) -> str:
     """Format search results as a numbered list with text excerpts."""
     n = len(results)
@@ -191,26 +212,29 @@ def format_search_results(query: str, results: Sequence[Mapping[str, Any]]) -> s
 
 
 def format_documents(docs: Sequence[Mapping[str, Any]]) -> str:
-    """Format document listing as a table."""
+    """Format document listing as a count header followed by a table."""
     if not docs:
         return "No documents"
-
-    specs = [
-        ColumnSpec("DOCUMENT", 8, fixed=False),
-        ColumnSpec("COLLECTION", 8),
-        ColumnSpec("PAGES", 5, align="right"),
-        ColumnSpec("CHUNKS", 6, align="right"),
-    ]
-    rows = [
+    listing = _Listing(
+        "document",
         [
-            d.get("document_name", "?"),
-            d.get("collection", "?"),
-            str(d.get("total_pages", 0)),
-            str(d.get("chunk_count", 0)),
+            ColumnSpec("DOCUMENT", 8, fixed=False),
+            ColumnSpec("COLLECTION", 8),
+            ColumnSpec("PAGES", 5, align="right"),
+            ColumnSpec("CHUNKS", 6, align="right"),
+        ],
+    )
+    return listing.render(
+        [
+            [
+                d.get("document_name", "?"),
+                d.get("collection", "?"),
+                str(d.get("total_pages", 0)),
+                str(d.get("chunk_count", 0)),
+            ]
+            for d in docs
         ]
-        for d in docs
-    ]
-    return format_table(specs, rows)
+    )
 
 
 def format_document_detail(doc: Mapping[str, Any]) -> str:
@@ -228,69 +252,78 @@ def format_document_detail(doc: Mapping[str, Any]) -> str:
 
 
 def format_collections(cols: Sequence[Mapping[str, Any]]) -> str:
-    """Format collection listing as a table."""
+    """Format collection listing as a count header followed by a table."""
     if not cols:
         return "No collections"
-
-    specs = [
-        ColumnSpec("COLLECTION", 8, fixed=False),
-        ColumnSpec("DOCUMENTS", 9, align="right"),
-        ColumnSpec("CHUNKS", 6, align="right"),
-    ]
-    rows = [
+    listing = _Listing(
+        "collection",
         [
-            c.get("collection", "?"),
-            str(c.get("document_count", 0)),
-            str(c.get("chunk_count", 0)),
+            ColumnSpec("COLLECTION", 8, fixed=False),
+            ColumnSpec("DOCUMENTS", 9, align="right"),
+            ColumnSpec("CHUNKS", 6, align="right"),
+        ],
+    )
+    return listing.render(
+        [
+            [
+                c.get("collection", "?"),
+                str(c.get("document_count", 0)),
+                str(c.get("chunk_count", 0)),
+            ]
+            for c in cols
         ]
-        for c in cols
-    ]
-    return format_table(specs, rows)
+    )
 
 
 def format_databases(
     databases: Sequence[Mapping[str, Any]],
     current: str = "default",
 ) -> str:
-    """Format database listing as a table."""
+    """Format database listing as a count header followed by a table."""
     if not databases:
         return "No databases"
-
-    specs = [
-        ColumnSpec("DATABASE", 8, fixed=False),
-        ColumnSpec("DOCUMENTS", 9, align="right"),
-    ]
-    rows = [
+    listing = _Listing(
+        "database",
         [
-            ("* " + db.get("name", "?"))
-            if db.get("name") == current
-            else db.get("name", "?"),
-            str(db.get("document_count", 0)),
+            ColumnSpec("DATABASE", 8, fixed=False),
+            ColumnSpec("DOCUMENTS", 9, align="right"),
+        ],
+    )
+    return listing.render(
+        [
+            [
+                ("* " + db.get("name", "?"))
+                if db.get("name") == current
+                else db.get("name", "?"),
+                str(db.get("document_count", 0)),
+            ]
+            for db in databases
         ]
-        for db in databases
-    ]
-    return format_table(specs, rows)
+    )
 
 
 def format_registrations(regs: Sequence[Mapping[str, Any]]) -> str:
-    """Format registration listing as a table."""
+    """Format registration listing as a count header followed by a table."""
     if not regs:
         return "No registered directories"
-
-    specs = [
-        ColumnSpec("COLLECTION", 8),
-        ColumnSpec("DIRECTORY", 8, fixed=False),
-        ColumnSpec("REGISTERED", 10),
-    ]
-    rows = [
+    listing = _Listing(
+        "registration",
         [
-            r.get("collection", "?"),
-            r.get("directory", "?"),
-            (r.get("registered_at") or "?")[:10],
+            ColumnSpec("COLLECTION", 8),
+            ColumnSpec("DIRECTORY", 8, fixed=False),
+            ColumnSpec("REGISTERED", 10),
+        ],
+    )
+    return listing.render(
+        [
+            [
+                r.get("collection", "?"),
+                r.get("directory", "?"),
+                (r.get("registered_at") or "?")[:10],
+            ]
+            for r in regs
         ]
-        for r in regs
-    ]
-    return format_table(specs, rows)
+    )
 
 
 def format_status(info: Mapping[str, Any]) -> str:

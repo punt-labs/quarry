@@ -12,7 +12,7 @@ Arguments: $ARGUMENTS
 
 Search the knowledge base to identify where specific information comes from.
 
-1. Call `mcp__plugin_quarry-dev_quarry__find` with `query` set to the arguments.
+1. Call `mcp__quarry-dev__find` with `query` set to the arguments.
 
 2. From the results, identify the source document(s) and cite them clearly: document name, page number, and the relevant excerpt. Focus on identifying WHERE the information comes from, not explaining it.
 

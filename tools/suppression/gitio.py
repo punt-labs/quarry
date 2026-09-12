@@ -29,6 +29,7 @@ class GitRepo:
     _root: Path | None
 
     BASELINE_FILE: str = ".suppression-baseline.json"
+    AUDIT_FILE: str = ".suppression-audit.jsonl"
 
     def __new__(cls, start: Path | None = None) -> Self:
         self = super().__new__(cls)
@@ -82,6 +83,20 @@ class GitRepo:
         if base_ref is not None:
             return self.resolve_ref(base_ref)
         return self.merge_base("origin/main", "HEAD")
+
+    def short_head(self) -> str | None:
+        """Return the abbreviated HEAD commit hash."""
+        out = self._git(["rev-parse", "--short", "HEAD"])
+        return out.strip() if out is not None else None
+
+    def show_audit(self, ref: str) -> str | None:
+        """Return the audit-log text committed at ``ref``, or ``None`` if absent.
+
+        ``None`` means the blob genuinely does not exist at that ref (no base
+        history); a real git error raises ``GitError`` rather than silently
+        reading as "no base relaxations" and over-waiving.
+        """
+        return self._show_file(ref, self.AUDIT_FILE)
 
     def show_baseline(self, ref: str) -> dict[str, object] | None:
         """Return the suppression baseline committed at ``ref``, or ``None``.

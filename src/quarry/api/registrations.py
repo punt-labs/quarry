@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -20,6 +22,10 @@ class RegistrationInfo(BaseModel):
     """One directory registration.
 
     ``extra="allow"`` keeps the model a superset of the registry row shape.
+    ``watch_state`` defaults to ``"scan-only"`` so a response from an older
+    daemon that omits the field still parses as the conservative reading —
+    "assume the safety scan is doing the work" — rather than as "watched"
+    (DES-045e: :meth:`~quarry.daemon.watch_loop.WatchLoop.watch_state`).
     """
 
     model_config = ConfigDict(extra="allow")
@@ -27,6 +33,7 @@ class RegistrationInfo(BaseModel):
     collection: str
     directory: str
     registered_at: str
+    watch_state: Literal["watched", "degraded", "scan-only"] = "scan-only"
 
 
 class RetainedCollection(BaseModel):

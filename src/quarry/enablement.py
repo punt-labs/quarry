@@ -92,18 +92,25 @@ class Enablement:
     def disable(self) -> DisablementResult:
         """Remove the marker and prune the import atomically; leave the guide dormant.
 
-        The remove runs before the fallible prune (read + atomic temp+rename) so
-        a prune failure leaves marker-absent + import-present — the recoverable
-        state — never the marker-present + import-absent state the § 2.11
-        biconditional forbids. This mirrors ``enable``, where the near-infallible
-        marker is likewise the commit point.
+        Guarantees the § 2.11 invariant marker-present ⇒ import-present: the
+        marker + import teardown commits atomically under one
+        :class:`FileLock`, and the near-infallible marker removal runs before
+        the fallible prune so a mid-call failure only ever leaves the
+        recoverable marker-absent + import-present state, never
+        marker-present + import-absent. A concurrent ``enable`` cannot
+        interleave under the shared lock.
 
-        Both run under one :class:`FileLock` so a concurrent ``enable`` cannot
-        interleave its marker write with this prune and strand the marker.
+        Deregistering the sync collection is the CALLER's responsibility.
+        This method owns marker + import atomicity only; it deliberately
+        depends on no daemon/HTTP client so the file-system commit point
+        stays pure stdlib. The orchestrator (:func:`quarry.enable.disable_project`)
+        sequences the deregister AFTER this call, so a deregister failure
+        leaves a coherent disabled surface (marker-absent, import-absent)
+        with only a runtime registration residue a retry converges.
 
         A :class:`~quarry.safe_paths.SafeRepoPath` refusal (a hostile symlinked
         ancestor) is caught so it cannot abort before the prune and strand the
-        ``@``-import a prior deregister already acted on. The refused marker is
+        ``@``-import a prior teardown already acted on. The refused marker is
         not a real in-repo marker (``is_present()`` is ``False``), so treating it
         as absent and pruning anyway keeps the recoverable invariant. A genuine
         unlink error still propagates, leaving the recoverable marker-present +

@@ -51,6 +51,7 @@ class RegistrationRoutes(RouteGroup):
                 "collection": reg.collection,
                 "directory": reg.directory,
                 "registered_at": reg.registered_at,
+                "watch_state": self.ctx.watch_loop.watch_state(reg.collection),
             }
             for reg in regs
         ]

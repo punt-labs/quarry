@@ -46,6 +46,7 @@ _BODIES: dict[tuple[str, str], dict[str, object]] = {
     },
     ("POST", "/v1/remember"): {"task_id": "t", "status": "accepted"},
     ("POST", "/v1/ingest"): {"task_id": "t", "status": "accepted"},
+    ("POST", "/v1/learn"): {"task_id": "t", "status": "accepted"},
     ("POST", "/v1/sync"): {"task_id": "t", "status": "accepted"},
     ("POST", "/v1/registrations"): {"task_id": "t", "status": "accepted"},
     ("POST", "/v1/optimize"): {"task_id": "t", "status": "accepted"},
@@ -256,6 +257,87 @@ class TestDelete:
     def test_collection_route(self, transport: RecordingTransport) -> None:
         _run(["delete", "mycol", "--type", "collection"])
         assert transport.params_for("DELETE", "/v1/collections")["name"] == "mycol"
+
+
+class TestRememberCollectionSentinel:
+    """CLI ``remember`` sends ``collection=""`` unless the caller overrides.
+
+    Bug-class-3 parity: the daemon's ``_remember_job`` owns the routing rule,
+    so every surface must send the empty sentinel by default. An explicit
+    ``--collection`` still passes through verbatim.
+    """
+
+    def test_default_collection_is_empty_on_wire(
+        self, transport: RecordingTransport
+    ) -> None:
+        result = runner.invoke(
+            app,
+            ["--json", "remember", "--name", "note.md", "--agent-handle", "rmh"],
+            input="body",
+        )
+        assert result.exit_code == 0, result.output
+        body = transport.body_for("POST", "/v1/remember")
+        assert body["collection"] == ""
+        assert body["agent_handle"] == "rmh"
+
+    def test_explicit_collection_forwarded_verbatim(
+        self, transport: RecordingTransport
+    ) -> None:
+        result = runner.invoke(
+            app,
+            [
+                "--json",
+                "remember",
+                "--name",
+                "note.md",
+                "--collection",
+                "notes",
+                "--agent-handle",
+                "rmh",
+            ],
+            input="body",
+        )
+        assert result.exit_code == 0, result.output
+        assert transport.body_for("POST", "/v1/remember")["collection"] == "notes"
+
+
+class TestLearn:
+    """CLI ``learn`` param parity (bug class 3) -- shape matches C2's ratified
+    signature: lesson positional, --topic/--name trailing, no --agent-handle
+    or --overwrite (learn's collection routing and naming are always
+    daemon-owned)."""
+
+    def test_sends_expected_body(self, transport: RecordingTransport) -> None:
+        result = runner.invoke(app, ["--json", "learn", "always run make check"])
+        assert result.exit_code == 0, result.output
+        body = transport.body_for("POST", "/v1/learn")
+        assert body["lesson"] == "always run make check"
+        assert body["topic"] == ""
+        assert body["name"] == ""
+
+    def test_topic_and_name_map_through(self, transport: RecordingTransport) -> None:
+        result = runner.invoke(
+            app,
+            [
+                "--json",
+                "learn",
+                "always run make check",
+                "--topic",
+                "testing",
+                "--name",
+                "auth-gotcha",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        body = transport.body_for("POST", "/v1/learn")
+        assert body["topic"] == "testing"
+        assert body["name"] == "auth-gotcha"
+
+    def test_no_agent_handle_or_overwrite_flags(self) -> None:
+        result = runner.invoke(app, ["learn", "--help"])
+        assert result.exit_code == 0, result.output
+        assert "--agent-handle" not in result.output
+        assert "--overwrite" not in result.output
 
 
 class TestSyncRegisterDeregister:

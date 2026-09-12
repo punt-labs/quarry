@@ -1113,6 +1113,15 @@ def _mock_install_deps(monkeypatch: MP) -> None:
         "quarry.opencv_headless.HeadlessOpenCv.enforce",
         lambda _self: "opencv-python-headless (mocked)",
     )
+    # GpuRuntime.ensure() shells out to `uv pip install onnxruntime-gpu` on a
+    # CUDA host, which mutates the running venv (removing onnxruntime and
+    # cascading ModuleNotFoundError into every later test in the session).
+    # Default to NO_GPU; individual tests may still patch ensure() to a
+    # specific GpuStatus for the failure-path scenarios.
+    monkeypatch.setattr(
+        "quarry.gpu_runtime.GpuRuntime.ensure",
+        classmethod(lambda cls: GpuStatus.NO_GPU),
+    )
 
 
 class TestMcpCommand:

@@ -1,0 +1,10 @@
+{
+  "hook_event_name": "PostToolUse",
+  "tool_name": "WebSearch",
+  "cwd": "/tmp/quarry-hook-fixture-cwd",
+  "session_id": "regression-quarry-871u-2026-05-markdown",
+  "tool_input": {
+    "query": "onnxruntime coreml provider fallback"
+  },
+  "tool_response": "# Search results for onnxruntime coreml provider fallback\n\n- [Apple CoreML EP notes](https://example.test/coreml-notes): CoreML fails closed on unsupported ops; ORT falls back to the CPU EP for those nodes.\n- [Provider ordering guidance](https://example.test/provider-order): List CoreML before CPU so unsupported ops still run rather than erroring out.\n"
+}

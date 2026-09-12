@@ -54,4 +54,6 @@ if [[ ${#dev_files[@]} -gt 0 ]]; then
   git -C "$REPO_ROOT" rm "${dev_files[@]}"
 fi
 
-git -C "$REPO_ROOT" commit --no-verify -m "chore: prepare plugin for release"
+# The org bans --no-verify; hooks run against the release-prep commit like
+# any other.
+git -C "$REPO_ROOT" commit -m "chore: prepare plugin for release"

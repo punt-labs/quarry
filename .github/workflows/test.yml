@@ -26,7 +26,7 @@ jobs:
       - name: Install shellcheck
         run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
       - run: uv sync --frozen --extra dev
-      - run: uv run pytest -m "not slow" --cov=quarry --cov-report=xml
+      - run: uv run pytest -m "not slow and not hook_integration" --cov=quarry --cov-report=xml
       - uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:

@@ -1,6 +1,31 @@
 {
   "components": {
     "schemas": {
+      "CapturesLookupResponse": {
+        "description": "Whether a URL is already indexed under a project's captures collection.\n\n``document_name`` names the stored capture when ``matched`` is true; it is\nabsent (``None``) on a miss \u2014 there is nothing to name, not a lookup\nfailure.",
+        "properties": {
+          "document_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Name"
+          },
+          "matched": {
+            "title": "Matched",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "matched"
+        ],
+        "title": "CapturesLookupResponse",
+        "type": "object"
+      },
       "CapturesPushResponse": {
         "description": "The response for pushing redacted capture shadows.\n\n``results`` maps each pushed collection to its per-collection push summary\n(``CaptureSync`` result dict) \u2014 a wire-boundary mapping the CLI renders,\nkept as ``dict`` so a summary-field addition never drops on the wire.",
         "properties": {
@@ -64,6 +89,30 @@
           "collections"
         ],
         "title": "CollectionList",
+        "type": "object"
+      },
+      "CoverageResponse": {
+        "description": "Per-repo coverage of a collection and its ``<collection>-captures`` sibling.\n\nThree distinct-name counts scoped to one repo's slice of the shared catalog:\nnon-memory documents in ``collection``, ``session-<id>`` compaction archives\nin ``captures_collection``, and memory rows (``agent_handle``/``memory_type``\nset) in ``collection``. A URL capture in the captures collection is neither\n\u2014 it's a background artifact and not surfaced here.",
+        "properties": {
+          "documents_indexed": {
+            "title": "Documents Indexed",
+            "type": "integer"
+          },
+          "memories_saved": {
+            "title": "Memories Saved",
+            "type": "integer"
+          },
+          "transcripts_captured": {
+            "title": "Transcripts Captured",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "documents_indexed",
+          "transcripts_captured",
+          "memories_saved"
+        ],
+        "title": "CoverageResponse",
         "type": "object"
       },
       "DatabaseInfo": {
@@ -280,7 +329,7 @@
       },
       "RegistrationInfo": {
         "additionalProperties": true,
-        "description": "One directory registration.\n\n``extra=\"allow\"`` keeps the model a superset of the registry row shape.",
+        "description": "One directory registration.\n\n``extra=\"allow\"`` keeps the model a superset of the registry row shape.\n``watch_state`` defaults to ``\"scan-only\"`` so a response from an older\ndaemon that omits the field still parses as the conservative reading \u2014\n\"assume the safety scan is doing the work\" \u2014 rather than as \"watched\"\n(DES-045e: :meth:`~quarry.daemon.watch_loop.WatchLoop.watch_state`).",
         "properties": {
           "collection": {
             "title": "Collection",
@@ -292,6 +341,16 @@
           },
           "registered_at": {
             "title": "Registered At",
+            "type": "string"
+          },
+          "watch_state": {
+            "default": "scan-only",
+            "enum": [
+              "watched",
+              "degraded",
+              "scan-only"
+            ],
+            "title": "Watch State",
             "type": "string"
           }
         },
@@ -769,6 +828,51 @@
         "summary": "Capture"
       }
     },
+    "/v1/captures/lookup": {
+      "post": {
+        "description": "Answer whether a URL is already indexed under the caller's captures.\n\nBody: {url, cwd} \u2014 POST, not a ``?url=`` query string: a query-string\ntoken (an API key, a session id) rides the URL itself and can leak into\nproxy/WAF/browser logs even on a loopback hop (CWE-598).  Shares\n``POST /capture``'s ``cwd``-derived collection contract\n(:meth:`_capture_job`), so this thin client never opens the sync\nregistry itself or spells the ``<repo>-captures`` naming rule.  The\nstored ``document_name`` for a WebFetch capture is the URL with\nuserinfo/query/fragment stripped (``CaptureUrl.for_web_fetch``), so this\nrecomputes the identical normalization before comparing: two URLs\ndiffering only by query string or fragment collapse to the SAME\ndocument and match; a trailing-slash difference does NOT normalize and\nwill not match.",
+        "operationId": "lookup_v1_captures_lookup_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "description": "Body for looking up whether a URL is already indexed under captures.\n\nPOST, not a query string: *url* can carry a secret token (an API key in\nthe query, a session id in the path) that a GET would otherwise expose to\nproxy, WAF, and browser history logs (CWE-598). Mirrors ``POST /capture``'s\n``cwd``-derived collection contract.",
+                "properties": {
+                  "cwd": {
+                    "default": "",
+                    "title": "Cwd",
+                    "type": "string"
+                  },
+                  "url": {
+                    "title": "Url",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "url"
+                ],
+                "title": "CapturesLookupRequest",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapturesLookupResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Lookup"
+      }
+    },
     "/v1/captures/push": {
       "post": {
         "operationId": "push_v1_captures_push_post",
@@ -830,6 +934,25 @@
           }
         },
         "summary": "Collections"
+      }
+    },
+    "/v1/coverage": {
+      "get": {
+        "description": "Return per-repo counts for ``collection`` and its captures sibling.\n\nReads ``?collection=<repo>`` from the query string; a missing or blank\nvalue earns a 400. The captures sibling is derived server-side as\n``<collection>-captures`` so the wire contract carries one identifier,\nnot two \u2014 the CLI/hook never has to spell the naming rule.",
+        "operationId": "coverage_v1_coverage_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoverageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Coverage"
       }
     },
     "/v1/databases": {
@@ -961,6 +1084,61 @@
         "summary": "Ingest"
       }
     },
+    "/v1/learn": {
+      "post": {
+        "description": "Save a distilled lesson as a background task.\n\nremember = a specific durable fact, ingest = a URL, learn = a\ndistilled lesson that gets retrieval preference. Body: {lesson,\ntopic?, name?, cwd?}. Always writes memory_type=\"lesson\" with no\nagent_handle -- a lesson is project-scoped, deliberately-curated\nknowledge, never a personal, decaying memory (fusion.py's decay gate\nexempts empty-handle rows already). Returns 202 with a task_id.",
+        "operationId": "learn_v1_learn_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "description": "Body for saving a distilled lesson with retrieval preference.\n\n``cwd`` is never a caller-facing parameter on any surface (CLI, MCP,\nslash, client) -- ``QuarryClient.learn()`` resolves it via ``Path.cwd()``\nbefore this model is built, exactly the way ``CaptureIngestRequest.cwd``\nis populated by the caller's own working directory, not the user.",
+                "properties": {
+                  "cwd": {
+                    "default": "",
+                    "title": "Cwd",
+                    "type": "string"
+                  },
+                  "lesson": {
+                    "title": "Lesson",
+                    "type": "string"
+                  },
+                  "name": {
+                    "default": "",
+                    "title": "Name",
+                    "type": "string"
+                  },
+                  "topic": {
+                    "default": "",
+                    "title": "Topic",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "lesson"
+                ],
+                "title": "LearnRequest",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Learn"
+      }
+    },
     "/v1/optimize": {
       "post": {
         "description": "Compact the table and rebuild indexes as a singleton background task.\n\nA second optimize while one is in flight is rejected with 409 and the\nrunning task's id, so concurrent runs never contend for the table lock.",
@@ -1086,7 +1264,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "description": "Body for indexing inline text content.",
+                "description": "Body for indexing inline text content.\n\n``collection`` is the empty-string sentinel: the daemon decides the effective\ncollection at ``_remember_job``. Explicit values pass through unchanged; an\nempty value with an ``agent_handle`` routes to ``memory-<handle>``, and an\nempty value with no handle falls back to ``default``.",
                 "properties": {
                   "agent_handle": {
                     "default": "",
@@ -1094,7 +1272,7 @@
                     "type": "string"
                   },
                   "collection": {
-                    "default": "default",
+                    "default": "",
                     "title": "Collection",
                     "type": "string"
                   },

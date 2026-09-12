@@ -17,7 +17,7 @@ import contextlib
 import logging
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Self, final
+from typing import TYPE_CHECKING, Literal, Self, final
 
 from starlette.concurrency import run_in_threadpool
 
@@ -149,6 +149,13 @@ class WatchLoop:
             self._safety_task = self._loop.create_task(
                 self._reconciler.run_safety_loop()
             )
+        else:
+            logger.warning(
+                "watch: watch_safety_scan_s=0 disables the periodic reconcile "
+                "backstop; a missed/shed live-watch event, a kernel inotify "
+                "queue overflow, or a watch degraded to scan-only will go "
+                "undetected until the next daemon restart"
+            )
 
     async def stop(self) -> None:
         """Tear down the observer + roster before the queue drain (any watch state)."""
@@ -188,6 +195,32 @@ class WatchLoop:
         if not self._started:
             return
         self._teardown(RouteKey(self._ctx.database_name, collection))
+
+    def watch_state(
+        self, collection: str
+    ) -> Literal["watched", "degraded", "scan-only"]:
+        """Report *collection*'s live-watch status in the active database.
+
+        ``"scan-only"`` — the observer is disabled (``watch_enabled=false``)
+        or this collection has never been (or is no longer) tracked by the
+        roster; it relies entirely on the periodic safety scan and explicit
+        ``quarry sync``. ``"degraded"`` — tracked, but either the last
+        ``schedule()`` returned no handle (e.g. an exhausted inotify
+        budget) or a handle exists but its background thread has since
+        died (djb minor) — either way the same reliance on the safety
+        scan, but silently, unlike a collection that was never registered.
+        ``"watched"`` — a live observer handle backs it, with a live
+        thread behind it.
+        """
+        if not self._started or self._roster is None:
+            return "scan-only"
+        key = RouteKey(self._ctx.database_name, collection)
+        present = self._roster.watch_handle_present(key)
+        if present is None:
+            return "scan-only"
+        if not present:
+            return "degraded"
+        return "watched" if self._roster.watch_handle_alive(key) else "degraded"
 
     def _teardown(self, key: RouteKey) -> None:
         """Unwatch *key*'s tree and drop its pending + backoff state."""

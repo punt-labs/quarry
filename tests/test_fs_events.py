@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.daemon.debounce import DebouncedDispatcher
-from quarry.daemon.fs_events import FsEvent
+from quarry.daemon.fs_events import FsEvent, NullFsEventSource
 from quarry.daemon.route_key import RouteKey
 
 if TYPE_CHECKING:
@@ -154,6 +154,15 @@ def test_cancel_drops_pending_paths() -> None:
         assert sink.batches == []
 
     asyncio.run(_run())
+
+
+def test_null_fs_event_source_reports_nothing_watched_or_alive() -> None:
+    """The sync-only Null Object never watches, so is_alive is always False."""
+    source = NullFsEventSource()
+    handle = source.schedule(Path("/r"), lambda _e: None)
+    assert handle is None
+    assert source.is_alive(handle) is False
+    assert source.is_alive(object()) is False  # a foreign handle, still False
 
 
 def test_raising_sink_never_crashes_the_loop() -> None:

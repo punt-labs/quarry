@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 from typing import ClassVar, Self
 
+from .audit import SuppressionAudit
 from .gitio import GitRepo
 from .outcome import Outcome
 from .report import SuppressionReport
@@ -33,19 +34,18 @@ class SuppressionBaseline:
     """
 
     _baseline_path: Path
-    _audit_path: Path
     _git: GitRepo
+    _audit: SuppressionAudit
     _entries: dict[str, object]
 
     BASELINE_FILE: ClassVar[str] = ".suppression-baseline.json"
-    AUDIT_FILE: ClassVar[str] = ".suppression-audit.jsonl"
 
     def __new__(cls, root: Path | None = None) -> Self:
         self = super().__new__(cls)
         base = root if root is not None else Path.cwd()
         self._baseline_path = base / cls.BASELINE_FILE
-        self._audit_path = base / cls.AUDIT_FILE
         self._git = GitRepo(base)
+        self._audit = SuppressionAudit(base)
         self._entries = self._load()  # eager: a corrupt in-tree file fails here
         return self
 
@@ -64,7 +64,8 @@ class SuppressionBaseline:
         base_data = self._git.show_baseline(base)
         if base_data is None:
             return self._absent_base()
-        return self._compare(report, base_data)
+        waivable = self._audit.relaxations_since(self._git.show_audit(base))
+        return self._compare(report, base_data, waivable)
 
     def _no_base(self, *, require_base: bool) -> Outcome:
         """Decide the verdict when no comparison base can be resolved.
@@ -114,23 +115,58 @@ class SuppressionBaseline:
             "No baseline at base or origin/main tip -- first-adoption bootstrap pass"
         )
 
-    def _compare(self, report: SuppressionReport, data: dict[str, object]) -> Outcome:
+    def _compare(
+        self,
+        report: SuppressionReport,
+        data: dict[str, object],
+        waivable: frozenset[str],
+    ) -> Outcome:
         baseline_total = self._as_int(data.get("total", 0))
         current_total = report.total
+        baseline_by_file = self._baseline_by_file(data)
+        current_by_file = report.by_file
+        forgiven = self._forgiven_increase(baseline_by_file, current_by_file, waivable)
+        adjusted_total = baseline_total + forgiven
         head = [
             f"\nBaseline total: {baseline_total}",
             f"Current total:  {current_total}",
         ]
-        if current_total > baseline_total:
-            return Outcome(
-                1, tuple(head + self._regression(data, report, baseline_total))
+        if forgiven:
+            head.append(f"Relaxed by audited --relax: +{forgiven}")
+        if current_total > adjusted_total:
+            lines = self._regression(
+                baseline_by_file, current_by_file, current_total, adjusted_total
             )
+            return Outcome(1, tuple(head + lines))
         if current_total < baseline_total:
             drop = baseline_total - current_total
             return Outcome.passed(
                 *head, f"\nPASS: suppression count decreased by {drop}"
             )
         return Outcome.passed(*head, "\nPASS: suppression count unchanged")
+
+    def _forgiven_increase(
+        self,
+        baseline_by_file: dict[str, dict[str, int]],
+        current_by_file: dict[str, dict[str, int]],
+        waivable: frozenset[str],
+    ) -> int:
+        """Return the total increase legitimately waived by an audited ``--relax``.
+
+        A file's increase is forgiven only when it was named by a relaxation
+        recorded since the comparison base (``waivable``) AND the in-tree
+        baseline is locked to its current count -- an un-committed local edit
+        can never forge a waiver, only a committed ``--relax`` can.
+        """
+        intree_by_file = self._baseline_by_file(self._entries)
+        forgiven = 0
+        for path in waivable:
+            base_count = sum(baseline_by_file.get(path, {}).values())
+            cur_count = sum(current_by_file.get(path, {}).values())
+            intree_count = sum(intree_by_file.get(path, {}).values())
+            if cur_count > base_count and intree_count == cur_count:
+                forgiven += cur_count - base_count
+        return forgiven
 
     def update(self, report: SuppressionReport, *, allow_ci_write: bool) -> Outcome:
         """Write current counts to the baseline, never loosening.
@@ -148,7 +184,13 @@ class SuppressionBaseline:
         if refused is not None:
             return refused
         self._save(report)
-        self._append_audit(report)
+        self._audit.append(
+            total=report.total,
+            by_category=report.by_category,
+            verdict="update",
+            deltas={},
+            commit=self._git.short_head(),
+        )
         lines = [
             f"\nBaseline updated: {self._baseline_path}",
             f"  total: {report.total}",
@@ -158,6 +200,66 @@ class SuppressionBaseline:
             for category, count in sorted(report.by_category.items())
         )
         return Outcome.passed(*lines)
+
+    def relax(
+        self,
+        report: SuppressionReport,
+        file: str,
+        *,
+        justify: str,
+        allow_ci_write: bool,
+        source: str | None,
+    ) -> Outcome:
+        """Write ``file``'s current suppression counts even if higher, with reason.
+
+        The single sanctioned, audited increase -- mirrors
+        ``CouplingWriter.relax``. Only the named file's counts move; every other
+        file's baseline entry, and the whole-tree total/by_category, are adjusted
+        by exactly that file's delta so an unrelated in-flight change elsewhere in
+        the tree cannot ride along on the same relaxation.
+        """
+        blocked = self._guard(allow_ci_write=allow_ci_write)
+        if blocked is not None:
+            return blocked
+        if not justify.strip():
+            return Outcome.failed("FAIL: --relax requires a non-empty --justify")
+        current_counts = report.by_file.get(file, {})
+        current_total = sum(current_counts.values())
+        intree_by_file = self._baseline_by_file(self._entries)
+        base_counts = intree_by_file.get(file, {})
+        base_total = sum(base_counts.values())
+        if current_total <= base_total:
+            return Outcome.failed(
+                f"FAIL: {file} has {current_total} suppression(s), not more than "
+                f"its baseline {base_total}; that is a paydown -- use --update"
+            )
+        deltas = {
+            category: [base_counts.get(category, 0), current_counts.get(category, 0)]
+            for category in set(base_counts) | set(current_counts)
+            if base_counts.get(category, 0) != current_counts.get(category, 0)
+        }
+        new_by_category = self._category_totals(self._entries)
+        for category, (old, new) in deltas.items():
+            new_by_category[category] = new_by_category.get(category, 0) - old + new
+        new_by_file = dict(intree_by_file)
+        new_by_file[file] = current_counts
+        old_total = self._as_int(self._entries.get("total", 0))
+        new_total = old_total - base_total + current_total
+        self._write(new_total, new_by_category, new_by_file)
+        self._audit.append(
+            total=new_total,
+            by_category=new_by_category,
+            verdict="relaxed",
+            deltas={file: deltas},
+            commit=self._git.short_head(),
+            source=source,
+            reason=justify,
+        )
+        return Outcome.passed(
+            f"\nRelaxed {file} (reason: {justify})",
+            f"  baseline: {self._baseline_path}",
+            f"  {file}: {base_total} -> {current_total}",
+        )
 
     @staticmethod
     def _guard(*, allow_ci_write: bool) -> Outcome | None:
@@ -188,25 +290,45 @@ class SuppressionBaseline:
             )
         return None
 
+    @staticmethod
     def _regression(
-        self,
-        data: dict[str, object],
-        report: SuppressionReport,
-        baseline_total: int,
+        baseline_by_file: dict[str, dict[str, int]],
+        current_by_file: dict[str, dict[str, int]],
+        current_total: int,
+        adjusted_total: int,
     ) -> list[str]:
-        diff = report.total - baseline_total
+        # current_total is report.total (files + per_file_ignores), passed in
+        # rather than resummed from current_by_file, which excludes the
+        # config-level per_file_ignores category and would understate the diff.
+        diff = current_total - adjusted_total
         lines = [
             f"\nFAIL: suppression count increased by {diff}",
             "\nFiles with new or increased suppressions:",
         ]
-        baseline_by_file = self._baseline_by_file(data)
-        current_by_file = report.by_file
+        sum_of_file_increases = 0
         for fpath in sorted(set(current_by_file) | set(baseline_by_file)):
             cur = sum(current_by_file.get(fpath, {}).values())
             base = sum(baseline_by_file.get(fpath, {}).values())
             if cur > base:
-                lines.append(f"  {fpath}: +{cur - base} ({base} -> {cur})")
+                rise = cur - base
+                sum_of_file_increases += rise
+                lines.append(f"  {fpath}: +{rise} ({base} -> {cur})")
+        if sum_of_file_increases != diff:
+            # Gap sources: paydowns on files not in the regression set, shifts in
+            # config-level per_file_ignores, and audited --relax waivers. Stay
+            # neutral about cause; just state the arithmetic.
+            lines.append(
+                f"\nNet after per-file offsets and any --relax waivers: +{diff} "
+                f"(sum of per-file increases above: +{sum_of_file_increases})"
+            )
         return lines
+
+    @classmethod
+    def _category_totals(cls, data: dict[str, object]) -> dict[str, int]:
+        raw = data.get("by_category", {})
+        if not isinstance(raw, dict):
+            return {}
+        return {str(k): cls._as_int(v) for k, v in raw.items()}
 
     @classmethod
     def _baseline_by_file(cls, data: dict[str, object]) -> dict[str, dict[str, int]]:
@@ -252,22 +374,23 @@ class SuppressionBaseline:
         return raw
 
     def _save(self, report: SuppressionReport) -> None:
+        self._write(report.total, dict(report.by_category), dict(report.by_file))
+
+    def _write(
+        self,
+        total: int,
+        by_category: dict[str, int],
+        by_file: dict[str, dict[str, int]],
+    ) -> None:
+        """Write the baseline to disk and refresh the in-memory view."""
         data = {
-            "total": report.total,
-            "by_category": report.by_category,
-            "by_file": report.by_file,
+            "total": total,
+            "by_category": by_category,
+            "by_file": by_file,
             "updated_at": self._now(),
         }
         self._baseline_path.write_text(json.dumps(data, indent=2) + "\n")
-
-    def _append_audit(self, report: SuppressionReport) -> None:
-        entry = {
-            "ts": self._now(),
-            "total": report.total,
-            "by_category": report.by_category,
-        }
-        with self._audit_path.open("a") as f:
-            f.write(json.dumps(entry, separators=(",", ":")) + "\n")
+        self._entries = data
 
     @staticmethod
     def _now() -> str:

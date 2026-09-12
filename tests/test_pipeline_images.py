@@ -69,7 +69,7 @@ def _mock_ocr_backend_single(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
         )
     )
     monkeypatch.setattr(
-        "quarry.ingestion.pipeline.get_ocr_backend", lambda _settings: backend
+        "quarry.ingestion.format_strategies.get_ocr_backend", lambda _settings: backend
     )
     return backend
 
@@ -159,7 +159,8 @@ class TestIngestImageSinglePage:
 
         backend.ocr_image_bytes.side_effect = _ocr_bytes
         monkeypatch.setattr(
-            "quarry.ingestion.pipeline.get_ocr_backend", lambda _settings: backend
+            "quarry.ingestion.format_strategies.get_ocr_backend",
+            lambda _settings: backend,
         )
         monkeypatch.setattr(
             "quarry.ingestion.streaming.chunk_pages",
@@ -201,7 +202,8 @@ class TestIngestImageSinglePage:
 
         backend.ocr_image_bytes.side_effect = _ocr_bytes
         monkeypatch.setattr(
-            "quarry.ingestion.pipeline.get_ocr_backend", lambda _settings: backend
+            "quarry.ingestion.format_strategies.get_ocr_backend",
+            lambda _settings: backend,
         )
         monkeypatch.setattr(
             "quarry.ingestion.streaming.chunk_pages",
@@ -240,7 +242,8 @@ class TestIngestImageSinglePage:
 
         backend.ocr_image_bytes.side_effect = _ocr_bytes
         monkeypatch.setattr(
-            "quarry.ingestion.pipeline.get_ocr_backend", lambda _settings: backend
+            "quarry.ingestion.format_strategies.get_ocr_backend",
+            lambda _settings: backend,
         )
         monkeypatch.setattr(
             "quarry.ingestion.streaming.chunk_pages",
@@ -322,7 +325,8 @@ class TestIngestImageMultiPage:
         ocr_backend = MagicMock()
         ocr_backend.ocr_document.return_value = ocr_pages
         monkeypatch.setattr(
-            "quarry.ingestion.pipeline.get_ocr_backend", lambda _settings: ocr_backend
+            "quarry.ingestion.format_strategies.get_ocr_backend",
+            lambda _settings: ocr_backend,
         )
         monkeypatch.setattr(
             "quarry.ingestion.streaming.chunk_pages",

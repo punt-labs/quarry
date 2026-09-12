@@ -1,5 +1,5 @@
 ---
-description: Ingest a URL, directory, or file into your knowledge base
+description: Ingest a URL, directory, or file into your knowledge base. remember = a specific durable fact, ingest = a URL, learn = a distilled lesson that gets retrieval preference.
 argument-hint: "<url, directory, or file path>"
 ---
 <!-- markdownlint-disable MD041 -->
@@ -25,14 +25,14 @@ side registers the wrong directory).
 
 Call the appropriate tool(s):
 
-- **URL**: `mcp__plugin_quarry-dev_quarry__ingest` with `source` set to the argument
-- **Local path**: Call `mcp__plugin_quarry-dev_quarry__register_directory` with
+- **URL**: `mcp__quarry-dev__ingest` with `source` set to the argument
+- **Local path**: Call `mcp__quarry-dev__register_directory` with
   `directory` set to the absolute path. If the result contains
   `FileNotFoundError` (the daemon rejects both a nonexistent path and an
   existing file this way — there's no way to tell them apart from the error
   alone), retry once with the path's parent directory. Any other error
   (already registered, name conflict, etc.) is not a file-vs-directory
   problem — report it as-is, do not retry. Then call
-  `mcp__plugin_quarry-dev_quarry__sync_all_registrations`
+  `mcp__quarry-dev__sync_all_registrations`
 
 The result is already formatted by a PostToolUse hook and displayed above. Do not repeat or reformat the data. Do not send any text after the tool call.

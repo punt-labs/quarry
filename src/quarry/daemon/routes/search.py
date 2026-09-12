@@ -11,6 +11,7 @@ from starlette.responses import JSONResponse
 from quarry.daemon.routes.base import RouteGroup
 from quarry.results import SearchFilter
 from quarry.retrieval import SearchService
+from quarry.retrieval.config import RetrievalConfig
 
 if TYPE_CHECKING:
     from starlette.datastructures import QueryParams
@@ -37,7 +38,11 @@ class SearchRoutes(RouteGroup):
         limit = self._limit(params)
         search_filter = self._filter(params)
         query_vector = self.ctx.embedder.embed_query(query)
-        results = SearchService(self.ctx.query_database).search(
+        config = RetrievalConfig(
+            decay_rate=self.ctx.settings.retrieval_decay_rate,
+            lesson_boost=self.ctx.settings.retrieval_lesson_boost,
+        )
+        results = SearchService(self.ctx.query_database, config).search(
             query, query_vector, search_filter, limit
         )
         formatted = [r.to_dict() for r in results]

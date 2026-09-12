@@ -34,13 +34,12 @@ These are the tools you call directly. Read-only tools are synchronous; write to
 | `sync_all_registrations` | Sync all registered directories | Background |
 | `use` | Switch the active named database | Sync |
 
-**Tool name resolution**: The MCP tool names vary depending on how quarry is configured. Common patterns:
+**Tool name resolution**: The MCP tool names vary by which quarry install a session connects to. Two variants:
 
-- `mcp__quarry__find` (direct MCP)
-- `mcp__plugin_quarry_quarry__find` (Claude Code plugin)
-- `mcp__quarry-proxy__find` (via mcp-proxy)
+- `mcp__quarry__find` — native prod (installed quarry MCP server)
+- `mcp__quarry-dev__find` — native dev twin (in-tree plugin, for development)
 
-Use whichever variant is available in your session. They all call the same backend.
+Use whichever variant is available in your session. They call the same backend.
 
 ### Slash Commands
 

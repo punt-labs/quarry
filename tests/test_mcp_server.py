@@ -32,11 +32,12 @@ from quarry.db_pointer import SELECTION
 from quarry.mcp_server import McpTools, mcp
 from quarry.results import SearchResult
 
-# The eleven tools the MCP surface exposes; a rename or removal is a regression.
+# The twelve tools the MCP surface exposes; a rename or removal is a regression.
 _EXPECTED_TOOLS = {
     "find",
     "ingest",
     "remember",
+    "learn",
     "list",
     "show",
     "delete",
@@ -370,9 +371,54 @@ class TestRemember:
 
     def test_scrubs_via_daemon(self, harness: _ToolHarness) -> None:
         """The daemon owns scrubbing; a 202 comes back before any indexing."""
-        result = harness.tools.remember("reach me at jmf@pobox.com", "note.md")
+        result = harness.tools.remember("reach me at jdoe@example.com", "note.md")
         assert "note.md" in result
         assert "task" in result
+
+    def test_default_collection_is_empty_on_wire(self, harness: _ToolHarness) -> None:
+        """MCP ``remember`` without ``collection`` sends the empty sentinel.
+
+        The daemon chokepoint owns the routing rule (bug class 3): the surfaces
+        must send ``collection=""`` when the caller does not name one, so the
+        server-side rule is the single source of truth.
+        """
+        captured: list[str] = []
+        real_route = __import__(
+            "quarry.daemon.routes.ingestion", fromlist=["IngestionRoutes"]
+        ).IngestionRoutes._remember_job
+
+        def spy(self: object, body: dict[str, object]) -> object:
+            captured.append(str(body.get("collection", "<missing>")))
+            return real_route(self, body)
+
+        with patch("quarry.daemon.routes.ingestion.IngestionRoutes._remember_job", spy):
+            harness.tools.remember("body", "note.md", agent_handle="rmh")
+
+        assert captured == [""]
+
+    def test_agent_handle_routes_to_memory_collection(
+        self, harness: _ToolHarness
+    ) -> None:
+        """End-to-end: MCP remember with an agent_handle lands in ``memory-<h>``.
+
+        Bug-class-3 equivalence check: the CLI/MCP/HTTP surfaces must all reach
+        the same server-side rule, so the observable outcome (the job's target
+        collection) must be identical to the CLI path.
+        """
+        captured: list[str] = []
+        real_route = __import__(
+            "quarry.daemon.routes.ingestion", fromlist=["IngestionRoutes"]
+        ).IngestionRoutes._remember_job
+
+        def spy(self: object, body: dict[str, object]) -> object:
+            job = real_route(self, body)
+            captured.append(getattr(job, "collection", "<not-a-job>"))
+            return job
+
+        with patch("quarry.daemon.routes.ingestion.IngestionRoutes._remember_job", spy):
+            harness.tools.remember("body", "note.md", agent_handle="rmh")
+
+        assert captured == ["memory-rmh"]
 
 
 class TestIngest:
@@ -391,13 +437,42 @@ class TestIngest:
                 return_value=None,
             ),
             patch(
-                "quarry.ingestion.pipeline.ingest_auto",
+                "quarry.ingestion.sitemap_ingest.ingest_auto",
                 return_value={"document_name": "x", "collection": "c", "chunks": 1},
             ),
         ):
             result = harness.tools.ingest("https://example.com/doc")
             harness.http.get("/v1/tasks")  # let the worker drain the job under the mock
         assert "task" in result
+
+
+class TestLearn:
+    def test_dispatches_and_returns_task(self, harness: _ToolHarness) -> None:
+        result = harness.tools.learn("always run make check before committing")
+        assert "task" in result
+
+    def test_blank_lesson_rejected(self, harness: _ToolHarness) -> None:
+        result = harness.tools.learn("")
+        assert result.startswith("Error:")
+        assert "lesson" in result
+
+    def test_topic_and_name_reach_the_daemon(self, harness: _ToolHarness) -> None:
+        captured: list[dict[str, object]] = []
+        real_learn_job = __import__(
+            "quarry.daemon.routes.ingestion", fromlist=["IngestionRoutes"]
+        ).IngestionRoutes._learn_job
+
+        async def spy(self: object, body: dict[str, object]) -> object:
+            captured.append(dict(body))
+            return await real_learn_job(self, body)
+
+        with patch("quarry.daemon.routes.ingestion.IngestionRoutes._learn_job", spy):
+            harness.tools.learn("a lesson", topic="testing", name="auth-gotcha")
+
+        assert len(captured) == 1
+        assert captured[0]["lesson"] == "a lesson"
+        assert captured[0]["topic"] == "testing"
+        assert captured[0]["name"] == "auth-gotcha"
 
 
 class TestDelete:
@@ -609,6 +684,10 @@ class TestDaemonDown:
         result = self._down_tools().remember("x", "n.md")
         assert result.startswith("Error:")
 
+    def test_learn_returns_error_string(self) -> None:
+        result = self._down_tools().learn("x")
+        assert result.startswith("Error:")
+
 
 class TestInputValidation:
     """Malformed inputs are rejected/normalized without hitting the daemon.
@@ -687,3 +766,85 @@ class TestInputValidation:
             ):
                 result = harness.tools.show("missing.pdf", page_number=page)
             assert result == "Document 'missing.pdf' not found", page
+
+
+class TestToolDocstringOpeners:
+    """Every tool docstring opens with an occasion, not a mechanism verb.
+
+    The two trigger-carrying tools (find, remember) splice R1/R2/R3 verbatim;
+    the rest lead with a situational "Use to ..." / "Use when ..." sentence
+    per the design's per-tool table.
+    """
+
+    _R1 = (
+        "Use find before WebSearch or WebFetch for research, or before "
+        "answering a why/how/what-did-we-decide question."
+    )
+    _R2 = "Prefer grep for symbol and value lookups; prefer find for meaning."
+    _R3 = (
+        "Use remember when you learn something durable — a decision, a gotcha, "
+        "a non-obvious fact, a procedure — so it survives context compaction."
+    )
+    _BOUNDARY = (
+        "remember = a specific durable fact, ingest = a URL, learn = a "
+        "distilled lesson that gets retrieval preference."
+    )
+
+    def test_server_instructions_lead_with_r1_and_r2(self) -> None:
+        assert mcp.instructions is not None
+        assert self._R1 in mcp.instructions
+        assert self._R2 in mcp.instructions
+
+    def test_find_docstring_carries_r1_and_r2(self) -> None:
+        doc = McpTools.find.__doc__
+        assert doc is not None
+        assert self._R1 in doc
+        assert self._R2 in doc
+
+    def test_remember_docstring_carries_r3(self) -> None:
+        doc = McpTools.remember.__doc__
+        assert doc is not None
+        assert self._R3 in doc
+
+    def test_remember_drops_clipboard_framing(self) -> None:
+        """R3a: the clipboard/API-response framing is dropped entirely."""
+        doc = McpTools.remember.__doc__ or ""
+        assert "clipboard" not in doc.lower()
+        assert "api response" not in doc.lower()
+        assert "sandbox-uploaded" not in doc.lower()
+
+    def test_boundary_sentence_in_remember_ingest_learn_docstrings(self) -> None:
+        """The three capture verbs must each carry the identical boundary
+        sentence, not just the newcomer -- otherwise the boundary blurs for
+        whichever verb is missing it.
+        """
+        for tool in (McpTools.remember, McpTools.ingest, McpTools.learn):
+            doc = tool.__doc__ or ""
+            assert self._BOUNDARY in doc, tool.__name__
+
+    def test_other_tools_open_with_non_mechanism_sentence(self) -> None:
+        """Every non-trigger tool opens with 'Use ...' — an occasion, not a verb.
+
+        The nine remaining tools each get a situational opener per the design
+        table. A mechanism opener would name the underlying operation (fetch,
+        list, show, delete, register, ...); the required pattern instead names
+        the occasion an agent would reach for it.
+        """
+        expected_openers = {
+            "ingest": "Use when you have a URL to add to the knowledge base",
+            "list_resources": "Use to see what's already indexed before ingesting",
+            "show": "Use to read a specific page, or to check whether a document",
+            "delete": "Use to remove stale or wrong content before re-ingesting",
+            "register_directory": (
+                "Use to track a local directory so future changes sync"
+            ),
+            "deregister_directory": "Use to stop tracking a directory",
+            "sync_all_registrations": "Use after registering a new directory",
+            "status": "Use to check how much is indexed",
+            "use_database": "Use to point every other tool at a different",
+        }
+        for name, opener in expected_openers.items():
+            doc = getattr(McpTools, name).__doc__
+            assert doc is not None, name
+            first_line = doc.lstrip().split("\n", 1)[0]
+            assert opener in first_line, f"{name}: got {first_line!r}"

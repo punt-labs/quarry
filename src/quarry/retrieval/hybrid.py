@@ -41,7 +41,7 @@ class HybridRetriever:
         self = super().__new__(cls)
         self._database = database
         self._config = config
-        self._fusion = RrfFusion(config.rrf_k, config.decay_rate)
+        self._fusion = RrfFusion(config.rrf_k, config.decay_rate, config.lesson_boost)
         return self
 
     def retrieve(

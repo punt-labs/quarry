@@ -1,0 +1,51 @@
+name: quarry
+repositories:
+  - punt-labs/quarry
+members:
+  - identity: jfreeman
+    role: ceo
+  - identity: claude
+    role: coo
+  # Python — LanceDB schema, CLI/library implementation, MCP server
+  - identity: rmh
+    role: python-specialist
+  # Python — document loaders, evaluator for python-specialist's work
+  - identity: gvr
+    role: python-language-design
+  # ML/inference — ONNX embedding pipeline, quantization, GPU/CPU
+  # dispatch, hybrid search (RRF, temporal decay)
+  - identity: kpz
+    role: ml-specialist
+  # Security — TLS cert generation, pinned-CA contexts, HTTP API and
+  # the local/remote boundary
+  - identity: djb
+    role: security-engineer
+  # CLI — quarry find/ingest/remember surface design
+  - identity: mdm
+    role: cli-specialist
+  # Infrastructure — install scripts, launchd/systemd service lifecycle,
+  # cross-repo tooling
+  - identity: adb
+    role: infra-engineer
+collaborations:
+  - from: coo
+    to: ceo
+    type: reports_to
+  - from: python-specialist
+    to: coo
+    type: reports_to
+  - from: python-language-design
+    to: coo
+    type: reports_to
+  - from: ml-specialist
+    to: coo
+    type: reports_to
+  - from: security-engineer
+    to: coo
+    type: reports_to
+  - from: cli-specialist
+    to: coo
+    type: reports_to
+  - from: infra-engineer
+    to: coo
+    type: reports_to

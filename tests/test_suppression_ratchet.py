@@ -9,6 +9,7 @@ the merge-base count delta driven end-to-end through a real git tree.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import patch
@@ -201,6 +202,33 @@ class TestMergeBaseCheck:
         assert code == 1
         assert "increased by 1" in out
 
+    def test_increase_reports_correct_delta_with_per_file_ignores_configured(
+        self,
+        git_sandbox: GitSandbox,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """The reported delta must be the file-level increase, not skewed by config.
+
+        ``per_file_ignores`` is a config-level category with no owning file, so
+        it is absent from ``by_file`` but present in ``total``. The regression
+        message must still report the true 1-suppression increase, not a
+        negative or inflated number derived from re-summing ``by_file`` alone.
+        """
+        monkeypatch.chdir(git_sandbox.root)
+        git_sandbox.write(
+            "pyproject.toml",
+            '[tool.ruff.lint.per-file-ignores]\n"tests/*" = ["S101", "PLR2004"]\n',
+        )
+        base = _seat_and_commit(git_sandbox, _SRC)
+        git_sandbox.write("src/mod.py", _SRC + "y = 2  # type: ignore\n")
+        code = tools.suppression.main(
+            ["src", "--check", "--base-ref", base, "--require-base"]
+        )
+        out = capsys.readouterr().out
+        assert code == 1
+        assert "increased by 1" in out
+
     def test_decrease_passes(
         self, git_sandbox: GitSandbox, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -240,6 +268,65 @@ class TestMergeBaseCheck:
         assert "increased" in out
 
 
+class TestRelax:
+    """``--relax`` scoped-rebaselines one file's count, audited and justified."""
+
+    def test_relax_updates_baseline_and_waives_check(
+        self,
+        git_sandbox: GitSandbox,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.chdir(git_sandbox.root)
+        base = _seat_and_commit(git_sandbox, _SRC)  # 1 suppression
+        # A legitimate increase: one more noqa on the same file.
+        git_sandbox.write("src/mod.py", _SRC + "y = 2  # noqa: E501\n")
+        code = tools.suppression.main(
+            ["src", "--relax", "src/mod.py", "--justify", "reason", "--allow-ci-write"]
+        )
+        assert code == 0
+        data = json.loads((git_sandbox.root / ".suppression-baseline.json").read_text())
+        assert data["by_file"]["src/mod.py"]["noqa"] == 2
+        assert data["total"] == 2
+        git_sandbox.commit("relax")
+        # The base-commit comparison still says 1, but the relax audit waives it.
+        code = tools.suppression.main(
+            ["src", "--check", "--base-ref", base, "--require-base"]
+        )
+        out = capsys.readouterr().out
+        assert code == 0
+        assert "Relaxed by audited --relax" in out
+
+    def test_relax_refuses_without_justify(
+        self, git_sandbox: GitSandbox, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(git_sandbox.root)
+        _seat_and_commit(git_sandbox, _SRC)
+        git_sandbox.write("src/mod.py", _SRC + "y = 2  # noqa: E501\n")
+        code = tools.suppression.main(
+            ["src", "--relax", "src/mod.py", "--allow-ci-write"]
+        )
+        assert code == 1
+
+    def test_relax_refuses_on_paydown(
+        self, git_sandbox: GitSandbox, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(git_sandbox.root)
+        _seat_and_commit(git_sandbox, _SRC + "y = 2  # noqa: E501\n")  # 2 suppressions
+        git_sandbox.write("src/mod.py", _SRC)  # dropped to 1 -- a paydown, not a relax
+        code = tools.suppression.main(
+            [
+                "src",
+                "--relax",
+                "src/mod.py",
+                "--justify",
+                "not a real relax",
+                "--allow-ci-write",
+            ]
+        )
+        assert code == 1
+
+
 class TestFailClosed:
     """A corrupt base baseline blob fails closed rather than fail-open."""
 
@@ -263,6 +350,29 @@ class TestFailClosed:
         sha = git_sandbox.commit("corrupt baseline")
         code = tools.suppression.main(
             ["src", "--check", "--base-ref", sha, "--require-base"]
+        )
+        assert code == 1
+        assert "FAIL" in capsys.readouterr().out
+
+    def test_check_reports_nonzero_on_corrupt_audit_log(
+        self,
+        git_sandbox: GitSandbox,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A hand-broken ``.suppression-audit.jsonl`` line must fail closed.
+
+        ``check()`` reads the worktree audit log via ``relaxations_since`` to
+        find waivers; a malformed line there must return exit code 1, not
+        propagate ``SuppressionAuditError`` as a traceback out of the CLI.
+        """
+        monkeypatch.chdir(git_sandbox.root)
+        base = _seat_and_commit(git_sandbox, _SRC)
+        git_sandbox.write(
+            ".suppression-audit.jsonl", "not-json-at-all\n"
+        )  # worktree-only edit; relaxations_since reads the live file, not HEAD
+        code = tools.suppression.main(
+            ["src", "--check", "--base-ref", base, "--require-base"]
         )
         assert code == 1
         assert "FAIL" in capsys.readouterr().out

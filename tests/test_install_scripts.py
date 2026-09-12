@@ -293,6 +293,19 @@ def _any_line_contains(log: list[str], needle: str) -> bool:
     return any(needle in line for line in log)
 
 
+def _any_command_invoked(log: list[str], cmd: str) -> bool:
+    """Return True iff any log line records an invocation of ``cmd``.
+
+    Substring matches on bare command names (e.g. ``"claude"``) false-
+    positive on path fragments — a ``curl --cacert /home/u/.claude/...``
+    line contains ``"claude"`` but is not a ``claude`` invocation.  The
+    mock recorder writes ``<basename> <args...>\\n``, so a real invocation
+    starts with the command followed by either a space or the end of the
+    line.
+    """
+    return any(line.startswith(f"{cmd} ") or line == cmd for line in log)
+
+
 # ---------------------------------------------------------------------------
 # Default mode (full install, with claude CLI present)
 # ---------------------------------------------------------------------------
@@ -383,7 +396,7 @@ def test_default_mode_no_claude_skips_plugin(
     )
 
     log = _read_log(env)
-    assert not _any_line_contains(log, "claude"), (
+    assert not _any_command_invoked(log, "claude"), (
         "Plugin install must be skipped when claude CLI is absent"
     )
 
@@ -639,7 +652,7 @@ def _assert_plugin_skipped_cli_intact(
     assert not _any_line_contains(log, "claude plugin"), (
         "marketplace-register and plugin-install steps must be skipped"
     )
-    assert not _any_line_contains(log, "claude"), (
+    assert not _any_command_invoked(log, "claude"), (
         "no claude invocation at all when the plugin is skipped"
     )
     # Every CLI step still runs: model+TLS install, local login, health check.
@@ -738,7 +751,7 @@ def test_no_plugin_with_network_still_skips_plugin(env: dict[str, str]) -> None:
         f"stderr:\n{result.stderr}"
     )
     log = _read_log(env)
-    assert not _any_line_contains(log, "claude"), (
+    assert not _any_command_invoked(log, "claude"), (
         "--no-plugin must skip the plugin even in network mode"
     )
     _index_of(log, "quarry install")

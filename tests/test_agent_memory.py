@@ -666,54 +666,6 @@ def _mock_settings() -> object:
     return settings
 
 
-class TestReadEthosAgentHandle:
-    def test_reads_agent_from_config(self, tmp_path: Path) -> None:
-        """Reads agent handle from .punt-labs/ethos/config.yaml."""
-        from quarry.hooks import _read_ethos_agent_handle
-
-        _make_ethos_config(tmp_path, "claude")
-        assert _read_ethos_agent_handle(str(tmp_path)) == "claude"
-
-    def test_returns_empty_when_no_config(self, tmp_path: Path) -> None:
-        """Returns empty string when no ethos config exists."""
-        from quarry.hooks import _read_ethos_agent_handle
-
-        # tmp_path is inside the quarry repo (.tmp/pytest-...), so the
-        # upward walk finds the real ethos config. Create a dummy
-        # config.yaml without an 'agent' field to stop the walk here.
-        ethos_dir = tmp_path / ".punt-labs" / "ethos"
-        ethos_dir.mkdir(parents=True)
-        (ethos_dir / "config.yaml").write_text("{}")
-        assert _read_ethos_agent_handle(str(tmp_path)) == ""
-
-    def test_walks_up_to_find_config(self, tmp_path: Path) -> None:
-        """Walks up directory tree to find ethos config."""
-        from quarry.hooks import _read_ethos_agent_handle
-
-        _make_ethos_config(tmp_path, "rmh")
-        subdir = tmp_path / "src" / "quarry"
-        subdir.mkdir(parents=True)
-        assert _read_ethos_agent_handle(str(subdir)) == "rmh"
-
-    def test_handles_malformed_yaml(self, tmp_path: Path) -> None:
-        """Returns empty string for malformed YAML."""
-        from quarry.hooks import _read_ethos_agent_handle
-
-        ethos_dir = tmp_path / ".punt-labs" / "ethos"
-        ethos_dir.mkdir(parents=True)
-        (ethos_dir / "config.yaml").write_text(": invalid: yaml: [")
-        assert _read_ethos_agent_handle(str(tmp_path)) == ""
-
-    def test_handles_missing_agent_field(self, tmp_path: Path) -> None:
-        """Returns empty string when config has no agent field."""
-        from quarry.hooks import _read_ethos_agent_handle
-
-        ethos_dir = tmp_path / ".punt-labs" / "ethos"
-        ethos_dir.mkdir(parents=True)
-        (ethos_dir / "config.yaml").write_text("some_other_key: value\n")
-        assert _read_ethos_agent_handle(str(tmp_path)) == ""
-
-
 class TestPreCompactEthosTagging:
     def test_passes_agent_handle_to_capture(self, tmp_path: Path) -> None:
         """PreCompact puts the ethos agent handle on the daemon capture request."""
@@ -725,9 +677,15 @@ class TestPreCompactEthosTagging:
         transcript = _make_transcript(tmp_path)
 
         with (
-            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
-            patch("quarry.hooks._write_capture_file"),
-            patch("quarry.hooks._capture_via_daemon", return_value=True) as cap,
+            patch(
+                "quarry.session_transcript.Path.home",
+                return_value=tmp_path / "home",
+            ),
+            patch("quarry.capture.CaptureWriter.write"),
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+                return_value=True,
+            ) as cap,
         ):
             handle_pre_compact(
                 {
@@ -749,8 +707,14 @@ class TestPreCompactEthosTagging:
         transcript = _make_transcript(tmp_path)
 
         with (
-            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
-            patch("quarry.hooks._capture_via_daemon", return_value=True) as cap,
+            patch(
+                "quarry.session_transcript.Path.home",
+                return_value=tmp_path / "home",
+            ),
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+                return_value=True,
+            ) as cap,
         ):
             handle_pre_compact(
                 {
@@ -768,39 +732,45 @@ class TestPreCompactEthosTagging:
 
 class TestIngestUrlThreadsAgentHandle:
     def test_ingest_url_passes_agent_handle(self) -> None:
-        """ingest_url threads agent_handle/memory_type/summary to _chunk_embed_store."""
+        """ingest_url threads agent_handle/memory_type/summary to the chunker."""
         from unittest.mock import MagicMock
 
-        from quarry.ingestion.pipeline import ingest_url
+        from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.streaming import DocumentStreamer
+        from quarry.ingestion.web_ingest import UrlIngest, ingest_url
 
         html = "<html><body>hi</body></html>"
-        result = {
-            "document_name": "x",
-            "collection": "c",
-            "chunks": 0,
-        }
+        seen: dict[str, object] = {}
+
+        def _capture_build_chunks(
+            _self: DocumentStreamer, pages: list[object], **kwargs: object
+        ) -> list[object]:
+            seen.update(kwargs)
+            return []
+
         with (
             patch("quarry.ingestion.web_fetch.WebFetcher.fetch", return_value=html),
             patch(
                 "quarry.extractors.html_extractor.HtmlExtractor.extract_from_html",
                 return_value=[],
             ),
-            patch("quarry.ingestion.pipeline._chunk_embed_store") as mock_ces,
+            patch.object(DocumentStreamer, "build_chunks", _capture_build_chunks),
             patch("quarry.db.chunk_store.ChunkStore.delete_document"),
         ):
-            mock_ces.return_value = result
             ingest_url(
-                "https://example.com",
-                Database(MagicMock()),
-                MagicMock(),
-                agent_handle="rmh",
-                memory_type="fact",
-                summary="test summary",
+                UrlIngest("https://example.com"),
+                Progress(None),
+                IngestContext(
+                    Database(MagicMock()),
+                    MagicMock(),
+                    agent_handle="rmh",
+                    memory_type="fact",
+                    summary="test summary",
+                ),
             )
-            _, kwargs = mock_ces.call_args
-            assert kwargs["agent_handle"] == "rmh"
-            assert kwargs["memory_type"] == "fact"
-            assert kwargs["summary"] == "test summary"
+            assert seen["agent_handle"] == "rmh"
+            assert seen["memory_type"] == "fact"
+            assert seen["summary"] == "test summary"
 
 
 class TestTemporalWeightEdgeCases:

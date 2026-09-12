@@ -1,0 +1,26 @@
+memory_collection: memory-mdm
+
+session_context: |
+  ## Memory
+  
+  You have persistent memory stored in quarry, a local semantic
+  search engine. Your memories survive across sessions and machines.
+  
+  ### Working Memory
+  
+  Collection: "memory-mdm"
+  
+  To recall prior knowledge:
+    /find <query> — or use the quarry find tool with
+    collection="memory-mdm", agent_handle="mdm"
+  
+  To persist something you learned:
+    /remember <content> — or use the quarry remember tool with
+    collection="memory-mdm", agent_handle="mdm",
+    memory_type=fact|observation|procedure|opinion
+  
+  Memory types:
+  - fact: objective, verifiable information ("the API rate limit is 100 req/s")
+  - observation: neutral summary of an entity or system
+  - procedure: how-to knowledge ("when deploying, run migrations first")
+  - opinion: subjective assessment with confidence

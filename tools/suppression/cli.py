@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Self
 
+from .audit import SuppressionAuditError
 from .baseline import SuppressionBaseline, SuppressionBaselineError
 from .gitio import GitError, GitRepo
 from .outcome import Outcome
@@ -24,9 +25,12 @@ class Options:
     update: bool
     json: bool
     threshold: bool
+    relax: str | None
+    justify: str
     base_ref: str | None
     require_base: bool
     allow_ci_write: bool
+    source: str | None
 
     @classmethod
     def parse(cls, argv: list[str] | None = None) -> Self:
@@ -38,9 +42,12 @@ class Options:
             update=bool(ns.update),
             json=bool(ns.json),
             threshold=bool(ns.threshold),
+            relax=ns.relax,
+            justify=ns.justify or "",
             base_ref=ns.base_ref,
             require_base=bool(ns.require_base),
             allow_ci_write=bool(ns.allow_ci_write),
+            source=ns.source,
         )
 
     @staticmethod
@@ -55,6 +62,8 @@ class Options:
         action.add_argument("--update", action="store_true", help="update baseline")
         action.add_argument("--threshold", action="store_true", help="per-file table")
         action.add_argument("--json", action="store_true", help="emit JSON counts")
+        action.add_argument("--relax", metavar="FILE", help="relax one file's baseline")
+        parser.add_argument("--justify", default="", help="justification for --relax")
         parser.add_argument("--base-ref", metavar="REF", help="comparison base commit")
         parser.add_argument(
             "--require-base", action="store_true", help="fail if base unresolvable"
@@ -62,6 +71,7 @@ class Options:
         parser.add_argument(
             "--allow-ci-write", action="store_true", help="permit writes under CI"
         )
+        parser.add_argument("--source", metavar="REF", help="audit source (PR/bead)")
         return parser
 
 
@@ -87,14 +97,16 @@ class Cli:
             # Anchor the scan's project root and the baseline path to the repo
             # root (via GitRepo), not cwd, so running from a subdirectory still
             # reads the right pyproject.toml and .suppression-baseline.json.
-            # Scan and construct inside the try: an unreadable .py file (OSError)
-            # or a corrupt in-tree baseline (eager load) must surface as a clean
-            # non-zero, not a traceback.
+            # Scan and construct inside the try: an unreadable .py file (OSError),
+            # a corrupt in-tree baseline (eager load), or a corrupt audit log
+            # (read on --check/--relax) must surface as a clean non-zero, not a
+            # traceback.
             report = Scanner(self._opts.src, self._root).report
             outcome = self._dispatch(SuppressionBaseline(self._root), report)
         except (
             GitError,
             SuppressionBaselineError,
+            SuppressionAuditError,
             PyprojectError,
             OSError,
             UnicodeDecodeError,
@@ -112,6 +124,14 @@ class Cli:
             )
         if opts.update:
             return baseline.update(report, allow_ci_write=opts.allow_ci_write)
+        if opts.relax is not None:
+            return baseline.relax(
+                report,
+                opts.relax,
+                justify=opts.justify,
+                allow_ci_write=opts.allow_ci_write,
+                source=opts.source,
+            )
         if opts.json:
             return Outcome.passed(report.to_json())
         lines = list(report.render())

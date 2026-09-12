@@ -10,7 +10,7 @@ from quarry.collection_namer import CollectionNamer
 if TYPE_CHECKING:
     from collections.abc import Set as AbstractSet
 
-    from quarry.sync_registry import SyncRegistry
+    from quarry.sync_registry import DirectoryRegistration, SyncRegistry
 
 
 @final
@@ -35,12 +35,19 @@ class CollectionResolver:
         return self
 
     def covering_collection(self, cwd: str) -> str | None:
-        """Return the registered collection covering *cwd* (exact or parent), else None.
+        """Return the collection covering *cwd* (exact or parent), else None."""
+        registration = self.covering_registration(cwd)
+        return registration.collection if registration is not None else None
+
+    def covering_registration(self, cwd: str) -> DirectoryRegistration | None:
+        """Return the registration covering *cwd* (exact or parent), else None.
 
         Walks up from *cwd* to the filesystem root; None means no registration
-        covers it — the documented "no coverage" contract, not a failure.
+        covers it — the documented "no coverage" contract, not a failure. Callers
+        that need the registration's own root directory (e.g. to check a marker
+        file there, not just at *cwd*) use this over :meth:`covering_collection`.
         """
-        reg_map = {r.directory: r.collection for r in self._conn.list_registrations()}
+        reg_map = {r.directory: r for r in self._conn.list_registrations()}
         if not reg_map:
             return None
         current = Path(cwd).resolve()

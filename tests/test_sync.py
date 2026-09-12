@@ -21,9 +21,8 @@ from quarry.db.storage import get_db
 from quarry.ingestion.pipeline import plan_file_chunks
 from quarry.ingestion.progressive import FlushCheckpoint, ProgressiveIndexer
 from quarry.models import PageContent, PageType
-from quarry.scratch_paths import ScratchGuard
 from quarry.sync import sync_collection
-from quarry.sync_discovery import _DEFAULT_IGNORE_PATTERNS, FileDiscovery
+from quarry.sync_discovery import FileDiscovery
 from quarry.sync_file_store import FileRecord
 from quarry.sync_ingest import CollectionIngestor
 from quarry.sync_messages import FileMeta
@@ -528,53 +527,133 @@ class TestIsIndexable:
         assert discovery.is_indexable(root / "scan.txt", frozenset({".txt"})) is False
 
 
-class TestLoadIgnoreSpec:
-    def test_default_patterns_are_globs_not_dir_names(self):
-        # Glob patterns stay in the pathspec defaults; scratch/VCS/cache DIR
-        # names moved to ScratchGuard (pruned by name in the walk), so they are
-        # no longer duplicated here.
-        assert "*.pyc" in _DEFAULT_IGNORE_PATTERNS
-        assert ".DS_Store" in _DEFAULT_IGNORE_PATTERNS
-        assert "node_modules/" not in _DEFAULT_IGNORE_PATTERNS
-        assert "venv/" not in _DEFAULT_IGNORE_PATTERNS
-        guard = ScratchGuard()
-        assert guard.is_skip_name("venv")
-        assert guard.is_skip_name("node_modules")
-        assert guard.is_skip_name("__pycache__")
+class TestIsWatchableDir:
+    """The single-directory check the live create-event handler applies.
 
-    def test_loads_gitignore(self, tmp_path: Path):
-        (tmp_path / ".gitignore").write_text("*.log\noutput/\n")
-        spec = FileDiscovery(tmp_path).load_ignore_spec()
-        assert spec.match_file("debug.log")
-        assert spec.match_file("output/")
-        assert not spec.match_file("app.py")
+    Ancestor-aware (round-2 fix): a directory reached via watchdog's
+    un-prunable backfill walk can be several levels below a pruned ancestor,
+    so every case here is checked BOTH as a direct child (the original,
+    single-level shape) and as a nested descendant two levels deep.
+    """
 
-    def test_loads_quarryignore(self, tmp_path: Path):
-        (tmp_path / ".quarryignore").write_text("scratch/\n")
-        spec = FileDiscovery(tmp_path).load_ignore_spec()
-        assert spec.match_file("scratch/")
+    def test_plain_subdirectory_is_watchable(self, tmp_path: Path):
+        root = tmp_path / "root"
+        sub = root / "src"
+        sub.mkdir(parents=True)
+        assert FileDiscovery(root).is_watchable_dir(sub) is True
 
-    def test_no_ignore_files_uses_defaults(self, tmp_path: Path):
-        spec = FileDiscovery(tmp_path).load_ignore_spec()
-        assert spec.match_file("module.pyc")
-        assert spec.match_file(".DS_Store")
-        assert not spec.match_file("src/app.py")
+    def test_vcs_directory_name_is_not_watchable(self, tmp_path: Path):
+        root = tmp_path / "root"
+        sub = root / "node_modules"
+        sub.mkdir(parents=True)
+        assert FileDiscovery(root).is_watchable_dir(sub) is False
 
-    def test_comments_and_blanks_ignored(self, tmp_path: Path):
-        (tmp_path / ".gitignore").write_text("# comment\n\n*.log\n")
-        spec = FileDiscovery(tmp_path).load_ignore_spec()
-        assert spec.match_file("debug.log")
-        assert not spec.match_file("# comment")
+    def test_descendant_of_a_scratch_name_is_not_watchable(self, tmp_path: Path):
+        """The exact bug: a grandchild of node_modules must stay unwatched too."""
+        root = tmp_path / "root"
+        nested = root / "node_modules" / "pkg" / "lib"
+        nested.mkdir(parents=True)
+        assert FileDiscovery(root).is_watchable_dir(root / "node_modules" / "pkg") is (
+            False
+        )
+        assert FileDiscovery(root).is_watchable_dir(nested) is False
 
-    def test_read_ignore_lines_absent_returns_empty(self, tmp_path: Path):
-        """An absent ignore file yields no lines (not a crash)."""
-        assert FileDiscovery._read_ignore_lines(tmp_path / ".gitignore") == []
+    def test_hidden_directory_is_not_watchable(self, tmp_path: Path):
+        root = tmp_path / "root"
+        sub = root / ".git"
+        sub.mkdir(parents=True)
+        assert FileDiscovery(root).is_watchable_dir(sub) is False
 
-    def test_read_ignore_lines_unreadable_returns_empty(self, tmp_path: Path):
-        """An unreadable ignore file (a directory) yields no lines, no raise."""
-        (tmp_path / ".gitignore").mkdir()  # read_text → IsADirectoryError (OSError)
-        assert FileDiscovery._read_ignore_lines(tmp_path / ".gitignore") == []
+    def test_descendant_of_a_hidden_directory_is_not_watchable(self, tmp_path: Path):
+        root = tmp_path / "root"
+        nested = root / ".git" / "objects" / "pack"
+        nested.mkdir(parents=True)
+        assert FileDiscovery(root).is_watchable_dir(nested) is False
 
+    def test_gitignored_directory_is_not_watchable(self, tmp_path: Path):
+        root = tmp_path / "root"
+        root.mkdir()
+        (root / ".gitignore").write_text("build/\n")
+        sub = root / "build"
+        sub.mkdir()
+        assert FileDiscovery(root).is_watchable_dir(sub) is False
+
+    def test_descendant_of_a_gitignored_directory_is_not_watchable(
+        self, tmp_path: Path
+    ):
+        """Root-spec matching already cascades to descendants (gitignore semantics)."""
+        root = tmp_path / "root"
+        root.mkdir()
+        (root / ".gitignore").write_text("build/\n")
+        nested = root / "build" / "obj" / "deep"
+        nested.mkdir(parents=True)
+        assert FileDiscovery(root).is_watchable_dir(nested) is False
+
+    def test_directory_matched_by_nested_gitignore_is_not_watchable(
+        self, tmp_path: Path
+    ):
+        root = tmp_path / "root"
+        parent = root / "project"
+        (parent / "logs").mkdir(parents=True)
+        (parent / ".gitignore").write_text("logs/\n")
+        assert FileDiscovery(root).is_watchable_dir(parent / "logs") is False
+
+    def test_descendant_of_a_nested_gitignore_match_is_not_watchable(
+        self, tmp_path: Path
+    ):
+        """Copilot finding, PR #503: a burst-created grandchild of a
+        NESTED-gitignore-matched directory must stay unwatched too --
+        checking only the immediate parent's local spec (project/logs's
+        own local_spec(project) covers "logs", but project/logs/deep's
+        own immediate parent is project/logs, which has no .gitignore of
+        its own) let a directory two levels below the match through.
+        """
+        root = tmp_path / "root"
+        parent = root / "project"
+        deep = parent / "logs" / "deep"
+        deep.mkdir(parents=True)
+        (parent / ".gitignore").write_text("logs/\n")
+        assert FileDiscovery(root).is_watchable_dir(deep) is False
+
+    def test_quarryignored_directory_is_not_watchable(self, tmp_path: Path):
+        root = tmp_path / "root"
+        root.mkdir()
+        (root / ".quarryignore").write_text("archive/\n")
+        sub = root / "archive"
+        sub.mkdir()
+        assert FileDiscovery(root).is_watchable_dir(sub) is False
+
+    def test_sibling_of_a_nested_gitignore_match_stays_watchable(self, tmp_path: Path):
+        """The nested-spec ancestor walk must not over-reject an unrelated
+        sibling directory under the SAME parent as the matched one.
+        """
+        root = tmp_path / "root"
+        parent = root / "project"
+        (parent / "logs" / "deep").mkdir(parents=True)
+        watchable = parent / "src" / "deep"
+        watchable.mkdir(parents=True)
+        (parent / ".gitignore").write_text("logs/\n")
+        assert FileDiscovery(root).is_watchable_dir(watchable) is True
+
+    def test_sibling_of_a_pruned_directory_stays_watchable(self, tmp_path: Path):
+        """The ancestor-aware check must not over-reject an unrelated sibling."""
+        root = tmp_path / "root"
+        (root / "node_modules" / "pkg").mkdir(parents=True)
+        watchable = root / "src" / "deep" / "nested"
+        watchable.mkdir(parents=True)
+        assert FileDiscovery(root).is_watchable_dir(watchable) is True
+
+    def test_excluded_scratch_root_makes_every_directory_unwatchable(
+        self, tmp_path: Path
+    ):
+        (tmp_path / ".git").mkdir()
+        root = tmp_path / ".tmp" / "pytest-of-me" / "docs"
+        sub = root / "sub"
+        sub.mkdir(parents=True)
+        assert FileDiscovery(root).is_watchable_dir(sub) is False
+
+
+class TestDiscoverSurvivesUnreadableIgnoreFile:
     def test_discover_survives_unreadable_gitignore(self, tmp_path: Path):
         """A raced/unreadable .gitignore does not abort the whole discover() walk."""
         (tmp_path / ".gitignore").mkdir()  # unreadable ignore → skipped, walk continues
@@ -1342,7 +1421,9 @@ class TestWithinFileResume:
         Image.new("RGB", (64, 64), "white").save(img)
         ocr = _FakeOcr(_SENTENCE * 12)
 
-        with patch("quarry.ingestion.pipeline.get_ocr_backend", return_value=ocr):
+        with patch(
+            "quarry.ingestion.format_strategies.get_ocr_backend", return_value=ocr
+        ):
             chunks, deterministic = plan_file_chunks(
                 img, settings, collection="col", document_name="scan.png"
             )
@@ -1367,7 +1448,9 @@ class TestWithinFileResume:
         )
         embedder = FakeEmbeddingBackend()
         with (
-            patch("quarry.ingestion.pipeline.get_ocr_backend", return_value=ocr),
+            patch(
+                "quarry.ingestion.format_strategies.get_ocr_backend", return_value=ocr
+            ),
             patched_embedder(embedder),
         ):
             sync_collection(d, "col", db, settings, conn, max_workers=1)

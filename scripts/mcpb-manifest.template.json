@@ -29,6 +29,7 @@
     {"name": "find", "description": "Search indexed documents by meaning (hybrid vector + BM25, RRF-fused)."},
     {"name": "ingest", "description": "Fetch and index an HTTP(S) URL (sitemap discovery with single-page fallback)."},
     {"name": "remember", "description": "Index inline text content (clipboard, API response, sandbox-uploaded files)."},
+    {"name": "learn", "description": "Save a distilled lesson that gets retrieval preference over ordinary results."},
     {"name": "list", "description": "List documents, collections, databases, or directory registrations."},
     {"name": "show", "description": "Show a document, collection, or registration in detail."},
     {"name": "delete", "description": "Delete indexed data for a document or collection."},

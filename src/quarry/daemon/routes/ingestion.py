@@ -15,14 +15,17 @@ from starlette.responses import JSONResponse
 
 from quarry.captures_collection import CapturesCollection
 from quarry.daemon.ingest_jobs import IngestJob, ScrubbedIngestJob
-from quarry.daemon.routes.base import RouteGroup
+from quarry.daemon.routes.base import RESERVED_MEMORY_TYPE, RouteGroup
 from quarry.http_guards import RequestGuards
 from quarry.ingest_collection import IngestCollection
+from quarry.lesson import LessonComposer, LessonsCollection
 from quarry.url_safety import UrlSafetyCheck
 
 # Maximum request body sizes.  Remember accepts content, ingest only a URL.
 MAX_REMEMBER_BODY_BYTES = 50 * 1024 * 1024
 MAX_INGEST_BODY_BYTES = 1 * 1024 * 1024
+MAX_LEARN_BODY_BYTES = 64 * 1024
+_MAX_LESSON_CHARS = 500
 
 
 @final
@@ -72,10 +75,35 @@ class IngestionRoutes(RouteGroup):
         state = self.ctx.tasks.begin("ingest")
         return self.submit(job, state)
 
+    async def learn(self, request: Request) -> JSONResponse:
+        """Save a distilled lesson as a background task.
+
+        remember = a specific durable fact, ingest = a URL, learn = a
+        distilled lesson that gets retrieval preference. Body: {lesson,
+        topic?, name?, cwd?}. Always writes memory_type="lesson" with no
+        agent_handle -- a lesson is project-scoped, deliberately-curated
+        knowledge, never a personal, decaying memory (fusion.py's decay gate
+        exempts empty-handle rows already). Returns 202 with a task_id.
+        """
+        body = await self._authorized_body(request, MAX_LEARN_BODY_BYTES)
+        if isinstance(body, JSONResponse):
+            return body
+        job = await self._learn_job(body)
+        if isinstance(job, JSONResponse):
+            return job
+        state = self.ctx.tasks.begin("learn")
+        return self.submit(job, state)
+
     def _remember_job(
         self, body: dict[str, object]
     ) -> ScrubbedIngestJob | JSONResponse:
-        """Validate a remember body into a :class:`ScrubbedIngestJob` or a 400."""
+        """Validate a remember body into a :class:`ScrubbedIngestJob` or a 400.
+
+        Collection routing is a single server-side rule so no surface can
+        drift (bug class 3): an empty collection with an ``agent_handle`` lands
+        in ``memory-<handle>``; empty on both sides falls back to ``default``;
+        an explicit collection always wins.
+        """
         name = self._require_text(body, "name")
         if isinstance(name, JSONResponse):
             return name
@@ -85,17 +113,74 @@ class IngestionRoutes(RouteGroup):
         overwrite = RequestGuards.coerce_bool_field(body, "overwrite", default=True)
         if isinstance(overwrite, JSONResponse):
             return overwrite
+        memory_type = self._str_field(body, "memory_type", "")
+        rejection = self.reject_reserved_memory_type(memory_type)
+        if rejection is not None:
+            return rejection
+        agent_handle = self._str_field(body, "agent_handle", "")
+        collection = self._resolve_memory_collection(
+            self._str_field(body, "collection", ""), agent_handle
+        )
         return ScrubbedIngestJob(
             name=name,
             content=content,
-            collection=self._str_field(body, "collection", "default"),
+            collection=collection,
             format_hint=self._str_field(body, "format_hint", "auto"),
             overwrite=overwrite,
             scrub_label="remember",
-            agent_handle=self._str_field(body, "agent_handle", ""),
-            memory_type=self._str_field(body, "memory_type", ""),
+            agent_handle=agent_handle,
+            memory_type=memory_type,
             summary=self._str_field(body, "summary", ""),
         )
+
+    async def _learn_job(
+        self, body: dict[str, object]
+    ) -> ScrubbedIngestJob | JSONResponse:
+        """Validate a learn body into a :class:`ScrubbedIngestJob` or a 400.
+
+        Naming, collection routing, and memory_type are single server-side
+        rules so no surface can drift them (bug class 3).
+        """
+        lesson = self._require_text(body, "lesson")
+        if isinstance(lesson, JSONResponse):
+            return lesson
+        if len(lesson) > _MAX_LESSON_CHARS:
+            return JSONResponse(
+                {
+                    "error": (
+                        f"lesson exceeds {_MAX_LESSON_CHARS} chars -- "
+                        "use remember for full documents"
+                    )
+                },
+                status_code=400,
+            )
+        topic = self._str_field(body, "topic", "")
+        name = self._str_field(body, "name", "")
+        collection = await run_in_threadpool(
+            LessonsCollection.for_registry_path,
+            self._str_field(body, "cwd", ""),
+            self.ctx.settings.registry_path,
+        )
+        return ScrubbedIngestJob(
+            name=LessonComposer.document_name(name, topic),
+            content=lesson,
+            collection=collection.name,
+            format_hint="auto",
+            overwrite=False,
+            scrub_label="learn",
+            agent_handle="",
+            memory_type=RESERVED_MEMORY_TYPE,
+            summary=topic,
+        )
+
+    @staticmethod
+    def _resolve_memory_collection(raw_collection: str, agent_handle: str) -> str:
+        """Return the effective collection for a remember write."""
+        if raw_collection:
+            return raw_collection
+        if agent_handle:
+            return f"memory-{agent_handle}"
+        return "default"
 
     async def _ingest_job(
         self, body: dict[str, object], source: str
@@ -107,6 +192,10 @@ class IngestionRoutes(RouteGroup):
         scrub = RequestGuards.coerce_bool_field(body, "scrub", default=False)
         if isinstance(scrub, JSONResponse):
             return scrub
+        memory_type = self._str_field(body, "memory_type", "")
+        rejection = self.reject_reserved_memory_type(memory_type)
+        if rejection is not None:
+            return rejection
         collection = await self._ingest_collection(body, scrub=scrub)
         # Key the queue on the ACTUAL table: the explicit/captures name if set,
         # else the URL hostname — the SAME resolver the pipeline applies, so the
@@ -118,7 +207,7 @@ class IngestionRoutes(RouteGroup):
             collection=collection,
             scrub=scrub,
             agent_handle=self._str_field(body, "agent_handle", ""),
-            memory_type=self._str_field(body, "memory_type", ""),
+            memory_type=memory_type,
             summary=self._str_field(body, "summary", ""),
         )
 

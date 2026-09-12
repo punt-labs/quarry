@@ -66,3 +66,31 @@ def test_redacted_ipv6_host_strips_userinfo() -> None:
     meta = CaptureUrl("https://u:pw@[2001:db8::1]/p").redacted(_scrub)
     assert meta == "https://[2001:db8::1]/p"
     assert "pw" not in meta
+
+
+def test_redacted_trailing_slash_not_normalized() -> None:
+    """A trailing-slash difference is NOT normalized — the two are distinct.
+
+    Unlike query strings and fragments (stripped outright), the path is kept
+    verbatim, so ``/docs`` and ``/docs/`` redact to different metadata URLs
+    and will not match for lookup purposes.
+    """
+    without = CaptureUrl("https://x.test/docs").redacted(_scrub)
+    with_slash = CaptureUrl("https://x.test/docs/").redacted(_scrub)
+    assert without == "https://x.test/docs"
+    assert with_slash == "https://x.test/docs/"
+    assert without != with_slash
+
+
+def test_for_web_fetch_matches_manual_redaction() -> None:
+    """``for_web_fetch`` is the one true derivation both write and lookup use."""
+    url = "https://x.test/reset?email=user@example.com#frag"
+    assert CaptureUrl.for_web_fetch(url) == CaptureUrl(url).redacted(_scrub)
+
+
+def test_for_web_fetch_query_and_fragment_collapse_to_same_name() -> None:
+    """Two URLs differing only by query string or fragment share one document."""
+    base = CaptureUrl.for_web_fetch("https://x.test/docs/guide")
+    with_query = CaptureUrl.for_web_fetch("https://x.test/docs/guide?utm=1")
+    with_fragment = CaptureUrl.for_web_fetch("https://x.test/docs/guide#section")
+    assert base == with_query == with_fragment

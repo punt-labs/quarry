@@ -172,6 +172,44 @@ class TestWebFetcher:
         assert "https://example.com/slow" in str(excinfo.value)
 
 
+class TestFetchBody:
+    """G4 capture-as-text: fetch_body returns non-HTML text with its media type."""
+
+    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    def test_returns_json_body_with_media_type(self, mock_open: MagicMock) -> None:
+        body = b'{"id": "abc-123"}'
+        mock_open.return_value = _mock_response(body, "application/json")
+        result = WebFetcher().fetch_body("https://httpbin.org/uuid")
+        assert result.text == '{"id": "abc-123"}'
+        assert result.media_type == "application/json"
+        assert result.is_html is False
+
+    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    def test_returns_html_body_with_media_type(self, mock_open: MagicMock) -> None:
+        body = b"<html><body>hi</body></html>"
+        mock_open.return_value = _mock_response(body, "text/html; charset=utf-8")
+        result = WebFetcher().fetch_body("https://example.com")
+        assert "hi" in result.text
+        assert result.media_type == "text/html"
+        assert result.is_html is True
+
+    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    def test_missing_content_type_is_html(self, mock_open: MagicMock) -> None:
+        """Missing Content-Type is treated as HTML, matching legacy fetch()."""
+        body = b"<html>ok</html>"
+        mock_open.return_value = _mock_response(body, "")
+        result = WebFetcher().fetch_body("https://example.com")
+        assert result.media_type == ""
+        assert result.is_html is True
+
+    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    def test_plain_text_is_not_html(self, mock_open: MagicMock) -> None:
+        mock_open.return_value = _mock_response(b"raw log line", "text/plain")
+        result = WebFetcher().fetch_body("https://example.com/log")
+        assert result.text == "raw log line"
+        assert result.is_html is False
+
+
 class TestInitialUrlGate:
     """WebFetcher self-gates its initial URL before opening any socket."""
 

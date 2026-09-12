@@ -11,6 +11,7 @@ would hand to the real DES-042 queue.
 from __future__ import annotations
 
 import asyncio
+import logging
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
@@ -123,15 +124,17 @@ class _FakeDatabase:
 class _FakeSource:
     """A synthetic FsEventSource: record scheduled trees, emit events on demand."""
 
-    __slots__ = ("_watches", "null_handle", "stopped")
+    __slots__ = ("_dead_handles", "_watches", "null_handle", "stopped")
 
     _watches: dict[object, tuple[Path, Callable[[FsEvent], None]]]
+    _dead_handles: set[object]
     null_handle: bool
     stopped: bool
 
     def __new__(cls, *, null_handle: bool = False) -> Self:
         self = super().__new__(cls)
         self._watches = {}
+        self._dead_handles = set()
         self.null_handle = null_handle
         self.stopped = False
         return self
@@ -147,6 +150,19 @@ class _FakeSource:
 
     def unschedule(self, handle: object | None) -> None:
         self._watches.pop(handle, None)
+        self._dead_handles.discard(handle)
+
+    def is_alive(self, handle: object | None) -> bool:
+        return (
+            handle is not None
+            and handle in self._watches
+            and (handle not in self._dead_handles)
+        )
+
+    def kill(self, handle: object | None) -> None:
+        """Simulate the background thread behind *handle* dying (test-only)."""
+        if handle is not None:
+            self._dead_handles.add(handle)
 
     def stop(self) -> None:
         self.stopped = True
@@ -177,6 +193,7 @@ def _build(
     bulk: int = 5,
     enabled: bool = True,
     optimize_interval: float = 30.0,
+    safety_scan_s: float = 0.0,  # drive _reconcile directly; no background timer
 ) -> tuple[DaemonContext, Path]:
     """Return a fake daemon context and the resolved watched root for 'col'."""
     data = tmp_path / "data"
@@ -191,7 +208,7 @@ def _build(
         watch_debounce_s=0.03,
         watch_max_delay_s=0.3,
         watch_bulk_threshold=bulk,
-        watch_safety_scan_s=0.0,  # drive _reconcile directly; no background timer
+        watch_safety_scan_s=safety_scan_s,
         watch_optimize_min_interval_s=optimize_interval,
     )
     _register(settings, watched.resolve(), "col")
@@ -229,6 +246,140 @@ def test_start_submits_initial_scan_and_finalize_per_collection(tmp_path: Path) 
         assert len(queue.jobs(CollectionFinalizeJob)) == 1
         assert source.watch_count == 1
         await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_start_warns_when_the_safety_scan_backstop_is_disabled(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """``watch_safety_scan_s=0`` removes the only backstop for a missed
+    live-watch event -- start() must log that loudly, not just document it
+    in a comment on the settings field.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, _root = _build(tmp_path, queue=queue, safety_scan_s=0.0)
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        with caplog.at_level(logging.WARNING):
+            await loop.start()
+        await loop.stop()
+
+    asyncio.run(_run())
+    assert any("watch_safety_scan_s=0" in record.message for record in caplog.records)
+
+
+def test_start_does_not_warn_when_the_safety_scan_backstop_is_enabled(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A positive ``watch_safety_scan_s`` runs the backstop silently."""
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, _root = _build(tmp_path, queue=queue, safety_scan_s=300.0)
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        with caplog.at_level(logging.WARNING):
+            await loop.start()
+        await loop.stop()
+
+    asyncio.run(_run())
+    assert not any(
+        "watch_safety_scan_s=0" in record.message for record in caplog.records
+    )
+
+
+def test_watch_state_watched_for_a_live_handle(tmp_path: Path) -> None:
+    """A collection with a live observer handle reports "watched" (DES-045e)."""
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, _root = _build(tmp_path, queue=queue)  # registers "col"
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        assert loop.watch_state("col") == "watched"
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_watch_state_degraded_for_a_dead_emitter_thread(tmp_path: Path) -> None:
+    """A live handle whose background thread has died flips to "degraded",
+    not "watched" (djb minor) -- watch_handle_present alone cannot see
+    this; the emitter's own liveness must be checked too.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, _root = _build(tmp_path, queue=queue)  # registers "col"
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        assert loop.watch_state("col") == "watched"
+        (handle,) = source._watches
+        source.kill(handle)
+        assert loop.watch_state("col") == "degraded"
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_watch_state_degraded_for_a_none_handle(tmp_path: Path) -> None:
+    """A schedule() failure (None handle) reports "degraded", not "watched"."""
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, _root = _build(tmp_path, queue=queue)  # registers "col"
+        source = _FakeSource(null_handle=True)
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        assert loop.watch_state("col") == "degraded"
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_watch_state_scan_only_for_an_unregistered_collection(tmp_path: Path) -> None:
+    """A collection the roster has never tracked reports "scan-only"."""
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, _root = _build(tmp_path, queue=queue)
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        assert loop.watch_state("never-registered") == "scan-only"
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_watch_state_scan_only_when_the_observer_is_disabled(tmp_path: Path) -> None:
+    """watch_enabled=false means every collection reads "scan-only"."""
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, _root = _build(tmp_path, queue=queue, enabled=False)  # registers "col"
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        assert loop.watch_state("col") == "scan-only"
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_watch_state_scan_only_before_start(tmp_path: Path) -> None:
+    """Before start() ever runs, watch_state is the safe scan-only default."""
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, _root = _build(tmp_path, queue=queue)
+        loop = WatchLoop(ctx, source=_FakeSource())
+        assert loop.watch_state("col") == "scan-only"
 
     asyncio.run(_run())
 

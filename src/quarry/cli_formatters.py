@@ -17,12 +17,22 @@ class ResultFormatter:
 
     @staticmethod
     def registrations(regs: list[dict[str, object]]) -> str:
-        """Format registered directories as ``collection: directory`` lines."""
+        """Format registered directories as ``collection: directory (state)`` lines.
+
+        ``watch_state`` (DES-045e) is omitted when a response predates the
+        field (``.get`` default), so an older daemon's output degrades
+        gracefully rather than printing a literal ``None``.
+        """
         if not regs:
             return "No registered directories."
-        return "\n".join(
-            f"{reg.get('collection', '')}: {reg.get('directory', '')}" for reg in regs
-        )
+        lines: list[str] = []
+        for reg in regs:
+            state = reg.get("watch_state")
+            suffix = f" ({state})" if state else ""
+            lines.append(
+                f"{reg.get('collection', '')}: {reg.get('directory', '')}{suffix}"
+            )
+        return "\n".join(lines)
 
     @staticmethod
     def databases(databases: list[dict[str, object]]) -> str:

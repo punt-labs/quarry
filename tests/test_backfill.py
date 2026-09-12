@@ -13,12 +13,10 @@ from typer.testing import CliRunner
 from quarry.__main__ import app
 from quarry.backfill import (
     BackfillConfig,
-    build_project_mappings,
     document_name_for_transcript,
-    encode_project_path,
     is_already_ingested,
-    list_transcript_files,
 )
+from quarry.backfill_mapping import ProjectMapping, ProjectMappingResolver
 from quarry.config import Settings
 from quarry.sync_registry import DirectoryRegistration
 
@@ -63,17 +61,17 @@ class TestBackfillConfig:
 
 class TestEncodeProjectPath:
     def test_simple_path(self) -> None:
-        assert encode_project_path("/Users/jfreeman/code") == "-Users-jfreeman-code"
+        assert ProjectMappingResolver.encode("/Users/jdoe/code") == "-Users-jdoe-code"
 
     def test_path_with_hyphens(self) -> None:
-        result = encode_project_path("/Users/jfreeman/Coding/punt-labs/quarry")
-        assert result == "-Users-jfreeman-Coding-punt-labs-quarry"
+        result = ProjectMappingResolver.encode("/Users/jdoe/Coding/punt-labs/quarry")
+        assert result == "-Users-jdoe-Coding-punt-labs-quarry"
 
     def test_root_path(self) -> None:
-        assert encode_project_path("/") == "-"
+        assert ProjectMappingResolver.encode("/") == "-"
 
     def test_single_component(self) -> None:
-        assert encode_project_path("/home") == "-home"
+        assert ProjectMappingResolver.encode("/home") == "-home"
 
 
 # ---------------------------------------------------------------------------
@@ -84,17 +82,17 @@ class TestEncodeProjectPath:
 class TestBuildProjectMappings:
     def test_matches_registration_to_directory(self, tmp_path: Path) -> None:
         projects_dir = tmp_path / ".claude" / "projects"
-        encoded = "-Users-jfreeman-Coding-punt-labs-quarry"
+        encoded = "-Users-jdoe-Coding-punt-labs-quarry"
         (projects_dir / encoded).mkdir(parents=True)
 
         reg = DirectoryRegistration(
-            directory="/Users/jfreeman/Coding/punt-labs/quarry",
+            directory="/Users/jdoe/Coding/punt-labs/quarry",
             collection="quarry",
             registered_at="2025-01-01T00:00:00",
         )
 
-        with patch("quarry.backfill.CLAUDE_PROJECTS_DIR", projects_dir):
-            mappings = build_project_mappings([reg])
+        with patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", projects_dir):
+            mappings = ProjectMappingResolver.resolve_all([reg])
 
         assert len(mappings) == 1
         assert mappings[0].collection == "quarry"
@@ -111,16 +109,16 @@ class TestBuildProjectMappings:
             registered_at="2025-01-01T00:00:00",
         )
 
-        with patch("quarry.backfill.CLAUDE_PROJECTS_DIR", projects_dir):
-            mappings = build_project_mappings([reg])
+        with patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", projects_dir):
+            mappings = ProjectMappingResolver.resolve_all([reg])
 
         assert len(mappings) == 0
 
     def test_no_projects_dir(self, tmp_path: Path) -> None:
         projects_dir = tmp_path / "does-not-exist"
 
-        with patch("quarry.backfill.CLAUDE_PROJECTS_DIR", projects_dir):
-            mappings = build_project_mappings([])
+        with patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", projects_dir):
+            mappings = ProjectMappingResolver.resolve_all([])
 
         assert mappings == []
 
@@ -139,8 +137,9 @@ class TestListTranscriptFiles:
         (project / "bbb22222.jsonl").write_text("{}")
         (project / "not-jsonl.txt").write_text("ignore")
 
-        with patch("quarry.backfill.CLAUDE_PROJECTS_DIR", projects_dir):
-            files = list_transcript_files("my-project")
+        with patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", projects_dir):
+            mapping = ProjectMapping("my-project", "", "")
+            files = mapping.transcript_files()
 
         assert len(files) == 2
         assert all(f.suffix == ".jsonl" for f in files)
@@ -150,8 +149,9 @@ class TestListTranscriptFiles:
         project = projects_dir / "empty"
         project.mkdir(parents=True)
 
-        with patch("quarry.backfill.CLAUDE_PROJECTS_DIR", projects_dir):
-            files = list_transcript_files("empty")
+        with patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", projects_dir):
+            mapping = ProjectMapping("empty", "", "")
+            files = mapping.transcript_files()
 
         assert files == []
 
@@ -159,8 +159,9 @@ class TestListTranscriptFiles:
         projects_dir = tmp_path / ".claude" / "projects"
         projects_dir.mkdir(parents=True)
 
-        with patch("quarry.backfill.CLAUDE_PROJECTS_DIR", projects_dir):
-            files = list_transcript_files("nonexistent")
+        with patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", projects_dir):
+            mapping = ProjectMapping("nonexistent", "", "")
+            files = mapping.transcript_files()
 
         assert files == []
 
@@ -304,7 +305,7 @@ def _make_env(tmp_path: Path) -> dict[str, Path]:
     real_project.mkdir()
 
     # Encode the resolved project path the same way Claude Code does
-    encoded = encode_project_path(str(real_project.resolve()))
+    encoded = ProjectMappingResolver.encode(str(real_project.resolve()))
 
     projects_dir = tmp_path / ".claude" / "projects"
     project_dir = projects_dir / encoded
@@ -340,12 +341,12 @@ class TestBackfillSessions:
 
         with (
             patch(
-                "quarry.backfill.CLAUDE_PROJECTS_DIR",
+                "quarry.backfill_mapping.CLAUDE_PROJECTS_DIR",
                 env["projects_dir"],
             ),
             patch("quarry.backfill.ingest_content") as mock_ingest,
         ):
-            stats = backfill_sessions(settings, dry_run=True)
+            stats = backfill_sessions(settings, BackfillConfig(dry_run=True))
 
         mock_ingest.assert_not_called()
         assert stats.ingested == 1
@@ -363,7 +364,7 @@ class TestBackfillSessions:
         conn.close()
 
         with patch(
-            "quarry.backfill.CLAUDE_PROJECTS_DIR",
+            "quarry.backfill_mapping.CLAUDE_PROJECTS_DIR",
             env["projects_dir"],
         ):
             stats = backfill_sessions(settings)
@@ -389,7 +390,7 @@ class TestBackfillSessions:
         }
         with (
             patch(
-                "quarry.backfill.CLAUDE_PROJECTS_DIR",
+                "quarry.backfill_mapping.CLAUDE_PROJECTS_DIR",
                 env["projects_dir"],
             ),
             patch(
@@ -422,10 +423,10 @@ class TestBackfillSessions:
         _setup_registry(env["registry_path"], str(env["real_project"]), "myproject")
 
         with patch(
-            "quarry.backfill.CLAUDE_PROJECTS_DIR",
+            "quarry.backfill_mapping.CLAUDE_PROJECTS_DIR",
             env["projects_dir"],
         ):
-            stats = backfill_sessions(settings, dry_run=True, limit=1)
+            stats = backfill_sessions(settings, BackfillConfig(dry_run=True, limit=1))
 
         assert stats.ingested == 1
 
@@ -437,13 +438,12 @@ class TestBackfillSessions:
         _setup_registry(env["registry_path"], str(env["real_project"]), "myproject")
 
         with patch(
-            "quarry.backfill.CLAUDE_PROJECTS_DIR",
+            "quarry.backfill_mapping.CLAUDE_PROJECTS_DIR",
             env["projects_dir"],
         ):
             stats = backfill_sessions(
                 settings,
-                collection_override="my-override",
-                dry_run=True,
+                BackfillConfig(collection_override="my-override", dry_run=True),
             )
 
         assert stats.ingested == 1
@@ -460,7 +460,7 @@ class TestBackfillSessions:
 
         with (
             patch(
-                "quarry.backfill.CLAUDE_PROJECTS_DIR",
+                "quarry.backfill_mapping.CLAUDE_PROJECTS_DIR",
                 env["projects_dir"],
             ),
             patch("quarry.backfill.ingest_content") as mock_ingest,
@@ -481,6 +481,7 @@ class TestBackfillSessions:
         Patching the store boundary asserts the REAL pipeline scrub ran.
         """
         from quarry.backfill import backfill_sessions
+        from quarry.ingestion.streaming import DocumentStreamer
 
         fake_pat = "ghp_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8"
         email = "leak.user@evil-example.com"
@@ -494,18 +495,20 @@ class TestBackfillSessions:
 
         stored: list[object] = []
 
-        def _store(pages: list[object], *_a: object, **_k: object) -> dict[str, object]:
+        def _capture_build_chunks(
+            _self: DocumentStreamer, pages: list[object], **_kw: object
+        ) -> list[object]:
             stored.extend(pages)
-            return {"document_name": "d", "collection": "c", "chunks": 0}
+            return []
 
         with (
-            patch("quarry.backfill.CLAUDE_PROJECTS_DIR", env["projects_dir"]),
-            patch("quarry.ingestion.pipeline._chunk_embed_store", _store),
+            patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", env["projects_dir"]),
+            patch.object(DocumentStreamer, "build_chunks", _capture_build_chunks),
             patch("quarry.db.chunk_store.ChunkStore.delete_document"),
         ):
             backfill_sessions(settings)
 
-        assert stored, "ingest_content never reached the store"
+        assert stored, "ingest_content never reached the chunker"
         joined = " ".join(page.text for page in stored)  # type: ignore[attr-defined]
         assert fake_pat not in joined
         assert email not in joined
@@ -581,7 +584,7 @@ class TestBackfillCaptureRedaction:
 
     def test_capture_file_has_zero_pii(self, tmp_path: Path) -> None:
         capture = self._write(
-            tmp_path, "ran /Users/jfreeman/x and emailed jmf@pobox.com"
+            tmp_path, "ran /Users/jdoe/x and emailed jdoe@example.com"
         )
         content = capture.read_text(encoding="utf-8")
         assert "/Users/" not in content
@@ -618,7 +621,7 @@ class TestBackfillCaptureRedaction:
                 branch_names=(),
                 bead_ids=(),
             ),
-            text="ran /Users/jfreeman/x here",
+            text="ran /Users/jdoe/x here",
         )
 
         captures = tmp_path / ".punt-labs" / "quarry" / "captures"

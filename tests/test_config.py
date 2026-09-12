@@ -116,3 +116,47 @@ class TestSyncBudget:
         settings = Settings(sync_flush_mb=1, embed_window_chunks=1)
         assert settings.sync_flush_mb == 1
         assert settings.embed_window_chunks == 1
+
+
+class TestRetrievalDecayRate:
+    def test_default_is_thirty_day_half_life(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("QUARRY_RETRIEVAL_DECAY_RATE", raising=False)
+        assert Settings().retrieval_decay_rate == pytest.approx(0.000963, rel=1e-3)
+
+    def test_env_alias_reads_quarry_retrieval_decay_rate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("QUARRY_RETRIEVAL_DECAY_RATE", "0.5")
+        assert Settings().retrieval_decay_rate == 0.5
+
+    def test_zero_accepted(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("QUARRY_RETRIEVAL_DECAY_RATE", "0.0")
+        assert Settings().retrieval_decay_rate == 0.0
+
+    def test_negative_rejected(self):
+        with pytest.raises(ValidationError, match="greater_than_equal"):
+            Settings.model_validate({"QUARRY_RETRIEVAL_DECAY_RATE": -0.1})
+
+
+class TestRetrievalLessonBoost:
+    def test_default_is_one_point_five(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("QUARRY_RETRIEVAL_LESSON_BOOST", raising=False)
+        assert Settings().retrieval_lesson_boost == 1.5
+
+    def test_env_alias_reads_quarry_retrieval_lesson_boost(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("QUARRY_RETRIEVAL_LESSON_BOOST", "2.0")
+        assert Settings().retrieval_lesson_boost == 2.0
+
+    def test_one_accepted_as_the_disable_value(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("QUARRY_RETRIEVAL_LESSON_BOOST", "1.0")
+        assert Settings().retrieval_lesson_boost == 1.0
+
+    def test_below_one_rejected(self):
+        with pytest.raises(ValidationError, match="greater_than_equal"):
+            Settings.model_validate({"QUARRY_RETRIEVAL_LESSON_BOOST": 0.5})
+
+    def test_zero_rejected(self):
+        with pytest.raises(ValidationError, match="greater_than_equal"):
+            Settings.model_validate({"QUARRY_RETRIEVAL_LESSON_BOOST": 0.0})

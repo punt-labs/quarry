@@ -8,6 +8,11 @@ set -euo pipefail
 #
 # If no argument is given, auto-detects the last "prepare plugin for release"
 # commit and restores from its parent.
+#
+# CONTRACT (pkit-hsyi, see punt-kit commit 462c65d): this script stages the
+# reverted files; it does NOT commit. The caller (_phase9_post_release in
+# punt-kit's release engine) re-stamps the version and commits with hooks
+# running.
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # The shippable plugin surface lives under plugin/ so a git-subdir marketplace
@@ -45,10 +50,8 @@ if git -C "$REPO_ROOT" ls-tree "${RELEASE_PREP_COMMIT}^" -- "$COMMANDS_PATHSPEC"
   git -C "$REPO_ROOT" add "$COMMANDS_PATHSPEC"
 fi
 
-# Skip commit if nothing changed (already in dev state)
+# Nothing further to do if nothing changed (already in dev state). Otherwise
+# leave the restored files staged — see CONTRACT above.
 if git -C "$REPO_ROOT" diff --cached --quiet; then
   echo "No changes to restore; working tree already matches dev state."
-  exit 0
 fi
-
-git -C "$REPO_ROOT" commit --no-verify -m "chore: restore dev plugin state [skip ci]"

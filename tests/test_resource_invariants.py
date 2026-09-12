@@ -37,7 +37,8 @@ import numpy as np
 import pytest
 from lancedb.index import FTS, Bitmap
 
-from quarry.backfill import backfill_sessions, encode_project_path
+from quarry.backfill import backfill_sessions
+from quarry.backfill_mapping import ProjectMappingResolver
 from quarry.config import Settings
 from quarry.db import Database
 from quarry.db.connection import LanceConnection, RecyclingTable
@@ -269,7 +270,7 @@ def _fabricate_backfill_corpus(tmp_path: Path, count: int) -> tuple[Settings, Pa
     """
     project = tmp_path / "myproject"
     project.mkdir()
-    encoded = encode_project_path(str(project.resolve()))
+    encoded = ProjectMappingResolver.encode(str(project.resolve()))
     project_dir = tmp_path / ".claude" / "projects" / encoded
     project_dir.mkdir(parents=True)
     for i in range(count):
@@ -308,7 +309,7 @@ def test_large_backfill_does_not_leak_descriptors(tmp_path: Path) -> None:
     embedder = _FdSamplingEmbedder(trajectory, dimension=_EMBEDDING_DIM)
 
     with (
-        patch("quarry.backfill.CLAUDE_PROJECTS_DIR", projects_dir),
+        patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", projects_dir),
         patch(
             "quarry.ingestion.streaming.get_embedding_backend",
             return_value=embedder,

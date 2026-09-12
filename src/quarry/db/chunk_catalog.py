@@ -7,7 +7,7 @@ from typing import Self
 
 from quarry._sql import escape_sql
 from quarry.db.schema import TABLE_NAME
-from quarry.results import CollectionSummary, DocumentSummary
+from quarry.results import CollectionSummary, CoverageCounts, DocumentSummary
 from quarry.types import LanceDB
 
 logger = logging.getLogger(__name__)
@@ -16,6 +16,12 @@ logger = logging.getLogger(__name__)
 # rows).  Non-vector filtered queries must set an explicit limit large enough
 # to cover the full table so the WHERE clause is evaluated against every row.
 _FULL_SCAN_LIMIT = 1_000_000
+
+# A compaction transcript is filed under ``session-<session_id[:8]>``
+# (api/capture_ingest.py); a URL capture is not.  The session archive is the
+# only capture-collection row surfaced in the coverage line — a fetched URL is
+# background metadata, not a user-visible artefact.
+_TRANSCRIPT_PREFIX = "session-"
 
 
 class ChunkCatalog:
@@ -119,6 +125,72 @@ class ChunkCatalog:
             }
             for col, docs in sorted(grouped.items())
         ]
+
+    def coverage(self, collection: str, captures_collection: str) -> CoverageCounts:
+        """Return per-repo counts split across ``collection`` and its captures sibling.
+
+        ``documents_indexed`` counts distinct non-memory documents in
+        ``collection``; ``memories_saved`` counts distinct memory rows
+        (``agent_handle`` or ``memory_type`` set) in the same collection;
+        ``transcripts_captured`` counts distinct ``session-`` compaction archives
+        in ``captures_collection``. The ``WHERE collection IN (...)`` predicate
+        bounds the scan to this repo's slice of the shared catalog — cheap
+        enough for the SessionStart hot path.
+        """
+        empty: CoverageCounts = {
+            "documents_indexed": 0,
+            "transcripts_captured": 0,
+            "memories_saved": 0,
+        }
+        if TABLE_NAME not in self._db.list_tables().tables:
+            return empty
+        table = self._db.open_table(TABLE_NAME)
+        predicate = (
+            f"collection IN ('{escape_sql(collection)}', "
+            f"'{escape_sql(captures_collection)}')"
+        )
+        rows = (
+            table.search()
+            .where(predicate)
+            .limit(_FULL_SCAN_LIMIT)
+            .select(["collection", "document_name", "agent_handle", "memory_type"])
+            .to_list()
+        )
+        documents: set[str] = set()
+        memories: set[str] = set()
+        transcripts: set[str] = set()
+        for row in rows:
+            name = str(row["document_name"])
+            if str(row["collection"]) == captures_collection:
+                if name.startswith(_TRANSCRIPT_PREFIX):
+                    transcripts.add(name)
+                continue
+            if row["agent_handle"] or row["memory_type"]:
+                memories.add(name)
+            else:
+                documents.add(name)
+        return {
+            "documents_indexed": len(documents),
+            "transcripts_captured": len(transcripts),
+            "memories_saved": len(memories),
+        }
+
+    def document_exists(self, document_name: str, collection: str) -> bool:
+        """Return whether *document_name* has any indexed chunk in *collection*.
+
+        ``limit()`` bounds the SCAN, not the filtered match count, so
+        ``limit(1)`` can miss a real match. Use the same full-scan limit as
+        every other filtered read in this file.
+        """
+        if TABLE_NAME not in self._db.list_tables().tables:
+            return False
+        predicate = (
+            f"document_name = '{escape_sql(document_name)}'"
+            f" AND collection = '{escape_sql(collection)}'"
+        )
+        table = self._db.open_table(TABLE_NAME)
+        query = table.search().where(predicate).limit(_FULL_SCAN_LIMIT)
+        return bool(query.select(["document_name"]).to_list())
 
     def get_page_text(
         self,

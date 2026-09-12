@@ -12,12 +12,12 @@ Parse the first token as a subcommand. Default to `status` if empty.
 
 ## Subcommands
 
-- **status** (default): Call `mcp__plugin_quarry_quarry__status`
+- **status** (default): Call `mcp__quarry__status`
 - **sync**: Run `quarry sync` via the Bash tool with `run_in_background: true`. This avoids blocking the conversation during long syncs. You will be notified when it completes. If a non-default database was selected via `use`, pass `--db <name>` to the CLI command.
-- **collections**: Call `mcp__plugin_quarry_quarry__list` with `kind` set to `"collections"`
-- **databases**: Call `mcp__plugin_quarry_quarry__list` with `kind` set to `"databases"`
-- **registrations**: Call `mcp__plugin_quarry_quarry__list` with `kind` set to `"registrations"`
-- **use `<name>`**: Call `mcp__plugin_quarry_quarry__use` with `name` set to the second token. If no name is given after `use`, reply with brief usage: `/quarry use <database-name>`
+- **collections**: Call `mcp__quarry__list` with `kind` set to `"collections"`
+- **databases**: Call `mcp__quarry__list` with `kind` set to `"databases"`
+- **registrations**: Call `mcp__quarry__list` with `kind` set to `"registrations"`
+- **use `<name>`**: Call `mcp__quarry__use` with `name` set to the second token. If no name is given after `use`, reply with brief usage: `/quarry use <database-name>`
 - **enable**: Run `quarry enable` via the Bash tool. If a directory argument follows, pass it as a positional argument. Supports `--collection <name>` to override the collection name.
 - **disable**: Run `quarry disable` via the Bash tool. If a directory argument follows, pass it as a positional argument. Supports `--keep-data` to preserve indexed data in LanceDB.
 

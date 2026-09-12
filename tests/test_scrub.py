@@ -213,7 +213,7 @@ def test_env_secret_does_not_match_unrelated_assignments() -> None:
 def test_env_secret_command_substitution_redacted() -> None:
     line = (
         "export GH_TOKEN=$(security find-generic-password"
-        ' -a "jfreeman" -s "GITHUB_CLAUDE_PAT" -w)'
+        ' -a "jdoe" -s "GITHUB_CLAUDE_PAT" -w)'
     )
     out, counts = _scrub(line)
     assert "[REDACTED:env-secret]" in out
@@ -517,7 +517,7 @@ def _pii_scrub(text: str, **kw: object) -> tuple[str, dict[str, int]]:
 @pytest.mark.parametrize(
     "raw,expected",
     [
-        ("/Users/jfreeman/Coding/x", "~/Coding/x"),
+        ("/Users/jdoe/Coding/x", "~/Coding/x"),
         ("/home/alice/proj", "~/proj"),
         ("/Users/bob/", "~/"),
         ("/home/bob", "~"),
@@ -606,10 +606,10 @@ def test_path_https_scheme_host_named_home_unchanged() -> None:
 
 
 def test_path_vox_corpus_style_home_redacts_to_tilde() -> None:
-    """The vox capture case: ``/Users/jfreeman/x`` collapses to ``~/x``."""
-    out, counts = _pii_scrub("/Users/jfreeman/x")
+    """The vox capture case: ``/Users/jdoe/x`` collapses to ``~/x``."""
+    out, counts = _pii_scrub("/Users/jdoe/x")
     assert out == "~/x"
-    assert "jfreeman" not in out
+    assert "jdoe" not in out
     assert counts.get("path", 0) == 1
 
 
@@ -619,8 +619,8 @@ def test_path_vox_corpus_style_home_redacts_to_tilde() -> None:
 
 
 def test_email_single_redacted() -> None:
-    out, counts = _pii_scrub("reach me at jmf@pobox.com anytime")
-    assert "jmf@pobox.com" not in out
+    out, counts = _pii_scrub("reach me at jdoe@example.com anytime")
+    assert "jdoe@example.com" not in out
     assert "[REDACTED:email]" in out
     assert counts.get("email", 0) == 1
 
@@ -636,30 +636,30 @@ def test_email_multiple_all_redacted() -> None:
 @pytest.mark.parametrize(
     "raw,tail",
     [
-        ("jmf@pobox.com.", "."),
-        ("jmf@pobox.com. ", ". "),
-        ("jmf@pobox.com...", "..."),
-        ("jmf@pobox.com,", ","),
-        ("jmf@pobox.com)", ")"),
-        ("jmf@pobox.com", ""),
+        ("jdoe@example.com.", "."),
+        ("jdoe@example.com. ", ". "),
+        ("jdoe@example.com...", "..."),
+        ("jdoe@example.com,", ","),
+        ("jdoe@example.com)", ")"),
+        ("jdoe@example.com", ""),
     ],
 )
 def test_email_redacted_before_trailing_punctuation(raw: str, tail: str) -> None:
     """A sentence-final address must redact — the trailing char is not part of it.
 
     Regression: the old ``(?![\\w.-])`` lookahead rejected a match when a period
-    followed, leaking ``jmf@pobox.com.`` — the most common address context in prose.
+    followed, leaking ``jdoe@example.com.`` — the most common address context in prose.
     """
     out, counts = _pii_scrub(f"reach {raw} ok")
-    assert "jmf@pobox.com" not in out
+    assert "jdoe@example.com" not in out
     assert out == f"reach [REDACTED:email]{tail} ok"
     assert counts.get("email", 0) == 1
 
 
 def test_email_multi_label_tld_with_trailing_period() -> None:
     """A multi-label TLD still matches via backtracking, even with a trailing dot."""
-    out, counts = _pii_scrub("write jmf@pobox.co.uk. now")
-    assert "jmf@pobox.co.uk" not in out
+    out, counts = _pii_scrub("write jdoe@example.co.uk. now")
+    assert "jdoe@example.co.uk" not in out
     assert out == "write [REDACTED:email]. now"
     assert counts.get("email", 0) == 1
 
@@ -733,7 +733,7 @@ def test_email_precedes_hostname_no_local_part_leak() -> None:
 
 def test_zero_pii_survives_mixed_fixture() -> None:
     """The security invariant: no path, email, or hostname leaks through."""
-    text = f"path /Users/jfreeman/Coding/quarry\nmail jmf@pobox.com\nbox {_HOST}\n"
+    text = f"path /Users/jdoe/Coding/quarry\nmail jdoe@example.com\nbox {_HOST}\n"
     out, counts = _pii_scrub(text)
     assert "/Users/" not in out
     assert "@" not in out
@@ -749,7 +749,7 @@ def test_all_six_categories_fire_together() -> None:
         "GH=ghp_" + "A" * 40 + "\n"
         "aws_secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n"
         "damn this /Users/jane/x file\n"
-        "mail jmf@pobox.com\n"
+        "mail jdoe@example.com\n"
         f"host {_HOST}\n"
     )
     out, counts = _pii_scrub(text)
@@ -764,7 +764,7 @@ def test_pii_idempotent_over_five_categories() -> None:
     text = (
         "ghp_" + "C" * 40 + "\n"
         "/Users/jane/Coding/x\n"
-        "jmf@pobox.com\n"
+        "jdoe@example.com\n"
         f"{_HOST}\n"
         "this is damn loud\n"
     )
@@ -775,8 +775,8 @@ def test_pii_idempotent_over_five_categories() -> None:
 
 
 def test_vox_corpus_paths_all_redacted() -> None:
-    """598 /Users/jfreeman/ occurrences collapse to 0 paths and 598 ~/."""
-    text = "/Users/jfreeman/repo/file.py\n" * 598
+    """598 /Users/jdoe/ occurrences collapse to 0 paths and 598 ~/."""
+    text = "/Users/jdoe/repo/file.py\n" * 598
     out, counts = _pii_scrub(text)
     assert out.count("/Users/") == 0
     assert out.count("/home/") == 0
@@ -785,7 +785,7 @@ def test_vox_corpus_paths_all_redacted() -> None:
 
 
 def test_pii_disabled_keeps_everything() -> None:
-    text = f"/Users/jane/x jmf@pobox.com {_HOST}"
+    text = f"/Users/jane/x jdoe@example.com {_HOST}"
     out, counts = _pii_scrub(text, scrub_pii=False)
     assert out == text
     assert counts.get("path", 0) == 0

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .audit import SuppressionAudit, SuppressionAuditError
 from .baseline import SuppressionBaseline, SuppressionBaselineError
 from .cli import Cli, Options, main
 from .gitio import GitError, GitRepo
@@ -20,6 +21,8 @@ __all__ = [
     "Outcome",
     "PerFileIgnoresCounter",
     "Scanner",
+    "SuppressionAudit",
+    "SuppressionAuditError",
     "SuppressionBaseline",
     "SuppressionBaselineError",
     "SuppressionReport",

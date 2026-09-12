@@ -2219,6 +2219,95 @@ every core; the cap is the ceiling, the throttle is the duty-cycle, and both are
 needed. *Raising `narenas` to reduce contention instead of capping threads* —
 addressed in DES-032; increases jemalloc retention (DES-027) and does not bound CPU.
 
+### DES-045d: One ignore seam — watch, scan, and filter all consult IgnoreRules
+
+**Status:** Accepted (2026-09-02) · **Beads:** quarry-0bej, quarry-ndrj
+
+**Context.** The watch layer and the scan layer disagreed about what is ignored.
+`FileDiscovery` pruned its bulk walk with full gitignore semantics (`pathspec`:
+`.gitignore` at every level, `.quarryignore` at the root, scratch defaults,
+hidden-dir skip), but the fs watchdog handed the raw registered root to
+`observer.schedule(..., recursive=True)` — inotify allocated one watch descriptor
+per directory, junk included. The operator's workspace root holds 206k
+directories (117k of them accumulated pytest scratch under one repo's `.tmp`)
+against the default 65,536-descriptor budget, so scheduling failed with ENOSPC
+after consuming ~55k descriptors, the partial acquisition was never released,
+and even 300-directory trees in the same daemon could not be watched. Ignore
+filtering ran only on *events*, after the descriptors already existed — paying
+the kernel cost for directories whose events would then be discarded.
+
+**Decision.** Extract the ignore decision into one component, `IgnoreRules`
+(`ignore_spec.py`), composed by `FileDiscovery`, and route every code path that
+walks, watches, or filters registered-directory contents through it: the bulk
+scan (`discover()`), the watch layer (`iter_watchable_dirs()` /
+`is_watchable_dir()`), the post-debounce submitter filter, and file-level
+matching (`keeps_file` — `FileDiscovery` never calls `pathspec` directly).
+Compiled specs are cached; the observer-thread hot path never re-reads ignore
+files per event. Paths that walk fixed, non-document directories (doctor's
+existence stat, shadow rescrub's captures glob, backfill/ethos-memory/transcript
+readers) are documented non-consumers, audited per mission m-2026-09-02-003.
+
+**Consequence.** Watch-time pruning and scan-time pruning cannot drift: a
+directory is ignored for descriptors, events, and bulk scans by the same rules,
+matching git's own semantics (`.gitignore` + `.quarryignore`). The operator's
+four registered roots prune from ~206k directories to ~1.2k watchable ones.
+
+**Rejected alternatives.** *Raising `fs.inotify.max_user_watches`* — operator-
+refused; treats the symptom and scales with junk accumulation rather than
+content. *Event-level filtering only* (the status quo) — the kernel cost is paid
+at watch establishment, so filtering events cannot protect the descriptor
+budget. *A second pattern list for the watcher* — the exact drift bug class
+(remote/local divergence, bug class 3) transplanted into the ignore layer.
+
+### DES-045e: Watch mechanism — one pruned recursive inotify instance per root
+
+**Status:** Accepted (2026-09-02) · **Beads:** quarry-0bej, quarry-ndrj
+
+**Context.** The first implementation of DES-045d scheduled one *non-recursive*
+`observer.schedule()` per surviving directory. Review rejected it: watchdog
+gives every `ObservedWatch` its own emitter, and on Linux each emitter
+constructs its own `Inotify` object calling `inotify_init()` — one kernel
+*instance* plus two threads and three fds per directory, against
+`fs.inotify.max_user_instances` = 128 (per-user, shared with IDEs). It
+exhausted at ~120 directories — structurally worse than the 65,536-descriptor
+problem it replaced. It also introduced a cross-thread watch-bookkeeping dict
+with no lock (evaluator blocker) and aborted whole trees on ordinary mid-walk
+ENOENT churn (evaluator major).
+
+**Decision.** Operator-ratified: return to ONE recursive watch per registered
+root — one emitter, one kernel instance, one thread-pair — and prune the
+*descriptor* walk instead. On Linux, `PrunedInotify` (`daemon/inotify_prune.py`)
+subclasses watchdog's private `Inotify`, overriding `_add_dir_watch` (the
+initial recursive walk: prunes via the DES-045d seam; ordinary per-directory
+`OSError` skips that directory, only `ENOSPC`/`EMFILE` aborts the tree) and
+`_add_watch` (the auto-add primitive for directories created later: rejects an
+ignored path via an `OSError` subclass every vanilla call site already
+tolerates, with sentinel bookkeeping so a file directly inside a pruned
+directory cannot `KeyError` watchdog's event simulation). A
+`PrunedInotifyBuffer`/`Emitter`/`Observer` chain (`inotify_prune_chain.py`)
+wires it into watchdog's construction pipeline. macOS keeps watchdog's standard
+recursive FSEvents observer — one stream per root, no per-directory kernel
+cost — with ignore filtering at the event/scan seam. Platform selection is a
+module-scope import of the pruned chain; on failure the `PollingObserver` and
+default recursive observer remain as fallbacks. Each collection's live watch
+state (`watched`/`degraded`/`scan-only`) surfaces through `/registrations` and
+`quarry list registrations`, so a silently degraded watch is observable.
+
+**Consequence.** The daemon fits the operator's unraised kernel budgets: four
+roots cost four inotify instances and ~1.2k descriptors. Watch bookkeeping
+lives inside watchdog's own single-threaded buffer, eliminating the cross-
+thread dict the first attempt needed. The cost accepted: `PrunedInotify`
+depends on watchdog private internals, pinned by tests that fail loudly if the
+subclassed surface moves.
+
+**Rejected alternatives.** *Per-directory non-recursive scheduling* (the first
+attempt) — one inotify instance per directory; dies at
+`max_user_instances` = 128. *A bespoke ctypes inotify layer* — full control,
+but reimplements rename cookies, queue overflow, and thread lifecycle — the
+hairiest, most defect-prone part of the space watchdog already handles.
+*Raising either sysctl* — operator-refused, and instance exhaustion is
+per-user, shared with every editor and IDE on the box.
+
 ## DES-046: File-descriptor envelope — raise RLIMIT_NOFILE at daemon start
 
 **Context.** The resident `quarryd` exhausted file descriptors over long uptime: an
@@ -2652,3 +2741,185 @@ maintenance cost, not a blocker.
 
 See `punt-labs/homebrew-tap` PR #34 and `punt-kit/patterns/homebrew-pypi-
 formula.md`'s "Known failure mode" section for the full technical detail.
+
+## DES-052: `POST /v1/captures/lookup` takes `cwd`, not a pre-resolved collection name
+
+**Context.** The WebFetch loop-closer needs to ask the daemon "have I already
+captured this URL?" before re-sending it. The ticket's illustrative route
+shape was `/v1/captures/lookup?url=<url>&collection=<repo>-captures` — the
+caller passing an already-suffixed captures collection name.
+
+**Decision.** The route is `POST /v1/captures/lookup`, taking `cwd` in the
+JSON body, not `collection`, mirroring `POST /capture`'s existing contract
+exactly: the daemon derives the target
+`<repo>-captures` collection server-side via
+`CapturesCollection.for_registry_path(cwd, registry_path)`. `CaptureUrl.for_web_fetch`
+also moved to run server-side, inside the route, rather than being computed by
+the caller and passed as an opaque pre-normalized string.
+
+**Why.** `CapturesCollection.for_registry_path`'s own docstring states the
+constraint plainly: "the capture client cannot do this itself without
+importing the engine" — resolving a directory to its registered collection
+name requires opening the sync registry, and hooks are deliberately
+engine-free (`TestHookImportsNoEngine` runs the capture paths with `lancedb`
+and `onnxruntime` poisoned). A hook that had to spell `<repo>-captures` itself
+would need either a registry import (breaking engine-free) or a naming
+heuristic that can drift from what the daemon actually registered — exactly
+the bug-class-3 local/remote divergence this repo's review history recurs on.
+Passing raw `cwd` (as `POST /capture` already does) keeps the hook a pure
+thin-client caller and the daemon the single owner of the naming rule.
+
+**Rejected: client passes the literal `<repo>-captures` name.** Would require
+the hook to either import `quarry.sync_registry` (violating the engine-free
+hook boundary) or guess the name from `cwd` with a copy of the daemon's own
+derivation logic — a second implementation of `CapturesCollection.for_cwd`
+that could silently diverge from the one the daemon uses at write time.
+
+## DES-053: `quarry learn` — a fourth capture verb with retrieval preference
+
+**Context.** `remember` and `ingest` cover a durable fact and a URL, but
+neither gives a caller a way to say "this rule should outrank ordinary
+results" — the only lever is `memory_type`, which is descriptive metadata,
+not a retrieval signal. The design considered and rejected a two-call shape
+(`learn` then `set_config`): a crash between the two calls leaves a lesson
+that never surfaces, and the shape freezes solid the moment a client exists.
+Operator-ratified 2026-08-31 (three constraints, `docs/design/quarry-b6p-
+quarry-learn.md`): **C1** atomic operation (one call writes the chunk and
+registers the boost, on every surface); **C2** same verb/shape everywhere
+(`learn` on CLI/MCP/slash/client, lesson text positional, `topic`/`name`
+trailing options); **C3** slash is a thin door (`/quarry:learn` parses and
+calls the MCP tool, no logic in the `.md`).
+
+**Decision.**
+
+1. **Collection: project-scoped `<repo>-lessons`, not agent-scoped.** A new
+   `LessonsCollection` (structurally identical to `CapturesCollection`) maps a
+   lesson's `cwd` to `<repo>-lessons` or `default-lessons`. The ratified wire
+   shape (`{lesson, topic?, name?}`) has no `agent_handle` field on any
+   surface — a distilled lesson is project knowledge, not personal memory.
+2. **Retrieval preference is a fusion-time rank multiplier, not a second
+   write.** `RrfFusion` gains `lesson_boost` (default `1.5`, threaded from
+   `Settings.retrieval_lesson_boost`, `ge=1.0`): a row's RRF term is
+   multiplied by `lesson_boost` when `memory_type == "lesson"`. This is why
+   C1's atomicity is trivial — "retrieval preference" is a derived property of
+   the one field (`memory_type`) the single write already sets, not a second
+   row. A multiplier (not a hard filter/promotion) means an irrelevant lesson
+   still loses to a relevant plain result; `1.5` is derived from RRF's
+   `1/(k+rank)` term so a lesson ranked in the top ~30 of its own channel
+   outranks even the single best non-lesson hit, while rank 40+ still loses.
+3. **Lessons are exempt from decay for free.** `learn` never sets
+   `agent_handle`, so every lesson row already fails the existing
+   `RrfFusion` decay gate (`decay_rate > 0 AND memory_type in _DECAYABLE_TYPES
+   AND agent_handle`) — no new gate needed. `_DECAYABLE_TYPES` deliberately
+   excludes `"lesson"` as belt-and-suspenders documentation against a future
+   change that adds `agent_handle` to `learn`'s shape.
+4. **Document naming is always daemon-generated, never the caller's literal
+   name.** `LessonComposer.document_name` returns `lesson-<slug>-<8 hex>` —
+   the slug comes from `name`, else `topic`, else `"note"`. Forced by
+   `RrfFusion`'s dedup key `(document_name, chunk_index, page_number)`: two
+   lessons sharing a literal name would collide at `chunk_index=0,
+   page_number=0` (the common case for a short lesson), merging scores and
+   silently dropping one lesson's text. `learn`'s whole premise — quick,
+   low-ceremony capture — makes name reuse the expected case, so the
+   uniqueness guarantee is unconditional, not caller-opt-in; `overwrite` is
+   therefore never exposed as a `learn` parameter.
+5. **`memory_type == "lesson"` is reserved.** `remember`/`ingest` both reject
+   a caller-supplied `memory_type: "lesson"` with `400` — without the guard, a
+   caller could get the retrieval boost while bypassing `learn`'s naming,
+   topic, and length-cap rules, defeating C1's atomicity guarantee.
+6. **Length cap: 500 characters, server-side only.** `learn` rejects a lesson
+   over 500 characters, pointing the caller at `remember`. "Distilled" is the
+   operative word in the boundary sentence; without an enforced boundary,
+   `learn` would accept the same content `remember` does.
+7. **`quarry doctor`'s memory-corpus check gains a handle-independent lesson
+   count.** The existing `_tally` excluded every empty-`agent_handle` row from
+   its type tally — meaning every lesson (empty handle by design) was
+   invisible to the one diagnostic built to answer "how much distilled
+   knowledge exists here." `_tally`'s counters were extracted into a
+   `_CorpusTally` accumulator (`add(row)` per row) so the lesson count is a
+   fourth, independently-gated field rather than a fifth tuple position.
+8. **The boundary sentence propagates to `remember`/`ingest`, not just the
+   newcomer.** "remember = a specific durable fact, ingest = a URL, learn = a
+   distilled lesson that gets retrieval preference" appears verbatim in the
+   CLI, MCP, and slash-command descriptions of all three verbs — otherwise the
+   boundary the sentence exists to draw only holds for two of three verbs.
+
+**One resolved deviation from C2's literal text.** C2's ratified prose spells
+the client signature `topic=None, name=None`; the implementation uses
+`topic: str = "", name: str = ""`. No `Optional`/`| None` field exists
+anywhere in `quarry.api` today (`RememberRequest`, `IngestRequest` both use
+the empty-string sentinel), and `None` here would be the only exception for no
+different reason than the two adjacent methods that already use `""`. Read as
+C2 specifying the *shape* (three params, one positional, two optional) and
+implementing the *type* per the codebase's settled convention.
+
+**Rejected: boost scoped by query-supplied `topic`.** Would require a new
+`topic` filter on `find`/`SearchRequest`/`SearchFilter` — a much larger
+surface-parity change (bug class 3) than a v1 retrieval-preference feature
+justifies. A real, data-backed need for topic-scoped boosting is a separate
+follow-on, not a speculative addition here.
+
+**Rejected: agent-scoped lessons (route via `agent_handle` like
+`remember`).** Would require smuggling an identity parameter onto a wire
+shape (C2) that has no field for it on any of the four surfaces.
+
+## DES-054: Vendored, self-contained ethos registry — repo-only, no external dependency
+
+**Decision.** Quarry commits a complete, self-contained ethos identity
+registry at `.punt-labs/ethos/`: the 8-member `quarry` team (jfreeman,
+claude, rmh, gvr, kpz, djb, mdm, adb — the roster the pairing tables
+use), their personalities, writing styles, talents, roles, and
+`teams/quarry.yaml`, all as plain committed files (the `lux`/`cryptd`
+pattern). `.punt-labs/ethos.yaml` pins `agent: claude`, `team: quarry`,
+`resolution: repo-only`. A fresh clone resolves every identity from
+files inside the repo alone — with no dependency on the developer's
+`~/.punt-labs/ethos/`, on the `..` workspace, or on the `../team`
+registry. `ethos doctor` and `ethos whoami` verify this repo-locally.
+
+The team is defined locally, in the vendored `teams/quarry.yaml`. The
+shared `punt-labs/team` registry is not consulted at resolution time and
+is not a dependency of this repo.
+
+Runtime state (`missions/`, `missions.jsonl`, `sessions/`, `.biff`)
+stays gitignored; everything else under the path is tracked. There is no
+`.vendor.yaml`: the committed copy is produced by `ethos vendor <8 seeds>
+--apply` followed by a prune to the quarry-team closure. (`ethos vendor`
+computes a membership-connected closure — the 8 seeds all belong to
+`engineering`, so an unpruned run plans the full ~29-identity
+engineering-connected roster regardless of `repositories:` claims, and
+`--team quarry` seeding plans the same set; the prune is what bounds the
+committed copy.)
+
+**Why.** Each repo must work for a developer on its own: clone it and it
+works, with no dependency on any machine-global store or sibling repo.
+Before this change, identity resolution fell back to the global
+`~/.punt-labs/ethos/`, so a bare clone could not resolve identities, and
+SessionStart injected the full engineering roster (~155 KB of persona and
+team context) into every session. `resolution: repo-only` plus the
+committed, pruned tree makes the repo self-contained and keeps the
+marketplace plugin clone lean.
+
+**Refresh is a maintainer action, not a developer-clone dependency.** To
+update the roster, edit `.punt-labs/ethos/teams/quarry.yaml` in the
+vendored copy and re-run the vendor+prune with the `ethos vendor` seed
+handles matching the team file (adding or dropping a member means
+changing both together, or the run reproduces the old set). Re-vendoring
+reads from a source registry the way any vendored dependency's update
+does; the committed result is what ships and is self-contained. The
+`../team` registry is not in this loop.
+
+**Rejected: unpruned `ethos vendor` snapshot (the `../ethos` repo
+shape).** Tool-verifiable via `.vendor.yaml`, but carries the full
+engineering-connected roster in every plugin clone — the payload bloat
+this change exists to avoid.
+
+**Rejected: `punt-labs/team` submodule.** Claude Code clones plugin
+repos with `--recurse-submodules` (ships the whole roster to consumers),
+and `ethos enable` v4.15.0+ refuses submodule mounts (`ethos-e29s`).
+
+**Rejected: any dependency on the global `~/.punt-labs/ethos/` or on a
+`punt-labs/team` registry edit.** Either breaks repo independence — the
+repo would resolve only on a machine whose global store is populated, or
+require the org registry to hold a particular state. Repo independence is
+the invariant; the vendored copy is the sole source of truth for this
+repo, and no other repo is touched to make quarry's identities resolve.

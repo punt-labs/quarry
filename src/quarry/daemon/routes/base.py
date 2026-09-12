@@ -26,6 +26,11 @@ if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.ingest_unit import IngestUnit
 
+# fusion.py's retrieval boost keys purely on this string, so every write
+# path (remember, ingest, capture) must reject a caller-supplied value
+# before it reaches storage -- only learn may ever write it.
+RESERVED_MEMORY_TYPE = "lesson"
+
 
 class RouteGroup:
     """Base for a group of REST handlers bound to one daemon context."""
@@ -93,6 +98,23 @@ class RouteGroup:
                 {"error": f"Missing required field: {key}"}, status_code=400
             )
         return value
+
+    @staticmethod
+    def reject_reserved_memory_type(memory_type: str) -> JSONResponse | None:
+        """Return a 400 if *memory_type* is the ``learn``-reserved value.
+
+        ``None`` means the value is unreserved and the caller may proceed.
+        """
+        if memory_type != RESERVED_MEMORY_TYPE:
+            return None
+        return JSONResponse(
+            {
+                "error": (
+                    f"memory_type '{RESERVED_MEMORY_TYPE}' is reserved for quarry learn"
+                )
+            },
+            status_code=400,
+        )
 
     def reject_if_running(self, kind: str, label: str) -> JSONResponse | None:
         """Return a 409 if a task of *kind* is already running, else ``None``.

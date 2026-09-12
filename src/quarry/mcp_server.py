@@ -77,8 +77,13 @@ def _guard(method: Callable[..., str]) -> Callable[..., str]:
 mcp = FastMCP(
     "punt-quarry",
     instructions=(
-        "Quarry is a local semantic search engine for your knowledge base. "
-        "Use these tools to ingest, search, and manage documents.\n\n"
+        "Use find before WebSearch or WebFetch for research, or before "
+        "answering a why/how/what-did-we-decide question. Prefer grep for "
+        "symbol and value lookups; prefer find for meaning. Use even when "
+        "you think you already know the answer — a prior decision or a "
+        "teammate's note may contradict your assumption. Do not reach for "
+        "find on mechanical string searches or navigating the file already "
+        "open — grep and the editor do that well.\n\n"
         "All quarry tool output is pre-formatted plain text using unicode "
         "characters for alignment. Always emit quarry output verbatim — "
         "never reformat, never convert to markdown tables, never wrap "
@@ -119,6 +124,7 @@ class McpTools:
         server.add_tool(self.find)
         server.add_tool(self.ingest)
         server.add_tool(self.remember)
+        server.add_tool(self.learn)
         server.add_tool(self.list_resources, name="list")
         server.add_tool(self.show)
         server.add_tool(self.delete)
@@ -140,7 +146,10 @@ class McpTools:
         agent_handle: str = "",
         memory_type: str = "",
     ) -> str:
-        """Search indexed documents using hybrid semantic + keyword search.
+        (
+            """Use find before WebSearch or WebFetch for research, or before """
+            """answering a why/how/what-did-we-decide question. """
+            """Prefer grep for symbol and value lookups; prefer find for meaning.
 
         Combines vector similarity and BM25 full-text search via Reciprocal
         Rank Fusion (RRF) for better recall on both meaning and exact terms.
@@ -153,8 +162,9 @@ class McpTools:
             page_type: Optional content type filter (text, code, spreadsheet, etc.).
             source_format: Optional source format filter (.pdf, .py, .xlsx, etc.).
             agent_handle: Optional agent handle to filter by (e.g. "rmh").
-            memory_type: Optional memory type filter (fact, observation, etc.).
+            memory_type: Optional memory type filter (fact, observation, lesson, etc.).
         """
+        )
         if err := self._reject_blank(query, "query"):
             return err
         if limit <= 0:
@@ -179,7 +189,13 @@ class McpTools:
         overwrite: bool = False,
         collection: str = "",
     ) -> str:
-        """Ingest an HTTP(S) URL into the knowledge base.
+        (
+            """Use when you have a URL to add to the knowledge base — a doc, """
+            """an article, a spec.
+
+        """
+            """remember = a specific durable fact, ingest = a URL, learn = a """
+            """distilled lesson that gets retrieval preference.
 
         Fetches a URL with smart sitemap discovery and single-page fallback.
         For local files and directories, use ``register_directory`` +
@@ -193,6 +209,7 @@ class McpTools:
             overwrite: If true, replace existing data.
             collection: Collection name. Auto-derived if empty.
         """
+        )
         if not source.startswith(("http://", "https://")):
             return (
                 f"Error: {source!r} is not a URL. Use "
@@ -210,30 +227,37 @@ class McpTools:
         content: str,
         document_name: str,
         overwrite: bool = False,
-        collection: str = "default",
+        collection: str = "",
         format_hint: str = "auto",
         agent_handle: str = "",
         memory_type: str = "",
         summary: str = "",
     ) -> str:
-        """Remember inline text content: chunk, embed, and index for search.
+        (
+            """Use remember when you learn something durable — a decision, """
+            """a gotcha, a non-obvious fact, a procedure — so it survives """
+            """context compaction.
 
-        Use this instead of ingest when you have the text content directly
-        (e.g., clipboard, API response, or sandbox-uploaded files in Claude Desktop).
-        The daemon scrubs secrets/PII before indexing.
+        """
+            """remember = a specific durable fact, ingest = a URL, learn = a """
+            """distilled lesson that gets retrieval preference.
 
-        Returns immediately — the daemon indexes in the background.
+        The daemon scrubs secrets/PII before indexing. Returns immediately —
+        the daemon indexes in the background.
 
         Args:
             content: The text content to remember.
             document_name: Name for the document (e.g., 'notes.md').
             overwrite: If true, replace existing data for this document.
-            collection: Collection name (default: 'default').
+            collection: Collection name. Leave empty to route by agent_handle —
+                ``memory-<handle>`` when a handle is given, else ``default``.
             format_hint: Format hint: 'auto', 'plain', 'markdown', 'latex'.
             agent_handle: Agent that owns this memory (e.g. "rmh").
-            memory_type: Memory classification: fact, observation, opinion, procedure.
+            memory_type: Memory classification: fact, observation, opinion,
+                procedure. ``'lesson'`` is reserved for the ``learn`` tool.
             summary: One-line summary of the content.
         """
+        )
         if err := self._reject_blank(document_name, "document_name"):
             return err
         if err := self._reject_blank(content, "content"):
@@ -256,8 +280,34 @@ class McpTools:
         return f"▶  Remembering {document_name} (task {accepted.task_id})"
 
     @_guard
+    def learn(self, lesson: str, topic: str = "", name: str = "") -> str:
+        (
+            """Use learn to save a distilled lesson that should outrank """
+            """ordinary results for related queries -- a rule, a convention, """
+            """a "do it this way" insight, not a one-off fact.
+
+        """
+            """remember = a specific durable fact, ingest = a URL, learn = a """
+            """distilled lesson that gets retrieval preference.
+
+        The daemon scrubs secrets/PII before indexing, same as remember.
+        Lessons are capped at 500 characters -- use remember for anything
+        longer. Returns immediately -- the daemon indexes in the background.
+
+        Args:
+            lesson: The distilled lesson text (<= 500 chars).
+            topic: Optional domain tag (e.g. "testing", "release-process").
+            name: Optional user-visible slug for later reference.
+        """
+        )
+        if err := self._reject_blank(lesson, "lesson"):
+            return err
+        accepted = self._connect().learn(lesson, topic=topic, name=name)
+        return f"▶  Learning saved ({accepted.status}, task {accepted.task_id})"
+
+    @_guard
     def list_resources(self, kind: str, collection: str = "") -> str:
-        """List documents, collections, databases, or registrations.
+        """Use to see what's already indexed before ingesting it again.
 
         Args:
             kind: What to list — "documents", "collections", "databases",
@@ -284,7 +334,9 @@ class McpTools:
         page_number: int = 0,
         collection: str = "",
     ) -> str:
-        """Show document metadata or retrieve a specific page's text.
+        (
+            """Use to read a specific page, or to check whether a document is """
+            """already indexed.
 
         Without page_number: shows document metadata (pages, chunks, collection).
         With page_number: shows the full text for that page.
@@ -294,6 +346,7 @@ class McpTools:
             page_number: Page number (1-indexed). 0 means show metadata only.
             collection: Optional collection scope.
         """
+        )
         if err := self._reject_blank(document_name, "document_name"):
             return err
         client = self._connect()
@@ -328,7 +381,7 @@ class McpTools:
         kind: str = "document",
         collection: str = "",
     ) -> str:
-        """Delete indexed data for a document or collection.
+        """Use to remove stale or wrong content before re-ingesting it.
 
         Returns immediately — the daemon removes chunks in the background.
 
@@ -354,7 +407,7 @@ class McpTools:
 
     @_guard
     def register_directory(self, directory: str, collection: str = "") -> str:
-        """Register a directory for incremental sync.
+        """Use to track a local directory so future changes sync automatically.
 
         Returns immediately — the daemon records the registration in the background.
 
@@ -376,7 +429,9 @@ class McpTools:
 
     @_guard
     def deregister_directory(self, collection: str, keep_data: bool = False) -> str:
-        """Remove a directory registration.
+        (
+            """Use to stop tracking a directory — keep its indexed data with """
+            """``keep_data=True``, or purge it.
 
         Returns the removed-file count synchronously; the chunk purge runs as a
         background task. An unknown collection surfaces as an error, not a
@@ -386,6 +441,7 @@ class McpTools:
             collection: Collection name to deregister.
             keep_data: If true, keep indexed data in LanceDB.
         """
+        )
         if err := self._reject_blank(collection, "collection"):
             return err
         accepted = self._connect().deregister(
@@ -398,21 +454,24 @@ class McpTools:
 
     @_guard
     def sync_all_registrations(self) -> str:
-        """Sync all registered directories: ingest new/changed, remove deleted.
+        (
+            """Use after registering a new directory, or when tracked files """
+            """changed outside quarry's own writes.
 
         Returns immediately — the daemon runs the sync in the background.
         """
+        )
         accepted = self._connect().sync()
         return f"▶  Syncing all registrations (task {accepted.task_id})"
 
     @_guard
     def status(self) -> str:
-        """Get database status: document/chunk counts, storage size, and model info."""
+        """Use to check how much is indexed before you search or ingest."""
         return format_status(self._connect().status().model_dump())
 
     @_guard
     def use_database(self, name: str) -> str:
-        """Switch to a different named database for subsequent operations.
+        """Use to point every other tool at a different named database.
 
         All tools (find, ingest, sync, etc.) will target the selected database's
         daemon until changed again. Use list(kind="databases") to see the

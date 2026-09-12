@@ -114,16 +114,17 @@ class MaintenanceRoutes(RouteGroup):
 
     async def _run_backfill(self, state: TaskState, args: BackfillArgs) -> None:
         """Run the transcript backfill in a worker thread and record its stats."""
-        from quarry.backfill import backfill_sessions  # noqa: PLC0415
+        from quarry.backfill import BackfillConfig, backfill_sessions  # noqa: PLC0415
 
         with task_terminal(state):
-            stats = await run_in_threadpool(
-                backfill_sessions,
-                self.ctx.settings,
+            config = BackfillConfig(
                 dry_run=args.dry_run,
                 collection_override=args.collection,
                 project_filter=args.project,
                 limit=args.limit,
+            )
+            stats = await run_in_threadpool(
+                backfill_sessions, self.ctx.settings, config
             )
             state.status = "completed"
             state.results = {

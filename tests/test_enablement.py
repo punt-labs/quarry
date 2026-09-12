@@ -4,15 +4,26 @@ from __future__ import annotations
 
 import multiprocessing
 from pathlib import Path
+from typing import Self, final
 
 import pytest
 
+from quarry.api import (
+    DeleteCollectionRequest,
+    DeregisterAccepted,
+    DeregisterRequest,
+    RegistrationList,
+    TaskAccepted,
+)
 from quarry.claude_import import ClaudeMdImport
+from quarry.enable import disable_project
 from quarry.enabled_marker import EnabledMarker
 from quarry.enablement import Enablement
+from quarry.enablement_result import DisablementResult
 from quarry.file_lock import FileLock
 from quarry.gitignore import CAPTURES_GITIGNORE_ENTRY, QuarryGitignore
 from quarry.guidance import REPO_IMPORT_LINE
+from tests.conftest import FakeRegistryClient
 
 
 def test_enable_writes_guide_marker_and_import(tmp_path: Path) -> None:
@@ -271,3 +282,171 @@ def test_concurrent_enable_disable_never_strands_marker(tmp_path: Path) -> None:
         assert p.exitcode == 0, "a child did not finish cleanly"
     violations = out.get(timeout=5)
     assert violations == 0, f"marker-present + import-absent observed {violations}x"
+
+
+# ── disable_project step ordering: § 2.11 commit point before deregister ────
+
+
+@final
+class _OrderingRecorder:
+    """Record the ordinal at which each disable step fires.
+
+    The regression the design pins is that ``Enablement.disable`` MUST run
+    before ``client.deregister``. Instrumenting both call sites through one
+    monotonically increasing counter is the smallest instrument that will
+    fail if either half of the ordering regresses.
+    """
+
+    __slots__ = ("_calls", "_next")
+
+    _calls: list[str]
+    _next: int
+
+    def __new__(cls) -> Self:
+        self = super().__new__(cls)
+        self._calls = []
+        self._next = 0
+        return self
+
+    @property
+    def calls(self) -> list[str]:
+        """Return the step names recorded so far, in call order."""
+        return self._calls
+
+    def record(self, name: str) -> int:
+        self._next += 1
+        self._calls.append(name)
+        return self._next
+
+
+class TestDisableProjectOrdering:
+    def _prepare_repo(self, tmp_path: Path) -> Path:
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / "CLAUDE.md").write_text(f"# rules\n{REPO_IMPORT_LINE}\n")
+        EnabledMarker(project).write()
+        return project
+
+    def _instrument(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        recorder: _OrderingRecorder,
+        client: FakeRegistryClient,
+        *,
+        disable_raises: Exception | None = None,
+    ) -> None:
+        real_disable = Enablement.disable
+
+        def spy_disable(self: Enablement) -> DisablementResult:
+            recorder.record("Enablement.disable")
+            if disable_raises is not None:
+                raise disable_raises
+            return real_disable(self)
+
+        real_list = FakeRegistryClient.list_registrations
+        real_deregister = FakeRegistryClient.deregister
+        real_delete = FakeRegistryClient.delete_collection
+
+        def spy_list(self: FakeRegistryClient) -> RegistrationList:
+            recorder.record("list_registrations")
+            return real_list(self)
+
+        def spy_deregister(
+            self: FakeRegistryClient, req: DeregisterRequest
+        ) -> DeregisterAccepted:
+            recorder.record("deregister")
+            return real_deregister(self, req)
+
+        def spy_delete(
+            self: FakeRegistryClient, req: DeleteCollectionRequest
+        ) -> TaskAccepted:
+            recorder.record("delete_collection")
+            return real_delete(self, req)
+
+        monkeypatch.setattr(Enablement, "disable", spy_disable)
+        monkeypatch.setattr(FakeRegistryClient, "list_registrations", spy_list)
+        monkeypatch.setattr(FakeRegistryClient, "deregister", spy_deregister)
+        monkeypatch.setattr(FakeRegistryClient, "delete_collection", spy_delete)
+        _ = client  # instrumentation lives on the class, not the instance
+
+    def test_deregister_runs_after_marker_removal(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """§ 4: list → Enablement.disable → deregister → delete_collection."""
+        project = self._prepare_repo(tmp_path)
+        client = FakeRegistryClient([("proj", project)])
+        recorder = _OrderingRecorder()
+        self._instrument(monkeypatch, recorder, client)
+
+        result = disable_project(project, client)
+
+        assert recorder.calls == [
+            "list_registrations",
+            "Enablement.disable",
+            "deregister",
+            "delete_collection",
+        ]
+        assert result.import_pruned is True
+        assert result.enabled_marker_removed is True
+        assert result.removed == 1
+        assert [r.collection for r in client.deregistered] == ["proj"]
+        assert client.deregistered[0].keep_data is False
+        assert not EnabledMarker(project).is_present()
+
+    def test_list_registrations_precedes_any_mutation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The covering lookup MUST resolve before any state changes."""
+        project = self._prepare_repo(tmp_path)
+        client = FakeRegistryClient([("proj", project)])
+        recorder = _OrderingRecorder()
+        self._instrument(monkeypatch, recorder, client)
+
+        disable_project(project, client)
+
+        assert recorder.calls.index("list_registrations") == 0
+        for mutation in ("Enablement.disable", "deregister", "delete_collection"):
+            assert recorder.calls.index("list_registrations") < recorder.calls.index(
+                mutation
+            )
+
+    def test_idempotent_second_call_does_not_redegister(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A retry sees covering=None and never dispatches a second deregister."""
+        project = self._prepare_repo(tmp_path)
+        client = FakeRegistryClient([("proj", project)])
+        disable_project(project, client)
+        assert len(client.deregistered) == 1
+
+        recorder = _OrderingRecorder()
+        self._instrument(monkeypatch, recorder, client)
+
+        disable_project(project, client)
+
+        assert "deregister" not in recorder.calls
+        assert "delete_collection" not in recorder.calls
+        assert len(client.deregistered) == 1  # unchanged
+
+    def test_deregister_never_called_when_enablement_disable_raises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Fail-closed: an Enablement.disable failure MUST NOT deregister.
+
+        The old order deregistered first — a mid-disable failure would leave
+        the marker advertising a repo whose collection was already gone.
+        The reordered flow leaves the collection intact on failure so a retry
+        converges cleanly.
+        """
+        project = self._prepare_repo(tmp_path)
+        client = FakeRegistryClient([("proj", project)])
+        recorder = _OrderingRecorder()
+        self._instrument(monkeypatch, recorder, client, disable_raises=OSError("boom"))
+
+        with pytest.raises(OSError, match="boom"):
+            disable_project(project, client)
+
+        assert "deregister" not in recorder.calls
+        assert "delete_collection" not in recorder.calls
+        assert client.deregistered == []
+        assert client.deleted == []

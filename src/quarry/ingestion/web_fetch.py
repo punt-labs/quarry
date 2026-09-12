@@ -1,4 +1,4 @@
-"""Fetch a URL over HTTP(S) and return validated HTML text."""
+"""Fetch a URL over HTTP(S) and return validated HTML or text."""
 
 from __future__ import annotations
 
@@ -18,6 +18,33 @@ if TYPE_CHECKING:
 
 _ALLOWED_MEDIA_TYPES = frozenset({"text/html", "application/xhtml+xml"})
 _USER_AGENT = "quarry/1.0 (+https://github.com/punt-labs/quarry)"
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class FetchedBody:
+    """The decoded body of an HTTP fetch plus its declared media type.
+
+    ``media_type`` is the lower-cased ``Content-Type`` primary token
+    (before any parameters) — ``"text/html"``, ``"application/json"``,
+    ``"text/plain"``, or ``""`` when the response omitted the header.
+    Callers decide how to route the body: HTML through the extractor,
+    everything else through the text pipeline (G4 capture-as-text).
+    """
+
+    text: str
+    media_type: str
+
+    @property
+    def is_html(self) -> bool:
+        """Return True when the body is HTML/XHTML or Content-Type was absent.
+
+        A missing ``Content-Type`` is treated as HTML for backward
+        compatibility with servers that omit the header — the pre-G4
+        contract for :meth:`WebFetcher.fetch`.
+        """
+        return not self.media_type or self.media_type in _ALLOWED_MEDIA_TYPES
+
 
 # Bound one response body.  Mirrors the daemon's 4 MiB capture-body cap
 # (``MAX_CAPTURE_BODY_BYTES``); core cannot import the presentation-layer
@@ -51,12 +78,38 @@ class WebFetcher:
     _DEADLINE_MARGIN_S: ClassVar[float] = 1.0
 
     def fetch(self, url: str) -> str:
-        """Fetch *url* and return the decoded response body.
+        """Fetch *url* and return the decoded HTML body.
+
+        Preserved for callers that require HTML (a sitemap crawl,
+        ``ingest_url`` on a user-initiated URL).  The G4 capture path
+        uses :meth:`fetch_body` instead.
 
         Raises:
             ValueError: If the URL is not HTTP(S), the response is not HTML, or
                 the body exceeds the size cap.
-            OSError: On network errors or once the total-time deadline passes.
+            OSError: On network errors.
+            TimeoutError: Total-time deadline exceeded (propagated from
+                :meth:`fetch_body`).
+        """
+        body = self.fetch_body(url)
+        if not body.is_html:
+            msg = f"URL returned non-HTML content: {body.media_type or '(unknown)'}"
+            raise ValueError(msg)
+        return body.text
+
+    def fetch_body(self, url: str) -> FetchedBody:
+        """Fetch *url* and return its decoded body + declared media type.
+
+        Unlike :meth:`fetch`, does NOT reject non-HTML content — the
+        caller decides how to route JSON, plain text, or XHTML through
+        the pipeline.  Underlying safety checks (SSRF, size cap,
+        deadline) still apply.
+
+        Raises:
+            ValueError: URL is not HTTP(S), the final URL is unsafe, or
+                the body exceeds the size cap.
+            OSError: Network error.
+            TimeoutError: Total-time deadline exceeded.
         """
         if not url.lower().startswith(("http://", "https://")):
             msg = f"Only HTTP(S) URLs are supported: {url}"
@@ -77,7 +130,7 @@ class WebFetcher:
         deadline = monotonic() + self.timeout + self._DEADLINE_MARGIN_S
         try:
             with GUARDED_OPENER.open(request, timeout=self.timeout) as resp:
-                return self._decode_html(resp, deadline)
+                return self._decode_body(resp, deadline)
         except HTTPError as exc:
             # HTTPError IS an open response holding a socket fd; close it before
             # re-raising or a failed fetch leaks an fd (EMFILE over a crawl).
@@ -95,25 +148,28 @@ class WebFetcher:
             raise TimeoutError(msg) from exc
 
     @staticmethod
-    def _decode_html(resp: HTTPResponse, deadline: float) -> str:
-        """Validate the response, then decode the bounded body to text."""
-        WebFetcher._reject_non_html(resp)
+    def _decode_body(resp: HTTPResponse, deadline: float) -> FetchedBody:
+        """Validate the final URL, decode the body, return it with its media type."""
+        WebFetcher._check_final_url(resp)
         charset = resp.headers.get_content_charset() or "utf-8"
         body = WebFetcher._read_body(resp, deadline)
-        return body.decode(charset, errors="replace")
+        media_type = WebFetcher._media_type(resp)
+        text = body.decode(charset, errors="replace")
+        return FetchedBody(text=text, media_type=media_type)
 
     @staticmethod
-    def _reject_non_html(resp: HTTPResponse) -> None:
-        """Raise if the final URL is unsafe (non-HTTP(S)/internal) or non-HTML."""
+    def _check_final_url(resp: HTTPResponse) -> None:
+        """Raise if the final URL (post-redirect) is unsafe/internal."""
         reason = UrlSafetyCheck.reject_reason(resp.url)
         if reason is not None:
             msg = f"final URL rejected: {reason}"
             raise ValueError(msg)
+
+    @staticmethod
+    def _media_type(resp: HTTPResponse) -> str:
+        """Return the primary media type from the ``Content-Type`` header."""
         content_type: str = resp.headers.get("Content-Type", "")
-        media_type = content_type.split(";", 1)[0].strip().lower()
-        if media_type and media_type not in _ALLOWED_MEDIA_TYPES:
-            msg = f"URL returned non-HTML content: {content_type}"
-            raise ValueError(msg)
+        return content_type.split(";", 1)[0].strip().lower()
 
     @staticmethod
     def _read_body(resp: HTTPResponse, deadline: float) -> bytes:

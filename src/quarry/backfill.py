@@ -12,17 +12,17 @@ from quarry.artifacts import (
     extract_artifacts,
     format_artifacts_header,
 )
+from quarry.backfill_mapping import ProjectMapping, ProjectMappingResolver
 from quarry.config import Settings
 from quarry.db.facade import Database
-from quarry.ingestion.pipeline import ingest_content
+from quarry.ingestion.ingest_context import IngestContext, Progress
+from quarry.ingestion.web_ingest import InlineIngest, ingest_content
 from quarry.scrub import scrub_and_log
-from quarry.sync_registry import DirectoryRegistration, SyncRegistry
+from quarry.sync_registry import SyncRegistry
 from quarry.transcript import Transcript
 from quarry.transcript_reader import TranscriptReader
 
 logger = logging.getLogger(__name__)
-
-CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +33,20 @@ class BackfillConfig:
     collection_override: str | None = None
     project_filter: str | None = None
     limit: int | None = None
+
+
+# A shared immutable default: a bare name reference in the signature below,
+# never a call, so it carries no branch of its own (unlike `config or
+# BackfillConfig()`) and keeps backfill_sessions' cyclomatic complexity flat.
+_DEFAULT_BACKFILL_CONFIG = BackfillConfig()
+
+
+@dataclass(frozen=True, slots=True)
+class _Runtime:
+    """The database and settings shared by every project processed in a run."""
+
+    database: Database
+    settings: Settings
 
 
 @dataclass(frozen=True)
@@ -46,16 +60,6 @@ class BackfillStats:
     errors: list[str] = field(default_factory=list)
 
 
-@dataclass(frozen=True)
-class ProjectMapping:
-    """Maps an encoded Claude project directory to a quarry collection."""
-
-    encoded_dir: str
-    project_path: str
-    collection: str
-    captures_collection: str
-
-
 @dataclass
 class _Accumulator:
     """Mutable counters for the backfill loop."""
@@ -65,52 +69,6 @@ class _Accumulator:
     skipped_empty: int = 0
     processed: int = 0
     errors: list[str] = field(default_factory=list)
-
-
-def encode_project_path(project_path: str) -> str:
-    """Encode a project path the same way Claude Code does.
-
-    Replace ``/`` with ``-``.  The leading ``-`` is preserved — Claude
-    Code keeps it (e.g. ``/Users/jm`` → ``-Users-jm``).
-    """
-    return project_path.replace("/", "-")
-
-
-def build_project_mappings(
-    registrations: list[DirectoryRegistration],
-) -> list[ProjectMapping]:
-    """Build mappings from encoded Claude project dirs to quarry collections.
-
-    For each registration, encode its directory path and check whether a
-    matching subdirectory exists under ``~/.claude/projects/``. This avoids
-    the ambiguous reverse-decode problem (hyphens in directory names).
-    """
-    mappings: list[ProjectMapping] = []
-    if not CLAUDE_PROJECTS_DIR.is_dir():
-        return mappings
-
-    existing_dirs = {d.name for d in CLAUDE_PROJECTS_DIR.iterdir() if d.is_dir()}
-
-    for reg in registrations:
-        encoded = encode_project_path(reg.directory)
-        if encoded in existing_dirs:
-            mappings.append(
-                ProjectMapping(
-                    encoded_dir=encoded,
-                    project_path=reg.directory,
-                    collection=reg.collection,
-                    captures_collection=f"{reg.collection}-captures",
-                )
-            )
-    return mappings
-
-
-def list_transcript_files(encoded_dir: str) -> list[Path]:
-    """Return all JSONL transcript files for an encoded project directory."""
-    project_dir = CLAUDE_PROJECTS_DIR / encoded_dir
-    if not project_dir.is_dir():
-        return []
-    return sorted(project_dir.glob("*.jsonl"))
 
 
 def document_name_for_transcript(transcript_path: Path) -> str:
@@ -129,20 +87,6 @@ def is_already_ingested(
     either order — is skipped rather than re-ingested as a second document.
     """
     return f"session-{session_id_prefix}" in existing_doc_names
-
-
-def _get_existing_doc_names(database: Database, collection: str) -> set[str]:
-    """Return the set of document names in a collection."""
-    docs = database.catalog.list_documents(collection_filter=collection)
-    return {d["document_name"] for d in docs}
-
-
-def _count_unregistered_dirs(mapped_dirs: set[str]) -> int:
-    """Count Claude project directories that have no quarry registration."""
-    if not CLAUDE_PROJECTS_DIR.is_dir():
-        return 0
-    all_dirs = {d.name for d in CLAUDE_PROJECTS_DIR.iterdir() if d.is_dir()}
-    return len(all_dirs - mapped_dirs)
 
 
 def _write_backfill_capture_file(
@@ -183,11 +127,9 @@ class _ProjectProcessor:
     """
 
     _mapping: ProjectMapping
-    _database: Database
-    _settings: Settings
+    _runtime: _Runtime
     _acc: _Accumulator
-    _dry_run: bool
-    _limit: int
+    _config: BackfillConfig
     _collection: str
     _existing: set[str]
     _ingested: int
@@ -196,22 +138,16 @@ class _ProjectProcessor:
     def __new__(
         cls,
         mapping: ProjectMapping,
-        database: Database,
-        settings: Settings,
+        runtime: _Runtime,
         acc: _Accumulator,
-        *,
-        dry_run: bool,
-        collection_override: str,
-        limit: int,
+        config: BackfillConfig,
     ) -> Self:
         self = super().__new__(cls)
         self._mapping = mapping
-        self._database = database
-        self._settings = settings
+        self._runtime = runtime
         self._acc = acc
-        self._dry_run = dry_run
-        self._limit = limit
-        self._collection = collection_override or mapping.captures_collection
+        self._config = config
+        self._collection = config.collection_override or mapping.captures_collection
         self._existing = set()
         self._ingested = 0
         self._skipped = 0
@@ -219,12 +155,16 @@ class _ProjectProcessor:
 
     def process(self) -> None:
         """Ingest every transcript for this project, then log the tally."""
-        transcripts = list_transcript_files(self._mapping.encoded_dir)
+        transcripts = self._mapping.transcript_files()
         if not transcripts:
             return
-        self._existing = _get_existing_doc_names(self._database, self._collection)
+        docs = self._runtime.database.catalog.list_documents(
+            collection_filter=self._collection
+        )
+        self._existing = {d["document_name"] for d in docs}
+        limit = self._config.limit or 0
         for transcript in transcripts:
-            if self._limit > 0 and self._acc.processed >= self._limit:
+            if limit > 0 and self._acc.processed >= limit:
                 break
             self._handle(transcript)
         logger.info(
@@ -241,7 +181,7 @@ class _ProjectProcessor:
             self._skipped += 1
             self._acc.skipped_existing += 1
             return
-        if self._dry_run:
+        if self._config.dry_run:
             self._ingested += 1
             self._acc.ingested += 1
             self._acc.processed += 1
@@ -274,14 +214,19 @@ class _ProjectProcessor:
             # every scrubbed caller shares — backfill can never drift from it.
             # (The capture .md is scrubbed independently by CaptureWriter.)
             ingest_content(
-                body,
+                InlineIngest(
+                    body,
+                    format_hint="plain",
+                    content_scrubber=lambda t: scrub_and_log(t, "backfill"),
+                ),
                 doc_name,
-                self._database,
-                self._settings,
-                overwrite=True,
-                collection=self._collection,
-                format_hint="plain",
-                content_scrubber=lambda t: scrub_and_log(t, "backfill"),
+                Progress(None),
+                IngestContext(
+                    self._runtime.database,
+                    self._runtime.settings,
+                    overwrite=True,
+                    collection=self._collection,
+                ),
             )
         except Exception as exc:
             self._acc.errors.append(f"{transcript.name}: {exc}")
@@ -294,11 +239,7 @@ class _ProjectProcessor:
 
 def backfill_sessions(
     settings: Settings,
-    *,
-    dry_run: bool = False,
-    collection_override: str = "",
-    project_filter: str = "",
-    limit: int = 0,
+    config: BackfillConfig = _DEFAULT_BACKFILL_CONFIG,
 ) -> BackfillStats:
     """Scan Claude Code project transcripts and ingest into quarry."""
     conn = SyncRegistry(settings.registry_path)
@@ -307,28 +248,18 @@ def backfill_sessions(
     finally:
         conn.close()
 
-    all_mappings = build_project_mappings(registrations)
-    if project_filter:
-        mappings = [m for m in all_mappings if m.project_path == project_filter]
-    else:
-        mappings = all_mappings
-
-    database = Database.connect(settings.lancedb_path)
-    acc = _Accumulator()
-    skipped_unregistered = _count_unregistered_dirs(
-        {m.encoded_dir for m in all_mappings}
+    all_mappings = ProjectMappingResolver.resolve_all(registrations)
+    mappings = ProjectMappingResolver.filter_by_project(
+        all_mappings, config.project_filter
     )
 
+    runtime = _Runtime(Database.connect(settings.lancedb_path), settings)
+    acc = _Accumulator()
+    skipped_unregistered = ProjectMappingResolver.count_unmapped(all_mappings)
+
+    limit = config.limit or 0
     for mapping in mappings:
-        _ProjectProcessor(
-            mapping,
-            database,
-            settings,
-            acc,
-            dry_run=dry_run,
-            collection_override=collection_override,
-            limit=limit,
-        ).process()
+        _ProjectProcessor(mapping, runtime, acc, config).process()
         if limit > 0 and acc.processed >= limit:
             logger.info("backfill: reached limit of %d transcripts", limit)
             break

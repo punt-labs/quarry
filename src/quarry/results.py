@@ -159,6 +159,22 @@ class CollectionSummary(TypedDict):
     chunk_count: int
 
 
+class CoverageCounts(TypedDict):
+    """Per-repo counts split across a repo's ``<repo>`` and ``<repo>-captures``.
+
+    ``documents_indexed`` counts distinct non-memory documents in ``<repo>``;
+    ``memories_saved`` counts distinct memories (chunks with ``agent_handle`` or
+    ``memory_type`` set) in the same collection; ``transcripts_captured`` counts
+    distinct ``session-<id>`` compaction archives in ``<repo>-captures``. A URL
+    capture in ``<repo>-captures`` is neither — it's a background artifact and
+    is not surfaced in the SessionStart summary line.
+    """
+
+    documents_indexed: int
+    transcripts_captured: int
+    memories_saved: int
+
+
 class SitemapResult(TypedDict):
     """Result of sitemap crawl and bulk URL ingestion."""
 

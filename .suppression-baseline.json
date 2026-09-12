@@ -1,10 +1,10 @@
 {
-  "total": 197,
+  "total": 219,
   "by_category": {
-    "noqa": 161,
+    "noqa": 182,
     "type_ignore": 7,
     "pylint_disable": 0,
-    "pyright_ignore": 0,
+    "pyright_ignore": 1,
     "per_file_ignores": 29
   },
   "by_file": {
@@ -13,9 +13,15 @@
       "type_ignore": 1
     },
     "src/quarry/_hook_entry.py": {
-      "noqa": 4
+      "noqa": 8
+    },
+    "src/quarry/_hook_trace.py": {
+      "noqa": 3
     },
     "src/quarry/backfill.py": {
+      "noqa": 1
+    },
+    "src/quarry/capture_url.py": {
       "noqa": 1
     },
     "src/quarry/captures_collection.py": {
@@ -31,7 +37,7 @@
       "type_ignore": 1
     },
     "src/quarry/daemon/ingest_jobs.py": {
-      "noqa": 7
+      "noqa": 11
     },
     "src/quarry/daemon/routes/captures.py": {
       "noqa": 1
@@ -51,6 +57,9 @@
     "src/quarry/daemon/watch_reconcile.py": {
       "noqa": 2
     },
+    "src/quarry/daemon_capture.py": {
+      "noqa": 1
+    },
     "src/quarry/db/storage.py": {
       "noqa": 1,
       "type_ignore": 1
@@ -67,6 +76,9 @@
     "src/quarry/doctor_inference.py": {
       "noqa": 1
     },
+    "src/quarry/doctor_memory.py": {
+      "noqa": 2
+    },
     "src/quarry/doctor_sync.py": {
       "noqa": 6
     },
@@ -74,7 +86,7 @@
       "noqa": 3
     },
     "src/quarry/enable.py": {
-      "noqa": 7
+      "noqa": 8
     },
     "src/quarry/extractors/image_extractor.py": {
       "noqa": 1
@@ -90,10 +102,19 @@
       "noqa": 1
     },
     "src/quarry/hooks.py": {
-      "noqa": 13
+      "noqa": 9
+    },
+    "src/quarry/hooks_agent.py": {
+      "noqa": 2
     },
     "src/quarry/ingestion/backends.py": {
       "noqa": 3
+    },
+    "src/quarry/ingestion/bulk_ingest.py": {
+      "noqa": 2
+    },
+    "src/quarry/ingestion/chunk_store_funnel.py": {
+      "pyright_ignore": 1
     },
     "src/quarry/ingestion/image_prep.py": {
       "noqa": 2
@@ -104,13 +125,16 @@
     "src/quarry/ingestion/ocr_engine.py": {
       "noqa": 1
     },
-    "src/quarry/ingestion/pipeline.py": {
-      "noqa": 6
-    },
     "src/quarry/ingestion/provider.py": {
       "noqa": 2
     },
+    "src/quarry/ingestion/sitemap_ingest.py": {
+      "noqa": 4
+    },
     "src/quarry/ingestion/web_fetch.py": {
+      "noqa": 1
+    },
+    "src/quarry/lesson.py": {
       "noqa": 1
     },
     "src/quarry/mcp_server.py": {
@@ -131,6 +155,9 @@
     "src/quarry/remote.py": {
       "noqa": 2
     },
+    "src/quarry/session_transcript.py": {
+      "noqa": 4
+    },
     "src/quarry/shadow/_git.py": {
       "noqa": 1
     },
@@ -149,7 +176,10 @@
     },
     "src/quarry/sync_ingest.py": {
       "noqa": 1
+    },
+    "src/quarry/web_fetch_loop_closer.py": {
+      "noqa": 2
     }
   },
-  "updated_at": "2026-08-22T11:22:16Z"
+  "updated_at": "2026-09-11T05:07:14Z"
 }

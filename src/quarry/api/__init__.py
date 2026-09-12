@@ -13,7 +13,11 @@ present, so a pure client never pulls in lancedb/onnxruntime.
 from __future__ import annotations
 
 from quarry.api.capture_ingest import CaptureIngestRequest
-from quarry.api.captures import CapturesPushResponse
+from quarry.api.captures import (
+    CapturesLookupRequest,
+    CapturesLookupResponse,
+    CapturesPushResponse,
+)
 from quarry.api.collections import (
     CollectionInfo,
     CollectionList,
@@ -23,9 +27,9 @@ from quarry.api.databases import DatabaseInfo, DatabaseList
 from quarry.api.deregister import DeregisterAccepted, DeregisterRequest
 from quarry.api.documents import DeleteDocumentRequest, DocumentInfo, DocumentList
 from quarry.api.errors import ErrorBody
-from quarry.api.ingestion import IngestRequest, RememberRequest
+from quarry.api.ingestion import IngestRequest, LearnRequest, RememberRequest
 from quarry.api.maintenance import BackfillRequest, OptimizeRequest
-from quarry.api.meta import HealthResponse, StatusResponse
+from quarry.api.meta import CoverageResponse, HealthResponse, StatusResponse
 from quarry.api.registrations import (
     RegisterRequest,
     RegistrationInfo,
@@ -44,9 +48,12 @@ __all__ = [
     "API_VERSION",
     "BackfillRequest",
     "CaptureIngestRequest",
+    "CapturesLookupRequest",
+    "CapturesLookupResponse",
     "CapturesPushResponse",
     "CollectionInfo",
     "CollectionList",
+    "CoverageResponse",
     "DatabaseInfo",
     "DatabaseList",
     "DeleteCollectionRequest",
@@ -58,6 +65,7 @@ __all__ = [
     "ErrorBody",
     "HealthResponse",
     "IngestRequest",
+    "LearnRequest",
     "OptimizeRequest",
     "RegisterRequest",
     "RegistrationInfo",

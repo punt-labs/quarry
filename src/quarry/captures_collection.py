@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from itertools import chain
-from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
+
+from quarry.collection_routing import CollectionRouting
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+    from pathlib import Path
 
 
 @final
@@ -65,7 +66,7 @@ class CapturesCollection:
         ``<repo>-captures``; an unregistered tree falls back to
         ``default-captures``.
         """
-        return cls.resolve(cls._covering_collection(cwd, registrations))
+        return cls.resolve(CollectionRouting.covering_collection(cwd, registrations))
 
     @classmethod
     def for_registry_path(cls, cwd: str, registry_path: Path) -> Self:
@@ -86,25 +87,3 @@ class CapturesCollection:
         finally:
             conn.close()
         return cls.for_cwd(cwd, registrations)
-
-    @staticmethod
-    def _covering_collection(cwd: str, registrations: Mapping[str, str]) -> str | None:
-        """Return the base collection of the registered ancestor of *cwd*."""
-        # A blank or RELATIVE cwd is "unregistered", not the daemon's own dir:
-        # both resolve against the daemon PROCESS's cwd, which — if quarryd was
-        # started inside a repo checkout — would misfile the capture into that
-        # project.  cwd is untrusted client input; only an absolute path names a
-        # real client directory.
-        if not registrations or not Path(cwd).is_absolute():
-            return None
-        try:
-            current = Path(cwd).resolve()
-        except (OSError, ValueError):
-            # An embedded NUL or OS-invalid path falls back to default-captures.
-            return None
-        # Iterate ancestors lazily; never materialize the full parent list —
-        # untrusted deep cwd (``/a/a/.../a``) would retain O(depth²) prefixes.
-        for path in chain((current,), current.parents):
-            if (collection := registrations.get(str(path))) is not None:
-                return collection
-        return None

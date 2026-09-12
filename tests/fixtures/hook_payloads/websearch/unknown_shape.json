@@ -1,0 +1,19 @@
+{
+  "hook_event_name": "PostToolUse",
+  "tool_name": "WebSearch",
+  "cwd": "/tmp/quarry-hook-fixture-cwd",
+  "session_id": "regression-quarry-871u-unknown-shape",
+  "tool_input": {
+    "query": "web search unknown response shape"
+  },
+  "tool_response": {
+    "diagnostics": {
+      "elapsed_ms": 812,
+      "provider": "unknown"
+    },
+    "hits_by_source": [
+      {"source": "a", "count": 3},
+      {"source": "b", "count": 0}
+    ]
+  }
+}

@@ -1,7 +1,11 @@
 ---
 name: researcher
 description: "Deep research agent that combines quarry local knowledge with web search. Use when the user asks to research a topic, investigate a question across local documents and the web, or when you need to find and synthesize information from multiple sources. Searches quarry first (local, fast, curated), then web for gaps. Auto-ingests valuable web findings so research compounds across sessions."
-tools: Read, Glob, Grep, WebSearch, WebFetch
+disallowedTools:
+  - Write
+  - Edit
+  - NotebookEdit
+  - Bash
 model: sonnet
 color: green
 ---

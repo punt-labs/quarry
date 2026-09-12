@@ -2,9 +2,8 @@
   "ignores": [
     ".beads/",
     ".claude/",
-    // The ethos registry submodule is gone, but markdownlint globs the
-    // filesystem rather than the index — a checkout predating the removal
-    // still has the directory on disk, and its 246 files are not ours to lint.
+    // The vendored ethos registry (DES-054) is copied verbatim from
+    // punt-labs/team — upstream's markdown is not ours to lint.
     ".punt-labs/ethos/",
     ".punt-labs/quarry/captures/",
     ".venv/",

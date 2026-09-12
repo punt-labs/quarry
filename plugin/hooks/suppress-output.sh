@@ -10,9 +10,12 @@
 # We must parse it twice: once to extract the string, once to
 # read the .result field inside it.
 #
-# Supports both prod (mcp__plugin_quarry_quarry__*) and dev
-# (mcp__plugin_quarry-dev_quarry__*) tool prefixes by extracting the
-# bare tool name via ${TOOL##*__}.
+# Supports all four namespace variants — native prod
+# (mcp__quarry__*), native dev (mcp__quarry-dev__*), and the legacy
+# proxy prefixes (mcp__plugin_quarry_quarry__*,
+# mcp__plugin_quarry-dev_quarry__*) — by extracting the bare tool
+# name via ${TOOL##*__}. The PostToolUse matcher in hooks.json
+# admits all four; see lint-hook-mcp-matcher.
 #
 # Note: no `set -euo pipefail` — hooks must degrade gracefully on
 # malformed input rather than failing the tool call. Matches biff's
@@ -62,15 +65,12 @@ if [[ "$TOOL_NAME" == "list" ]]; then
       }
     }'
   else
-    COUNT=$(printf '%s\n' "$RESULT" | tail -n +2 | wc -l | tr -d ' ')
-    # Detect kind from unique column names in header
-    LABEL="items"
-    if [[ "$FIRST_LINE" == *"REGISTERED"* ]]; then LABEL="registrations"
-    elif [[ "$FIRST_LINE" == *"DATABASE"* ]]; then LABEL="databases"
-    elif [[ "$FIRST_LINE" == *"PAGES"* ]]; then LABEL="documents"
-    elif [[ "$FIRST_LINE" == *"COLLECTION"* ]]; then LABEL="collections"
-    fi
-    jq -n --arg summary "${COUNT} ${LABEL}" --arg ctx "$RESULT" '{
+    # The formatter's first line is an authoritative "▶  N <noun>" summary;
+    # strip the leading marker so the panel shows plain "N <noun>". Deriving
+    # the count from wc -l here would over-count wrapped rows (a variable
+    # column that overflows produces continuation lines).
+    SUMMARY="${FIRST_LINE#▶  }"
+    jq -n --arg summary "$SUMMARY" --arg ctx "$RESULT" '{
       hookSpecificOutput: {
         hookEventName: "PostToolUse",
         updatedMCPToolOutput: $summary,

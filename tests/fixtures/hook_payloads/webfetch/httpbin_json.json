@@ -1,0 +1,11 @@
+{
+  "hook_event_name": "PostToolUse",
+  "tool_name": "WebFetch",
+  "cwd": "/tmp/quarry-hook-fixture-cwd",
+  "session_id": "regression-quarry-jzqw-httpbin-json",
+  "tool_input": {
+    "url": "https://httpbin.test/anything",
+    "prompt": "capture the JSON payload"
+  },
+  "tool_response": ""
+}

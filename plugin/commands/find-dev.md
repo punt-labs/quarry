@@ -12,7 +12,7 @@ Use the full arguments text as the search query.
 
 ## Task
 
-Call `mcp__plugin_quarry-dev_quarry__find` with `query` set to the arguments.
+Call `mcp__quarry-dev__find` with `query` set to the arguments.
 
 If the result says "No results", say so briefly.
 

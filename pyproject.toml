@@ -1,6 +1,6 @@
 [project]
 name = "punt-quarry"
-version = "3.0.3"
+version = "3.2.1"
 description = "Extract searchable knowledge from any document. Expose it to LLMs via MCP."
 readme = "README.md"
 requires-python = ">=3.13"
@@ -60,7 +60,28 @@ dependencies = [
     "pyyaml>=6.0.0",
     "cryptography>=46.0.0",
     "httpx>=0.27.0",
-    "watchdog>=4.0",
+    # Floor and cap both verified (Copilot, PR #503 round 3): this repo
+    # subclasses watchdog's PRIVATE internals (Inotify._add_dir_watch/
+    # _add_watch, InotifyBuffer.__init__, InotifyEmitter.on_thread_start --
+    # see quarry/daemon/inotify_prune.py, inotify_prune_chain.py), and that
+    # subclassed surface was verified only against the installed 6.0.0 (the
+    # CI pin test, test_pins_the_watchdog_internals_this_module_subclasses,
+    # never ran against an older release). The floor was previously >=4.0,
+    # which was ALSO wrong independent of a naming issue Copilot separately
+    # caught: fs_watchdog.py imports UnsupportedLibcError unconditionally,
+    # but that class is named UnsupportedLibc (no "Error" suffix) through
+    # watchdog 4.0.2, the last 4.x release -- confirmed by downloading and
+    # inspecting watchdog/utils/__init__.py at 4.0.2 ("class
+    # UnsupportedLibc(Exception)") versus 5.0.0 ("class
+    # UnsupportedLibcError(Exception)"), so 4.x/5.x resolving under the old
+    # floor would have crashed at import time. 6.0.0 is both the version
+    # with the correct name AND the only version this module's private
+    # internals dependency is verified against, so the floor and the cap
+    # meet at the single release actually tested: 6.0.0 is currently
+    # watchdog's latest release, so this pin resolves to exactly what CI
+    # runs. A future watchdog release bumping either bound is a deliberate,
+    # re-verified dependency update, not an automatic one.
+    "watchdog>=6.0,<7",
 ]
 
 [project.optional-dependencies]
@@ -276,7 +297,7 @@ reportMissingParameterType = false
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-addopts = "-ra -q -m 'not slow and not embedding'"
+addopts = "-ra -q -m 'not slow and not embedding and not hook_integration'"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 timeout = 30
@@ -286,6 +307,7 @@ markers = [
     "integration: real-socket/live-server tests, also slow so excluded from the fast CI suite and run via -m integration",
     "embedding: opts back in to the real ONNX model (410 MB); deselected by default alongside slow, run via -m embedding",
     "network: opts back in to real DNS resolution; the default suite resolves from a fake so it does not depend on the network",
+    "hook_integration: spawns a real quarry-hook and/or quarryd subprocess; deselected by default, run via -m hook_integration",
 ]
 
 [tool.coverage.run]

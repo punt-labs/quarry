@@ -1,0 +1,10 @@
+{
+  "hook_event_name": "PostToolUse",
+  "tool_name": "WebSearch",
+  "cwd": "/tmp/quarry-hook-fixture-cwd",
+  "session_id": "regression-quarry-871u-pre-2026-05",
+  "tool_input": {
+    "query": "reciprocal rank fusion tuning"
+  },
+  "tool_response": "[{\"title\": \"Reciprocal Rank Fusion Explained\", \"url\": \"https://example.test/rrf-explained\", \"snippet\": \"RRF combines multiple rankings by summing 1/(k + rank) across sources.\"}, {\"title\": \"Tuning k in RRF\", \"url\": \"https://example.test/rrf-tuning\", \"snippet\": \"Larger k flattens the score curve and reduces the weight of the top result.\"}]"
+}
