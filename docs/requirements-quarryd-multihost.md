@@ -96,26 +96,36 @@ and the opencode design mission cites both documents as governing.
 
 ## 3. M2 — opencode adapter: session lifecycle
 
-Quarry's Claude Code hook layer, re-homed. Today: SessionStart
-auto-indexes the working directory, PreCompact captures the session
-transcript before compaction, and WebFetch results are auto-ingested.
-All three are `quarry-hook` invocations — already pure clients under
+Quarry's Claude Code hook layer, re-homed. Today the plugin's hooks
+auto-index the working directory at session start, capture the session
+transcript at compaction, session end, and subagent stop, auto-ingest
+WebFetch results, capture WebSearch digests, and (opt-in) capture Read
+results. All are `quarry-hook` invocations — already pure clients under
 DES-031 v2 (R6).
 
 ### Requirements
 
 - **R-L.1** The adapter MUST deliver the same semantic lifecycle
-  behaviors, mapped to opencode events:
+  behaviors — the full current capture/index surface, not a subset —
+  mapped to opencode events. The Claude Code column is the authoritative
+  set (`plugin/hooks/`); the opencode column is a **candidate** mapping
+  until SP-Q.2 confirms each event against opencode source:
 
-  | Semantic behavior | Claude Code today | opencode source |
-  |-------------------|-------------------|-----------------|
-  | working-directory auto-index | SessionStart hook | `session.created` |
-  | pre-compaction transcript capture | PreCompact hook | `session.compacted` |
-  | web-fetch auto-ingest | PostToolUse hook | `tool.execute.after` |
+  | Semantic behavior | Claude Code today | opencode source (candidate) |
+  |-------------------|-------------------|-----------------------------|
+  | working-directory auto-index | `session-start.sh` | `session.created` |
+  | transcript capture at compaction | `pre-compact.sh` | `session.compacted` |
+  | transcript capture at session end | `session-end.sh` | SP-Q.2 maps |
+  | transcript capture at subagent stop | `subagent-stop.sh` | SP-Q.2 maps |
+  | web-fetch auto-ingest | `web-fetch.sh` | `tool.execute.after` |
+  | web-search digest capture | `web-search.sh` | `tool.execute.after` |
+  | Read capture (opt-in) | `post-read.sh` | `tool.execute.after` |
 
-  The exact event mapping is design-confirmed against opencode source
-  (SP-Q.2), but the semantic set is fixed: no capture or indexing
-  behavior a Claude Code user gets goes missing on opencode.
+  The candidate mappings above are NOT design-confirmed: SP-Q.2 (§8)
+  gates them, and any event that fails to expose the needed content is
+  replaced there, never silently dropped. The semantic set, however, is
+  fixed: no capture or indexing behavior a Claude Code user gets goes
+  missing on opencode.
 - **R-L.2** Capture timing MUST be verified, not assumed: whether
   `session.compacted` fires before or after the transcript is
   rewritten determines whether capture-at-compaction is even the
