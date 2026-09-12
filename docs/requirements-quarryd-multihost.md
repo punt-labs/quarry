@@ -279,10 +279,16 @@ everywhere.
 - **SP-Q.1** SDK transcript access from a plugin (shared with vox
   SP-V.1 / biff SP-2): API, measured token usage, visibility,
   behavior across compaction. Gates R-L.2 and M6.
-- **SP-Q.2** Event semantics: does `session.compacted` fire with
-  pre-compaction content still reachable? Which tool name does
-  opencode's web-fetch surface expose to `tool.execute.after`? Gates
-  R-L.1/R-L.2/R-L.3.
+- **SP-Q.2** Event semantics — MUST confirm or replace EVERY R-L.1
+  candidate mapping, not just compaction: (a) does `session.compacted`
+  fire with pre-compaction content still reachable? (b) which tool
+  names do opencode's web-fetch AND web-search surfaces expose to
+  `tool.execute.after`, and is a Read event available for the opt-in
+  capture? (c) do `session.created`, and opencode's session-end and
+  subagent-stop equivalents, exist and carry the payloads their
+  captures need — and if any event is absent or underpowered, name the
+  replacement. No R-L.1 row may be implemented against an event this
+  spike has not confirmed. Gates R-L.1/R-L.2/R-L.3.
 - **SP-Q.3** Plugin lifecycle (shared with biff SP-4 / vox SP-V.3):
   process model, restart behavior, sessions-per-plugin-instance —
   decides where the `QuarryClient` connection lives.
