@@ -148,8 +148,8 @@ operator-confirmed.
 
 - **R-T.1** The full quarry MCP tool surface MUST be available as
   native opencode tools with argument and output parity: `find`,
-  `show`, `ingest`, `remember`, `use`, `status`, `list`, `delete`,
-  `register_directory`, `deregister_directory`,
+  `show`, `ingest`, `remember`, `learn`, `use`, `status`, `list`,
+  `delete`, `register_directory`, `deregister_directory`,
   `sync_all_registrations`. Tools MUST be thin `QuarryClient` clients
   (R-C.1); any logic beyond validate-call-render is a contract
   violation.
@@ -158,8 +158,8 @@ operator-confirmed.
   rendering makes a convention impossible, the deviation is
   documented in the deposited agent guide, not silently improvised.
 - **R-T.3** Slash-command equivalents (`/find`, `/ingest`,
-  `/remember`, `/explain`, `/source`, `/quarry`, `/use`) MUST ship in
-  opencode's command format, routing to the native tools.
+  `/remember`, `/learn`, `/explain`, `/source`, `/quarry`, `/use`)
+  MUST ship in opencode's command format, routing to the native tools.
 - **R-T.4** The `researcher` agent MUST ship in opencode's agent
   format (`mode: subagent`) with capability parity: quarry-first
   search, web research for gaps, auto-ingest of valuable findings.
