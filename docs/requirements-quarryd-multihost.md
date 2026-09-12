@@ -12,9 +12,11 @@ second harness as a first-class integration, and enhance each product
 where opencode's architecture permits things Claude Code does not.
 **Relationship to DESIGN.md:** This document states *what* the work
 must achieve. Design missions produce the *how* as DES entries. Where
-this document names a mechanism (`session.compacted`, the SDK client),
-that mechanism is a verified host capability — a constraint, not a
-design choice left open.
+this document names a candidate opencode mechanism (`session.compacted`,
+the SDK client), it is a *hypothesis gated by the named spike*
+(SP-Q.1/SP-Q.2), not a verified constraint: the spike confirms or
+replaces it before any design mission relies on it. The fixed
+requirement is the semantic behavior, never the specific event.
 
 Same engineering bar as the sibling programs. Nothing here is a pilot
 or a shortcut: every module goes through the full lifecycle (design
@@ -113,7 +115,7 @@ DES-031 v2 (R6).
 
   | Semantic behavior | Claude Code today | opencode source (candidate) |
   |-------------------|-------------------|-----------------------------|
-  | working-directory auto-index | `session-start.sh` | `session.created` |
+  | working-directory auto-index | `session-sync.sh` | `session.created` |
   | transcript capture at compaction | `pre-compact.sh` | `session.compacted` |
   | transcript capture at session end | `session-end.sh` | SP-Q.2 maps |
   | transcript capture at subagent stop | `subagent-stop.sh` | SP-Q.2 maps |
@@ -144,11 +146,13 @@ DES-031 v2 (R6).
 
 ### Acceptance
 
-M2 is done when a live opencode session demonstrably indexes its
-working directory at start, captures its transcript around
-compaction with content parity to Claude Code, and auto-ingests a
-fetched URL — verified through the real entry points and
-operator-confirmed.
+M2 is done when a live opencode session demonstrably exercises EVERY
+R-L.1 row end-to-end — working-directory index at start; transcript
+capture at compaction, session end, and subagent stop, each with
+content parity to Claude Code; web-fetch auto-ingest; web-search
+digest capture; and Read capture when its opt-in is enabled — verified
+through the real entry points and operator-confirmed. A row silently
+dropped is a failed acceptance, not a deferral.
 
 ---
 
