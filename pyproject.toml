@@ -32,7 +32,7 @@ dependencies = [
     "fastapi>=0.133.0,<1.0.0",
     "typer>=0.15.0",
     "rich>=13.0.0",
-    "mcp>=1.0.0,<2.0.0",
+    "mcp>=1.0.0,<3.0.0",
     # 1.3.1 is the first release patched against all five advisories open here:
     # the request.form() DoS and StaticFiles UNC SSRF (high), the Host-header and
     # HTTPEndpoint getattr issues (medium), and request.url.hostname poisoning.
