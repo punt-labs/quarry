@@ -23,8 +23,11 @@ across `transform`, `index`, and `connector`).
   `observation` in `memory-<worker>` via `POST /v1/remember`, named
   `mission-<repo>-<id>-r<n>`. Idempotent: a round the daemon already holds is
   skipped, a name held by another checkout's round is an error and never
-  overwritten (`--force` re-files a matching key only), parse failures are
-  collected and exit 1, `--dry-run` posts nothing. New modules
+  overwritten (`--force` re-files a matching key only), `--dry-run` posts
+  nothing. Errors never pass silently: a parse failure, a daemon failure on
+  any one round (a 503, an unreachable daemon), and a `--mission` id that
+  names no mission are each one error line and exit 1, and the run continues
+  past every one so the rounds already filed are never lost. New modules
   `mission_records`, `mission_round_parts`, `mission_store`,
   `mission_sync_types`, `mission_memory`, `cli_missions`, `mcp_missions`.
   (quarry-fbj9)
@@ -35,10 +38,11 @@ across `transform`, `index`, and `connector`).
   global ethos identity; a bare `Agent()` reviewer (`general-purpose`) is
   filed unattributed, never under the repo pin's leader. Both rows go through
   the daemon's scrub-before-store route with the hook's 5 s cap; no engine
-  runs in the hook (DES-041). New modules `subagent_report`,
-  `subagent_capture`; `EthosConfig.subagent_handle_at`;
-  `DaemonCaptureSender.send_remember`; `QuarryClient.remember(timeout=)`.
-  (quarry-fbj9)
+  runs in the hook (DES-041), and the transcript is parsed once for both
+  rows. New modules `subagent_report`, `subagent_capture`, `transcript_turns`
+  (one record's text, split out of `transcript_reader`);
+  `EthosConfig.subagent_handle_at`; `DaemonCaptureSender.send_remember`;
+  `QuarryClient.remember(timeout=)`. (quarry-fbj9)
 - tool: a versioned memory guide, `## Memory (quarry guide v2)`, in every
   ethos identity's `session_context` — the five moments to `remember`, what
   never to store, and why the handle is the agent's own. `quarry enable`
