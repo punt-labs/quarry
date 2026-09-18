@@ -13,7 +13,7 @@ from quarry.mission_records import MissionContract, MissionRound
 from quarry.mission_round_parts import EvaluatorReflection, WorkerResult
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping
+    from collections.abc import Iterable, Mapping
     from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -77,23 +77,32 @@ class MissionStore:
         return cls(missions_dir, default_repo=missions_dir.parents[2])
 
     def scan(self, mission_id: str = "") -> MissionScan:
-        """Parse every mission directory (or just *mission_id*), collecting errors."""
+        """Parse every mission directory (or just *mission_id*), collecting errors.
+
+        A *mission_id* that names no directory is one error, not an empty
+        scan: the caller asked for something specific and must hear that it
+        is not there, so the CLI exits 1 rather than reporting "filed 0".
+        """
+        if not mission_id:
+            return self._scan(
+                sorted(p for p in self._missions_dir.iterdir() if p.is_dir())
+            )
+        target = self._missions_dir / mission_id
+        if not target.is_dir():
+            msg = f"mission {mission_id} not found under {self._missions_dir}"
+            return MissionScan(missions=(), errors=(msg,))
+        return self._scan((target,))
+
+    def _scan(self, mission_dirs: Iterable[Path]) -> MissionScan:
+        """Load each directory; one that fails to parse is one error line."""
         missions: list[MissionRecord] = []
         errors: list[str] = []
-        for mission_dir in self._mission_dirs(mission_id):
+        for mission_dir in mission_dirs:
             try:
                 missions.append(self._load(mission_dir))
             except (OSError, yaml.YAMLError, ValueError) as exc:
                 errors.append(f"{mission_dir}: {exc}")
         return MissionScan(missions=tuple(missions), errors=tuple(errors))
-
-    def _mission_dirs(self, mission_id: str) -> Iterator[Path]:
-        if mission_id:
-            candidate = self._missions_dir / mission_id
-            if candidate.is_dir():
-                yield candidate
-            return
-        yield from sorted(p for p in self._missions_dir.iterdir() if p.is_dir())
 
     def _load(self, mission_dir: Path) -> MissionRecord:
         contract_data = self._read(mission_dir / "contract.yaml")

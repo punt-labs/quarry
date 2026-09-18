@@ -153,11 +153,19 @@ class MissionMemorySync:
 
         The one entry both the CLI verb and the MCP tool call, so the two
         surfaces cannot build different request sequences from the same files.
+        A repo with no missions tree is an empty sync — unless one mission was
+        asked for by id, which then cannot be found and must say so.
         """
         store = MissionStore.for_repo(cwd)
-        if store is None:
-            return MissionSyncOutcome((), (), (), dry_run=options.dry_run)
-        return cls(client, options).run(store.scan(options.mission_id))
+        if store is not None:
+            return cls(client, options).run(store.scan(options.mission_id))
+        tally = SyncTally()
+        if options.mission_id:
+            tally.error(
+                f"mission {options.mission_id} not found: "
+                f"no .punt-labs/ethos/missions/ above {cwd}"
+            )
+        return tally.outcome(dry_run=options.dry_run)
 
     @staticmethod
     def requests(scan: MissionScan) -> list[tuple[str, RememberRequest]]:

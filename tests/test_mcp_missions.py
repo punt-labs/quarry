@@ -57,6 +57,18 @@ class TestBoundary:
 
 
 class TestOptions:
+    def test_unknown_mission_id_is_reported(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The MCP string says the mission is missing, same as the CLI."""
+        monkeypatch.chdir(repo_with_missions(tmp_path / "quarry"))
+        client = MagicMock(spec=QuarryClient)
+        text = MissionTools(connect=lambda: client).missions_sync(
+            mission="no-such-mission", dry_run=True
+        )
+        assert "errors 1" in text
+        assert "error: mission no-such-mission not found under" in text
+
     def test_options_reach_the_sync(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -358,6 +358,22 @@ class TestRun:
         assert outcome.filed == ()
         assert outcome.errors == ()
 
+    def test_for_repo_without_a_tree_but_a_mission_id_is_an_error(
+        self, tmp_path: Path
+    ) -> None:
+        """Asking for one mission where there is no tree at all is not 'filed 0'."""
+        bare = tmp_path / "bare"
+        bare.mkdir()
+        (bare / ".git").mkdir()
+        outcome = MissionMemorySync.for_repo(
+            bare, FakeDaemon().client(), SyncOptions(mission_id="m-9999-99-99-999")
+        )
+        assert outcome.filed == ()
+        assert outcome.errors == (
+            f"mission m-9999-99-99-999 not found: "
+            f"no .punt-labs/ethos/missions/ above {bare}",
+        )
+
 
 class TestIdentityCheckRoundTrip:
     """The stored first line survives the daemon's chunking and scrubbing."""

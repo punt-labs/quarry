@@ -68,6 +68,16 @@ class TestSync:
         assert result.exit_code == 1
         assert "error: m-2: contract.yaml is not a mapping" in result.output
 
+    def test_unknown_mission_id_exits_one(self, in_repo: Path) -> None:
+        """End to end through the real store: a missing --mission is not 'filed 0'."""
+        with patch("quarry.__main__.TargetResolver.connect"):
+            result = runner.invoke(
+                app, ["missions", "sync", "--mission", "no-such-mission", "--dry-run"]
+            )
+        assert result.exit_code == 1
+        assert "would file 0, skipped 0, errors 1" in result.output
+        assert "error: mission no-such-mission not found under" in result.output
+
     def test_options_reach_the_sync(self, in_repo: Path) -> None:
         with (
             patch(

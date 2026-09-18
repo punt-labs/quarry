@@ -84,10 +84,14 @@ class TestScan:
         scan = _store(repo).scan(mission_id=CLOSED_MISSION)
         assert [m.contract.mission_id for m in scan.missions] == [CLOSED_MISSION]
 
-    def test_unknown_mission_filter_scans_nothing(self, repo: Path) -> None:
+    def test_unknown_mission_filter_is_one_error(self, repo: Path) -> None:
+        """Asking for a mission that is not there must not read as 'filed 0'."""
         scan = _store(repo).scan(mission_id="m-9999-99-99-999")
         assert scan.missions == ()
-        assert scan.errors == ()
+        missions_dir = repo / ".punt-labs" / "ethos" / "missions"
+        assert scan.errors == (
+            f"mission m-9999-99-99-999 not found under {missions_dir}",
+        )
 
     def test_absent_round_files_read_as_no_rounds(self, repo: Path) -> None:
         missions_dir = repo / ".punt-labs" / "ethos" / "missions"
