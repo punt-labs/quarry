@@ -1599,17 +1599,17 @@
     "public_attr_violations": 0.0
   },
   "src/quarry/ethos_handle.py": {
-    "avg_complexity": 4.0,
-    "avg_params": 1.0,
-    "class_to_func_ratio": 1.0,
-    "classes_per_module": 1.0,
-    "encapsulation_ratio": 1.0,
-    "future_annotations": 1.0,
-    "init_violations": 0.0,
-    "max_complexity": 6.0,
     "method_ratio": 1.0,
-    "module_size": 60.0,
-    "public_attr_violations": 0.0
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.0,
+    "max_complexity": 3.0,
+    "avg_complexity": 3.0,
+    "module_size": 47.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/quarry/ethos_memory.py": {
     "avg_complexity": 2.4,
@@ -2416,6 +2416,19 @@
     "method_ratio": 0.905,
     "module_size": 481.0,
     "public_attr_violations": 0.0
+  },
+  "src/quarry/memory_types.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.5,
+    "max_complexity": 4.0,
+    "avg_complexity": 2.0,
+    "module_size": 62.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/quarry/models.py": {
     "avg_complexity": 1.0,

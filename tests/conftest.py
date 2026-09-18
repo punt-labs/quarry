@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import subprocess
 import tempfile
 from collections.abc import Generator, Iterable, Iterator
@@ -53,6 +54,26 @@ def _pytest_tmp_base() -> Path:
     if ScratchGuard().refuses_root(candidate):
         return Path.home() / ".cache" / "quarry-pytest"
     return candidate
+
+
+@pytest.fixture()
+def unpinned_root() -> Generator[Path]:
+    """Yield a repository root with no ethos sidecar in ANY ancestor directory.
+
+    ``tmp_path`` lives under this repo's ``.pytest-work``, so an ancestor walk
+    from it reaches the repo's own ``.punt-labs/ethos.yaml`` and vendored
+    identities — a test asserting "no ethos here" would read the leader's pin.
+    The redirected session HOME has no ``.punt-labs`` above it, so trees that
+    must resolve as unpinned are built beneath it and removed afterwards. The
+    root carries a ``.git`` marker: :class:`~quarry.ethos_tree.EthosTree`
+    bounds its vendored-tree search at the enclosing repository, and the
+    operator's real home (an ancestor of the redirected one) holds the global
+    tree the search must not reach.
+    """
+    root = Path(tempfile.mkdtemp(prefix="unpinned-", dir=Path.home()))
+    (root / ".git").mkdir()
+    yield root
+    shutil.rmtree(root, ignore_errors=True)
 
 
 def pytest_configure(config: pytest.Config) -> None:

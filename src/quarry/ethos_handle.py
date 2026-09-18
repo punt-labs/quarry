@@ -1,9 +1,10 @@
-"""Resolve the agent handle from the ethos sidecar config at a given directory.
+"""Resolve the agent handle from the ethos repo pin at a given directory.
 
-Sole caller today: the ``memory`` doctor check asks whether the current repo
-has an ethos identity active. ``hooks.py`` still carries its own inline walker
-that a follow-up unit migrates onto this helper; keeping the walker in one
-place from the start prevents drift once the write path lands here.
+The pin names the identity a *session* runs as — the leader of the repo it is
+opened in. Every producer that runs for the parent session (PreCompact,
+SessionEnd, the memory doctor check) resolves through here; a producer that
+runs for a subagent must not, because a subagent's working directory is the
+repo and the pin would name the leader.
 """
 
 from __future__ import annotations
@@ -14,42 +15,30 @@ from typing import final
 
 import yaml
 
-logger = logging.getLogger(__name__)
+from quarry.ethos_tree import EthosTree
 
-_ETHOS_CONFIG = Path(".punt-labs") / "ethos" / "config.yaml"
+logger = logging.getLogger(__name__)
 
 
 @final
 class EthosConfig:
-    """Ancestor-walking reader of the ``.punt-labs/ethos/config.yaml`` sidecar."""
+    """Ancestor-walking reader of the ethos repo pin's ``agent`` field."""
 
     __slots__ = ()
 
     @staticmethod
     def agent_handle_at(cwd: str) -> str:
-        """Return the nearest ancestor config's ``agent`` field, else ``""``.
+        """Return the nearest ancestor pin's ``agent`` field, else ``""``.
 
         Empty string is the documented "no identity here" signal — callers use
         it as a gate, not as a value. Missing file, unparsable YAML, missing/
         blank/non-string ``agent``, and OS errors on read all funnel to ``""``.
         """
-        for config_path in EthosConfig._walk_up(Path(cwd).resolve()):
-            handle = EthosConfig._read_handle(config_path)
+        for pin in EthosTree(cwd).pin_files():
+            handle = EthosConfig._read_handle(pin)
             if handle is not None:
                 return handle
         return ""
-
-    @staticmethod
-    def _walk_up(start: Path) -> list[Path]:
-        """Return every candidate config path from *start* to the FS root."""
-        paths: list[Path] = []
-        current = start
-        while True:
-            paths.append(current / _ETHOS_CONFIG)
-            parent = current.parent
-            if parent == current:
-                return paths
-            current = parent
 
     @staticmethod
     def _read_handle(config_path: Path) -> str | None:
@@ -67,8 +56,5 @@ class EthosConfig:
                 "ethos_handle: could not parse %s", config_path, exc_info=True
             )
             return ""
-        if isinstance(data, dict):
-            agent = data.get("agent", "")
-            if isinstance(agent, str) and agent:
-                return agent
-        return ""
+        agent = data.get("agent", "") if isinstance(data, dict) else ""
+        return agent if isinstance(agent, str) else ""
