@@ -41,6 +41,22 @@ class EthosConfig:
         return ""
 
     @staticmethod
+    def subagent_handle_at(agent_type: str, cwd: str) -> str:
+        """Return the identity a subagent's capture is attributed to, else ``""``.
+
+        ``agent_type`` is the hook's statement of who ran and is used **iff**
+        it names a registered identity (a ``<handle>.yaml`` in the vendored or
+        global tree); a bare ``Agent()`` reviewer such as ``general-purpose``
+        is filed unattributed rather than under a handle no ``find`` will ask
+        for — or under the leader, whose memory it is not. An absent
+        ``agent_type`` falls back to the repo pin, as every parent-session
+        producer does.
+        """
+        if not agent_type:
+            return EthosConfig.agent_handle_at(cwd)
+        return agent_type if EthosTree(cwd).identity_exists(agent_type) else ""
+
+    @staticmethod
     def _read_handle(config_path: Path) -> str | None:
         """Return the handle at *config_path*, or ``None`` when the file is absent.
 

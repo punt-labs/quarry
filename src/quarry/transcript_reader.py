@@ -8,9 +8,14 @@ import logging
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Self, final
+from typing import TYPE_CHECKING, Self, final
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 logger = logging.getLogger(__name__)
+
+_TURN_TYPES = ("user", "assistant")
 
 
 @final
@@ -36,6 +41,28 @@ class TranscriptReader:
         self._path = path
         return self
 
+    def _records(self) -> Iterator[dict[str, object]]:
+        """Yield each parsed JSON object in the transcript, in file order.
+
+        The one reader every extraction shares: a missing or unreadable file
+        yields nothing, and a line that is not a JSON object is skipped, so
+        no extraction ever sees a partial or malformed record.
+        """
+        if not self._path.is_file():
+            return
+        try:
+            raw = self._path.read_text()
+        except (OSError, UnicodeDecodeError):
+            logger.warning("transcript: could not read %s", self._path)
+            return
+        for line in raw.splitlines():
+            try:
+                obj = json.loads(line)
+            except (ValueError, TypeError):
+                continue
+            if isinstance(obj, dict):
+                yield obj
+
     def text(self) -> str:
         """Return the transcript's conversation text, newest-first truncated.
 
@@ -43,34 +70,34 @@ class TranscriptReader:
         skips tool-use content blocks, file snapshots, and system messages.  A
         missing or unreadable file yields ``""``.
         """
-        if not self._path.is_file():
-            return ""
-        try:
-            raw = self._path.read_text()
-        except (OSError, UnicodeDecodeError):
-            logger.warning("pre-compact: could not read transcript %s", self._path)
-            return ""
-        parts: list[str] = []
-        for line in raw.splitlines():
-            try:
-                obj = json.loads(line)
-            except (ValueError, TypeError):
-                continue
-            entry = self.message_text(obj)
-            if entry:
-                parts.append(entry)
+        parts = [
+            entry for record in self._records() if (entry := self.message_text(record))
+        ]
         return self._join_within_budget(parts)
 
-    def _join_within_budget(self, parts: list[str]) -> str:
+    def last_assistant_text(self) -> str:
+        """Return the final assistant turn's text without its role prefix, or ``""``.
+
+        The last assistant message is the report a subagent hands its parent;
+        tool-use blocks are not text, so a turn holding only those is skipped.
+        """
+        last = ""
+        for record in self._records():
+            if record.get("type") == "assistant" and (text := self.turn_text(record)):
+                last = text
+        return last.strip()
+
+    @classmethod
+    def _join_within_budget(cls, parts: list[str]) -> str:
         """Drop the oldest entries until the joined text fits the char budget."""
         total_chars = sum(len(p) for p in parts)
         start = 0
-        while start < len(parts) and total_chars > self._MAX_CHARS:
+        while start < len(parts) and total_chars > cls._MAX_CHARS:
             total_chars -= len(parts[start])
             start += 1
         if start > 0:
             logger.debug(
-                "pre-compact: dropped %d oldest entries from transcript",
+                "transcript: dropped %d oldest entries from transcript",
                 start,
             )
             parts = parts[start:]
@@ -113,22 +140,37 @@ class TranscriptReader:
         contract (a file snapshot or system record), not a failure — the caller
         skips it.
         """
-        record_type = record.get("type", "")
-        if record_type not in ("user", "assistant"):
+        text = cls.turn_text(record)
+        if not text:
             return None
+        return f"[{cls._role(record)}] {text}"
+
+    @classmethod
+    def turn_text(cls, record: dict[str, object]) -> str:
+        """Return a user/assistant record's text with no role prefix, or ``""``.
+
+        A string ``content`` is returned as written (blank-only is ``""``); a
+        block list yields its text blocks and short tool results joined by a
+        space.
+        """
+        if record.get("type") not in _TURN_TYPES:
+            return ""
         message = record.get("message")
         if not isinstance(message, dict):
-            return None
-        role = message.get("role", record_type)
+            return ""
         content = message.get("content")
         if isinstance(content, str):
-            return f"[{role}] {content}" if content.strip() else None
+            return content if content.strip() else ""
         if not isinstance(content, list):
-            return None
-        texts = cls._content_texts(content)
-        if not texts:
-            return None
-        return f"[{role}] {' '.join(texts)}"
+            return ""
+        return " ".join(cls._content_texts(content))
+
+    @staticmethod
+    def _role(record: dict[str, object]) -> str:
+        """Return the message's ``role``, falling back to the record ``type``."""
+        message = record.get("message")
+        role = message.get("role") if isinstance(message, dict) else None
+        return str(role) if isinstance(role, str) else str(record.get("type", ""))
 
     @classmethod
     def _content_texts(cls, content: list[object]) -> list[str]:

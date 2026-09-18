@@ -24,9 +24,8 @@ from typing import TYPE_CHECKING, Self, final
 from quarry._hook_trace import HookPayload, HookTrace
 from quarry._stdlib import load_hook_config
 from quarry.daemon_capture import DaemonCaptureSender
-from quarry.ethos_handle import EthosConfig
 from quarry.session_start_templates import SessionStartTemplates
-from quarry.session_transcript import SessionTranscriptCapture
+from quarry.session_transcript import SessionTranscriptCapture, TranscriptSource
 from quarry.sync_lock import SyncLock
 from quarry.web_capture import WebFetchPayload
 
@@ -408,8 +407,8 @@ _WEB_FETCH_UNREACHABLE = (
 )
 
 
-def _precompact_target(payload: dict[str, object]) -> tuple[str, str, Path] | None:
-    """Return ``(cwd, session_id, resolved jsonl path)`` for a capturable compaction.
+def _precompact_target(payload: dict[str, object]) -> TranscriptSource | None:
+    """Return the transcript source for a capturable compaction.
 
     ``None`` means the hook must no-op — the documented skip contract, not a
     failure: disabled by config, a missing ``transcript_path``/``session_id``, or
@@ -429,7 +428,7 @@ def _precompact_target(payload: dict[str, object]) -> tuple[str, str, Path] | No
     resolved = HookPayload.resolve_jsonl(transcript_path, label="pre-compact")
     if resolved is None:
         return None
-    return cwd, session_id, resolved
+    return TranscriptSource(cwd, session_id, resolved, "pre-compact")
 
 
 def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
@@ -445,16 +444,9 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
     if target is None:
         trace.skip("payload")
         return {}
-    cwd, session_id, tp = target
     trace.mark_payload(ok=True)
 
-    outcome = SessionTranscriptCapture(
-        cwd=cwd,
-        session_id=session_id,
-        transcript_path=tp,
-        label="pre-compact",
-        agent_handle=EthosConfig.agent_handle_at(cwd) if cwd else "",
-    ).capture()
+    outcome = SessionTranscriptCapture.for_session(target).capture()
 
     if not outcome.text_captured:
         trace.skip("empty-transcript")

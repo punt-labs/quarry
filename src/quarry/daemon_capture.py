@@ -1,22 +1,22 @@
 """Send scrubbed captures to the running daemon over the thin HTTP client.
 
 Every hook that produces a capture — pre-compact, web-fetch, session-end,
-web-search, read — routes through :class:`DaemonCaptureSender`.  Keeping the
-four failure classes named in exactly one place prevents each caller from
-re-inventing its own error branching.  Fire-and-forget: the daemon 202s a
-capture before any embedding runs, so a healthy send is near instant and a
-lost send is only a lost *capture*, never a lost transcript on disk.
+web-search, read, subagent-stop — routes through :class:`DaemonCaptureSender`.
+Keeping the four failure classes named in exactly one place prevents each
+caller from re-inventing its own error branching.  Fire-and-forget: the daemon
+202s a capture before any embedding runs, so a healthy send is near instant and
+a lost send is only a lost *capture*, never a lost transcript on disk.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Self, final
+from typing import TYPE_CHECKING, final
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from quarry.api import CaptureIngestRequest, IngestRequest
+    from quarry.api import CaptureIngestRequest, IngestRequest, RememberRequest
     from quarry.client import QuarryClient
 
 logger = logging.getLogger(__name__)
@@ -38,12 +38,14 @@ class DaemonCaptureSender:
     has no durable local copy so a lost send is genuinely lost, whereas a
     compaction can fall back to ``backfill-sessions`` — so the caller supplies
     the phrasing that reflects what recovery is actually available.
+
+    Three doors, one boundary: a scrubbed capture (``/v1/capture``), a
+    server-side re-fetch (``/v1/ingest``), and a distilled memory
+    (``/v1/remember``). All three carry the same short timeout and land in the
+    daemon's scrub-before-store job, so no hook needs an engine.
     """
 
     __slots__ = ()
-
-    def __new__(cls) -> Self:
-        return super().__new__(cls)
 
     def send_capture(
         self, request: CaptureIngestRequest, *, unreachable_log: str
@@ -58,6 +60,13 @@ class DaemonCaptureSender:
         """Ask the daemon to re-fetch and index a URL (the web-fetch fallback)."""
         return self._send(
             lambda client: client.ingest_url(request, timeout=_CAPTURE_SEND_TIMEOUT),
+            unreachable_log=unreachable_log,
+        )
+
+    def send_remember(self, request: RememberRequest, *, unreachable_log: str) -> bool:
+        """File a distilled memory (a subagent's own report) via ``remember``."""
+        return self._send(
+            lambda client: client.remember(request, timeout=_CAPTURE_SEND_TIMEOUT),
             unreachable_log=unreachable_log,
         )
 

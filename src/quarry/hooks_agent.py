@@ -20,9 +20,13 @@ import logging
 from quarry._hook_trace import HookPayload, HookTrace, ReadAdmission
 from quarry._stdlib import load_hook_config
 from quarry.daemon_capture import DaemonCaptureSender
-from quarry.ethos_handle import EthosConfig
 from quarry.read_capture import ReadCaptureFilter, ReadPayload
-from quarry.session_transcript import SessionTranscriptCapture, TranscriptCaptureOutcome
+from quarry.session_transcript import (
+    SessionTranscriptCapture,
+    TranscriptCaptureOutcome,
+    TranscriptSource,
+)
+from quarry.subagent_capture import SubagentCapture
 from quarry.web_search_capture import WebSearchPayload
 
 logger = logging.getLogger(__name__)
@@ -68,31 +72,29 @@ class HookAgent:
             trace.skip("payload")
             return {}
         trace.mark_payload(ok=True)
-        outcome = SessionTranscriptCapture(
-            cwd=cwd,
-            session_id=session_id,
-            transcript_path=tp,
-            label="session-end",
-            agent_handle=EthosConfig.agent_handle_at(cwd),
+        outcome = SessionTranscriptCapture.for_session(
+            TranscriptSource(cwd, session_id, tp, "session-end")
         ).capture()
         HookAgent._trace_transcript_outcome(trace, outcome)
         return {}
 
     @staticmethod
     def _trace_transcript_outcome(
-        trace: HookTrace, outcome: TranscriptCaptureOutcome
+        trace: HookTrace, outcome: TranscriptCaptureOutcome, detail: str = ""
     ) -> None:
         """Emit the breadcrumb that matches the actual transcript-send outcome.
 
         A silent-skip is only visible when the trace tells the truth: an
         unreachable daemon must not read as ``capture``, and an empty
         transcript is a skip, not a send failure (parity with the
-        ``handle_pre_compact`` branching in :mod:`quarry.hooks`).
+        ``handle_pre_compact`` branching in :mod:`quarry.hooks`). *detail*
+        rides the capture line — SubagentStop uses it to say whether the
+        distilled report was filed too.
         """
         if not outcome.text_captured:
             trace.skip("empty-transcript")
         elif outcome.sent:
-            trace.capture()
+            trace.capture(detail)
         else:
             trace.error("daemon-unreachable")
 
@@ -115,12 +117,12 @@ class HookAgent:
                 trace.skip("config")
                 return {}
 
-        HookAgent._debug_search_shape(payload)
         parsed = WebSearchPayload(payload)
+        parsed.log_shape()
         digest = parsed.digest
         if digest is None:
             trace.mark_payload(ok=False)
-            HookAgent._warn_no_search_digest(payload)
+            parsed.warn_no_digest()
             trace.skip("no-digest")
             return {}
         trace.mark_payload(ok=True)
@@ -141,41 +143,6 @@ class HookAgent:
         else:
             trace.error("daemon-unreachable")
         return {}
-
-    @staticmethod
-    def _debug_search_shape(payload: dict[str, object]) -> None:
-        """Emit the DEBUG payload-shape probe used to diagnose G5 drift.
-
-        Keys + tool_response type only — never contents, which may hold
-        secrets.  The WARN in the caller fires on every silent skip, so
-        the pair together makes the shape visible at production INFO.
-        """
-        logger.debug(
-            "post-web-search: payload keys=%s tool_response_type=%s",
-            sorted(payload.keys()),
-            type(payload.get("tool_response")).__name__,
-        )
-
-    @staticmethod
-    def _warn_no_search_digest(payload: dict[str, object]) -> None:
-        """Emit the WARN line when WebSearchPayload yields no digest.
-
-        Upgraded from DEBUG so a silent-skip is visible at production
-        INFO — the operator's "proof they are happening" gap.  Logs
-        shape metadata only (presence + length + tool_response type)
-        because an operator's search box may hold tokens the same as
-        any other free-text input; CWE-532 forbids persisting that to
-        ``quarry.log`` (parity with :meth:`_debug_search_shape`).
-        """
-        parsed = WebSearchPayload(payload)
-        logger.warning(
-            "post-web-search: no result digest in payload "
-            "(query_present=%s, query_len=%d, tool_response type=%s); "
-            "skipping capture",
-            parsed.query is not None,
-            len(parsed.query or ""),
-            type(payload.get("tool_response")).__name__,
-        )
 
     @staticmethod
     def _search_doc_name(query: str | None) -> str:
@@ -257,7 +224,7 @@ class HookAgent:
 
     @staticmethod
     def subagent_stop(payload: dict[str, object]) -> dict[str, object]:
-        """Handle SubagentStop hook: capture the subagent's own transcript.
+        """Handle SubagentStop: capture the subagent's transcript and its report.
 
         **BLOCKING hook — never return a decision/block field.**
         ``SubagentStop`` fires blocking on Claude Code's side (a non-zero
@@ -265,11 +232,12 @@ class HookAgent:
         unlike every other hook this module registers.  Every path returns
         ``{}``.
 
-        Per Ratification R4b (2026-08-30): the payload's
-        ``agent_transcript_path`` is subagent-scoped and distinct from
-        ``transcript_path`` (the parent's), so we archive the subagent path.
-        Identity carrier is ``agent_id``, not ``session_id`` (which is the
-        parent's).
+        The payload's ``agent_transcript_path`` is subagent-scoped and
+        distinct from ``transcript_path`` (the parent's), so the subagent path
+        is what gets archived. Identity carrier is ``agent_id``, not
+        ``session_id`` (which is the parent's); attribution comes from
+        ``agent_type`` when it names a registered identity, never from the
+        repo pin, which would name the leader.
         """
         trace = HookTrace("post-subagent-stop")
         cwd = HookPayload.as_dir(payload.get("cwd"))
@@ -294,13 +262,12 @@ class HookAgent:
             trace.skip("payload")
             return {}
         trace.mark_payload(ok=True)
-        agent_type = HookPayload.as_str(payload.get("agent_type"))
-        outcome = SessionTranscriptCapture(
-            cwd=cwd,
-            session_id=agent_id,
-            transcript_path=tp,
-            label="subagent-stop",
-            agent_handle=agent_type or EthosConfig.agent_handle_at(cwd),
+        outcome = SubagentCapture(
+            TranscriptSource(cwd, agent_id, tp, "subagent-stop"),
+            agent_type=HookPayload.as_str(payload.get("agent_type")),
+            parent_session_id=HookPayload.as_str(payload.get("session_id")),
         ).capture()
-        HookAgent._trace_transcript_outcome(trace, outcome)
+        HookAgent._trace_transcript_outcome(
+            trace, outcome.raw, "distilled" if outcome.distilled else ""
+        )
         return {}

@@ -8,6 +8,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from quarry.api.capture_ingest import SESSION_ID_PREFIX_LEN
 from quarry.capture_url import CaptureUrl
 from quarry.captures_collection import CapturesCollection
 from quarry.daemon.ingest_jobs import CaptureIngestJob, ScrubbedIngestJob
@@ -118,7 +119,7 @@ class CaptureRoutes(RouteGroup):
             return document_name
         session_id = self._str_field(body, "session_id").strip()
         if session_id:
-            return f"session-{session_id[:8]}"
+            return f"session-{session_id[:SESSION_ID_PREFIX_LEN]}"
         return JSONResponse(
             {"error": "Missing document_name or session_id"}, status_code=400
         )

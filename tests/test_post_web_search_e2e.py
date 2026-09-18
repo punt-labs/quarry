@@ -185,7 +185,7 @@ def test_unknown_shape_logs_warn_with_metadata(
 ) -> None:
     """An unknown ``tool_response`` shape must WARN with query_present/query_len.
 
-    The shape-metadata WARN in ``HookAgent._warn_no_search_digest`` is the
+    The shape-metadata WARN in ``WebSearchPayload.warn_no_digest`` is the
     only signal an operator has that a WebSearch payload arrived but was
     rejected as unparseable.  Its persistence to quarry.log requires the
     hook entry point to have configured logging (quarry-ridg), so this

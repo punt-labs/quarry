@@ -25,7 +25,6 @@ from quarry.client import (
     QuarryError,
     TargetResolver,
 )
-from quarry.client.errors import CONFLICT_STATUS
 from quarry.config import Settings
 from quarry.db_pointer import SELECTION
 from quarry.logging_config import LoggingConfig
@@ -205,7 +204,7 @@ def _cli_errors(fn: Callable[..., None]) -> Callable[..., None]:
                 err_console.print(_AUTOSTART_HINT, style="yellow")
             raise typer.Exit(code=1) from exc
         except HttpError as exc:
-            if exc.status == CONFLICT_STATUS:
+            if exc.is_conflict:
                 # 409 = a singleton task is already running. Surface ITS task_id
                 # the same way the 202 acceptance path does (via _emit to stdout),
                 # so an operator can poll/track the in-flight task. Exit 0 — this

@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+from typing import Final
+
 from pydantic import BaseModel
+
+# The one place the ``session-<id8>`` / ``subagent-<id8>-report`` key width
+# lives: the daemon names a raw capture and the hook names its distilled report
+# from the same agent id, so widening the prefix must move both names together.
+SESSION_ID_PREFIX_LEN: Final = 8
 
 
 class CaptureIngestRequest(BaseModel):

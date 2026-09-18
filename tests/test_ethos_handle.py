@@ -101,3 +101,37 @@ class TestPinFilePrecedence:
         with caplog.at_level("WARNING", logger="quarry.ethos_handle"):
             assert EthosConfig.agent_handle_at(str(tmp_path)) == ""
         assert any("ethos.yaml" in rec.getMessage() for rec in caplog.records)
+
+
+def _vendor_identity(root: Path, handle: str) -> None:
+    identities = root / ".punt-labs" / "ethos" / "identities"
+    identities.mkdir(parents=True, exist_ok=True)
+    (identities / f"{handle}.yaml").write_text(f"handle: {handle}\n")
+
+
+class TestSubagentHandleAt:
+    """``agent_type`` attributes a subagent only when it names an identity."""
+
+    def test_registered_agent_type_is_the_handle(self, tmp_path: Path) -> None:
+        _vendor_identity(tmp_path, "rmh")
+        _write_pin(tmp_path, "agent: claude\n")
+        assert EthosConfig.subagent_handle_at("rmh", str(tmp_path)) == "rmh"
+
+    def test_unregistered_agent_type_is_unattributed(self, tmp_path: Path) -> None:
+        _vendor_identity(tmp_path, "rmh")
+        _write_pin(tmp_path, "agent: claude\n")
+        # Never the leader's pin: the review is not the leader's memory.
+        assert EthosConfig.subagent_handle_at("general-purpose", str(tmp_path)) == ""
+
+    def test_invalid_handle_shape_is_unattributed(self, tmp_path: Path) -> None:
+        assert EthosConfig.subagent_handle_at("../etc", str(tmp_path)) == ""
+
+    def test_absent_agent_type_falls_back_to_the_pin(self, tmp_path: Path) -> None:
+        _write_pin(tmp_path, "agent: claude\n")
+        assert EthosConfig.subagent_handle_at("", str(tmp_path)) == "claude"
+
+    def test_identity_found_from_a_subdirectory(self, tmp_path: Path) -> None:
+        _vendor_identity(tmp_path, "kpz")
+        deep = tmp_path / "src" / "pkg"
+        deep.mkdir(parents=True)
+        assert EthosConfig.subagent_handle_at("kpz", str(deep)) == "kpz"

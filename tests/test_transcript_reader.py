@@ -230,6 +230,92 @@ class TestText:
         assert TranscriptReader(transcript).text() == ""
 
 
+def _turn(role: str, text: str) -> dict[str, object]:
+    return {
+        "type": role,
+        "message": {"role": role, "content": [{"type": "text", "text": text}]},
+    }
+
+
+def _write(path: Path, *records: object) -> TranscriptReader:
+    path.write_text("\n".join(json.dumps(r) for r in records))
+    return TranscriptReader(path)
+
+
+class TestMalformedLines:
+    """Every extraction reads through one record iterator that skips junk."""
+
+    def test_non_object_lines_are_skipped_in_order(self, tmp_path: Path) -> None:
+        path = tmp_path / "t.jsonl"
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps(_turn("user", "first")),
+                    "not json",
+                    "[1, 2]",
+                    json.dumps(_turn("assistant", "second")),
+                ]
+            )
+        )
+        reader = TranscriptReader(path)
+        assert reader.text() == "[user] first\n\n[assistant] second"
+        assert reader.last_assistant_text() == "second"
+
+
+class TestTurnText:
+    def test_string_content_is_returned_verbatim(self) -> None:
+        record: dict[str, object] = {
+            "type": "assistant",
+            "message": {"role": "assistant", "content": "  spaced  "},
+        }
+        assert TranscriptReader.turn_text(record) == "  spaced  "
+
+    def test_blank_string_content_is_empty(self) -> None:
+        record: dict[str, object] = {
+            "type": "assistant",
+            "message": {"role": "assistant", "content": "   "},
+        }
+        assert TranscriptReader.turn_text(record) == ""
+
+    def test_non_turn_record_is_empty(self) -> None:
+        assert TranscriptReader.turn_text({"type": "system", "message": {}}) == ""
+
+    def test_message_text_falls_back_to_type_for_role(self) -> None:
+        record: dict[str, object] = {"type": "user", "message": {"content": "hi"}}
+        assert TranscriptReader.message_text(record) == "[user] hi"
+
+
+class TestLastAssistantText:
+    def test_returns_the_final_assistant_turn_without_prefix(
+        self, tmp_path: Path
+    ) -> None:
+        reader = _write(
+            tmp_path / "t.jsonl",
+            _turn("assistant", "first"),
+            _turn("user", "more"),
+            _turn("assistant", "  final report  "),
+        )
+        assert reader.last_assistant_text() == "final report"
+
+    def test_skips_a_trailing_tool_only_turn(self, tmp_path: Path) -> None:
+        tool_only: dict[str, object] = {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "name": "Bash"}],
+            },
+        }
+        reader = _write(tmp_path / "t.jsonl", _turn("assistant", "real"), tool_only)
+        assert reader.last_assistant_text() == "real"
+
+    def test_no_assistant_turn_is_empty(self, tmp_path: Path) -> None:
+        reader = _write(tmp_path / "t.jsonl", _turn("user", "alone"))
+        assert reader.last_assistant_text() == ""
+
+    def test_missing_file_is_empty(self, tmp_path: Path) -> None:
+        assert TranscriptReader(tmp_path / "nope.jsonl").last_assistant_text() == ""
+
+
 class TestArchive:
     def _make_transcript(self, tmp_path: Path) -> Path:
         transcript = tmp_path / "session.jsonl"

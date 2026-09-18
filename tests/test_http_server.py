@@ -2666,6 +2666,45 @@ class TestIngest:
         assert "reserved" in resp.json()["error"].lower()
 
 
+class TestCaptureSummaryPersists:
+    """The capture route's ``summary`` lands on every stored chunk (bug class 3).
+
+    A summary that is accepted on the wire but dropped before the row is
+    written is invisible to a unit test of the request model; this drives the
+    real ``/v1/capture`` route through the in-process daemon into LanceDB and
+    reads the column back.
+    """
+
+    def test_capture_summary_persists_per_chunk(self, tmp_path: Path) -> None:
+        from quarry.api import CaptureIngestRequest
+        from tests.inproc_daemon import InProcessDaemon
+
+        daemon = InProcessDaemon(tmp_path)
+        request = CaptureIngestRequest(
+            content="First paragraph of the report.\n\nSecond paragraph.",
+            cwd=str(tmp_path),
+            session_id="a0f13948-agent",
+            agent_handle="rmh",
+            summary="Findings: none. Approve.",
+            format_hint="markdown",
+        )
+        with daemon.client() as client:
+            accepted = client.capture(request)
+            outcome = client.await_task(accepted.task_id)
+        assert outcome.is_completed, outcome
+
+        table = daemon.ctx.database.db.open_table("chunks")
+        rows = (
+            table.search()
+            .select(["document_name", "summary", "agent_handle"])
+            .to_list()
+        )
+        assert rows, "the capture stored no chunks"
+        assert {row["document_name"] for row in rows} == {"session-a0f13948"}
+        assert {row["summary"] for row in rows} == {"Findings: none. Approve."}
+        assert {row["agent_handle"] for row in rows} == {"rmh"}
+
+
 # The 400 body every write route returns for a mistyped memory_type.
 _UNKNOWN_MEMORY_TYPE_BODY = {
     "error": (
