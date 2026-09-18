@@ -7,8 +7,10 @@ and running ``quarry mcp`` load zero LanceDB/ONNX.  It mirrors vox's
 ``vox mcp`` → ``server.py`` → ``VoxClientSync`` shape: the MCP server is a client
 of the resident daemon, never a second in-process engine.
 
-The eleven tools and their docstrings are the surface Claude Code sees; the
+The twelve tools and their docstrings are the surface Claude Code sees; the
 bodies changed (client calls, fire-and-forget 202s), the surface did not.
+``missions_sync`` lives in the sibling :mod:`quarry.mcp_missions` and is
+registered from here so the surface stays one registration call.
 """
 
 from __future__ import annotations
@@ -42,6 +44,7 @@ from quarry.formatting import (
     format_switch_summary,
 )
 from quarry.mcp_guard import ToolGuard
+from quarry.mcp_missions import MissionTools
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -113,6 +116,7 @@ class McpTools:
         server.add_tool(self.sync_all_registrations)
         server.add_tool(self.status)
         server.add_tool(self.use_database, name="use")
+        MissionTools(self._connect).register(server)
 
     @ToolGuard.wrap
     def find(

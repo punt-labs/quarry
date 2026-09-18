@@ -1,0 +1,226 @@
+"""Loop 2: file each frozen mission round as a memory in ``memory-<worker>``.
+
+The client reads the sidecar files and POSTs content; the daemon never reads a
+path. Idempotency comes from the document name plus an identity check on the
+stored first line, so a re-run files nothing twice and never overwrites a
+round another checkout filed under the same name.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING, Self, final
+
+from quarry.api import RememberRequest, ShowRequest
+from quarry.client import HttpError
+from quarry.memory_types import MemoryType
+from quarry.mission_store import MissionStore
+from quarry.mission_sync_types import MissionSyncOutcome, SyncOptions
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from quarry.client import QuarryClient
+    from quarry.mission_records import MissionContract, MissionRound
+    from quarry.mission_store import MissionScan
+
+logger = logging.getLogger(__name__)
+
+_NOT_FOUND = 404
+_SUMMARY_SIGNAL_CHARS = 100
+
+
+@final
+class MissionMemoryComposer:
+    """Turn one frozen round into the ``remember`` body that records it.
+
+    Stateless: every method derives from the contract and the round, so the
+    CLI and the MCP tool cannot produce different documents for one round.
+    """
+
+    __slots__ = ()
+
+    @staticmethod
+    def document_name(contract: MissionContract, round_: MissionRound) -> str:
+        """Return ``mission-<repo>-<id>-r<n>`` — unique per round across machines."""
+        return f"mission-{contract.repo_name}-{contract.mission_id}-r{round_.number}"
+
+    @staticmethod
+    def header(contract: MissionContract, round_: MissionRound) -> str:
+        """Return the first line — the identity key the existence check compares."""
+        return (
+            f"# Mission {contract.mission_id} — round {round_.number} "
+            f"(repo {contract.repo_name}, worker {contract.worker}, "
+            f"evaluator {contract.evaluator}, created {contract.created_at})"
+        )
+
+    @classmethod
+    def compose(
+        cls, contract: MissionContract, round_: MissionRound
+    ) -> RememberRequest:
+        """Return the request; an empty ``collection`` routes by handle server-side."""
+        return RememberRequest(
+            name=cls.document_name(contract, round_),
+            content=cls.document(contract, round_),
+            format_hint="markdown",
+            overwrite=True,
+            agent_handle=contract.worker,
+            memory_type=MemoryType.OBSERVATION.value,
+            summary=cls.summary(contract, round_),
+        )
+
+    @classmethod
+    def summary(cls, contract: MissionContract, round_: MissionRound) -> str:
+        """Return ``<id> r<n> (<repo>): worker <verdict>/<recommendation> — <signal>``.
+
+        The signal is the reflection's first, cut to 100 characters.
+        """
+        verdict = round_.result.verdict if round_.result else "none"
+        recommendation = cls._recommendation(contract, round_)
+        line = (
+            f"{contract.mission_id} r{round_.number} ({contract.repo_name}): "
+            f"worker {verdict}/{recommendation}"
+        )
+        if round_.reflection and round_.reflection.signals:
+            line += f" — {round_.reflection.signals[0][:_SUMMARY_SIGNAL_CHARS]}"
+        return line
+
+    @classmethod
+    def document(cls, contract: MissionContract, round_: MissionRound) -> str:
+        """Render the markdown body (Appendix B of the design)."""
+        result, reflection = round_.result, round_.reflection
+        verdict = (
+            f"Worker verdict (self-assessed): {result.verdict}, "
+            f"confidence {result.confidence:.2f}"
+            if result
+            else "Worker verdict: none — no result submitted"
+        )
+        sections = [cls.header(contract, round_), "", verdict]
+        if reflection:
+            sections.append(
+                f"Evaluator reflection: {reflection.recommendation} "
+                f"(converging: {str(reflection.converging).lower()}), "
+                f"authored by {reflection.author}"
+            )
+            sections.extend(("", "## Reflection signals"))
+            sections.extend(f"- {signal}" for signal in reflection.signals)
+            sections.extend(
+                (
+                    "",
+                    "## Recommendation",
+                    f"{reflection.recommendation} — {reflection.reason}",
+                )
+            )
+        else:
+            sections.append(
+                f"Evaluator reflection: none — closed {contract.status} "
+                f"at round {round_.number}"
+            )
+        if result:
+            if result.open_questions:
+                sections.extend(("", "## Open questions (worker)"))
+                sections.extend(f"- {q}" for q in result.open_questions)
+            sections.extend(("", "## Worker report", result.prose))
+        return "\n".join(sections) + "\n"
+
+    @staticmethod
+    def _recommendation(contract: MissionContract, round_: MissionRound) -> str:
+        if round_.reflection:
+            return round_.reflection.recommendation
+        return contract.status
+
+
+@final
+class MissionMemorySync:
+    """File every frozen round of a scan that the daemon does not already hold."""
+
+    __slots__ = ("_client", "_options")
+
+    _client: QuarryClient
+    _options: SyncOptions
+
+    def __new__(cls, client: QuarryClient, options: SyncOptions) -> Self:
+        self = super().__new__(cls)
+        self._client = client
+        self._options = options
+        return self
+
+    @classmethod
+    def for_repo(
+        cls, cwd: Path, client: QuarryClient, options: SyncOptions
+    ) -> MissionSyncOutcome:
+        """Scan the checkout containing *cwd* and sync it.
+
+        The one entry both the CLI verb and the MCP tool call, so the two
+        surfaces cannot build different request sequences from the same files.
+        """
+        store = MissionStore.for_repo(cwd)
+        if store is None:
+            return MissionSyncOutcome((), (), (), dry_run=options.dry_run)
+        return cls(client, options).run(store.scan(options.mission_id))
+
+    @staticmethod
+    def requests(scan: MissionScan) -> list[tuple[str, RememberRequest]]:
+        """Return ``(header, request)`` for every frozen, non-empty round in order."""
+        composed: list[tuple[str, RememberRequest]] = []
+        for record in scan.missions:
+            for round_ in record.frozen_rounds():
+                if round_.is_empty:
+                    logger.info(
+                        "missions: %s round %d has neither result nor reflection; "
+                        "skipped",
+                        record.contract.mission_id,
+                        round_.number,
+                    )
+                    continue
+                header = MissionMemoryComposer.header(record.contract, round_)
+                composed.append(
+                    (header, MissionMemoryComposer.compose(record.contract, round_))
+                )
+        return composed
+
+    def run(self, scan: MissionScan) -> MissionSyncOutcome:
+        """File, skip, or record an error for every composed round."""
+        filed: list[str] = []
+        skipped: list[str] = []
+        errors = list(scan.errors)
+        for header, request in self.requests(scan):
+            try:
+                existing = self._existing_header(request.name)
+            except HttpError as exc:
+                errors.append(
+                    f"{request.name}: daemon returned HTTP {exc.status}: {exc.message}"
+                )
+                continue
+            if existing is not None and existing != header:
+                errors.append(
+                    f"name collision: {request.name} holds a different round "
+                    f"({existing!r}) from another checkout; not overwritten"
+                )
+            elif existing is not None and not self._options.force:
+                skipped.append(request.name)
+            else:
+                if not self._options.dry_run:
+                    self._client.remember(request)
+                filed.append(request.name)
+        return MissionSyncOutcome(
+            filed=tuple(filed),
+            skipped=tuple(skipped),
+            errors=tuple(errors),
+            dry_run=self._options.dry_run,
+        )
+
+    def _existing_header(self, name: str) -> str | None:
+        """Return the stored document's first line, or ``None`` when not filed yet.
+
+        ``None`` is the documented 404 outcome ("file it"); any other HTTP
+        failure propagates to :meth:`run`, which records it rather than skipping.
+        """
+        try:
+            page = self._client.show_page(ShowRequest(document=name, page=1))
+        except HttpError as exc:
+            if exc.status == _NOT_FOUND:
+                return None
+            raise
+        first = page.text.lstrip().splitlines()
+        return first[0].strip() if first else ""

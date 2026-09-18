@@ -15,6 +15,7 @@ from quarry.cli_captures import CapturesCli, CliPlumbing
 from quarry.cli_documents import DocumentsCli
 from quarry.cli_ingest import IngestCli
 from quarry.cli_maintenance import MaintenanceCli
+from quarry.cli_missions import MissionsCli
 from quarry.cli_project import ProjectCli
 from quarry.cli_remote import RemoteCli
 from quarry.cli_search import SearchCli
@@ -58,6 +59,7 @@ _COMMAND_ORDER: list[str] = [
     "disable",
     "optimize",
     "captures",
+    "missions",
     "backfill-sessions",
     "login",
     "logout",
@@ -247,6 +249,7 @@ ProjectCli(_plumbing).register(app)
 MaintenanceCli(_plumbing).register(app)
 RemoteCli(_plumbing).register(app)
 app.add_typer(CapturesCli(_plumbing).build(), name="captures")
+app.add_typer(MissionsCli(_plumbing).build(), name="missions")
 
 
 @app.command(name="use")

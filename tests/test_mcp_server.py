@@ -46,6 +46,7 @@ _EXPECTED_TOOLS = {
     "sync_all_registrations",
     "status",
     "use",
+    "missions_sync",
 }
 
 
@@ -182,7 +183,7 @@ def harness(tmp_path: Path) -> Iterator[_ToolHarness]:
 
 
 class TestSurfaceComplete:
-    """The MCP surface must stay exactly the eleven documented tools."""
+    """The MCP surface must stay exactly the twelve documented tools."""
 
     def test_all_tools_registered(self) -> None:
         names = {tool.name for tool in asyncio.run(mcp.list_tools())}

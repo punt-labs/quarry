@@ -1,0 +1,33 @@
+results:
+    - mission: m-2026-09-09-001
+      round: 1
+      created_at: "2026-09-09T05:41:37Z"
+      author: gvr
+      verdict: pass
+      confidence: 0.85
+      files_changed:
+        - path: .tmp/missions/results/hb9u-pipeline-design.md
+          added: 772
+          removed: 0
+      evidence:
+        - name: Read pipeline.py against main
+          status: pass
+      open_questions:
+        - Whether to keep the optional SitemapDiscovery addition or drop it for a smaller diff.
+      prose: |
+        Design complete: all seven sections cover the decomposition.
+    - mission: m-2026-09-09-001
+      round: 2
+      created_at: "2026-09-09T05:57:06Z"
+      author: gvr
+      verdict: pass
+      confidence: 0.92
+      files_changed:
+        - path: .tmp/missions/results/hb9u-pipeline-design.md
+          added: 155
+          removed: 102
+      evidence:
+        - name: Re-read the full document end-to-end after all five fixes
+          status: pass
+      prose: |
+        Round 2 changelog — targeted fixes only, no redesign.

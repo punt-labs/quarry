@@ -1,0 +1,21 @@
+mission_id: m-2026-09-02-003
+status: open
+type: implement
+created_at: "2026-09-02T12:42:20Z"
+updated_at: "2026-09-02T16:20:06Z"
+leader: claude
+worker: rmh
+evaluator:
+    handle: djb
+    pinned_at: "2026-09-02T12:42:20Z"
+    hash: df993891ca0c525df743eb9dd5318504fa32455a9117a6621104ab1e05ef4bde
+inputs:
+    ticket: quarry-0bej
+write_set:
+    - src/quarry
+    - tests
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 2
+context: 'Watch-time ignore pruning.'
