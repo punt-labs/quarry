@@ -12,10 +12,10 @@ import logging
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.api import RememberRequest, ShowRequest
-from quarry.client import HttpError
+from quarry.client import HttpError, QuarryError
 from quarry.memory_types import MemoryType
 from quarry.mission_store import MissionStore
-from quarry.mission_sync_types import MissionSyncOutcome, SyncOptions
+from quarry.mission_sync_types import MissionSyncOutcome, SyncOptions, SyncTally
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -180,41 +180,50 @@ class MissionMemorySync:
         return composed
 
     def run(self, scan: MissionScan) -> MissionSyncOutcome:
-        """File, skip, or record an error for every composed round."""
-        filed: list[str] = []
-        skipped: list[str] = []
-        errors = list(scan.errors)
+        """File, skip, or record an error for every composed round.
+
+        Every daemon failure — a non-404 on the existence check, a 503 on the
+        remember, an unreachable daemon — is one error line for that round,
+        and the run continues: the rounds already filed stay in the tally, and
+        the CLI's exit 1 on errors reports the ones that did not.
+        """
+        tally = SyncTally(scan.errors)
         for header, request in self.requests(scan):
             try:
-                existing = self._existing_header(request.name)
-            except HttpError as exc:
-                errors.append(
-                    f"{request.name}: daemon returned HTTP {exc.status}: {exc.message}"
-                )
-                continue
-            if existing is not None and existing != header:
-                errors.append(
-                    f"name collision: {request.name} holds a different round "
-                    f"({existing!r}) from another checkout; not overwritten"
-                )
-            elif existing is not None and not self._options.force:
-                skipped.append(request.name)
-            else:
-                if not self._options.dry_run:
-                    self._client.remember(request)
-                filed.append(request.name)
-        return MissionSyncOutcome(
-            filed=tuple(filed),
-            skipped=tuple(skipped),
-            errors=tuple(errors),
-            dry_run=self._options.dry_run,
-        )
+                self._sync_round(header, request, tally)
+            except QuarryError as exc:
+                tally.error(f"{request.name}: {self._describe(exc)}")
+        return tally.outcome(dry_run=self._options.dry_run)
+
+    def _sync_round(
+        self, header: str, request: RememberRequest, tally: SyncTally
+    ) -> None:
+        """Record one round's disposition; a daemon failure raises to :meth:`run`."""
+        existing = self._existing_header(request.name)
+        if existing is not None and existing != header:
+            tally.error(
+                f"name collision: {request.name} holds a different round "
+                f"({existing!r}) from another checkout; not overwritten"
+            )
+        elif existing is not None and not self._options.force:
+            tally.skipped(request.name)
+        else:
+            if not self._options.dry_run:
+                self._client.remember(request)
+            tally.filed(request.name)
+
+    @staticmethod
+    def _describe(exc: QuarryError) -> str:
+        """Return the error line's cause, with the wire status when there is one."""
+        if exc.status:
+            return f"daemon returned HTTP {exc.status}: {exc.message}"
+        return exc.message
 
     def _existing_header(self, name: str) -> str | None:
         """Return the stored document's first line, or ``None`` when not filed yet.
 
-        ``None`` is the documented 404 outcome ("file it"); any other HTTP
-        failure propagates to :meth:`run`, which records it rather than skipping.
+        ``None`` is the documented 404 outcome ("file it"); any other failure
+        propagates to :meth:`run`, which records it rather than skipping.
         """
         try:
             page = self._client.show_page(ShowRequest(document=name, page=1))

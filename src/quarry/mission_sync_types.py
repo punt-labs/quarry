@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import final
+from typing import TYPE_CHECKING, Self, final
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 
 @final
@@ -50,3 +53,44 @@ class MissionSyncOutcome:
         lines.extend(f"  skipped (already filed): {name}" for name in self.skipped)
         lines.extend(f"  error: {error}" for error in self.errors)
         return "\n".join(lines)
+
+
+@final
+class SyncTally:
+    """Accumulate one sync's dispositions; ``outcome()`` freezes them.
+
+    Mutable on purpose (a Builder): the sync adds one line per round and keeps
+    going past every failure, so a daemon error on the Nth round can never
+    discard the rounds already filed before it.
+    """
+
+    __slots__ = ("_errors", "_filed", "_skipped")
+
+    _filed: list[str]
+    _skipped: list[str]
+    _errors: list[str]
+
+    def __new__(cls, errors: Iterable[str] = ()) -> Self:
+        self = super().__new__(cls)
+        self._filed = []
+        self._skipped = []
+        self._errors = list(errors)
+        return self
+
+    def filed(self, name: str) -> None:
+        self._filed.append(name)
+
+    def skipped(self, name: str) -> None:
+        self._skipped.append(name)
+
+    def error(self, message: str) -> None:
+        self._errors.append(message)
+
+    def outcome(self, *, dry_run: bool) -> MissionSyncOutcome:
+        """Return the frozen outcome, in the order each disposition arrived."""
+        return MissionSyncOutcome(
+            filed=tuple(self._filed),
+            skipped=tuple(self._skipped),
+            errors=tuple(self._errors),
+            dry_run=dry_run,
+        )

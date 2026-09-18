@@ -12,7 +12,12 @@ from typer.testing import CliRunner
 
 from quarry.__main__ import app
 from quarry.api import RememberRequest
-from quarry.client import QuarryClient, QuarryError, TargetResolver
+from quarry.client import (
+    QuarryClient,
+    QuarryConnectionError,
+    QuarryError,
+    TargetResolver,
+)
 from quarry.client.transport import Response
 from quarry.mcp_missions import MissionTools
 from quarry.mission_memory import MissionMemoryComposer, MissionMemorySync
@@ -38,24 +43,32 @@ class FakeDaemon:
 
     ``pages`` maps a document name to its stored page-1 text; an unknown name
     is a 404 — the daemon's "not filed yet" answer. ``show_status`` overrides
-    every show response (for the non-404 failure path). Non-2xx statuses raise
-    the same typed :class:`HttpError` the real transport classifies, so the
-    client sees exactly what a live daemon would send it.
+    every show response (for the non-404 failure path). ``remember_errors``
+    maps a document name to the error its remember raises (a 503, a dropped
+    connection). Non-2xx statuses raise the same typed :class:`HttpError` the
+    real transport classifies, so the client sees exactly what a live daemon
+    would send it.
     """
 
-    __slots__ = ("pages", "remembered", "show_status")
+    __slots__ = ("pages", "remember_errors", "remembered", "show_status")
 
     pages: dict[str, str]
     remembered: list[dict[str, object]]
     show_status: int
+    remember_errors: dict[str, QuarryError]
 
     def __new__(
-        cls, pages: dict[str, str] | None = None, *, show_status: int = 0
+        cls,
+        pages: dict[str, str] | None = None,
+        *,
+        show_status: int = 0,
+        remember_errors: dict[str, QuarryError] | None = None,
     ) -> Self:
         self = super().__new__(cls)
         self.pages = dict(pages or {})
         self.remembered = []
         self.show_status = show_status
+        self.remember_errors = dict(remember_errors or {})
         return self
 
     def request(
@@ -78,12 +91,36 @@ class FakeDaemon:
                 200, {"document_name": name, "page_number": 1, "text": self.pages[name]}
             )
         if base == "/v1/remember":
-            self.remembered.append(dict(json_body or {}))
+            body = dict(json_body or {})
+            if (error := self.remember_errors.get(str(body.get("name")))) is not None:
+                raise error
+            self.remembered.append(body)
             return Response(202, {"task_id": "t", "status": "accepted"})
         raise AssertionError(f"unexpected {method} {base}")
 
     def client(self) -> QuarryClient:
         return QuarryClient(self)
+
+
+@final
+class DownDaemon:
+    """A transport whose every request is a refused connection."""
+
+    __slots__ = ()
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Mapping[str, str] | None = None,
+        json_body: Mapping[str, object] | None = None,
+        timeout: float | None = None,
+    ) -> Response:
+        raise QuarryConnectionError(
+            "Cannot connect to remote quarry server at http://127.0.0.1:8420",
+            "http://127.0.0.1:8420",
+        )
 
 
 class TestComposer:
@@ -168,6 +205,14 @@ def _scan(repo: Path, mission_id: str = "") -> MissionScan:
     store = MissionStore.for_repo(repo)
     assert store is not None
     return store.scan(mission_id)
+
+
+def _closed_round_names(repo: Path) -> tuple[str, str]:
+    """Return the document names of the closed fixture mission's two rounds."""
+    first, second = (
+        req.name for _h, req in MissionMemorySync.requests(_scan(repo, CLOSED_MISSION))
+    )
+    return first, second
 
 
 class TestRequests:
@@ -259,6 +304,43 @@ class TestRun:
         assert all("HTTP 500" in e for e in outcome.errors)
         assert len(outcome.errors) == 2
         assert daemon.remembered == []
+
+    def test_connection_error_on_remember_is_recorded_and_the_run_continues(
+        self, repo: Path
+    ) -> None:
+        """Design f.1: a QuarryConnectionError on remember → recorded, run continues."""
+        first, second = _closed_round_names(repo)
+        dropped = QuarryConnectionError(
+            "Cannot connect to remote quarry server at http://127.0.0.1:8420",
+            "http://127.0.0.1:8420",
+        )
+        daemon = FakeDaemon(remember_errors={first: dropped})
+        outcome = self._sync(daemon).run(_scan(repo, CLOSED_MISSION))
+        assert outcome.filed == (second,)
+        assert outcome.errors == (f"{first}: {dropped.message}",)
+        assert [r["name"] for r in daemon.remembered] == [second]
+
+    def test_http_failure_on_a_later_remember_keeps_the_earlier_tally(
+        self, repo: Path
+    ) -> None:
+        """A 503 on the Nth round must not discard the rounds filed before it."""
+        first, second = _closed_round_names(repo)
+        queue_full = QuarryError.from_response(503, {"error": "queue full"})
+        daemon = FakeDaemon(remember_errors={second: queue_full})
+        outcome = self._sync(daemon).run(_scan(repo, CLOSED_MISSION))
+        assert outcome.filed == (first,)
+        assert outcome.errors == (f"{second}: daemon returned HTTP 503: queue full",)
+        assert [r["name"] for r in daemon.remembered] == [first]
+
+    def test_daemon_down_on_the_existence_check_is_one_error_per_round(
+        self, repo: Path
+    ) -> None:
+        sync = MissionMemorySync(QuarryClient(DownDaemon()), SyncOptions())
+        outcome = sync.run(_scan(repo, CLOSED_MISSION))
+        assert outcome.filed == ()
+        assert outcome.skipped == ()
+        assert len(outcome.errors) == 2
+        assert all("Cannot connect" in e for e in outcome.errors)
 
     def test_scan_errors_are_carried_into_the_outcome(self, repo: Path) -> None:
         bad = repo / ".punt-labs" / "ethos" / "missions" / "m-2026-09-30-001"

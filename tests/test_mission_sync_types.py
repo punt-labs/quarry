@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from quarry.mission_sync_types import MissionSyncOutcome, SyncOptions
+from quarry.mission_sync_types import MissionSyncOutcome, SyncOptions, SyncTally
 
 
 class TestSyncOptions:
@@ -47,3 +47,26 @@ class TestMissionSyncOutcome:
     def test_has_errors(self) -> None:
         assert self._outcome().has_errors is True
         assert MissionSyncOutcome((), (), (), dry_run=False).has_errors is False
+
+
+class TestSyncTally:
+    def test_empty_tally_is_an_empty_outcome(self) -> None:
+        assert SyncTally().outcome(dry_run=True) == MissionSyncOutcome(
+            (), (), (), dry_run=True
+        )
+
+    def test_scan_errors_lead_and_dispositions_keep_arrival_order(self) -> None:
+        tally = SyncTally(("m-2: contract.yaml is not a mapping",))
+        tally.filed("r1")
+        tally.error("r2: daemon returned HTTP 503: queue full")
+        tally.skipped("r3")
+        tally.filed("r4")
+        assert tally.outcome(dry_run=False) == MissionSyncOutcome(
+            filed=("r1", "r4"),
+            skipped=("r3",),
+            errors=(
+                "m-2: contract.yaml is not a mapping",
+                "r2: daemon returned HTTP 503: queue full",
+            ),
+            dry_run=False,
+        )
