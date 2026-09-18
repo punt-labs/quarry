@@ -16,6 +16,45 @@ across `transform`, `index`, and `connector`).
 
 ### Added
 
+- tool: `quarry missions sync` (CLI), `missions_sync` (MCP, the twelfth tool)
+  and `/quarry missions sync` (plugin) — Loop 2 of the agent memory loop.
+  Reads this repo's `.punt-labs/ethos/missions/` sidecar (contract, results,
+  reflections; quarry never calls ethos) and files each frozen round as an
+  `observation` in `memory-<worker>` via `POST /v1/remember`, named
+  `mission-<repo>-<id>-r<n>`. Idempotent: a round the daemon already holds is
+  skipped, a name held by another checkout's round is an error and never
+  overwritten (`--force` re-files a matching key only), parse failures are
+  collected and exit 1, `--dry-run` posts nothing. New modules
+  `mission_records`, `mission_round_parts`, `mission_store`,
+  `mission_sync_types`, `mission_memory`, `cli_missions`, `mcp_missions`.
+  (quarry-fbj9)
+- tool: `SubagentStop` now files the subagent's final report as an
+  `observation` in `memory-<handle>` (`subagent-<id8>-report`) alongside the
+  raw transcript capture, which now carries a summary — Loop 3. Attribution is
+  identity-validated: `agent_type` is used only when it names a vendored or
+  global ethos identity; a bare `Agent()` reviewer (`general-purpose`) is
+  filed unattributed, never under the repo pin's leader. Both rows go through
+  the daemon's scrub-before-store route with the hook's 5 s cap; no engine
+  runs in the hook (DES-041). New modules `subagent_report`,
+  `subagent_capture`; `EthosConfig.subagent_handle_at`;
+  `DaemonCaptureSender.send_remember`; `QuarryClient.remember(timeout=)`.
+  (quarry-fbj9)
+- tool: a versioned memory guide, `## Memory (quarry guide v2)`, in every
+  ethos identity's `session_context` — the five moments to `remember`, what
+  never to store, and why the handle is the agent's own. `quarry enable`
+  refreshes the vendored `.punt-labs/ethos/identities/<handle>.ext/quarry.yaml`
+  files (reported as "commit via PR") and `quarry install` refreshes the
+  global ones; a v1 block is replaced in place, a customised block is left
+  alone. The MCP `remember` docstring, the recall skill, `/remember`, and the
+  deposited repo guide carry the same five moments. New modules `ethos_tree`
+  (the read-only sidecar locator: pins, vendored/global identities, missions),
+  `ethos_ext_block`, `ethos_ext_scan`. (quarry-fbj9)
+- tool: one `MemoryType` vocabulary (`fact`, `observation`, `opinion`,
+  `procedure`; `lesson` reserved for `learn`) enforced on `remember`,
+  `ingest`, and `capture` alike — an unknown `memory_type` is a 400 with an
+  identical body on all three routes instead of a silently stored row that
+  neither decays nor matches a typed filter. The CLI `--memory-type` help and
+  the MCP docstrings name the same set. (quarry-fbj9)
 - infra: vendored, locally-optimized ethos identity registry at
   `.punt-labs/ethos/` — the 8-member `quarry` team only, produced by
   `ethos vendor` plus a prune to the quarry-team closure, with
@@ -25,6 +64,23 @@ across `transform`, `index`, and `connector`).
 
 ### Changed
 
+- tool: the ethos repo pin is read from `.punt-labs/ethos.yaml` first, then the
+  legacy `.punt-labs/ethos/config.yaml`, at each ancestor — the file current
+  ethos writes — so PreCompact/SessionEnd captures and `quarry doctor` attribute
+  to the pinned identity again instead of falling back to unattributed. The
+  walk stops at the repository boundary and never reads the operator's home.
+  (quarry-fbj9)
+- tool: `quarry mcp` (the only launcher) now configures the server's stderr
+  logging; `mcp_server.main()` no longer does, and its `__main__` block is gone.
+  The MCP tool-boundary decorator is `mcp_guard.ToolGuard.wrap`, shared by
+  `McpTools` and the sibling `MissionTools`. The hidden `quarry hooks` typer
+  sub-app is deleted — `quarry-hook` (`_hook_entry`) is the one dispatcher.
+  (quarry-fbj9)
+- infra: the web-search hook's shape/no-digest log lines moved from
+  `hooks_agent` onto `WebSearchPayload.log_shape`/`warn_no_digest`; the
+  `TranscriptReader` reads through one `_records()` seam; `EnableResult`
+  carries an `EthosMemoryResult` instead of six flattened ethos fields.
+  (quarry-fbj9)
 - infra: decomposed the ingestion god module `ingestion/pipeline.py`
   (1,133 → ~140 lines) into focused modules — `ingest_context.py`
   (`IngestContext`/`Progress`), `extracted_document.py`,
