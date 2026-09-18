@@ -2968,7 +2968,11 @@ shelf. This ADR records the loop that fills it, in three parts.
    reviewers) are filed unattributed with no distilled memory (decision D2). The
    subagent's own final report is filed as an `observation` in `memory-<handle>` —
    no LLM, no per-hook engine, a bounded third `DaemonCaptureSender` door,
-   scrub-before-store (DES-041). The raw transcript is preserved unchanged.
+   scrub-before-store (DES-041). The raw transcript is preserved unchanged. (When
+`SubagentStop` carries no `agent_type` at all — a rare harness case — the handle
+falls back to the cwd pin, i.e. the leader, and the report distills into the
+leader's own memory; this is the documented §b.2/§d.2 fallback, not the
+non-identity-`agent_type` path, which stays unattributed.)
 
 `quarry enable` refreshes the **vendored** ext guide blocks (refresh-only,
 producing a committed diff); `install` keeps the global tree; `doctor` stays
