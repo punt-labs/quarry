@@ -58,7 +58,7 @@ class CaptureRoutes(RouteGroup):
         if isinstance(overwrite, JSONResponse):
             return overwrite
         memory_type = self._str_field(body, "memory_type")
-        rejection = self.reject_reserved_memory_type(memory_type)
+        rejection = self.reject_invalid_memory_type(memory_type)
         if rejection is not None:
             return rejection
         source_url = self._str_field(body, "source_url")

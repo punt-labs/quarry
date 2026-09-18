@@ -224,7 +224,7 @@
     "avg_lcom": 0.0
   },
   "src/quarry/cli_ingest.py": {
-    "efferent_coupling": 1.0,
+    "efferent_coupling": 2.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
@@ -498,7 +498,7 @@
   },
   "src/quarry/daemon/routes/base.py": {
     "efferent_coupling": 4.0,
-    "public_names": 2.0,
+    "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.286,
     "avg_lcom": 0.286
@@ -742,7 +742,7 @@
     "avg_lcom": 0.0
   },
   "src/quarry/doctor_memory.py": {
-    "efferent_coupling": 3.0,
+    "efferent_coupling": 4.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.524,
@@ -1161,6 +1161,13 @@
     "max_lcom": 0.0,
     "public_names": 1.0
   },
+  "src/quarry/lesson.py": {
+    "efferent_coupling": 2.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
   "src/quarry/logging_config.py": {
     "avg_lcom": 0.0,
     "circular_imports": 0.0,
@@ -1253,7 +1260,7 @@
     "avg_lcom": 0.0
   },
   "src/quarry/retrieval/fusion.py": {
-    "efferent_coupling": 2.0,
+    "efferent_coupling": 3.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 0.667,

@@ -300,6 +300,25 @@ class TestRememberCollectionSentinel:
         assert result.exit_code == 0, result.output
         assert transport.body_for("POST", "/v1/remember")["collection"] == "notes"
 
+    def test_memory_type_reaches_the_wire_unchanged(
+        self, transport: RecordingTransport
+    ) -> None:
+        """The CLI never rewrites ``--memory-type``; the daemon owns validation."""
+        result = runner.invoke(
+            app,
+            ["--json", "remember", "--name", "n.md", "--memory-type", "procedure"],
+            input="body",
+        )
+        assert result.exit_code == 0, result.output
+        assert transport.body_for("POST", "/v1/remember")["memory_type"] == "procedure"
+
+    def test_memory_type_help_names_the_vocabulary(self) -> None:
+        """The help text is derived from ``MemoryType``, so it lists all four."""
+        result = runner.invoke(app, ["remember", "--help"])
+        assert result.exit_code == 0, result.output
+        for value in ("fact", "observation", "opinion", "procedure"):
+            assert value in result.output
+
 
 class TestLearn:
     """CLI ``learn`` param parity (bug class 3) -- shape matches C2's ratified

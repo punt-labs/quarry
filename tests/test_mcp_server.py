@@ -420,6 +420,31 @@ class TestRemember:
 
         assert captured == ["memory-rmh"]
 
+    def test_memory_type_reaches_the_wire_unchanged(
+        self, harness: _ToolHarness
+    ) -> None:
+        """The MCP tool never rewrites ``memory_type``; the daemon owns validation."""
+        captured: list[str] = []
+        real_route = __import__(
+            "quarry.daemon.routes.ingestion", fromlist=["IngestionRoutes"]
+        ).IngestionRoutes._remember_job
+
+        def spy(self: object, body: dict[str, object]) -> object:
+            captured.append(str(body.get("memory_type", "<missing>")))
+            return real_route(self, body)
+
+        with patch("quarry.daemon.routes.ingestion.IngestionRoutes._remember_job", spy):
+            harness.tools.remember(
+                "body", "n.md", agent_handle="rmh", memory_type="procedure"
+            )
+        assert captured == ["procedure"]
+
+    def test_unknown_memory_type_is_the_daemon_400(self, harness: _ToolHarness) -> None:
+        """The daemon's 400 body surfaces verbatim through the tool boundary."""
+        result = harness.tools.remember("body", "n.md", memory_type="facts")
+        assert result.startswith("Error:")
+        assert "unknown memory_type 'facts'" in result
+
 
 class TestIngest:
     def test_non_url_points_to_register(self, harness: _ToolHarness) -> None:

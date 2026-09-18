@@ -94,7 +94,7 @@ class TestCorpus:
         with patch("quarry.db.facade.Database.connect", return_value=_patch_rows(rows)):
             result = MemoryDiagnostics.corpus(db_path)
         # ``rmh`` still tallies (handle non-empty) but ``chatter`` is not in
-        # ``_MEMORY_TYPES``, so it does not show under ``types:``.
+        # ``DECAYABLE_MEMORY_TYPES``, so it does not show under ``types:``.
         assert "memory: rmh=1" in result.message
         assert "types:" not in result.message
 
@@ -219,7 +219,11 @@ class TestIdentityActive:
         assert result.passed is False
         assert result.required is False
         assert "rmh" in result.message
+        # Both remedies are named: the leader's next PreCompact populates the
+        # handle passively, and a remember with the handle does so directly.
         assert "PreCompact" in result.message
+        assert "quarry remember --agent-handle rmh" in result.message
+        assert "other agents have 2" in result.message
 
     def test_db_error_returns_failed_check_not_raise(self, tmp_path: Path) -> None:
         _write_ethos_config(tmp_path, "rmh")

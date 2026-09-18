@@ -15,7 +15,7 @@ from starlette.responses import JSONResponse
 
 from quarry.captures_collection import CapturesCollection
 from quarry.daemon.ingest_jobs import IngestJob, ScrubbedIngestJob
-from quarry.daemon.routes.base import RESERVED_MEMORY_TYPE, RouteGroup
+from quarry.daemon.routes.base import RouteGroup
 from quarry.http_guards import RequestGuards
 from quarry.ingest_collection import IngestCollection
 from quarry.lesson import LessonComposer, LessonsCollection
@@ -25,7 +25,6 @@ from quarry.url_safety import UrlSafetyCheck
 MAX_REMEMBER_BODY_BYTES = 50 * 1024 * 1024
 MAX_INGEST_BODY_BYTES = 1 * 1024 * 1024
 MAX_LEARN_BODY_BYTES = 64 * 1024
-_MAX_LESSON_CHARS = 500
 
 
 @final
@@ -114,7 +113,7 @@ class IngestionRoutes(RouteGroup):
         if isinstance(overwrite, JSONResponse):
             return overwrite
         memory_type = self._str_field(body, "memory_type", "")
-        rejection = self.reject_reserved_memory_type(memory_type)
+        rejection = self.reject_invalid_memory_type(memory_type)
         if rejection is not None:
             return rejection
         agent_handle = self._str_field(body, "agent_handle", "")
@@ -144,16 +143,10 @@ class IngestionRoutes(RouteGroup):
         lesson = self._require_text(body, "lesson")
         if isinstance(lesson, JSONResponse):
             return lesson
-        if len(lesson) > _MAX_LESSON_CHARS:
-            return JSONResponse(
-                {
-                    "error": (
-                        f"lesson exceeds {_MAX_LESSON_CHARS} chars -- "
-                        "use remember for full documents"
-                    )
-                },
-                status_code=400,
-            )
+        try:
+            LessonComposer.check_length(lesson)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
         topic = self._str_field(body, "topic", "")
         name = self._str_field(body, "name", "")
         collection = await run_in_threadpool(
@@ -169,7 +162,7 @@ class IngestionRoutes(RouteGroup):
             overwrite=False,
             scrub_label="learn",
             agent_handle="",
-            memory_type=RESERVED_MEMORY_TYPE,
+            memory_type=LessonComposer.memory_type(),
             summary=topic,
         )
 
@@ -193,7 +186,7 @@ class IngestionRoutes(RouteGroup):
         if isinstance(scrub, JSONResponse):
             return scrub
         memory_type = self._str_field(body, "memory_type", "")
-        rejection = self.reject_reserved_memory_type(memory_type)
+        rejection = self.reject_invalid_memory_type(memory_type)
         if rejection is not None:
             return rejection
         collection = await self._ingest_collection(body, scrub=scrub)

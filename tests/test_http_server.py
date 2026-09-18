@@ -2666,6 +2666,81 @@ class TestIngest:
         assert "reserved" in resp.json()["error"].lower()
 
 
+# The 400 body every write route returns for a mistyped memory_type.
+_UNKNOWN_MEMORY_TYPE_BODY = {
+    "error": (
+        "unknown memory_type 'facts'; expected one of "
+        "fact, observation, opinion, procedure"
+    )
+}
+
+
+class TestMemoryTypeVocabulary:
+    """One validator serves the three write routes (bug class 3)."""
+
+    def test_memory_type_rejection_identical_on_three_routes(
+        self, client: TestClient
+    ) -> None:
+        """A mistyped type is a 400 with the same body on remember, ingest, capture.
+
+        Before the shared vocabulary, ``"facts"`` was accepted everywhere and
+        stored as a row that neither decayed nor matched a typed filter.
+        """
+        with patch(
+            "quarry.url_safety.socket_module.getaddrinfo",
+            side_effect=_fake_public_addrinfo,
+        ):
+            responses = {
+                "remember": client.post(
+                    "/v1/remember",
+                    json={"name": "n.md", "content": "body", "memory_type": "facts"},
+                ),
+                "ingest": client.post(
+                    "/v1/ingest",
+                    json={"source": "https://example.com/d", "memory_type": "facts"},
+                ),
+                "capture": client.post(
+                    "/v1/capture",
+                    json={
+                        "content": "body",
+                        "document_name": "n.md",
+                        "memory_type": "facts",
+                    },
+                ),
+            }
+        for route, resp in responses.items():
+            assert resp.status_code == 400, route
+            assert resp.json() == _UNKNOWN_MEMORY_TYPE_BODY, route
+
+    def test_every_agent_type_is_accepted_on_remember(self, tmp_path: Path) -> None:
+        """The four agent-writable values reach the job untouched."""
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        stored = {"document_name": "n.md", "collection": "memory-rmh", "chunks": 1}
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch(
+                "quarry.ingestion.web_ingest.ingest_content", return_value=stored
+            ) as mock_ingest,
+        ):
+            for memory_type in ("fact", "observation", "opinion", "procedure"):
+                resp = tc.post(
+                    "/v1/remember",
+                    json={
+                        "name": "n.md",
+                        "content": "body",
+                        "agent_handle": "rmh",
+                        "memory_type": memory_type,
+                    },
+                )
+                assert resp.status_code == 202, memory_type
+                _poll_task_done(tc, resp.json()["task_id"])
+                assert mock_ingest.call_args is not None
+                assert mock_ingest.call_args.args[3].memory_type == memory_type
+
+
 class TestLearn:
     """Tests for POST /learn endpoint (quarry-b6p)."""
 

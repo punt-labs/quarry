@@ -14,10 +14,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# "" is unset; "lesson" is written only by the daemon's learn route
-# (RESERVED_MEMORY_TYPE) and rejected at every other boundary — see
-# daemon/routes/base.py's reject_reserved_memory_type and the domain
-# documented in mcp_server.py's remember() docstring.
+# The storage-column shape of quarry.memory_types.MemoryType plus "" (unset).
+# "lesson" is written only by the daemon's learn route and rejected at every
+# other boundary — see daemon/routes/base.py's reject_invalid_memory_type,
+# which is also where an unknown value becomes a 400 instead of a row.
 type MemoryType = Literal["", "fact", "observation", "opinion", "procedure", "lesson"]
 
 
