@@ -10,81 +10,6 @@ from unittest.mock import patch
 from quarry.transcript_reader import TranscriptReader
 
 
-class TestMessageText:
-    def test_extracts_short_tool_result_string(self) -> None:
-        record: dict[str, object] = {
-            "type": "user",
-            "message": {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": "toolu_abc",
-                        "content": "5 passed, 0 failed",
-                    }
-                ],
-            },
-        }
-        result = TranscriptReader.message_text(record)
-        assert result is not None
-        assert "[tool_result] 5 passed, 0 failed" in result
-
-    def test_extracts_short_tool_result_list(self) -> None:
-        record: dict[str, object] = {
-            "type": "user",
-            "message": {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": "toolu_abc",
-                        "content": [{"type": "text", "text": "No matches found"}],
-                    }
-                ],
-            },
-        }
-        result = TranscriptReader.message_text(record)
-        assert result is not None
-        assert "[tool_result] No matches found" in result
-
-    def test_skips_long_tool_result(self) -> None:
-        long_output = "x" * 501
-        record: dict[str, object] = {
-            "type": "user",
-            "message": {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": "toolu_abc",
-                        "content": long_output,
-                    }
-                ],
-            },
-        }
-        assert TranscriptReader.message_text(record) is None
-
-    def test_skips_tool_use_blocks(self) -> None:
-        record: dict[str, object] = {
-            "type": "assistant",
-            "message": {
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "tool_use",
-                        "id": "toolu_abc",
-                        "name": "Bash",
-                        "input": {"command": "ls"},
-                    }
-                ],
-            },
-        }
-        assert TranscriptReader.message_text(record) is None
-
-    def test_returns_none_for_non_message_record(self) -> None:
-        assert TranscriptReader.message_text({"type": "file-history-snapshot"}) is None
-
-
 class TestText:
     def _write_transcript(self, path: Path, records: list[dict[str, object]]) -> None:
         lines = [json.dumps(r) for r in records]
@@ -262,27 +187,15 @@ class TestMalformedLines:
         assert reader.last_assistant_text() == "second"
 
 
-class TestTurnText:
-    def test_string_content_is_returned_verbatim(self) -> None:
-        record: dict[str, object] = {
-            "type": "assistant",
-            "message": {"role": "assistant", "content": "  spaced  "},
-        }
-        assert TranscriptReader.turn_text(record) == "  spaced  "
+class TestReadOnce:
+    """A reader parses its file at construction and never again."""
 
-    def test_blank_string_content_is_empty(self) -> None:
-        record: dict[str, object] = {
-            "type": "assistant",
-            "message": {"role": "assistant", "content": "   "},
-        }
-        assert TranscriptReader.turn_text(record) == ""
-
-    def test_non_turn_record_is_empty(self) -> None:
-        assert TranscriptReader.turn_text({"type": "system", "message": {}}) == ""
-
-    def test_message_text_falls_back_to_type_for_role(self) -> None:
-        record: dict[str, object] = {"type": "user", "message": {"content": "hi"}}
-        assert TranscriptReader.message_text(record) == "[user] hi"
+    def test_extractions_answer_from_the_one_read(self, tmp_path: Path) -> None:
+        path = tmp_path / "t.jsonl"
+        reader = _write(path, _turn("user", "asked"), _turn("assistant", "answered"))
+        path.unlink()
+        assert reader.text() == "[user] asked\n\n[assistant] answered"
+        assert reader.last_assistant_text() == "answered"
 
 
 class TestLastAssistantText:

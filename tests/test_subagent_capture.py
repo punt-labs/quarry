@@ -15,6 +15,7 @@ import pytest
 
 from quarry.session_transcript import TranscriptSource
 from quarry.subagent_capture import SubagentCapture
+from quarry.transcript_reader import TranscriptReader
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -119,6 +120,30 @@ class TestRegisteredIdentity:
         assert outcome.distilled is False
         raw.assert_not_called()
         memory.assert_not_called()
+
+
+class TestSingleParse:
+    def test_one_reader_serves_both_rows(self, project: Path) -> None:
+        """The transcript is parsed once: the report and the raw row share a reader."""
+        capture = _capture(project, _turn("user", "go"), _turn("assistant", "Done."))
+        with (
+            patch(
+                "quarry.subagent_capture.TranscriptReader", wraps=TranscriptReader
+            ) as reader_cls,
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+                return_value=True,
+            ) as raw,
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_remember",
+                return_value=True,
+            ) as memory,
+        ):
+            outcome = capture.capture()
+        assert reader_cls.call_count == 1
+        assert outcome.distilled is True
+        assert "Done." in raw.call_args[0][0].content
+        assert "Done." in memory.call_args[0][0].content
 
 
 class TestUnregisteredAgentType:

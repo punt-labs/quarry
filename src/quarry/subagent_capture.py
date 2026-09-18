@@ -35,7 +35,8 @@ class SubagentCapture:
     registered identity with something to report — its final assistant turn
     lands in ``memory-<handle>`` as an ``observation`` through the daemon's
     scrub-before-store ``remember`` route. No engine runs in the hook; the
-    second POST carries the same 5 s cap as the first.
+    second POST carries the same 5 s cap as the first, and both rows come
+    from one reader, so the transcript is parsed once.
     """
 
     __slots__ = ("_agent_type", "_parent_session_id", "_source")
@@ -62,15 +63,16 @@ class SubagentCapture:
         for one agent never disagree about whether the session had content.
         """
         handle = EthosConfig.subagent_handle_at(self._agent_type, self._source.cwd)
+        reader = TranscriptReader(self._source.transcript_path)
         report = SubagentReport.from_transcript(
-            TranscriptReader(self._source.transcript_path),
+            reader,
             handle=handle,
             agent_id=self._source.session_id,
             parent_session_id=self._parent_session_id,
             agent_type=self._agent_type,
         )
         raw = SessionTranscriptCapture(
-            self._source, agent_handle=handle, summary=report.summary
+            self._source, reader, agent_handle=handle, summary=report.summary
         ).capture()
         distilled = False
         if handle and not report.is_empty and raw.text_captured:

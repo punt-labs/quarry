@@ -69,17 +69,26 @@ class SessionTranscriptCapture:
     still routes to ``<repo>-captures`` either way.
     """
 
-    __slots__ = ("_agent_handle", "_source", "_summary")
+    __slots__ = ("_agent_handle", "_reader", "_source", "_summary")
 
     _source: TranscriptSource
+    _reader: TranscriptReader
     _agent_handle: str
     _summary: str
 
     def __new__(
-        cls, source: TranscriptSource, *, agent_handle: str = "", summary: str = ""
+        cls,
+        source: TranscriptSource,
+        reader: TranscriptReader,
+        *,
+        agent_handle: str = "",
+        summary: str = "",
     ) -> Self:
         self = super().__new__(cls)
         self._source = source
+        # The reader is injected so a caller that already read the transcript
+        # (SubagentStop, for the distilled report) shares that one parse.
+        self._reader = reader
         self._agent_handle = agent_handle
         self._summary = summary
         return self
@@ -92,8 +101,11 @@ class SessionTranscriptCapture:
         and SessionEnd cannot drift. A subagent's capture must not come through
         here — its ``cwd`` is the repo and the pin would name the leader.
         """
+        from quarry.transcript_reader import TranscriptReader  # noqa: PLC0415
+
         handle = EthosConfig.agent_handle_at(source.cwd) if source.cwd else ""
-        return cls(source, agent_handle=handle)
+        reader = TranscriptReader(source.transcript_path)
+        return cls(source, reader, agent_handle=handle)
 
     def capture(self) -> TranscriptCaptureOutcome:
         """Run archive → scrub → daemon-post; return what actually happened.
@@ -107,12 +119,10 @@ class SessionTranscriptCapture:
             extract_artifacts,
             format_artifacts_header,
         )
-        from quarry.transcript_reader import TranscriptReader  # noqa: PLC0415
 
-        reader = TranscriptReader(self._source.transcript_path)
-        archived = self._archive(reader)
+        archived = self._archive()
 
-        raw_text = reader.text()
+        raw_text = self._reader.text()
         if not raw_text:
             logger.debug("%s: no conversation text found", self._source.label)
             return TranscriptCaptureOutcome(
@@ -137,11 +147,11 @@ class SessionTranscriptCapture:
             archived=archived, sent=sent, text_captured=True
         )
 
-    def _archive(self, reader: TranscriptReader) -> bool:
+    def _archive(self) -> bool:
         """Copy the raw JSONL under sessions/ and dedup prior archives for it."""
         sessions_dir = Path.home() / ".punt-labs" / "quarry" / "sessions"
         try:
-            reader.archive(self._source.session_id, sessions_dir)
+            self._reader.archive(self._source.session_id, sessions_dir)
         except OSError:
             logger.exception(
                 "%s: archival failed, proceeding with ingest", self._source.label
