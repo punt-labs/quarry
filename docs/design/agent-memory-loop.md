@@ -420,7 +420,7 @@ Why this and not the alternatives:
 
 ### c.3 Mechanism
 
-```
+```text
 EthosTree.missions_dir(cwd)            # nearest .punt-labs/ethos/missions
   → MissionStore.scan()                # MissionContract + MissionRound per dir; parse errors collected
   → frozen rounds only (c.1 rule)
@@ -513,7 +513,7 @@ source. Add the `## Session Artifacts` header the raw capture already computes
 (`src/quarry/artifacts.py:72-80,100-113`) and the result is a short, classified,
 attributed memory:
 
-```
+```text
 # Subagent report — rmh (agent a0f13948)
 Parent session: 304fdeb9 · agent_type: rmh
 
@@ -548,7 +548,7 @@ hook with a 30 s budget is exactly the per-hook heavy work DES-041 removed.
 
 ### d.2 Flow — `SubagentCapture`
 
-```
+```text
 HookAgent.subagent_stop (unchanged gates: cwd, config, payload → {} always)
   → SubagentCapture(cwd, agent_id, agent_type, transcript_path).capture()
       handle  = SubagentCapture.handle_for(agent_type, cwd)          # b.2
@@ -611,8 +611,8 @@ live scorers.
 | File | Responsibility | Lines | Classes / shape |
 |---|---|---|---|
 | `src/quarry/memory_types.py` | The `memory_type` vocabulary: `MemoryType(StrEnum)`, `parse`, `is_decayable`, `DECAYABLE_MEMORY_TYPES` | ~55 | 1 enum |
-| `src/quarry/ethos_tree.py` | Locate ethos sidecar artifacts from a cwd: `EthosTree.ancestors`, `nearest`, `vendored_identities` (`Path | None` — absence is the documented "no vendored tree" contract), `identities_dirs` (vendored-then-global, present ones only), `missions_dir`, `identity_exists` (handle regex-validated; vendored + global, not bundles — b.2) | ~105 | 1 `@final` class, `__slots__ = ()` |
-| `src/quarry/hooks_compact.py` | The PreCompact hook, extracted from `hooks.py`: `PreCompactTarget` (frozen: `cwd`, `session_id`, `transcript_path`; `source(label) -> TranscriptSource`) and `PreCompactHook` (`__slots__ = ()`; `handle(payload)` — today's `handle_pre_compact` verbatim in behaviour, the capture built as `SessionTranscriptCapture.for_session(target.source("pre-compact"))` so the handle resolution lives in one place (C6) and the hook imports no `EthosConfig`; `_target(payload) -> PreCompactTarget | None`, `None` being the documented no-op skip contract today's `_precompact_target` has). Payload coercion comes from `HookPayload.as_str/as_dir` (`_hook_trace.py:102-141`), which `hooks.py:683-705` duplicates line for line today | ~120 | 2 (`HookAgent` precedent: a `@final` static-method hook class, `hooks_agent.py`) |
+| `src/quarry/ethos_tree.py` | Locate ethos sidecar artifacts from a cwd: `EthosTree.ancestors`, `nearest`, `vendored_identities` (`Path or None` — absence is the documented "no vendored tree" contract), `identities_dirs` (vendored-then-global, present ones only), `missions_dir`, `identity_exists` (handle regex-validated; vendored + global, not bundles — b.2) | ~105 | 1 `@final` class, `__slots__ = ()` |
+| `src/quarry/hooks_compact.py` | The PreCompact hook, extracted from `hooks.py`: `PreCompactTarget` (frozen: `cwd`, `session_id`, `transcript_path`; `source(label) -> TranscriptSource`) and `PreCompactHook` (`__slots__ = ()`; `handle(payload)` — today's `handle_pre_compact` verbatim in behaviour, the capture built as `SessionTranscriptCapture.for_session(target.source("pre-compact"))` so the handle resolution lives in one place (C6) and the hook imports no `EthosConfig`; `_target(payload) -> PreCompactTarget or None`, `None` being the documented no-op skip contract today's `_precompact_target` has). Payload coercion comes from `HookPayload.as_str/as_dir` (`_hook_trace.py:102-141`), which `hooks.py:683-705` duplicates line for line today | ~120 | 2 (`HookAgent` precedent: a `@final` static-method hook class, `hooks_agent.py`) |
 | `src/quarry/mcp_guard.py` | The MCP tool-boundary decorator, extracted from `mcp_server.py:55-74`: `ToolGuard.wrap(method)` — a `@final`, `__slots__ = ()` namespace class in the `HookPayload` style (`_hook_trace.py:102-116` states the PY-OO-7 rationale) so a sibling tool module and `McpTools` share one boundary without either importing the other | ~40 | 1 |
 | `src/quarry/mcp_missions.py` | `MissionTools` (`__new__(connect)`, `register(server)`, `@ToolGuard.wrap missions_sync(mission, dry_run, force) -> str` over `MissionMemorySync`) — the twelfth tool in its own module so `mcp_server.py` (553 lines) shrinks instead of growing | ~70 | 1 |
 | `src/quarry/hooks_compact.py` tests → `tests/test_hooks_compact.py` | `TestHandlePreCompact`, `TestPreCompactCaptureRedaction`, `TestCwdHardeningPreCompact` **moved** from `tests/test_hooks.py:1359-1754,2173-2205,2284-` and re-pointed at `PreCompactHook.handle`; the moved suite passing unchanged is the extraction's behaviour-preservation guard (PY-RF-2) | ~450 (moved) | — |
@@ -807,6 +807,7 @@ and a warning (extends `tests/test_ethos_handle.py:54-60`).
 routes; `"lesson"` keeps the existing text (`test_http_server.py:2017,2269,2628`).
 
 **Class 3 — remote/local divergence.**
+
 - `tests/test_mission_memory.py::test_cli_and_mcp_produce_identical_requests`: run `quarry missions sync --json` (CLI runner, recording transport as in `tests/test_cli.py:263-301`) and `McpTools.missions_sync()` against the same fixture tree; assert the ordered list of `RememberRequest` bodies is identical.
 - `test_http_server.py`: `/remember`, `/ingest`, `/capture` each return the same 400 body for `memory_type="facts"`; `/capture` with `summary="s"` stores `summary == "s"` on every chunk.
 - `test_cli.py` / `test_mcp_server.py`: `--memory-type procedure` / `memory_type="procedure"` reach the wire unchanged.
@@ -970,7 +971,7 @@ layout (PY-RF-1: one transformation per step).
 
 ## Appendix A — session_context v2 (rendered for `rmh`)
 
-```
+```text
 ## Memory (quarry guide v2)
 
 You have persistent memory in quarry. It is cross-project and cross-machine:
@@ -1007,7 +1008,7 @@ Memories decay with a 30-day half-life; lessons and documents do not.
 
 ## Appendix B — mission memory document (Loop 2)
 
-```
+```text
 # Mission m-2026-09-02-003 — round 1 (repo quarry, worker rmh, evaluator djb, created 2026-09-02T12:42:20Z)
 
 Worker verdict (self-assessed): pass, confidence 0.90

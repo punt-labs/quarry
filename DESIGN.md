@@ -890,7 +890,7 @@ The encoded project dir replaces `/` with `-` and preserves the leading dash (e.
 
 1. Users who want full history should set `cleanupPeriodDays` to a high value (e.g., 365) in `~/.claude/settings.json` before sessions are lost.
 2. `quarry enable` should advise users about the cleanup window.
-3. Subagent transcripts (`subagents/agent-<id>.jsonl`) are not currently ingested by either mechanism — they are a future opportunity but not the primary knowledge source.
+3. Subagent transcripts (`subagents/agent-<id>.jsonl`) are not currently ingested by either mechanism — they are a future opportunity but not the primary knowledge source. **Superseded by DES-055 (2026-09-18):** subagent transcripts *are* now captured — via the `SubagentStop` hook (shipped in PR #486, `44b54f4`), which archives the transcript to `<repo>-captures` and, per DES-055 Loop 3, distills the subagent's final report into `memory-<handle>`.
 
 ---
 
@@ -2923,3 +2923,74 @@ repo would resolve only on a machine whose global store is populated, or
 require the org registry to hold a particular state. Repo independence is
 the invariant; the vendored copy is the sole source of truth for this
 repo, and no other repo is touched to make quarry's identities resolve.
+
+---
+
+## DES-055: The agent-memory write loop — persist, feedback, distillation
+
+**Date:** 2026-09-18
+**Status:** SETTLED
+**Topic:** Making agents persist and benefit from their own work
+**Bead:** quarry-fbj9
+**Full design:** [`docs/design/agent-memory-loop.md`](docs/design/agent-memory-loop.md)
+**Extends:** DES-017 (decay/boost), DES-018 (agent-memory schema), DES-019 (ext `session_context`), DES-029 (`enable` collections), DES-030 (transcript lifecycle — supersedes its Implication #3), DES-041 (scrub-before-store), DES-053 (`learn`/lessons)
+
+### Context
+
+Recall-on-launch already works: the ethos `SubagentStart` hook injects each
+identity's ext `session_context` (`memory-<handle>` recall/persist block) into a
+spawned subagent (ethos DES-028 Layer 3, verified). The *write* side was dormant —
+zero `memory-*`/`*-lessons` collections existed, so agents recalled from an empty
+shelf. This ADR records the loop that fills it, in three parts.
+
+### Design
+
+1. **Persist habit + attribution (Loop 1).** A versioned `## Memory (quarry guide
+   v2)` block (five persist moments, a not-list, the "always pass your own handle"
+   rule — a subagent's cwd resolves to the leader, not to it) refreshed atomically
+   into both the global and the vendored ext files. One `MemoryType` enum is the
+   single source of truth (replacing three hand copies); an unknown `memory_type`
+   is a **400** on `/remember`, `/ingest`, `/capture` (decision D1). Identity for a
+   write is the caller's statement — the daemon never auto-resolves a handle from
+   `cwd`.
+
+2. **Evaluator feedback → memory (Loop 2).** A quarry-side, idempotent,
+   leader-run verb `quarry missions sync` (CLI + MCP + slash; the write is
+   `POST /v1/remember`, so no new route) reads the ethos mission YAML trio
+   (`contract`/`results`/`reflections`) client-side and files each frozen round as
+   an `observation` in `memory-<worker>`, named `mission-<repo>-<id>-r<n>`
+   (repo discriminator: mission IDs are per-machine counters), skip-if-exists.
+   Ethos is never called — the one-way dependency (DES-001/DES-008) holds.
+
+3. **Capture distillation (Loop 3).** `SubagentStop` resolves the handle as
+   `agent_type` **iff** it is a registered ethos identity (read-only `EthosTree`
+   check, `agent_type` regex-validated first); non-identities (`general-purpose`,
+   reviewers) are filed unattributed with no distilled memory (decision D2). The
+   subagent's own final report is filed as an `observation` in `memory-<handle>` —
+   no LLM, no per-hook engine, a bounded third `DaemonCaptureSender` door,
+   scrub-before-store (DES-041). The raw transcript is preserved unchanged.
+
+`quarry enable` refreshes the **vendored** ext guide blocks (refresh-only,
+producing a committed diff); `install` keeps the global tree; `doctor` stays
+read-only (decision D3).
+
+### Asserts
+
+(1) Identity for a write is the caller's statement — the injected `## Memory`
+block for agents, `agent_type` validated against the registry for `SubagentStop`,
+`contract.worker` for mission memory; `cwd` names the leader and only the leader.
+(2) `memory_type` is a closed vocabulary enforced once, server-side. (3) Evaluator
+feedback reaches the worker through a quarry-side, idempotent, leader-run verb that
+reads ethos artifacts and writes through `/remember`; ethos is never called. (4) A
+subagent's transcript is captured raw and its final report filed as an
+`observation` — no model, no per-hook engine. (5) Agent memory has no project
+dimension (cross-project, cross-machine by ruling).
+
+### Alternatives Considered
+
+Server-side `agent_handle` auto-resolve (no `cwd` on the wire; cwd → leader);
+attributing non-identity subagents to the leader (pollutes the leader's memory);
+an ethos-side or daemon-path-read trigger for Loop 2 (breaks the one-way
+dependency / DES-041 path-read rejection); filing reflections as lessons
+(un-distilled text in the boosted tier); an LLM distillation pass (cost, no local
+model, heavy work in a blocking hook). Full rejection table in the design doc §g.2.
