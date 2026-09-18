@@ -728,7 +728,7 @@
     "avg_lcom": 0.0
   },
   "src/quarry/doctor_ethos.py": {
-    "efferent_coupling": 1.0,
+    "efferent_coupling": 5.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
@@ -756,7 +756,7 @@
     "public_names": 2.0
   },
   "src/quarry/enable.py": {
-    "efferent_coupling": 1.0,
+    "efferent_coupling": 2.0,
     "public_names": 6.0,
     "circular_imports": 0.0,
     "max_lcom": 0.267,
@@ -798,11 +798,18 @@
     "avg_lcom": 0.0
   },
   "src/quarry/ethos_memory.py": {
-    "efferent_coupling": 1.0,
+    "efferent_coupling": 3.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
+  },
+  "src/quarry/ethos_tree.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.964,
+    "avg_lcom": 0.964
   },
   "src/quarry/extractors/__init__.py": {
     "avg_lcom": 0.0,

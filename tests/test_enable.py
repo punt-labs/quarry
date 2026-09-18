@@ -219,6 +219,37 @@ class TestT6EnablePreservesExistingConfig:
         assert config_path.read_text() == custom_content
 
 
+class TestEnableRefreshesVendoredEthosTree:
+    """``quarry enable`` refreshes the repo's committed ext files — never creates."""
+
+    _V1_BLOCK = "\nsession_context: |\n  ## Memory\n  \n  old guide\n"
+
+    def test_reports_refreshed_vendored_identities(self, unpinned_root: Path) -> None:
+        identities = unpinned_root / ".punt-labs" / "ethos" / "identities"
+        for handle in ("claude", "rmh"):
+            ext = identities / f"{handle}.ext"
+            ext.mkdir(parents=True)
+            (ext / "quarry.yaml").write_text(
+                f"memory_collection: memory-{handle}\n{self._V1_BLOCK}"
+            )
+        (identities / "kpz.yaml").write_text("agent: kpz\n")  # no ext: stays without
+        client = FakeRegistryClient()
+
+        with patch(_NO_ETHOS, unpinned_root / "no-ethos"):
+            result = enable_project(unpinned_root, client)
+
+        assert result.ethos.vendored_updated == ["claude", "rmh"]
+        assert (
+            "## Memory (quarry guide v2)"
+            in (identities / "rmh.ext" / "quarry.yaml").read_text()
+        )
+        assert not (identities / "kpz.ext").exists()
+
+        with patch(_NO_ETHOS, unpinned_root / "no-ethos"):
+            again = enable_project(unpinned_root, client)
+        assert again.ethos.vendored_updated == []
+
+
 class TestT8EnableSkipsEthosWhenMissing:
     def test_skips_when_identities_dir_missing(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
@@ -228,7 +259,7 @@ class TestT8EnableSkipsEthosWhenMissing:
         with patch(_NO_ETHOS, tmp_path / "nonexistent-identities"):
             result = enable_project(project, client)
 
-        assert result.ethos_skipped is True
+        assert result.ethos.skipped is True
 
 
 class TestT9EnableCapturesCollectionName:

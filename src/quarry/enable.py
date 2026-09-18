@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, Self, final
 
+from quarry.ethos_memory import EthosMemoryBootstrap, EthosMemoryResult
 from quarry.safe_paths import SafeRepoPath
 
 if TYPE_CHECKING:
@@ -45,23 +46,20 @@ class EnableResult:
 
     The four CLAUDE.md/.gitignore fields track the § 2.3 steps: guide
     deposit, ``enabled`` marker, ``@``-import line, and ``.gitignore`` entry.
+    ``ethos`` is the bootstrap's own per-handle outcome, carried whole rather
+    than flattened into parallel lists.
     """
 
     directory: str
     collection: str
     captures_collection: str
-    memory_collections: list[str] = field(default_factory=list)
     config_path: str = ""
     created_registration: bool = False
     guide_deposited: bool = False
     enabled_marker_written: bool = False
     import_registered: bool = False
     gitignore_ensured: bool = False
-    ethos_skipped: bool = False
-    ethos_updated: list[str] = field(default_factory=list)
-    ethos_already_set: list[str] = field(default_factory=list)
-    ethos_created: list[str] = field(default_factory=list)
-    ethos_failed: list[str] = field(default_factory=list)
+    ethos: EthosMemoryResult = field(default_factory=EthosMemoryResult)
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,7 +130,6 @@ def enable_project(
     are the client's and are written locally.
     """
     from quarry.enablement import Enablement  # noqa: PLC0415
-    from quarry.ethos_memory import EthosMemoryBootstrap  # noqa: PLC0415
     from quarry.registrar import Registrar  # noqa: PLC0415
 
     # expanduser BEFORE resolve: a bare "~/proj" otherwise resolves against cwd
@@ -146,7 +143,9 @@ def enable_project(
 
     captures_collection = f"{collection}-captures"
 
-    ethos = EthosMemoryBootstrap().run()
+    # Global ext files are created and refreshed; the repo's vendored tree (a
+    # repo-only identity's actual source layer) is refreshed, never created.
+    ethos = EthosMemoryBootstrap.for_repo(directory).run()
 
     # Enablement runs BEFORE the config write: config.md's compaction flag
     # has no gitignore/marker dependency, so it makes hook-triggered capture
@@ -161,18 +160,13 @@ def enable_project(
         directory=str(directory),
         collection=collection,
         captures_collection=captures_collection,
-        memory_collections=ethos.memory_collections,
         config_path=config_path,
         created_registration=created,
         guide_deposited=claudemd.guide_deposited,
         enabled_marker_written=claudemd.enabled_marker_written,
         import_registered=claudemd.import_registered,
         gitignore_ensured=claudemd.gitignore_ensured,
-        ethos_skipped=ethos.skipped,
-        ethos_updated=ethos.updated,
-        ethos_already_set=ethos.already_set,
-        ethos_created=ethos.created,
-        ethos_failed=ethos.failed,
+        ethos=ethos,
     )
 
 

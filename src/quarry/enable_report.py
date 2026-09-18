@@ -61,25 +61,33 @@ class EnableReport:
         return lines + self._ethos_lines()
 
     def _ethos_lines(self) -> list[str]:
-        """Return the ethos-identity portion of the summary."""
-        r = self._r
-        if r.ethos_skipped:
-            return ["  Ethos: not installed (agent memory skipped)"]
-        lines = _flagged(
+        """Return the ethos-identity portion of the summary.
+
+        The vendored line can accompany "not installed": a repo's committed
+        ext files are refreshed whether or not the operator has a global ethos
+        install, and that refresh is a working-tree diff to commit — announced
+        here so it is committed, not discovered. The failed handles are listed
+        last: the guide never landed for them, so "Ethos created" must not read
+        as unqualified success.
+        """
+        e = self._r.ethos
+        return _flagged(
             (
-                (r.ethos_created, f"  Ethos created: {', '.join(r.ethos_created)}"),
-                (r.ethos_updated, f"  Ethos updated: {', '.join(r.ethos_updated)}"),
+                (e.skipped, "  Ethos: not installed (agent memory skipped)"),
+                (e.created, f"  Ethos created: {', '.join(e.created)}"),
+                (e.updated, f"  Ethos updated: {', '.join(e.updated)}"),
                 (
-                    r.memory_collections,
-                    f"  Memory collections: {', '.join(r.memory_collections)}",
+                    e.memory_collections,
+                    f"  Memory collections: {', '.join(e.memory_collections)}",
                 ),
+                (
+                    e.vendored_updated,
+                    "  Ethos guide refreshed (vendored — commit via PR): "
+                    + ", ".join(e.vendored_updated),
+                ),
+                (e.failed, f"  Ethos FAILED: {', '.join(e.failed)}"),
             )
         )
-        # session_context never landed for the failed handles — surface the
-        # partial failure rather than let "Ethos created" imply success.
-        if r.ethos_failed:
-            lines.append(f"  Ethos FAILED: {', '.join(r.ethos_failed)}")
-        return lines
 
 
 @final

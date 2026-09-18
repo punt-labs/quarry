@@ -1,4 +1,4 @@
-"""Doctor check: propagate quarry memory instructions into ethos identity exts."""
+"""Refresh the quarry memory guide in each ethos identity's ``quarry.yaml`` ext."""
 
 from __future__ import annotations
 
@@ -7,181 +7,114 @@ from typing import final
 
 import yaml
 
+from quarry.atomic_file import AtomicFile
+from quarry.ethos_ext_block import SessionContextBlock
+from quarry.ethos_ext_scan import ExtFailure, ExtScanOutcome, ExtWriteResult
+from quarry.ethos_tree import EthosTree
 from quarry.results import CheckResult
-
-_SESSION_CONTEXT_TEMPLATE = """\
-## Memory
-
-You have persistent memory stored in quarry, a local semantic
-search engine. Your memories survive across sessions and machines.
-
-### Working Memory
-
-Collection: "{memory_collection}"
-
-To recall prior knowledge:
-  /find <query> — or use the quarry find tool with
-  collection="{memory_collection}", agent_handle="{handle}"
-
-To persist something you learned:
-  /remember <content> — or use the quarry remember tool with
-  collection="{memory_collection}", agent_handle="{handle}",
-  memory_type=fact|observation|procedure|opinion
-
-Memory types:
-- fact: objective, verifiable information ("the API rate limit is 100 req/s")
-- observation: neutral summary of an entity or system
-- procedure: how-to knowledge ("when deploying, run migrations first")
-- opinion: subjective assessment with confidence
-"""
 
 
 @final
 class EthosExtDiagnostics:
-    """Write ``session_context`` into each identity's ``quarry.yaml`` ext.
+    """Write the current memory guide into each identity's ``quarry.yaml`` ext.
 
-    Idempotent: leaves an existing ``session_context`` key unchanged. Skips
-    identity directories that have no ``quarry.yaml`` (quarry not configured
-    for that identity).
+    Idempotent: a file already carrying the current guide, or a hand-authored
+    ``session_context``, is left unchanged; a stale quarry guide is spliced up
+    to the current version in place. Identity directories without a
+    ``quarry.yaml`` (quarry not configured for that identity) are skipped and
+    never created here.
     """
 
     __slots__ = ()
 
     @staticmethod
     def configure(identities_dir: Path | None = None) -> CheckResult:
-        """Best-effort install step: write session_context for every identity."""
-        if identities_dir is None:
-            identities_dir = Path.home() / ".punt-labs" / "ethos" / "identities"
+        """Best-effort install step: refresh the guide across the global tree.
 
+        ``quarry install`` has no repo context, so this touches the global
+        identities only; ``quarry enable`` handles a repo's vendored tree.
+        """
+        if identities_dir is None:
+            identities_dir = EthosTree.global_identities()
+        name = "Ethos ext session_context"
         if not identities_dir.is_dir():
             return CheckResult(
-                name="Ethos ext session_context",
+                name=name,
                 passed=True,
                 message="ethos not installed, skipping",
                 required=False,
             )
-
-        updated, already_set, no_collection, failed = EthosExtDiagnostics._scan(
-            identities_dir
-        )
-
-        if not updated and not already_set and not no_collection and not failed:
+        outcome = EthosExtDiagnostics.refresh(identities_dir)
+        if outcome.is_empty:
             return CheckResult(
-                name="Ethos ext session_context",
+                name=name,
                 passed=True,
                 message="no identities with quarry configured",
                 required=False,
             )
-
         return CheckResult(
-            name="Ethos ext session_context",
-            passed=not failed,
-            message=EthosExtDiagnostics._message(
-                updated, already_set, no_collection, failed
-            ),
+            name=name,
+            passed=not outcome.failed,
+            message=outcome.message(),
             required=False,
         )
 
     @staticmethod
-    def write_session_context(quarry_yaml: Path, handle: str) -> str:
-        """Write session_context into one quarry.yaml if missing.
+    def refresh(identities_dir: Path) -> ExtScanOutcome:
+        """Refresh every ``<handle>.ext/quarry.yaml`` under *identities_dir*.
 
-        Returns:
-            "updated"      — session_context was appended
-            "already_set"  — session_context key already present, file unchanged
-            "no_collection"— memory_collection absent, nothing to do
+        Only I/O, YAML, and decoding failures are recorded per identity — a
+        non-UTF8 ext file raises ``UnicodeDecodeError`` (a ``ValueError``, not
+        an ``OSError``) — so one bad file never stops the scan while a real
+        bug still propagates. An absent directory yields an empty outcome.
         """
-        raw = quarry_yaml.read_text(encoding="utf-8")
-
-        data = yaml.safe_load(raw) or {}
-        if not isinstance(data, dict):
-            return "no_collection"
-        if "session_context" in data:
-            return "already_set"
-
-        memory_collection = data.get("memory_collection")
-        if not memory_collection:
-            return "no_collection"
-
-        fragment = EthosExtDiagnostics._literal_block(handle, str(memory_collection))
-        with quarry_yaml.open("a", encoding="utf-8") as fh:
-            fh.write(fragment)
-        return "updated"
-
-    @staticmethod
-    def _literal_block(handle: str, memory_collection: str) -> str:
-        """Return a YAML literal block scalar fragment for session_context.
-
-        The fragment starts with a newline so it appends cleanly to an existing
-        file that may or may not end with a newline. Each body line is indented
-        two spaces as required for a YAML literal block scalar.
-        """
-        body = _SESSION_CONTEXT_TEMPLATE.format(
-            handle=handle,
-            memory_collection=memory_collection,
-        )
-        indented = "\n".join(f"  {line}" for line in body.splitlines())
-        return f"\nsession_context: |\n{indented}\n"
-
-    @staticmethod
-    def _scan(
-        identities_dir: Path,
-    ) -> tuple[list[str], list[str], list[str], list[str]]:
-        """Iterate identity ext dirs and classify each quarry.yaml.
-
-        Returns (updated, already_set, no_collection, failed).
-        """
-        updated: list[str] = []
-        already_set: list[str] = []
-        no_collection: list[str] = []
-        failed: list[str] = []
-
-        for ext_dir in sorted(identities_dir.iterdir()):
-            if not ext_dir.is_dir() or not ext_dir.name.endswith(".ext"):
-                continue
-            handle = ext_dir.name[: -len(".ext")]
-            quarry_yaml = ext_dir / "quarry.yaml"
-            if not quarry_yaml.exists():
-                continue
+        buckets: dict[ExtWriteResult, list[str]] = {
+            result: [] for result in ExtWriteResult
+        }
+        failed: list[ExtFailure] = []
+        for handle, quarry_yaml in EthosExtDiagnostics._ext_files(identities_dir):
             try:
                 result = EthosExtDiagnostics.write_session_context(quarry_yaml, handle)
-                if result == "updated":
-                    updated.append(handle)
-                elif result == "already_set":
-                    already_set.append(handle)
-                elif result == "no_collection":
-                    no_collection.append(handle)
-            except Exception as exc:  # noqa: BLE001
-                failed.append(f"{handle}: {exc}")
-
-        return updated, already_set, no_collection, failed
+            except (OSError, yaml.YAMLError, UnicodeDecodeError) as exc:
+                failed.append(ExtFailure(handle, str(exc)))
+                continue
+            buckets[result].append(handle)
+        return ExtScanOutcome(
+            updated=tuple(buckets[ExtWriteResult.UPDATED]),
+            already_set=tuple(buckets[ExtWriteResult.ALREADY_SET]),
+            no_collection=tuple(buckets[ExtWriteResult.NO_COLLECTION]),
+            failed=tuple(failed),
+        )
 
     @staticmethod
-    def _message(
-        updated: list[str],
-        already_set: list[str],
-        no_collection: list[str],
-        failed: list[str],
-    ) -> str:
-        """Build the result message for configure()."""
+    def _ext_files(identities_dir: Path) -> list[tuple[str, Path]]:
+        """Return ``(handle, quarry.yaml)`` for each ext dir that has the file."""
+        if not identities_dir.is_dir():
+            return []
+        return [
+            (ext_dir.name.removesuffix(".ext"), ext_dir / "quarry.yaml")
+            for ext_dir in sorted(identities_dir.iterdir())
+            if ext_dir.is_dir()
+            and ext_dir.name.endswith(".ext")
+            and (ext_dir / "quarry.yaml").is_file()
+        ]
 
-        def _plural(lst: list[str]) -> str:
-            return "identity" if len(lst) == 1 else "identities"
+    @staticmethod
+    def write_session_context(quarry_yaml: Path, handle: str) -> ExtWriteResult:
+        """Write the current guide into one ``quarry.yaml`` if absent or stale.
 
-        parts: list[str] = []
-        if updated:
-            parts.append(
-                f"updated {len(updated)} {_plural(updated)}: {', '.join(updated)}"
-            )
-        if already_set:
-            if not updated:
-                parts.append(f"session_context already set: {', '.join(already_set)}")
-            else:
-                parts.append(f"already set: {', '.join(already_set)}")
-        if no_collection:
-            parts.append(
-                f"no memory_collection (check config): {', '.join(no_collection)}"
-            )
-        if failed:
-            parts.append(f"errors: {'; '.join(failed)}")
-        return "; ".join(parts)
+        The raw text is edited as a line range and written back atomically;
+        ``yaml.safe_load`` is used only to read ``memory_collection``, never to
+        rewrite the file.
+        """
+        ext = AtomicFile(quarry_yaml)
+        raw = ext.read()
+        block = SessionContextBlock.locate(raw)
+        if not block.needs_guide:
+            return ExtWriteResult.ALREADY_SET
+        data = yaml.safe_load(raw) or {}
+        collection = data.get("memory_collection") if isinstance(data, dict) else None
+        if not collection:
+            return ExtWriteResult.NO_COLLECTION
+        ext.replace(block.with_guide(handle, str(collection)))
+        return ExtWriteResult.UPDATED

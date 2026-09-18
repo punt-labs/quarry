@@ -81,10 +81,18 @@ def pytest_configure(config: pytest.Config) -> None:
 
     Overriding ``tempfile.tempdir`` (not ``--basetemp``) preserves pytest's
     ``pytest-of-<user>/pytest-<n>`` rotation and its concurrency safety.
+
+    The base is also stamped as a repository boundary (an empty ``.git``):
+    :class:`~quarry.ethos_tree.EthosTree` bounds its vendored-tree search at
+    the enclosing git root, and without the stamp an ancestor walk from any
+    ``tmp_path`` project reaches THIS repository's committed
+    ``.punt-labs/ethos/identities`` — the enable tests then refresh the real
+    vendored ext files as a side effect of running.
     """
     del config
     base = _pytest_tmp_base()
     base.mkdir(parents=True, exist_ok=True)
+    (base / ".git").mkdir(exist_ok=True)
     tempfile.tempdir = str(base)
 
 
