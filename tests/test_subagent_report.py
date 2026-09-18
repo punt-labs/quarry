@@ -64,7 +64,7 @@ class TestFromTranscript:
         )
         assert "quarry-fbj9" in _report(reader).artifacts_header
 
-    def test_runaway_report_is_tail_truncated(self, tmp_path: Path) -> None:
+    def test_runaway_report_keeps_head_and_caps_tail(self, tmp_path: Path) -> None:
         huge = "x" * (SubagentReport.MAX_CHARS + 500)
         reader = _transcript(tmp_path / "t.jsonl", _turn("assistant", huge))
         text = _report(reader).text

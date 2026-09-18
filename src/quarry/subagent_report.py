@@ -54,12 +54,12 @@ class SubagentReport:
             parent_session_id=parent_session_id,
             agent_type=agent_type,
             artifacts_header=SessionArtifacts.from_text(reader.text()).format_header(),
-            text=cls._tail_truncated(reader.last_assistant_text()),
+            text=cls._head_capped(reader.last_assistant_text()),
         )
 
     @classmethod
-    def _tail_truncated(cls, text: str) -> str:
-        """Keep the first ``MAX_CHARS`` and say how much was cut."""
+    def _head_capped(cls, text: str) -> str:
+        """Keep the first ``MAX_CHARS`` and say how much of the tail was cut."""
         if len(text) <= cls.MAX_CHARS:
             return text
         cut = len(text) - cls.MAX_CHARS
