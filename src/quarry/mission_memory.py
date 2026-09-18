@@ -227,7 +227,7 @@ class MissionMemorySync:
             return f"daemon returned HTTP {exc.status}: {exc.message}"
         return exc.message
 
-    def _existing_header(self, name: str) -> str | None:
+    def _existing_header(self, name: str) -> str | None:  # None: not filed yet (404)
         """Return the stored document's first line, or ``None`` when not filed yet.
 
         ``None`` is the documented 404 outcome ("file it"); any other failure

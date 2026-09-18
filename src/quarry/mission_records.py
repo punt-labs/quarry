@@ -96,8 +96,8 @@ class MissionRound:
     """
 
     number: int
-    result: WorkerResult | None
-    reflection: EvaluatorReflection | None
+    result: WorkerResult | None  # None: the worker never submitted this round
+    reflection: EvaluatorReflection | None  # None: the evaluator never reflected
 
     @property
     def has_result(self) -> bool:

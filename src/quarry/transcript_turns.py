@@ -22,7 +22,7 @@ class TurnText:
     _MAX_TOOL_RESULT_CHARS = 500
 
     @classmethod
-    def message_text(cls, record: dict[str, object]) -> str | None:
+    def message_text(cls, record: dict[str, object]) -> str | None:  # None: not a turn
         """Return a single record's ``[role] text``, or ``None`` if not a message.
 
         ``None`` is the documented "this record is not a user/assistant message"
