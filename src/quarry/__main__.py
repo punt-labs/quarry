@@ -86,11 +86,6 @@ app = typer.Typer(
     rich_markup_mode=None,
     cls=_OrderedGroup,
 )
-hooks_app = typer.Typer(
-    help="Claude Code hook handlers (called by hook scripts)",
-    rich_markup_mode=None,
-)
-app.add_typer(hooks_app, name="hooks", hidden=True)
 err_console = Console(stderr=True)
 
 # Global state set by @app.callback.
@@ -303,6 +298,9 @@ def mcp() -> None:
     """Start the MCP server (stdio transport)."""
     from quarry.mcp_server import main as mcp_main  # noqa: PLC0415
 
+    # stdout is the stdio transport, so the server's log goes to stderr at INFO
+    # regardless of the CLI's --quiet/--verbose default; the launcher owns this.
+    LoggingConfig.configure(stderr_level="INFO")
     mcp_main(db_name=_global_db or SELECTION.persisted())
 
 
@@ -328,37 +326,10 @@ def uninstall() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Hook subcommands — called by Claude Code hook scripts.  All are fail-open:
-# exceptions are caught, logged, and the process exits 0 so Claude is never
-# blocked.
+# Claude Code hooks are dispatched by ``quarry-hook`` (``quarry._hook_entry``),
+# never through this CLI: the entry point exists precisely to skip the typer +
+# pydantic import chain on every hook fire.
 # ---------------------------------------------------------------------------
-
-
-@hooks_app.command(name="session-start")
-def hook_session_start() -> None:
-    """SessionStart: auto-register and sync the current repo."""
-    from quarry._stdlib import run_hook  # noqa: PLC0415
-    from quarry.hooks import handle_session_start  # noqa: PLC0415
-
-    run_hook(handle_session_start)
-
-
-@hooks_app.command(name="post-web-fetch")
-def hook_post_web_fetch() -> None:
-    """PostToolUse on WebFetch: auto-ingest fetched URLs."""
-    from quarry._stdlib import run_hook  # noqa: PLC0415
-    from quarry.hooks import handle_post_web_fetch  # noqa: PLC0415
-
-    run_hook(handle_post_web_fetch)
-
-
-@hooks_app.command(name="pre-compact")
-def hook_pre_compact() -> None:
-    """PreCompact: capture compaction summaries."""
-    from quarry._stdlib import run_hook  # noqa: PLC0415
-    from quarry.hooks import handle_pre_compact  # noqa: PLC0415
-
-    run_hook(handle_pre_compact)
 
 
 if __name__ == "__main__":

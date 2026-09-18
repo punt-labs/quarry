@@ -539,3 +539,22 @@ def _status_request(
             "embedding_dimension": 768,
         },
     )
+
+
+class TestMcpCommand:
+    """``quarry mcp`` is the only launcher, so it owns the server's logging."""
+
+    def test_configures_stderr_logging_at_info_before_serving(self) -> None:
+        calls: list[str] = []
+        with (
+            patch(
+                "quarry.__main__.LoggingConfig.configure",
+                side_effect=lambda *, stderr_level: calls.append(stderr_level),
+            ),
+            patch("quarry.mcp_server.main") as serve,
+        ):
+            result = runner.invoke(app, ["mcp"])
+        assert result.exit_code == 0, result.output
+        # The CLI callback's default level first, then the launcher's INFO.
+        assert calls[-1] == "INFO"
+        serve.assert_called_once()

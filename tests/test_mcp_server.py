@@ -831,6 +831,25 @@ class TestToolDocstringOpeners:
         assert doc is not None
         assert self._R3 in doc
 
+    def test_remember_docstring_carries_the_five_moments_and_attribution(
+        self,
+    ) -> None:
+        """The MCP surface states when to remember and why the handle is yours.
+
+        The same five moments live in the session_context guide and the recall
+        skill; the MCP docstring is the copy a model sees without either.
+        """
+        doc = " ".join((McpTools.remember.__doc__ or "").split())
+        assert "five moments" in doc
+        for moment in ("(fact)", "(procedure)", "(opinion)", "(observation)"):
+            assert moment in doc, moment
+        assert "Always pass your own agent_handle" in doc
+        assert "resolves to the repo's leader, not to you" in doc
+
+    def test_find_agent_handle_doc_says_your_own(self) -> None:
+        doc = McpTools.find.__doc__ or ""
+        assert "Your own handle to recall only your memories" in doc
+
     def test_remember_drops_clipboard_framing(self) -> None:
         """R3a: the clipboard/API-response framing is dropped entirely."""
         doc = McpTools.remember.__doc__ or ""

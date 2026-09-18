@@ -13,14 +13,14 @@
     "public_attr_violations": 0.0
   },
   "src/quarry/__main__.py": {
-    "method_ratio": 0.071,
+    "method_ratio": 0.091,
     "encapsulation_ratio": 1.0,
-    "avg_params": 0.8,
+    "avg_params": 1.0,
     "max_complexity": 8.0,
-    "avg_complexity": 2.67,
-    "module_size": 301.0,
+    "avg_complexity": 3.08,
+    "module_size": 281.0,
     "classes_per_module": 1.0,
-    "class_to_func_ratio": 0.071,
+    "class_to_func_ratio": 0.091,
     "init_violations": 0.0,
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
@@ -2443,18 +2443,31 @@
     "module_size": 134.0,
     "public_attr_violations": 0.0
   },
-  "src/quarry/mcp_server.py": {
-    "avg_complexity": 2.45,
-    "avg_params": 2.05,
-    "class_to_func_ratio": 0.333,
-    "classes_per_module": 1.0,
+  "src/quarry/mcp_guard.py": {
+    "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "future_annotations": 1.0,
+    "avg_params": 0.5,
+    "max_complexity": 2.0,
+    "avg_complexity": 2.0,
+    "module_size": 37.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
+  "src/quarry/mcp_server.py": {
+    "method_ratio": 0.95,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 2.2,
     "max_complexity": 6.0,
-    "method_ratio": 0.905,
-    "module_size": 481.0,
-    "public_attr_violations": 0.0
+    "avg_complexity": 2.5,
+    "module_size": 475.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 0.5,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/quarry/memory_types.py": {
     "method_ratio": 1.0,
@@ -2923,6 +2936,32 @@
     "method_ratio": 1.0,
     "module_size": 131.0,
     "public_attr_violations": 0.0
+  },
+  "src/quarry/subagent_capture.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.5,
+    "max_complexity": 4.0,
+    "avg_complexity": 2.5,
+    "module_size": 70.0,
+    "classes_per_module": 2.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
+  "src/quarry/subagent_report.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.86,
+    "max_complexity": 3.0,
+    "avg_complexity": 1.43,
+    "module_size": 94.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/quarry/sync.py": {
     "avg_complexity": 3.75,
