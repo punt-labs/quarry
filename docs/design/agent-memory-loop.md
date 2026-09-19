@@ -20,6 +20,19 @@ facts.
 Section map: a current state · b loop 1 · c loop 2 · d loop 3 · e write-set ·
 f test plan · g rejected alternatives + ADR plan · h rollback coherence.
 
+**Implementation note (2026-09-18, re-grounded against `main` `b0684cd` — bead
+quarry-fbj9, mission m-2026-09-18-002).** Sections e.1/e.5 describe the
+*pre-implementation* plan written against HEAD `a0a4ac4`. Two merges moved the
+ground before implementation: #512 decomposed `ingestion/pipeline.py` (the
+DES-041 scrub choke point now lives in `ingestion/web_ingest.py`), and #518
+decomposed `hooks.py` to 479 lines. As shipped, therefore: the `hooks_compact.py`
+extraction (and its relax) was **dropped** — `handle_pre_compact` stays in
+`hooks.py`, now under the 500 cap; `mcp_server.py` was still extracted
+(`mcp_missions.py` + `mcp_guard.py`, relax R7 withdrawn); and four modules were
+added for PY-OO-7 single-responsibility (`mission_round_parts.py`,
+`mission_sync_types.py`, `ethos_ext_scan.py`, `transcript_turns.py`). The final
+audited relax ledger is in the PR, superseding §e.5's projection.
+
 **Round 2 amendments** (kpz's round-1 reflection, all findings resolved in
 place): Loop 2 document names carry a repo discriminator and the existence
 check became an identity check (§c.3–c.4); the vendored ext refresh rides
