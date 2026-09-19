@@ -32,7 +32,7 @@ from quarry.db_pointer import SELECTION
 from quarry.mcp_server import McpTools, mcp
 from quarry.results import SearchResult
 
-# The twelve tools the MCP surface exposes; a rename or removal is a regression.
+# The thirteen tools the MCP surface exposes; a rename or removal is a regression.
 _EXPECTED_TOOLS = {
     "find",
     "ingest",
@@ -183,7 +183,7 @@ def harness(tmp_path: Path) -> Iterator[_ToolHarness]:
 
 
 class TestSurfaceComplete:
-    """The MCP surface must stay exactly the twelve documented tools."""
+    """The MCP surface must stay exactly the thirteen documented tools."""
 
     def test_all_tools_registered(self) -> None:
         names = {tool.name for tool in asyncio.run(mcp.list_tools())}
