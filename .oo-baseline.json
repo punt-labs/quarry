@@ -1484,10 +1484,10 @@
   "src/quarry/doctor_ethos.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 1.25,
+    "avg_params": 1.4,
     "max_complexity": 6.0,
-    "avg_complexity": 4.5,
-    "module_size": 105.0,
+    "avg_complexity": 3.8,
+    "module_size": 125.0,
     "classes_per_module": 1.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,

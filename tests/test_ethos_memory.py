@@ -218,3 +218,47 @@ class TestForRepo:
 
         assert result.vendored_updated == ["claude"]
         assert "kpz" in result.failed
+
+
+class TestVendoredSeal:
+    """``quarry enable`` on a hostile checkout must not write outside it (CWE-59)."""
+
+    def test_symlinked_vendored_ext_is_refused_not_followed(
+        self, unpinned_root: Path
+    ) -> None:
+        identities = _identities(unpinned_root / "global", "rmh")
+        vendored = _vendored(unpinned_root, "claude")
+        outside = unpinned_root / "elsewhere" / "quarry.yaml"
+        outside.parent.mkdir()
+        outside.write_text("memory_collection: memory-claude\n" + _V1_BLOCK)
+        before = outside.read_text()
+        link = vendored / "claude.ext" / "quarry.yaml"
+        link.unlink()
+        link.symlink_to(outside)
+
+        result = EthosMemoryBootstrap(identities, vendored=vendored).run()
+
+        assert result.vendored_updated == []
+        assert "claude" in result.failed
+        assert outside.read_text() == before
+        assert link.is_symlink()
+
+    def test_for_repo_seals_at_the_checkout_root(self, unpinned_root: Path) -> None:
+        """The whole ``identities`` directory as a link is refused per handle."""
+        identities = _identities(unpinned_root / "global", "rmh")
+        elsewhere = unpinned_root / "elsewhere" / "identities"
+        elsewhere.mkdir(parents=True)
+        ext = elsewhere / "claude.ext"
+        ext.mkdir()
+        target = ext / "quarry.yaml"
+        target.write_text("memory_collection: memory-claude\n" + _V1_BLOCK)
+        before = target.read_text()
+        (unpinned_root / ".punt-labs" / "ethos").mkdir(parents=True)
+        (unpinned_root / ".punt-labs" / "ethos" / "identities").symlink_to(elsewhere)
+
+        with patch("quarry.ethos_memory._GLOBAL_IDENTITIES", identities):
+            result = EthosMemoryBootstrap.for_repo(unpinned_root).run()
+
+        assert "claude" in result.failed
+        assert result.vendored_updated == []
+        assert target.read_text() == before

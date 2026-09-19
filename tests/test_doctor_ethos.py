@@ -11,6 +11,7 @@ import yaml
 from quarry.doctor_ethos import EthosExtDiagnostics
 from quarry.ethos_ext_block import MEMORY_GUIDE_HEADER
 from quarry.ethos_ext_scan import ExtScanOutcome, ExtWriteResult
+from quarry.path_guard import SealedTree
 
 _V1_BLOCK = (
     "\nsession_context: |\n  ## Memory\n  \n  You have persistent memory stored in "
@@ -298,3 +299,73 @@ class TestWriteSessionContext:
         quarry_yaml.chmod(0o600)
         EthosExtDiagnostics.write_session_context(quarry_yaml, "rmh")
         assert quarry_yaml.stat().st_mode & 0o777 == 0o600
+
+
+class TestRefreshSealed:
+    """A vendored tree is cloned content: a symlink there is refused, not written."""
+
+    def _outside_ext(self, tmp_path: Path) -> Path:
+        """A file outside the sealed root that a hostile link would redirect to."""
+        outside = tmp_path / "outside" / "quarry.yaml"
+        outside.parent.mkdir()
+        outside.write_text("memory_collection: memory-claude\n" + _V1_BLOCK)
+        return outside
+
+    def test_symlinked_ext_file_is_refused_and_the_target_untouched(
+        self, tmp_path: Path
+    ) -> None:
+        root = tmp_path / "repo"
+        identities_dir = root / ".punt-labs" / "ethos" / "identities"
+        outside = self._outside_ext(tmp_path)
+        before = outside.read_text()
+        _make_ext(identities_dir, "claude")
+        (identities_dir / "claude.ext" / "quarry.yaml").symlink_to(outside)
+
+        outcome = EthosExtDiagnostics.refresh(identities_dir, SealedTree(root))
+
+        assert outcome.updated == ()
+        assert outcome.failed_handles == ("claude",)
+        assert "symlink" in outcome.failed[0].reason
+        assert outside.read_text() == before
+
+    def test_symlinked_ext_directory_is_refused(self, tmp_path: Path) -> None:
+        """The leaf is a real file; the directory above it is the link."""
+        root = tmp_path / "repo"
+        identities_dir = root / ".punt-labs" / "ethos" / "identities"
+        identities_dir.mkdir(parents=True)
+        outside = self._outside_ext(tmp_path)
+        before = outside.read_text()
+        (identities_dir / "claude.ext").symlink_to(outside.parent)
+
+        outcome = EthosExtDiagnostics.refresh(identities_dir, SealedTree(root))
+
+        assert outcome.failed_handles == ("claude",)
+        assert outside.read_text() == before
+
+    def test_real_files_under_the_sealed_root_still_refresh(
+        self, tmp_path: Path
+    ) -> None:
+        root = tmp_path / "repo"
+        identities_dir = root / ".punt-labs" / "ethos" / "identities"
+        quarry_yaml = _write_ext(
+            identities_dir, "rmh", "memory_collection: memory-rmh\n" + _V1_BLOCK
+        )
+
+        outcome = EthosExtDiagnostics.refresh(identities_dir, SealedTree(root))
+
+        assert outcome.updated == ("rmh",)
+        assert MEMORY_GUIDE_HEADER in quarry_yaml.read_text()
+
+    def test_default_guard_follows_an_operator_symlink(self, tmp_path: Path) -> None:
+        """The global tree is the operator's own: a dotfile-manager link is honoured."""
+        identities_dir = tmp_path / "identities"
+        outside = self._outside_ext(tmp_path)
+        _make_ext(identities_dir, "claude")
+        link = identities_dir / "claude.ext" / "quarry.yaml"
+        link.symlink_to(outside)
+
+        outcome = EthosExtDiagnostics.refresh(identities_dir)
+
+        assert outcome.updated == ("claude",)
+        assert link.is_symlink()
+        assert MEMORY_GUIDE_HEADER in outside.read_text()

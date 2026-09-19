@@ -85,7 +85,7 @@ class EthosMemoryBootstrap:
         # Refresh-only: the vendored roster is curated by ``ethos vendor``, so an
         # ext file quarry invented there would be an uncommitted surprise.
         vendored_scan = (
-            EthosExtDiagnostics.refresh(self._vendored)
+            EthosExtDiagnostics.refresh_vendored(self._vendored)
             if self._vendored is not None
             else ExtScanOutcome()
         )
