@@ -632,9 +632,10 @@ CLI         & \modpath{\_\_main\_\_.py} + \modpath{cli\_*.py} & Typer
               output plumbing in \modpath{cli\_formatters}. \\
 MCP Server  & \modpath{mcp\_server.py}, \modpath{mcp\_missions.py} &
               \texttt{quarry mcp}: a FastMCP \emph{stdio} server whose
-              thirteen tool bodies (twelve on \texttt{McpTools}, plus
-              \texttt{missions\_sync} on the sibling \texttt{MissionTools},
-              all behind \modpath{mcp\_guard.py}'s \texttt{ToolGuard}) are
+              tool bodies (the search/ingest/management tools on
+              \texttt{McpTools}, plus \texttt{missions\_sync} on the sibling
+              \texttt{MissionTools}, all behind \modpath{mcp\_guard.py}'s
+              \texttt{ToolGuard}) are
               thin \texttt{QuarryClient} calls over the daemon's
               \texttt{/v1} API.  Imports \emph{no} engine --- loads zero
               LanceDB/ONNX (DES-031 v2.2). \\
@@ -795,7 +796,7 @@ gates on \texttt{/health} \texttt{ready} before exiting~0.
 \subsection{MCP Transport (\texttt{quarry mcp})}
 
 Quarry's plugin runs \texttt{quarry mcp} directly --- a FastMCP
-\emph{stdio} server (\modpath{mcp\_server.py}) whose thirteen tool bodies
+\emph{stdio} server (\modpath{mcp\_server.py}) whose tool bodies
 are thin \texttt{QuarryClient} calls over the daemon's \texttt{/v1} REST
 API.  It reads MCP JSON-RPC from stdin, dispatches each tool to the
 resident daemon (reusing its one warm \texttt{ctx.embedder}/\texttt{ctx.database}),
@@ -877,10 +878,11 @@ Bg = background (daemon-side; the tool returns a \field{task\_id}).
 $^{*}$\tool{missions\_sync} runs client-side: it reads the repo's
 \texttt{.punt-labs/ethos/missions/} tree and issues one
 \texttt{/v1/remember} (202) per frozen round the daemon does not yet hold,
-returning after the last post (DES-055).  Thirteen tools in all: twelve
-on \texttt{McpTools} plus \texttt{missions\_sync} on the sibling
-\texttt{MissionTools} (\modpath{mcp\_missions.py}), registered from one
-call.
+returning after the last post (DES-055).  The table above is the
+registered surface: every tool on \texttt{McpTools} plus
+\texttt{missions\_sync} on the sibling \texttt{MissionTools}
+(\modpath{mcp\_missions.py}), registered from one call; the exact set is
+pinned by \texttt{tests/test\_mcp\_server.py}.
 
 Each tool body is a thin \texttt{QuarryClient} call over \texttt{/v1}
 (the MCP server holds no engine).  A background tool posts to the daemon,
@@ -1888,10 +1890,10 @@ database).
 \section{Test Architecture}
 % ===================================================================
 
-The default run (\texttt{make test}, with the \texttt{slow} and
-\texttt{embedding} tiers deselected) collected 4{,}041 tests on
-2026-09-19 (\texttt{uv run pytest -{}-collect-only -q}).  Three tiers
-plus integration; the files named are representative, not exhaustive:
+The default run (\texttt{make test}) deselects the \texttt{slow} and
+\texttt{embedding} tiers; \texttt{uv run pytest -{}-collect-only -q}
+reports the current test count.  Three tiers plus integration; the files
+named are representative, not exhaustive:
 
 \begin{center}
 \begin{tabular}{lp{5cm}p{5cm}}
