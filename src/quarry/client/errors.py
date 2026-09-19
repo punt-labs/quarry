@@ -133,3 +133,8 @@ class HttpError(QuarryError):
     def task_id(self) -> str:
         # Empty unless the server returned a 409 conflict naming a running task.
         return self._task_id
+
+    @property
+    def is_conflict(self) -> bool:
+        """Whether this is the 409 "already in progress" the CLI maps to exit 0."""
+        return self._status == CONFLICT_STATUS

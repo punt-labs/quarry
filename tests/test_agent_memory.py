@@ -636,10 +636,10 @@ class TestTemporalDecay:
 
 
 def _make_ethos_config(project_dir: Path, agent: str) -> None:
-    """Create a .punt-labs/ethos/config.yaml with given agent handle."""
-    ethos_dir = project_dir / ".punt-labs" / "ethos"
-    ethos_dir.mkdir(parents=True, exist_ok=True)
-    (ethos_dir / "config.yaml").write_text(f"agent: {agent}\n")
+    """Create the ethos repo pin (.punt-labs/ethos.yaml) with the given handle."""
+    punt_labs = project_dir / ".punt-labs"
+    punt_labs.mkdir(parents=True, exist_ok=True)
+    (punt_labs / "ethos.yaml").write_text(f"agent: {agent}\nresolution: repo-only\n")
 
 
 def _make_transcript(tmp_path: Path, text: str = "test message") -> Path:

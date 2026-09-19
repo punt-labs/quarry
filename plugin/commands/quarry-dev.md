@@ -1,6 +1,6 @@
 ---
 description: Manage your quarry knowledge base
-argument-hint: "[status|sync|collections|databases|registrations|use <name>|enable|disable]"
+argument-hint: "[status|sync|collections|databases|registrations|use <name>|enable|disable|missions sync]"
 ---
 <!-- markdownlint-disable MD041 -->
 
@@ -20,6 +20,7 @@ Parse the first token as a subcommand. Default to `status` if empty.
 - **use `<name>`**: Call `mcp__quarry-dev__use` with `name` set to the second token. If no name is given after `use`, reply with brief usage: `/quarry-dev use <database-name>`
 - **enable**: Run `quarry enable` via the Bash tool. If a directory argument follows, pass it as a positional argument. Supports `--collection <name>` to override the collection name.
 - **disable**: Run `quarry disable` via the Bash tool. If a directory argument follows, pass it as a positional argument. Supports `--keep-data` to preserve indexed data in LanceDB.
+- **missions sync**: Call `mcp__quarry-dev__missions_sync`. Files each frozen ethos mission round of this repo into the worker's memory; run it after `ethos mission close`. Pass `mission` when a mission id follows, `dry_run: true` for `--dry-run`, and `force: true` for `--force`.
 
 ## Output
 

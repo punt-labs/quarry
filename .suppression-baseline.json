@@ -1,7 +1,7 @@
 {
-  "total": 219,
+  "total": 211,
   "by_category": {
-    "noqa": 182,
+    "noqa": 174,
     "type_ignore": 7,
     "pylint_disable": 0,
     "pyright_ignore": 1,
@@ -9,7 +9,7 @@
   },
   "by_file": {
     "src/quarry/__main__.py": {
-      "noqa": 12,
+      "noqa": 6,
       "type_ignore": 1
     },
     "src/quarry/_hook_entry.py": {
@@ -70,9 +70,6 @@
     "src/quarry/doctor_captures.py": {
       "noqa": 6
     },
-    "src/quarry/doctor_ethos.py": {
-      "noqa": 1
-    },
     "src/quarry/doctor_inference.py": {
       "noqa": 1
     },
@@ -86,7 +83,7 @@
       "noqa": 3
     },
     "src/quarry/enable.py": {
-      "noqa": 8
+      "noqa": 7
     },
     "src/quarry/extractors/image_extractor.py": {
       "noqa": 1
@@ -181,5 +178,5 @@
       "noqa": 2
     }
   },
-  "updated_at": "2026-09-11T05:07:14Z"
+  "updated_at": "2026-09-18T18:20:59Z"
 }

@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 
-from quarry.api import CapturesLookupResponse
+from quarry.api import CapturesLookupResponse, RememberRequest
 from quarry.client.client import QuarryClient
 from quarry.client.transport import HttpxTransport
 
@@ -57,6 +57,35 @@ class TestCapturesLookupWire:
             "cwd": "/repo",
         }
         assert result == CapturesLookupResponse(matched=False)
+
+
+class TestRememberWire:
+    """``remember`` takes the same optional short timeout ``capture`` does, so a
+    hook filing a distilled memory can never hold a blocking event."""
+
+    def _seen(self, timeout: float | None) -> list[httpx.Request]:
+        seen: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(202, json={"task_id": "t1", "status": "accepted"})
+
+        req = RememberRequest(name="n", content="c", agent_handle="rmh")
+        if timeout is None:
+            _client(handler).remember(req)
+        else:
+            _client(handler).remember(req, timeout=timeout)
+        return seen
+
+    def test_posts_the_full_body_to_remember(self) -> None:
+        request = self._seen(None)[0]
+        assert request.method == "POST"
+        assert request.url.path == "/v1/remember"
+        assert json.loads(request.read())["agent_handle"] == "rmh"
+
+    def test_explicit_timeout_reaches_the_wire(self) -> None:
+        recorded = self._seen(5.0)[0].extensions["timeout"]
+        assert all(value == 5.0 for value in recorded.values())
 
 
 class TestLearnWire:

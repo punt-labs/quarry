@@ -48,8 +48,8 @@
   urlcolor=SectionBlue,
   citecolor=SectionBlue,
   pdfauthor={JM Freeman},
-  pdftitle={Quarry --- PR/FAQ},
-  pdfsubject={Working Backwards --- Product Discovery},
+  pdftitle={Quarry: PR/FAQ},
+  pdfsubject={Working Backwards: Product Discovery},
 }
 
 % ── Section styling ───────────────────────────────────────────────────────────
@@ -172,7 +172,7 @@
   {\LARGE\bfseries\color{SectionBlue}
     Free Plugin Gives Claude Code Persistent Memory Across Sessions} \\[0.8em]
   {\large\color{AccentGray}
-    Quarry learns from every conversation and recalls what you've researched before---locally, with no cloud accounts or data leaving your machine} \\[0.3em]
+    Quarry learns from every conversation and recalls what you've researched before: locally, with no cloud accounts or data leaving your machine} \\[0.3em]
   {\large\color{AccentGray}
     Open source plugin captures web research, session transcripts, and project files as searchable knowledge that compounds over time}
 \end{center}
@@ -185,11 +185,11 @@
 
 \section*{Press Release}
 
-PORTLAND, OR --- September 2026 --- Today, Punt Labs announced Quarry, a free,
+PORTLAND, OR, September 2026. Today, Punt Labs announced Quarry, a free,
 open-source tool that gives Claude persistent memory and instant access to
 everything on your computer. Quarry indexes PDFs, scanned documents,
-spreadsheets, presentations, web pages, notes, source code, and images---over
-20 document formats---into a local semantic search engine, then exposes that
+spreadsheets, presentations, web pages, notes, source code, and images (over
+20 document formats) into a local semantic search engine, then exposes that
 knowledge to Claude Code and Claude Desktop through the Model Context
 Protocol~\cite{aitoolanalysis2026claudeplugins}. As a Claude Code plugin,
 Quarry goes further: every web page Claude researches, every debugging
@@ -201,13 +201,13 @@ Claude Code plugin system that has grown to over 9{,}000 extensions
 
 \prsection{Problem}
 
-Developers who use Claude Code for serious, multi-session work---refactoring
-systems, debugging production issues, designing architectures---lose everything
+Developers who use Claude Code for serious, multi-session work (refactoring
+systems, debugging production issues, designing architectures) lose everything
 they learn at the end of every conversation. A developer spends forty-five
 minutes with Claude tracking down a connection timeout, reads three Stack
 Overflow answers, identifies the root cause, and ships the fix. Two weeks later,
 the same class of issue appears in a different service. Claude starts from
-zero---searches the web again, reads the same answers, discovers the same root
+zero: it searches the web again, reads the same answers, discovers the same root
 cause. The developer recognizes the pattern but Claude does not.
 
 People who use Claude for research, analysis, or writing hit the same wall.
@@ -227,7 +227,7 @@ Quarry works at two levels: as a search engine for your files, and as a plugin
 that captures knowledge automatically.
 
 \textbf{Search engine.} Install with \texttt{uv tool install punt-quarry} and
-\texttt{quarry install}. Point it at your files---register a directory with
+\texttt{quarry install}. Point it at your files: register a directory with
 \texttt{quarry register \texttildelow/Documents/research \&\& quarry sync}, or
 ingest a web page with \texttt{quarry ingest https://example.com/report}. From
 that moment,
@@ -253,13 +253,13 @@ laptop. No cloud service, no API key, no subscription.
 
 \begin{customerquote}
 \textit{``I've been using Claude Code full-time for seven months. The thing
-that frustrated me most wasn't the model---it was the amnesia. I'd debug
+that frustrated me most wasn't the model; it was the amnesia. I'd debug
 something, figure out the fix, and three weeks later Claude would research the
 same problem from scratch while I watched. With Quarry's hooks capturing web
 pages from that first session, the second time Claude found the answer locally
 in two seconds instead of spending five minutes searching Stack Overflow. After
 a month, I had a searchable archive of every piece of research Claude had ever
-done for me---and I never explicitly saved any of it.''}
+done for me, and I never explicitly saved any of it.''}
 
 \raggedleft --- \textbf{Sarah Lindqvist}, Staff Engineer at a Series C startup
 \end{customerquote}
@@ -283,13 +283,13 @@ No accounts. No API keys. Under five minutes:
 \prsection{Spokesperson Quote}
 
 \begin{spokespersonquote}
-``The bottleneck for LLM-assisted work isn't the model---it's the context. People
+``The bottleneck for LLM-assisted work isn't the model; it's the context. People
 have years of accumulated knowledge on their hard drives, and none of it is
 accessible to their LLM. We built Quarry to solve two problems: unlocking the
 knowledge trapped in files, and preserving the knowledge generated during every
 coding session that vanishes when the conversation ends. The Model Context
 Protocol made the first possible; the Claude Code hook system made the second
-possible. Quarry doesn't just index your files---it makes Claude itself
+possible. Quarry doesn't just index your files; it makes Claude itself
 smarter.''
 
 \raggedleft --- \textbf{JM Freeman}, Creator of Quarry
@@ -329,7 +329,7 @@ run \texttt{quarry install}, and start searching.
   context window limits how many you can include, and when you start a new
   conversation, you start from scratch. Quarry inverts this: index your files
   once, and Claude searches them on demand during any conversation. You don't
-  decide what's relevant---Claude does. There is no context window limit because
+  decide what's relevant; Claude does. There is no context window limit because
   Quarry returns only the relevant passages, not entire files.
 \end{faqpair}
 
@@ -344,7 +344,7 @@ run \texttt{quarry install}, and start searching.
 \begin{faqpair}{How is this different from CLAUDE.md or memory files?}\label{faq:vs-claude-md}
   CLAUDE.md is static instructions that you write and maintain manually. It
   tells Claude \emph{how} to behave. Quarry captures \emph{what Claude
-  learned}---web pages, debugging conclusions, design rationale---and makes it
+  learned} (web pages, debugging conclusions, design rationale) and makes it
   searchable by meaning. You do not write or maintain the knowledge base; it
   builds itself from every session. CLAUDE.md says ``use ruff for linting.''
   Quarry remembers that the last time you debugged a ruff configuration issue,
@@ -360,33 +360,44 @@ run \texttt{quarry install}, and start searching.
   optimized for LLM consumption. Spreadsheets and presentation tables are
   serialized to LaTeX to preserve tabular structure. Source code is chunked by
   function and class boundaries, not arbitrary line counts. Scanned documents
-  and images are OCR'd locally---no cloud account needed.
+  and images are OCR'd locally, with no cloud account needed.
 \end{faqpair}
 
 \begin{faqpair}{How does the ambient capture work?}\label{faq:how-it-works}
-  Quarry uses Claude Code's hook system~\cite{claude-code-hooks}---the same
+  Quarry uses Claude Code's hook system~\cite{claude-code-hooks}, the same
   event-driven architecture used by plugins like Entire.io for code provenance.
-  Three hooks ship today:
+  The lifecycle hooks ship in \texttt{plugin/hooks/hooks.json}:
 
   \begin{itemize}[leftmargin=1.5em, nosep]
-    \item \textbf{Session start} --- auto-registers the project directory so
+    \item \textbf{Session start} auto-registers the project directory so
           new files are indexed on sync, and injects a knowledge base summary
           into Claude's context.
-    \item \textbf{Post web fetch} --- every URL Claude fetches is auto-ingested
+    \item \textbf{Post web fetch} auto-ingests every URL Claude fetches
           into the knowledge base for later semantic search.
-    \item \textbf{Pre-compact} --- conversation transcript is captured before
+    \item \textbf{Post web search} files a scrubbed digest of each web
+          search's results alongside the fetched pages.
+    \item \textbf{Post read} (opt-in, off by default) captures prose files
+          read from outside any registered tree, behind an in-tree,
+          secret-path, extension, and size filter.
+    \item \textbf{Pre-compact} captures the conversation transcript before
           context compaction, preserving decisions and discoveries that would
           otherwise be lost.
+    \item \textbf{Session end} captures the full transcript on every close,
+          so a short session that never compacts is still kept.
+    \item \textbf{Subagent stop} archives a subagent's own transcript and,
+          when the subagent is a registered ethos identity, distills its final
+          report into that agent's \texttt{memory-<handle>} collection
+          (DES-055).
   \end{itemize}
 
-  All hooks write to a local staging directory and return
-  immediately---they never block the conversation. A background process handles
-  embedding and indexing. The hooks are fail-open: if Quarry is unavailable,
-  Claude Code works exactly as before. Per-project configuration via
-  \texttt{.punt-labs/quarry/config.md} lets you selectively disable individual
-  hooks.
+  Every hook makes one bounded call to the resident \texttt{quarryd} daemon
+  and returns immediately; it never blocks the conversation. The daemon
+  scrubs, embeds, and indexes in the background. The hooks are fail-open: if
+  Quarry is unavailable, Claude Code works exactly as before. Per-project
+  configuration via \texttt{.punt-labs/quarry/config.md} lets you selectively
+  disable individual hooks.
 
-  \texttt{quarry enable <dir>} activates all three capture types for a project
+  \texttt{quarry enable <dir>} activates the capture hooks for a project
   in one command and keeps them scoped: web research and session transcripts
   route to a separate \texttt{<name>-captures} collection so browser tabs and
   conversation fragments never pollute the file-sync collection you search for
@@ -404,9 +415,9 @@ run \texttt{quarry install}, and start searching.
   One planned feature involves the network by design: an opt-in sync that pushes
   captured session transcripts to a \emph{user-owned} private git repository for
   cross-machine continuity. It is off by default and never targets a Punt Labs
-  server. Captures are PII-redacted at write time---secrets, filesystem paths,
+  server. Captures are PII-redacted at write time (secrets, filesystem paths,
   email addresses, and the local hostname are stripped before a capture file is
-  written (DES-036)---so redaction, not trust in a remote, is the mitigation for
+  written; DES-036), so redaction, not trust in a remote, is the mitigation for
   anything that would leave the machine.
 \end{faqpair}
 
@@ -417,11 +428,11 @@ run \texttt{quarry install}, and start searching.
 \end{faqpair}
 
 \begin{faqpair}{Can I use Quarry with tools other than Claude?}\label{faq:other-tools}
-  Quarry exposes a standard MCP server over stdio and an HTTP API with
-  WebSocket support. Any MCP-compatible client can use it. Today that includes
-  Claude Code and Claude Desktop. As other LLM tools adopt MCP, Quarry will
-  work with them without modification. The CLI also works standalone for
-  direct search without any LLM.
+  Quarry exposes a standard MCP server over stdio and a versioned REST API
+  (\texttt{/v1}, TLS, Bearer token). Any MCP-compatible client can use it.
+  Today that includes Claude Code and Claude Desktop. As other LLM tools adopt
+  MCP, Quarry will work with them without modification. The CLI also works
+  standalone for direct search without any LLM.
 \end{faqpair}
 
 \begin{faqpair}{How does search quality compare to keyword search (Spotlight, grep)?}\label{faq:search-quality}
@@ -439,7 +450,7 @@ run \texttt{quarry install}, and start searching.
 \end{faqpair}
 
 \begin{faqpair}{Do I have to manually index everything?}\label{faq:passive-capture}
-  No. The Claude Code plugin captures knowledge passively through three
+  No. The Claude Code plugin captures knowledge passively through its
   hooks~\cite{claude-code-hooks} (see \faqref{faq:how-it-works} for detail).
   You work normally; the knowledge base grows in the background. Explicit CLI
   commands are available for one-off ingestion.
@@ -460,7 +471,7 @@ run \texttt{quarry install}, and start searching.
   months~\cite{startuphub2025claudeplugins}. The broader AI-assisted coding
   market (Cursor, GitHub Copilot, Windsurf) totals millions of developers.
 
-  The target segment is \emph{multi-session power users}---developers doing
+  The target segment is \emph{multi-session power users}: developers doing
   complex work spanning days or weeks. The Qodo survey found 41--52\% of
   developers report context-related frustration~\cite{qodo2025aicodequality}.
   A quarter of frustrated Claude Code users is tens of thousands. Because
@@ -476,7 +487,7 @@ run \texttt{quarry install}, and start searching.
   with seniority), and ``improved contextual understanding'' is the single
   most-requested AI improvement at 26\% of votes. The Stack Overflow 2025
   survey (49{,}000+ respondents) found 81\% have security/privacy concerns
-  about AI data use~\cite{stackoverflow2025survey}---local-first architecture
+  about AI data use~\cite{stackoverflow2025survey}; local-first architecture
   directly addresses this.
 
   \textbf{Market signal:} SageOx~\cite{sageox2026} positions itself as ``context
@@ -487,7 +498,7 @@ run \texttt{quarry install}, and start searching.
   companies are building for the same problem.
 
   \textbf{Behavioral:} Claude Code's own memory features (CLAUDE.md,
-  auto-memory) are static and manually maintained---they capture instructions,
+  auto-memory) are static and manually maintained; they capture instructions,
   not learned knowledge. The gap between ``remember my preferences'' and
   ``remember what we researched'' is the gap Quarry fills.
 
@@ -499,7 +510,7 @@ run \texttt{quarry install}, and start searching.
 \end{faqpair}
 
 \begin{faqpair}{Who are the competitors and why will we win?}\label{faq:competitors}
-  The competitive landscape splits into six categories; no single tool covers
+  The competitive field splits into six categories; no single tool covers
   Quarry's niche. See the Competitive Landscape appendix for the full analysis.
 
   \textbf{MCP-native code search} (DeepContext, claude-context, mcp-local-rag,
@@ -515,7 +526,7 @@ run \texttt{quarry install}, and start searching.
   GUI-first, human-interactive, no MCP server, no agent memory concept.
 
   \textbf{Session capture} (Entire.io, SageOx, Screenpipe): Record what
-  happened. Quarry adds semantic search---making captured knowledge retrievable
+  happened. Quarry adds semantic search, making captured knowledge retrievable
   by meaning across sessions.
 
   \textbf{RAG frameworks} (RAGFlow, AnythingLLM, LlamaIndex): Toolkits
@@ -560,16 +571,16 @@ run \texttt{quarry install}, and start searching.
   (768 dimensions, 512 token context) performs well for general text but may
   underperform on domain-specific content (medical, legal, financial jargon).
   Mitigation: the backend abstraction allows swapping models without code
-  changes---a model upgrade is a configuration change, not an architecture change.
+  changes: a model upgrade is a configuration change, not an architecture change.
 
   \textbf{Retrieval ranking quality (medium risk):} Quarry ranks per-chunk with
   a bi-encoder (mean-pooled dense embedding) fused with BM25 via RRF. A
   bi-encoder rewards \emph{token density}, not relevance: short, term-dense
-  chunks---document frontmatter, changelog lines, tables of contents---can
+  chunks (document frontmatter, changelog lines, tables of contents) can
   systematically outrank the substantive passages that actually answer a query.
   On the live index, the query ``Predicate Logic in Z'' returns a manual's YAML
   frontmatter at \#1 and a one-line \texttt{CHANGELOG} entry at \#2, with the
-  passage that genuinely answers the question ranked \#3. This is distinct from
+  passage that answers the question ranked \#3. This is distinct from
   the already-fixed FTS fake-1.00 scoring bug; here every score is proper bounded
   cosine and the ranker is simply under-valuing substance. The mitigation is at
   the embedding layer, not a reranker: context-aware embeddings (contextual
@@ -577,8 +588,8 @@ run \texttt{quarry install}, and start searching.
   at $k=60$ as the validated, calibration-free fusion floor. An off-the-shelf
   cross-encoder reranker degrades quality on technical corpora, so one is adopted
   only if it wins on Quarry's own corpus. This direction touches DES-004's ``the
-  embedding model is fixed'' stance---late chunking needs a long-context model
-  and may require swapping off arctic-embed's 512-token cap---an open decision
+  embedding model is fixed'' stance: late chunking needs a long-context model
+  and may require swapping off arctic-embed's 512-token cap, an open decision
   the evaluation harness is now in place to settle. Phase~0/1 have landed on main
   (\texttt{make eval}, measuring per-bucket MRR/success@k plus a
   metadata-pollution diagnostic on Quarry's own data); full-fixture curation and
@@ -597,10 +608,12 @@ run \texttt{quarry install}, and start searching.
   partitioning by project.
 
   \textbf{Hook latency (low risk):} All hooks must return fast to avoid
-  blocking Claude Code. The hooks write to files and return
-  immediately---no embedding or network calls in the hook path. Cold start
-  for the hook dispatcher is 0.24s (stdlib-only imports, no heavy
-  dependencies).
+  blocking Claude Code. Each hook makes a single bounded loopback POST to
+  the resident daemon and returns; there is no embedding and no engine import
+  in the hook path. The SubagentStop hook, which Claude Code treats as
+  blocking, returns an empty result on every path. The dispatcher
+  (\texttt{quarry-hook}) is stdlib-only at import and lazily loads just the
+  thin client.
 \end{faqpair}
 
 \begin{faqpair}{What dependencies exist on external systems?}\label{faq:dependencies}
@@ -610,7 +623,8 @@ run \texttt{quarry install}, and start searching.
   support it.
 
   \textbf{Claude Code hook system:} The ambient capture layer depends on Claude
-  Code's hook events (PostToolUse, PreCompact, SessionStart) remaining stable.
+  Code's hook events (SessionStart, PostToolUse, PreCompact, SessionEnd,
+  SubagentStop) remaining stable.
   Risk is low: the hook system is actively developed and used by multiple
   shipping plugins~\cite{claude-code-hooks}.
 
@@ -625,7 +639,7 @@ run \texttt{quarry install}, and start searching.
 \end{faqpair}
 
 \begin{faqpair}{What is the development timeline and current status?}\label{faq:timeline}
-  The press release above is written Working-Backwards---an aspirational future
+  The press release above is written Working-Backwards: an aspirational future
   framing of what adoption looks like. The code, by contrast, is real and
   shipping today: Quarry is live on PyPI. The gap this document
   tracks is adoption, not availability (see \faqref{faq:next-validation}).
@@ -637,14 +651,23 @@ run \texttt{quarry install}, and start searching.
   parsing (30+ languages via Tree-sitter), semantic search with metadata
   filtering, hybrid search (vector similarity + BM25 full-text fused via
   reciprocal rank fusion), agent memory with identity tagging and temporal
-  decay (via ethos integration), directory sync with
-  \texttt{.gitignore}/\texttt{.quarryignore} support, named databases and
-  collections, MCP server with 11 tools, CLI with \texttt{--version} and
-  plain-text help, HTTP API with WebSocket MCP endpoint and Bearer token
-  authentication, Claude Code plugin with three hooks (session start
-  auto-registration plus knowledge-base briefing, post web fetch
-  auto-ingestion, pre-compact transcript preservation), daemon architecture
-  (launchd/systemd) with mcp-proxy for shared-process MCP, ONNX provider
+  decay (via ethos integration) plus its write loop (a closed, server-validated
+  \texttt{memory\_type} vocabulary; \texttt{quarry learn} lessons with
+  retrieval preference, DES-053; \texttt{quarry missions sync} filing
+  evaluator feedback into the worker's memory; and SubagentStop distilling a
+  subagent's final report into its own memory, DES-055), directory sync with
+  \texttt{.gitignore}/\texttt{.quarryignore} support and an always-on
+  filesystem watch that re-indexes on change (DES-045), named databases and
+  collections, MCP server (search, ingestion, management, database
+  operations, and \texttt{missions\_sync}), CLI with \texttt{--version} and
+  plain-text help, a versioned \texttt{/v1} REST API with Bearer token
+  authentication (REST only; the in-daemon MCP WebSocket route was removed
+  under DES-031 v2.2), Claude Code plugin with lifecycle hooks
+  (session start auto-registration plus knowledge-base briefing; post web
+  fetch, post web search, and opt-in post read capture; pre-compact and
+  session-end transcript preservation; subagent-stop capture and
+  distillation), the \texttt{quarryd} daemon (launchd/systemd) with
+  \texttt{quarry mcp} as a thin stdio client of it, ONNX provider
   auto-detection with CUDA/GPU acceleration (curl|sh installer auto-installs
   \texttt{onnxruntime-gpu} on NVIDIA machines; uses FP16 model), researcher
   subagent for combined local + web search, CLAUDE.md injection for agent
@@ -654,19 +677,20 @@ run \texttt{quarry install}, and start searching.
   with scoped \texttt{<name>-captures} collections (DES-029); the SessionStart
   knowledge-base briefing (DES-013); bounded progressive sync with mid-flush
   visibility and within-file crash-resume (DES-034); the retrieval-quality eval
-  harness---\texttt{make eval}, an internal dev/CI tool reporting per-bucket
+  harness (\texttt{make eval}, an internal dev/CI tool reporting per-bucket
   MRR/success@k plus a metadata-pollution diagnostic, built on a
-  parameterizable retrieval seam (\texttt{src/quarry/retrieval/}) shared by
-  production and eval (Phase~0/1); and capture-path write-time PII redaction
+  parameterizable retrieval layer (\texttt{src/quarry/retrieval/}) shared by
+  production and eval; Phase~0/1); and capture-path write-time PII redaction
   that scrubs secrets, PII, and profanity from session transcripts and
   WebFetch captures before they are written (DES-036). A comprehensive
   automated test suite backs all of it, with strict type checking
   (mypy + pyright).
 
-  \textbf{Roadmap:} \texttt{quarry sync --watch} for live filesystem monitoring,
-  index-wide PII detection over arbitrary ingested files, a Google Drive
-  connector, and the retrieval-ranking lever bake-offs---context-aware embeddings
-  and metadata down-weighting---that the eval harness is built to settle (see
+  \textbf{Roadmap:} index-wide PII detection over arbitrary ingested files, a
+  Google Drive connector, the \texttt{quarryd} host-adapter contract for
+  non-Claude agent hosts (requirements drafted, not yet designed), and the
+  retrieval-ranking lever bake-offs (context-aware embeddings and metadata
+  down-weighting) that the eval tooling is built to settle (see
   \faqref{faq:tech-risks}).
 \end{faqpair}
 
@@ -678,7 +702,7 @@ run \texttt{quarry install}, and start searching.
   chunks/second. A 10{,}000-file directory (\texttildelow70{,}000 chunks)
   takes roughly 1.5--2 hours, and results are queryable \emph{during} the sync,
   not only after it finishes. Bounded progressive commit (DES-034) flushes
-  chunks to LanceDB in fixed-size windows---peak memory is bounded regardless of
+  chunks to LanceDB in fixed-size windows: peak memory is bounded regardless of
   file or collection size, each flush publishes a new MVCC version that
   concurrent search sees immediately, and a crash resumes \emph{within} the file
   it was embedding rather than restarting the collection. Subsequent syncs are
@@ -699,7 +723,7 @@ run \texttt{quarry install}, and start searching.
   documents (years of heavy use) is well within range. Disk usage scales at
   approximately 1--5\,MB per 100 documents for embeddings and metadata.
   Captured content (web pages, transcripts) adds more but is bounded by dedup
-  logic---the same URL is not re-ingested.
+  logic: the same URL is not re-ingested.
 
   \texttt{quarry delete} lets users prune old or low-value collections.
 \end{faqpair}
@@ -774,7 +798,7 @@ run \texttt{quarry install}, and start searching.
           and lets semantic search surface what is relevant. It does not extract
           summaries, decisions, or intent from captured content.
     \item \textbf{Git write-side provenance.} Quarry does not add metadata to
-          git commits---no checkpoint trailers, shadow branches, or commit
+          git commits: no checkpoint trailers, shadow branches, or commit
           annotations. It \emph{reads} from git (commits made during a session)
           to enrich captured transcripts with artifact context.
   \end{itemize}
@@ -797,8 +821,14 @@ run \texttt{quarry install}, and start searching.
   \textbf{Capture noise exceeds signal.} The knowledge base fills with
   low-value web pages and irrelevant transcript fragments, degrading search
   quality. \textit{Response:} Start conservative (web research + compaction
-  only). If signal-to-noise is poor, add quality filtering---URL pattern
-  exclusions, minimum page length, dedup by content similarity.
+  only). If signal-to-noise is poor, add quality filtering: URL pattern
+  exclusions, minimum page length, dedup by content similarity. Two
+  structural mitigations already ship. Captures are filed into scoped
+  \texttt{<name>-captures} collections that the code-search collection never
+  sees (DES-029). Agent memory is written through a closed, server-validated
+  \texttt{memory\_type} vocabulary as typed, attributed documents (mission
+  rounds, subagent reports) rather than raw transcript dumps (DES-055), so a
+  typed \texttt{find} filter returns memories, not noise.
 \end{faqpair}
 
 \begin{faqpair}{What is the next step to validate adoption?}\label{faq:next-validation}
@@ -808,11 +838,11 @@ run \texttt{quarry install}, and start searching.
   whether a developer who is not the author installs Quarry, indexes enough of
   their own material, and comes back because it saved them a redundant round of
   research. Until that happens the product is a well-built hypothesis, not a
-  validated one---which is why this document stays at hypothesis stage.
+  validated one, which is why this document stays at hypothesis stage.
 
   The next step is to put Quarry in front of a small cohort of external Claude
-  Code power users---via the plugin marketplace and Claude community
-  forums---and measure whether they reach the moment where Claude surfaces a
+  Code power users, via the plugin marketplace and Claude community
+  forums, and measure whether they reach the moment where Claude surfaces a
   document they had forgotten they owned. Retention past the first week, not raw
   install count, is the signal. If early adopters index and return, the thesis
   holds; if they install and drift away, the constraint is discovery-of-value,
@@ -831,7 +861,7 @@ run \texttt{quarry install}, and start searching.
 \toprule
 \textbf{\color{SectionBlue}Risk} & \textbf{\color{SectionBlue}Rating} & \textbf{\color{SectionBlue}Assessment} \\
 \midrule
-Value      & \textcolor{RiskAmber}{Medium} & Multiple startups and survey data validate the problem~\cite{qodo2025aicodequality,techcrunch2026entirefunding}. Discovery and activation are the primary risks---demand is proven but users must find Quarry and index enough content to experience the value. \\
+Value      & \textcolor{RiskAmber}{Medium} & Multiple startups and survey data validate the problem~\cite{qodo2025aicodequality,techcrunch2026entirefunding}. Discovery and activation are the primary risks: demand is proven, but users must find Quarry and index enough content to experience the value. \\
 Usability  & \textcolor{RiskAmber}{Medium} & For CLI-native users, three commands to value. Auto-configures MCP. No accounts, no API keys. The SessionStart knowledge-base briefing ships and surfaces the index to Claude automatically. The residual risk is the first-value moment: a user must index enough of their own material before Claude can surface something they had forgotten, and that activation step is unproven with external users. \\
 Feasibility & \textcolor{RiskGreen}{Low} & The product is live on PyPI with a comprehensive automated test suite and strict type checking. Core pipeline, daemon architecture, plugin hooks, MCP server, hybrid search, agent memory, CUDA acceleration, TLS remote server support, \texttt{quarry enable}/\texttt{disable} project activation, and bounded progressive sync are all shipped. The one open technical question is retrieval ranking quality (see \faqref{faq:tech-risks}); remaining roadmap items are additive features, not architectural risks. \\
 Viability  & \textcolor{RiskGreen}{Low} & No revenue model to validate. Zero marginal cost (runs on user hardware). MIT license. \\
@@ -843,14 +873,14 @@ Viability  & \textcolor{RiskGreen}{Low} & No revenue model to validate. Zero mar
 
 \textbf{Value risk} is the dominant concern. The thesis: local semantic search
 combined with passive knowledge capture changes how developers work with AI
-coding tools---your LLM has access to everything you know, and knowledge
+coding tools: your LLM has access to everything you know, and knowledge
 generated during sessions compounds instead of evaporating. Discovery is the
 immediate challenge: users must find Quarry and invest enough initial indexing
 to experience Claude finding a document they forgot they had. The recall
 briefing that surfaces local knowledge to Claude already ships; what remains
 unproven is whether users beyond the author adopt Quarry and return once they
-have---the value-to-others question this document stays at hypothesis stage to
-answer (see \faqref{faq:next-validation}).
+have. That is the value-to-others question this document stays at hypothesis
+stage to answer (see \faqref{faq:next-validation}).
 
 % ══════════════════════════════════════════════════════════════════════════════
 % FEATURE APPENDIX
@@ -865,16 +895,17 @@ Defines scope. Features are categorized to prevent scope creep.
 
 \begin{enumerate}[nosep,leftmargin=2.5em]
   \featureitem{Local semantic search}{Index local files and retrieve passages by meaning across 20+ document formats.}\label{feat:semantic-search}
-  \featureitem{MCP server}{11 tools covering search, ingestion, management, and database operations. Exposes Quarry to Claude Code and Claude Desktop as a native tool.}\label{feat:mcp-server}
+  \featureitem{MCP server}{Tools covering search, ingestion (\texttt{ingest}, \texttt{remember}, \texttt{learn}), management, database operations, and \texttt{missions\_sync}. Exposes Quarry to Claude Code and Claude Desktop as a native tool.}\label{feat:mcp-server}
   \featureitem{Directory registration and sync}{Bulk ingestion workflow: register a directory once, sync incrementally as files change. Respects \texttt{.gitignore} and \texttt{.quarryignore}.}\label{feat:directory-sync}
   \featureitem{Local OCR}{Extract text from scanned documents and images on-device via RapidOCR with no cloud account required.}\label{feat:local-ocr}
   \featureitem{Named databases}{Separate knowledge bases by project or domain.}\label{feat:named-databases}
   \featureitem{One-command install}{\texttt{quarry install} auto-configures MCP for Claude Code and Claude Desktop, downloads mcp-proxy, and installs the daemon.}\label{feat:one-command-install}
-  \featureitem{Claude Code plugin}{Plugin with three hooks: auto-register project directory on session start, auto-ingest URLs Claude fetches (post web fetch), and preserve conversation transcripts before context compaction (pre-compact). All hooks fail-open, non-blocking, per-project configurable.}\label{feat:claude-plugin}
-  \featureitem{Daemon architecture}{Single background process (\texttt{quarry serve}) loads the embedding model once and serves all sessions via WebSocket MCP endpoint. Lightweight mcp-proxy binary bridges MCP stdio to the daemon, eliminating per-session Python startup.}\label{feat:daemon}
+  \featureitem{Claude Code plugin}{Plugin with lifecycle hooks: auto-register the project directory on session start; capture what Claude fetches (post web fetch), searches (post web search), and, opt-in, reads outside the tree (post read); preserve the transcript before context compaction (pre-compact) and on every close (session end); and archive each subagent's transcript, distilling a registered identity's final report into its own memory (subagent stop). All hooks fail-open, per-project configurable, and thin daemon clients.}\label{feat:claude-plugin}
+  \featureitem{Daemon architecture}{Single background process (\texttt{quarryd}, supervised by launchd/systemd) holds the engine (embedding model, LanceDB, pipeline) and serves a versioned \texttt{/v1} REST API over TLS. The CLI, the \texttt{quarry mcp} stdio server, the hooks, and the library are pure clients of it; no client process loads the model (DES-031 v2.2).}\label{feat:daemon}
+  \featureitem{Always-on watch/index loop}{\texttt{quarryd} watches every registered directory (FSEvents/inotify, debounced, with a periodic safety sweep) and re-indexes on change, so a registered tree stays current with no human action; \texttt{quarry sync} is a one-shot pass on top (DES-045).}\label{feat:watch-loop}
   \featureitem{Researcher agent}{Combines local Quarry search with web research. Searches locally first, fills gaps from the web, and auto-ingests findings so research compounds across sessions.}\label{feat:researcher}
   \featureitem{Hybrid search}{Vector similarity + BM25 full-text fused via RRF. Semantic understanding plus keyword precision.}\label{feat:hybrid-search}
-  \featureitem{Agent memory}{Per-agent memory with identity tagging via ethos integration. Memory types (fact, observation, procedure, opinion) with temporal decay for relevance. Agents remember across sessions on the same machine; cross-machine continuity requires a remote daemon.}\label{feat:agent-memory}
+  \featureitem{Agent memory}{Per-agent memory with identity tagging via ethos integration. A closed, server-validated \texttt{memory\_type} vocabulary (fact, observation, opinion, procedure; \texttt{lesson} reserved for \texttt{learn}; anything else is a 400) with temporal decay for the agent-owned types and a retrieval boost for lessons. The write loop fills the shelf without a model in the loop: a versioned memory guide in every identity's session context, \texttt{quarry missions sync} filing each frozen ethos mission round's evaluator feedback into \texttt{memory-<worker>}, and SubagentStop distilling a subagent's final report into \texttt{memory-<handle>} (DES-055). Agents remember across sessions on the same machine; cross-machine continuity requires a remote daemon.}\label{feat:agent-memory}
   \featureitem{CUDA/GPU acceleration}{Auto-detects NVIDIA hardware and uses FP16 model via CUDAExecutionProvider. Installer swaps \texttt{onnxruntime} for \texttt{onnxruntime-gpu} with rollback on failure.}\label{feat:cuda}
   \featureitem{HTTP API with authentication}{Bearer token on all endpoints except \texttt{/health}. Server refuses non-loopback binding without an API key. Enables secure LAN access to a GPU daemon.}\label{feat:http-auth}
   \featureitem{Ethos integration}{Injects per-identity agent personality, memory instructions, and team context into sessions automatically.}\label{feat:ethos}
@@ -886,10 +917,9 @@ Defines scope. Features are categorized to prevent scope creep.
 \subsection*{Should Do}
 
 \begin{enumerate}[nosep,leftmargin=2.5em]
-  \featureitem{Retrieval-quality eval harness}{A \texttt{make eval} harness (internal dev/CI tooling, not an end-user command) over a committed query set, reporting per-bucket MRR and success@k plus a metadata-pollution diagnostic. Phase~0 (the parameterizable retrieval seam in \texttt{src/quarry/retrieval/}) and Phase~1 (\texttt{make eval} with ranx metrics and a known-item baseline) have landed on main; full-fixture curation and the lever bake-offs---metadata down-weighting and context-aware embeddings (contextual embeddings or late chunking)---remain, with graded relevance judgments and nDCG@10 deferred to Phase~2 (see \faqref{faq:tech-risks}).}\label{feat:eval-harness}
-  \featureitem{Live filesystem monitoring}{\texttt{sync --watch} automatically re-indexes on file changes.}\label{feat:sync-watch}
+  \featureitem{Retrieval-quality eval harness}{A \texttt{make eval} tool (internal dev/CI tooling, not an end-user command) over a committed query set, reporting per-bucket MRR and success@k plus a metadata-pollution diagnostic. Phase~0 (the parameterizable retrieval layer in \texttt{src/quarry/retrieval/}) and Phase~1 (\texttt{make eval} with ranx metrics and a known-item baseline) have landed on main; full-fixture curation and the lever bake-offs (metadata down-weighting and context-aware embeddings, whether contextual embeddings or late chunking) remain, with graded relevance judgments and nDCG@10 deferred to Phase~2 (see \faqref{faq:tech-risks}).}\label{feat:eval-harness}
   \featureitem{Google Drive connector}{Ingest cloud-hosted documents without manual download.}\label{feat:google-drive}
-  \featureitem{Index-wide PII detection}{General PII detection over arbitrary ingested files, before content enters the search index. Distinct from the capture-path write-time redaction that has already landed on main (session transcripts and WebFetch captures; DES-036)---this extends redaction to deliberately-ingested documents.}\label{feat:pii-redaction}
+  \featureitem{Index-wide PII detection}{General PII detection over arbitrary ingested files, before content enters the search index. Distinct from the capture-path write-time redaction that has already landed on main (session transcripts and WebFetch captures; DES-036): this extends redaction to deliberately-ingested documents.}\label{feat:pii-redaction}
 \end{enumerate}
 
 \subsection*{Won't Do}
@@ -911,7 +941,7 @@ Defines scope. Features are categorized to prevent scope creep.
 \newpage
 \section*{Competitive Landscape}
 
-Surveyed March 2026. The landscape divides into six categories; no single tool
+Surveyed March 2026. The field divides into six categories; no single tool
 covers Quarry's niche.
 
 \subsection*{MCP-Native Code Search}
@@ -964,7 +994,7 @@ AnythingLLM & Full AI workspace. Built-in LanceDB. GUI-first. & No MCP. Smaller 
 \vspace{0.5em}
 \textit{Assessment:} These tools are GUI-first and human-interactive. Quarry is
 CLI/MCP-first, designed for AI agents as the primary consumer. The risk is Khoj
-shipping an MCP server---they have the breadth to compete directly.
+shipping an MCP server; they have the breadth to compete directly.
 
 \subsection*{Session Capture \& Activity Recording}
 

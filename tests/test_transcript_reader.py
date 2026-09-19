@@ -10,81 +10,6 @@ from unittest.mock import patch
 from quarry.transcript_reader import TranscriptReader
 
 
-class TestMessageText:
-    def test_extracts_short_tool_result_string(self) -> None:
-        record: dict[str, object] = {
-            "type": "user",
-            "message": {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": "toolu_abc",
-                        "content": "5 passed, 0 failed",
-                    }
-                ],
-            },
-        }
-        result = TranscriptReader.message_text(record)
-        assert result is not None
-        assert "[tool_result] 5 passed, 0 failed" in result
-
-    def test_extracts_short_tool_result_list(self) -> None:
-        record: dict[str, object] = {
-            "type": "user",
-            "message": {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": "toolu_abc",
-                        "content": [{"type": "text", "text": "No matches found"}],
-                    }
-                ],
-            },
-        }
-        result = TranscriptReader.message_text(record)
-        assert result is not None
-        assert "[tool_result] No matches found" in result
-
-    def test_skips_long_tool_result(self) -> None:
-        long_output = "x" * 501
-        record: dict[str, object] = {
-            "type": "user",
-            "message": {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": "toolu_abc",
-                        "content": long_output,
-                    }
-                ],
-            },
-        }
-        assert TranscriptReader.message_text(record) is None
-
-    def test_skips_tool_use_blocks(self) -> None:
-        record: dict[str, object] = {
-            "type": "assistant",
-            "message": {
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "tool_use",
-                        "id": "toolu_abc",
-                        "name": "Bash",
-                        "input": {"command": "ls"},
-                    }
-                ],
-            },
-        }
-        assert TranscriptReader.message_text(record) is None
-
-    def test_returns_none_for_non_message_record(self) -> None:
-        assert TranscriptReader.message_text({"type": "file-history-snapshot"}) is None
-
-
 class TestText:
     def _write_transcript(self, path: Path, records: list[dict[str, object]]) -> None:
         lines = [json.dumps(r) for r in records]
@@ -228,6 +153,80 @@ class TestText:
         transcript = tmp_path / "binary.jsonl"
         transcript.write_bytes(b"\x80\x81\x82\xff\xfe")
         assert TranscriptReader(transcript).text() == ""
+
+
+def _turn(role: str, text: str) -> dict[str, object]:
+    return {
+        "type": role,
+        "message": {"role": role, "content": [{"type": "text", "text": text}]},
+    }
+
+
+def _write(path: Path, *records: object) -> TranscriptReader:
+    path.write_text("\n".join(json.dumps(r) for r in records))
+    return TranscriptReader(path)
+
+
+class TestMalformedLines:
+    """Every extraction reads through one record iterator that skips junk."""
+
+    def test_non_object_lines_are_skipped_in_order(self, tmp_path: Path) -> None:
+        path = tmp_path / "t.jsonl"
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps(_turn("user", "first")),
+                    "not json",
+                    "[1, 2]",
+                    json.dumps(_turn("assistant", "second")),
+                ]
+            )
+        )
+        reader = TranscriptReader(path)
+        assert reader.text() == "[user] first\n\n[assistant] second"
+        assert reader.last_assistant_text() == "second"
+
+
+class TestReadOnce:
+    """A reader parses its file at construction and never again."""
+
+    def test_extractions_answer_from_the_one_read(self, tmp_path: Path) -> None:
+        path = tmp_path / "t.jsonl"
+        reader = _write(path, _turn("user", "asked"), _turn("assistant", "answered"))
+        path.unlink()
+        assert reader.text() == "[user] asked\n\n[assistant] answered"
+        assert reader.last_assistant_text() == "answered"
+
+
+class TestLastAssistantText:
+    def test_returns_the_final_assistant_turn_without_prefix(
+        self, tmp_path: Path
+    ) -> None:
+        reader = _write(
+            tmp_path / "t.jsonl",
+            _turn("assistant", "first"),
+            _turn("user", "more"),
+            _turn("assistant", "  final report  "),
+        )
+        assert reader.last_assistant_text() == "final report"
+
+    def test_skips_a_trailing_tool_only_turn(self, tmp_path: Path) -> None:
+        tool_only: dict[str, object] = {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "name": "Bash"}],
+            },
+        }
+        reader = _write(tmp_path / "t.jsonl", _turn("assistant", "real"), tool_only)
+        assert reader.last_assistant_text() == "real"
+
+    def test_no_assistant_turn_is_empty(self, tmp_path: Path) -> None:
+        reader = _write(tmp_path / "t.jsonl", _turn("user", "alone"))
+        assert reader.last_assistant_text() == ""
+
+    def test_missing_file_is_empty(self, tmp_path: Path) -> None:
+        assert TranscriptReader(tmp_path / "nope.jsonl").last_assistant_text() == ""
 
 
 class TestArchive:

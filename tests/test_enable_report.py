@@ -4,6 +4,14 @@ from __future__ import annotations
 
 from quarry.enable import DisableResult, EnableResult
 from quarry.enable_report import DisableReport, EnableReport
+from quarry.ethos_memory import EthosMemoryResult
+
+
+def _enable(ethos: EthosMemoryResult) -> EnableResult:
+    """Return a minimal EnableResult carrying *ethos* as its bootstrap outcome."""
+    return EnableResult(
+        directory="/p", collection="p", captures_collection="p-captures", ethos=ethos
+    )
 
 
 def test_enable_report_lists_claudemd_steps() -> None:
@@ -37,6 +45,7 @@ def test_enable_report_omits_absent_steps() -> None:
     # DisableReport omits the marker line when nothing was removed.
     assert "Wrote enabled marker" not in joined
     assert ".gitignore excludes captures and lock files" not in joined
+    assert "Ethos" not in joined
 
 
 def test_enable_report_gitignore_message_states_postcondition_not_delta() -> None:
@@ -62,24 +71,40 @@ def test_enable_report_gitignore_message_states_postcondition_not_delta() -> Non
 
 
 def test_enable_report_reports_ethos_skipped() -> None:
-    result = EnableResult(
-        directory="/p",
-        collection="p",
-        captures_collection="p-captures",
-        ethos_skipped=True,
+    report = EnableReport(_enable(EthosMemoryResult(skipped=True)))
+    assert "  Ethos: not installed (agent memory skipped)" in report.lines()
+
+
+def test_enable_report_reports_created_and_memory_collections() -> None:
+    joined = "\n".join(
+        EnableReport(_enable(EthosMemoryResult(created=["rmh"]))).lines()
     )
+    assert "Ethos created: rmh" in joined
+    assert "Memory collections: memory-rmh" in joined
+
+
+def test_enable_report_announces_vendored_refresh_as_a_diff_to_commit() -> None:
+    result = _enable(EthosMemoryResult(vendored_updated=["claude", "rmh"]))
+    joined = "\n".join(EnableReport(result).lines())
+    assert "Ethos guide refreshed (vendored — commit via PR): claude, rmh" in joined
+
+
+def test_enable_report_vendored_line_accompanies_not_installed() -> None:
+    """A repo can carry a vendored tree while the operator has no global ethos."""
+    result = _enable(EthosMemoryResult(skipped=True, vendored_updated=["rmh"]))
     joined = "\n".join(EnableReport(result).lines())
     assert "Ethos: not installed (agent memory skipped)" in joined
+    assert "Ethos guide refreshed (vendored — commit via PR): rmh" in joined
 
 
-def test_enable_report_reports_ethos_failed() -> None:
-    result = EnableResult(
-        directory="/p",
-        collection="p",
-        captures_collection="p-captures",
-        ethos_failed=["rmh"],
-    )
-    assert any("Ethos FAILED: rmh" in line for line in EnableReport(result).lines())
+def test_enable_report_omits_vendored_line_when_nothing_refreshed() -> None:
+    joined = "\n".join(EnableReport(_enable(EthosMemoryResult())).lines())
+    assert "vendored" not in joined
+
+
+def test_enable_report_reports_ethos_failed_last() -> None:
+    result = _enable(EthosMemoryResult(created=["rmh"], failed=["rmh"]))
+    assert EnableReport(result).lines()[-1] == "  Ethos FAILED: rmh"
 
 
 def test_disable_report_purge_queued_when_not_keep_data() -> None:

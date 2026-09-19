@@ -41,6 +41,14 @@ WebSearch or WebFetch call re-discovering something already found.
     lesson typically ranks above a session transcript that mentions the
     same keywords.
   - `find` — the retrieval verb; searches everything the other three wrote.
+- Call `remember` at these five moments, not at the end and not never: you
+  found a non-obvious root cause or gotcha (`fact`); a design decision was
+  ratified, with its reason (`fact`); you worked out a repeatable how-to
+  (`procedure`); you formed a judgement you will want to revisit (`opinion`);
+  and once before submitting a mission result, one note on what you would
+  tell yourself next time (`observation`). Always pass your own
+  `agent_handle` — the daemon cannot infer it, and a subagent's working
+  directory resolves to the repo's leader, not to you.
 
 ## When not to use it
 

@@ -15,6 +15,7 @@ from quarry.cli_captures import CapturesCli, CliPlumbing
 from quarry.cli_documents import DocumentsCli
 from quarry.cli_ingest import IngestCli
 from quarry.cli_maintenance import MaintenanceCli
+from quarry.cli_missions import MissionsCli
 from quarry.cli_project import ProjectCli
 from quarry.cli_remote import RemoteCli
 from quarry.cli_search import SearchCli
@@ -25,7 +26,6 @@ from quarry.client import (
     QuarryError,
     TargetResolver,
 )
-from quarry.client.errors import CONFLICT_STATUS
 from quarry.config import Settings
 from quarry.db_pointer import SELECTION
 from quarry.logging_config import LoggingConfig
@@ -59,6 +59,7 @@ _COMMAND_ORDER: list[str] = [
     "disable",
     "optimize",
     "captures",
+    "missions",
     "backfill-sessions",
     "login",
     "logout",
@@ -87,11 +88,6 @@ app = typer.Typer(
     rich_markup_mode=None,
     cls=_OrderedGroup,
 )
-hooks_app = typer.Typer(
-    help="Claude Code hook handlers (called by hook scripts)",
-    rich_markup_mode=None,
-)
-app.add_typer(hooks_app, name="hooks", hidden=True)
 err_console = Console(stderr=True)
 
 # Global state set by @app.callback.
@@ -205,7 +201,7 @@ def _cli_errors(fn: Callable[..., None]) -> Callable[..., None]:
                 err_console.print(_AUTOSTART_HINT, style="yellow")
             raise typer.Exit(code=1) from exc
         except HttpError as exc:
-            if exc.status == CONFLICT_STATUS:
+            if exc.is_conflict:
                 # 409 = a singleton task is already running. Surface ITS task_id
                 # the same way the 202 acceptance path does (via _emit to stdout),
                 # so an operator can poll/track the in-flight task. Exit 0 — this
@@ -253,6 +249,7 @@ ProjectCli(_plumbing).register(app)
 MaintenanceCli(_plumbing).register(app)
 RemoteCli(_plumbing).register(app)
 app.add_typer(CapturesCli(_plumbing).build(), name="captures")
+app.add_typer(MissionsCli(_plumbing).build(), name="missions")
 
 
 @app.command(name="use")
@@ -304,6 +301,9 @@ def mcp() -> None:
     """Start the MCP server (stdio transport)."""
     from quarry.mcp_server import main as mcp_main  # noqa: PLC0415
 
+    # stdout is the stdio transport, so the server's log goes to stderr at INFO
+    # regardless of the CLI's --quiet/--verbose default; the launcher owns this.
+    LoggingConfig.configure(stderr_level="INFO")
     mcp_main(db_name=_global_db or SELECTION.persisted())
 
 
@@ -329,37 +329,10 @@ def uninstall() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Hook subcommands — called by Claude Code hook scripts.  All are fail-open:
-# exceptions are caught, logged, and the process exits 0 so Claude is never
-# blocked.
+# Claude Code hooks are dispatched by ``quarry-hook`` (``quarry._hook_entry``),
+# never through this CLI: the entry point exists precisely to skip the typer +
+# pydantic import chain on every hook fire.
 # ---------------------------------------------------------------------------
-
-
-@hooks_app.command(name="session-start")
-def hook_session_start() -> None:
-    """SessionStart: auto-register and sync the current repo."""
-    from quarry._stdlib import run_hook  # noqa: PLC0415
-    from quarry.hooks import handle_session_start  # noqa: PLC0415
-
-    run_hook(handle_session_start)
-
-
-@hooks_app.command(name="post-web-fetch")
-def hook_post_web_fetch() -> None:
-    """PostToolUse on WebFetch: auto-ingest fetched URLs."""
-    from quarry._stdlib import run_hook  # noqa: PLC0415
-    from quarry.hooks import handle_post_web_fetch  # noqa: PLC0415
-
-    run_hook(handle_post_web_fetch)
-
-
-@hooks_app.command(name="pre-compact")
-def hook_pre_compact() -> None:
-    """PreCompact: capture compaction summaries."""
-    from quarry._stdlib import run_hook  # noqa: PLC0415
-    from quarry.hooks import handle_pre_compact  # noqa: PLC0415
-
-    run_hook(handle_pre_compact)
 
 
 if __name__ == "__main__":

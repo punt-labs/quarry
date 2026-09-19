@@ -19,6 +19,8 @@ from quarry.hooks_agent import HookAgent
 if TYPE_CHECKING:
     import pytest
 
+    from quarry.api import CaptureIngestRequest, RememberRequest
+
 
 class TestHookPayload:
     """HookPayload parses untrusted payload fields defensively."""
@@ -128,6 +130,26 @@ def _write_config(cwd: Path, body: str) -> None:
     config_dir = cwd / ".punt-labs" / "quarry"
     config_dir.mkdir(parents=True, exist_ok=True)
     (config_dir / "config.md").write_text(body)
+
+
+def _vendor_identity(root: Path, handle: str) -> None:
+    """Register *handle* in the repo's vendored ethos tree under *root*."""
+    identities = root / ".punt-labs" / "ethos" / "identities"
+    identities.mkdir(parents=True, exist_ok=True)
+    (identities / f"{handle}.yaml").write_text(f"handle: {handle}\nkind: agent\n")
+
+
+def _make_dialogue(path: Path, user: str, assistant: str) -> Path:
+    """Write a two-turn transcript so a subagent has a final report to file."""
+    turns = [
+        {
+            "type": role,
+            "message": {"role": role, "content": [{"type": "text", "text": text}]},
+        }
+        for role, text in (("user", user), ("assistant", assistant))
+    ]
+    path.write_text("\n".join(json.dumps(t) for t in turns))
+    return path
 
 
 class TestHandleSessionEnd:
@@ -546,14 +568,19 @@ class TestHandleSubagentStop:
         assert "subagent chat" in req.content
         assert "parent chat" not in req.content
 
-    def test_uses_agent_type_as_handle(self, tmp_path: Path) -> None:
-        subagent = _make_transcript(tmp_path, "sub")
-        subagent.rename(tmp_path / "sub.jsonl")
+    def _stop(
+        self, tmp_path: Path, agent_type: str, *, distilled: bool = True
+    ) -> tuple[dict[str, object], list[CaptureIngestRequest], list[RememberRequest]]:
+        """Run SubagentStop for a two-turn transcript; return (result, raw, memory)."""
+        transcript = _make_dialogue(
+            tmp_path / "sub.jsonl", "review PR #519", "Findings: none. Approve."
+        )
         payload: dict[str, object] = {
             "cwd": str(tmp_path),
-            "agent_id": "sub-2",
-            "agent_type": "rmh",
-            "agent_transcript_path": str(tmp_path / "sub.jsonl"),
+            "session_id": "parent-session",
+            "agent_id": "a0f13948344b777d1",
+            "agent_type": agent_type,
+            "agent_transcript_path": str(transcript),
         }
         with (
             patch(
@@ -564,11 +591,60 @@ class TestHandleSubagentStop:
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
                 return_value=True,
             ) as cap,
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_remember",
+                return_value=distilled,
+            ) as mem,
         ):
             result = HookAgent.subagent_stop(payload)
+        raw: list[CaptureIngestRequest] = [c[0][0] for c in cap.call_args_list]
+        memory: list[RememberRequest] = [c[0][0] for c in mem.call_args_list]
+        return result, raw, memory
+
+    def test_registered_identity_gets_two_rows(self, tmp_path: Path) -> None:
+        """A vendored ``rmh`` subagent files the raw transcript AND its report."""
+        _vendor_identity(tmp_path, "rmh")
+        result, raw, memory = self._stop(tmp_path, "rmh")
         assert result == {}
-        req = cap.call_args[0][0]
-        assert req.agent_handle == "rmh"
+        assert len(raw) == 1
+        assert len(memory) == 1
+        assert raw[0].agent_handle == "rmh"
+        assert raw[0].summary == "Findings: none. Approve."
+        assert memory[0].name == "subagent-a0f13948-report"
+        assert memory[0].agent_handle == "rmh"
+        assert memory[0].memory_type == "observation"
+
+    def test_bare_agent_type_is_unattributed_single_row(self, tmp_path: Path) -> None:
+        """``general-purpose`` is not an identity: raw capture only, no handle."""
+        (tmp_path / ".punt-labs").mkdir()
+        (tmp_path / ".punt-labs" / "ethos.yaml").write_text("agent: claude\n")
+        result, raw, memory = self._stop(tmp_path, "general-purpose")
+        assert result == {}
+        assert len(raw) == 1
+        assert raw[0].agent_handle == ""
+        assert memory == []
+
+    def test_trace_says_distilled_when_the_report_was_filed(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging as _logging
+
+        caplog.set_level(_logging.INFO, logger="quarry.hooks")
+        _vendor_identity(tmp_path, "rmh")
+        self._stop(tmp_path, "rmh")
+        line = next(r for r in caplog.records if r.name == "quarry.hooks").getMessage()
+        assert "-> capture:distilled" in line
+
+    def test_trace_is_a_bare_capture_when_only_the_raw_row_landed(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging as _logging
+
+        caplog.set_level(_logging.INFO, logger="quarry.hooks")
+        _vendor_identity(tmp_path, "rmh")
+        self._stop(tmp_path, "rmh", distilled=False)
+        line = next(r for r in caplog.records if r.name == "quarry.hooks").getMessage()
+        assert line.endswith("-> capture")
 
     def test_config_off_returns_empty(self, tmp_path: Path) -> None:
         _write_config(tmp_path, "---\nauto_capture:\n  subagent_stop: false\n---\n")

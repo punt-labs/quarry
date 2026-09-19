@@ -9,6 +9,10 @@ documents by meaning, ingest new content, and recall knowledge across sessions.
   use them — do not re-research what has already been found.
 - Use grep for symbol lookups and value lookups; use quarry for "why", "how",
   and "what did we decide about X" questions.
+- Agent memory: call `remember` with your own `agent_handle` after a root
+  cause, a ratified decision, a worked-out how-to, a judgement worth
+  revisiting, and once before a mission result — it is cross-project, and
+  the daemon cannot infer who you are.
 - **Slash commands**: `/find`, `/ingest`, `/remember`, `/explain`, `/source`,
   `/quarry`
 - **Research agent**: `researcher` — combines quarry local search with web

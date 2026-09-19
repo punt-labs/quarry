@@ -8,7 +8,12 @@ import logging
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Self, final
+from typing import TYPE_CHECKING, Self, final
+
+from quarry.transcript_turns import TurnText
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -24,17 +29,44 @@ class TranscriptReader:
     """
 
     _MAX_CHARS = 500_000
-    _MAX_TOOL_RESULT_CHARS = 500
     _RETENTION_DAYS = 90
 
-    __slots__ = ("_path",)
+    __slots__ = ("_path", "_records")
 
     _path: Path
+    _records: tuple[dict[str, object], ...]
 
     def __new__(cls, path: Path) -> Self:
         self = super().__new__(cls)
         self._path = path
+        # Read once, here: a SubagentStop asks one reader for the conversation
+        # text and for the final turn, and a 500 KB transcript must not be
+        # parsed again per question.
+        self._records = tuple(cls._parse(path))
         return self
+
+    @staticmethod
+    def _parse(path: Path) -> Iterator[dict[str, object]]:
+        """Yield each parsed JSON object in *path*, in file order.
+
+        The one read every extraction shares: a missing or unreadable file
+        yields nothing, and a line that is not a JSON object is skipped, so
+        no extraction ever sees a partial or malformed record.
+        """
+        if not path.is_file():
+            return
+        try:
+            raw = path.read_text()
+        except (OSError, UnicodeDecodeError):
+            logger.warning("transcript: could not read %s", path)
+            return
+        for line in raw.splitlines():
+            try:
+                obj = json.loads(line)
+            except (ValueError, TypeError):
+                continue
+            if isinstance(obj, dict):
+                yield obj
 
     def text(self) -> str:
         """Return the transcript's conversation text, newest-first truncated.
@@ -43,34 +75,38 @@ class TranscriptReader:
         skips tool-use content blocks, file snapshots, and system messages.  A
         missing or unreadable file yields ``""``.
         """
-        if not self._path.is_file():
-            return ""
-        try:
-            raw = self._path.read_text()
-        except (OSError, UnicodeDecodeError):
-            logger.warning("pre-compact: could not read transcript %s", self._path)
-            return ""
-        parts: list[str] = []
-        for line in raw.splitlines():
-            try:
-                obj = json.loads(line)
-            except (ValueError, TypeError):
-                continue
-            entry = self.message_text(obj)
-            if entry:
-                parts.append(entry)
+        parts = [
+            entry
+            for record in self._records
+            if (entry := TurnText.message_text(record))
+        ]
         return self._join_within_budget(parts)
 
-    def _join_within_budget(self, parts: list[str]) -> str:
+    def last_assistant_text(self) -> str:
+        """Return the final assistant turn's text without its role prefix, or ``""``.
+
+        The last assistant message is the report a subagent hands its parent;
+        tool-use blocks are not text, so a turn holding only those is skipped.
+        """
+        last = ""
+        for record in self._records:
+            if record.get("type") == "assistant" and (
+                text := TurnText.turn_text(record)
+            ):
+                last = text
+        return last.strip()
+
+    @classmethod
+    def _join_within_budget(cls, parts: list[str]) -> str:
         """Drop the oldest entries until the joined text fits the char budget."""
         total_chars = sum(len(p) for p in parts)
         start = 0
-        while start < len(parts) and total_chars > self._MAX_CHARS:
+        while start < len(parts) and total_chars > cls._MAX_CHARS:
             total_chars -= len(parts[start])
             start += 1
         if start > 0:
             logger.debug(
-                "pre-compact: dropped %d oldest entries from transcript",
+                "transcript: dropped %d oldest entries from transcript",
                 start,
             )
             parts = parts[start:]
@@ -104,68 +140,3 @@ class TranscriptReader:
             with contextlib.suppress(OSError):
                 if now - f.stat().st_mtime > retention_seconds:
                     f.unlink()
-
-    @classmethod
-    def message_text(cls, record: dict[str, object]) -> str | None:
-        """Return a single record's ``[role] text``, or ``None`` if not a message.
-
-        ``None`` is the documented "this record is not a user/assistant message"
-        contract (a file snapshot or system record), not a failure — the caller
-        skips it.
-        """
-        record_type = record.get("type", "")
-        if record_type not in ("user", "assistant"):
-            return None
-        message = record.get("message")
-        if not isinstance(message, dict):
-            return None
-        role = message.get("role", record_type)
-        content = message.get("content")
-        if isinstance(content, str):
-            return f"[{role}] {content}" if content.strip() else None
-        if not isinstance(content, list):
-            return None
-        texts = cls._content_texts(content)
-        if not texts:
-            return None
-        return f"[{role}] {' '.join(texts)}"
-
-    @classmethod
-    def _content_texts(cls, content: list[object]) -> list[str]:
-        """Extract text fragments from a list of content blocks."""
-        texts: list[str] = []
-        for block in content:
-            if not isinstance(block, dict):
-                continue
-            if block.get("type") == "tool_result":
-                if tool_text := cls._tool_result_text(block):
-                    texts.append(f"[tool_result] {tool_text}")
-            elif stripped := cls._block_text(block):
-                texts.append(stripped)
-        return texts
-
-    @classmethod
-    def _tool_result_text(cls, block: dict[str, object]) -> str:
-        """Return the tool_result text if under the per-result cap, else ``""``."""
-        tool_content = block.get("content")
-        if isinstance(tool_content, str):
-            tool_text = tool_content.strip()
-        elif isinstance(tool_content, list):
-            tool_text = " ".join(
-                t
-                for b in tool_content
-                if isinstance(b, dict) and (t := cls._block_text(b))
-            )
-        else:
-            tool_text = ""
-        if 0 < len(tool_text) <= cls._MAX_TOOL_RESULT_CHARS:
-            return tool_text
-        return ""
-
-    @staticmethod
-    def _block_text(block: dict[str, object]) -> str:
-        """Return a text block's stripped text, or ``""`` if not a text block."""
-        if block.get("type") != "text":
-            return ""
-        text = block.get("text")
-        return text.strip() if isinstance(text, str) else ""

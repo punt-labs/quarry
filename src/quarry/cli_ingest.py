@@ -9,14 +9,42 @@ rather than an in-process file loader (there is no engine in the CLI).
 from __future__ import annotations
 
 import sys
-from typing import TYPE_CHECKING, Annotated, Self, final
+from typing import TYPE_CHECKING, Annotated, NoReturn, Self, final
 
 import typer
 
 from quarry.api import IngestRequest, RememberRequest
+from quarry.memory_types import MemoryType
 
 if TYPE_CHECKING:
+    from quarry.api import TaskAccepted
     from quarry.cli_captures import CliPlumbing
+
+# The three agent-memory options ``ingest`` and ``remember`` share, declared
+# once so their help text (and the vocabulary it names) cannot drift between
+# the two commands. The daemon cannot infer an agent's identity — a
+# subagent's working directory resolves to the repo's leader — so the handle
+# is always the caller's own statement.
+_AgentHandleOption = Annotated[
+    str,
+    typer.Option(
+        "--agent-handle",
+        help="Your own agent handle; routes to memory-<handle> unless --collection",
+    ),
+]
+_MemoryTypeOption = Annotated[
+    str,
+    typer.Option(
+        "--memory-type",
+        help=(
+            f"Memory type: {MemoryType.agent_choices()} "
+            f"('{MemoryType.LESSON}' is reserved for quarry learn)"
+        ),
+    ),
+]
+_SummaryOption = Annotated[
+    str, typer.Option("--summary", help="One-line summary of the content")
+]
 
 
 @final
@@ -47,18 +75,9 @@ class IngestCli:
         collection: Annotated[
             str, typer.Option("--collection", "-c", help="Collection name")
         ] = "",
-        agent_handle: Annotated[
-            str, typer.Option("--agent-handle", help="Agent handle to tag content")
-        ] = "",
-        memory_type: Annotated[
-            str,
-            typer.Option(
-                "--memory-type", help="Memory type: fact, observation, opinion"
-            ),
-        ] = "",
-        summary: Annotated[
-            str, typer.Option("--summary", help="One-line summary of the content")
-        ] = "",
+        agent_handle: _AgentHandleOption = "",
+        memory_type: _MemoryTypeOption = "",
+        summary: _SummaryOption = "",
     ) -> None:
         """Ingest a URL into the knowledge base.
 
@@ -70,12 +89,10 @@ class IngestCli:
         and let sync index them.
         """
         if not source.startswith(("http://", "https://")):
-            self._p.err_console.print(
+            self._fail(
                 f"Error: {source!r} is not a URL. Use 'quarry register <dir>' to "
-                "track local files and directories, then 'quarry sync'.",
-                style="red",
+                "track local files and directories, then 'quarry sync'."
             )
-            raise typer.Exit(code=1)
         req = IngestRequest(
             source=source,
             overwrite=overwrite,
@@ -84,11 +101,7 @@ class IngestCli:
             memory_type=memory_type,
             summary=summary,
         )
-        accepted = self._p.client().ingest_url(req)
-        self._p.emit(
-            accepted.model_dump(),
-            f"Ingest {accepted.status}: task_id={accepted.task_id}",
-        )
+        self._emit_accepted("Ingest", self._p.client().ingest_url(req))
 
     def _remember(
         self,
@@ -117,37 +130,24 @@ class IngestCli:
                 help="Replace existing document with same name",
             ),
         ] = True,
-        agent_handle: Annotated[
-            str, typer.Option("--agent-handle", help="Agent handle to tag content")
-        ] = "",
-        memory_type: Annotated[
-            str,
-            typer.Option(
-                "--memory-type", help="Memory type: fact, observation, opinion"
-            ),
-        ] = "",
-        summary: Annotated[
-            str, typer.Option("--summary", help="One-line summary of the content")
-        ] = "",
+        agent_handle: _AgentHandleOption = "",
+        memory_type: _MemoryTypeOption = "",
+        summary: _SummaryOption = "",
     ) -> None:
         """Ingest inline content from stdin.
 
         remember = a specific durable fact, ingest = a URL, learn = a
         distilled lesson that gets retrieval preference. ``memory_type
-        'lesson'`` is reserved for ``quarry learn``.
+        'lesson'`` is reserved for ``quarry learn``; an unknown type is a 400.
 
         Reads text from stdin and indexes it. Requires --name to set the document
         name. Overwrites by default; use --no-overwrite to skip an existing doc.
         """
         if not name:
-            self._p.err_console.print(
-                "Error: --name is required for remember.", style="red"
-            )
-            raise typer.Exit(code=1)
+            self._fail("Error: --name is required for remember.")
         content = sys.stdin.read()
         if not content.strip():
-            self._p.err_console.print("Error: no content on stdin.", style="red")
-            raise typer.Exit(code=1)
+            self._fail("Error: no content on stdin.")
         req = RememberRequest(
             name=name,
             content=content,
@@ -158,11 +158,7 @@ class IngestCli:
             memory_type=memory_type,
             summary=summary,
         )
-        accepted = self._p.client().remember(req)
-        self._p.emit(
-            accepted.model_dump(),
-            f"Remember {accepted.status}: task_id={accepted.task_id}",
-        )
+        self._emit_accepted("Remember", self._p.client().remember(req))
 
     def _learn(
         self,
@@ -182,7 +178,16 @@ class IngestCli:
         at 500 characters -- use remember for anything longer.
         """
         accepted = self._p.client().learn(lesson, topic=topic, name=name)
+        self._emit_accepted("Learn", accepted)
+
+    def _emit_accepted(self, verb: str, accepted: TaskAccepted) -> None:
+        """Emit the daemon's 202 acceptance as JSON or a one-line status."""
         self._p.emit(
             accepted.model_dump(),
-            f"Learn {accepted.status}: task_id={accepted.task_id}",
+            f"{verb} {accepted.status}: task_id={accepted.task_id}",
         )
+
+    def _fail(self, message: str) -> NoReturn:
+        """Print *message* in red and exit 1 — the caller-error path."""
+        self._p.err_console.print(message, style="red")
+        raise typer.Exit(code=1)

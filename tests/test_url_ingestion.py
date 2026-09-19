@@ -7,7 +7,8 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import MagicMock, patch
 
-from quarry.daemon.ingest_jobs import IngestJob, ScrubbedIngestJob
+from quarry.daemon.content_jobs import ScrubbedIngestJob
+from quarry.daemon.ingest_jobs import IngestJob
 from quarry.daemon.routes.ingestion import IngestionRoutes
 from quarry.db import Database
 from quarry.extractors.html_extractor import HtmlExtractor

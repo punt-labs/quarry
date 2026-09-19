@@ -131,9 +131,16 @@ class QuarryClient:
 
     # -- ingestion ---------------------------------------------------------
 
-    def remember(self, req: RememberRequest) -> TaskAccepted:
-        """Index inline text content as a 202 background task."""
-        return self._post("/remember", TaskAccepted, req)
+    def remember(
+        self, req: RememberRequest, *, timeout: float | None = None
+    ) -> TaskAccepted:
+        """Index inline text content as a 202 background task.
+
+        A hook filing a distilled memory passes a short *timeout* for the same
+        reason ``capture`` does: the 202 precedes any embedding, and a saturated
+        daemon must never hold a blocking hook.
+        """
+        return self._post("/remember", TaskAccepted, req, timeout=timeout)
 
     def capture(
         self, req: CaptureIngestRequest, *, timeout: float | None = None
@@ -258,15 +265,26 @@ class QuarryClient:
                 unreachable += 1
                 if unreachable >= _MAX_UNREACHABLE_POLLS:
                     return TaskOutcome.unreachable(task_id, str(exc))
-                time.sleep(_POLL_INTERVAL_S)
-                continue
-            unreachable = 0
-            if status.status == "completed":
-                return TaskOutcome.completed(task_id, status.results or {})
-            if status.status == "failed":
-                return TaskOutcome.failed(task_id, status.error or "unknown error")
+            else:
+                unreachable = 0
+                outcome = self._terminal_outcome(task_id, status)
+                if outcome is not None:
+                    return outcome
             time.sleep(_POLL_INTERVAL_S)
         return TaskOutcome.timed_out(task_id)
+
+    @staticmethod
+    def _terminal_outcome(task_id: str, status: TaskStatus) -> TaskOutcome | None:
+        """Map a polled *status* to its terminal outcome.
+
+        ``None`` is the documented "not terminal yet — keep polling" signal;
+        only ``completed`` and ``failed`` end the wait.
+        """
+        if status.status == "completed":
+            return TaskOutcome.completed(task_id, status.results or {})
+        if status.status == "failed":
+            return TaskOutcome.failed(task_id, status.error or "unknown error")
+        return None
 
     # -- request helpers ---------------------------------------------------
 

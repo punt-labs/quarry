@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import os
@@ -1681,36 +1682,62 @@ class TestHandlePreCompact:
         assert "background" in msg
 
 
-class TestHookCLI:
-    """The CLI dispatcher reads stdin JSON, calls the handler, writes stdout."""
+class TestHookEntryDispatch:
+    """``quarry-hook <event>`` reads stdin JSON, calls the handler, writes stdout.
 
-    def test_session_start_no_cwd_returns_empty_json(self) -> None:
-        result = runner.invoke(app, ["hooks", "session-start"], input="")
-        assert result.exit_code == 0
-        assert json.loads(result.stdout) == {}
+    The hidden ``quarry hooks`` typer sub-app is gone: ``quarry._hook_entry``
+    is the one dispatcher, and it must stay fail-open (exit 0, ``{}``) on
+    every malformed input so Claude Code is never blocked.
+    """
 
-    def test_post_web_fetch_accepts_json_stdin(self) -> None:
+    @staticmethod
+    def _run(
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        event: str,
+        stdin: str,
+    ) -> str:
+        from quarry._hook_entry import main
+
+        monkeypatch.setattr(sys, "argv", ["quarry-hook", event])
+        monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
+        main()
+        return capsys.readouterr().out
+
+    def test_session_start_no_cwd_returns_empty_json(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        out = self._run(monkeypatch, capsys, "session-start", "")
+        assert json.loads(out) == {}
+
+    def test_post_web_fetch_accepts_json_stdin(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         payload = json.dumps({"tool_input": {"url": "https://example.com"}})
-        result = runner.invoke(app, ["hooks", "post-web-fetch"], input=payload)
-        assert result.exit_code == 0
-        assert json.loads(result.stdout) == {}
+        out = self._run(monkeypatch, capsys, "post-web-fetch", payload)
+        assert json.loads(out) == {}
 
-    def test_pre_compact_accepts_empty_stdin(self) -> None:
-        result = runner.invoke(app, ["hooks", "pre-compact"], input="")
-        assert result.exit_code == 0
-        assert json.loads(result.stdout) == {}
+    def test_pre_compact_accepts_empty_stdin(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        out = self._run(monkeypatch, capsys, "pre-compact", "")
+        assert json.loads(out) == {}
 
-    def test_hooks_help(self) -> None:
+    def test_invalid_json_is_fail_open(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        out = self._run(monkeypatch, capsys, "session-start", "not json{{{")
+        assert json.loads(out) == {}
+
+    def test_unknown_event_exits_with_usage(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit, match="Unknown hook event: nope"):
+            self._run(monkeypatch, capsys, "nope", "")
+
+    def test_cli_no_longer_carries_a_hooks_sub_app(self) -> None:
         result = runner.invoke(app, ["hooks", "--help"])
-        assert result.exit_code == 0
-        assert "session-start" in result.output
-        assert "post-web-fetch" in result.output
-        assert "pre-compact" in result.output
-
-    def test_invalid_json_is_fail_open(self) -> None:
-        result = runner.invoke(app, ["hooks", "session-start"], input="not json{{{")
-        assert result.exit_code == 0
-        assert json.loads(result.stdout) == {}
+        assert result.exit_code != 0
 
 
 # ---------------------------------------------------------------------------

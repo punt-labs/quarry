@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Self, final
 from uuid import uuid4
 
 from quarry.collection_routing import CollectionRouting
+from quarry.memory_types import MemoryType
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -15,12 +16,32 @@ if TYPE_CHECKING:
 
 @final
 class LessonComposer:
-    """Compose a collision-proof document name for a distilled lesson."""
+    """Compose a distilled lesson: its name, its type, and its length cap.
+
+    A lesson is curated, project-scoped knowledge that retrieval boosts, so
+    it is short by contract — anything longer belongs in ``remember``.
+    """
 
     __slots__ = ()
 
+    MAX_CHARS = 500
     _FALLBACK_SLUG = "note"
     _MAX_SLUG_LEN = 40
+
+    @classmethod
+    def memory_type(cls) -> str:
+        """Return the one ``memory_type`` a lesson row carries."""
+        return MemoryType.LESSON.value
+
+    @classmethod
+    def check_length(cls, lesson: str) -> None:
+        """Raise ``ValueError`` when *lesson* exceeds :data:`MAX_CHARS`."""
+        if len(lesson) > cls.MAX_CHARS:
+            msg = (
+                f"lesson exceeds {cls.MAX_CHARS} chars -- "
+                "use remember for full documents"
+            )
+            raise ValueError(msg)
 
     @classmethod
     def document_name(cls, name: str, topic: str) -> str:

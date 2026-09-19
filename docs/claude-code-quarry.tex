@@ -18,7 +18,7 @@
 
 \title{Claude Code + Quarry: A Z Specification}
 \author{Layer 2 --- Knowledge Capture State}
-\date{March 2026}
+\date{March 2026 (implementation status revised September 2026)}
 \hypersetup{
   pdftitle={Claude Code + Quarry: A Z Specification},
   pdfauthor={Punt Labs},
@@ -51,7 +51,9 @@ The key properties verified by this model:
     captures session notes. No path reaches \texttt{CompactContext}
     without the capture flag being set.
   \item \textbf{WebFetch auto-capture}: URLs fetched during a session
-    are automatically ingested into the \texttt{web-captures} collection.
+    are automatically ingested into the project's
+    \texttt{<repo>-captures} collection (\texttt{default-captures} when
+    the working directory is not registered).
   \item \textbf{Capture toggles are respected}: each auto-capture
     layer (session sync, web fetch, compaction) can be independently
     disabled via \texttt{.punt-labs/quarry/config.md}.
@@ -500,8 +502,8 @@ automatically.
 
 \texttt{PostToolUse} on \texttt{WebFetch}. When web fetch capture
 is enabled, the fetched URL is added to the captured set and
-ingested into the \texttt{web-captures} collection (async,
-fire-and-forget).
+ingested into the project's \texttt{<repo>-captures} collection
+(async, fire-and-forget; the daemon scrubs before storing).
 
 \begin{schema}{CaptureWebFetch}
   \Delta State \\
@@ -777,8 +779,9 @@ session notes \emph{before} the context is shrunk.
 
 \texttt{PreCompact} hook fires. If compaction capture is enabled,
 quarry reads the transcript and ingests it as session notes into
-the \texttt{session-notes} collection. This must happen before
-\texttt{CompactContext}.
+the project's \texttt{<repo>-captures} collection (as
+\texttt{session-<id8>}, attributed to the repo's ethos pin). This
+must happen before \texttt{CompactContext}.
 
 \begin{schema}{CaptureBeforeCompact}
   \Delta State
@@ -939,6 +942,10 @@ SessionStart & * & InjectKnowledge\-Hint &
   Project standards & No \\
 PostToolUse & WebFetch & CaptureWebFetch &
   Ingest URL & No \\
+PostToolUse & WebSearch$^\ddagger$ & CompleteTool\-Success (base) &
+  Capture search digest & No \\
+PostToolUse & Read$^\ddagger$ & CompleteTool\-Success (base) &
+  Capture read file (opt-in) & No \\
 PostToolUse & Edit|Write & InjectKnowledge\-Hint &
   File-type hints & No \\
 PostToolUse & Bash & InjectKnowledge\-Hint &
@@ -951,17 +958,26 @@ PostToolUse & quarry\_\_*$^\dagger$ & (suppress output) &
   Format display & No \\
 PreCompact & * & CaptureBefore\-Compact &
   Save session notes & No \\
-SessionEnd$^\ddagger$ & * & EndSession &
-  Clear state & No \\
+SubagentStop$^\ddagger$ & * & StopSubagent (base) &
+  Archive transcript, distill report & No$^\S$ \\
+SessionEnd & * & EndSession &
+  Capture full transcript, clear state & No \\
 \hline
 \end{tabular}
 }
 
 \noindent
 $^\dagger$Conceptual matcher; actual regex is
-\texttt{mcp\_\_(plugin\_quarry...)?quarry(-proxy)?\_\_.*}
-(see \texttt{hooks.json}).\\
-$^\ddagger$Not yet wired --- no SessionEnd hook is registered.
+\texttt{mcp\_\_(plugin\_quarry(-dev)?\_)?quarry(-proxy|-dev)?\_\_.*}
+(see \texttt{plugin/hooks/hooks.json}).\\
+$^\ddagger$The capture side-effect rides a base-layer operation; the
+quarry layer does not model it as a separate schema. SubagentStop
+files the subagent's own final report as an \texttt{observation} in
+\texttt{memory-<handle>} when \texttt{agent\_type} names a registered
+ethos identity (DES-055).\\
+$^\S$Claude Code treats SubagentStop as a blocking hook (a non-zero
+exit or a \texttt{decision} field keeps the subagent running); the
+handler returns \texttt{\{\}} on every path, so it never blocks.
 
 % ============================================================
 \section{Implementation Validation}
@@ -973,9 +989,13 @@ scripts in the hooks directory, and the Python handlers.
 
 \subsection{Hook Wiring Status}
 
-All three knowledge capture handlers are implemented in
-\texttt{src/quarry/hooks.py} and wired via shell scripts in
-\texttt{plugin/hooks/hooks.json}.
+All seven capture handlers are implemented in
+\texttt{src/quarry/hooks.py} (session start, web fetch, pre-compact)
+and \texttt{src/quarry/hooks\_agent.py} (session end, web search,
+read, subagent stop), dispatched by \texttt{quarry-hook <event>}
+(\texttt{src/quarry/\_hook\_entry.py}) and wired via shell scripts in
+\texttt{plugin/hooks/hooks.json}.  Every handler is a thin daemon
+client: no hook loads the engine.
 
 {\small
 \begin{tabular}{lp{3cm}p{5cm}l}
@@ -989,8 +1009,16 @@ Output formatting & PostToolUse (quarry) &
   suppress-output.sh & Correct \\
 Web fetch capture & PostToolUse (WebFetch) &
   web-fetch.sh, hooks.py & Correct \\
+Web search capture & PostToolUse (WebSearch) &
+  web-search.sh, hooks\_agent.py & Correct \\
+Read capture (opt-in) & PostToolUse (Read) &
+  post-read.sh, hooks\_agent.py, read\_capture.py & Correct \\
 Compaction capture & PreCompact &
   pre-compact.sh, hooks.py & Correct \\
+Session-end capture & SessionEnd &
+  session-end.sh, hooks\_agent.py & Correct \\
+Subagent capture + distillation & SubagentStop &
+  subagent-stop.sh, hooks\_agent.py, subagent\_capture.py & Correct \\
 \hline
 \end{tabular}
 }
@@ -1004,7 +1032,6 @@ Compaction capture & PreCompact &
 InjectKnowledgeHint & SessionStart & Project standards & Medium \\
 InjectKnowledgeHint & PostToolUse Edit|Write & File-type hints & Medium \\
 InjectKnowledgeHint & PostToolUse Bash & Workflow hints & Medium \\
-EndSession cleanup & SessionEnd & Clear session state & Low \\
 \hline
 \end{tabular}
 
@@ -1034,8 +1061,17 @@ SearchKnowledge & MCP tool & Correct \\
 InjectKnowledgeHint & --- & \textbf{Not built} \\
 CaptureBeforeCompact & hooks.py + pre-compact.sh & Correct \\
 CompactContext & (base) & Correct \\
-EndSession & --- & \textbf{Not built} \\
+StopSubagent (capture side-effect) & hooks\_agent.py + subagent-stop.sh & Correct \\
+EndSession & hooks\_agent.py + session-end.sh & Correct \\
 \hline
 \end{tabular}
+
+\noindent
+The \texttt{EndSession} schema models the state clear; the wired
+handler additionally captures the full session transcript on every
+close, so a short session that never compacts still yields a durable
+capture.  The WebSearch and Read captures ride the base
+\texttt{CompleteToolSuccess} operation and are listed in the hook
+event map above rather than as quarry-layer schemas.
 
 \end{document}

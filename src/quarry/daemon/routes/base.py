@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import hmac
-from collections.abc import Callable, Coroutine
 from typing import TYPE_CHECKING, Any, Self
 
 from starlette.concurrency import run_in_threadpool
@@ -19,17 +18,15 @@ from starlette.responses import JSONResponse
 from quarry.daemon.route_key import RouteKey
 from quarry.daemon.tasks import TaskState, task_terminal
 from quarry.http_guards import RequestGuards
+from quarry.memory_types import MemoryType
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Coroutine
+
     from starlette.requests import Request
 
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.ingest_unit import IngestUnit
-
-# fusion.py's retrieval boost keys purely on this string, so every write
-# path (remember, ingest, capture) must reject a caller-supplied value
-# before it reaches storage -- only learn may ever write it.
-RESERVED_MEMORY_TYPE = "lesson"
 
 
 class RouteGroup:
@@ -100,21 +97,14 @@ class RouteGroup:
         return value
 
     @staticmethod
-    def reject_reserved_memory_type(memory_type: str) -> JSONResponse | None:
-        """Return a 400 if *memory_type* is the ``learn``-reserved value.
+    def reject_invalid_memory_type(memory_type: str) -> JSONResponse | None:
+        """Return a 400 unless *memory_type* is empty or an agent-writable type.
 
-        ``None`` means the value is unreserved and the caller may proceed.
+        ``None`` means the caller may proceed. :meth:`MemoryType.write_rejection`
+        owns the rule, so remember, ingest, and capture cannot drift apart.
         """
-        if memory_type != RESERVED_MEMORY_TYPE:
-            return None
-        return JSONResponse(
-            {
-                "error": (
-                    f"memory_type '{RESERVED_MEMORY_TYPE}' is reserved for quarry learn"
-                )
-            },
-            status_code=400,
-        )
+        reason = MemoryType.write_rejection(memory_type)
+        return JSONResponse({"error": reason}, status_code=400) if reason else None
 
     def reject_if_running(self, kind: str, label: str) -> JSONResponse | None:
         """Return a 409 if a task of *kind* is already running, else ``None``.

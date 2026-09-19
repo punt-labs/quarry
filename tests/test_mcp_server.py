@@ -32,7 +32,7 @@ from quarry.db_pointer import SELECTION
 from quarry.mcp_server import McpTools, mcp
 from quarry.results import SearchResult
 
-# The twelve tools the MCP surface exposes; a rename or removal is a regression.
+# The tools the MCP surface exposes; a rename or removal is a regression.
 _EXPECTED_TOOLS = {
     "find",
     "ingest",
@@ -46,6 +46,7 @@ _EXPECTED_TOOLS = {
     "sync_all_registrations",
     "status",
     "use",
+    "missions_sync",
 }
 
 
@@ -182,7 +183,7 @@ def harness(tmp_path: Path) -> Iterator[_ToolHarness]:
 
 
 class TestSurfaceComplete:
-    """The MCP surface must stay exactly the eleven documented tools."""
+    """The MCP surface must stay exactly the tools listed in `_EXPECTED_TOOLS`."""
 
     def test_all_tools_registered(self) -> None:
         names = {tool.name for tool in asyncio.run(mcp.list_tools())}
@@ -419,6 +420,31 @@ class TestRemember:
             harness.tools.remember("body", "note.md", agent_handle="rmh")
 
         assert captured == ["memory-rmh"]
+
+    def test_memory_type_reaches_the_wire_unchanged(
+        self, harness: _ToolHarness
+    ) -> None:
+        """The MCP tool never rewrites ``memory_type``; the daemon owns validation."""
+        captured: list[str] = []
+        real_route = __import__(
+            "quarry.daemon.routes.ingestion", fromlist=["IngestionRoutes"]
+        ).IngestionRoutes._remember_job
+
+        def spy(self: object, body: dict[str, object]) -> object:
+            captured.append(str(body.get("memory_type", "<missing>")))
+            return real_route(self, body)
+
+        with patch("quarry.daemon.routes.ingestion.IngestionRoutes._remember_job", spy):
+            harness.tools.remember(
+                "body", "n.md", agent_handle="rmh", memory_type="procedure"
+            )
+        assert captured == ["procedure"]
+
+    def test_unknown_memory_type_is_the_daemon_400(self, harness: _ToolHarness) -> None:
+        """The daemon's 400 body surfaces verbatim through the tool boundary."""
+        result = harness.tools.remember("body", "n.md", memory_type="facts")
+        assert result.startswith("Error:")
+        assert "unknown memory_type 'facts'" in result
 
 
 class TestIngest:
@@ -805,6 +831,25 @@ class TestToolDocstringOpeners:
         doc = McpTools.remember.__doc__
         assert doc is not None
         assert self._R3 in doc
+
+    def test_remember_docstring_carries_the_five_moments_and_attribution(
+        self,
+    ) -> None:
+        """The MCP surface states when to remember and why the handle is yours.
+
+        The same five moments live in the session_context guide and the recall
+        skill; the MCP docstring is the copy a model sees without either.
+        """
+        doc = " ".join((McpTools.remember.__doc__ or "").split())
+        assert "five moments" in doc
+        for moment in ("(fact)", "(procedure)", "(opinion)", "(observation)"):
+            assert moment in doc, moment
+        assert "Always pass your own agent_handle" in doc
+        assert "resolves to the repo's leader, not to you" in doc
+
+    def test_find_agent_handle_doc_says_your_own(self) -> None:
+        doc = McpTools.find.__doc__ or ""
+        assert "Your own handle to recall only your memories" in doc
 
     def test_remember_drops_clipboard_framing(self) -> None:
         """R3a: the clipboard/API-response framing is dropped entirely."""

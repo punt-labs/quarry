@@ -191,6 +191,39 @@ name: default
 multiple databases exist; otherwise verify it doesn't error on the
 current database.)
 
+### 1.15 Learn (lessons write path)
+
+**Tool:** `learn`
+
+```yaml
+lesson: "Smoke lesson: the keyword platypus-lesson-token marks the
+  post-release smoke lesson and nothing else."
+name: smoke-lesson
+```
+
+**Verify:** Returns "▶  Learning saved (accepted, task ...)". Wait 3
+seconds, then `find` with query `platypus-lesson-token`: a document named
+`lesson-smoke-lesson-<8 hex>` appears, in the `<collection>-lessons`
+collection of the registered project (`default-lessons` when the session
+runs outside a registered directory), with `memory_type` `lesson`.
+
+Cleanup: `delete` that document (kind `document`, its collection).
+
+### 1.16 Missions sync (dry run)
+
+**Tool:** `missions_sync`
+
+```yaml
+dry_run: true
+```
+
+**Verify:** Returns one line, `▶  Mission memories: would file N, skipped N,
+errors 0`, and posts nothing. A repo with no `.punt-labs/ethos/missions/`
+tree reports all zeros — that is a PASS; a non-zero `errors` count is a
+FAIL (each error is one line naming the file or mission id). A mission
+directory holding no `contract.yaml` (a delegation log left by another
+checkout) is skipped silently and counts toward nothing.
+
 ## Phase 2: CLI Commands
 
 1:1 mirror of Phase 1 using CLI equivalents, plus CLI-only checks.
@@ -386,6 +419,58 @@ quarry find "control" --collection smoke-scope
 
 Cleanup: `quarry delete smoke-scope --type collection`.
 
+### 2.19 Learn (lessons write path)
+
+```bash
+quarry learn "CLI smoke lesson: platypus-cli-lesson-token marks this lesson." --name cli-smoke-lesson
+```
+
+**Verify:** Reports a task acceptance. Wait 3 seconds, then:
+
+```bash
+quarry find "platypus-cli-lesson-token"
+```
+
+**Verify:** A `lesson-cli-smoke-lesson-<8 hex>` document appears (collection
+`<collection>-lessons` for the registered project, else `default-lessons`),
+tagged `memory_type` `lesson`. Cleanup:
+`quarry delete lesson-cli-smoke-lesson-<hex> --collection <that collection>`.
+
+### 2.20 Missions sync (dry run, DES-055)
+
+```bash
+quarry missions sync --dry-run
+```
+
+**Verify:** Exit 0 and one line, `▶  Mission memories: would file N,
+skipped N, errors 0`. Nothing is posted. All zeros is a PASS when the repo
+has no `.punt-labs/ethos/missions/` tree; any non-zero `errors` (exit 1)
+is a FAIL. A mission directory holding no `contract.yaml` (a delegation
+log left by another checkout) is skipped silently — not an error, not
+counted. Run it from a repo with closed missions to see `would file`
+count the frozen rounds not yet held by the daemon.
+
+### 2.21 Unknown memory type rejected (DES-055)
+
+```bash
+echo "smoke probe: this text must never be stored" \
+  | quarry remember --name smoke-bad-type --memory-type bogus
+echo "exit=$?"
+quarry find "smoke probe must never be stored"
+```
+
+**Verify:**
+
+- The `remember` exits 1 and prints exactly
+  `Error: unknown memory_type 'bogus'; expected one of fact, observation, opinion, procedure`
+  (the daemon's 400 body, identical on `remember`, `ingest`, and the capture
+  route).
+- The `find` returns no `smoke-bad-type` document — the row was rejected,
+  not stored with a bad tag. A stored row is a FAIL (the vocabulary gate is
+  broken).
+
+No cleanup: nothing was written.
+
 ## Phase 3: Enable/Disable
 
 Tests `quarry enable` and `quarry disable` end-to-end. Use a
@@ -506,16 +591,54 @@ curl --cacert ~/.punt-labs/quarry/tls/ca.crt https://localhost:8420/health
 
 **Verify:** Returns `{"status":"ok"}` or similar. No TLS errors.
 
+## Phase 5: Agent-Memory Write Loop (DES-055)
+
+Verifies the `SubagentStop` distillation live: a subagent's own final
+report lands in `memory-<handle>` as an `observation`, alongside its raw
+transcript in `<repo>-captures`. Run from a Claude Code session in a repo
+whose vendored registry (`.punt-labs/ethos/identities/<handle>.yaml`)
+carries the identity you spawn — the quarry repo itself, with `rmh`, is
+the canonical choice.
+
+### 5.1 SubagentStop distillation
+
+In the session, spawn a registered identity with a trivial task, e.g.
+`Agent(subagent_type="rmh", prompt="Reply with exactly one line: platypus-subagent-token smoke report.")`,
+and wait for it to stop. Then, from a terminal:
+
+```bash
+quarry list documents --collection memory-rmh
+quarry find "platypus-subagent-token" --agent-handle rmh --memory-type observation
+quarry list documents --collection <repo>-captures
+```
+
+**Verify:**
+
+- `memory-rmh` holds a new `subagent-<id8>-report` document whose text
+  includes `platypus-subagent-token`; the filtered `find` (handle `rmh`,
+  type `observation`) returns it, which proves both columns were set.
+- `<repo>-captures` holds the raw transcript as `session-<id8>` with the
+  **same** eight-character id — one event, two rows.
+- Negative control: a bare `Agent(subagent_type="general-purpose", ...)`
+  yields the `<repo>-captures` row only; no `memory-*` collection gains a
+  `subagent-*-report`, and nothing is filed under the leader's handle.
+
+Cleanup: `quarry delete subagent-<id8>-report --collection memory-rmh` (and
+the `session-<id8>` capture if you want the collection clean).
+
 ## Quick Pass Criteria
 
-- Phase 1: all 14 MCP tool calls succeed, BM25 keyword match works
+- Phase 1: every MCP tool call succeeds, BM25 keyword match works
   (1.4), cleanup leaves no smoke-test data
-- Phase 2: all 18 CLI checks succeed, BM25 keyword match works (2.5),
-  cleanup leaves no smoke-test data, `list databases` completes in <3s
-- Phase 3: all 7 enable/disable checks succeed, registrations created
+- Phase 2: every CLI check succeeds, BM25 keyword match works (2.5),
+  the unknown memory type is rejected with exit 1 (2.21), cleanup leaves
+  no smoke-test data, `list databases` completes in <3s
+- Phase 3: every enable/disable check succeeds, registrations created
   and removed correctly, config.md managed, doctor reports enable status
 - Phase 4: service unit points at tool venv, correct bind address,
   CUDA on GPU hosts
+- Phase 5: the subagent's report reaches `memory-<handle>` as an
+  `observation` and the unattributed control reaches captures only
 
 ## Quick Fail Indicators
 
@@ -533,6 +656,13 @@ curl --cacert ~/.punt-labs/quarry/tls/ca.crt https://localhost:8420/health
   check install.sh GPU swap
 - `quarry enable` crashes on child of registered parent — walk-up
   matching or descendant guard broken
+- `remember --memory-type bogus` exits 0 or the row shows up in `find` —
+  the server-side `MemoryType` gate is not on that route
+- `subagent-<id8>-report` lands in the leader's `memory-*` instead of the
+  subagent's — attribution fell back to the repo pin instead of
+  `agent_type`
+- A `general-purpose` subagent produces a `memory-*` row — non-identities
+  must be filed unattributed
 
 ## Report Format
 
@@ -563,6 +693,8 @@ Phase 1: MCP Tools
   1.12 delete document           PASS / FAIL
   1.13 delete collection         PASS / FAIL
   1.14 use database              PASS / FAIL / SKIP
+  1.15 learn                     PASS / FAIL
+  1.16 missions_sync (dry run)   PASS / FAIL
 
 Phase 2: CLI (1:1 mirror of Phase 1 + CLI-only checks)
   2.1  doctor                    PASS / FAIL  <failed checks>
@@ -583,6 +715,9 @@ Phase 2: CLI (1:1 mirror of Phase 1 + CLI-only checks)
   2.16 version                   PASS / FAIL  <version string>
   2.17 remote list --ping        PASS / FAIL / SKIP  <status>
   2.18 capture PII redaction     PASS / FAIL
+  2.19 learn                     PASS / FAIL
+  2.20 missions sync --dry-run   PASS / FAIL
+  2.21 unknown memory type → 400 PASS / FAIL
 
 Phase 3: Enable/Disable
   3.1  enable                    PASS / FAIL
@@ -599,13 +734,17 @@ Phase 4: Install
   4.3  port binding              PASS / FAIL  <bind address>
   4.4  TLS health                PASS / FAIL
 
+Phase 5: Agent-Memory Write Loop (DES-055)
+  5.1  SubagentStop distillation PASS / FAIL / SKIP  <handle, id8>
+
 Result: PASS / FAIL
-  Passed: N/43
-  Failed: N/43
-  Skipped: N/43
+  Passed: <count>
+  Failed: <count>
+  Skipped: <count>
   Notes: <any observations, warnings, or follow-up beads created>
 ```
 
 SKIP is valid for: 1.14 (single database), 2.15 (single database),
-2.17 (no remote configured), 4.2 (no GPU). Everything else must be
+2.17 (no remote configured), 4.2 (no GPU), 5.1 (no Claude Code session
+in a repo with a vendored ethos identity). Everything else must be
 PASS or FAIL with explanation.

@@ -16,6 +16,93 @@ across `transform`, `index`, and `connector`).
 
 ### Added
 
+- tool: `quarry missions sync` (CLI), `missions_sync` (MCP)
+  and `/quarry missions sync` (plugin) — Loop 2 of the agent memory loop.
+  Reads this repo's `.punt-labs/ethos/missions/` sidecar (contract, results,
+  reflections; quarry never calls ethos) and files each frozen round as an
+  `observation` in `memory-<worker>` via `POST /v1/remember`, named
+  `mission-<repo>-<id>-r<n>`. Idempotent: a round the daemon already holds is
+  skipped, a name held by another checkout's round is an error and never
+  overwritten (`--force` re-files a matching key only), `--dry-run` posts
+  nothing. The write is create-if-absent (`overwrite: false`), so two syncs
+  racing on one name — both see "absent" before either 202 is indexed — are
+  arbitrated on the daemon's per-collection writer: the second completes as
+  a skip, never a replacement and never a second chunk set; only `--force`
+  posts `overwrite`. Errors never pass silently: a parse failure, a daemon failure on
+  any one round (a 503, an unreachable daemon), and a `--mission` id that
+  names no mission are each one error line and exit 1, and the run continues
+  past every one so the rounds already filed are never lost. A mission
+  directory holding no `contract.yaml` (a delegation log left by another
+  checkout, or a partially sealed tree) is not a mission and is skipped
+  without an error line — only a `contract.yaml` that is present but
+  unreadable is one. The tree is read as cloned content: `--mission` must
+  be the id ethos mints (`m-YYYY-MM-DD-NNN`) before it is joined onto the
+  missions root, and a mission directory or YAML file reached through a
+  symlink is refused (an error line by id, a warning-and-skip in the full
+  scan), so neither a crafted id nor a committed link can make the sync
+  read another tree's rounds. The write and the existence check both name
+  `memory-<worker>` explicitly, so a same-named document in another
+  collection never reads as "filed". New modules `path_guard`,
+  `mission_records`, `mission_round_parts`, `mission_directory`,
+  `mission_store`, `mission_sync_types`, `mission_memory`, `cli_missions`,
+  `mcp_missions`. (quarry-fbj9)
+- tool: `SubagentStop` now files the subagent's final report as an
+  `observation` in `memory-<handle>` (`subagent-<id8>-report`) alongside the
+  raw transcript capture, which now carries a summary — Loop 3. Attribution is
+  identity-validated: `agent_type` is used only when it names a vendored or
+  global ethos identity; a bare `Agent()` reviewer (`general-purpose`) is
+  filed unattributed, never under the repo pin's leader, and a vendored
+  `<handle>.yaml` that is a symlink (or sits below one) registers nothing —
+  the file it points at is not the repo's. Both rows go through
+  the daemon's scrub-before-store route with the hook's 5 s cap; no engine
+  runs in the hook (DES-041), and the transcript is parsed once for both
+  rows. New modules `subagent_report`, `subagent_capture`, `transcript_turns`
+  (one record's text, split out of `transcript_reader`);
+  `EthosConfig.subagent_handle_at`; `DaemonCaptureSender.send_remember`;
+  `QuarryClient.remember(timeout=)`. (quarry-fbj9)
+- tool: a versioned memory guide, `## Memory (quarry guide v2)`, in every
+  ethos identity's `session_context` — the five moments to `remember`, what
+  never to store, and why the handle is the agent's own. `quarry enable`
+  refreshes the vendored `.punt-labs/ethos/identities/<handle>.ext/quarry.yaml`
+  files (reported as "commit via PR") and `quarry install` refreshes the
+  global ones; a v1 block is replaced in place, a customised block is left
+  alone. The vendored refresh is sealed at the checkout root: an ext file,
+  ext directory, or `identities/` reached through a symlink is refused and
+  reported as that identity's failure, never written through, so a hostile
+  checkout cannot redirect the guide write onto a file outside the repo.
+  Both the read and the write of a vendored ext file go through the same
+  `openat`/`O_NOFOLLOW` primitive (`SafeRepoPath.write_atomic`, surfaced as
+  `SealedTree.write_text`) rather than a check made before an
+  `AtomicFile` replace, so a link swapped in between the read and the write
+  is refused too — there is no check-then-write window — and the leaf's
+  mode is preserved. `write_atomic` now refuses to replace any non-regular
+  leaf (symlink, directory, fifo), the rule `create_exclusive` already
+  applied. The global refresh still follows the operator's own
+  (dotfile-manager) symlinks. The MCP `remember` docstring, the recall skill, `/remember`, and the
+  deposited repo guide carry the same five moments. The repo-pin walk that
+  attributes a parent session's captures (PreCompact, SessionEnd, a
+  `SubagentStop` with no `agent_type`) is bounded at the checkout root
+  exactly like the vendored-tree walk: a repo with no
+  `.punt-labs/ethos.yaml` is filed unattributed rather than under a parent
+  directory's pin or the operator's `~/.punt-labs/ethos.yaml`/`config.yaml`
+  (the home is resolved before the skip, so a symlinked `$HOME` is skipped
+  too). Every repo-controlled sidecar read — the pin, a vendored identity,
+  a mission's `contract.yaml`/`results.yaml`/`reflections.yaml` — goes
+  through one primitive, `SafeRepoPath.read_text` (the `openat` walk the
+  enable-time writers already use, `O_NOFOLLOW` on every component below
+  the checkout root), so a symlink at the file or at any directory above
+  it is refused inside the open itself rather than by a check made before
+  it: a component swapped for a link between a listing and the read is
+  refused all the same. A symlinked pin fails closed to unattributed with
+  a warning. New modules `ethos_tree` (the read-only sidecar locator:
+  pins, vendored/global identities, missions; `read_sidecar` is the sealed
+  read), `ethos_ext_block`, `ethos_ext_scan`. (quarry-fbj9)
+- tool: one `MemoryType` vocabulary (`fact`, `observation`, `opinion`,
+  `procedure`; `lesson` reserved for `learn`) enforced on `remember`,
+  `ingest`, and `capture` alike — an unknown `memory_type` is a 400 with an
+  identical body on all three routes instead of a silently stored row that
+  neither decays nor matches a typed filter. The CLI `--memory-type` help and
+  the MCP docstrings name the same set. (quarry-fbj9)
 - infra: vendored, locally-optimized ethos identity registry at
   `.punt-labs/ethos/` — the 8-member `quarry` team only, produced by
   `ethos vendor` plus a prune to the quarry-team closure, with
@@ -25,6 +112,36 @@ across `transform`, `index`, and `connector`).
 
 ### Changed
 
+- tool: `POST /v1/remember` with `overwrite: false` (`quarry remember
+  --no-overwrite`, the MCP `remember` default, `learn`) is now
+  create-if-absent: a document already stored under that name in the target
+  collection is left untouched and the task completes with `chunks: 0,
+  skipped: "exists"`, instead of a second chunk set being appended under
+  the same name. The check runs on the collection's single FIFO writer, so
+  it is race-free against any earlier write to that collection. A capture
+  whose page is already stored completes as that skip too, without
+  re-fetching the source URL: only a genuinely empty extraction (a
+  JS-rendered page) triggers the daemon-side re-fetch.
+  `ScrubbedIngestJob` and `CaptureIngestJob` move to `daemon/content_jobs`;
+  `daemon/ingest_jobs` keeps the URL job.
+  (quarry-fbj9)
+- tool: the ethos repo pin is read from `.punt-labs/ethos.yaml` first, then the
+  legacy `.punt-labs/ethos/config.yaml`, at each ancestor — the file current
+  ethos writes — so PreCompact/SessionEnd captures and `quarry doctor` attribute
+  to the pinned identity again instead of falling back to unattributed. The
+  walk stops at the repository boundary and never reads the operator's home.
+  (quarry-fbj9)
+- tool: `quarry mcp` (the only launcher) now configures the server's stderr
+  logging; `mcp_server.main()` no longer does, and its `__main__` block is gone.
+  The MCP tool-boundary decorator is `mcp_guard.ToolGuard.wrap`, shared by
+  `McpTools` and the sibling `MissionTools`. The hidden `quarry hooks` typer
+  sub-app is deleted — `quarry-hook` (`_hook_entry`) is the one dispatcher.
+  (quarry-fbj9)
+- infra: the web-search hook's shape/no-digest log lines moved from
+  `hooks_agent` onto `WebSearchPayload.log_shape`/`warn_no_digest`; the
+  `TranscriptReader` reads through one `_records()` seam; `EnableResult`
+  carries an `EthosMemoryResult` instead of six flattened ethos fields.
+  (quarry-fbj9)
 - infra: decomposed the ingestion god module `ingestion/pipeline.py`
   (1,133 → ~140 lines) into focused modules — `ingest_context.py`
   (`IngestContext`/`Progress`), `extracted_document.py`,

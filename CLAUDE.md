@@ -11,11 +11,11 @@ If cloned outside the workspace, these rules and configuration will not be prese
 
 **OO Python standards adopted 2026-05-13.** The codebase does not yet fully comply. Every commit must improve OO scores (`make check-oo`), never regress. Do not match existing code patterns that violate the rules — write new code to the standard and improve touched files incrementally.
 
-Local semantic search for AI agents and humans. Indexes 20+ document formats, embeds with a local ONNX model (snowflake-arctic-embed-m-v1.5, 768-dim), stores vectors in LanceDB, serves via MCP (stdio or WebSocket daemon on port 8420).
+Local semantic search for AI agents and humans. Indexes 20+ document formats, embeds with a local ONNX model (snowflake-arctic-embed-m-v1.5, 768-dim), stores vectors in LanceDB, and serves via CLI, an MCP stdio server, and an HTTP API — all backed by the quarryd daemon (port 8420).
 
 - **Package**: `punt-quarry`
 - **CLI**: `quarry`
-- **MCP server**: `quarry mcp` (stdio) or `mcp-proxy` → daemon (`/mcp` WebSocket); there is no `quarry-server` entry point
+- **MCP server**: `quarry mcp` (stdio subcommand → `QuarryClient` → the quarryd REST daemon); there is no in-daemon `/mcp` WebSocket route and no `quarry-server` entry point
 - **Python**: 3.13+, managed with `uv`
 
 ## Mandatory Reading
@@ -45,15 +45,15 @@ Documents enter via `ingestion/pipeline.py`. The pipeline detects format (20+ ty
 
 ### Key architectural boundary: local vs. remote
 
-Quarry has two operational modes. **Local mode**: direct LanceDB access via the `db/` package (`Database` facade). **Remote mode**: HTTP client → `http_server.py` → same database layer. The HTTP API must be a faithful proxy of every local operation — same parameters, same response fields, same behavior. Bug class 3 (remote/local divergence) documents the repeated failure mode where these paths drift. Every new query parameter or response field must exist on both paths simultaneously.
+Quarry has two operational modes. **Local mode**: direct LanceDB access via the `db/` package (`Database` facade). **Remote mode**: HTTP client → the FastAPI wire API (`api/` + `daemon/routes/`) → same database layer. The HTTP API must be a faithful proxy of every local operation — same parameters, same response fields, same behavior. Bug class 3 (remote/local divergence) documents the repeated failure mode where these paths drift. Every new query parameter or response field must exist on both paths simultaneously.
 
 ### Subsystems
 
 - **Embedding**: ONNX Runtime with snowflake-arctic-embed-m-v1.5. int8 on CPU (default), FP16 on CUDA (auto-detected). See DES-004, DES-016.
 - **Storage**: LanceDB (Rust core via PyO3). Single `chunks` table per database with vector, text, and metadata columns.
 - **Search**: Hybrid — vector similarity + BM25 full-text (Tantivy) fused via RRF. Temporal decay for agent-scoped memories. See DES-017.
-- **Agent memory**: `agent_handle`, `memory_type`, `summary` columns on all chunks. Identity tagging from ethos config. See DES-018.
-- **Surfaces**: CLI (`quarry`), MCP server (stdio + WebSocket), HTTP API, Claude Code plugin.
+- **Agent memory**: `agent_handle`, `memory_type`, `summary` columns on all chunks. `memory_type` is a closed, server-validated vocabulary (`fact`/`observation`/`opinion`/`procedure`; `lesson` reserved for `learn`; unknown → 400). Identity tagging from ethos config. Schema: DES-018; decay/boost: DES-017; the write loop (`remember` → `memory-<handle>`, `quarry missions sync` for evaluator feedback, SubagentStop report distillation): DES-055.
+- **Surfaces**: CLI (`quarry`), MCP server (stdio), HTTP API, Claude Code plugin.
 - **User data**: `~/.punt-labs/quarry/` per filesystem standard. Per-repo config at `.punt-labs/quarry/config.md`.
 
 ### Key modules
@@ -65,18 +65,20 @@ Quarry has two operational modes. **Local mode**: direct LanceDB access via the 
 | `retrieval/` (package) | Single retrieval seam (DES-037): `SearchService`, `HybridRetriever` (vector + BM25 + RRF), `RetrievalConfig`, `reranker.py`, temporal decay |
 | `embeddings.py` | ONNX provider: model loading, quantization, batch embedding |
 | `scrub.py` / `capture.py` | Write-time PII/secret redaction (`Scrubber`) + the single `CaptureWriter` choke point for captures (DES-036) |
-| `http_server.py` | REST API: must mirror every local operation faithfully |
-| `mcp_server.py` | FastMCP server (stdio + WebSocket on port 8420) |
+| `api/` + `daemon/routes/` | FastAPI wire API + route handlers: must mirror every local operation faithfully |
+| `mcp_server.py` / `mcp_missions.py` / `mcp_guard.py` | FastMCP stdio server (reaches the quarryd REST daemon on port 8420) + the `missions_sync` tool + the shared tool-boundary guard |
 | `sync.py` | Directory registration, change tracking, re-indexing |
 | `doctor.py` | Health checks: model, DB, providers, registration state |
-| `hooks.py` | Claude Code event handlers (SessionStart, PostToolUse) |
-| `__main__.py` | Typer CLI: find, ingest, remember, sync, serve, doctor, etc. |
+| `hooks.py` / `hooks_agent.py` | Claude Code event handlers: SessionStart, PostToolUse (WebFetch/WebSearch/Read + quarry tools), PreCompact, SessionEnd, SubagentStop |
+| `mission_*.py` / `subagent_*.py` / `ethos_tree.py` | Agent-memory write loop (DES-055): `quarry missions sync` reads the ethos mission YAML trio → `memory-<worker>`; SubagentStop distills a subagent's final report → `memory-<handle>` |
+| `memory_types.py` | The `MemoryType` closed vocabulary + server-side validation |
+| `__main__.py` | Typer CLI: find, ingest, remember, learn, sync, missions, serve, doctor, etc. |
 
 See `docs/architecture.tex` for the full system description.
 
 ## Code Quality
 
-**Module size limits.** No module over 500 lines without a design reason. Known violations (as of 2026-07-11): `__main__.py` (1,795), `http_server.py` (1,498), `ingestion/pipeline.py` (1,475), `doctor.py` (1,128), `hooks.py` (811), `mcp_server.py` (557). (`database.py` and `search.py` are retired — decomposed into the `db/` and `retrieval/` packages; `sync.py` is now 359.) When a module grows past the limit, the next change to that module must include extraction. `pipeline.py`/`hooks.py` full strategy decomposition is tracked as a bead.
+**Module size limits.** No module over 500 lines without a design reason. The modules still over the cap are `doctor.py` (decomposition tracked as quarry-ywh5) and `mcp_server.py`; check current sizes with `make report` or `wc -l src/quarry/*.py`. (`http_server.py`, `database.py`, and `search.py` are retired — decomposed into the `api/`+`daemon/`, `db/`, and `retrieval/` packages; `__main__.py`, `ingestion/pipeline.py`, and `hooks.py` are back under the cap after their decompositions.) When a module grows past the limit, the next change to that module must include extraction.
 
 **Class design.** Classes have a single responsibility. Prefer composition over inheritance. Use `Protocol` for structural typing at boundaries. A module with zero classes and 20+ module-level functions is procedural — it needs a design pass, not more functions.
 
@@ -122,7 +124,7 @@ CI injects `--base-ref <merge-base> --require-base` (with `fetch-depth: 0`) on P
 
 ### Database facade convention
 
-Functions in `src/quarry/ingestion/pipeline.py` and `src/quarry/ingestion/url_ingester.py` accept `database: Database`, NOT `db: LanceDB`. Callers pass their existing `Database` instance — don't extract `.db` to pass the raw LanceDB connection. Re-wrapping via `Database(db)` re-instantiates the full facade (ChunkStore, ChunkSearch, ChunkCatalog, SchemaManager, TableOptimizer) per call. (Cursor Bugbot flagged this on PR #289; the fix landed in the same PR.)
+Functions in the `src/quarry/ingestion/` package (e.g. `pipeline.py`, `web_ingest.py`) accept `database: Database`, NOT `db: LanceDB`. Callers pass their existing `Database` instance — don't extract `.db` to pass the raw LanceDB connection. Re-wrapping via `Database(db)` re-instantiates the full facade (ChunkStore, ChunkSearch, ChunkCatalog, SchemaManager, TableOptimizer) per call. (Cursor Bugbot flagged this on PR #289; the fix landed in the same PR.)
 
 **When mocking `get_db` in tests, patch `quarry.db.facade.get_db`, not `quarry.db.storage.get_db`.** `Database.connect()` imports `get_db` at module scope into `quarry.db.facade`'s namespace. Patching the storage definition site leaves the facade's bound reference untouched and the mock becomes a silent no-op — tests still pass because they hit the real LanceDB.
 
@@ -142,7 +144,7 @@ Functions in `src/quarry/ingestion/pipeline.py` and `src/quarry/ingestion/url_in
 | Shell scripts | `make test` (via pytest) | yes | Install script ordering, shellcheck |
 | HTTP API contract | `make test` | yes | Endpoint shape, params, response fields (growing) |
 | Wheel install | `make test-wheel` | local pre-PR gate | Build wheel → isolated venv → serve on 8422 → smoke checks |
-| MCP smoke test | `docs/smoke-test.md` | post-release manual | 38 checks (14 MCP + 17 CLI + 7 enable/disable) + install verification |
+| MCP smoke test | `docs/smoke-test.md` | post-release manual | MCP + CLI + enable/disable + install verification (see `docs/smoke-test.md` for the current check count) |
 
 `make check-full` = `make check` + `make test-wheel`. Full test suite needs `timeout=300000` on the Bash tool (5 minutes). During development, use targeted tests: `uv run pytest tests/test_specific.py -v`.
 
@@ -217,7 +219,7 @@ Quarry spans four technical domains that require distinct expertise: (1) **ML/nu
 | Search algorithm (hybrid, RRF, temporal decay, BM25) | `kpz` | `rmh` |
 | LanceDB schema / chunks table / migrations | `rmh` | `gvr` |
 | Python implementation (CLI commands, library API) | `rmh` | `gvr` |
-| MCP server (stdio + WebSocket on port 8420) | `rmh` | `mdm` (Pike) |
+| MCP server (stdio) | `rmh` | `mdm` (Pike) |
 | HTTP API / `/search` endpoint / param contracts | `rmh` | `djb` (Bernstein) |
 | TLS / cert generation / pinned-CA contexts | `djb` | `rmh` |
 | Install scripts / launchd / systemd service | `adb` (Lovelace) | `djb` |

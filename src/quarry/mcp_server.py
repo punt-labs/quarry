@@ -7,16 +7,16 @@ and running ``quarry mcp`` load zero LanceDB/ONNX.  It mirrors vox's
 ``vox mcp`` → ``server.py`` → ``VoxClientSync`` shape: the MCP server is a client
 of the resident daemon, never a second in-process engine.
 
-The eleven tools and their docstrings are the surface Claude Code sees; the
+The twelve tools and their docstrings are the surface Claude Code sees; the
 bodies changed (client calls, fire-and-forget 202s), the surface did not.
+``missions_sync`` lives in the sibling :mod:`quarry.mcp_missions` and is
+registered from here so the surface stays one registration call.
 """
 
 from __future__ import annotations
 
-import functools
 import logging
-from collections.abc import Callable
-from typing import Self, final
+from typing import TYPE_CHECKING, Self, final
 
 from mcp.server.fastmcp import FastMCP
 
@@ -43,35 +43,17 @@ from quarry.formatting import (
     format_status,
     format_switch_summary,
 )
-from quarry.logging_config import LoggingConfig
+from quarry.mcp_guard import ToolGuard
+from quarry.mcp_missions import MissionTools
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
 # The daemon returns 404 for a missing document/page; `show` translates it into a
 # plain "not found" line rather than the guard's terse "Error: HttpError: …".
 _NOT_FOUND = 404
-
-
-def _guard(method: Callable[..., str]) -> Callable[..., str]:
-    """Wrap a tool method so any failure returns an error string at the boundary.
-
-    A down daemon (``QuarryConnectionError``), a daemon rejection (``HttpError`` —
-    e.g. a 404 on an unknown collection), or any escape is logged and rendered as
-    ``Error: …`` rather than propagating; the stdio transport never sees a raised
-    exception, and there is no in-process engine fallback.  Applied at definition
-    so a direct call and the registered tool share the identical boundary.
-    """
-
-    @functools.wraps(method)
-    def wrapper(*args: object, **kwargs: object) -> str:
-        try:
-            return method(*args, **kwargs)
-        # The MCP tool-handler boundary: any failure becomes a returned string.
-        except Exception as exc:
-            logger.exception("Error in %s", method.__name__)
-            return f"Error: {type(exc).__name__}: {exc}"
-
-    return wrapper
 
 
 mcp = FastMCP(
@@ -98,9 +80,10 @@ class McpTools:
 
     Holds only the client factory it resolves per call (fresh connection per
     tool, matching vox) — no engine, no thread pool, no database.  A down daemon
-    surfaces as a clean MCP error string via :meth:`_guard`, never an in-process
-    engine fallback.  Tests inject a factory returning a client over an
-    ``ASGITransport`` so each tool round-trips through the real daemon handlers.
+    surfaces as a clean MCP error string via :meth:`ToolGuard.wrap`, never an
+    in-process engine fallback.  Tests inject a factory returning a client over
+    an ``ASGITransport`` so each tool round-trips through the real daemon
+    handlers.
     """
 
     __slots__ = ("_connect",)
@@ -118,8 +101,8 @@ class McpTools:
         """Attach every guarded tool to *server* under its wire name.
 
         ``list`` and ``use`` keep their short wire names; the rest register under
-        the method name.  Every method is already ``@_guard``-wrapped, so the
-        registered tool and a direct call share the identical error boundary.
+        the method name.  Every method is already ``@ToolGuard.wrap``-wrapped, so
+        the registered tool and a direct call share the identical error boundary.
         """
         server.add_tool(self.find)
         server.add_tool(self.ingest)
@@ -133,8 +116,9 @@ class McpTools:
         server.add_tool(self.sync_all_registrations)
         server.add_tool(self.status)
         server.add_tool(self.use_database, name="use")
+        MissionTools(self._connect).register(server)
 
-    @_guard
+    @ToolGuard.wrap
     def find(
         self,
         query: str,
@@ -161,7 +145,8 @@ class McpTools:
             collection: Optional collection name to search within.
             page_type: Optional content type filter (text, code, spreadsheet, etc.).
             source_format: Optional source format filter (.pdf, .py, .xlsx, etc.).
-            agent_handle: Optional agent handle to filter by (e.g. "rmh").
+            agent_handle: Your own handle to recall only your memories (e.g.
+                "rmh"); leave empty to search everything.
             memory_type: Optional memory type filter (fact, observation, lesson, etc.).
         """
         )
@@ -182,7 +167,7 @@ class McpTools:
         resp = self._connect().search(req)
         return format_search_results(query, [hit.model_dump() for hit in resp.results])
 
-    @_guard
+    @ToolGuard.wrap
     def ingest(
         self,
         source: str,
@@ -221,7 +206,7 @@ class McpTools:
         )
         return f"▶  Ingesting {source} (task {accepted.task_id})"
 
-    @_guard
+    @ToolGuard.wrap
     def remember(
         self,
         content: str,
@@ -242,17 +227,27 @@ class McpTools:
             """remember = a specific durable fact, ingest = a URL, learn = a """
             """distilled lesson that gets retrieval preference.
 
+        Call it at these five moments, not at the end and not never: a
+        non-obvious root cause or gotcha (fact); a ratified design decision with
+        its reason (fact); a repeatable how-to (procedure); a judgement you will
+        revisit (opinion); and once before submitting a mission result
+        (observation). Always pass your own agent_handle — the daemon cannot
+        infer it, and a subagent's working directory resolves to the repo's
+        leader, not to you.
+
         The daemon scrubs secrets/PII before indexing. Returns immediately —
         the daemon indexes in the background.
 
         Args:
             content: The text content to remember.
             document_name: Name for the document (e.g., 'notes.md').
-            overwrite: If true, replace existing data for this document.
+            overwrite: If true, replace existing data for this document. If
+                false, an existing document of this name is left untouched.
             collection: Collection name. Leave empty to route by agent_handle —
                 ``memory-<handle>`` when a handle is given, else ``default``.
             format_hint: Format hint: 'auto', 'plain', 'markdown', 'latex'.
-            agent_handle: Agent that owns this memory (e.g. "rmh").
+            agent_handle: Your own handle (e.g. "rmh") — the memory is filed
+                under it and recalled by it.
             memory_type: Memory classification: fact, observation, opinion,
                 procedure. ``'lesson'`` is reserved for the ``learn`` tool.
             summary: One-line summary of the content.
@@ -279,7 +274,7 @@ class McpTools:
         )
         return f"▶  Remembering {document_name} (task {accepted.task_id})"
 
-    @_guard
+    @ToolGuard.wrap
     def learn(self, lesson: str, topic: str = "", name: str = "") -> str:
         (
             """Use learn to save a distilled lesson that should outrank """
@@ -305,7 +300,7 @@ class McpTools:
         accepted = self._connect().learn(lesson, topic=topic, name=name)
         return f"▶  Learning saved ({accepted.status}, task {accepted.task_id})"
 
-    @_guard
+    @ToolGuard.wrap
     def list_resources(self, kind: str, collection: str = "") -> str:
         """Use to see what's already indexed before ingesting it again.
 
@@ -327,7 +322,7 @@ class McpTools:
             )
         return handler(collection)
 
-    @_guard
+    @ToolGuard.wrap
     def show(
         self,
         document_name: str,
@@ -374,7 +369,7 @@ class McpTools:
                 return f"No data found for {document_name} page {page_number}"
             return f"Document {document_name!r} not found"
 
-    @_guard
+    @ToolGuard.wrap
     def delete(
         self,
         name: str,
@@ -405,7 +400,7 @@ class McpTools:
             accepted = client.delete_collection(DeleteCollectionRequest(name=name))
         return f"▶  Deleting {kind} {name!r} (task {accepted.task_id})"
 
-    @_guard
+    @ToolGuard.wrap
     def register_directory(self, directory: str, collection: str = "") -> str:
         """Use to track a local directory so future changes sync automatically.
 
@@ -427,7 +422,7 @@ class McpTools:
         )
         return f"▶  Registering {resolved} as {col!r} (task {accepted.task_id})"
 
-    @_guard
+    @ToolGuard.wrap
     def deregister_directory(self, collection: str, keep_data: bool = False) -> str:
         (
             """Use to stop tracking a directory — keep its indexed data with """
@@ -452,7 +447,7 @@ class McpTools:
             f"chunk purge task {accepted.task_id}"
         )
 
-    @_guard
+    @ToolGuard.wrap
     def sync_all_registrations(self) -> str:
         (
             """Use after registering a new directory, or when tracked files """
@@ -464,12 +459,12 @@ class McpTools:
         accepted = self._connect().sync()
         return f"▶  Syncing all registrations (task {accepted.task_id})"
 
-    @_guard
+    @ToolGuard.wrap
     def status(self) -> str:
         """Use to check how much is indexed before you search or ingest."""
         return format_status(self._connect().status().model_dump())
 
-    @_guard
+    @ToolGuard.wrap
     def use_database(self, name: str) -> str:
         """Use to point every other tool at a different named database.
 
@@ -542,12 +537,12 @@ _tools.register(mcp)
 
 
 def main(db_name: str | None = None) -> None:
-    """Run the stdio MCP server, targeting *db_name* (the daemon's database)."""
-    LoggingConfig.configure(stderr_level="INFO")
+    """Run the stdio MCP server, targeting *db_name* (the daemon's database).
+
+    Logging is the launcher's job: ``quarry mcp`` (the only entry point)
+    configures the stderr level before calling in, so this stays a pure
+    "select the database and serve" step.
+    """
     SELECTION.override(db_name or "")
     logger.info("Starting quarry MCP server (client tier)")
     mcp.run(transport="stdio")
-
-
-if __name__ == "__main__":
-    main()

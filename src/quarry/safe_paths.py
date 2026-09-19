@@ -1,41 +1,58 @@
-"""Symlink-safe writes to a fixed path under an untrusted repository root."""
+"""Symlink-safe reads and writes of a fixed path under an untrusted repo root."""
 
 from __future__ import annotations
 
 import contextlib
+import errno
 import os
 import secrets
 import stat
-from typing import TYPE_CHECKING, Self, final
+from typing import TYPE_CHECKING, Final, Literal, Self, final
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Sequence
     from pathlib import Path
+    from typing import TextIO
 
 __all__ = ["SafeRepoPath"]
+
+# ``O_NOFOLLOW`` on a symlink fails with ELOOP on Linux and macOS; FreeBSD
+# reports EMLINK. Either means "the leaf is a link" — the one open failure that
+# is a refusal rather than an ordinary I/O error to propagate.
+_SYMLINK_ERRNOS: Final = frozenset({errno.ELOOP, errno.EMLINK})
 
 
 @final
 class SafeRepoPath:
-    """A fixed path under a repo root, written without following any symlink.
+    """A fixed path under a repo root, read and written without following a symlink.
 
-    Every writer under an untrusted repo's ``.punt-labs/quarry/`` tree (the
-    ``enabled`` marker, the vendored guide, ``config.md``) routes through this
-    one primitive so the symlink-safe walk lives in a single place. The repo
-    root is the trust anchor; each component below it — every ancestor directory
-    and the leaf — is opened with ``O_NOFOLLOW`` via an ``openat`` walk relative
-    to the prior directory fd. A hostile repo therefore cannot redirect a
-    create, overwrite, stat, or unlink to a target outside the repo by planting
-    a symlink at any component: a symlinked ancestor fails the ``O_DIRECTORY |
-    O_NOFOLLOW`` open, and a symlinked leaf fails the ``O_NOFOLLOW`` create.
-    Because the fds pin the real inode chain, the walk is free of the
-    resolve-then-act TOCTOU a realpath-containment check would carry.
+    Every reader and writer of a file an untrusted repo controls — the
+    ``.punt-labs/quarry/`` tree (the ``enabled`` marker, the vendored guide,
+    ``config.md``) and the ``.punt-labs/ethos`` sidecar (the repo pin, a
+    vendored identity, a mission's YAML) — routes through this one primitive so
+    the symlink-safe walk lives in a single place. The repo root is the trust
+    anchor; each component below it — every ancestor directory and the leaf —
+    is opened with ``O_NOFOLLOW`` via an ``openat`` walk relative to the prior
+    directory fd. A hostile repo therefore cannot redirect a read, create,
+    overwrite, stat, or unlink to a target outside the repo by planting a
+    symlink at any component: a symlinked ancestor fails the ``O_DIRECTORY |
+    O_NOFOLLOW`` open, and a symlinked leaf fails the ``O_NOFOLLOW`` open or
+    create, or is refused before an atomic replace. Because the fds pin the
+    real inode chain, the walk is free of the check-then-act TOCTOU a
+    realpath-containment or ``is_symlink`` pre-check would carry: a component
+    swapped for a link after such a check is still refused, because the
+    refusal happens inside the open itself (and ``rename(2)`` never follows
+    its destination, so a replace cannot be redirected either).
     """
 
     __slots__ = ("_relative", "_root")
 
     _root: Path
     _relative: tuple[str, ...]
+
+    # A brand-new leaf's mode when the caller forces none: predictable
+    # regardless of umask, the same policy as the operator-tree writer.
+    _NEW_FILE_MODE: Final = 0o644
 
     def __new__(cls, root: Path, relative: Sequence[str]) -> Self:
         self = super().__new__(cls)
@@ -60,6 +77,35 @@ class SafeRepoPath:
                 return stat.S_ISREG(os.lstat(leaf, dir_fd=parent_fd).st_mode)
         except (OSError, ValueError):
             return False
+
+    def read_text(self) -> str:
+        """Return the leaf's text, following no symlink at any component.
+
+        The leaf is opened ``O_RDONLY | O_NOFOLLOW`` relative to the
+        ancestor-verified parent fd; a symlinked leaf fails that open with
+        ``ELOOP`` and is refused with ``ValueError`` like a symlinked ancestor.
+        An absent ancestor or leaf propagates ``FileNotFoundError`` (the caller
+        decides what absence means); a directory leaf propagates
+        ``IsADirectoryError``. Bytes are preserved verbatim (``newline=""``) so
+        a CRLF file is parsed as written.
+        """
+        with (
+            self._parent_fd(create=False) as parent_fd,
+            self._owned(self._open_leaf(parent_fd), "r") as handle,
+        ):
+            return handle.read()
+
+    def _open_leaf(self, parent_fd: int) -> int:
+        """Open the leaf read-only under *parent_fd*, refusing a symlink (``ELOOP``)."""
+        try:
+            return os.open(
+                self._relative[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd
+            )
+        except OSError as exc:
+            if exc.errno not in _SYMLINK_ERRNOS:
+                raise
+            msg = f"refusing symlinked leaf {self.path}"
+            raise ValueError(msg) from exc
 
     def create_exclusive(self, text: str, *, mode: int) -> bool:
         """Create the leaf with *text* at *mode*; return whether it was created.
@@ -97,18 +143,31 @@ class SafeRepoPath:
                 raise
             return True
 
-    def write_atomic(self, text: str, *, mode: int) -> None:
+    # ``mode=None`` is the documented "keep the leaf's current mode" signal
+    # (a new leaf gets ``_NEW_FILE_MODE``), not a missing value.
+    def write_atomic(self, text: str, *, mode: int | None = None) -> None:
         """Overwrite the leaf atomically with *text*, following no symlink.
 
         Create a temp file with ``O_EXCL | O_NOFOLLOW`` in the ancestor-verified
         parent, ``fsync`` it, then ``os.replace`` it over the leaf — every step
-        relative to the parent fd, so no ancestor or leaf symlink is traversed.
-        The rename is atomic, so an interrupted write leaves the previous guide
+        relative to the parent fd, so no ancestor symlink is traversed. The
+        rename is atomic, so an interrupted write leaves the previous content
         intact rather than truncated; the temp is removed on any failure.
+
+        The leaf is ``lstat``-ed first (relative to the same parent fd, never
+        followed): an existing entry that is not a regular file — a symlink, a
+        directory, a fifo — is refused with ``ValueError`` before any temp is
+        made, the rule :meth:`create_exclusive` applies, so a committed link is
+        never replaced by our file. That lstat is not the escape boundary:
+        ``rename(2)`` never follows its destination, so a link swapped in after
+        the lstat is replaced as a directory entry and the file it pointed at
+        is untouched. *mode* forces the permission bits; ``None`` keeps an
+        existing leaf's mode, or :data:`_NEW_FILE_MODE` for a new one.
         """
         leaf = self._relative[-1]
         tmp = f".{leaf}.{secrets.token_hex(8)}.tmp"
         with self._parent_fd(create=True) as parent_fd:
+            mode = self._replacement_mode(parent_fd, mode)
             fd = os.open(
                 tmp,
                 os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW,
@@ -122,6 +181,23 @@ class SafeRepoPath:
                 with contextlib.suppress(OSError):
                     os.unlink(tmp, dir_fd=parent_fd)
                 raise
+
+    def _replacement_mode(self, parent_fd: int, forced: int | None) -> int:
+        """Return the mode for the replacement leaf; refuse a non-regular one.
+
+        An absent leaf is a create. An existing regular file keeps its own
+        mode unless *forced* (``None`` = keep). Anything else — symlink,
+        directory, fifo, socket, device — is refused: a write must never land
+        on, or replace, an entry that is not the regular file it expects.
+        """
+        try:
+            current = os.lstat(self._relative[-1], dir_fd=parent_fd)
+        except FileNotFoundError:
+            return self._NEW_FILE_MODE if forced is None else forced
+        if not stat.S_ISREG(current.st_mode):
+            msg = f"path is not a regular file: {self.path}"
+            raise ValueError(msg)
+        return stat.S_IMODE(current.st_mode) if forced is None else forced
 
     def remove(self) -> bool:
         """Unlink the leaf when it is a regular file; return whether one was removed.
@@ -141,25 +217,34 @@ class SafeRepoPath:
         except FileNotFoundError:
             return False
 
-    @staticmethod
-    def _fill_and_close(fd: int, text: str, mode: int) -> None:
+    @classmethod
+    def _fill_and_close(cls, fd: int, text: str, mode: int) -> None:
         """Write *text* to *fd*, fsync, force *mode*, and close it on every path.
 
-        Takes ownership of *fd*: if ``fdopen`` raises before owning it, the raw
-        fd is closed here; otherwise the handle's ``with`` closes it. ``fchmod``
-        forces *mode* on the descriptor (``O_CREAT``'s mode is umask-masked).
+        ``fchmod`` forces *mode* on the descriptor (``O_CREAT``'s mode is
+        umask-masked).
         """
-        try:
-            handle = os.fdopen(fd, "w", encoding="utf-8")
-        except BaseException:
-            os.close(fd)
-            raise
-        with handle:
+        with cls._owned(fd, "w") as handle:
             if text:
                 handle.write(text)
                 handle.flush()
             os.fsync(handle.fileno())
             os.fchmod(handle.fileno(), mode)
+
+    @staticmethod
+    def _owned(fd: int, mode: Literal["r", "w"]) -> TextIO:
+        """Wrap the raw *fd* in a UTF-8 text handle that owns it.
+
+        If ``fdopen`` raises before taking ownership, the raw fd is closed
+        here; otherwise the handle's ``with`` closes it. ``newline=""`` keeps
+        bytes verbatim in both directions, so a read/write round-trip of a
+        CRLF file stays byte-identical.
+        """
+        try:
+            return os.fdopen(fd, mode, encoding="utf-8", newline="")
+        except BaseException:
+            os.close(fd)
+            raise
 
     @contextlib.contextmanager
     def _parent_fd(self, *, create: bool) -> Generator[int]:

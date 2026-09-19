@@ -155,10 +155,11 @@ Search by meaning:
 |---------|-------------|
 | `/ingest <source>` | Ingest a URL, or register+sync a local file or directory |
 | `/remember <name>` | Ingest inline text under a document name |
+| `/learn <name>` | Save a distilled, retrieval-preferred lesson (project-scoped) |
 | `/find <query>` | Semantic search; questions get synthesized answers, keywords get raw results |
 | `/explain <topic>` | Search and synthesize an explanation |
 | `/source <claim>` | Find which document a claim comes from |
-| `/quarry [sub]` | Manage: `status`, `sync`, `collections`, `databases`, `registrations` |
+| `/quarry [sub]` | Manage: `status`, `sync`, `collections`, `databases`, `registrations`, `missions sync` |
 
 ### MCP Tools
 
@@ -169,10 +170,12 @@ Search by meaning:
 | `list` | Documents, collections, databases, registrations |
 | `status` | Database statistics |
 | `ingest` / `remember` | Index a URL, or inline text |
+| `learn` | Save a distilled lesson (`memory_type=lesson`, project-scoped, retrieval boost) |
 | `register_directory` / `deregister_directory` | Manage a synced directory |
 | `sync_all_registrations` | Re-index all registered directories |
 | `delete` | Remove a document or collection |
 | `use` | Switch the active database |
+| `missions_sync` | File each frozen ethos mission round into the worker's memory |
 
 ### CLI
 
@@ -181,10 +184,12 @@ Search by meaning:
 | `quarry find "<query>"` | Hybrid search (vector + full-text) |
 | `quarry ingest <url>` | Index a webpage (local files/directories: `quarry register`) |
 | `quarry remember --name <name>` | Index inline text from stdin |
+| `quarry learn --name <name>` | Save a distilled lesson from stdin (project-scoped, retrieval-preferred) |
 | `quarry list documents` | List indexed documents |
 | `quarry register <dir>` | Watch a directory for changes |
 | `quarry sync` | Re-index registered directories |
 | `quarry enable` / `quarry disable` | Set up / tear down project collections + captures |
+| `quarry missions sync` | File each frozen ethos mission round into `memory-<worker>` (`--mission`, `--dry-run`, `--force`) |
 | `quarry use <name>` | Switch the active database |
 | `quarry status` | Database dashboard |
 | `quarry doctor` | Health check |
@@ -194,6 +199,9 @@ Search by meaning:
 | `quarry logout` | Disconnect, revert to the local daemon |
 
 Agent-memory tagging is available on `ingest`/`remember`/`find` via `--agent-handle`, `--memory-type`, and `--summary`.
+`--memory-type` is one vocabulary on every surface (`fact`, `observation`, `opinion`, `procedure`; `lesson` is reserved for `quarry learn`) — an unknown value is a 400 on `remember`, `ingest`, and the capture route alike. Always pass your own handle: the daemon cannot infer it, and a subagent's working directory resolves to the repo's leader, not to the subagent.
+
+Each ethos identity gets a versioned `## Memory (quarry guide v2)` block in its `session_context` — when to `remember` (the five moments), what never to store, and why the handle is yours — written to the vendored `.punt-labs/ethos/identities/<handle>.ext/quarry.yaml` on `quarry enable` (commit it via PR) and to the global identities on `quarry install`.
 
 A registered directory isn't cron-driven — `quarryd` runs a live filesystem
 watch (debounced, ~1s) that reacts to changes as they happen, backed by a
@@ -234,7 +242,7 @@ knowledge automatically, with no action from you:
 | `PostToolUse` (Read) | Opt-in (off by default): captures prose files read from outside any registered tree, gated by an in-tree/secret-path/extension/size filter |
 | `PreCompact` | Captures the session transcript before context compaction discards it |
 | `SessionEnd` | Captures the full session transcript on every close, even a short session that never compacts |
-| `SubagentStop` | Archives a subagent's own transcript, separate from the parent session's |
+| `SubagentStop` | Archives a subagent's own transcript, separate from the parent session's, and — when `agent_type` names a registered ethos identity — files the subagent's final report as an `observation` in `memory-<handle>`; a bare `Agent()` (`general-purpose`) is filed unattributed, never under the leader's pin |
 
 Every hook fails open — a hook failure never blocks Claude Code — and each is
 independently toggleable in `.punt-labs/quarry/config.md`.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import subprocess
 import tempfile
 from collections.abc import Generator, Iterable, Iterator
@@ -55,15 +56,43 @@ def _pytest_tmp_base() -> Path:
     return candidate
 
 
+@pytest.fixture()
+def unpinned_root() -> Generator[Path]:
+    """Yield a repository root with no ethos sidecar in ANY ancestor directory.
+
+    ``tmp_path`` lives under this repo's ``.pytest-work``, so an ancestor walk
+    from it reaches the repo's own ``.punt-labs/ethos.yaml`` and vendored
+    identities — a test asserting "no ethos here" would read the leader's pin.
+    The redirected session HOME has no ``.punt-labs`` above it, so trees that
+    must resolve as unpinned are built beneath it and removed afterwards. The
+    root carries a ``.git`` marker: :class:`~quarry.ethos_tree.EthosTree`
+    bounds its vendored-tree search at the enclosing repository, and the
+    operator's real home (an ancestor of the redirected one) holds the global
+    tree the search must not reach.
+    """
+    root = Path(tempfile.mkdtemp(prefix="unpinned-", dir=Path.home()))
+    (root / ".git").mkdir()
+    yield root
+    shutil.rmtree(root, ignore_errors=True)
+
+
 def pytest_configure(config: pytest.Config) -> None:
     """Point pytest's temp base at a guard-permitted directory (DES-045).
 
     Overriding ``tempfile.tempdir`` (not ``--basetemp``) preserves pytest's
     ``pytest-of-<user>/pytest-<n>`` rotation and its concurrency safety.
+
+    The base is also stamped as a repository boundary (an empty ``.git``):
+    :class:`~quarry.ethos_tree.EthosTree` bounds its vendored-tree search at
+    the enclosing git root, and without the stamp an ancestor walk from any
+    ``tmp_path`` project reaches THIS repository's committed
+    ``.punt-labs/ethos/identities`` — the enable tests then refresh the real
+    vendored ext files as a side effect of running.
     """
     del config
     base = _pytest_tmp_base()
     base.mkdir(parents=True, exist_ok=True)
+    (base / ".git").mkdir(exist_ok=True)
     tempfile.tempdir = str(base)
 
 
