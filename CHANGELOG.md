@@ -51,7 +51,9 @@ across `transform`, `index`, and `connector`).
   raw transcript capture, which now carries a summary — Loop 3. Attribution is
   identity-validated: `agent_type` is used only when it names a vendored or
   global ethos identity; a bare `Agent()` reviewer (`general-purpose`) is
-  filed unattributed, never under the repo pin's leader. Both rows go through
+  filed unattributed, never under the repo pin's leader, and a vendored
+  `<handle>.yaml` that is a symlink (or sits below one) registers nothing —
+  the file it points at is not the repo's. Both rows go through
   the daemon's scrub-before-store route with the hook's 5 s cap; no engine
   runs in the hook (DES-041), and the transcript is parsed once for both
   rows. New modules `subagent_report`, `subagent_capture`, `transcript_turns`
@@ -75,10 +77,19 @@ across `transform`, `index`, and `connector`).
   `SubagentStop` with no `agent_type`) is bounded at the checkout root
   exactly like the vendored-tree walk: a repo with no
   `.punt-labs/ethos.yaml` is filed unattributed rather than under a parent
-  directory's pin or the operator's `~/.punt-labs/ethos.yaml`/`config.yaml`.
-  New modules `ethos_tree` (the read-only sidecar locator: pins,
-  vendored/global identities, missions), `ethos_ext_block`, `ethos_ext_scan`.
-  (quarry-fbj9)
+  directory's pin or the operator's `~/.punt-labs/ethos.yaml`/`config.yaml`
+  (the home is resolved before the skip, so a symlinked `$HOME` is skipped
+  too). Every repo-controlled sidecar read — the pin, a vendored identity,
+  a mission's `contract.yaml`/`results.yaml`/`reflections.yaml` — goes
+  through one primitive, `SafeRepoPath.read_text` (the `openat` walk the
+  enable-time writers already use, `O_NOFOLLOW` on every component below
+  the checkout root), so a symlink at the file or at any directory above
+  it is refused inside the open itself rather than by a check made before
+  it: a component swapped for a link between a listing and the read is
+  refused all the same. A symlinked pin fails closed to unattributed with
+  a warning. New modules `ethos_tree` (the read-only sidecar locator:
+  pins, vendored/global identities, missions; `read_sidecar` is the sealed
+  read), `ethos_ext_block`, `ethos_ext_scan`. (quarry-fbj9)
 - tool: one `MemoryType` vocabulary (`fact`, `observation`, `opinion`,
   `procedure`; `lesson` reserved for `learn`) enforced on `remember`,
   `ingest`, and `capture` alike — an unknown `memory_type` is a 400 with an
@@ -100,7 +111,10 @@ across `transform`, `index`, and `connector`).
   collection is left untouched and the task completes with `chunks: 0,
   skipped: "exists"`, instead of a second chunk set being appended under
   the same name. The check runs on the collection's single FIFO writer, so
-  it is race-free against any earlier write to that collection.
+  it is race-free against any earlier write to that collection. A capture
+  whose page is already stored completes as that skip too, without
+  re-fetching the source URL: only a genuinely empty extraction (a
+  JS-rendered page) triggers the daemon-side re-fetch.
   `ScrubbedIngestJob` and `CaptureIngestJob` move to `daemon/content_jobs`;
   `daemon/ingest_jobs` keeps the URL job.
   (quarry-fbj9)
