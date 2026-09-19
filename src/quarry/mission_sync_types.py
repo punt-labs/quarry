@@ -77,13 +77,13 @@ class SyncTally:
         self._errors = list(errors)
         return self
 
-    def filed(self, name: str) -> None:
+    def record_filed(self, name: str) -> None:
         self._filed.append(name)
 
-    def skipped(self, name: str) -> None:
+    def record_skipped(self, name: str) -> None:
         self._skipped.append(name)
 
-    def error(self, message: str) -> None:
+    def record_error(self, message: str) -> None:
         self._errors.append(message)
 
     def outcome(self, *, dry_run: bool) -> MissionSyncOutcome:

@@ -57,10 +57,10 @@ class TestSyncTally:
 
     def test_scan_errors_lead_and_dispositions_keep_arrival_order(self) -> None:
         tally = SyncTally(("m-2: contract.yaml is not a mapping",))
-        tally.filed("r1")
-        tally.error("r2: daemon returned HTTP 503: queue full")
-        tally.skipped("r3")
-        tally.filed("r4")
+        tally.record_filed("r1")
+        tally.record_error("r2: daemon returned HTTP 503: queue full")
+        tally.record_skipped("r3")
+        tally.record_filed("r4")
         assert tally.outcome(dry_run=False) == MissionSyncOutcome(
             filed=("r1", "r4"),
             skipped=("r3",),

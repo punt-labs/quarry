@@ -161,7 +161,7 @@ class MissionMemorySync:
             return cls(client, options).run(store.scan(options.mission_id))
         tally = SyncTally()
         if options.mission_id:
-            tally.error(
+            tally.record_error(
                 f"mission {options.mission_id} not found: "
                 f"no .punt-labs/ethos/missions/ above {cwd}"
             )
@@ -200,7 +200,7 @@ class MissionMemorySync:
             try:
                 self._sync_round(header, request, tally)
             except QuarryError as exc:
-                tally.error(f"{request.name}: {self._describe(exc)}")
+                tally.record_error(f"{request.name}: {self._describe(exc)}")
         return tally.outcome(dry_run=self._options.dry_run)
 
     def _sync_round(
@@ -209,16 +209,16 @@ class MissionMemorySync:
         """Record one round's disposition; a daemon failure raises to :meth:`run`."""
         existing = self._existing_header(request.name)
         if existing is not None and existing != header:
-            tally.error(
+            tally.record_error(
                 f"name collision: {request.name} holds a different round "
                 f"({existing!r}) from another checkout; not overwritten"
             )
         elif existing is not None and not self._options.force:
-            tally.skipped(request.name)
+            tally.record_skipped(request.name)
         else:
             if not self._options.dry_run:
                 self._client.remember(request)
-            tally.filed(request.name)
+            tally.record_filed(request.name)
 
     @staticmethod
     def _describe(exc: QuarryError) -> str:
