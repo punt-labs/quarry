@@ -78,7 +78,7 @@ See `docs/architecture.tex` for the full system description.
 
 ## Code Quality
 
-**Module size limits.** No module over 500 lines without a design reason. Known violations (as of 2026-09-19): `doctor.py` (687, decomposition tracked as quarry-ywh5) and `mcp_server.py` (547). (`http_server.py`, `database.py`, and `search.py` are retired — decomposed into the `api/`+`daemon/`, `db/`, and `retrieval/` packages; `__main__.py` (339), `ingestion/pipeline.py` (138), and `hooks.py` (471) are now under 500 after their decompositions; `sync.py` is 229.) When a module grows past the limit, the next change to that module must include extraction.
+**Module size limits.** No module over 500 lines without a design reason. The modules still over the cap are `doctor.py` (decomposition tracked as quarry-ywh5) and `mcp_server.py`; check current sizes with `make report` or `wc -l src/quarry/*.py`. (`http_server.py`, `database.py`, and `search.py` are retired — decomposed into the `api/`+`daemon/`, `db/`, and `retrieval/` packages; `__main__.py`, `ingestion/pipeline.py`, and `hooks.py` are back under the cap after their decompositions.) When a module grows past the limit, the next change to that module must include extraction.
 
 **Class design.** Classes have a single responsibility. Prefer composition over inheritance. Use `Protocol` for structural typing at boundaries. A module with zero classes and 20+ module-level functions is procedural — it needs a design pass, not more functions.
 
