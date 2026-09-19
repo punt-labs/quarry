@@ -46,6 +46,16 @@ class MissionMemoryComposer:
         return f"mission-{contract.repo_name}-{contract.mission_id}-r{round_.number}"
 
     @staticmethod
+    def collection(contract: MissionContract) -> str:
+        """Return ``memory-<worker>`` — where the round is filed and looked up.
+
+        Named explicitly on both the write and the existence check so the two
+        cannot disagree: a show has no handle routing, and an unscoped show
+        would report a same-named document in any collection as "filed".
+        """
+        return f"memory-{contract.worker}"
+
+    @staticmethod
     def header(contract: MissionContract, round_: MissionRound) -> str:
         """Return the first line — the identity key the existence check compares."""
         return (
@@ -58,10 +68,11 @@ class MissionMemoryComposer:
     def compose(
         cls, contract: MissionContract, round_: MissionRound
     ) -> RememberRequest:
-        """Return the request; an empty ``collection`` routes by handle server-side."""
+        """Return the request, addressed to the worker's own memory collection."""
         return RememberRequest(
             name=cls.document_name(contract, round_),
             content=cls.document(contract, round_),
+            collection=cls.collection(contract),
             format_hint="markdown",
             overwrite=True,
             agent_handle=contract.worker,
@@ -207,7 +218,7 @@ class MissionMemorySync:
         self, header: str, request: RememberRequest, tally: SyncTally
     ) -> None:
         """Record one round's disposition; a daemon failure raises to :meth:`run`."""
-        existing = self._existing_header(request.name)
+        existing = self._existing_header(request.name, request.collection)
         if existing is not None and existing != header:
             tally.record_error(
                 f"name collision: {request.name} holds a different round "
@@ -227,14 +238,20 @@ class MissionMemorySync:
             return f"daemon returned HTTP {exc.status}: {exc.message}"
         return exc.message
 
-    def _existing_header(self, name: str) -> str | None:  # None: not filed yet (404)
+    def _existing_header(
+        self, name: str, collection: str
+    ) -> str | None:  # None: not filed yet (404)
         """Return the stored document's first line, or ``None`` when not filed yet.
 
-        ``None`` is the documented 404 outcome ("file it"); any other failure
-        propagates to :meth:`run`, which records it rather than skipping.
+        The lookup is scoped to *collection* — the same one the remember names —
+        so only this worker's memory of the round counts as filed. ``None`` is
+        the documented 404 outcome ("file it"); any other failure propagates to
+        :meth:`run`, which records it rather than skipping.
         """
         try:
-            page = self._client.show_page(ShowRequest(document=name, page=1))
+            page = self._client.show_page(
+                ShowRequest(document=name, collection=collection, page=1)
+            )
         except HttpError as exc:
             if exc.status == _NOT_FOUND:
                 return None

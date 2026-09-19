@@ -2524,10 +2524,10 @@
   "src/quarry/mission_memory.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 1.85,
+    "avg_params": 1.86,
     "max_complexity": 6.0,
-    "avg_complexity": 2.77,
-    "module_size": 210.0,
+    "avg_complexity": 2.64,
+    "module_size": 225.0,
     "classes_per_module": 2.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,

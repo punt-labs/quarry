@@ -41,25 +41,29 @@ _EXPECTED_HEADER = (
 class FakeDaemon:
     """A transport that answers ``/v1/show`` from a page table and records writes.
 
-    ``pages`` maps a document name to its stored page-1 text; an unknown name
-    is a 404 — the daemon's "not filed yet" answer. ``show_status`` overrides
-    every show response (for the non-404 failure path). ``remember_errors``
+    ``pages`` maps ``(collection, document name)`` to its stored page-1 text —
+    the daemon scopes a show to the collection it is given, so a same-named
+    document elsewhere is a 404, the "not filed yet" answer, and so is an
+    unknown name. Every show's query params are kept in ``shown``.
+    ``show_status`` overrides every show response (for the non-404 failure
+    path). ``remember_errors``
     maps a document name to the error its remember raises (a 503, a dropped
     connection). Non-2xx statuses raise the same typed :class:`HttpError` the
     real transport classifies, so the client sees exactly what a live daemon
     would send it.
     """
 
-    __slots__ = ("pages", "remember_errors", "remembered", "show_status")
+    __slots__ = ("pages", "remember_errors", "remembered", "show_status", "shown")
 
-    pages: dict[str, str]
+    pages: dict[tuple[str, str], str]
     remembered: list[dict[str, object]]
+    shown: list[dict[str, str]]
     show_status: int
     remember_errors: dict[str, QuarryError]
 
     def __new__(
         cls,
-        pages: dict[str, str] | None = None,
+        pages: dict[tuple[str, str], str] | None = None,
         *,
         show_status: int = 0,
         remember_errors: dict[str, QuarryError] | None = None,
@@ -67,6 +71,7 @@ class FakeDaemon:
         self = super().__new__(cls)
         self.pages = dict(pages or {})
         self.remembered = []
+        self.shown = []
         self.show_status = show_status
         self.remember_errors = dict(remember_errors or {})
         return self
@@ -84,11 +89,14 @@ class FakeDaemon:
         if base == "/v1/show":
             if self.show_status:
                 raise QuarryError.from_response(self.show_status, {"error": "boom"})
-            name = (params or {}).get("document", "")
-            if name not in self.pages:
+            query = dict(params or {})
+            self.shown.append(query)
+            key = (query.get("collection", ""), query.get("document", ""))
+            if key not in self.pages:
                 raise QuarryError.from_response(404, {"error": "not found"})
             return Response(
-                200, {"document_name": name, "page_number": 1, "text": self.pages[name]}
+                200,
+                {"document_name": key[1], "page_number": 1, "text": self.pages[key]},
             )
         if base == "/v1/remember":
             body = dict(json_body or {})
@@ -128,6 +136,14 @@ class TestComposer:
         name = MissionMemoryComposer.document_name(Rounds.contract(), Rounds.full())
         assert name == "mission-quarry-m-2026-09-02-003-r1"
 
+    def test_collection_is_the_workers_memory(self) -> None:
+        """The write and the existence check both name ``memory-<worker>``."""
+        contract = Rounds.contract(worker="gvr")
+        assert MissionMemoryComposer.collection(contract) == "memory-gvr"
+        assert MissionMemoryComposer.compose(contract, Rounds.full()).collection == (
+            "memory-gvr"
+        )
+
     def test_header_is_the_identity_key(self) -> None:
         assert MissionMemoryComposer.header(Rounds.contract(), Rounds.full()) == (
             _EXPECTED_HEADER
@@ -137,7 +153,7 @@ class TestComposer:
         req = MissionMemoryComposer.compose(Rounds.contract(), Rounds.full())
         assert req.name == "mission-quarry-m-2026-09-02-003-r1"
         assert req.agent_handle == "rmh"
-        assert req.collection == ""  # the daemon routes handle -> memory-rmh
+        assert req.collection == "memory-rmh"  # named, not left to server routing
         assert req.memory_type == "observation"
         assert req.overwrite is True
         assert req.format_hint == "markdown"
@@ -261,16 +277,43 @@ class TestRun:
         store = MissionStore.for_repo(repo)
         assert store is not None
         header, req = MissionMemorySync.requests(store.scan(CLOSED_MISSION))[0]
-        daemon = FakeDaemon({req.name: f"{header}\n\nWorker verdict ..."})
+        daemon = FakeDaemon(
+            {(req.collection, req.name): f"{header}\n\nWorker verdict ..."}
+        )
         outcome = self._sync(daemon).run(store.scan(CLOSED_MISSION))
         assert outcome.skipped == (req.name,)
         assert req.name not in [r["name"] for r in daemon.remembered]
+
+    def test_existence_check_is_scoped_to_the_workers_collection(
+        self, repo: Path
+    ) -> None:
+        """The show names ``memory-<worker>``; an unscoped show would match anywhere."""
+        store = MissionStore.for_repo(repo)
+        assert store is not None
+        _header, req = MissionMemorySync.requests(store.scan(CLOSED_MISSION))[0]
+        daemon = FakeDaemon()
+        self._sync(daemon).run(store.scan(CLOSED_MISSION))
+        assert daemon.shown[0]["document"] == req.name
+        assert daemon.shown[0]["collection"] == f"memory-{req.agent_handle}"
+
+    def test_same_name_in_another_collection_is_filed_not_skipped(
+        self, repo: Path
+    ) -> None:
+        """A document held only elsewhere is not this worker's memory of the round."""
+        store = MissionStore.for_repo(repo)
+        assert store is not None
+        header, req = MissionMemorySync.requests(store.scan(CLOSED_MISSION))[0]
+        daemon = FakeDaemon({("default", req.name): header})
+        outcome = self._sync(daemon).run(store.scan(CLOSED_MISSION))
+        assert req.name in outcome.filed
+        assert outcome.skipped == ()
+        assert next(r["name"] for r in daemon.remembered) == req.name
 
     def test_force_refiles_a_matching_key(self, repo: Path) -> None:
         store = MissionStore.for_repo(repo)
         assert store is not None
         header, req = MissionMemorySync.requests(store.scan(CLOSED_MISSION))[0]
-        daemon = FakeDaemon({req.name: header})
+        daemon = FakeDaemon({(req.collection, req.name): header})
         outcome = self._sync(daemon, force=True).run(store.scan(CLOSED_MISSION))
         assert req.name in outcome.filed
         assert daemon.remembered[0]["overwrite"] is True
@@ -283,7 +326,7 @@ class TestRun:
         other = (
             "# Mission m-2026-09-09-001 — round 1 (repo quarry, worker kpz, created …)"
         )
-        daemon = FakeDaemon({req.name: other})
+        daemon = FakeDaemon({(req.collection, req.name): other})
         outcome = self._sync(daemon, force=True).run(store.scan(CLOSED_MISSION))
         assert req.name not in outcome.filed
         assert any(e.startswith(f"name collision: {req.name}") for e in outcome.errors)
@@ -388,10 +431,12 @@ class TestIdentityCheckRoundTrip:
             outcome = client.await_task(client.remember(request).task_id)
             assert outcome.is_completed, outcome
             sync = MissionMemorySync(client, SyncOptions())
-            assert sync._existing_header(request.name) == (
+            assert sync._existing_header(request.name, request.collection) == (
                 MissionMemoryComposer.header(contract, round_)
             )
-            assert sync._existing_header("mission-quarry-m-0-r9") is None
+            assert sync._existing_header("mission-quarry-m-0-r9", "memory-rmh") is None
+            # The real daemon scopes the lookup: the same name is absent elsewhere.
+            assert sync._existing_header(request.name, "memory-gvr") is None
 
 
 class TestFourSurfaceParity:
