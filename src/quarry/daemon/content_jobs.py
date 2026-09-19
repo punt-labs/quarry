@@ -22,12 +22,19 @@ from quarry.daemon.job_spool import SpoolRecord
 from quarry.daemon.tasks import task_terminal
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.tasks import TaskState
     from quarry.ingestion.ingest_context import MemoryType
     from quarry.ingestion.web_ingest import FormatHint
 
 logger = logging.getLogger(__name__)
+
+# The result key a create-if-absent skip carries.  It is the one way to tell a
+# skip (``chunks: 0`` because the document is already stored) from an empty
+# extraction (``chunks: 0`` because the page yielded nothing).
+_SKIPPED = "skipped"
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,7 +108,7 @@ class ScrubbedIngestJob:
                 "document_name": self.name,
                 "collection": self.collection,
                 "chunks": 0,
-                "skipped": "exists",
+                _SKIPPED: "exists",
             }
         from quarry.ingestion.ingest_context import (  # noqa: PLC0415
             IngestContext,
@@ -144,6 +151,16 @@ class ScrubbedIngestJob:
             self._scrubbed(self.name), self.collection
         )
 
+    @staticmethod
+    def is_stored(result: Mapping[str, object]) -> bool:
+        """Return whether the document is in the store after *result*.
+
+        True when chunks were written, or when the create-if-absent check found
+        it already there (``skipped: "exists"``). Only a result that is neither
+        — an extraction that produced nothing — leaves the store without it.
+        """
+        return bool(result.get("chunks")) or _SKIPPED in result
+
 
 @dataclass(frozen=True, slots=True)
 class CaptureIngestJob:
@@ -185,9 +202,15 @@ class CaptureIngestJob:
             state.results = dict(result)
 
     def _capture(self, ctx: DaemonContext) -> dict[str, object]:
-        """Scrub-ingest inline; on zero chunks with a source URL, re-fetch it."""
+        """Scrub-ingest inline; on an empty extraction with a source URL, re-fetch.
+
+        A create-if-absent skip also reports ``chunks: 0`` but is not empty —
+        the document is already stored under this name — so it returns as a
+        skip rather than spending a network round trip to re-fetch a page the
+        daemon holds (and then skip or rewrite it a second time).
+        """
         result = self.inline.scrub_and_ingest(ctx)
-        if result.get("chunks") or not self.source_url:
+        if ScrubbedIngestJob.is_stored(result) or not self.source_url:
             return result
         return self._refetch(ctx)
 

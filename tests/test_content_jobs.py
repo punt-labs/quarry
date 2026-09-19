@@ -123,6 +123,71 @@ def test_capture_spool_record_is_none() -> None:
     assert job.spool_record() is None
 
 
+class TestCaptureSkipVersusEmpty:
+    """A create-if-absent skip is not an empty extraction; only the latter re-fetches.
+
+    Both answer ``chunks: 0``. The skip means the document is already stored
+    under this name, so a re-fetch would spend a network round trip to write
+    (or be skipped again) for a page the daemon holds; the empty extraction
+    means a JS-rendered page produced nothing, and the re-fetch is the rescue.
+    """
+
+    def _job(self, source_url: str = "https://x.test/page") -> CaptureIngestJob:
+        inline = _remember("<html></html>", collection="repo-captures", overwrite=False)
+        return CaptureIngestJob(inline=inline, source_url=source_url)
+
+    def test_existing_document_is_skipped_without_a_refetch(self) -> None:
+        ctx, _catalog = _ctx(exists=True)
+        job = self._job()
+        with (
+            patch("quarry.ingestion.web_ingest.ingest_content") as ingest,
+            patch.object(CaptureIngestJob, "_refetch") as refetch,
+        ):
+            result = job._capture(ctx)
+        ingest.assert_not_called()
+        refetch.assert_not_called()
+        assert result["skipped"] == "exists"
+        assert result["chunks"] == 0
+
+    def test_empty_extraction_with_a_source_url_refetches(self) -> None:
+        ctx, _catalog = _ctx(exists=False)
+        job = self._job()
+        empty = {"document_name": "note", "collection": "repo-captures", "chunks": 0}
+        with (
+            patch("quarry.ingestion.web_ingest.ingest_content", return_value=empty),
+            patch.object(
+                CaptureIngestJob, "_refetch", return_value={"chunks": 2}
+            ) as refetch,
+        ):
+            result = job._capture(ctx)
+        refetch.assert_called_once_with(ctx)
+        assert result == {"chunks": 2}
+
+    def test_empty_extraction_without_a_source_url_stores_what_it_has(self) -> None:
+        ctx, _catalog = _ctx(exists=False)
+        job = self._job(source_url="")
+        empty = {"document_name": "note", "collection": "repo-captures", "chunks": 0}
+        with (
+            patch("quarry.ingestion.web_ingest.ingest_content", return_value=empty),
+            patch.object(CaptureIngestJob, "_refetch") as refetch,
+        ):
+            result = job._capture(ctx)
+        refetch.assert_not_called()
+        assert result == empty
+
+    def test_non_empty_extraction_never_refetches(self) -> None:
+        ctx, _catalog = _ctx(exists=False)
+        job = self._job()
+        stored = {"document_name": "note", "collection": "repo-captures", "chunks": 3}
+        with (
+            patch("quarry.ingestion.web_ingest.ingest_content", return_value=stored),
+            patch.object(CaptureIngestJob, "_refetch") as refetch,
+        ):
+            result = job._capture(ctx)
+        refetch.assert_not_called()
+        assert result == stored
+
+
 def test_html_refetch_fetches_the_source_url_exactly_once() -> None:
     """The HTML re-fetch branch must not fetch the same URL twice.
 
