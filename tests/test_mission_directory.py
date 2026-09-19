@@ -1,0 +1,107 @@
+"""Behaviour of :class:`quarry.mission_directory.MissionDirectory`."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+import pytest
+import yaml
+
+from quarry.mission_directory import MissionDirectory
+from tests.mission_fixtures import CLOSED_MISSION, OPEN_MISSION, repo_with_missions
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+
+@pytest.fixture
+def repo(tmp_path: Path) -> Path:
+    return repo_with_missions(tmp_path / "repo")
+
+
+def _missions_dir(repo: Path) -> Path:
+    return repo / ".punt-labs" / "ethos" / "missions"
+
+
+def _closed(repo: Path) -> MissionDirectory:
+    return MissionDirectory(_missions_dir(repo) / CLOSED_MISSION)
+
+
+class TestHasContract:
+    def test_true_for_a_fixture_mission(self, repo: Path) -> None:
+        assert _closed(repo).has_contract()
+
+    def test_false_for_a_log_only_directory(self, repo: Path) -> None:
+        stray = _missions_dir(repo) / "m-2026-09-30-003"
+        stray.mkdir()
+        (stray / "log-3f2a9c1e-0000-4000-8000-000000000000-1-1.jsonl").write_text(
+            '{"event": "delegated"}\n'
+        )
+        assert not MissionDirectory(stray).has_contract()
+
+    def test_false_when_the_contract_is_a_directory(self, repo: Path) -> None:
+        stray = _missions_dir(repo) / "m-2026-09-30-004"
+        (stray / "contract.yaml").mkdir(parents=True)
+        assert not MissionDirectory(stray).has_contract()
+
+    def test_path_is_the_directory_given(self, repo: Path) -> None:
+        assert _closed(repo).path == _missions_dir(repo) / CLOSED_MISSION
+
+
+class TestContract:
+    def test_parses_the_fixture_contract(self, repo: Path) -> None:
+        assert _closed(repo).contract(repo).mission_id == CLOSED_MISSION
+
+    def test_default_repo_fills_a_contract_with_no_repo_key(self, repo: Path) -> None:
+        open_ = MissionDirectory(_missions_dir(repo) / OPEN_MISSION)
+        assert open_.contract(repo).repo == str(repo)
+
+    def test_non_mapping_raises(self, repo: Path) -> None:
+        (_missions_dir(repo) / CLOSED_MISSION / "contract.yaml").write_text("- a\n")
+        with pytest.raises(ValueError, match="not a mapping"):
+            _closed(repo).contract(repo)
+
+    def test_malformed_yaml_raises(self, repo: Path) -> None:
+        (_missions_dir(repo) / CLOSED_MISSION / "contract.yaml").write_text(
+            "mission_id: [unclosed\n"
+        )
+        with pytest.raises(yaml.YAMLError):
+            _closed(repo).contract(repo)
+
+    def test_absent_contract_raises_rather_than_returning_nothing(
+        self, repo: Path
+    ) -> None:
+        (_missions_dir(repo) / CLOSED_MISSION / "contract.yaml").unlink()
+        with pytest.raises(FileNotFoundError):
+            _closed(repo).contract(repo)
+
+
+class TestRounds:
+    def test_pairs_results_with_reflections_in_round_order(self, repo: Path) -> None:
+        rounds = _closed(repo).rounds()
+        assert [r.number for r in rounds] == [1, 2]
+        assert rounds[1].has_result and not rounds[1].has_reflection
+
+    def test_absent_round_files_are_no_rounds(self, repo: Path) -> None:
+        (_missions_dir(repo) / CLOSED_MISSION / "results.yaml").unlink()
+        (_missions_dir(repo) / CLOSED_MISSION / "reflections.yaml").unlink()
+        assert _closed(repo).rounds() == ()
+
+    def test_an_empty_key_is_no_rounds(self, repo: Path) -> None:
+        (_missions_dir(repo) / CLOSED_MISSION / "results.yaml").write_text("results:\n")
+        (_missions_dir(repo) / CLOSED_MISSION / "reflections.yaml").unlink()
+        assert _closed(repo).rounds() == ()
+
+    def test_non_mapping_entries_are_dropped(self, repo: Path) -> None:
+        (_missions_dir(repo) / CLOSED_MISSION / "results.yaml").write_text(
+            "results:\n  - 3\n  - not-a-mapping\n"
+        )
+        (_missions_dir(repo) / CLOSED_MISSION / "reflections.yaml").unlink()
+        assert _closed(repo).rounds() == ()
+
+    def test_non_list_raises(self, repo: Path) -> None:
+        (_missions_dir(repo) / CLOSED_MISSION / "results.yaml").write_text(
+            "results: nope\n"
+        )
+        with pytest.raises(ValueError, match="'results' is not a list"):
+            _closed(repo).rounds()

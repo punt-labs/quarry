@@ -9,12 +9,13 @@ from typing import TYPE_CHECKING, Self, final
 import yaml
 
 from quarry.ethos_tree import EthosTree
-from quarry.mission_records import MissionContract, MissionRound
-from quarry.mission_round_parts import EvaluatorReflection, WorkerResult
+from quarry.mission_directory import MissionDirectory
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Iterable
     from pathlib import Path
+
+    from quarry.mission_records import MissionContract, MissionRound
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +46,11 @@ class MissionScan:
 class MissionStore:
     """The on-disk mission tree, read one directory at a time.
 
-    A directory that fails to parse (malformed YAML, a missing ``worker``, a
-    non-integer ``round``) becomes one error line and the scan continues —
-    one bad mission must not hide the rest.
+    A directory with no ``contract.yaml`` is not a mission — a delegation log
+    left by another checkout, or a partially sealed tree — and the scan passes
+    it by without an error line. A directory that fails to parse (malformed
+    YAML, a missing ``worker``, a non-integer ``round``) becomes one error line
+    and the scan continues — one bad mission must not hide the rest.
     """
 
     __slots__ = ("_default_repo", "_missions_dir")
@@ -81,7 +84,8 @@ class MissionStore:
 
         A *mission_id* that names no directory is one error, not an empty
         scan: the caller asked for something specific and must hear that it
-        is not there, so the CLI exits 1 rather than reporting "filed 0".
+        is not there, so the CLI exits 1 rather than reporting "filed 0". A
+        directory that exists but holds no contract is the ordinary skip.
         """
         if not mission_id:
             return self._scan(
@@ -94,58 +98,23 @@ class MissionStore:
         return self._scan((target,))
 
     def _scan(self, mission_dirs: Iterable[Path]) -> MissionScan:
-        """Load each directory; one that fails to parse is one error line."""
+        """Load each mission directory; one that fails to parse is one error line."""
         missions: list[MissionRecord] = []
         errors: list[str] = []
-        for mission_dir in mission_dirs:
+        for mission_dir in map(MissionDirectory, mission_dirs):
+            if not mission_dir.has_contract():
+                logger.info(
+                    "missions: %s has no contract.yaml; skipped", mission_dir.path
+                )
+                continue
             try:
                 missions.append(self._load(mission_dir))
             except (OSError, yaml.YAMLError, ValueError) as exc:
-                errors.append(f"{mission_dir}: {exc}")
+                errors.append(f"{mission_dir.path}: {exc}")
         return MissionScan(missions=tuple(missions), errors=tuple(errors))
 
-    def _load(self, mission_dir: Path) -> MissionRecord:
-        contract_data = self._read(mission_dir / "contract.yaml")
-        if not isinstance(contract_data, dict):
-            msg = "contract.yaml is not a mapping"
-            raise ValueError(msg)
-        contract = MissionContract.from_mapping(
-            contract_data, default_repo=self._default_repo
+    def _load(self, mission_dir: MissionDirectory) -> MissionRecord:
+        return MissionRecord(
+            contract=mission_dir.contract(self._default_repo),
+            rounds=mission_dir.rounds(),
         )
-        results = {
-            r.round: r
-            for r in map(
-                WorkerResult.from_mapping,
-                self._entries(mission_dir / "results.yaml", "results"),
-            )
-        }
-        reflections = {
-            r.round: r
-            for r in map(
-                EvaluatorReflection.from_mapping,
-                self._entries(mission_dir / "reflections.yaml", "reflections"),
-            )
-        }
-        numbers = sorted(results.keys() | reflections.keys())
-        rounds = tuple(
-            MissionRound(n, results.get(n), reflections.get(n)) for n in numbers
-        )
-        return MissionRecord(contract=contract, rounds=rounds)
-
-    def _entries(self, path: Path, key: str) -> list[Mapping[str, object]]:
-        """Return the per-round list under *key*; an absent file is an empty list."""
-        if not path.is_file():
-            return []
-        data = self._read(path)
-        entries = data.get(key) if isinstance(data, dict) else None
-        if entries is None:
-            return []
-        if not isinstance(entries, list):
-            msg = f"{path.name}: {key!r} is not a list"
-            raise ValueError(msg)
-        # YAML is a wire boundary: each entry is checked by the record parser.
-        return [e for e in entries if isinstance(e, dict)]
-
-    @staticmethod
-    def _read(path: Path) -> object:
-        return yaml.safe_load(path.read_text())

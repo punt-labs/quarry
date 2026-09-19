@@ -2508,6 +2508,19 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/quarry/mission_directory.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.71,
+    "max_complexity": 6.0,
+    "avg_complexity": 2.29,
+    "module_size": 71.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/quarry/mission_memory.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
@@ -2550,10 +2563,10 @@
   "src/quarry/mission_store.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 1.12,
-    "max_complexity": 6.0,
-    "avg_complexity": 3.25,
-    "module_size": 124.0,
+    "avg_params": 1.0,
+    "max_complexity": 5.0,
+    "avg_complexity": 2.67,
+    "module_size": 94.0,
     "classes_per_module": 3.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,

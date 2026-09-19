@@ -78,6 +78,22 @@ class TestSync:
         assert "would file 0, skipped 0, errors 1" in result.output
         assert "error: mission no-such-mission not found under" in result.output
 
+    def test_contract_less_directory_exits_zero(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """End to end through the real store: a log-only directory is not an error."""
+        repo = repo_with_missions(tmp_path / "quarry", mission_ids=())
+        stray = repo / ".punt-labs" / "ethos" / "missions" / "m-2026-09-30-003"
+        stray.mkdir()
+        (stray / "log-3f2a9c1e-0000-4000-8000-000000000000-1-1.jsonl").write_text(
+            '{"event": "delegated"}\n'
+        )
+        monkeypatch.chdir(repo)
+        with patch("quarry.__main__.TargetResolver.connect"):
+            result = runner.invoke(app, ["missions", "sync", "--dry-run"])
+        assert result.exit_code == 0, result.output
+        assert "would file 0, skipped 0, errors 0" in result.output
+
     def test_options_reach_the_sync(self, in_repo: Path) -> None:
         with (
             patch(

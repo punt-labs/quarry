@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from quarry.mission_store import MissionStore
+from quarry.mission_store import MissionScan, MissionStore
 from tests.mission_fixtures import CLOSED_MISSION, OPEN_MISSION, repo_with_missions
 
 if TYPE_CHECKING:
@@ -22,6 +22,16 @@ def _store(repo: Path) -> MissionStore:
     store = MissionStore.for_repo(repo)
     assert store is not None
     return store
+
+
+def _contract_less_directory(repo: Path) -> Path:
+    """Leave the shape another checkout's dispatch leaves: a log, no contract."""
+    stray = repo / ".punt-labs" / "ethos" / "missions" / "m-2026-09-30-003"
+    stray.mkdir()
+    (stray / "log-3f2a9c1e-0000-4000-8000-000000000000-1-1.jsonl").write_text(
+        '{"event": "delegated"}\n'
+    )
+    return stray
 
 
 class TestForRepo:
@@ -92,6 +102,20 @@ class TestScan:
         assert scan.errors == (
             f"mission m-9999-99-99-999 not found under {missions_dir}",
         )
+
+    def test_contract_less_directory_is_skipped(self, repo: Path) -> None:
+        """A delegation log with no contract.yaml is not a mission: no error line."""
+        _contract_less_directory(repo)
+        scan = _store(repo).scan()
+        assert scan.errors == ()
+        ids = [m.contract.mission_id for m in scan.missions]
+        assert ids == sorted([CLOSED_MISSION, OPEN_MISSION])
+
+    def test_contract_less_mission_filter_is_an_empty_scan(self, repo: Path) -> None:
+        """A named directory that holds no contract is a skip, not an error."""
+        stray = _contract_less_directory(repo)
+        scan = _store(repo).scan(mission_id=stray.name)
+        assert scan == MissionScan(missions=(), errors=())
 
     def test_absent_round_files_read_as_no_rounds(self, repo: Path) -> None:
         missions_dir = repo / ".punt-labs" / "ethos" / "missions"
