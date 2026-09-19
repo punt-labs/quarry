@@ -217,7 +217,17 @@ class MissionMemorySync:
     def _sync_round(
         self, header: str, request: RememberRequest, tally: SyncTally
     ) -> None:
-        """Record one round's disposition; a daemon failure raises to :meth:`run`."""
+        """Record one round's disposition; a daemon failure raises to :meth:`run`.
+
+        The check-then-write is deliberately unlocked. Two syncs racing on one
+        round both see 404 and both remember the same name into the same
+        collection with byte-identical content; the daemon runs one FIFO
+        writer per collection (``daemon.ingest_queue``), so the second
+        overwrite replaces the first's chunks with identical ones — one chunk
+        set survives, never two. The collision branch below guards a
+        *different* round under the same name, which no ordering of identical
+        writes can produce.
+        """
         existing = self._existing_header(request.name, request.collection)
         if existing is not None and existing != header:
             tally.record_error(

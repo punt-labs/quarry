@@ -31,9 +31,17 @@ across `transform`, `index`, and `connector`).
   directory holding no `contract.yaml` (a delegation log left by another
   checkout, or a partially sealed tree) is not a mission and is skipped
   without an error line — only a `contract.yaml` that is present but
-  unreadable is one. New modules `mission_records`, `mission_round_parts`,
-  `mission_directory`, `mission_store`, `mission_sync_types`,
-  `mission_memory`, `cli_missions`, `mcp_missions`. (quarry-fbj9)
+  unreadable is one. The tree is read as cloned content: `--mission` must
+  be the id ethos mints (`m-YYYY-MM-DD-NNN`) before it is joined onto the
+  missions root, and a mission directory or YAML file reached through a
+  symlink is refused (an error line by id, a warning-and-skip in the full
+  scan), so neither a crafted id nor a committed link can make the sync
+  read another tree's rounds. The write and the existence check both name
+  `memory-<worker>` explicitly, so a same-named document in another
+  collection never reads as "filed". New modules `path_guard`,
+  `mission_records`, `mission_round_parts`, `mission_directory`,
+  `mission_store`, `mission_sync_types`, `mission_memory`, `cli_missions`,
+  `mcp_missions`. (quarry-fbj9)
 - tool: `SubagentStop` now files the subagent's final report as an
   `observation` in `memory-<handle>` (`subagent-<id8>-report`) alongside the
   raw transcript capture, which now carries a summary — Loop 3. Attribution is
@@ -52,7 +60,12 @@ across `transform`, `index`, and `connector`).
   refreshes the vendored `.punt-labs/ethos/identities/<handle>.ext/quarry.yaml`
   files (reported as "commit via PR") and `quarry install` refreshes the
   global ones; a v1 block is replaced in place, a customised block is left
-  alone. The MCP `remember` docstring, the recall skill, `/remember`, and the
+  alone. The vendored refresh is sealed at the checkout root: an ext file,
+  ext directory, or `identities/` reached through a symlink is refused and
+  reported as that identity's failure, never written through, so a hostile
+  checkout cannot redirect the guide write onto a file outside the repo.
+  The global refresh still follows the operator's own (dotfile-manager)
+  symlinks. The MCP `remember` docstring, the recall skill, `/remember`, and the
   deposited repo guide carry the same five moments. New modules `ethos_tree`
   (the read-only sidecar locator: pins, vendored/global identities, missions),
   `ethos_ext_block`, `ethos_ext_scan`. (quarry-fbj9)
