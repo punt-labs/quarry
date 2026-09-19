@@ -1264,7 +1264,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "description": "Body for indexing inline text content.\n\n``collection`` is the empty-string sentinel: the daemon decides the effective\ncollection at ``_remember_job``. Explicit values pass through unchanged; an\nempty value with an ``agent_handle`` routes to ``memory-<handle>``, and an\nempty value with no handle falls back to ``default``.",
+                "description": "Body for indexing inline text content.\n\n``collection`` is the empty-string sentinel: the daemon decides the effective\ncollection at ``_remember_job``. Explicit values pass through unchanged; an\nempty value with an ``agent_handle`` routes to ``memory-<handle>``, and an\nempty value with no handle falls back to ``default``.\n\n``overwrite`` true replaces a document already stored under ``name`` in that\ncollection; false is create-if-absent \u2014 an existing document is left\nuntouched and the task completes with ``skipped: exists``. The daemon decides\non the collection's serialized writer, so two clients that both saw the name\nabsent cannot both land.",
                 "properties": {
                   "agent_handle": {
                     "default": "",

@@ -11,7 +11,7 @@ from starlette.responses import JSONResponse
 from quarry.api.capture_ingest import SESSION_ID_PREFIX_LEN
 from quarry.capture_url import CaptureUrl
 from quarry.captures_collection import CapturesCollection
-from quarry.daemon.ingest_jobs import CaptureIngestJob, ScrubbedIngestJob
+from quarry.daemon.content_jobs import CaptureIngestJob, ScrubbedIngestJob
 from quarry.daemon.routes.base import RouteGroup
 from quarry.http_guards import RequestGuards
 from quarry.url_safety import UrlSafetyCheck

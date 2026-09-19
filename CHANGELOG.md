@@ -24,7 +24,11 @@ across `transform`, `index`, and `connector`).
   `mission-<repo>-<id>-r<n>`. Idempotent: a round the daemon already holds is
   skipped, a name held by another checkout's round is an error and never
   overwritten (`--force` re-files a matching key only), `--dry-run` posts
-  nothing. Errors never pass silently: a parse failure, a daemon failure on
+  nothing. The write is create-if-absent (`overwrite: false`), so two syncs
+  racing on one name — both see "absent" before either 202 is indexed — are
+  arbitrated on the daemon's per-collection writer: the second completes as
+  a skip, never a replacement and never a second chunk set; only `--force`
+  posts `overwrite`. Errors never pass silently: a parse failure, a daemon failure on
   any one round (a 503, an unreachable daemon), and a `--mission` id that
   names no mission are each one error line and exit 1, and the run continues
   past every one so the rounds already filed are never lost. A mission
@@ -90,6 +94,16 @@ across `transform`, `index`, and `connector`).
 
 ### Changed
 
+- tool: `POST /v1/remember` with `overwrite: false` (`quarry remember
+  --no-overwrite`, the MCP `remember` default, `learn`) is now
+  create-if-absent: a document already stored under that name in the target
+  collection is left untouched and the task completes with `chunks: 0,
+  skipped: "exists"`, instead of a second chunk set being appended under
+  the same name. The check runs on the collection's single FIFO writer, so
+  it is race-free against any earlier write to that collection.
+  `ScrubbedIngestJob` and `CaptureIngestJob` move to `daemon/content_jobs`;
+  `daemon/ingest_jobs` keeps the URL job.
+  (quarry-fbj9)
 - tool: the ethos repo pin is read from `.punt-labs/ethos.yaml` first, then the
   legacy `.punt-labs/ethos/config.yaml`, at each ancestor — the file current
   ethos writes — so PreCompact/SessionEnd captures and `quarry doctor` attribute

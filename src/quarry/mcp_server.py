@@ -241,7 +241,8 @@ class McpTools:
         Args:
             content: The text content to remember.
             document_name: Name for the document (e.g., 'notes.md').
-            overwrite: If true, replace existing data for this document.
+            overwrite: If true, replace existing data for this document. If
+                false, an existing document of this name is left untouched.
             collection: Collection name. Leave empty to route by agent_handle —
                 ``memory-<handle>`` when a handle is given, else ``default``.
             format_hint: Format hint: 'auto', 'plain', 'markdown', 'latex'.

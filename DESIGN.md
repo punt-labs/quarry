@@ -2960,7 +2960,13 @@ shelf. This ADR records the loop that fills it, in three parts.
    (`contract`/`results`/`reflections`) client-side and files each frozen round as
    an `observation` in `memory-<worker>`, named `mission-<repo>-<id>-r<n>`
    (repo discriminator: mission IDs are per-machine counters), skip-if-exists.
-   Ethos is never called — the one-way dependency (DES-001/DES-008) holds.
+   The skip is decided twice: client-side on the stored first line (a
+   *different* round under the name is an error, never overwritten), and on
+   the daemon — the write is `overwrite=false`, which `/remember` treats as
+   create-if-absent on the collection's single FIFO writer, so two syncs that
+   both saw the name absent cannot both land; only `--force` replaces, and
+   only a matching key. Ethos is never called — the one-way dependency
+   (DES-001/DES-008) holds.
 
 3. **Capture distillation (Loop 3).** `SubagentStop` resolves the handle as
    `agent_type` **iff** it is a registered ethos identity (read-only `EthosTree`

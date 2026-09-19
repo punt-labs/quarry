@@ -3,7 +3,9 @@
 The client reads the sidecar files and POSTs content; the daemon never reads a
 path. Idempotency comes from the document name plus an identity check on the
 stored first line, so a re-run files nothing twice and never overwrites a
-round another checkout filed under the same name.
+round another checkout filed under the same name. The write itself is
+create-if-absent (``overwrite=False``): the daemon's per-collection writer is
+the arbiter when two syncs race, and only ``--force`` replaces.
 """
 
 from __future__ import annotations
@@ -68,13 +70,20 @@ class MissionMemoryComposer:
     def compose(
         cls, contract: MissionContract, round_: MissionRound
     ) -> RememberRequest:
-        """Return the request, addressed to the worker's own memory collection."""
+        """Return the create-if-absent request, addressed to the worker's memory.
+
+        ``overwrite`` is off: the daemon refuses to replace a document that is
+        already stored under the name, so the composed request can never
+        clobber another checkout's round. The ``--force`` re-file is the
+        sync's decision (:meth:`MissionMemorySync._sync_round`), not the
+        composer's — the composer produces one document per round.
+        """
         return RememberRequest(
             name=cls.document_name(contract, round_),
             content=cls.document(contract, round_),
             collection=cls.collection(contract),
             format_hint="markdown",
-            overwrite=True,
+            overwrite=False,
             agent_handle=contract.worker,
             memory_type=MemoryType.OBSERVATION.value,
             summary=cls.summary(contract, round_),
@@ -219,14 +228,21 @@ class MissionMemorySync:
     ) -> None:
         """Record one round's disposition; a daemon failure raises to :meth:`run`.
 
-        The check-then-write is deliberately unlocked. Two syncs racing on one
-        round both see 404 and both remember the same name into the same
-        collection with byte-identical content; the daemon runs one FIFO
-        writer per collection (``daemon.ingest_queue``), so the second
-        overwrite replaces the first's chunks with identical ones — one chunk
-        set survives, never two. The collision branch below guards a
-        *different* round under the same name, which no ordering of identical
-        writes can produce.
+        The check-then-write here is deliberately unlocked, because it is not
+        the arbiter. Two syncs racing on one name both see 404 — a remember
+        returns 202 before its chunks are indexed — so a client-side check can
+        never rule out a second writer. The write is therefore create-if-absent
+        (``overwrite=False``): the daemon re-checks on the collection's single
+        FIFO writer (``daemon.ingest_queue``), after the first write has landed,
+        and completes the second as a skip. A *different* round under the same
+        name from another checkout is thus never replaced and never joined by
+        a second chunk set; the collision branch below catches it on the next
+        run, when the stored first line no longer matches. Two syncs of the
+        same round converge on one chunk set the same way. The residual is
+        reporting only: the losing sync's tally says "filed" for a write the
+        daemon skipped. ``--force`` posts ``overwrite`` — and only for a name
+        whose stored first line already matches this round, so it re-files
+        this round and can never take another checkout's.
         """
         existing = self._existing_header(request.name, request.collection)
         if existing is not None and existing != header:
@@ -238,8 +254,21 @@ class MissionMemorySync:
             tally.record_skipped(request.name)
         else:
             if not self._options.dry_run:
-                self._client.remember(request)
+                self._client.remember(self._write_mode(request, matched=existing))
             tally.record_filed(request.name)
+
+    def _write_mode(
+        self, request: RememberRequest, *, matched: str | None
+    ) -> RememberRequest:
+        """Return *request* as posted: overwrite only on a forced re-file.
+
+        ``matched`` is the stored first line when the name is already filed
+        (``None`` when absent); a first filing is create-if-absent even under
+        ``--force``, so the daemon still arbitrates a race on an unfiled name.
+        """
+        if self._options.force and matched is not None:
+            return request.model_copy(update={"overwrite": True})
+        return request
 
     @staticmethod
     def _describe(exc: QuarryError) -> str:

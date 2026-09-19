@@ -12,6 +12,12 @@ class RememberRequest(BaseModel):
     collection at ``_remember_job``. Explicit values pass through unchanged; an
     empty value with an ``agent_handle`` routes to ``memory-<handle>``, and an
     empty value with no handle falls back to ``default``.
+
+    ``overwrite`` true replaces a document already stored under ``name`` in that
+    collection; false is create-if-absent — an existing document is left
+    untouched and the task completes with ``skipped: exists``. The daemon decides
+    on the collection's serialized writer, so two clients that both saw the name
+    absent cannot both land.
     """
 
     name: str

@@ -155,7 +155,7 @@ class TestComposer:
         assert req.agent_handle == "rmh"
         assert req.collection == "memory-rmh"  # named, not left to server routing
         assert req.memory_type == "observation"
-        assert req.overwrite is True
+        assert req.overwrite is False  # create-if-absent: the daemon arbitrates
         assert req.format_hint == "markdown"
         first_signal = Rounds.reflection().signals[0]
         assert len(first_signal) > 100  # the fixture exercises the cut
@@ -309,7 +309,17 @@ class TestRun:
         assert outcome.skipped == ()
         assert next(r["name"] for r in daemon.remembered) == req.name
 
+    def test_default_path_posts_create_if_absent(self, repo: Path) -> None:
+        """The normal write never carries overwrite: a racing same-name write
+        with different content is refused on the daemon's serialized writer,
+        not clobbered."""
+        daemon = FakeDaemon()
+        self._sync(daemon).run(_scan(repo))
+        assert daemon.remembered
+        assert all(r["overwrite"] is False for r in daemon.remembered)
+
     def test_force_refiles_a_matching_key(self, repo: Path) -> None:
+        """``--force`` is the only path that posts ``overwrite``."""
         store = MissionStore.for_repo(repo)
         assert store is not None
         header, req = MissionMemorySync.requests(store.scan(CLOSED_MISSION))[0]
@@ -317,6 +327,16 @@ class TestRun:
         outcome = self._sync(daemon, force=True).run(store.scan(CLOSED_MISSION))
         assert req.name in outcome.filed
         assert daemon.remembered[0]["overwrite"] is True
+        assert daemon.remembered[0]["content"] == req.content
+
+    def test_force_on_an_unfiled_round_still_creates_if_absent(
+        self, repo: Path
+    ) -> None:
+        """``--force`` re-files a matching key; a first filing needs no overwrite."""
+        daemon = FakeDaemon()
+        self._sync(daemon, force=True).run(_scan(repo, CLOSED_MISSION))
+        assert daemon.remembered
+        assert all(r["overwrite"] is False for r in daemon.remembered)
 
     def test_mission_name_collision_is_error_not_overwrite(self, repo: Path) -> None:
         """A name another checkout's round holds is never replaced, even by --force."""
@@ -437,6 +457,41 @@ class TestIdentityCheckRoundTrip:
             assert sync._existing_header("mission-quarry-m-0-r9", "memory-rmh") is None
             # The real daemon scopes the lookup: the same name is absent elsewhere.
             assert sync._existing_header(request.name, "memory-gvr") is None
+
+    def test_a_different_round_under_the_same_name_never_replaces_the_first(
+        self, tmp_path: Path
+    ) -> None:
+        """Two checkouts, one name, different content: first to the writer wins.
+
+        Both syncs see 404 before either 202 is indexed, so the client-side
+        collision check cannot arbitrate. The default write is create-if-absent
+        on the daemon's per-collection writer, so the second lands as a skip —
+        the first round's chunks are neither replaced nor joined by a second
+        set. ``--force`` (``overwrite``) is the one path that replaces.
+        """
+        from tests.inproc_daemon import InProcessDaemon
+
+        contract, round_ = Rounds.contract(), Rounds.full()
+        first = MissionMemoryComposer.compose(contract, round_)
+        other_header = first.content.splitlines()[0].replace("worker rmh", "worker kpz")
+        second = first.model_copy(
+            update={"content": f"{other_header}\n\nWorker verdict: none\n"}
+        )
+        daemon = InProcessDaemon(tmp_path / "daemon")
+        with daemon.client() as client:
+            assert client.await_task(client.remember(first).task_id).is_completed
+            outcome = client.await_task(client.remember(second).task_id)
+            assert outcome.is_completed, outcome
+            assert outcome.results is not None
+            assert outcome.results["chunks"] == 0
+            assert outcome.results["skipped"] == "exists"
+            sync = MissionMemorySync(client, SyncOptions())
+            assert sync._existing_header(first.name, first.collection) == (
+                MissionMemoryComposer.header(contract, round_)
+            )
+            forced = second.model_copy(update={"overwrite": True})
+            assert client.await_task(client.remember(forced).task_id).is_completed
+            assert sync._existing_header(first.name, first.collection) == other_header
 
 
 class TestFourSurfaceParity:

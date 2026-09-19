@@ -14,7 +14,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from quarry.captures_collection import CapturesCollection
-from quarry.daemon.ingest_jobs import IngestJob, ScrubbedIngestJob
+from quarry.daemon.content_jobs import ScrubbedIngestJob
+from quarry.daemon.ingest_jobs import IngestJob
 from quarry.daemon.routes.base import RouteGroup
 from quarry.http_guards import RequestGuards
 from quarry.ingest_collection import IngestCollection
