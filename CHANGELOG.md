@@ -16,7 +16,7 @@ across `transform`, `index`, and `connector`).
 
 ### Added
 
-- tool: `quarry missions sync` (CLI), `missions_sync` (MCP, the twelfth tool)
+- tool: `quarry missions sync` (CLI), `missions_sync` (MCP, the thirteenth tool)
   and `/quarry missions sync` (plugin) — Loop 2 of the agent memory loop.
   Reads this repo's `.punt-labs/ethos/missions/` sidecar (contract, results,
   reflections; quarry never calls ethos) and files each frozen round as an

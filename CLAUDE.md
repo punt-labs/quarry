@@ -124,7 +124,7 @@ CI injects `--base-ref <merge-base> --require-base` (with `fetch-depth: 0`) on P
 
 ### Database facade convention
 
-Functions in `src/quarry/ingestion/pipeline.py` and `src/quarry/ingestion/url_ingester.py` accept `database: Database`, NOT `db: LanceDB`. Callers pass their existing `Database` instance — don't extract `.db` to pass the raw LanceDB connection. Re-wrapping via `Database(db)` re-instantiates the full facade (ChunkStore, ChunkSearch, ChunkCatalog, SchemaManager, TableOptimizer) per call. (Cursor Bugbot flagged this on PR #289; the fix landed in the same PR.)
+Functions in the `src/quarry/ingestion/` package (e.g. `pipeline.py`, `web_ingest.py`) accept `database: Database`, NOT `db: LanceDB`. Callers pass their existing `Database` instance — don't extract `.db` to pass the raw LanceDB connection. Re-wrapping via `Database(db)` re-instantiates the full facade (ChunkStore, ChunkSearch, ChunkCatalog, SchemaManager, TableOptimizer) per call. (Cursor Bugbot flagged this on PR #289; the fix landed in the same PR.)
 
 **When mocking `get_db` in tests, patch `quarry.db.facade.get_db`, not `quarry.db.storage.get_db`.** `Database.connect()` imports `get_db` at module scope into `quarry.db.facade`'s namespace. Patching the storage definition site leaves the facade's bound reference untouched and the mock becomes a silent no-op — tests still pass because they hit the real LanceDB.
 
