@@ -157,3 +157,41 @@ class TestGuard:
             _missions_dir(repo) / CLOSED_MISSION, guard=SealedTree(repo)
         )
         assert sealed.contract(repo).mission_id == CLOSED_MISSION
+
+    def test_sealed_guard_refuses_a_symlinked_mission_directory(
+        self, repo: Path, tmp_path: Path
+    ) -> None:
+        """A real contract below a linked directory is still another tree's."""
+        other = repo_with_missions(tmp_path / "other", (CLOSED_MISSION,))
+        link = _missions_dir(repo) / "m-2026-09-30-009"
+        link.symlink_to(other / ".punt-labs" / "ethos" / "missions" / CLOSED_MISSION)
+        sealed = MissionDirectory(link, guard=SealedTree(repo))
+        assert sealed.has_contract()  # present — the read refuses it loudly
+        with pytest.raises(SealedTreeError, match="symlink"):
+            sealed.contract(repo)
+        with pytest.raises(SealedTreeError, match="symlink"):
+            sealed.rounds()
+
+    def test_sealed_guard_refuses_a_directory_swapped_for_a_link_after_listing(
+        self, repo: Path, tmp_path: Path
+    ) -> None:
+        """A listing that saw a real directory grants nothing to the later read."""
+        other = repo_with_missions(tmp_path / "other", (CLOSED_MISSION,))
+        mission = _missions_dir(repo) / CLOSED_MISSION
+        seal = SealedTree(repo)
+        assert seal.check(mission) == mission
+        sealed = MissionDirectory(mission, guard=seal)
+        mission.rename(tmp_path / "moved")
+        mission.symlink_to(other / ".punt-labs" / "ethos" / "missions" / CLOSED_MISSION)
+        with pytest.raises(SealedTreeError, match="symlink"):
+            sealed.contract(repo)
+
+    def test_sealed_guard_reports_an_absent_round_file_as_no_rounds(
+        self, repo: Path
+    ) -> None:
+        (_missions_dir(repo) / CLOSED_MISSION / "results.yaml").unlink()
+        (_missions_dir(repo) / CLOSED_MISSION / "reflections.yaml").unlink()
+        sealed = MissionDirectory(
+            _missions_dir(repo) / CLOSED_MISSION, guard=SealedTree(repo)
+        )
+        assert sealed.rounds() == ()

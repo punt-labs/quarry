@@ -65,7 +65,7 @@ class TestReadAgentHandle:
         _write_config(tmp_path, "agent: [unclosed\n")
         with caplog.at_level("WARNING", logger="quarry.ethos_handle"):
             assert EthosConfig.agent_handle_at(str(tmp_path)) == ""
-        assert any("could not parse" in rec.message for rec in caplog.records)
+        assert any("could not read" in rec.getMessage() for rec in caplog.records)
 
 
 class TestPinFilePrecedence:
@@ -149,6 +149,79 @@ class TestPinWalkBounds:
         deep = unpinned_root / "src" / "quarry"
         deep.mkdir(parents=True)
         assert EthosConfig.agent_handle_at(str(deep)) == "claude"
+
+
+class TestPinSymlinks:
+    """The pin is cloned content: a link out of the checkout is refused, not read.
+
+    A checked-out ``.punt-labs/ethos.yaml`` that links to the operator's global
+    pin would attribute every capture of the session to whatever that file
+    names — chosen by whoever committed the link. The refusal fails closed to
+    the unattributed ``""``; it never falls through to a farther pin, since a
+    repo that plants one link is not trusted to have an honest one above it.
+    """
+
+    def test_symlinked_pin_file_is_unattributed_with_a_warning(
+        self, unpinned_root: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        outside = unpinned_root / "outside" / "ethos.yaml"
+        outside.parent.mkdir()
+        outside.write_text("agent: jfreeman\n")
+        repo = unpinned_root / "repo"
+        (repo / ".punt-labs").mkdir(parents=True)
+        (repo / ".git").mkdir()
+        (repo / ".punt-labs" / "ethos.yaml").symlink_to(outside)
+        with caplog.at_level("WARNING", logger="quarry.ethos_handle"):
+            assert EthosConfig.agent_handle_at(str(repo)) == ""
+        assert any("symlink" in rec.getMessage() for rec in caplog.records)
+
+    def test_symlinked_legacy_config_is_unattributed(self, unpinned_root: Path) -> None:
+        outside = unpinned_root / "outside" / "config.yaml"
+        outside.parent.mkdir()
+        outside.write_text("agent: jfreeman\n")
+        repo = unpinned_root / "repo"
+        (repo / ".punt-labs" / "ethos").mkdir(parents=True)
+        (repo / ".git").mkdir()
+        (repo / ".punt-labs" / "ethos" / "config.yaml").symlink_to(outside)
+        assert EthosConfig.agent_handle_at(str(repo)) == ""
+
+    def test_symlinked_punt_labs_directory_is_unattributed(
+        self, unpinned_root: Path
+    ) -> None:
+        """The leaf is real; the directory above it is the link."""
+        outside = unpinned_root / "outside" / ".punt-labs"
+        outside.mkdir(parents=True)
+        (outside / "ethos.yaml").write_text("agent: jfreeman\n")
+        repo = unpinned_root / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / ".punt-labs").symlink_to(outside)
+        assert EthosConfig.agent_handle_at(str(repo)) == ""
+
+    def test_a_symlinked_pin_does_not_fall_through_to_a_farther_pin(
+        self, unpinned_root: Path
+    ) -> None:
+        outside = unpinned_root / "outside" / "ethos.yaml"
+        outside.parent.mkdir()
+        outside.write_text("agent: jfreeman\n")
+        repo = unpinned_root / "repo"
+        _write_pin(repo, "agent: claude\n")
+        (repo / ".git").mkdir()
+        inner = repo / "inner"
+        (inner / ".punt-labs").mkdir(parents=True)
+        (inner / ".punt-labs" / "ethos.yaml").symlink_to(outside)
+        assert EthosConfig.agent_handle_at(str(inner)) == ""
+
+    def test_a_real_pin_under_a_symlinked_checkout_root_is_read(
+        self, unpinned_root: Path
+    ) -> None:
+        """The checkout root is the operator's choice and may be reached by a link."""
+        repo = unpinned_root / "repo"
+        _write_pin(repo, "agent: claude\n")
+        (repo / ".git").mkdir()
+        via_link = unpinned_root / "via-link"
+        via_link.symlink_to(repo)
+        assert EthosConfig.agent_handle_at(str(via_link)) == "claude"
 
 
 def _vendor_identity(root: Path, handle: str) -> None:

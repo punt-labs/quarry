@@ -6,14 +6,17 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Self, final
 
+from quarry.path_guard import FOLLOW_SYMLINKS, PathGuard, SealedTree
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-_ETHOS_DIR: Final = Path(".punt-labs") / "ethos"
+_PUNT_LABS: Final = Path(".punt-labs")
+_ETHOS_DIR: Final = _PUNT_LABS / "ethos"
 # Ethos reads the repo pin from ``.punt-labs/ethos.yaml`` and falls back to the
 # legacy ``.punt-labs/ethos/config.yaml``; quarry tries both at each ancestor in
 # that order so it agrees with ethos on which file wins.
-_PIN_FILES: Final = (Path(".punt-labs") / "ethos.yaml", _ETHOS_DIR / "config.yaml")
+_PIN_FILES: Final = (_PUNT_LABS / "ethos.yaml", _ETHOS_DIR / "config.yaml")
 # An ethos handle is a lowercase slug. Hook input (``agent_type``) is checked
 # against this before it is ever joined into a path, so ``../claude`` or a
 # blank can never become a path segment.
@@ -67,9 +70,12 @@ class EthosTree:
         scratch directory with no repository of its own): ``~/.punt-labs`` is
         the global tree, and reading its pin or its ``ethos/`` as the repo's
         would attribute a session to the operator's global identity and turn
-        a global refresh into a phantom working-tree diff.
+        a global refresh into a phantom working-tree diff. The ancestors are
+        resolved paths, so the home is resolved before the comparison: a
+        symlinked ``$HOME`` would otherwise never match and the skip would
+        silently stop applying.
         """
-        home = Path.home()
+        home = Path.home().resolve()
         for ancestor in self.ancestors():
             if ancestor != home:
                 yield ancestor
@@ -118,31 +124,70 @@ class EthosTree:
         Only directories that exist are returned, so a caller can iterate
         without re-checking presence.
         """
-        candidates = (self.vendored_identities(), self.global_identities())
-        return tuple(path for path in candidates if path is not None and path.is_dir())
+        return tuple(path for path, _guard in self.identity_trees())
+
+    def identity_trees(self) -> tuple[tuple[Path, PathGuard], ...]:
+        """Return each existing identity tree with the guard its files are read under.
+
+        The vendored tree is cloned content and is sealed at its checkout
+        root: an identity reached through a symlink is not the repo's. The
+        global tree is the operator's own and follows symlinks (dotfile
+        managers put them there on purpose).
+        """
+        trees: list[tuple[Path, PathGuard]] = []
+        vendored = self.vendored_identities()
+        if vendored is not None:
+            trees.append((vendored, SealedTree(self.checkout_root(vendored))))
+        global_tree = self.global_identities()
+        if global_tree.is_dir():
+            trees.append((global_tree, FOLLOW_SYMLINKS))
+        return tuple(trees)
 
     def identity_exists(self, handle: str) -> bool:
         """Return whether *handle* names a registered identity in either tree.
 
         The handle is validated as a slug before any path is built; an
         invalid handle is simply "not an identity", never a filesystem probe.
+        A vendored ``<handle>.yaml`` that is a symlink does not count: the
+        file it points at is wherever the committer chose, and attribution
+        must not follow it.
         """
         if not self.is_valid_handle(handle):
             return False
         return any(
-            (identities / f"{handle}.yaml").is_file()
-            for identities in self.identities_dirs()
+            guard.is_regular_file(identities / f"{handle}.yaml")
+            for identities, guard in self.identity_trees()
         )
+
+    @classmethod
+    def read_sidecar(cls, path: Path) -> str:
+        """Read a file under a ``.punt-labs`` sidecar, sealed at its checkout root.
+
+        The sidecar is cloned content: a repo pin, a vendored identity, or a
+        mission's YAML that is — or sits below — a symlink is refused inside
+        the open (:class:`~quarry.path_guard.SealedTree`), never followed to
+        whatever file the committer pointed it at, such as the operator's
+        global pin. Absence propagates as ``FileNotFoundError``; a refusal is
+        a :class:`~quarry.path_guard.SealedTreeError`, an ``OSError``.
+        """
+        return SealedTree(cls.checkout_root(path)).read_text(path)
 
     @staticmethod
     def checkout_root(sidecar: Path) -> Path:
-        """Return the checkout that vendors *sidecar*.
+        """Return the checkout that vendors *sidecar* — the parent of ``.punt-labs``.
 
-        ``<repo>/.punt-labs/ethos/<name>`` -> ``<repo>``. The checkout is the
-        trust boundary for everything under the sidecar: the operator chose
-        the checkout, but its contents are cloned and may hold a symlink.
+        ``<repo>/.punt-labs/ethos/<name>`` -> ``<repo>``, and likewise for a
+        pin (``<repo>/.punt-labs/ethos.yaml``) or a file deeper in the tree.
+        The checkout is the trust boundary for everything under the sidecar:
+        the operator chose the checkout, but its contents are cloned and may
+        hold a symlink. A path with no ``.punt-labs`` component is a caller
+        bug, not a sidecar, and raises ``ValueError``.
         """
-        return sidecar.parents[2]
+        for parent in sidecar.parents:
+            if parent.name == _PUNT_LABS.name:
+                return parent.parent
+        msg = f"{sidecar} is not under a {_PUNT_LABS} sidecar"
+        raise ValueError(msg)
 
     @staticmethod
     def is_valid_handle(handle: str) -> bool:

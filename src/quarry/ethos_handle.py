@@ -60,17 +60,18 @@ class EthosConfig:
     def _read_handle(config_path: Path) -> str | None:
         """Return the handle at *config_path*, or ``None`` when the file is absent.
 
-        The absent-file signal is ``None`` (walk keeps going); any parse
-        problem or missing/blank field short-circuits to ``""`` (walk stops).
+        The pin is read through :meth:`EthosTree.read_sidecar`, so a symlinked
+        pin (or ``.punt-labs``) is refused, never followed out of the checkout.
+        The absent-file signal is ``None`` (walk keeps going); a refused
+        symlink, any other read failure, a parse problem, or a missing/blank
+        field short-circuits to ``""`` (walk stops, unattributed).
         """
-        if not config_path.is_file():
-            return None
         try:
-            data = yaml.safe_load(config_path.read_text())
-        except (OSError, yaml.YAMLError):
-            logger.warning(
-                "ethos_handle: could not parse %s", config_path, exc_info=True
-            )
+            data = yaml.safe_load(EthosTree.read_sidecar(config_path))
+        except FileNotFoundError:
+            return None
+        except (OSError, yaml.YAMLError) as exc:
+            logger.warning("ethos_handle: could not read %s: %s", config_path, exc)
             return ""
         agent = data.get("agent", "") if isinstance(data, dict) else ""
         return agent if isinstance(agent, str) else ""

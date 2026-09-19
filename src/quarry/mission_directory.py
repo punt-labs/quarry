@@ -27,9 +27,11 @@ class MissionDirectory:
     pass it by. A contract that is present but unreadable is corruption, and
     every reader here raises so the scan records it.
 
-    Every file read passes the *guard* first: a store scanning cloned content
-    hands in a sealed tree so a symlinked ``contract.yaml`` is refused rather
-    than read from wherever it points.
+    Every file is read *through* the guard: a store scanning cloned content
+    hands in a sealed tree, whose read refuses a symlink at any component
+    inside the open itself — a ``contract.yaml`` that is a link, or a mission
+    directory that is one, is refused rather than read from wherever it
+    points, even if it became a link after the directory was listed.
     """
 
     __slots__ = ("_guard", "_path")
@@ -49,7 +51,7 @@ class MissionDirectory:
 
     def has_contract(self) -> bool:
         """Return whether ``contract.yaml`` is present — the mark of a mission."""
-        return (self._path / "contract.yaml").is_file()
+        return self._present("contract.yaml")
 
     def contract(self, default_repo: Path) -> MissionContract:
         """Parse ``contract.yaml``; *default_repo* stands in for a missing ``repo:``."""
@@ -81,7 +83,7 @@ class MissionDirectory:
 
     def _entries(self, name: str, key: str) -> list[Mapping[str, object]]:
         """Return the per-round list under *key*; an absent file is an empty list."""
-        if not (self._path / name).is_file():
+        if not self._present(name):
             return []
         data = self._read(name)
         entries = data.get(key) if isinstance(data, dict) else None
@@ -93,5 +95,18 @@ class MissionDirectory:
         # YAML is a wire boundary: each entry is checked by the record parser.
         return [e for e in entries if isinstance(e, dict)]
 
+    def _present(self, name: str) -> bool:
+        """Return whether *name* is here to read: an ``lstat`` of the leaf only.
+
+        Presence is not trust — the guard decides that inside the read. A
+        symlink counts as present so that a sealed read refuses it loudly
+        (one error line for the mission) rather than the scan passing the
+        mission by as "no contract"; the same holds for a real file below a
+        mission directory that is itself a link. A directory named like the
+        file is not a file and is absent.
+        """
+        target = self._path / name
+        return target.is_symlink() or target.is_file(follow_symlinks=False)
+
     def _read(self, name: str) -> object:
-        return yaml.safe_load(self._guard.check(self._path / name).read_text())
+        return yaml.safe_load(self._guard.read_text(self._path / name))

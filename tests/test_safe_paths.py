@@ -262,3 +262,75 @@ def test_remove_creates_no_artifact_and_leaves_file_on_unlink_error(
         target.remove()
 
     assert leaf.read_text() == "keep\n"  # untouched, no partial state
+
+
+# ── read_text: the one read primitive for repo-controlled files ──────
+
+
+def test_read_text_reads_a_real_file_byte_for_byte(tmp_path: Path) -> None:
+    target = _target(tmp_path)
+    target.create_exclusive("k: v\r\nline2\n", mode=0o644)
+    assert target.read_text() == "k: v\r\nline2\n"
+
+
+def test_read_text_refuses_a_symlinked_leaf(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.write_text("secret\n")
+    target = _target(tmp_path)
+    target.path.parent.mkdir(parents=True, exist_ok=True)
+    target.path.symlink_to(outside)
+    with pytest.raises(ValueError, match="symlink"):
+        target.read_text()
+
+
+def test_read_text_refuses_a_symlinked_ancestor(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "leaf").write_text("secret\n")
+    (tmp_path / ".punt-labs").mkdir()
+    (tmp_path / ".punt-labs" / "quarry").symlink_to(outside)
+    with pytest.raises(ValueError, match="symlink"):
+        _target(tmp_path).read_text()
+
+
+def test_read_text_absent_leaf_is_file_not_found(tmp_path: Path) -> None:
+    target = _target(tmp_path)
+    target.path.parent.mkdir(parents=True)
+    with pytest.raises(FileNotFoundError):
+        target.read_text()
+
+
+def test_read_text_absent_ancestor_is_file_not_found(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        _target(tmp_path).read_text()
+
+
+def test_read_text_refuses_a_directory_leaf(tmp_path: Path) -> None:
+    target = _target(tmp_path)
+    target.path.mkdir(parents=True)
+    with pytest.raises(IsADirectoryError):
+        target.read_text()
+
+
+def test_read_text_closes_the_fd_when_fdopen_raises(tmp_path: Path) -> None:
+    target = _target(tmp_path)
+    target.create_exclusive("x\n", mode=0o644)
+    opened: list[int] = []
+    real_open = os.open
+
+    def spy_open(
+        path: str, flags: int, mode: int = 0o777, *, dir_fd: int | None = None
+    ) -> int:
+        fd = real_open(path, flags, mode, dir_fd=dir_fd)
+        opened.append(fd)
+        return fd
+
+    with (
+        patch("quarry.safe_paths.os.open", side_effect=spy_open),
+        patch("quarry.safe_paths.os.fdopen", side_effect=OSError("boom")),
+        pytest.raises(OSError, match="boom"),
+    ):
+        target.read_text()
+    for fd in opened:
+        with pytest.raises(OSError):
+            os.fstat(fd)

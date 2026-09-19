@@ -76,6 +76,26 @@ class TestRepoAncestors:
         assert home not in chain
         assert chain == [scratch.resolve(), unpinned_root.resolve()]
 
+    def test_a_symlinked_home_is_still_skipped(self, unpinned_root: Path) -> None:
+        """``$HOME`` may be a symlink; the ancestors are resolved, so resolve it too.
+
+        Comparing an unresolved home against resolved ancestors never matches,
+        and the global ``~/.punt-labs`` would then be read as a repo's pin.
+        """
+        real_home = unpinned_root / "real-home"
+        scratch = real_home / "scratch"
+        scratch.mkdir(parents=True)
+        linked_home = unpinned_root / "home-link"
+        linked_home.symlink_to(real_home)
+        with patch("quarry.ethos_tree.Path.home", return_value=linked_home):
+            chain = list(EthosTree(scratch).repo_ancestors())
+            pins = list(EthosTree(scratch).pin_files())
+        assert real_home.resolve() not in chain
+        assert chain == [scratch.resolve(), unpinned_root.resolve()]
+        assert not any(
+            pin.is_relative_to(real_home.resolve() / ".punt-labs") for pin in pins
+        )
+
 
 class TestPinFiles:
     def test_new_file_precedes_legacy_at_each_ancestor(self, tmp_path: Path) -> None:
@@ -230,11 +250,72 @@ class TestIdentityExists:
         (identities / "ghost.yaml").mkdir()
         assert EthosTree(unpinned_root).identity_exists("ghost") is False
 
+    def test_symlinked_vendored_identity_is_not_an_identity(
+        self, unpinned_root: Path, tmp_path: Path
+    ) -> None:
+        """A committed link to a file outside the checkout registers nothing.
+
+        Otherwise SubagentStop would file ``memory-<handle>`` for a handle the
+        repo never vendored — attribution decided by wherever the link points.
+        """
+        outside = tmp_path / "outside-rmh.yaml"
+        outside.write_text("name: rmh\n")
+        identities = _vendor_identity(unpinned_root, "claude")
+        (identities / "rmh.yaml").symlink_to(outside)
+        assert (identities / "rmh.yaml").is_file()  # what a naive probe says
+        assert EthosTree(unpinned_root).identity_exists("rmh") is False
+        assert EthosTree(unpinned_root).identity_exists("claude") is True
+
+    def test_symlinked_vendored_identities_directory_is_not_a_tree(
+        self, unpinned_root: Path, tmp_path: Path
+    ) -> None:
+        other = tmp_path / "other"
+        _vendor_identity(other, "rmh")
+        ethos = unpinned_root / ".punt-labs" / "ethos"
+        ethos.mkdir(parents=True)
+        (ethos / "identities").symlink_to(other / ".punt-labs" / "ethos" / "identities")
+        assert EthosTree(unpinned_root).identity_exists("rmh") is False
+
+    def test_symlinked_global_identity_is_honoured(
+        self, unpinned_root: Path, tmp_path: Path
+    ) -> None:
+        """The global tree is the operator's: a dotfile-manager link counts."""
+        outside = tmp_path / "dotfiles-kpz.yaml"
+        outside.write_text("name: kpz\n")
+        home = EthosTree.global_identities()
+        home.mkdir(parents=True, exist_ok=True)
+        link = home / "kpz.yaml"
+        link.symlink_to(outside)
+        try:
+            assert EthosTree(unpinned_root).identity_exists("kpz") is True
+        finally:
+            link.unlink()
+
 
 class TestCheckoutRoot:
     def test_strips_the_sidecar_layout(self, tmp_path: Path) -> None:
         sidecar = tmp_path / "repo" / ".punt-labs" / "ethos" / "missions"
         assert EthosTree.checkout_root(sidecar) == tmp_path / "repo"
+
+    def test_pin_files_root_at_their_ancestor(self, tmp_path: Path) -> None:
+        """Both pin shapes seal at the directory that holds ``.punt-labs``."""
+        repo = tmp_path / "repo"
+        assert EthosTree.checkout_root(repo / ".punt-labs" / "ethos.yaml") == repo
+        assert (
+            EthosTree.checkout_root(repo / ".punt-labs" / "ethos" / "config.yaml")
+            == repo
+        )
+
+    def test_a_file_deep_in_the_sidecar_roots_at_the_checkout(
+        self, tmp_path: Path
+    ) -> None:
+        repo = tmp_path / "repo"
+        deep = repo / ".punt-labs" / "ethos" / "identities" / "rmh.yaml"
+        assert EthosTree.checkout_root(deep) == repo
+
+    def test_a_path_outside_any_sidecar_is_a_bug(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match=r"\.punt-labs"):
+            EthosTree.checkout_root(tmp_path / "repo" / "src" / "x.py")
 
     def test_agrees_with_the_locator(self, unpinned_root: Path) -> None:
         identities = _vendor_identity(unpinned_root, "rmh")
