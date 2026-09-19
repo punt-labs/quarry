@@ -155,6 +155,7 @@ Search by meaning:
 |---------|-------------|
 | `/ingest <source>` | Ingest a URL, or register+sync a local file or directory |
 | `/remember <name>` | Ingest inline text under a document name |
+| `/learn <name>` | Save a distilled, retrieval-preferred lesson (project-scoped) |
 | `/find <query>` | Semantic search; questions get synthesized answers, keywords get raw results |
 | `/explain <topic>` | Search and synthesize an explanation |
 | `/source <claim>` | Find which document a claim comes from |
@@ -169,6 +170,7 @@ Search by meaning:
 | `list` | Documents, collections, databases, registrations |
 | `status` | Database statistics |
 | `ingest` / `remember` | Index a URL, or inline text |
+| `learn` | Save a distilled lesson (`memory_type=lesson`, project-scoped, retrieval boost) |
 | `register_directory` / `deregister_directory` | Manage a synced directory |
 | `sync_all_registrations` | Re-index all registered directories |
 | `delete` | Remove a document or collection |
@@ -182,6 +184,7 @@ Search by meaning:
 | `quarry find "<query>"` | Hybrid search (vector + full-text) |
 | `quarry ingest <url>` | Index a webpage (local files/directories: `quarry register`) |
 | `quarry remember --name <name>` | Index inline text from stdin |
+| `quarry learn --name <name>` | Save a distilled lesson from stdin (project-scoped, retrieval-preferred) |
 | `quarry list documents` | List indexed documents |
 | `quarry register <dir>` | Watch a directory for changes |
 | `quarry sync` | Re-index registered directories |

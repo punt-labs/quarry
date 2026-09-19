@@ -11,11 +11,11 @@ If cloned outside the workspace, these rules and configuration will not be prese
 
 **OO Python standards adopted 2026-05-13.** The codebase does not yet fully comply. Every commit must improve OO scores (`make check-oo`), never regress. Do not match existing code patterns that violate the rules — write new code to the standard and improve touched files incrementally.
 
-Local semantic search for AI agents and humans. Indexes 20+ document formats, embeds with a local ONNX model (snowflake-arctic-embed-m-v1.5, 768-dim), stores vectors in LanceDB, serves via MCP (stdio or WebSocket daemon on port 8420).
+Local semantic search for AI agents and humans. Indexes 20+ document formats, embeds with a local ONNX model (snowflake-arctic-embed-m-v1.5, 768-dim), stores vectors in LanceDB, and serves via CLI, an MCP stdio server, and an HTTP API — all backed by the quarryd daemon (port 8420).
 
 - **Package**: `punt-quarry`
 - **CLI**: `quarry`
-- **MCP server**: `quarry mcp` (stdio) or `mcp-proxy` → daemon (`/mcp` WebSocket); there is no `quarry-server` entry point
+- **MCP server**: `quarry mcp` (stdio subcommand → `QuarryClient` → the quarryd REST daemon); there is no in-daemon `/mcp` WebSocket route and no `quarry-server` entry point
 - **Python**: 3.13+, managed with `uv`
 
 ## Mandatory Reading
@@ -53,7 +53,7 @@ Quarry has two operational modes. **Local mode**: direct LanceDB access via the 
 - **Storage**: LanceDB (Rust core via PyO3). Single `chunks` table per database with vector, text, and metadata columns.
 - **Search**: Hybrid — vector similarity + BM25 full-text (Tantivy) fused via RRF. Temporal decay for agent-scoped memories. See DES-017.
 - **Agent memory**: `agent_handle`, `memory_type`, `summary` columns on all chunks. `memory_type` is a closed, server-validated vocabulary (`fact`/`observation`/`opinion`/`procedure`; `lesson` reserved for `learn`; unknown → 400). Identity tagging from ethos config. Schema: DES-018; decay/boost: DES-017; the write loop (`remember` → `memory-<handle>`, `quarry missions sync` for evaluator feedback, SubagentStop report distillation): DES-055.
-- **Surfaces**: CLI (`quarry`), MCP server (stdio + WebSocket), HTTP API, Claude Code plugin.
+- **Surfaces**: CLI (`quarry`), MCP server (stdio), HTTP API, Claude Code plugin.
 - **User data**: `~/.punt-labs/quarry/` per filesystem standard. Per-repo config at `.punt-labs/quarry/config.md`.
 
 ### Key modules
@@ -66,7 +66,7 @@ Quarry has two operational modes. **Local mode**: direct LanceDB access via the 
 | `embeddings.py` | ONNX provider: model loading, quantization, batch embedding |
 | `scrub.py` / `capture.py` | Write-time PII/secret redaction (`Scrubber`) + the single `CaptureWriter` choke point for captures (DES-036) |
 | `api/` + `daemon/routes/` | FastAPI wire API + route handlers: must mirror every local operation faithfully |
-| `mcp_server.py` / `mcp_missions.py` / `mcp_guard.py` | FastMCP server (stdio + WebSocket on port 8420) + the `missions_sync` tool + the shared tool-boundary guard |
+| `mcp_server.py` / `mcp_missions.py` / `mcp_guard.py` | FastMCP stdio server (reaches the quarryd REST daemon on port 8420) + the `missions_sync` tool + the shared tool-boundary guard |
 | `sync.py` | Directory registration, change tracking, re-indexing |
 | `doctor.py` | Health checks: model, DB, providers, registration state |
 | `hooks.py` / `hooks_agent.py` | Claude Code event handlers: SessionStart, PostToolUse (WebFetch/WebSearch/Read + quarry tools), PreCompact, SessionEnd, SubagentStop |
@@ -219,7 +219,7 @@ Quarry spans four technical domains that require distinct expertise: (1) **ML/nu
 | Search algorithm (hybrid, RRF, temporal decay, BM25) | `kpz` | `rmh` |
 | LanceDB schema / chunks table / migrations | `rmh` | `gvr` |
 | Python implementation (CLI commands, library API) | `rmh` | `gvr` |
-| MCP server (stdio + WebSocket on port 8420) | `rmh` | `mdm` (Pike) |
+| MCP server (stdio) | `rmh` | `mdm` (Pike) |
 | HTTP API / `/search` endpoint / param contracts | `rmh` | `djb` (Bernstein) |
 | TLS / cert generation / pinned-CA contexts | `djb` | `rmh` |
 | Install scripts / launchd / systemd service | `adb` (Lovelace) | `djb` |
