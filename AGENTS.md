@@ -20,7 +20,7 @@ Quarry integrates with Claude Code as a **plugin** that provides three layers:
 
 These are the tools you call directly. Read-only tools are synchronous; write tools are fire-and-forget (return immediately, process in background).
 
-Thirteen tools (`src/quarry/mcp_server.py` registers twelve; the thirteenth, `missions_sync`, lives in the sibling `mcp_missions.py` and is registered from the same call):
+The registered tools (`src/quarry/mcp_server.py` registers the `McpTools` set; `missions_sync` lives in the sibling `mcp_missions.py` and is registered from the same call):
 
 | Tool | Purpose | Execution |
 |------|---------|-----------|

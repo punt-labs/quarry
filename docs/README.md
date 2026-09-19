@@ -69,10 +69,10 @@ DES-### in `DESIGN.md`. Read the ADR first, the design for the reasoning.
 
 ## Operations
 
-- **`smoke-test.md`** — post-release manual smoke test, 49 checks: 16 MCP (every tool, incl.
-  `learn` and a `missions_sync` dry run), 21 CLI (incl. capture PII redaction, `learn`,
-  `missions sync --dry-run`, and the unknown-`memory_type` 400), 7 enable/disable, 4 install,
-  and 1 live `SubagentStop` distillation (DES-055). Run after every release.
+- **`smoke-test.md`** — post-release manual smoke test in five phases: MCP (every tool, incl.
+  `learn` and a `missions_sync` dry run), CLI (incl. capture PII redaction, `learn`,
+  `missions sync --dry-run`, and the unknown-`memory_type` 400), enable/disable, install,
+  and a live `SubagentStop` distillation (DES-055). Run after every release.
 
 ## Archive (`archive/`)
 

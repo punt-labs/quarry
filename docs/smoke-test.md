@@ -624,12 +624,12 @@ the `session-<id8>` capture if you want the collection clean).
 
 ## Quick Pass Criteria
 
-- Phase 1: all 16 MCP tool calls succeed, BM25 keyword match works
+- Phase 1: every MCP tool call succeeds, BM25 keyword match works
   (1.4), cleanup leaves no smoke-test data
-- Phase 2: all 21 CLI checks succeed, BM25 keyword match works (2.5),
+- Phase 2: every CLI check succeeds, BM25 keyword match works (2.5),
   the unknown memory type is rejected with exit 1 (2.21), cleanup leaves
   no smoke-test data, `list databases` completes in <3s
-- Phase 3: all 7 enable/disable checks succeed, registrations created
+- Phase 3: every enable/disable check succeeds, registrations created
   and removed correctly, config.md managed, doctor reports enable status
 - Phase 4: service unit points at tool venv, correct bind address,
   CUDA on GPU hosts
@@ -734,9 +734,9 @@ Phase 5: Agent-Memory Write Loop (DES-055)
   5.1  SubagentStop distillation PASS / FAIL / SKIP  <handle, id8>
 
 Result: PASS / FAIL
-  Passed: N/49
-  Failed: N/49
-  Skipped: N/49
+  Passed: <count>
+  Failed: <count>
+  Skipped: <count>
   Notes: <any observations, warnings, or follow-up beads created>
 ```
 
