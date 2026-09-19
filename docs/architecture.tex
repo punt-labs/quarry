@@ -940,7 +940,7 @@ raises \texttt{QuarryVersionError} in the client.
 \texttt{/v1/learn}            & POST   & Save a distilled lesson (returns 202) & Yes & async \\
 \texttt{/v1/ingest}           & POST   & Ingest a URL (returns 202)       & Yes & async \\
 \texttt{/v1/capture}          & POST   & Capture web/transcript (returns 202) & Yes & async \\
-\texttt{/v1/captures/lookup}  & GET    & Prior capture of a URL (web-fetch loop closer) & Yes & sync  \\
+\texttt{/v1/captures/lookup}  & POST   & Prior capture of a URL (web-fetch loop closer) & Yes & sync  \\
 \texttt{/v1/captures/push}    & POST   & Push private capture shadow repo & Yes & async \\
 \texttt{/v1/sync}             & POST   & Sync registrations (returns 202) & Yes & async \\
 \texttt{/v1/optimize}         & POST   & Compact + rebuild index (returns 202) & Yes & async \\
@@ -1820,8 +1820,9 @@ the leader's handle (DES-055).
 \textbf{Command} & \textbf{Purpose} \\
 \midrule
 \endhead
-\texttt{ingest <source>}      & Ingest file or URL.  Flags: \texttt{-{}-agent-handle},
-  \texttt{-{}-memory-type}, \texttt{-{}-summary} \\
+\texttt{ingest <url>}         & Ingest a URL (URL-only; local files and
+  directories go through \texttt{register} + \texttt{sync}).  Flags:
+  \texttt{-{}-agent-handle}, \texttt{-{}-memory-type}, \texttt{-{}-summary} \\
 \texttt{remember}             & Ingest stdin content (\texttt{-{}-name};
   \texttt{-{}-agent-handle} routes to \texttt{memory-<handle>};
   \texttt{-{}-memory-type} from the closed vocabulary) \\

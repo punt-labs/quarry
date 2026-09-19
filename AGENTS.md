@@ -90,7 +90,7 @@ Quarry runs as a single background daemon (`quarryd`, supervised by launchd/syst
 
 ### Named Databases
 
-Databases are fully isolated: separate LanceDB directories, sync registries, and vector indexes. Switch with the `use` tool, which sets the persistent default database for subsequent calls. Common pattern: `default` for general use, project-specific databases for scoped work.
+Databases are fully isolated: separate LanceDB directories, sync registries, and vector indexes. Switch with the `use` tool, which overrides the database for the rest of your session's `quarry mcp` process only — each session gets isolated database state, so `use("work")` in one session doesn't affect others, and nothing is written to disk. The persistent default is set only by the CLI `quarry use <name>`. Common pattern: `default` for general use, project-specific databases for scoped work.
 
 ### Fire-and-Forget
 

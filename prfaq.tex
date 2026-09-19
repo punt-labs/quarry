@@ -366,7 +366,7 @@ run \texttt{quarry install}, and start searching.
 \begin{faqpair}{How does the ambient capture work?}\label{faq:how-it-works}
   Quarry uses Claude Code's hook system~\cite{claude-code-hooks}, the same
   event-driven architecture used by plugins like Entire.io for code provenance.
-  Seven hook registrations ship today (\texttt{plugin/hooks/hooks.json}):
+  Seven hooks ship today (\texttt{plugin/hooks/hooks.json}):
 
   \begin{itemize}[leftmargin=1.5em, nosep]
     \item \textbf{Session start} auto-registers the project directory so
@@ -661,7 +661,7 @@ run \texttt{quarry install}, and start searching.
   collections, MCP server with 13 tools, CLI with \texttt{--version} and
   plain-text help, a versioned \texttt{/v1} REST API with Bearer token
   authentication (REST only; the in-daemon MCP WebSocket route was removed
-  under DES-031 v2.2), Claude Code plugin with seven hook registrations
+  under DES-031 v2.2), Claude Code plugin with seven hooks
   (session start auto-registration plus knowledge-base briefing; post web
   fetch, post web search, and opt-in post read capture; pre-compact and
   session-end transcript preservation; subagent-stop capture and
@@ -899,7 +899,7 @@ Defines scope. Features are categorized to prevent scope creep.
   \featureitem{Local OCR}{Extract text from scanned documents and images on-device via RapidOCR with no cloud account required.}\label{feat:local-ocr}
   \featureitem{Named databases}{Separate knowledge bases by project or domain.}\label{feat:named-databases}
   \featureitem{One-command install}{\texttt{quarry install} auto-configures MCP for Claude Code and Claude Desktop, downloads mcp-proxy, and installs the daemon.}\label{feat:one-command-install}
-  \featureitem{Claude Code plugin}{Plugin with seven hook registrations: auto-register the project directory on session start; capture what Claude fetches (post web fetch), searches (post web search), and, opt-in, reads outside the tree (post read); preserve the transcript before context compaction (pre-compact) and on every close (session end); and archive each subagent's transcript, distilling a registered identity's final report into its own memory (subagent stop). All hooks fail-open, per-project configurable, and thin daemon clients.}\label{feat:claude-plugin}
+  \featureitem{Claude Code plugin}{Plugin with seven hooks: auto-register the project directory on session start; capture what Claude fetches (post web fetch), searches (post web search), and, opt-in, reads outside the tree (post read); preserve the transcript before context compaction (pre-compact) and on every close (session end); and archive each subagent's transcript, distilling a registered identity's final report into its own memory (subagent stop). All hooks fail-open, per-project configurable, and thin daemon clients.}\label{feat:claude-plugin}
   \featureitem{Daemon architecture}{Single background process (\texttt{quarryd}, supervised by launchd/systemd) holds the engine (embedding model, LanceDB, pipeline) and serves a versioned \texttt{/v1} REST API over TLS. The CLI, the \texttt{quarry mcp} stdio server, the hooks, and the library are pure clients of it; no client process loads the model (DES-031 v2.2).}\label{feat:daemon}
   \featureitem{Always-on watch/index loop}{\texttt{quarryd} watches every registered directory (FSEvents/inotify, debounced, with a periodic safety sweep) and re-indexes on change, so a registered tree stays current with no human action; \texttt{quarry sync} is a one-shot pass on top (DES-045).}\label{feat:watch-loop}
   \featureitem{Researcher agent}{Combines local Quarry search with web research. Searches locally first, fills gaps from the web, and auto-ingests findings so research compounds across sessions.}\label{feat:researcher}
