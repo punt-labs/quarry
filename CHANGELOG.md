@@ -27,10 +27,13 @@ across `transform`, `index`, and `connector`).
   nothing. Errors never pass silently: a parse failure, a daemon failure on
   any one round (a 503, an unreachable daemon), and a `--mission` id that
   names no mission are each one error line and exit 1, and the run continues
-  past every one so the rounds already filed are never lost. New modules
-  `mission_records`, `mission_round_parts`, `mission_store`,
-  `mission_sync_types`, `mission_memory`, `cli_missions`, `mcp_missions`.
-  (quarry-fbj9)
+  past every one so the rounds already filed are never lost. A mission
+  directory holding no `contract.yaml` (a delegation log left by another
+  checkout, or a partially sealed tree) is not a mission and is skipped
+  without an error line — only a `contract.yaml` that is present but
+  unreadable is one. New modules `mission_records`, `mission_round_parts`,
+  `mission_directory`, `mission_store`, `mission_sync_types`,
+  `mission_memory`, `cli_missions`, `mcp_missions`. (quarry-fbj9)
 - tool: `SubagentStop` now files the subagent's final report as an
   `observation` in `memory-<handle>` (`subagent-<id8>-report`) alongside the
   raw transcript capture, which now carries a summary — Loop 3. Attribution is

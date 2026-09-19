@@ -220,7 +220,9 @@ dry_run: true
 **Verify:** Returns one line, `▶  Mission memories: would file N, skipped N,
 errors 0`, and posts nothing. A repo with no `.punt-labs/ethos/missions/`
 tree reports all zeros — that is a PASS; a non-zero `errors` count is a
-FAIL (each error is one line naming the file or mission id).
+FAIL (each error is one line naming the file or mission id). A mission
+directory holding no `contract.yaml` (a delegation log left by another
+checkout) is skipped silently and counts toward nothing.
 
 ## Phase 2: CLI Commands
 
@@ -443,7 +445,9 @@ quarry missions sync --dry-run
 **Verify:** Exit 0 and one line, `▶  Mission memories: would file N,
 skipped N, errors 0`. Nothing is posted. All zeros is a PASS when the repo
 has no `.punt-labs/ethos/missions/` tree; any non-zero `errors` (exit 1)
-is a FAIL. Run it from a repo with closed missions to see `would file`
+is a FAIL. A mission directory holding no `contract.yaml` (a delegation
+log left by another checkout) is skipped silently — not an error, not
+counted. Run it from a repo with closed missions to see `would file`
 count the frozen rounds not yet held by the daemon.
 
 ### 2.21 Unknown memory type rejected (DES-055)
