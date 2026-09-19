@@ -377,6 +377,13 @@
     "max_lcom": 0.491,
     "public_names": 1.0
   },
+  "src/quarry/daemon/content_jobs.py": {
+    "efferent_coupling": 3.0,
+    "public_names": 3.0,
+    "circular_imports": 0.0,
+    "max_lcom": 1.0,
+    "avg_lcom": 0.85
+  },
   "src/quarry/daemon/context.py": {
     "avg_lcom": 0.735,
     "circular_imports": 0.0,
