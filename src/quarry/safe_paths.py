@@ -37,16 +37,22 @@ class SafeRepoPath:
     overwrite, stat, or unlink to a target outside the repo by planting a
     symlink at any component: a symlinked ancestor fails the ``O_DIRECTORY |
     O_NOFOLLOW`` open, and a symlinked leaf fails the ``O_NOFOLLOW`` open or
-    create. Because the fds pin the real inode chain, the walk is free of the
-    check-then-act TOCTOU a realpath-containment or ``is_symlink`` pre-check
-    would carry: a component swapped for a link after such a check is still
-    refused, because the refusal happens inside the open itself.
+    create, or is refused before an atomic replace. Because the fds pin the
+    real inode chain, the walk is free of the check-then-act TOCTOU a
+    realpath-containment or ``is_symlink`` pre-check would carry: a component
+    swapped for a link after such a check is still refused, because the
+    refusal happens inside the open itself (and ``rename(2)`` never follows
+    its destination, so a replace cannot be redirected either).
     """
 
     __slots__ = ("_relative", "_root")
 
     _root: Path
     _relative: tuple[str, ...]
+
+    # A brand-new leaf's mode when the caller forces none: predictable
+    # regardless of umask, the same policy as the operator-tree writer.
+    _NEW_FILE_MODE: Final = 0o644
 
     def __new__(cls, root: Path, relative: Sequence[str]) -> Self:
         self = super().__new__(cls)
@@ -137,18 +143,31 @@ class SafeRepoPath:
                 raise
             return True
 
-    def write_atomic(self, text: str, *, mode: int) -> None:
+    # ``mode=None`` is the documented "keep the leaf's current mode" signal
+    # (a new leaf gets ``_NEW_FILE_MODE``), not a missing value.
+    def write_atomic(self, text: str, *, mode: int | None = None) -> None:
         """Overwrite the leaf atomically with *text*, following no symlink.
 
         Create a temp file with ``O_EXCL | O_NOFOLLOW`` in the ancestor-verified
         parent, ``fsync`` it, then ``os.replace`` it over the leaf — every step
-        relative to the parent fd, so no ancestor or leaf symlink is traversed.
-        The rename is atomic, so an interrupted write leaves the previous guide
+        relative to the parent fd, so no ancestor symlink is traversed. The
+        rename is atomic, so an interrupted write leaves the previous content
         intact rather than truncated; the temp is removed on any failure.
+
+        The leaf is ``lstat``-ed first (relative to the same parent fd, never
+        followed): an existing entry that is not a regular file — a symlink, a
+        directory, a fifo — is refused with ``ValueError`` before any temp is
+        made, the rule :meth:`create_exclusive` applies, so a committed link is
+        never replaced by our file. That lstat is not the escape boundary:
+        ``rename(2)`` never follows its destination, so a link swapped in after
+        the lstat is replaced as a directory entry and the file it pointed at
+        is untouched. *mode* forces the permission bits; ``None`` keeps an
+        existing leaf's mode, or :data:`_NEW_FILE_MODE` for a new one.
         """
         leaf = self._relative[-1]
         tmp = f".{leaf}.{secrets.token_hex(8)}.tmp"
         with self._parent_fd(create=True) as parent_fd:
+            mode = self._replacement_mode(parent_fd, mode)
             fd = os.open(
                 tmp,
                 os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW,
@@ -162,6 +181,23 @@ class SafeRepoPath:
                 with contextlib.suppress(OSError):
                     os.unlink(tmp, dir_fd=parent_fd)
                 raise
+
+    def _replacement_mode(self, parent_fd: int, forced: int | None) -> int:
+        """Return the mode for the replacement leaf; refuse a non-regular one.
+
+        An absent leaf is a create. An existing regular file keeps its own
+        mode unless *forced* (``None`` = keep). Anything else — symlink,
+        directory, fifo, socket, device — is refused: a write must never land
+        on, or replace, an entry that is not the regular file it expects.
+        """
+        try:
+            current = os.lstat(self._relative[-1], dir_fd=parent_fd)
+        except FileNotFoundError:
+            return self._NEW_FILE_MODE if forced is None else forced
+        if not stat.S_ISREG(current.st_mode):
+            msg = f"path is not a regular file: {self.path}"
+            raise ValueError(msg)
+        return stat.S_IMODE(current.st_mode) if forced is None else forced
 
     def remove(self) -> bool:
         """Unlink the leaf when it is a regular file; return whether one was removed.

@@ -70,8 +70,15 @@ across `transform`, `index`, and `connector`).
   ext directory, or `identities/` reached through a symlink is refused and
   reported as that identity's failure, never written through, so a hostile
   checkout cannot redirect the guide write onto a file outside the repo.
-  The global refresh still follows the operator's own (dotfile-manager)
-  symlinks. The MCP `remember` docstring, the recall skill, `/remember`, and the
+  Both the read and the write of a vendored ext file go through the same
+  `openat`/`O_NOFOLLOW` primitive (`SafeRepoPath.write_atomic`, surfaced as
+  `SealedTree.write_text`) rather than a check made before an
+  `AtomicFile` replace, so a link swapped in between the read and the write
+  is refused too — there is no check-then-write window — and the leaf's
+  mode is preserved. `write_atomic` now refuses to replace any non-regular
+  leaf (symlink, directory, fifo), the rule `create_exclusive` already
+  applied. The global refresh still follows the operator's own
+  (dotfile-manager) symlinks. The MCP `remember` docstring, the recall skill, `/remember`, and the
   deposited repo guide carry the same five moments. The repo-pin walk that
   attributes a parent session's captures (PreCompact, SessionEnd, a
   `SubagentStop` with no `agent_type`) is bounded at the checkout root

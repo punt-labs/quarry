@@ -1,11 +1,12 @@
-"""Read repo-controlled sidecar files without following a symlink out of the repo.
+"""Read and rewrite repo-controlled sidecar files without following a symlink out.
 
 A cloned repository's sidecar files (``.punt-labs/ethos/…``) are attacker
 content: a symlink committed there can point a read at any file the operator
 can reach — the operator's global identity pin, another checkout's mission
-YAML. The checkout root itself is trusted (the operator chose it), so the rule
-is lexical containment under the root plus no symlink at any component
-*below* it. The refusal lives in the read itself (an ``openat`` walk with
+YAML — or point a write (the ext-guide refresh) at a file outside the repo.
+The checkout root itself is trusted (the operator chose it), so the rule is
+lexical containment under the root plus no symlink at any component *below*
+it. The refusal lives in the read or write itself (an ``openat`` walk with
 ``O_NOFOLLOW`` on every component, via :class:`~quarry.safe_paths.SafeRepoPath`),
 not in a check made before it, so a component swapped for a link between a
 check and the open is refused all the same. Operator-owned trees (the global
@@ -17,6 +18,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final, Protocol, Self, final
 
+from quarry.atomic_file import AtomicFile
 from quarry.safe_paths import SafeRepoPath
 
 if TYPE_CHECKING:
@@ -36,19 +38,26 @@ class SealedTreeError(OSError):
 
 
 class PathGuard(Protocol):
-    """Read a repo-controlled file, deciding whether a symlink may be followed."""
+    """Read or rewrite a repo-controlled file, deciding whether to follow a symlink."""
 
     def check(self, path: Path) -> Path:
         """Return *path* when it may be used; raise :class:`SealedTreeError` if not.
 
-        A pre-filter for directory listings and write targets, not the
-        security boundary: the boundary is :meth:`read_text`, which decides
+        A pre-filter for directory listings, not the security boundary: the
+        boundary is :meth:`read_text` / :meth:`write_text`, which decide
         inside the open.
         """
         ...
 
     def read_text(self, path: Path) -> str:
         """Return the file's text; raise :class:`SealedTreeError` on a refused link."""
+        ...
+
+    def write_text(self, path: Path, text: str) -> None:
+        """Replace the file's text atomically, keeping its mode.
+
+        Raise :class:`SealedTreeError` on a refused link.
+        """
         ...
 
     def is_regular_file(self, path: Path) -> bool:
@@ -69,6 +78,10 @@ class FollowSymlinks:
     def read_text(self, path: Path) -> str:
         """Read *path*, following any symlink on the way."""
         return path.read_text(encoding="utf-8", newline="")
+
+    def write_text(self, path: Path, text: str) -> None:
+        """Rewrite *path* atomically through any symlink, keeping link and mode."""
+        AtomicFile(path).replace(text)
 
     def is_regular_file(self, path: Path) -> bool:
         """Return whether *path* (through any symlink) is a regular file."""
@@ -101,8 +114,8 @@ class SealedTree:
         component below the root is then ``lstat``-ed in turn. A component
         that does not exist yet is not a symlink and passes — the caller
         decides what an absent file means. This is a pre-filter (a directory
-        listing skips a linked entry with a warning; a write target is
-        vetted); every read re-walks inside :meth:`read_text`.
+        listing skips a linked entry with a warning); every read and write
+        re-walks inside :meth:`read_text` / :meth:`write_text`.
         """
         current = self._root
         for part in self._contained(path):
@@ -122,6 +135,21 @@ class SealedTree:
         """
         try:
             return self._sealed(path).read_text()
+        except ValueError as exc:
+            raise SealedTreeError(f"{exc}; refused") from exc
+
+    def write_text(self, path: Path, text: str) -> None:
+        """Rewrite *path* atomically, ``O_NOFOLLOW`` on every component below the root.
+
+        A symlinked ancestor is refused inside the ``openat`` walk; a symlinked
+        (or otherwise non-regular) leaf is refused before a temp file is made;
+        and a link swapped in after that is only ever replaced as a directory
+        entry, never written through (``rename(2)`` does not follow its
+        destination). The leaf keeps its mode. Every refusal is a
+        :class:`SealedTreeError`; other I/O failures propagate as they are.
+        """
+        try:
+            self._sealed(path).write_atomic(text)
         except ValueError as exc:
             raise SealedTreeError(f"{exc}; refused") from exc
 

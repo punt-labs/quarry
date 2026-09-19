@@ -100,7 +100,7 @@ class EthosMemoryBootstrap:
             for identity in sorted(self._identities.glob("*.yaml"))
             if self._ensure_ext(identity.stem)
         ]
-        global_scan = EthosExtDiagnostics.refresh(self._identities)
+        global_scan = EthosExtDiagnostics().refresh(self._identities)
         return EthosMemoryResult(
             created=created,
             updated=list(global_scan.updated),

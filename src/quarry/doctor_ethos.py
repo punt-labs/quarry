@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import final
+from typing import Self, final
 
 import yaml
 
-from quarry.atomic_file import AtomicFile
 from quarry.ethos_ext_block import SessionContextBlock
 from quarry.ethos_ext_scan import ExtFailure, ExtScanOutcome, ExtWriteResult
 from quarry.ethos_tree import EthosTree
@@ -24,16 +23,31 @@ class EthosExtDiagnostics:
     to the current version in place. Identity directories without a
     ``quarry.yaml`` (quarry not configured for that identity) are skipped and
     never created here.
+
+    Every read and every write of an ext file goes through the guard the
+    instance was built with. The default follows symlinks — the operator's
+    global tree, where dotfile managers put them on purpose.
+    :meth:`refresh_vendored` builds a sealed instance for a checkout's
+    vendored tree, so a committed link can neither feed the parser nor
+    receive the guide.
     """
 
-    __slots__ = ()
+    __slots__ = ("_guard",)
 
-    @staticmethod
-    def configure(identities_dir: Path | None = None) -> CheckResult:
+    _guard: PathGuard
+
+    def __new__(cls, guard: PathGuard = FOLLOW_SYMLINKS) -> Self:
+        self = super().__new__(cls)
+        self._guard = guard
+        return self
+
+    @classmethod
+    def configure(cls, identities_dir: Path | None = None) -> CheckResult:
         """Best-effort install step: refresh the guide across the global tree.
 
         ``quarry install`` has no repo context, so this touches the global
         identities only; ``quarry enable`` handles a repo's vendored tree.
+        ``None`` means the operator's global tree.
         """
         if identities_dir is None:
             identities_dir = EthosTree.global_identities()
@@ -45,7 +59,7 @@ class EthosExtDiagnostics:
                 message="ethos not installed, skipping",
                 required=False,
             )
-        outcome = EthosExtDiagnostics.refresh(identities_dir)
+        outcome = cls().refresh(identities_dir)
         if outcome.is_empty:
             return CheckResult(
                 name=name,
@@ -60,29 +74,26 @@ class EthosExtDiagnostics:
             required=False,
         )
 
-    @staticmethod
-    def refresh_vendored(identities_dir: Path) -> ExtScanOutcome:
+    @classmethod
+    def refresh_vendored(cls, identities_dir: Path) -> ExtScanOutcome:
         """Refresh a checkout's vendored ``identities/``, sealed at the checkout root.
 
         The vendored tree is cloned content: a committed symlink under it could
         redirect the guide write onto a file outside the repo (the operator's
         global ext, with an attacker-chosen handle in the guide). Sealing at
-        the checkout root refuses any symlink component below it; the root
-        itself is the operator's choice and may be one.
+        the checkout root refuses any symlink component below it — inside the
+        read and inside the write, not by a check made before either; the
+        root itself is the operator's choice and may be one.
         """
-        seal = SealedTree(EthosTree.checkout_root(identities_dir))
-        return EthosExtDiagnostics.refresh(identities_dir, seal)
+        return cls(SealedTree(EthosTree.checkout_root(identities_dir))).refresh(
+            identities_dir
+        )
 
-    @staticmethod
-    def refresh(
-        identities_dir: Path, guard: PathGuard = FOLLOW_SYMLINKS
-    ) -> ExtScanOutcome:
+    def refresh(self, identities_dir: Path) -> ExtScanOutcome:
         """Refresh every ``<handle>.ext/quarry.yaml`` under *identities_dir*.
 
-        Each file passes *guard* before it is read or written. The operator's
-        global tree keeps the default and follows symlinks (dotfile managers
-        put them there); :meth:`refresh_vendored` hands in a sealed tree, and
-        a refused path is recorded as that identity's failure.
+        Each file is read and rewritten through this instance's guard; a
+        refused path is recorded as that identity's failure.
 
         Only I/O, YAML, and decoding failures are recorded per identity — a
         non-UTF8 ext file raises ``UnicodeDecodeError`` (a ``ValueError``, not
@@ -93,11 +104,9 @@ class EthosExtDiagnostics:
             result: [] for result in ExtWriteResult
         }
         failed: list[ExtFailure] = []
-        for handle, quarry_yaml in EthosExtDiagnostics._ext_files(identities_dir):
+        for handle, quarry_yaml in self._ext_files(identities_dir):
             try:
-                result = EthosExtDiagnostics.write_session_context(
-                    guard.check(quarry_yaml), handle
-                )
+                result = self.write_session_context(quarry_yaml, handle)
             except (OSError, yaml.YAMLError, UnicodeDecodeError) as exc:
                 failed.append(ExtFailure(handle, str(exc)))
                 continue
@@ -111,7 +120,11 @@ class EthosExtDiagnostics:
 
     @staticmethod
     def _ext_files(identities_dir: Path) -> list[tuple[str, Path]]:
-        """Return ``(handle, quarry.yaml)`` for each ext dir that has the file."""
+        """Return ``(handle, quarry.yaml)`` for each ext dir that has the file.
+
+        A listing only: the entries are candidates, and the guard decides
+        inside each read and write whether one may be used.
+        """
         if not identities_dir.is_dir():
             return []
         return [
@@ -122,16 +135,14 @@ class EthosExtDiagnostics:
             and (ext_dir / "quarry.yaml").is_file()
         ]
 
-    @staticmethod
-    def write_session_context(quarry_yaml: Path, handle: str) -> ExtWriteResult:
+    def write_session_context(self, quarry_yaml: Path, handle: str) -> ExtWriteResult:
         """Write the current guide into one ``quarry.yaml`` if absent or stale.
 
-        The raw text is edited as a line range and written back atomically;
-        ``yaml.safe_load`` is used only to read ``memory_collection``, never to
-        rewrite the file.
+        The raw text is edited as a line range and written back atomically
+        through the guard, which preserves the file's mode; ``yaml.safe_load``
+        is used only to read ``memory_collection``, never to rewrite the file.
         """
-        ext = AtomicFile(quarry_yaml)
-        raw = ext.read()
+        raw = self._guard.read_text(quarry_yaml)
         block = SessionContextBlock.locate(raw)
         if not block.needs_guide:
             return ExtWriteResult.ALREADY_SET
@@ -139,5 +150,5 @@ class EthosExtDiagnostics:
         collection = data.get("memory_collection") if isinstance(data, dict) else None
         if not collection:
             return ExtWriteResult.NO_COLLECTION
-        ext.replace(block.with_guide(handle, str(collection)))
+        self._guard.write_text(quarry_yaml, block.with_guide(handle, str(collection)))
         return ExtWriteResult.UPDATED

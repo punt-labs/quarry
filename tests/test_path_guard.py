@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import stat
 from pathlib import Path
 
 import pytest
@@ -52,6 +53,21 @@ class TestFollowSymlinks:
         assert FollowSymlinks().is_regular_file(link) is True
         assert FollowSymlinks().is_regular_file(root / "a") is False
         assert FollowSymlinks().is_regular_file(root / "missing") is False
+
+
+class TestFollowSymlinksWriteText:
+    """The operator's own tree: a dotfile-manager link is written through, kept."""
+
+    def test_writes_through_an_operator_symlink_keeping_link_and_mode(
+        self, root: Path, outside: Path
+    ) -> None:
+        link = root / "a" / "b" / "link.yaml"
+        link.symlink_to(outside)
+        outside.chmod(0o600)
+        FollowSymlinks().write_text(link, "k: new\n")
+        assert link.is_symlink()
+        assert outside.read_text() == "k: new\n"
+        assert stat.S_IMODE(outside.stat().st_mode) == 0o600
 
 
 class TestSealedTreeCheck:
@@ -181,6 +197,79 @@ class TestSealedTreeReadText:
     def test_the_root_itself_is_not_a_readable_file(self, root: Path) -> None:
         with pytest.raises(SealedTreeError, match="refused"):
             SealedTree(root).read_text(root)
+
+
+class TestSealedTreeWriteText:
+    """The write itself refuses a symlink: there is no check-then-write window."""
+
+    def test_rewrites_a_real_file_keeping_its_mode_and_no_temp(
+        self, root: Path
+    ) -> None:
+        target = root / "a" / "b" / "file.yaml"
+        target.chmod(0o600)
+        SealedTree(root).write_text(target, "k: new\n")
+        assert target.read_text() == "k: new\n"
+        assert stat.S_IMODE(target.stat().st_mode) == 0o600
+        assert [p.name for p in target.parent.iterdir()] == ["file.yaml"]
+
+    def test_creates_an_absent_leaf_under_a_real_directory(self, root: Path) -> None:
+        target = root / "a" / "b" / "new.yaml"
+        SealedTree(root).write_text(target, "k: v\n")
+        assert target.read_text() == "k: v\n"
+
+    def test_symlinked_leaf_is_refused_and_left_as_found(
+        self, root: Path, outside: Path
+    ) -> None:
+        link = root / "a" / "b" / "link.yaml"
+        link.symlink_to(outside)
+        with pytest.raises(SealedTreeError, match="refused"):
+            SealedTree(root).write_text(link, "k: clobber\n")
+        assert outside.read_text() == "k: outside\n"
+        assert link.is_symlink()
+
+    def test_symlinked_intermediate_directory_is_refused(
+        self, root: Path, tmp_path: Path
+    ) -> None:
+        escape = tmp_path / "escape"
+        escape.mkdir()
+        (escape / "file.yaml").write_text("k: outside\n")
+        (root / "a" / "escape").symlink_to(escape)
+        with pytest.raises(SealedTreeError, match="symlink"):
+            SealedTree(root).write_text(
+                root / "a" / "escape" / "file.yaml", "k: clobber\n"
+            )
+        assert (escape / "file.yaml").read_text() == "k: outside\n"
+        assert list(escape.iterdir()) == [escape / "file.yaml"]
+
+    def test_component_swapped_to_a_symlink_after_check_is_still_refused(
+        self, root: Path, tmp_path: Path
+    ) -> None:
+        """A check that passed grants nothing: the write re-walks with O_NOFOLLOW."""
+        escape = tmp_path / "escape"
+        escape.mkdir()
+        (escape / "file.yaml").write_text("k: outside\n")
+        target = root / "a" / "b" / "file.yaml"
+        seal = SealedTree(root)
+        assert seal.check(target) == target
+        (root / "a" / "b").rename(tmp_path / "moved")
+        (root / "a" / "b").symlink_to(escape)
+        with pytest.raises(SealedTreeError, match="symlink"):
+            seal.write_text(target, "k: clobber\n")
+        assert (escape / "file.yaml").read_text() == "k: outside\n"
+        assert list(escape.iterdir()) == [escape / "file.yaml"]
+
+    def test_dot_dot_is_refused(self, root: Path) -> None:
+        with pytest.raises(SealedTreeError, match="escapes"):
+            SealedTree(root).write_text(root / "a" / ".." / ".." / "x.yaml", "k: v\n")
+
+    def test_path_outside_the_root_is_refused(self, root: Path, outside: Path) -> None:
+        with pytest.raises(SealedTreeError, match="outside"):
+            SealedTree(root).write_text(outside, "k: clobber\n")
+        assert outside.read_text() == "k: outside\n"
+
+    def test_the_root_itself_is_not_a_writable_file(self, root: Path) -> None:
+        with pytest.raises(SealedTreeError, match="refused"):
+            SealedTree(root).write_text(root, "k: v\n")
 
 
 class TestSealedTreeIsRegularFile:

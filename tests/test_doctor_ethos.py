@@ -11,7 +11,7 @@ import yaml
 from quarry.doctor_ethos import EthosExtDiagnostics
 from quarry.ethos_ext_block import MEMORY_GUIDE_HEADER
 from quarry.ethos_ext_scan import ExtScanOutcome, ExtWriteResult
-from quarry.path_guard import SealedTree
+from quarry.path_guard import SealedTree, SealedTreeError
 
 _V1_BLOCK = (
     "\nsession_context: |\n  ## Memory\n  \n  You have persistent memory stored in "
@@ -195,9 +195,9 @@ class TestRefresh:
             identities_dir, "rmh", "memory_collection: memory-rmh\n" + _V1_BLOCK
         )
 
-        first = EthosExtDiagnostics.refresh(identities_dir)
+        first = EthosExtDiagnostics().refresh(identities_dir)
         after_first = quarry_yaml.read_text()
-        second = EthosExtDiagnostics.refresh(identities_dir)
+        second = EthosExtDiagnostics().refresh(identities_dir)
 
         assert first.updated == ("rmh",)
         assert second.already_set == ("rmh",)
@@ -211,13 +211,13 @@ class TestRefresh:
         raw = "memory_collection: m\nsession_context: |\n  You are the ops lead.\n"
         quarry_yaml = _write_ext(identities_dir, "ops", raw)
 
-        outcome = EthosExtDiagnostics.refresh(identities_dir)
+        outcome = EthosExtDiagnostics().refresh(identities_dir)
 
         assert outcome.already_set == ("ops",)
         assert quarry_yaml.read_text() == raw
 
     def test_absent_directory_is_an_empty_outcome(self, tmp_path: Path) -> None:
-        outcome = EthosExtDiagnostics.refresh(tmp_path / "nowhere")
+        outcome = EthosExtDiagnostics().refresh(tmp_path / "nowhere")
         assert outcome == ExtScanOutcome()
         assert outcome.is_empty
 
@@ -227,7 +227,7 @@ class TestRefresh:
         _make_ext(identities_dir, "nomemory")
         (identities_dir / "nomemory.yaml").write_text("name: nomemory\n")
 
-        outcome = EthosExtDiagnostics.refresh(identities_dir)
+        outcome = EthosExtDiagnostics().refresh(identities_dir)
 
         assert outcome.is_empty
         assert not (identities_dir / "nomemory.ext" / "quarry.yaml").exists()
@@ -237,7 +237,7 @@ class TestRefresh:
         bad = _make_ext(identities_dir, "alice") / "quarry.yaml"
         bad.write_bytes(b"memory_collection: \xff\xfe bad\n")
 
-        outcome = EthosExtDiagnostics.refresh(identities_dir)
+        outcome = EthosExtDiagnostics().refresh(identities_dir)
 
         assert outcome.failed_handles == ("alice",)
         assert "codec" in outcome.failed[0].reason
@@ -253,29 +253,29 @@ class TestRefresh:
             ),
             pytest.raises(TypeError, match="bug"),
         ):
-            EthosExtDiagnostics.refresh(identities_dir)
+            EthosExtDiagnostics().refresh(identities_dir)
 
 
 class TestWriteSessionContext:
-    """The single-file writer goes through AtomicFile (bug class 1)."""
+    """The single-file writer reads and writes through its guard (bug class 1)."""
 
     def test_returns_the_typed_result(self, tmp_path: Path) -> None:
         quarry_yaml = tmp_path / "quarry.yaml"
         quarry_yaml.write_text("memory_collection: memory-rmh\n")
         assert (
-            EthosExtDiagnostics.write_session_context(quarry_yaml, "rmh")
+            EthosExtDiagnostics().write_session_context(quarry_yaml, "rmh")
             is ExtWriteResult.UPDATED
         )
         assert (
-            EthosExtDiagnostics.write_session_context(quarry_yaml, "rmh")
+            EthosExtDiagnostics().write_session_context(quarry_yaml, "rmh")
             is ExtWriteResult.ALREADY_SET
         )
 
     def test_writes_through_atomic_replace(self, tmp_path: Path) -> None:
         quarry_yaml = tmp_path / "quarry.yaml"
         quarry_yaml.write_text("memory_collection: memory-rmh\n")
-        with patch("quarry.doctor_ethos.AtomicFile.replace") as replace:
-            EthosExtDiagnostics.write_session_context(quarry_yaml, "rmh")
+        with patch("quarry.path_guard.AtomicFile.replace") as replace:
+            EthosExtDiagnostics().write_session_context(quarry_yaml, "rmh")
         replace.assert_called_once()
         assert MEMORY_GUIDE_HEADER in replace.call_args.args[0]
 
@@ -284,12 +284,10 @@ class TestWriteSessionContext:
         original = "memory_collection: memory-rmh\n" + _V1_BLOCK
         quarry_yaml.write_text(original)
         with (
-            patch(
-                "quarry.doctor_ethos.AtomicFile.replace", side_effect=OSError("disk")
-            ),
+            patch("quarry.path_guard.AtomicFile.replace", side_effect=OSError("disk")),
             pytest.raises(OSError, match="disk"),
         ):
-            EthosExtDiagnostics.write_session_context(quarry_yaml, "rmh")
+            EthosExtDiagnostics().write_session_context(quarry_yaml, "rmh")
         assert quarry_yaml.read_text() == original
         assert not list(tmp_path.glob(".quarry.yaml.*.tmp"))
 
@@ -297,7 +295,7 @@ class TestWriteSessionContext:
         quarry_yaml = tmp_path / "quarry.yaml"
         quarry_yaml.write_text("memory_collection: memory-rmh\n")
         quarry_yaml.chmod(0o600)
-        EthosExtDiagnostics.write_session_context(quarry_yaml, "rmh")
+        EthosExtDiagnostics().write_session_context(quarry_yaml, "rmh")
         assert quarry_yaml.stat().st_mode & 0o777 == 0o600
 
 
@@ -321,7 +319,7 @@ class TestRefreshSealed:
         _make_ext(identities_dir, "claude")
         (identities_dir / "claude.ext" / "quarry.yaml").symlink_to(outside)
 
-        outcome = EthosExtDiagnostics.refresh(identities_dir, SealedTree(root))
+        outcome = EthosExtDiagnostics(SealedTree(root)).refresh(identities_dir)
 
         assert outcome.updated == ()
         assert outcome.failed_handles == ("claude",)
@@ -337,7 +335,7 @@ class TestRefreshSealed:
         before = outside.read_text()
         (identities_dir / "claude.ext").symlink_to(outside.parent)
 
-        outcome = EthosExtDiagnostics.refresh(identities_dir, SealedTree(root))
+        outcome = EthosExtDiagnostics(SealedTree(root)).refresh(identities_dir)
 
         assert outcome.failed_handles == ("claude",)
         assert outside.read_text() == before
@@ -351,10 +349,68 @@ class TestRefreshSealed:
             identities_dir, "rmh", "memory_collection: memory-rmh\n" + _V1_BLOCK
         )
 
-        outcome = EthosExtDiagnostics.refresh(identities_dir, SealedTree(root))
+        outcome = EthosExtDiagnostics(SealedTree(root)).refresh(identities_dir)
 
         assert outcome.updated == ("rmh",)
         assert MEMORY_GUIDE_HEADER in quarry_yaml.read_text()
+
+    def test_real_file_keeps_its_mode_and_leaves_no_temp(self, tmp_path: Path) -> None:
+        root = tmp_path / "repo"
+        identities_dir = root / ".punt-labs" / "ethos" / "identities"
+        quarry_yaml = _write_ext(
+            identities_dir, "rmh", "memory_collection: memory-rmh\n" + _V1_BLOCK
+        )
+        quarry_yaml.chmod(0o600)
+
+        EthosExtDiagnostics(SealedTree(root)).refresh(identities_dir)
+
+        assert quarry_yaml.stat().st_mode & 0o777 == 0o600
+        assert [p.name for p in quarry_yaml.parent.iterdir()] == ["quarry.yaml"]
+
+    def test_leaf_swapped_to_a_symlink_between_read_and_write_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """The read passed; the write must still refuse — no check-then-write.
+
+        The hostile swap lands after the real file was read and before the
+        guide is written back. The write refuses the link, the file it points
+        at is byte-unchanged, and the identity is reported as failed.
+        """
+        root = tmp_path / "repo"
+        identities_dir = root / ".punt-labs" / "ethos" / "identities"
+        quarry_yaml = _write_ext(
+            identities_dir, "claude", "memory_collection: memory-claude\n" + _V1_BLOCK
+        )
+        outside = self._outside_ext(tmp_path)
+        before = outside.read_text()
+        real_read = SealedTree.read_text
+
+        def read_then_swap(self: SealedTree, path: Path) -> str:
+            raw = real_read(self, path)
+            quarry_yaml.unlink()
+            quarry_yaml.symlink_to(outside)
+            return raw
+
+        with patch("quarry.path_guard.SealedTree.read_text", read_then_swap):
+            outcome = EthosExtDiagnostics(SealedTree(root)).refresh(identities_dir)
+
+        assert outcome.updated == ()
+        assert outcome.failed_handles == ("claude",)
+        assert "refused" in outcome.failed[0].reason
+        assert outside.read_text() == before
+        assert quarry_yaml.is_symlink()
+
+    def test_write_refusal_is_a_sealed_tree_error(self, tmp_path: Path) -> None:
+        """The single-file writer surfaces the refusal as the guard's OSError."""
+        root = tmp_path / "repo"
+        identities_dir = root / ".punt-labs" / "ethos" / "identities"
+        outside = self._outside_ext(tmp_path)
+        _make_ext(identities_dir, "claude")
+        link = identities_dir / "claude.ext" / "quarry.yaml"
+        link.symlink_to(outside)
+        with pytest.raises(SealedTreeError, match="refused"):
+            EthosExtDiagnostics(SealedTree(root)).write_session_context(link, "claude")
+        assert outside.read_text().count(MEMORY_GUIDE_HEADER) == 0
 
     def test_default_guard_follows_an_operator_symlink(self, tmp_path: Path) -> None:
         """The global tree is the operator's own: a dotfile-manager link is honoured."""
@@ -364,8 +420,11 @@ class TestRefreshSealed:
         link = identities_dir / "claude.ext" / "quarry.yaml"
         link.symlink_to(outside)
 
-        outcome = EthosExtDiagnostics.refresh(identities_dir)
+        outside.chmod(0o600)
+
+        outcome = EthosExtDiagnostics().refresh(identities_dir)
 
         assert outcome.updated == ("claude",)
         assert link.is_symlink()
         assert MEMORY_GUIDE_HEADER in outside.read_text()
+        assert outside.stat().st_mode & 0o777 == 0o600

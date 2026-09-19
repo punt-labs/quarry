@@ -69,6 +69,31 @@ def test_remove_absent_is_false(tmp_path: Path) -> None:
     assert _target(tmp_path).remove() is False
 
 
+# ── write_atomic: mode policy ────────────────────────────────────────
+
+
+def test_write_atomic_preserves_the_leaf_mode_when_none_is_forced(
+    tmp_path: Path,
+) -> None:
+    target = _target(tmp_path)
+    target.create_exclusive("old\n", mode=0o600)
+    target.write_atomic("new\n")
+    leaf = tmp_path.joinpath(*_RELATIVE)
+    assert leaf.read_text() == "new\n"
+    assert stat.S_IMODE(leaf.stat().st_mode) == 0o600
+
+
+def test_write_atomic_new_leaf_defaults_to_0644_under_restrictive_umask(
+    tmp_path: Path,
+) -> None:
+    old = os.umask(0o077)
+    try:
+        _target(tmp_path).write_atomic("x\n")
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE(tmp_path.joinpath(*_RELATIVE).stat().st_mode) == 0o644
+
+
 # ── non-regular leaf is refused / ignored ────────────────────────────
 
 
@@ -91,6 +116,59 @@ def test_create_exclusive_refuses_directory_leaf(tmp_path: Path) -> None:
     target.path.mkdir()
     with pytest.raises(ValueError, match="not a regular file"):
         target.create_exclusive("x", mode=0o644)
+
+
+def test_write_atomic_refuses_symlinked_leaf(tmp_path: Path) -> None:
+    """A committed link is never replaced by our file: refused, link left as found."""
+    outside = tmp_path / "outside"
+    outside.write_text("secret\n")
+    target = _target(tmp_path)
+    target.path.parent.mkdir(parents=True, exist_ok=True)
+    target.path.symlink_to(outside)
+
+    with pytest.raises(ValueError, match="not a regular file"):
+        target.write_atomic("clobber\n", mode=0o644)
+
+    assert outside.read_text() == "secret\n"
+    assert target.path.is_symlink()
+    # No temp file was made before the refusal.
+    assert [p.name for p in target.path.parent.iterdir()] == ["leaf"]
+
+
+def test_write_atomic_refuses_directory_leaf(tmp_path: Path) -> None:
+    target = _target(tmp_path)
+    target.path.mkdir(parents=True)
+    with pytest.raises(ValueError, match="not a regular file"):
+        target.write_atomic("x\n", mode=0o644)
+    assert target.path.is_dir()
+
+
+def test_write_atomic_leaf_swapped_to_symlink_after_lstat_never_reaches_target(
+    tmp_path: Path,
+) -> None:
+    """The lstat is not the escape boundary; ``rename(2)`` is.
+
+    Fool the lstat into reporting a regular file while the leaf is really a
+    symlink — the state a swap between the lstat and the rename produces. The
+    rename replaces the directory entry and never follows the link, so the
+    file it pointed at is byte-unchanged; the repo's own entry now holds ours.
+    """
+    outside = tmp_path / "outside"
+    outside.write_text("secret\n")
+    target = _target(tmp_path)
+    target.path.parent.mkdir(parents=True, exist_ok=True)
+    target.path.symlink_to(outside)
+    regular = outside.stat()
+
+    def lying_lstat(path: str, *, dir_fd: int | None = None) -> os.stat_result:
+        return regular
+
+    with patch("quarry.safe_paths.os.lstat", side_effect=lying_lstat):
+        target.write_atomic("new\n", mode=0o644)
+
+    assert outside.read_text() == "secret\n"
+    assert not target.path.is_symlink()
+    assert target.path.read_text() == "new\n"
 
 
 def test_is_regular_file_false_for_symlinked_leaf(tmp_path: Path) -> None:

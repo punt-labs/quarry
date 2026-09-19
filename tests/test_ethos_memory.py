@@ -106,11 +106,13 @@ def test_bad_yaml_is_recorded_and_bootstrap_continues(
 
     original_write = EthosExtDiagnostics.write_session_context
 
-    def selective_raise(quarry_yaml: Path, handle: str) -> ExtWriteResult:
+    def selective_raise(
+        self: EthosExtDiagnostics, quarry_yaml: Path, handle: str
+    ) -> ExtWriteResult:
         if handle == "bad":
             msg = "simulated YAML parse failure"
             raise YAMLError(msg)
-        return original_write(quarry_yaml, handle)
+        return original_write(self, quarry_yaml, handle)
 
     monkeypatch.setattr(
         "quarry.doctor_ethos.EthosExtDiagnostics.write_session_context",
