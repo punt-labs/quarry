@@ -50,6 +50,33 @@ class TestAncestors:
         assert next(EthosTree(str(tmp_path)).ancestors()) == tmp_path.resolve()
 
 
+class TestRepoAncestors:
+    """The bounded walk both the pin lookup and the sidecar lookup share."""
+
+    def test_ends_at_the_checkout_root_inclusive(self, unpinned_root: Path) -> None:
+        child = unpinned_root / "child"
+        deep = child / "src" / "pkg"
+        deep.mkdir(parents=True)
+        (child / ".git").mkdir()
+        assert list(EthosTree(deep).repo_ancestors()) == [
+            deep.resolve(),
+            (child / "src").resolve(),
+            child.resolve(),
+        ]
+
+    def test_home_is_skipped_but_still_bounds_the_walk(
+        self, unpinned_root: Path
+    ) -> None:
+        """A scratch directory under home walks past it without yielding it."""
+        home = unpinned_root / "home"
+        scratch = home / "scratch"
+        scratch.mkdir(parents=True)
+        with patch("quarry.ethos_tree.Path.home", return_value=home):
+            chain = list(EthosTree(scratch).repo_ancestors())
+        assert home not in chain
+        assert chain == [scratch.resolve(), unpinned_root.resolve()]
+
+
 class TestPinFiles:
     def test_new_file_precedes_legacy_at_each_ancestor(self, tmp_path: Path) -> None:
         first, second, *_ = EthosTree(tmp_path).pin_files()
@@ -60,6 +87,29 @@ class TestPinFiles:
         assert not any(
             pin.exists() for pin in list(EthosTree(tmp_path).pin_files())[:2]
         )
+
+    def test_candidates_stop_at_the_checkout_root(self, unpinned_root: Path) -> None:
+        """A parent directory's pin is never a candidate for a repo's session.
+
+        Attribution reads the pin of the checkout a session is opened in; the
+        walk that finds it is bounded exactly like the vendored-tree walk, so a
+        workspace meta-repo's pin cannot name the identity of a child repo.
+        """
+        child = unpinned_root / "child"
+        (child / ".git").mkdir(parents=True)
+        candidates = list(EthosTree(child / "src").pin_files())
+        assert candidates
+        assert all(pin.is_relative_to(child.resolve()) for pin in candidates)
+
+    def test_home_is_never_a_candidate(self, unpinned_root: Path) -> None:
+        """``~/.punt-labs`` is the global tree; its files are not a repo pin."""
+        home = unpinned_root / "home"
+        scratch = home / "scratch"
+        scratch.mkdir(parents=True)
+        with patch("quarry.ethos_tree.Path.home", return_value=home):
+            candidates = list(EthosTree(scratch).pin_files())
+        assert candidates
+        assert not any(pin.is_relative_to(home / ".punt-labs") for pin in candidates)
 
 
 class TestNearest:

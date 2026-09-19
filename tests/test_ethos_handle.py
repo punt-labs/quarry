@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 from quarry.ethos_handle import EthosConfig
 
@@ -101,6 +102,53 @@ class TestPinFilePrecedence:
         with caplog.at_level("WARNING", logger="quarry.ethos_handle"):
             assert EthosConfig.agent_handle_at(str(tmp_path)) == ""
         assert any("ethos.yaml" in rec.getMessage() for rec in caplog.records)
+
+
+class TestPinWalkBounds:
+    """Attribution is repo-scoped: a checkout without a pin is unattributed.
+
+    The alternative — adopting a parent directory's or the operator's global
+    pin — would file a session's captures under an identity the session never
+    declared.
+    """
+
+    def test_repo_without_a_pin_does_not_adopt_a_parent_pin(
+        self, unpinned_root: Path
+    ) -> None:
+        _write_pin(unpinned_root, "agent: outer\n")
+        child = unpinned_root / "child"
+        (child / ".git").mkdir(parents=True)
+        (child / "src").mkdir()
+        assert EthosConfig.agent_handle_at(str(child / "src")) == ""
+        assert EthosConfig.subagent_handle_at("", str(child)) == ""
+
+    def test_repo_without_a_pin_does_not_adopt_the_home_pin(
+        self, unpinned_root: Path
+    ) -> None:
+        home = unpinned_root / "home"
+        _write_pin(home, "agent: jfreeman\n")
+        _write_config(home, "agent: jfreeman\n")
+        repo = home / "repo"
+        (repo / ".git").mkdir(parents=True)
+        with patch("quarry.ethos_tree.Path.home", return_value=home):
+            assert EthosConfig.agent_handle_at(str(repo)) == ""
+
+    def test_scratch_directory_under_home_does_not_adopt_the_home_pin(
+        self, unpinned_root: Path
+    ) -> None:
+        """No repository at all: the home ancestor is walked through, not read."""
+        home = unpinned_root / "home"
+        _write_pin(home, "agent: jfreeman\n")
+        scratch = home / "scratch"
+        scratch.mkdir(parents=True)
+        with patch("quarry.ethos_tree.Path.home", return_value=home):
+            assert EthosConfig.agent_handle_at(str(scratch)) == ""
+
+    def test_the_checkout_root_pin_itself_is_read(self, unpinned_root: Path) -> None:
+        _write_pin(unpinned_root, "agent: claude\n")
+        deep = unpinned_root / "src" / "quarry"
+        deep.mkdir(parents=True)
+        assert EthosConfig.agent_handle_at(str(deep)) == "claude"
 
 
 def _vendor_identity(root: Path, handle: str) -> None:

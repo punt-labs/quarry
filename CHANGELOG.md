@@ -66,9 +66,15 @@ across `transform`, `index`, and `connector`).
   checkout cannot redirect the guide write onto a file outside the repo.
   The global refresh still follows the operator's own (dotfile-manager)
   symlinks. The MCP `remember` docstring, the recall skill, `/remember`, and the
-  deposited repo guide carry the same five moments. New modules `ethos_tree`
-  (the read-only sidecar locator: pins, vendored/global identities, missions),
-  `ethos_ext_block`, `ethos_ext_scan`. (quarry-fbj9)
+  deposited repo guide carry the same five moments. The repo-pin walk that
+  attributes a parent session's captures (PreCompact, SessionEnd, a
+  `SubagentStop` with no `agent_type`) is bounded at the checkout root
+  exactly like the vendored-tree walk: a repo with no
+  `.punt-labs/ethos.yaml` is filed unattributed rather than under a parent
+  directory's pin or the operator's `~/.punt-labs/ethos.yaml`/`config.yaml`.
+  New modules `ethos_tree` (the read-only sidecar locator: pins,
+  vendored/global identities, missions), `ethos_ext_block`, `ethos_ext_scan`.
+  (quarry-fbj9)
 - tool: one `MemoryType` vocabulary (`fact`, `observation`, `opinion`,
   `procedure`; `lesson` reserved for `learn`) enforced on `remember`,
   `ingest`, and `capture` alike — an unknown `memory_type` is a 400 with an

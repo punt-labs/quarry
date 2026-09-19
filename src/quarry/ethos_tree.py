@@ -53,37 +53,55 @@ class EthosTree:
                 return
             current = parent
 
+    def repo_ancestors(self) -> Iterator[Path]:
+        """Yield the ancestors inside the checkout that contains the start.
+
+        This is the one bounded walk every per-repo lookup shares — the repo
+        pin and the vendored sidecar — so the two cannot disagree about which
+        directories belong to "this repo". It is bounded the way ethos bounds
+        its own reads: it stops at the first ancestor holding ``.git`` (a
+        directory, or a worktree's file) after yielding that root itself, so
+        nothing above the checkout — a workspace meta-repo, a parent
+        directory — is ever consulted. The ancestor that *is* the operator's
+        home is never yielded, even on a walk that passes through it (a
+        scratch directory with no repository of its own): ``~/.punt-labs`` is
+        the global tree, and reading its pin or its ``ethos/`` as the repo's
+        would attribute a session to the operator's global identity and turn
+        a global refresh into a phantom working-tree diff.
+        """
+        home = Path.home()
+        for ancestor in self.ancestors():
+            if ancestor != home:
+                yield ancestor
+            if (ancestor / ".git").exists():
+                return
+
     def pin_files(self) -> Iterator[Path]:
         """Yield every candidate repo-pin path, nearest ancestor first.
 
-        At each ancestor the current ``ethos.yaml`` precedes the legacy
-        ``ethos/config.yaml``; the paths are candidates, not checked for
-        existence, so the caller decides what an absent or malformed file means.
+        Candidates come only from :meth:`repo_ancestors`: a session is
+        attributed to the pin of the checkout it runs in, never to a parent
+        directory's or the global tree's. At each ancestor the current
+        ``ethos.yaml`` precedes the legacy ``ethos/config.yaml``; the paths are
+        candidates, not checked for existence, so the caller decides what an
+        absent or malformed file means.
         """
-        for ancestor in self.ancestors():
+        for ancestor in self.repo_ancestors():
             for pin in _PIN_FILES:
                 yield ancestor / pin
 
     def nearest(self, relative: Path) -> Path | None:
-        """Return the closest ancestor's *relative* directory, or ``None``.
+        """Return the closest repo ancestor's *relative* directory, or ``None``.
 
         ``None`` is the documented "no such sidecar above here" contract — a
         repo without a vendored ethos tree is ordinary, not an error. A
         vendored tree is the one committed in the repository that contains
-        ``cwd``, so the search is bounded the way ethos bounds its own: it
-        stops at the first ancestor holding ``.git`` (a directory, or a
-        worktree's file) after checking that root itself. The ancestor that
-        *is* the operator's home is never a match — ``~/.punt-labs/ethos`` is
-        the global tree, and reporting it as vendored would turn a global
-        refresh into a phantom working-tree diff.
+        ``cwd``, so only :meth:`repo_ancestors` are searched.
         """
-        home = Path.home()
-        for ancestor in self.ancestors():
+        for ancestor in self.repo_ancestors():
             candidate = ancestor / relative
-            if ancestor != home and candidate.is_dir():
+            if candidate.is_dir():
                 return candidate
-            if (ancestor / ".git").exists():
-                return None
         return None
 
     def vendored_identities(self) -> Path | None:
