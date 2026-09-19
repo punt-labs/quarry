@@ -8,6 +8,7 @@ import pytest
 import yaml
 
 from quarry.mission_directory import MissionDirectory
+from quarry.path_guard import SealedTree, SealedTreeError
 from tests.mission_fixtures import CLOSED_MISSION, OPEN_MISSION, repo_with_missions
 
 if TYPE_CHECKING:
@@ -105,3 +106,54 @@ class TestRounds:
         )
         with pytest.raises(ValueError, match="'results' is not a list"):
             _closed(repo).rounds()
+
+
+class TestGuard:
+    """Every file read goes through the directory's path guard."""
+
+    def test_default_guard_follows_a_symlinked_file(
+        self, repo: Path, tmp_path: Path
+    ) -> None:
+        """Without a trust boundary named, a link is just a file (the old shape)."""
+        outside = tmp_path / "outside.yaml"
+        outside.write_text("results:\n")
+        target = _missions_dir(repo) / CLOSED_MISSION / "results.yaml"
+        target.unlink()
+        target.symlink_to(outside)
+        (_missions_dir(repo) / CLOSED_MISSION / "reflections.yaml").unlink()
+        assert _closed(repo).rounds() == ()
+
+    def test_sealed_guard_refuses_a_symlinked_file(
+        self, repo: Path, tmp_path: Path
+    ) -> None:
+        outside = tmp_path / "outside.yaml"
+        outside.write_text("results:\n")
+        target = _missions_dir(repo) / CLOSED_MISSION / "results.yaml"
+        target.unlink()
+        target.symlink_to(outside)
+        sealed = MissionDirectory(
+            _missions_dir(repo) / CLOSED_MISSION, guard=SealedTree(repo)
+        )
+        with pytest.raises(SealedTreeError, match="symlink"):
+            sealed.rounds()
+
+    def test_sealed_guard_refuses_a_symlinked_contract(
+        self, repo: Path, tmp_path: Path
+    ) -> None:
+        outside = tmp_path / "contract.yaml"
+        outside.write_text("mission_id: x\nworker: w\n")
+        target = _missions_dir(repo) / CLOSED_MISSION / "contract.yaml"
+        target.unlink()
+        target.symlink_to(outside)
+        sealed = MissionDirectory(
+            _missions_dir(repo) / CLOSED_MISSION, guard=SealedTree(repo)
+        )
+        assert sealed.has_contract()  # present — so the failure is loud, not a skip
+        with pytest.raises(SealedTreeError, match="symlink"):
+            sealed.contract(repo)
+
+    def test_sealed_guard_reads_a_real_file(self, repo: Path) -> None:
+        sealed = MissionDirectory(
+            _missions_dir(repo) / CLOSED_MISSION, guard=SealedTree(repo)
+        )
+        assert sealed.contract(repo).mission_id == CLOSED_MISSION

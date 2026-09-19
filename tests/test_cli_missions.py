@@ -72,11 +72,20 @@ class TestSync:
         """End to end through the real store: a missing --mission is not 'filed 0'."""
         with patch("quarry.__main__.TargetResolver.connect"):
             result = runner.invoke(
-                app, ["missions", "sync", "--mission", "no-such-mission", "--dry-run"]
+                app, ["missions", "sync", "--mission", "m-9999-99-99-999", "--dry-run"]
             )
         assert result.exit_code == 1
         assert "would file 0, skipped 0, errors 1" in result.output
-        assert "error: mission no-such-mission not found under" in result.output
+        assert "error: mission m-9999-99-99-999 not found under" in result.output
+
+    def test_traversal_mission_id_exits_one(self, in_repo: Path) -> None:
+        """A --mission that is not a mission id is refused before any path is built."""
+        with patch("quarry.__main__.TargetResolver.connect"):
+            result = runner.invoke(
+                app, ["missions", "sync", "--mission", "../../etc", "--dry-run"]
+            )
+        assert result.exit_code == 1
+        assert "error: invalid mission id: '../../etc'" in result.output
 
     def test_contract_less_directory_exits_zero(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -179,3 +179,15 @@ class TestIdentityExists:
         identities = _vendor_identity(unpinned_root, "rmh")
         (identities / "ghost.yaml").mkdir()
         assert EthosTree(unpinned_root).identity_exists("ghost") is False
+
+
+class TestCheckoutRoot:
+    def test_strips_the_sidecar_layout(self, tmp_path: Path) -> None:
+        sidecar = tmp_path / "repo" / ".punt-labs" / "ethos" / "missions"
+        assert EthosTree.checkout_root(sidecar) == tmp_path / "repo"
+
+    def test_agrees_with_the_locator(self, unpinned_root: Path) -> None:
+        identities = _vendor_identity(unpinned_root, "rmh")
+        located = EthosTree(unpinned_root / "src").vendored_identities()
+        assert located == identities
+        assert EthosTree.checkout_root(identities) == unpinned_root

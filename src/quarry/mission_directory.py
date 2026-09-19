@@ -8,10 +8,13 @@ import yaml
 
 from quarry.mission_records import MissionContract, MissionRound
 from quarry.mission_round_parts import EvaluatorReflection, WorkerResult
+from quarry.path_guard import FOLLOW_SYMLINKS
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
     from pathlib import Path
+
+    from quarry.path_guard import PathGuard
 
 
 @final
@@ -23,15 +26,21 @@ class MissionDirectory:
     tree — has nothing a sync can file, and :meth:`has_contract` lets the scan
     pass it by. A contract that is present but unreadable is corruption, and
     every reader here raises so the scan records it.
+
+    Every file read passes the *guard* first: a store scanning cloned content
+    hands in a sealed tree so a symlinked ``contract.yaml`` is refused rather
+    than read from wherever it points.
     """
 
-    __slots__ = ("_path",)
+    __slots__ = ("_guard", "_path")
 
     _path: Path
+    _guard: PathGuard
 
-    def __new__(cls, path: Path) -> Self:
+    def __new__(cls, path: Path, *, guard: PathGuard = FOLLOW_SYMLINKS) -> Self:
         self = super().__new__(cls)
         self._path = path
+        self._guard = guard
         return self
 
     @property
@@ -85,4 +94,4 @@ class MissionDirectory:
         return [e for e in entries if isinstance(e, dict)]
 
     def _read(self, name: str) -> object:
-        return yaml.safe_load((self._path / name).read_text())
+        return yaml.safe_load(self._guard.check(self._path / name).read_text())

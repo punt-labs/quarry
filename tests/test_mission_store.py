@@ -179,3 +179,125 @@ class TestScanErrors:
     def test_stray_files_in_the_tree_are_ignored(self, repo: Path) -> None:
         (self._missions_dir(repo) / "missions.jsonl").write_text("{}\n")
         assert _store(repo).scan().errors == ()
+
+
+class TestScanContainment:
+    """``--mission`` is hostile input and the tree is cloned content.
+
+    An id is matched against the slug ethos mints before it is joined onto the
+    root, and every directory read must be reached without a symlink, so
+    neither a crafted id nor a committed symlink can make the sync read (and
+    then POST) another tree's YAML.
+    """
+
+    def _missions_dir(self, repo: Path) -> Path:
+        return repo / ".punt-labs" / "ethos" / "missions"
+
+    def _foreign_mission(self, tmp_path: Path) -> Path:
+        """Plant a real mission outside the repo for a symlink or ``..`` to reach."""
+        other = repo_with_missions(tmp_path / "other", (CLOSED_MISSION,))
+        return other / ".punt-labs" / "ethos" / "missions" / CLOSED_MISSION
+
+    @pytest.mark.parametrize(
+        "mission_id",
+        [
+            "../other/.punt-labs/ethos/missions/m-2026-09-09-001",
+            "/etc",
+            "m-2026-09-09-001/..",
+            "m-2026-09-09-001/../m-2026-09-02-003",
+            "M-2026-09-09-001",
+            "m-2026-09-09",
+            "missions.jsonl",
+            "",
+        ],
+    )
+    def test_non_slug_id_is_rejected_without_a_filesystem_probe(
+        self, repo: Path, mission_id: str
+    ) -> None:
+        if not mission_id:
+            return  # the empty id is the "every mission" form, covered elsewhere
+        scan = _store(repo).scan(mission_id=mission_id)
+        assert scan.missions == ()
+        assert scan.errors == (f"invalid mission id: {mission_id!r}",)
+
+    def test_dot_dot_id_cannot_reach_a_foreign_mission(
+        self, repo: Path, tmp_path: Path
+    ) -> None:
+        foreign = self._foreign_mission(tmp_path)
+        assert foreign.is_dir()
+        traversal = f"../../../../other/.punt-labs/ethos/missions/{CLOSED_MISSION}"
+        assert (self._missions_dir(repo) / traversal).resolve() == foreign
+        scan = _store(repo).scan(mission_id=traversal)
+        assert scan.missions == ()
+        assert len(scan.errors) == 1
+
+    def test_symlinked_mission_directory_is_refused_by_id(
+        self, repo: Path, tmp_path: Path
+    ) -> None:
+        foreign = self._foreign_mission(tmp_path)
+        link = self._missions_dir(repo) / "m-2026-09-30-005"
+        link.symlink_to(foreign)
+        scan = _store(repo).scan(mission_id=link.name)
+        assert scan.missions == ()
+        assert len(scan.errors) == 1
+        assert "symlink" in scan.errors[0]
+
+    def test_symlinked_mission_directory_is_skipped_by_the_full_scan(
+        self, repo: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        foreign = self._foreign_mission(tmp_path)
+        (self._missions_dir(repo) / "m-2026-09-30-005").symlink_to(foreign)
+        with caplog.at_level("WARNING", logger="quarry.mission_store"):
+            scan = _store(repo).scan()
+        assert [m.contract.mission_id for m in scan.missions] == sorted(
+            [CLOSED_MISSION, OPEN_MISSION]
+        )
+        assert scan.errors == ()
+        assert any("symlink" in r.getMessage() for r in caplog.records)
+
+    def test_symlinked_contract_file_is_an_error_not_a_read(
+        self, repo: Path, tmp_path: Path
+    ) -> None:
+        foreign = self._foreign_mission(tmp_path)
+        mission = self._missions_dir(repo) / OPEN_MISSION
+        (mission / "contract.yaml").unlink()
+        (mission / "contract.yaml").symlink_to(foreign / "contract.yaml")
+        scan = _store(repo).scan()
+        assert [m.contract.mission_id for m in scan.missions] == [CLOSED_MISSION]
+        assert len(scan.errors) == 1
+        assert OPEN_MISSION in scan.errors[0]
+        assert "symlink" in scan.errors[0]
+
+    def test_symlinked_round_file_is_an_error_not_a_read(
+        self, repo: Path, tmp_path: Path
+    ) -> None:
+        foreign = self._foreign_mission(tmp_path)
+        mission = self._missions_dir(repo) / OPEN_MISSION
+        (mission / "results.yaml").unlink()
+        (mission / "results.yaml").symlink_to(foreign / "results.yaml")
+        scan = _store(repo).scan(mission_id=OPEN_MISSION)
+        assert scan.missions == ()
+        assert len(scan.errors) == 1
+        assert "symlink" in scan.errors[0]
+
+    def test_symlinked_missions_root_is_refused(
+        self, repo: Path, tmp_path: Path
+    ) -> None:
+        """A checkout whose whole ``missions/`` is a link reads nothing."""
+        other = repo_with_missions(tmp_path / "other", (CLOSED_MISSION,))
+        bare = tmp_path / "bare"
+        (bare / ".punt-labs" / "ethos").mkdir(parents=True)
+        (bare / ".git").mkdir()
+        (bare / ".punt-labs" / "ethos" / "missions").symlink_to(
+            other / ".punt-labs" / "ethos" / "missions"
+        )
+        store = MissionStore.for_repo(bare)
+        assert store is not None
+        assert store.scan().missions == ()
+        by_id = store.scan(mission_id=CLOSED_MISSION)
+        assert by_id.missions == ()
+        assert len(by_id.errors) == 1
+
+    def test_valid_id_still_reads_its_mission(self, repo: Path) -> None:
+        scan = _store(repo).scan(mission_id=OPEN_MISSION)
+        assert [m.contract.mission_id for m in scan.missions] == [OPEN_MISSION]

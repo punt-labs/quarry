@@ -64,10 +64,22 @@ class TestOptions:
         monkeypatch.chdir(repo_with_missions(tmp_path / "quarry"))
         client = MagicMock(spec=QuarryClient)
         text = MissionTools(connect=lambda: client).missions_sync(
-            mission="no-such-mission", dry_run=True
+            mission="m-9999-99-99-999", dry_run=True
         )
         assert "errors 1" in text
-        assert "error: mission no-such-mission not found under" in text
+        assert "error: mission m-9999-99-99-999 not found under" in text
+
+    def test_traversal_mission_id_is_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The tool argument is hostile input: a non-id never becomes a path."""
+        monkeypatch.chdir(repo_with_missions(tmp_path / "quarry"))
+        client = MagicMock(spec=QuarryClient)
+        text = MissionTools(connect=lambda: client).missions_sync(
+            mission="../../../etc", dry_run=True
+        )
+        assert "errors 1" in text
+        assert "error: invalid mission id: '../../../etc'" in text
 
     def test_options_reach_the_sync(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

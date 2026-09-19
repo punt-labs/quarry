@@ -117,6 +117,16 @@ class EthosTree:
         )
 
     @staticmethod
+    def checkout_root(sidecar: Path) -> Path:
+        """Return the checkout that vendors *sidecar*.
+
+        ``<repo>/.punt-labs/ethos/<name>`` -> ``<repo>``. The checkout is the
+        trust boundary for everything under the sidecar: the operator chose
+        the checkout, but its contents are cloned and may hold a symlink.
+        """
+        return sidecar.parents[2]
+
+    @staticmethod
     def is_valid_handle(handle: str) -> bool:
         """Return whether *handle* is a lowercase slug safe to use as a path leaf."""
         return _HANDLE_PATTERN.fullmatch(handle) is not None
