@@ -195,7 +195,8 @@ class TestSealedTreeReadText:
             SealedTree(root).read_text(root / "a" / "b" / "missing.yaml")
 
     def test_the_root_itself_is_not_a_readable_file(self, root: Path) -> None:
-        with pytest.raises(SealedTreeError, match="refused"):
+        """The root is refused as such — never opened, so never IsADirectoryError."""
+        with pytest.raises(SealedTreeError, match="sealed root"):
             SealedTree(root).read_text(root)
 
 
@@ -268,7 +269,7 @@ class TestSealedTreeWriteText:
         assert outside.read_text() == "k: outside\n"
 
     def test_the_root_itself_is_not_a_writable_file(self, root: Path) -> None:
-        with pytest.raises(SealedTreeError, match="refused"):
+        with pytest.raises(SealedTreeError, match="sealed root"):
             SealedTree(root).write_text(root, "k: v\n")
 
 
@@ -302,3 +303,8 @@ class TestSealedTreeIsRegularFile:
         """A caller asking about a path outside its seal has a bug, not a miss."""
         with pytest.raises(SealedTreeError, match="outside"):
             SealedTree(root).is_regular_file(outside)
+
+    def test_the_root_itself_is_refused_not_false(self, root: Path) -> None:
+        """Same rule as read and write: the root is refused, not probed."""
+        with pytest.raises(SealedTreeError, match="sealed root"):
+            SealedTree(root).is_regular_file(root)
