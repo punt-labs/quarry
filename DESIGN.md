@@ -3004,3 +3004,125 @@ an ethos-side or daemon-path-read trigger for Loop 2 (breaks the one-way
 dependency / DES-041 path-read rejection); filing reflections as lessons
 (un-distilled text in the boosted tier); an LLM distillation pass (cost, no local
 model, heavy work in a blocking hook). Full rejection table in the design doc §g.2.
+
+## DES-056: Recall telemetry — a local scrubbed query log and an insights read surface
+
+**Date:** 2026-09-20
+**Status:** SETTLED
+**Topic:** Measuring whether the agent-memory/recall loop pays off
+**Bead:** quarry-x7ja (epic; this ADR covers quarry-x7ja.2 and quarry-x7ja.3)
+**Extends:** DES-037 (the `SearchService` retrieval seam), DES-041 (scrub-before-store), DES-055 (the agent-memory write loop)
+
+### Context
+
+Quarry had no telemetry: every `find`/`search` ran and vanished. There was no
+way to answer "does recall actually get used," "which queries come back
+empty," or "is the DES-055 memory loop paying off" without instrumenting the
+one choke point every search already passes through —
+`SearchService.search()`, called from `daemon/routes/search.py`. This ADR
+records what gets written, what gets scrubbed, and what gets read back.
+
+### Design
+
+1. **A local, engine-free SQLite store (`query_log.py` + `query_log_schema.py`,
+   mirroring `sync_registry.py`/`sync_schema.py`).** Two tables:
+   `query_events` (one row per search: timestamp, surface, agent_handle,
+   collection, filters as JSON, limit, latency, result count, the *scrubbed*
+   query text, and its length) and `query_hits` (one row per ranked result:
+   rank, document identity, score, the hit's own agent_handle/memory_type).
+   WAL journal, a 5 s busy timeout, `check_same_thread=False` — the same
+   connection lifecycle contract as the sync registry, because this store
+   shares the daemon's exact liveness requirements (long-lived, one writer,
+   background-thread-reachable). A process-wide `functools.cache`d
+   `get_query_log(path)` factory gives every route handler the same resident
+   connection without adding a field to `DaemonContext`.
+2. **The write point is boundary I/O, not a feature that can break `find`.**
+   `daemon/routes/search.py` times the `SearchService.search()` call, and when
+   `Settings.telemetry_enabled`, scrubs the query text through the existing
+   `Scrubber` (DES-041's write-time PII/secret pass — the exact same pass
+   captures already go through) before ever touching disk, then records the
+   event and its hits. The whole write is wrapped in `try/except Exception`:
+   a locked database or a full disk logs and is swallowed, because a search
+   response the caller already has must never regress to a 500 over a
+   telemetry side effect. A `_SearchOutcome` value object bundles the six
+   pieces the write needs (query, surface, filter, limit, latency, results)
+   into one parameter rather than threading them individually.
+3. **Two Settings knobs, no magic numbers in prose.** `telemetry_enabled:
+   bool = True` and `telemetry_retention_days: int = 90` (`Field(ge=1)`) join
+   `telemetry_path` (resolved alongside `lancedb_path`/`registry_path` in
+   `resolve_db_paths`). `QueryLog.prune()` runs once at first
+   `get_query_log()` construction (approximating "on daemon start" without a
+   daemon-lifecycle hook this store doesn't own) and is designed to be called
+   opportunistically elsewhere; every retention-affecting number lives in
+   Settings, never spelled out in README/CHANGELOG prose.
+4. **Provenance seam.** `SearchRequest` gains an optional `surface: str = ""`
+   field (`"cli"`/`"mcp"`/`"http"`/`"plugin"`); the daemon route defaults a
+   blank value to `"unknown"` rather than guessing. The MCP `find` tool sets
+   `surface="mcp"` in this same change; wiring the CLI's own `find` command is
+   left to a follow-up workstream (decision D1 below).
+5. **The insights read surface mirrors the status chain exactly.**
+   `MetaRoutes.insights` → a `RouteSpec` in `route_table.py` →
+   `InsightsResponse` (`api/insights.py`) → `QuarryClient.insights()` → CLI
+   `quarry insights` (`cli_sync.py`) → an MCP `insights` tool — the same six
+   hops `status` already takes, so an agent reads its own recall stats from
+   whichever surface it's on. Aggregations: total queries, empty-result rate,
+   p50/p95 latency, top empty (scrubbed) queries, per-collection hit counts,
+   per-agent recall counts, a memory-vs-knowledge split (empty `agent_handle`
+   = knowledge, matching `CoverageResponse`'s existing convention), and a
+   hit decay-band breakdown. The four row-breakdown types
+   (`EmptyQueryCount`/`CollectionHitCount`/`AgentRecallCount`/`DecayBandCount`)
+   are `TypedDict`s, not pydantic models or dataclasses — plain data-transfer
+   rows with no behavior, built once by their one call site.
+6. **The decay-band join lives in the route, not the store.** `QueryLog` is
+   engine-free by design (no LanceDB import), so it can only return a hit's
+   bare document identity (`recent_hits()`). `MetaRoutes` — the one place that
+   already holds `ctx.database` — joins those identities against the live
+   catalog's `ingestion_timestamp` and buckets into `0-7d`/`7-30d`/`30-90d`/`90d+`.
+
+### Decisions
+
+**D1 — Feedback path deferred.** This ADR covers *recording* a search and
+*reading* the aggregate; it deliberately does not add a "was this result
+used" signal (e.g., a client reporting back which hit it acted on). Recall
+volume and empty-rate are enough to answer "is the loop being exercised";
+a usage signal is a distinct, harder problem (what counts as "used"? a
+read-only tool has no natural next action to observe) left for a future ADR
+if the aggregate data motivates it.
+
+**D2 — No heuristic usage inference.** An earlier option inferred "used" from
+a hit's rank plus a following write to the same collection within N minutes.
+Rejected: too many false positives/negatives to trust, and it would launder a
+guess into what looks like a hard measurement.
+
+**D3 — Scrub before persist, always.** Raw query text is never written to
+disk, even transiently — `query_scrubbed` is the only text column, produced
+by the same `Scrubber` pass captures already use (DES-041), so a secret typed
+into a search query cannot leak into the telemetry store any more than it can
+leak into a capture file.
+
+### Asserts
+
+(1) A telemetry write failure never changes `find`'s response (failure-
+injection test: a raising `QueryLog.record` still returns 200 with results).
+(2) A seeded secret in the query text never appears in `query_scrubbed`
+(seeded-GitHub-PAT test). (3) `telemetry_enabled=False` makes the write path a
+true no-op — no file is created. (4) The client model's JSON field names are
+an exact match for what the daemon actually returns, at the top level and
+inside every row breakdown (bug class 3 parity tests via
+`InProcessDaemon`). (5) `GET /insights` mirrors every field `quarry insights`
+and the MCP `insights` tool print — one aggregation, three surfaces.
+
+### Alternatives Considered
+
+Storing raw (unscrubbed) query text with redaction only at read time
+(rejected — a disk compromise or backup would leak secrets; DES-041 already
+established write-time scrubbing as the rule for captures, and telemetry gets
+no exception). Recording telemetry as LanceDB rows in the existing chunks
+table (rejected — telemetry is structured, small, high-write-frequency
+operational data with a retention window, not a document; SQLite's
+transactional single-writer model fits it exactly the way it already fits the
+sync registry). A synchronous feedback loop that blocks `find` until the
+telemetry write completes (rejected — this is precisely the failure mode
+Class-1/Class-2 bug histories warn about; the write is fire-and-forget from
+the caller's perspective, wrapped in the same boundary-I/O contract as every
+other best-effort side effect in this codebase).

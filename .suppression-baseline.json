@@ -1,7 +1,7 @@
 {
-  "total": 209,
+  "total": 210,
   "by_category": {
-    "noqa": 172,
+    "noqa": 173,
     "type_ignore": 7,
     "pylint_disable": 0,
     "pyright_ignore": 1,
@@ -179,7 +179,10 @@
     },
     "src/quarry/web_fetch_loop_closer.py": {
       "noqa": 2
+    },
+    "src/quarry/doctor_recall.py": {
+      "noqa": 1
     }
   },
-  "updated_at": "2026-09-20T16:40:15Z"
+  "updated_at": "2026-09-20T19:54:35Z"
 }

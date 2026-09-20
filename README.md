@@ -169,6 +169,7 @@ Search by meaning:
 | `show` | Document metadata or page text |
 | `list` | Documents, collections, databases, registrations |
 | `status` | Database statistics |
+| `insights` | Recall telemetry: query volume, latency, empty-result rate, recall mix |
 | `ingest` / `remember` | Index a URL, or inline text |
 | `learn` | Save a distilled lesson (`memory_type=lesson`, project-scoped, retrieval boost) |
 | `register_directory` / `deregister_directory` | Manage a synced directory |
@@ -192,6 +193,7 @@ Search by meaning:
 | `quarry missions sync` | File each frozen ethos mission round into `memory-<worker>` (`--mission`, `--dry-run`, `--force`) |
 | `quarry use <name>` | Switch the active database |
 | `quarry status` | Database dashboard |
+| `quarry insights` | Recall telemetry: query volume, latency, empty-result rate, recall mix |
 | `quarry doctor` | Health check |
 | `quarry install` | Set up the daemon service, TLS certs, and MCP config |
 | `quarry uninstall` | Remove the daemon service (its launchd/systemd unit) |
@@ -260,6 +262,13 @@ DESIGN.md](DESIGN.md).
 public repo entirely, for projects where even scrubbed transcripts shouldn't
 live in a public history. See [DES-039 in DESIGN.md](DESIGN.md) and
 [AGENTS.md](AGENTS.md).
+
+**Recall telemetry privacy note.** Every search records a scrubbed copy of the
+query text and its ranked hits to a local SQLite file
+(`~/.punt-labs/quarry/data/<db>/telemetry.db`) — nothing leaves the machine.
+Query text goes through the same secret/PII scrub as captures before it ever
+touches disk. Turn it off with `telemetry_enabled: false` in `Settings`
+(env var `TELEMETRY_ENABLED`); see [DES-056 in DESIGN.md](DESIGN.md).
 
 ## Managing the Daemon
 
