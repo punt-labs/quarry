@@ -392,9 +392,9 @@ reconsidered before, not after, building it.
     consequence for quarry, which ships as a CLI+MCP hybrid plugin today?
   \item \textbf{Still open; carried forward as Chapter 2, \S2.5 Decision
     4.} What, precisely, should \fr{13}'s status view show beyond
-    reachability --- is FD headroom, FTS index health, and sync recency
-    (all already in \texttt{quarry doctor}'s output) the right read-only
-    subset, or is that too much detail for a glance-and-close use case?
+    reachability --- is FD headroom and FTS index health (already in
+    \texttt{quarry doctor}'s output) the right read-only subset, or is
+    that too much detail for a glance-and-close use case?
   \item \label{sec:openq-lastsync} \fr{16} originally assumed
     \texttt{quarry-menubar}'s status surface already exposes a
     per-collection last-synced timestamp; peer review found it does not
@@ -586,10 +586,10 @@ that overhead.
   \item \textbf{Status-view scope beyond reachability, carried forward
     from Chapter 1.} Chapter 1's open questions ask, and this chapter
     does not resolve, exactly what \fr{13} should show beyond daemon
-    reachability --- FD headroom, FTS index health, and sync recency are
-    all already in \texttt{quarry doctor}'s output and are candidates,
-    but including all three may be more detail than a glance-and-close
-    status view warrants. Genuinely undecided; needs a ruling before
+    reachability --- FD headroom and FTS index health are already in
+    \texttt{quarry doctor}'s output and are candidates, but including
+    both may be more detail than a glance-and-close status view
+    warrants. Genuinely undecided; needs a ruling before
     \fr{13} can be implemented as more than a bare up/down indicator.
   \item \textbf{Success-metric instrumentation.} \S1.6's success metric
     (search volume through this applet, among users who also have
