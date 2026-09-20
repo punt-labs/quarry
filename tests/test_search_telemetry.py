@@ -15,10 +15,12 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
+from starlette.requests import Request
 from starlette.testclient import TestClient
 
 from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
+from quarry.daemon.routes.search import SearchRoutes
 from quarry.query_log import QueryLog, get_query_log
 from quarry.results import SearchResult
 
@@ -142,6 +144,28 @@ class TestScrubBeforePersist:
         assert _FAKE_GH_PAT not in row[0]
         assert "[REDACTED:gh-pat]" in row[0]
 
+    def test_seeded_secret_in_a_filter_never_appears_in_filters_json(
+        self, tmp_path: Path
+    ) -> None:
+        """Only ``query_scrubbed`` was scrubbed (MUST-FIX): a secret placed in a
+        filter value -- ``?document=`` here -- must not reach ``filters_json``
+        unredacted, or DES-056 D3's scrub-before-store guarantee is bypassed
+        by the filter path."""
+        get_query_log.cache_clear()
+        client = _client(tmp_path)
+        with _patched_retrieve([]):
+            client.get(f"/v1/search?q=hello&document={_FAKE_GH_PAT}")
+
+        log = QueryLog(tmp_path / "telemetry.db")
+        row = log._conn.execute("SELECT filters_json FROM query_events").fetchone()
+        log.close()
+        get_query_log.cache_clear()
+
+        assert row is not None
+        filters = json.loads(row[0])
+        assert _FAKE_GH_PAT not in row[0]
+        assert "[REDACTED:gh-pat]" in filters["document"]
+
 
 class TestFilterReachesTelemetry:
     def test_search_filters_are_recorded_on_the_event(self, tmp_path: Path) -> None:
@@ -220,6 +244,51 @@ class TestFailureInjection:
         body = resp.json()
         assert body["total_results"] == 1
         assert body["results"][0]["document_name"] == "report.pdf"
+
+
+def _search_request(query_string: str) -> Request:
+    """Build a bare GET ``Request`` for calling ``SearchRoutes.search`` directly.
+
+    Bypasses ``TestClient``/httpx, whose ASGI transport awaits a response's
+    ``background`` task before returning control to the test -- exactly the
+    behavior under test here, so asserting on it needs the raw
+    :class:`~starlette.responses.JSONResponse` the handler returns, not a
+    fully-processed httpx response.
+    """
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/v1/search",
+        "query_string": query_string.encode(),
+        "headers": [],
+    }
+    return Request(scope)
+
+
+class TestTelemetryOffResponsePath:
+    """A telemetry write must never delay the search response (Bug: inline write)."""
+
+    def test_enabled_attaches_a_background_task(self, tmp_path: Path) -> None:
+        get_query_log.cache_clear()
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        with _patched_retrieve([]):
+            resp = SearchRoutes(ctx).search(_search_request("q=hello"))
+        get_query_log.cache_clear()
+
+        assert resp.background is not None
+
+    def test_disabled_attaches_no_background_task(self, tmp_path: Path) -> None:
+        get_query_log.cache_clear()
+        settings = _mock_settings(tmp_path, telemetry_enabled=False)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        with _patched_retrieve([]):
+            resp = SearchRoutes(ctx).search(_search_request("q=hello"))
+        get_query_log.cache_clear()
+
+        assert resp.background is None
 
 
 @pytest.mark.resource

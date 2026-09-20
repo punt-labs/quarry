@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, final
 
+from starlette.background import BackgroundTask
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
@@ -88,6 +89,7 @@ class SearchRoutes(RouteGroup):
         latency_ms = (time.perf_counter() - started) * 1000
         formatted = [r.to_dict() for r in results]
 
+        background = None
         if self.ctx.settings.telemetry_enabled:
             outcome = _SearchOutcome(
                 query=query,
@@ -97,23 +99,29 @@ class SearchRoutes(RouteGroup):
                 latency_ms=latency_ms,
                 results=results,
             )
-            self._record_telemetry(outcome)
+            # A ``BackgroundTask`` on a sync function runs via Starlette's
+            # threadpool AFTER the response is sent (starlette.background),
+            # not before -- a contended or slow telemetry write must never
+            # add latency to the search response it rides along with.
+            background = BackgroundTask(self._record_telemetry, outcome)
 
         # DEBUG per the level policy in quarry.logging_config: search is the
         # daemon's highest-frequency request, so a count per query would bury
         # the operational record it shares a file with.
         logger.debug("Search results=%d", len(formatted))
         return JSONResponse(
-            {"query": query, "total_results": len(formatted), "results": formatted}
+            {"query": query, "total_results": len(formatted), "results": formatted},
+            background=background,
         )
 
     def _record_telemetry(self, outcome: _SearchOutcome) -> None:
         """Record one ``query_events`` row + N ``query_hits`` rows, scrubbed first.
 
-        A telemetry write is boundary I/O the search response must survive
+        Runs as a post-response :class:`~starlette.background.BackgroundTask`
         (PY-EH boundary I/O, not internal defensive coding): a locked
         database or a full disk here must never turn an otherwise-successful
-        search into a 500, so any failure is logged and swallowed.
+        search into a 500 or added latency, so any failure is logged and
+        swallowed rather than raised back into the (already-sent) response.
         """
         try:
             query_log = get_query_log(self.ctx.settings.telemetry_path)
@@ -157,7 +165,14 @@ class SearchRoutes(RouteGroup):
 
     @staticmethod
     def _filter_dict(search_filter: SearchFilter) -> dict[str, str]:
-        """Return *search_filter*'s non-empty fields as a dict for ``filters_json``."""
+        """Return *search_filter*'s non-empty fields, scrubbed, for ``filters_json``.
+
+        Every field here is a user-supplied query param (``?document=``,
+        ``?agent_handle=``, ...) that reaches disk verbatim in
+        ``query_events.filters_json`` -- DES-056 D3's "a secret typed into a
+        search query never hits disk" holds only if every persisted string is
+        scrubbed, not just ``query_scrubbed``.
+        """
         fields = (
             ("collection", search_filter.collection),
             ("document", search_filter.document),
@@ -166,7 +181,7 @@ class SearchRoutes(RouteGroup):
             ("agent_handle", search_filter.agent_handle),
             ("memory_type", search_filter.memory_type),
         )
-        return {name: value for name, value in fields if value}
+        return {name: scrub(value)[0] for name, value in fields if value}
 
     @staticmethod
     def _coerce_surface(raw: str) -> str:
