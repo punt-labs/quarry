@@ -172,7 +172,7 @@ design docs, transcripts, agent memories). Three buckets:
 - *Query-type spread* — conceptual ("why/how"), known-item lookup, and keyword-ish, so we do
   not tune for one shape and regress another.
 
-Recall telemetry (DES-056) feeds this harness a real query set: `quarry insights`'
+Recall telemetry (DES-056) feeds this harness a real query set: `quarry insights`'s
 scrubbed top-empty-queries breakdown surfaces actual queries that returned nothing,
 turning them into regression cases without hand-curating a natural-question set from
 scratch.
