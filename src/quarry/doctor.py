@@ -666,7 +666,6 @@ def check_environment(*, _skip_header: bool = False) -> int:
             DaemonDiagnostics.serve_token(),
             DaemonDiagnostics.fd_headroom(),
             _check_fts_health(settings.lancedb_path),
-            SyncDiagnostics.recency(settings.registry_path),
             SyncDiagnostics.directories(settings.registry_path),
             SyncDiagnostics.enable_status(settings.registry_path, cwd),
             CaptureDiagnostics.unlinked(settings.registry_path, settings.lancedb_path),
