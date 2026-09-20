@@ -71,6 +71,15 @@ def _mock_settings(tmp_path: Path) -> MagicMock:
     s.lancedb_path = tmp_path / "lancedb"
     s.lancedb_path.mkdir(parents=True)
     s.registry_path = tmp_path / "registry.db"  # does not exist -> regs = []
+    # A real Path (never a bare MagicMock attribute): QueryLog.__new__ calls
+    # path.parent.mkdir() and sqlite3.connect(str(path)) unconditionally, so an
+    # unconfigured mock would stringify to its own repr and sqlite3 would
+    # silently create a junk file with that literal name in the process's cwd.
+    # Off by default like watch_enabled -- tests that exercise telemetry set it
+    # explicitly (see test_search_telemetry.py).
+    s.telemetry_path = tmp_path / "telemetry.db"
+    s.telemetry_enabled = False
+    s.telemetry_retention_days = 90
     s.embedding_model = "Snowflake/snowflake-arctic-embed-m-v1.5"
     s.embedding_dimension = 768
     s.ingest_queue_depth = 32

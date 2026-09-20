@@ -55,6 +55,11 @@ def _mock_settings(tmp_path: Path) -> MagicMock:
     s.lancedb_path = tmp_path / "lancedb"
     s.lancedb_path.mkdir(parents=True)
     s.registry_path = tmp_path / "registry.db"
+    # A real Path, disabled by default -- see the identical note in
+    # test_http_server.py's _mock_settings.
+    s.telemetry_path = tmp_path / "telemetry.db"
+    s.telemetry_enabled = False
+    s.telemetry_retention_days = 90
     s.embedding_model = "Snowflake/snowflake-arctic-embed-m-v1.5"
     s.embedding_dimension = 768
     s.ingest_queue_depth = 32

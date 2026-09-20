@@ -15,28 +15,36 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import cache
 from pathlib import Path
-from typing import Self, final
+from typing import Self, TypedDict, final
 
 from quarry.config import Settings
 from quarry.query_log_schema import QueryLogSchema
 
 
-@dataclass(frozen=True, slots=True)
-class QueryHit:
-    """One ranked result row recorded against a query event."""
+class QueryHit(TypedDict):
+    """One ranked result row recorded against a query event.
+
+    A ``TypedDict``, not a dataclass: every field is always supplied by the
+    one call site that builds it (the search route, from an already-ranked
+    :class:`~quarry.results.SearchResult`), so there is no invariant left for
+    a constructor to enforce -- a plain data-transfer shape (PY-OO-4).
+    """
 
     rank: int
     document_name: str
     collection: str
     chunk_index: int
     score: float
-    hit_agent_handle: str = ""
-    memory_type: str = ""
+    hit_agent_handle: str
+    memory_type: str
 
 
-@dataclass(frozen=True, slots=True)
-class QueryEvent:
-    """One recorded search: its scrubbed text, filters, and outcome."""
+class QueryEvent(TypedDict):
+    """One recorded search: its scrubbed text, filters, and outcome.
+
+    A ``TypedDict`` for the same reason as :class:`QueryHit`: a pure
+    data-transfer row built once, fully, by its one call site.
+    """
 
     ts: str
     surface: str
@@ -50,8 +58,7 @@ class QueryEvent:
     query_len: int
 
 
-@dataclass(frozen=True, slots=True)
-class CountRow:
+class CountRow(TypedDict):
     """One ``(label, count)`` row from a GROUP BY aggregation."""
 
     label: str
@@ -86,8 +93,7 @@ class RecallAggregate:
         return round(self.empty_queries / self.total_queries, 4)
 
 
-@dataclass(frozen=True, slots=True)
-class HitDocRef:
+class HitDocRef(TypedDict):
     """A recorded hit's document identity, for a caller to join against LanceDB."""
 
     document_name: str
@@ -257,16 +263,16 @@ class QueryLog:
             "latency_ms, result_count, query_scrubbed, query_len) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                event.ts,
-                event.surface,
-                event.agent_handle,
-                event.collection,
-                event.filters_json,
-                event.limit_n,
-                event.latency_ms,
-                event.result_count,
-                event.query_scrubbed,
-                event.query_len,
+                event["ts"],
+                event["surface"],
+                event["agent_handle"],
+                event["collection"],
+                event["filters_json"],
+                event["limit_n"],
+                event["latency_ms"],
+                event["result_count"],
+                event["query_scrubbed"],
+                event["query_len"],
             ),
         )
         event_id = cursor.lastrowid
@@ -278,13 +284,13 @@ class QueryLog:
                 [
                     (
                         event_id,
-                        hit.rank,
-                        hit.document_name,
-                        hit.collection,
-                        hit.chunk_index,
-                        hit.score,
-                        hit.hit_agent_handle,
-                        hit.memory_type,
+                        hit["rank"],
+                        hit["document_name"],
+                        hit["collection"],
+                        hit["chunk_index"],
+                        hit["score"],
+                        hit["hit_agent_handle"],
+                        hit["memory_type"],
                     )
                     for hit in hits
                 ],

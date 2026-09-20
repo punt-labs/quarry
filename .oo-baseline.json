@@ -1131,17 +1131,17 @@
     "future_annotations": 1.0
   },
   "src/quarry/daemon/routes/search.py": {
-    "avg_complexity": 4.33,
-    "avg_params": 1.0,
-    "class_to_func_ratio": 1.0,
-    "classes_per_module": 1.0,
-    "encapsulation_ratio": 1.0,
-    "future_annotations": 1.0,
-    "init_violations": 0.0,
-    "max_complexity": 7.0,
     "method_ratio": 1.0,
-    "module_size": 62.0,
-    "public_attr_violations": 0.0
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.0,
+    "max_complexity": 7.0,
+    "avg_complexity": 3.57,
+    "module_size": 155.0,
+    "classes_per_module": 2.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/quarry/daemon/routes/show.py": {
     "avg_complexity": 4.0,
@@ -2696,9 +2696,9 @@
     "avg_params": 0.59,
     "max_complexity": 4.0,
     "avg_complexity": 1.82,
-    "module_size": 277.0,
-    "classes_per_module": 7.0,
-    "class_to_func_ratio": 0.875,
+    "module_size": 281.0,
+    "classes_per_module": 3.0,
+    "class_to_func_ratio": 0.75,
     "init_violations": 0.0,
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
