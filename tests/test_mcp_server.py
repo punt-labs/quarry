@@ -286,8 +286,8 @@ class TestInsights:
         """The harness disables telemetry -- proves the formatter handles the
         disabled shape (zeroed fields) without a KeyError on shape drift."""
         result = harness.tools.insights()
-        assert "telemetry disabled" in result
-        assert "Total queries:     0" in result
+        assert "Telemetry:        disabled" in result
+        assert "Total queries:    0" in result
 
     def test_seeded_events_render_without_keyerror(self, tmp_path: Path) -> None:
         """A second, telemetry-enabled daemon seeded with real events -- proves
@@ -329,8 +329,16 @@ class TestInsights:
             result = _ToolHarness(tc).tools.insights()
         get_query_log.cache_clear()
 
-        assert "telemetry enabled" in result
-        assert "Total queries:     1" in result
+        assert "Telemetry:        enabled" in result
+        assert "Total queries:    1" in result
+        # The MCP tool must expose the same row breakdowns as the CLI and HTTP
+        # surfaces (Bug class 3), not just the scalar summary fields.
+        assert "Per-collection hits:" in result
+        assert "default: 1" in result
+        assert "Per-agent recall:" in result
+        assert "rmh: 1" in result
+        assert "Hit decay bands:" in result
+        assert "unknown: 1" in result
 
 
 class TestListResources:

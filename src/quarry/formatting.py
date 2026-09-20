@@ -1,18 +1,21 @@
-"""Output formatting for MCP tool responses.
+"""Output formatting shared by quarry's CLI and MCP tool responses.
 
 Adapts biff's constrained-width table formatter (DES-014) for quarry's
 data types.  Data tools return pre-formatted plain text; action tools
-return compact summary lines.  The PostToolUse hook routes these to the
-UI panel and LLM context.
+return compact summary lines.  The MCP surface's PostToolUse hook routes
+these to the UI panel and LLM context; the CLI prints them directly.
 """
 
 from __future__ import annotations
 
 import re
 import textwrap
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from quarry.api.insights import InsightsResponse
 
 # Layout constants ────────────────────────────────────────────────────────────
 
@@ -338,6 +341,77 @@ def format_status(info: Mapping[str, Any]) -> str:
         f"   Model:          {info.get('embedding_model', '?')}",
         f"   Provider:       {info.get('provider', '?')}",
     ]
+    return "\n".join(lines)
+
+
+@dataclass(frozen=True, slots=True)
+class _InsightsBreakdown:
+    """One ``quarry insights`` row breakdown: title, row accessor, and field names.
+
+    ``rows_of`` reads the one field it names off the typed ``InsightsResponse``
+    directly, so a wire field cannot silently rename out from under this
+    formatter the way a string-keyed ``dict.get`` lookup could.
+    """
+
+    title: str
+    rows_of: Callable[[InsightsResponse], Sequence[Mapping[str, object]]]
+    label_field: str
+    count_field: str
+
+    def rows(self, info: InsightsResponse) -> list[str]:
+        """Return a titled ``label: count`` block for this breakdown, or none."""
+        rows = self.rows_of(info)
+        if not rows:
+            return []
+        return [f"   {self.title}:"] + [
+            f"      {r[self.label_field]}: {r[self.count_field]}" for r in rows
+        ]
+
+
+# One breakdown per insights row group -- each reads its rows straight off the
+# typed response, so a wire field rename fails type-checking here instead of
+# silently rendering blank. Shared by the CLI (``quarry insights``) and the MCP
+# ``insights`` tool so the two surfaces expose the same aggregations (Bug
+# class 3: a breakdown present on one surface and missing from the other).
+_INSIGHTS_BREAKDOWNS: tuple[_InsightsBreakdown, ...] = (
+    _InsightsBreakdown(
+        "Top empty queries",
+        lambda info: info.top_empty_queries,
+        "query_scrubbed",
+        "count",
+    ),
+    _InsightsBreakdown(
+        "Per-collection hits",
+        lambda info: info.per_collection_hits,
+        "collection",
+        "hit_count",
+    ),
+    _InsightsBreakdown(
+        "Per-agent recall",
+        lambda info: info.per_agent_recall,
+        "agent_handle",
+        "query_count",
+    ),
+    _InsightsBreakdown(
+        "Hit decay bands", lambda info: info.hit_decay_bands, "band", "hit_count"
+    ),
+)
+
+
+def format_insights(info: InsightsResponse) -> str:
+    """Format the recall-telemetry snapshot as key-value lines plus row breakdowns."""
+    enabled = "enabled" if info.telemetry_enabled else "disabled"
+    lines = [
+        "\u25b6  quarry insights",
+        f"   Telemetry:        {enabled}",
+        f"   Total queries:    {info.total_queries}",
+        f"   Empty-result rate: {info.empty_result_rate * 100:.1f}%",
+        f"   Latency p50/p95:  {info.p50_latency_ms:.1f}ms / "
+        f"{info.p95_latency_ms:.1f}ms",
+        f"   Memory/Knowledge: {info.memory_queries} / {info.knowledge_queries}",
+    ]
+    for breakdown in _INSIGHTS_BREAKDOWNS:
+        lines.extend(breakdown.rows(info))
     return "\n".join(lines)
 
 

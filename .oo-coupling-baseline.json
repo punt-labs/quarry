@@ -952,11 +952,11 @@
     "avg_lcom": 0.0
   },
   "src/quarry/formatting.py": {
-    "avg_lcom": 0.0,
-    "circular_imports": 0.0,
     "efferent_coupling": 1.0,
+    "public_names": 20.0,
+    "circular_imports": 0.0,
     "max_lcom": 0.0,
-    "public_names": 19.0
+    "avg_lcom": 0.0
   },
   "src/quarry/gitignore.py": {
     "efferent_coupling": 2.0,

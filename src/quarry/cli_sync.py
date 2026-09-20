@@ -11,44 +11,16 @@ and only the index/purge processing is deferred.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Self, final
 
 import typer
 
 from quarry.api import DeregisterRequest, RegisterRequest
-from quarry.formatting import format_status
+from quarry.formatting import format_insights, format_status
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
-
-    from quarry.api.insights import InsightsResponse
     from quarry.cli_captures import CliPlumbing
-
-
-@dataclass(frozen=True, slots=True)
-class _Breakdown:
-    """One ``quarry insights`` row breakdown: title, row accessor, and field names.
-
-    ``rows_of`` reads the one field it names off the typed ``InsightsResponse``
-    directly, so a wire field cannot silently rename out from under this
-    formatter the way a string-keyed ``dict.get`` lookup could.
-    """
-
-    title: str
-    rows_of: Callable[[InsightsResponse], Sequence[Mapping[str, object]]]
-    label_field: str
-    count_field: str
-
-    def rows(self, info: InsightsResponse) -> list[str]:
-        """Return a titled ``label: count`` block for this breakdown, or none."""
-        rows = self.rows_of(info)
-        if not rows:
-            return []
-        return [f"   {self.title}:"] + [
-            f"      {r[self.label_field]}: {r[self.count_field]}" for r in rows
-        ]
 
 
 @final
@@ -154,48 +126,4 @@ class SyncCli:
     def _insights(self) -> None:
         """Show recall telemetry: query volume, latency, and recall breakdowns."""
         resp = self._p.client().insights()
-        self._p.emit(resp.model_dump(), self._render_insights(resp))
-
-    # One breakdown per insights row group -- each reads its rows straight off
-    # the typed response, so a wire field rename fails type-checking here
-    # instead of silently rendering blank.
-    _BREAKDOWNS: tuple[_Breakdown, ...] = (
-        _Breakdown(
-            "Top empty queries",
-            lambda info: info.top_empty_queries,
-            "query_scrubbed",
-            "count",
-        ),
-        _Breakdown(
-            "Per-collection hits",
-            lambda info: info.per_collection_hits,
-            "collection",
-            "hit_count",
-        ),
-        _Breakdown(
-            "Per-agent recall",
-            lambda info: info.per_agent_recall,
-            "agent_handle",
-            "query_count",
-        ),
-        _Breakdown(
-            "Hit decay bands", lambda info: info.hit_decay_bands, "band", "hit_count"
-        ),
-    )
-
-    @staticmethod
-    def _render_insights(info: InsightsResponse) -> str:
-        """Render the insights response as key-value lines plus row breakdowns."""
-        enabled = "enabled" if info.telemetry_enabled else "disabled"
-        lines = [
-            "▶  quarry insights",
-            f"   Telemetry:        {enabled}",
-            f"   Total queries:    {info.total_queries}",
-            f"   Empty-result rate: {info.empty_result_rate * 100:.1f}%",
-            f"   Latency p50/p95:  {info.p50_latency_ms:.1f}ms / "
-            f"{info.p95_latency_ms:.1f}ms",
-            f"   Memory/Knowledge: {info.memory_queries} / {info.knowledge_queries}",
-        ]
-        for spec in SyncCli._BREAKDOWNS:
-            lines.extend(spec.rows(info))
-        return "\n".join(lines)
+        self._p.emit(resp.model_dump(), format_insights(resp))

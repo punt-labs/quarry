@@ -38,6 +38,7 @@ from quarry.formatting import (
     format_databases,
     format_document_detail,
     format_documents,
+    format_insights,
     format_registrations,
     format_search_results,
     format_status,
@@ -469,17 +470,7 @@ class McpTools:
     @ToolGuard.wrap
     def insights(self) -> str:
         """Use to read your own recall stats: query volume, latency, recall mix."""
-        info = self._connect().insights().model_dump()
-        enabled = "enabled" if info["telemetry_enabled"] else "disabled"
-        return (
-            f"▶  Recall insights (telemetry {enabled})\n"
-            f"   Total queries:     {info['total_queries']}\n"
-            f"   Empty-result rate: {info['empty_result_rate'] * 100:.1f}%\n"
-            f"   Latency p50/p95:   {info['p50_latency_ms']:.1f}ms / "
-            f"{info['p95_latency_ms']:.1f}ms\n"
-            f"   Memory/Knowledge:  {info['memory_queries']} / "
-            f"{info['knowledge_queries']}"
-        )
+        return format_insights(self._connect().insights())
 
     @ToolGuard.wrap
     def use_database(self, name: str) -> str:

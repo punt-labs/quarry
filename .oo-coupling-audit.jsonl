@@ -355,3 +355,6 @@
 {"ts":"2026-09-20T23:38:02Z","commit":"a5376d7","source":null,"files_scored":270,"files_improved":0,"files_regressed":0,"verdict":"pass","reason":null,"deltas":{}}
 {"ts":"2026-09-20T23:42:39Z","commit":"b6104e4","source":null,"files_scored":270,"files_improved":0,"files_regressed":0,"verdict":"pass","reason":null,"deltas":{}}
 {"ts":"2026-09-20T23:45:32Z","commit":"37fcee0","source":null,"files_scored":270,"files_improved":0,"files_regressed":0,"verdict":"pass","reason":null,"deltas":{}}
+{"ts":"2026-09-20T23:48:31Z","commit":"23b1b62","source":null,"files_scored":270,"files_improved":0,"files_regressed":1,"verdict":"fail","reason":null,"deltas":{}}
+{"ts":"2026-09-20T23:48:37Z","commit":"23b1b62","source":null,"files_scored":270,"files_improved":0,"files_regressed":1,"verdict":"relaxed","reason":"format_insights shares the CLI/MCP insights breakdown formatter (DES-056 round 3, issue #7) -- one new public function is the unavoidable cost of eliminating the duplicated _Breakdown/_render_insights code that used to live in cli_sync.py","deltas":{"src/quarry/formatting.py":{"public_names":[19.0,20.0]}}}
+{"ts":"2026-09-20T23:48:38Z","commit":"23b1b62","source":null,"files_scored":270,"files_improved":0,"files_regressed":0,"verdict":"pass","reason":null,"deltas":{}}
