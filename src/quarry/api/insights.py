@@ -49,3 +49,25 @@ class InsightsResponse(BaseModel):
     memory_queries: int
     knowledge_queries: int
     hit_decay_bands: list[DecayBandCount]
+
+    @classmethod
+    def disabled(cls) -> InsightsResponse:
+        """Return the all-zero snapshot for a disabled telemetry store.
+
+        The route serves this without ever opening the query-log store, so a
+        disabled toggle stays a true no-op -- no ``telemetry.db`` file, no
+        connection, just this literal shape.
+        """
+        return cls(
+            telemetry_enabled=False,
+            total_queries=0,
+            empty_result_rate=0.0,
+            p50_latency_ms=0.0,
+            p95_latency_ms=0.0,
+            top_empty_queries=[],
+            per_collection_hits=[],
+            per_agent_recall=[],
+            memory_queries=0,
+            knowledge_queries=0,
+            hit_decay_bands=[],
+        )
