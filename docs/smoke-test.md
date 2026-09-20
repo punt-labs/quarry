@@ -15,7 +15,7 @@ quarry doctor       # all checks pass, including FTS index: healthy
 ```
 
 Expected: Python, data directory, OCR, embedding model, ONNX provider,
-core imports, mcp-proxy, Claude Code MCP, storage, FTS index, sync, and
+core imports, mcp-proxy, Claude Code MCP, storage, FTS index, and
 sync directories all pass. No timeouts.
 
 ## Phase 1: MCP Tools
@@ -245,7 +245,6 @@ quarry doctor
 - Claude Code MCP: configured (not "timed out")
 - Storage size reported
 - FTS index: healthy (not "stale" or "missing")
-- Sync: N collections, oldest sync Xh ago (not ">24h stale")
 - Sync directories: N directories OK (no missing)
 
 ### 2.2 Status

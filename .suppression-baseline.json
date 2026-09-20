@@ -1,7 +1,7 @@
 {
-  "total": 211,
+  "total": 209,
   "by_category": {
-    "noqa": 174,
+    "noqa": 172,
     "type_ignore": 7,
     "pylint_disable": 0,
     "pyright_ignore": 1,
@@ -36,8 +36,11 @@
     "src/quarry/collections.py": {
       "type_ignore": 1
     },
+    "src/quarry/daemon/content_jobs.py": {
+      "noqa": 3
+    },
     "src/quarry/daemon/ingest_jobs.py": {
-      "noqa": 11
+      "noqa": 8
     },
     "src/quarry/daemon/routes/captures.py": {
       "noqa": 1
@@ -77,7 +80,7 @@
       "noqa": 2
     },
     "src/quarry/doctor_sync.py": {
-      "noqa": 6
+      "noqa": 4
     },
     "src/quarry/embeddings.py": {
       "noqa": 3
@@ -178,5 +181,5 @@
       "noqa": 2
     }
   },
-  "updated_at": "2026-09-18T18:20:59Z"
+  "updated_at": "2026-09-20T02:15:55Z"
 }
