@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Self
 
 import pytest
 
-from quarry.query_log import QueryEvent, QueryHit, QueryLog, get_query_log
+import quarry.query_log_schema as query_log_schema
+from quarry.query_log import QueryLog, get_query_log
 from quarry.query_log_schema import QueryLogSchema
+from quarry.query_log_types import QueryEvent, QueryHit
 
 _RETENTION_DAYS = 90
 
@@ -101,6 +105,28 @@ class TestSchemaMigration:
         schema.migrate()
         schema.migrate()  # must not raise, no columns added twice
         conn.close()
+
+    def test_migrate_adds_a_missing_column_once(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``_MIGRATIONS`` is empty in v1 -- feed a real spec so this test is
+        non-vacuous (an empty dict's ``migrate()`` iterates nothing)."""
+        monkeypatch.setattr(
+            query_log_schema,
+            "_MIGRATIONS",
+            {"query_events": {"note": "TEXT NOT NULL DEFAULT ''"}},
+        )
+        conn = sqlite3.connect(str(tmp_path / "t.db"))
+        schema = QueryLogSchema(conn)
+        schema.initialize()
+        schema.migrate()
+        columns_sql = "PRAGMA table_info(query_events)"
+        first_pass = {row[1] for row in conn.execute(columns_sql)}
+        schema.migrate()  # second pass: must not raise or add "note" again
+        second_pass = {row[1] for row in conn.execute(columns_sql)}
+        conn.close()
+        assert "note" in first_pass
+        assert second_pass == first_pass
 
 
 class TestRecord:
@@ -296,6 +322,95 @@ class TestGetQueryLog:
         log.close()
         get_query_log.cache_clear()
         assert total == 0
+
+    def test_prune_failure_closes_the_connection_and_reraises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A prune failure must not leak the connection @cache discards (MUST-FIX)."""
+        get_query_log.cache_clear()
+        closed: list[QueryLog] = []
+        original_close = QueryLog.close
+
+        def _tracking_close(self: QueryLog) -> None:
+            closed.append(self)
+            original_close(self)
+
+        def _raising_prune(self: QueryLog, retention_days: int) -> int:
+            raise RuntimeError("prune boom")
+
+        monkeypatch.setattr(QueryLog, "close", _tracking_close)
+        monkeypatch.setattr(QueryLog, "prune", _raising_prune)
+
+        with pytest.raises(RuntimeError, match="prune boom"):
+            get_query_log(tmp_path / "telemetry.db")
+        get_query_log.cache_clear()
+
+        assert len(closed) == 1
+
+
+class TestPruneBoundary:
+    def test_event_exactly_at_the_cutoff_is_kept(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``WHERE ts < cutoff`` is exclusive -- an event dated exactly at the
+        retention boundary survives one more prune cycle."""
+
+        class _FixedDatetime(datetime):
+            @classmethod
+            def now(cls, tz: object = None) -> Self:
+                return cls(2026, 1, 1, tzinfo=UTC)
+
+        monkeypatch.setattr("quarry.query_log.datetime", _FixedDatetime)
+        fixed_now = _FixedDatetime.now()
+        cutoff_ts = (fixed_now - timedelta(days=_RETENTION_DAYS)).isoformat()
+
+        log = QueryLog(tmp_path / "telemetry.db")
+        log.record(_event(ts=cutoff_ts), [_hit()])
+        deleted = log.prune(_RETENTION_DAYS)
+        total = log.insights.aggregate().total_queries
+        log.close()
+
+        assert deleted == 0
+        assert total == 1
+
+
+class TestConcurrentWriters:
+    def test_concurrent_records_never_split_an_event_from_its_hits(
+        self, tmp_path: Path
+    ) -> None:
+        """Many threads racing ``record()`` on one connection (MUST-FIX): every
+        ``query_events`` row must end with exactly the hit count it was given,
+        never an interleaved/partial count from another thread's write."""
+        log = QueryLog(tmp_path / "telemetry.db")
+        thread_count = 8
+        records_per_thread = 25
+
+        def _worker(thread_id: int) -> None:
+            for i in range(records_per_thread):
+                hit_count = (thread_id + i) % 5
+                hits = [_hit(rank=r + 1) for r in range(hit_count)]
+                log.record(_event(result_count=hit_count), hits)
+
+        threads = [
+            threading.Thread(target=_worker, args=(t,)) for t in range(thread_count)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        rows = log._conn.execute(
+            "SELECT e.result_count, COUNT(h.query_event_id) FROM query_events e "
+            "LEFT JOIN query_hits h ON h.query_event_id = e.id GROUP BY e.id"
+        ).fetchall()
+        total_events = log._conn.execute(
+            "SELECT COUNT(*) FROM query_events"
+        ).fetchone()[0]
+        log.close()
+
+        assert total_events == thread_count * records_per_thread
+        for result_count, actual_hits in rows:
+            assert actual_hits == result_count
 
 
 @pytest.mark.resource

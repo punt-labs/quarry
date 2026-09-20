@@ -10,95 +10,22 @@ and cached for the process — the same "one resident connection" shape as
 from __future__ import annotations
 
 import sqlite3
+import threading
 from collections.abc import Sequence
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import cache
 from pathlib import Path
-from typing import Self, TypedDict, final
+from typing import Self, final
 
 from quarry.config import Settings
 from quarry.query_log_schema import QueryLogSchema
-
-
-class QueryHit(TypedDict):
-    """One ranked result row recorded against a query event.
-
-    A ``TypedDict``, not a dataclass: every field is always supplied by the
-    one call site that builds it (the search route, from an already-ranked
-    :class:`~quarry.results.SearchResult`), so there is no invariant left for
-    a constructor to enforce -- a plain data-transfer shape (PY-OO-4).
-    """
-
-    rank: int
-    document_name: str
-    collection: str
-    chunk_index: int
-    score: float
-    hit_agent_handle: str
-    memory_type: str
-
-
-class QueryEvent(TypedDict):
-    """One recorded search: its scrubbed text, filters, and outcome.
-
-    A ``TypedDict`` for the same reason as :class:`QueryHit`: a pure
-    data-transfer row built once, fully, by its one call site.
-    """
-
-    ts: str
-    surface: str
-    agent_handle: str
-    collection: str
-    filters_json: str
-    limit_n: int
-    latency_ms: float
-    result_count: int
-    query_scrubbed: str
-    query_len: int
-
-
-class CountRow(TypedDict):
-    """One ``(label, count)`` row from a GROUP BY aggregation."""
-
-    label: str
-    count: int
-
-
-@dataclass(frozen=True, slots=True)
-class RecallAggregate:
-    """The SQLite-only aggregations behind ``GET /insights``.
-
-    Excludes the hit decay-band breakdown: that requires joining a hit's
-    ``document_name``/``collection`` against LanceDB's ``ingestion_timestamp``,
-    which lives outside this engine-free store — the caller (a route handler
-    with database access) computes it from :meth:`QueryLogInsights.recent_hits`.
-    """
-
-    total_queries: int
-    empty_queries: int
-    p50_latency_ms: float
-    p95_latency_ms: float
-    top_empty_queries: tuple[CountRow, ...]
-    per_collection_hits: tuple[CountRow, ...]
-    per_agent_recall: tuple[CountRow, ...]
-    memory_queries: int
-    knowledge_queries: int
-
-    @property
-    def empty_result_rate(self) -> float:
-        """Return the fraction of queries with zero hits, or ``0.0`` when none ran."""
-        if self.total_queries == 0:
-            return 0.0
-        return round(self.empty_queries / self.total_queries, 4)
-
-
-class HitDocRef(TypedDict):
-    """A recorded hit's document identity, for a caller to join against LanceDB."""
-
-    document_name: str
-    collection: str
-
+from quarry.query_log_types import (
+    CountRow,
+    HitDocRef,
+    QueryEvent,
+    QueryHit,
+    RecallAggregate,
+)
 
 # Bound the aggregation queries so a very long-lived, never-pruned database
 # cannot turn an insights read into an unbounded table scan.
@@ -114,35 +41,43 @@ class QueryLogInsights:
     Composed onto :class:`QueryLog` the way ``FileStore`` and
     ``CollectionMarkerStore`` compose onto ``SyncRegistry`` — a distinct
     responsibility (reads for ``GET /insights``) sharing one connection with the
-    store that owns the writes.
+    store that owns the writes. Shares :class:`QueryLog`'s lock too: a read
+    must never observe another thread's partially-committed rows, since
+    ``SearchRoutes.search`` runs on a threadpool and ``/search`` and
+    ``/insights`` can execute concurrently against this one connection.
     """
 
     _conn: sqlite3.Connection
+    _lock: threading.Lock
 
-    def __new__(cls, conn: sqlite3.Connection) -> Self:
+    def __new__(cls, conn: sqlite3.Connection, lock: threading.Lock) -> Self:
         self = super().__new__(cls)
         self._conn = conn
+        self._lock = lock
         return self
 
     def aggregate(self) -> RecallAggregate:
         """Return every SQLite-only insights aggregation in one snapshot."""
-        total = self._scalar("SELECT COUNT(*) FROM query_events")
-        empty = self._scalar("SELECT COUNT(*) FROM query_events WHERE result_count = 0")
-        memory = self._scalar(
-            "SELECT COUNT(*) FROM query_events WHERE agent_handle != ''"
-        )
-        p50, p95 = self._latency_percentiles()
-        return RecallAggregate(
-            total_queries=total,
-            empty_queries=empty,
-            p50_latency_ms=p50,
-            p95_latency_ms=p95,
-            top_empty_queries=self._top_empty_queries(),
-            per_collection_hits=self._per_collection_hits(),
-            per_agent_recall=self._per_agent_recall(),
-            memory_queries=memory,
-            knowledge_queries=total - memory,
-        )
+        with self._lock:
+            total = self._scalar("SELECT COUNT(*) FROM query_events")
+            empty = self._scalar(
+                "SELECT COUNT(*) FROM query_events WHERE result_count = 0"
+            )
+            memory = self._scalar(
+                "SELECT COUNT(*) FROM query_events WHERE agent_handle != ''"
+            )
+            p50, p95 = self._latency_percentiles()
+            return RecallAggregate(
+                total_queries=total,
+                empty_queries=empty,
+                p50_latency_ms=p50,
+                p95_latency_ms=p95,
+                top_empty_queries=self._top_empty_queries(),
+                per_collection_hits=self._per_collection_hits(),
+                per_agent_recall=self._per_agent_recall(),
+                memory_queries=memory,
+                knowledge_queries=total - memory,
+            )
 
     def recent_hits(self, limit: int = _RECENT_HITS_LIMIT) -> list[HitDocRef]:
         """Return the most recent hits' document identity, newest first.
@@ -150,12 +85,13 @@ class QueryLogInsights:
         Bounded by *limit* so a caller computing a decay-band breakdown reads a
         fixed-size window rather than the full (unbounded) hit history.
         """
-        rows = self._conn.execute(
-            "SELECT h.document_name, h.collection FROM query_hits h "
-            "JOIN query_events e ON e.id = h.query_event_id "
-            "ORDER BY e.ts DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT h.document_name, h.collection FROM query_hits h "
+                "JOIN query_events e ON e.id = h.query_event_id "
+                "ORDER BY e.ts DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
         return [HitDocRef(document_name=r[0], collection=r[1]) for r in rows]
 
     def _scalar(self, sql: str) -> int:
@@ -220,6 +156,7 @@ class QueryLog:
     """
 
     _conn: sqlite3.Connection
+    _lock: threading.Lock
     _insights: QueryLogInsights
 
     def __new__(cls, path: Path) -> Self:
@@ -227,14 +164,17 @@ class QueryLog:
         path.parent.mkdir(parents=True, exist_ok=True)
         # check_same_thread=False: background ingest/task threads share the
         # daemon's one connection with the request-handling thread, matching
-        # SyncRegistry's rationale.
+        # SyncRegistry's rationale. The connection itself serializes nothing --
+        # ``_lock`` is what makes concurrent record()/prune()/insights reads
+        # from the threadpool safe against interleaving (DES-056 round 2).
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
+        self._lock = threading.Lock()
         try:
             self._ensure_schema()
         except Exception:
             self._conn.close()
             raise
-        self._insights = QueryLogInsights(self._conn)
+        self._insights = QueryLogInsights(self._conn, self._lock)
         return self
 
     @property
@@ -256,66 +196,80 @@ class QueryLog:
         self._conn.close()
 
     def record(self, event: QueryEvent, hits: Sequence[QueryHit]) -> None:
-        """Insert one ``query_events`` row plus one ``query_hits`` row per hit."""
-        cursor = self._conn.execute(
-            "INSERT INTO query_events "
-            "(ts, surface, agent_handle, collection, filters_json, limit_n, "
-            "latency_ms, result_count, query_scrubbed, query_len) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                event["ts"],
-                event["surface"],
-                event["agent_handle"],
-                event["collection"],
-                event["filters_json"],
-                event["limit_n"],
-                event["latency_ms"],
-                event["result_count"],
-                event["query_scrubbed"],
-                event["query_len"],
-            ),
-        )
-        event_id = cursor.lastrowid
-        if hits:
-            self._conn.executemany(
-                "INSERT INTO query_hits "
-                "(query_event_id, rank, document_name, collection, chunk_index, "
-                "score, hit_agent_handle, memory_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                [
-                    (
-                        event_id,
-                        hit["rank"],
-                        hit["document_name"],
-                        hit["collection"],
-                        hit["chunk_index"],
-                        hit["score"],
-                        hit["hit_agent_handle"],
-                        hit["memory_type"],
-                    )
-                    for hit in hits
-                ],
+        """Insert one ``query_events`` row plus one ``query_hits`` row per hit.
+
+        The lock plus ``with self._conn:`` together make this atomic against
+        both concurrent threads (no interleaved event/hit writes) and partial
+        failure (``sqlite3.Connection`` used as a context manager commits on
+        clean exit and rolls back -- never leaving an event committed without
+        its hits -- on any exception, which then propagates to the caller).
+        """
+        with self._lock, self._conn:
+            cursor = self._conn.execute(
+                "INSERT INTO query_events "
+                "(ts, surface, agent_handle, collection, filters_json, limit_n, "
+                "latency_ms, result_count, query_scrubbed, query_len) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    event["ts"],
+                    event["surface"],
+                    event["agent_handle"],
+                    event["collection"],
+                    event["filters_json"],
+                    event["limit_n"],
+                    event["latency_ms"],
+                    event["result_count"],
+                    event["query_scrubbed"],
+                    event["query_len"],
+                ),
             )
-        self._conn.commit()
+            event_id = cursor.lastrowid
+            if hits:
+                self._conn.executemany(
+                    "INSERT INTO query_hits "
+                    "(query_event_id, rank, document_name, collection, chunk_index, "
+                    "score, hit_agent_handle, memory_type) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    [
+                        (
+                            event_id,
+                            hit["rank"],
+                            hit["document_name"],
+                            hit["collection"],
+                            hit["chunk_index"],
+                            hit["score"],
+                            hit["hit_agent_handle"],
+                            hit["memory_type"],
+                        )
+                        for hit in hits
+                    ],
+                )
 
     def prune(self, retention_days: int) -> int:
-        """Delete events and hits older than *retention_days*; return the count."""
+        """Delete events and hits older than *retention_days*; return the count.
+
+        See :meth:`record` for why the lock plus ``with self._conn:`` together
+        give atomicity against concurrent threads and partial failure.
+        """
         cutoff = (datetime.now(UTC) - timedelta(days=retention_days)).isoformat()
-        stale_ids = [
-            row[0]
-            for row in self._conn.execute(
-                "SELECT id FROM query_events WHERE ts < ?", (cutoff,)
+        with self._lock, self._conn:
+            stale_ids = [
+                row[0]
+                for row in self._conn.execute(
+                    "SELECT id FROM query_events WHERE ts < ?", (cutoff,)
+                )
+            ]
+            if not stale_ids:
+                return 0
+            # One row per statement rather than a dynamic IN-clause: a fixed
+            # parameterized statement needs no f-string SQL at all, so there is
+            # nothing for a query-count-scale prune batch to lose by avoiding it.
+            rows = [(i,) for i in stale_ids]
+            self._conn.executemany(
+                "DELETE FROM query_hits WHERE query_event_id = ?", rows
             )
-        ]
-        if not stale_ids:
-            return 0
-        # One row per statement rather than a dynamic IN-clause: a fixed
-        # parameterized statement needs no f-string SQL at all, so there is
-        # nothing for a query-count-scale prune batch to lose by avoiding it.
-        rows = [(i,) for i in stale_ids]
-        self._conn.executemany("DELETE FROM query_hits WHERE query_event_id = ?", rows)
-        self._conn.executemany("DELETE FROM query_events WHERE id = ?", rows)
-        self._conn.commit()
-        return len(stale_ids)
+            self._conn.executemany("DELETE FROM query_events WHERE id = ?", rows)
+            return len(stale_ids)
 
 
 @cache
@@ -328,7 +282,16 @@ def get_query_log(path: Path) -> QueryLog:
     Pruned once here, at first construction, which approximates "on daemon
     start" for the process that first touches telemetry (search or insights);
     :meth:`QueryLog.prune` runs again opportunistically from the search route.
+
+    ``@cache`` does not memoize a raised call, so a prune failure must close the
+    connection before re-raising -- otherwise every subsequent search or
+    insights read opens (and leaks) a fresh, never-closed connection to the
+    same file, exhausting file descriptors under sustained failure.
     """
     log = QueryLog(path)
-    log.prune(Settings.load().telemetry_retention_days)
+    try:
+        log.prune(Settings.load().telemetry_retention_days)
+    except Exception:
+        log.close()
+        raise
     return log
