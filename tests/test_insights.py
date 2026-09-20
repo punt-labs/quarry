@@ -222,6 +222,29 @@ class TestHitDecayBandsEndToEnd:
         bands = {row["band"]: row["hit_count"] for row in resp.hit_decay_bands}
         assert bands == {"0-7d": 1}
 
+    def test_naive_ingestion_timestamp_is_treated_as_utc(self, tmp_path: Path) -> None:
+        """A naive ``ingestion_timestamp`` (MUST-FIX) must not 500 the route:
+        subtracting it from an aware ``datetime.now(UTC)`` raises ``TypeError``,
+        which the route's ``except ValueError`` alone does not catch. Naive is
+        treated as UTC, matching ``retrieval.fusion``'s convention, so the hit
+        lands in its real recency band instead of "unknown"."""
+        get_query_log.cache_clear()
+        daemon = InProcessDaemon(tmp_path)
+        naive_ingested_at = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=3)
+        chunk = _chunk(document_name="doc.pdf", ingestion_timestamp=naive_ingested_at)
+        daemon.ctx.database.store.insert([chunk], np.zeros((1, 768), dtype=np.float32))
+
+        log = QueryLog(daemon.ctx.settings.telemetry_path)
+        log.record(_event(result_count=1), [_hit(document_name="doc.pdf")])
+        log.close()
+
+        with daemon.client() as client:
+            resp = client.insights()
+        get_query_log.cache_clear()
+
+        bands = {row["band"]: row["hit_count"] for row in resp.hit_decay_bands}
+        assert bands == {"0-7d": 1}
+
     def test_hit_absent_from_catalog_is_unknown(self, tmp_path: Path) -> None:
         get_query_log.cache_clear()
         daemon = InProcessDaemon(tmp_path)

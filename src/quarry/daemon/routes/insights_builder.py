@@ -124,7 +124,11 @@ class InsightsBuilder:
 
         A document whose stored ``ingestion_timestamp`` doesn't parse is
         logged and skipped -- it falls back to the "unknown" band rather than
-        silently vanishing from the breakdown with no trace of why.
+        silently vanishing from the breakdown with no trace of why. A naive
+        timestamp is treated as UTC (matching
+        ``retrieval.fusion.RecencyFuser.temporal_weight``) rather than left
+        naive: :meth:`_band` subtracts it from an aware ``datetime.now(UTC)``,
+        and naive-minus-aware raises ``TypeError``.
         """
         index: dict[tuple[str, str], datetime] = {}
         for doc in self._database.catalog.list_documents():
@@ -138,6 +142,8 @@ class InsightsBuilder:
                     doc.get("document_name"),
                 )
                 continue
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=UTC)
             index[(doc["collection"], doc["document_name"])] = ts
         return index
 
