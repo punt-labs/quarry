@@ -8,6 +8,7 @@ shared fixture.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -139,6 +140,67 @@ class TestScrubBeforePersist:
         assert row is not None
         assert _FAKE_GH_PAT not in row[0]
         assert "[REDACTED:gh-pat]" in row[0]
+
+
+class TestFilterReachesTelemetry:
+    def test_search_filters_are_recorded_on_the_event(self, tmp_path: Path) -> None:
+        """Bug class 3: a CLI/MCP filter must reach the recorded row, not just
+        the search itself."""
+        get_query_log.cache_clear()
+        client = _client(tmp_path)
+        with _patched_retrieve([]):
+            client.get(
+                "/v1/search?q=hello&collection=alpha&agent_handle=rmh&memory_type=fact"
+            )
+
+        log = QueryLog(tmp_path / "telemetry.db")
+        row = log._conn.execute(
+            "SELECT collection, agent_handle, filters_json FROM query_events"
+        ).fetchone()
+        log.close()
+        get_query_log.cache_clear()
+
+        assert row is not None
+        collection, agent_handle, filters_json = row
+        assert collection == "alpha"
+        assert agent_handle == "rmh"
+        filters = json.loads(filters_json)
+        assert filters["collection"] == "alpha"
+        assert filters["agent_handle"] == "rmh"
+        assert filters["memory_type"] == "fact"
+
+
+class TestSurfaceProvenance:
+    @pytest.mark.parametrize("surface", ["cli", "mcp", "http", "plugin"])
+    def test_known_surface_reaches_telemetry(
+        self, tmp_path: Path, surface: str
+    ) -> None:
+        get_query_log.cache_clear()
+        client = _client(tmp_path)
+        with _patched_retrieve([]):
+            client.get(f"/v1/search?q=hello&surface={surface}")
+
+        log = QueryLog(tmp_path / "telemetry.db")
+        row = log._conn.execute("SELECT surface FROM query_events").fetchone()
+        log.close()
+        get_query_log.cache_clear()
+
+        assert row is not None
+        assert row[0] == surface
+
+    def test_unrecognized_surface_coerces_to_unknown(self, tmp_path: Path) -> None:
+        get_query_log.cache_clear()
+        client = _client(tmp_path)
+        with _patched_retrieve([]):
+            client.get("/v1/search?q=hello&surface=bogus")
+
+        log = QueryLog(tmp_path / "telemetry.db")
+        row = log._conn.execute("SELECT surface FROM query_events").fetchone()
+        log.close()
+        get_query_log.cache_clear()
+
+        assert row is not None
+        assert row[0] == "unknown"
 
 
 class TestFailureInjection:

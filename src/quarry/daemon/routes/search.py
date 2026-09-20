@@ -13,7 +13,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from quarry.daemon.routes.base import RouteGroup
-from quarry.query_log import QueryEvent, QueryHit, get_query_log
+from quarry.query_log import get_query_log
+from quarry.query_log_types import QueryEvent, QueryHit
 from quarry.results import SearchFilter
 from quarry.retrieval import SearchService
 from quarry.retrieval.config import RetrievalConfig
@@ -30,6 +31,13 @@ logger = logging.getLogger(__name__)
 # never threads provenance is not "cli" or "mcp", so this earns its own honest
 # label rather than silently defaulting to one of the named surfaces.
 _DEFAULT_SURFACE = "unknown"
+
+# The closed vocabulary ``SearchRequest.surface`` documents but does not
+# enforce (PY-TS-14 -- kept an open ``str`` there for forward-compat with a new
+# caller). This route is where an unrecognized value earns the fallback
+# instead: provenance is best-effort telemetry, so a stray or future value
+# must never turn into a 400 and break the search itself.
+_KNOWN_SURFACES = frozenset({"cli", "mcp", "http", "plugin"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,7 +91,7 @@ class SearchRoutes(RouteGroup):
         if self.ctx.settings.telemetry_enabled:
             outcome = _SearchOutcome(
                 query=query,
-                surface=params.get("surface", "") or _DEFAULT_SURFACE,
+                surface=self._coerce_surface(params.get("surface", "")),
                 search_filter=search_filter,
                 limit=limit,
                 latency_ms=latency_ms,
@@ -159,6 +167,16 @@ class SearchRoutes(RouteGroup):
             ("memory_type", search_filter.memory_type),
         )
         return {name: value for name, value in fields if value}
+
+    @staticmethod
+    def _coerce_surface(raw: str) -> str:
+        """Return *raw* if it names a known surface, else :data:`_DEFAULT_SURFACE`.
+
+        Covers both an absent ``?surface=`` (empty string) and a value outside
+        the closed set -- a future caller identifying itself with a name this
+        set hasn't learned yet must still get a recorded search, not a 400.
+        """
+        return raw if raw in _KNOWN_SURFACES else _DEFAULT_SURFACE
 
     @staticmethod
     def _limit(params: QueryParams) -> int:
