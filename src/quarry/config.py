@@ -44,6 +44,13 @@ class Settings(BaseSettings):
     # laptop-scale deployment.
     telemetry_enabled: bool = True
     telemetry_retention_days: int = Field(default=90, ge=1)
+    # ``QueryLog.prune`` runs once at daemon start (inside ``get_query_log``'s
+    # first construction) and then opportunistically from the search write
+    # path -- a long-lived quarryd must keep enforcing the retention window,
+    # not just apply it once. This cadence bounds how often a ``record()``
+    # call re-checks, so a busy daemon isn't re-scanning the table on every
+    # single write.
+    telemetry_prune_cadence_s: float = Field(default=3600.0, gt=0)
 
     chunk_max_chars: int = 1800
     chunk_overlap_chars: int = 200

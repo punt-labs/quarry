@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import stat
 import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -11,9 +12,16 @@ from typing import Self
 import pytest
 
 import quarry.query_log_schema as query_log_schema
+from quarry.config import Settings
 from quarry.query_log import QueryLog, get_query_log
 from quarry.query_log_schema import QueryLogSchema
 from quarry.query_log_types import QueryEvent, QueryHit
+
+
+def _mode(path: Path) -> int:
+    """Return *path*'s permission bits (the low 12 bits of ``st_mode``)."""
+    return stat.S_IMODE(path.stat().st_mode)
+
 
 _RETENTION_DAYS = 90
 
@@ -88,6 +96,36 @@ class TestOpenQueryLog:
         log = QueryLog(db_path)
         assert db_path.exists()
         log.close()
+
+
+class TestFilePermissions:
+    def test_directory_is_0700(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "sub" / "telemetry.db"
+        log = QueryLog(db_path)
+        log.close()
+        assert _mode(db_path.parent) == 0o700
+
+    def test_db_file_is_0600(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "telemetry.db"
+        log = QueryLog(db_path)
+        log.close()
+        assert _mode(db_path) == 0o600
+
+    def test_tightens_an_already_loose_directory(self, tmp_path: Path) -> None:
+        directory = tmp_path / "sub"
+        directory.mkdir(mode=0o755)
+        db_path = directory / "telemetry.db"
+        log = QueryLog(db_path)
+        log.close()
+        assert _mode(directory) == 0o700
+
+    def test_tightens_an_already_loose_db_file(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "telemetry.db"
+        db_path.touch(mode=0o644)
+        db_path.chmod(0o644)  # touch()'s mode is umask-masked; force it loose
+        log = QueryLog(db_path)
+        log.close()
+        assert _mode(db_path) == 0o600
 
 
 class TestSchemaMigration:
@@ -272,6 +310,35 @@ class TestInsightsAggregate:
         assert agg.p50_latency_ms == pytest.approx(30.0)
         assert agg.p95_latency_ms == pytest.approx(50.0)
 
+    def test_latency_percentiles_over_an_even_sized_series(
+        self, tmp_path: Path
+    ) -> None:
+        """``ceil(pct * n) - 1`` over an even ``n`` (MUST-FIX): plain
+        ``int(pct * n)`` is off by one whenever ``pct * n`` lands on an
+        integer -- p50 of 4 sorted values must read index 1 (20.0), not
+        index 2 (30.0)."""
+        log = QueryLog(tmp_path / "telemetry.db")
+        for latency in (10.0, 20.0, 30.0, 40.0):
+            log.record(_event(latency_ms=latency), [])
+        agg = log.insights.aggregate()
+        log.close()
+        assert agg.p50_latency_ms == pytest.approx(20.0)
+        assert agg.p95_latency_ms == pytest.approx(40.0)
+
+    def test_latency_percentile_is_bounded_over_a_large_series(
+        self, tmp_path: Path
+    ) -> None:
+        """The percentile read is a single bounded row fetch, not a full-table
+        load into Python -- correctness over a series too large to eyeball
+        stands in for that bound (the SQL itself is asserted by inspection)."""
+        log = QueryLog(tmp_path / "telemetry.db")
+        for i in range(1, 1001):
+            log.record(_event(latency_ms=float(i)), [])
+        agg = log.insights.aggregate()
+        log.close()
+        assert agg.p50_latency_ms == pytest.approx(500.0)
+        assert agg.p95_latency_ms == pytest.approx(950.0)
+
 
 class TestRecentHits:
     def test_recent_hits_returns_document_identity(self, tmp_path: Path) -> None:
@@ -310,8 +377,6 @@ class TestGetQueryLog:
         seed.record(_event(ts=stale_ts), [])
         seed.close()
 
-        from quarry.config import Settings
-
         monkeypatch.setattr(
             Settings,
             "load",
@@ -322,6 +387,40 @@ class TestGetQueryLog:
         log.close()
         get_query_log.cache_clear()
         assert total == 0
+
+    def test_second_record_after_cadence_elapses_prunes_the_stale_row(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``QueryLog.prune`` must not run only once at construction (MUST-FIX):
+        a long-lived daemon's later ``record()`` calls must re-prune once the
+        configured cadence has elapsed, not leave rows past
+        ``telemetry_retention_days`` forever."""
+        get_query_log.cache_clear()
+        monkeypatch.setattr(
+            Settings,
+            "load",
+            classmethod(
+                lambda cls: Settings(
+                    telemetry_retention_days=1, telemetry_prune_cadence_s=1.0
+                )
+            ),
+        )
+        # One monotonic() call each for configure_retention() and the two
+        # record() calls' _maybe_prune() checks: cadence not yet elapsed after
+        # the first record, elapsed (1000s later) by the second.
+        ticks = iter([0.0, 0.0, 1000.0])
+        monkeypatch.setattr(
+            "quarry.query_log_prune.time.monotonic", lambda: next(ticks)
+        )
+
+        log = get_query_log(tmp_path / "telemetry.db")
+        stale_ts = (datetime.now(UTC) - timedelta(days=2)).isoformat()
+        log.record(_event(ts=stale_ts), [])  # cadence not elapsed: no prune yet
+        log.record(_event(), [])  # cadence elapsed: prunes the stale row above
+        total = log.insights.aggregate().total_queries
+        log.close()
+        get_query_log.cache_clear()
+        assert total == 1
 
     def test_prune_failure_closes_the_connection_and_reraises(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

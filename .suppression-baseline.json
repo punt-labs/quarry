@@ -79,6 +79,9 @@
     "src/quarry/doctor_memory.py": {
       "noqa": 2
     },
+    "src/quarry/doctor_recall.py": {
+      "noqa": 1
+    },
     "src/quarry/doctor_sync.py": {
       "noqa": 4
     },
@@ -179,10 +182,7 @@
     },
     "src/quarry/web_fetch_loop_closer.py": {
       "noqa": 2
-    },
-    "src/quarry/doctor_recall.py": {
-      "noqa": 1
     }
   },
-  "updated_at": "2026-09-20T19:54:35Z"
+  "updated_at": "2026-09-20T23:38:02Z"
 }

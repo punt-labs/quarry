@@ -64,6 +64,7 @@ def _mock_settings(tmp_path: Path) -> MagicMock:
     s.telemetry_path = tmp_path / "telemetry.db"
     s.telemetry_enabled = False
     s.telemetry_retention_days = 90
+    s.telemetry_prune_cadence_s = 3600.0
     s.embedding_model = "Snowflake/snowflake-arctic-embed-m-v1.5"
     s.embedding_dimension = 768
     s.ingest_queue_depth = 32

@@ -18,130 +18,11 @@ from pathlib import Path
 from typing import Self, final
 
 from quarry.config import Settings
+from quarry.query_log_insights import QueryLogInsights
+from quarry.query_log_prune import PruneSchedule
 from quarry.query_log_schema import QueryLogSchema
-from quarry.query_log_types import (
-    CountRow,
-    HitDocRef,
-    QueryEvent,
-    QueryHit,
-    RecallAggregate,
-)
-
-# Bound the aggregation queries so a very long-lived, never-pruned database
-# cannot turn an insights read into an unbounded table scan.
-_TOP_EMPTY_LIMIT = 10
-_RANKING_LIMIT = 10
-_RECENT_HITS_LIMIT = 5000
-
-
-@final
-class QueryLogInsights:
-    """Read-only aggregations over the query log, sharing its connection.
-
-    Composed onto :class:`QueryLog` the way ``FileStore`` and
-    ``CollectionMarkerStore`` compose onto ``SyncRegistry`` — a distinct
-    responsibility (reads for ``GET /insights``) sharing one connection with the
-    store that owns the writes. Shares :class:`QueryLog`'s lock too: a read
-    must never observe another thread's partially-committed rows, since
-    ``SearchRoutes.search`` runs on a threadpool and ``/search`` and
-    ``/insights`` can execute concurrently against this one connection.
-    """
-
-    _conn: sqlite3.Connection
-    _lock: threading.Lock
-
-    def __new__(cls, conn: sqlite3.Connection, lock: threading.Lock) -> Self:
-        self = super().__new__(cls)
-        self._conn = conn
-        self._lock = lock
-        return self
-
-    def aggregate(self) -> RecallAggregate:
-        """Return every SQLite-only insights aggregation in one snapshot."""
-        with self._lock:
-            total = self._scalar("SELECT COUNT(*) FROM query_events")
-            empty = self._scalar(
-                "SELECT COUNT(*) FROM query_events WHERE result_count = 0"
-            )
-            memory = self._scalar(
-                "SELECT COUNT(*) FROM query_events WHERE agent_handle != ''"
-            )
-            p50, p95 = self._latency_percentiles()
-            return RecallAggregate(
-                total_queries=total,
-                empty_queries=empty,
-                p50_latency_ms=p50,
-                p95_latency_ms=p95,
-                top_empty_queries=self._top_empty_queries(),
-                per_collection_hits=self._per_collection_hits(),
-                per_agent_recall=self._per_agent_recall(),
-                memory_queries=memory,
-                knowledge_queries=total - memory,
-            )
-
-    def recent_hits(self, limit: int = _RECENT_HITS_LIMIT) -> list[HitDocRef]:
-        """Return the most recent hits' document identity, newest first.
-
-        Bounded by *limit* so a caller computing a decay-band breakdown reads a
-        fixed-size window rather than the full (unbounded) hit history.
-        """
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT h.document_name, h.collection FROM query_hits h "
-                "JOIN query_events e ON e.id = h.query_event_id "
-                "ORDER BY e.ts DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
-        return [HitDocRef(document_name=r[0], collection=r[1]) for r in rows]
-
-    def _scalar(self, sql: str) -> int:
-        row = self._conn.execute(sql).fetchone()
-        return int(row[0]) if row and row[0] is not None else 0
-
-    def _latency_percentiles(self) -> tuple[float, float]:
-        rows = self._conn.execute(
-            "SELECT latency_ms FROM query_events ORDER BY latency_ms"
-        ).fetchall()
-        values = [float(r[0]) for r in rows]
-        return self._percentile(values, 0.50), self._percentile(values, 0.95)
-
-    def _top_empty_queries(self) -> tuple[CountRow, ...]:
-        rows = self._conn.execute(
-            "SELECT query_scrubbed, COUNT(*) AS c FROM query_events "
-            "WHERE result_count = 0 GROUP BY query_scrubbed "
-            "ORDER BY c DESC LIMIT ?",
-            (_TOP_EMPTY_LIMIT,),
-        ).fetchall()
-        return tuple(CountRow(label=r[0], count=r[1]) for r in rows)
-
-    def _per_collection_hits(self) -> tuple[CountRow, ...]:
-        rows = self._conn.execute(
-            "SELECT collection, COUNT(*) AS c FROM query_hits "
-            "GROUP BY collection ORDER BY c DESC LIMIT ?",
-            (_RANKING_LIMIT,),
-        ).fetchall()
-        return tuple(CountRow(label=r[0], count=r[1]) for r in rows)
-
-    def _per_agent_recall(self) -> tuple[CountRow, ...]:
-        rows = self._conn.execute(
-            "SELECT agent_handle, COUNT(*) AS c FROM query_events "
-            "WHERE agent_handle != '' GROUP BY agent_handle "
-            "ORDER BY c DESC LIMIT ?",
-            (_RANKING_LIMIT,),
-        ).fetchall()
-        return tuple(CountRow(label=r[0], count=r[1]) for r in rows)
-
-    @staticmethod
-    def _percentile(sorted_values: list[float], pct: float) -> float:
-        """Return the *pct* percentile (nearest-rank) of *sorted_values*.
-
-        ``0.0`` for an empty series -- an insights read on a fresh database must
-        report zero latency, not raise on an empty sequence.
-        """
-        if not sorted_values:
-            return 0.0
-        index = min(len(sorted_values) - 1, int(pct * len(sorted_values)))
-        return round(sorted_values[index], 2)
+from quarry.query_log_types import QueryEvent, QueryHit
+from quarry.telemetry_perms import TelemetryPathGuard
 
 
 @final
@@ -158,10 +39,11 @@ class QueryLog:
     _conn: sqlite3.Connection
     _lock: threading.Lock
     _insights: QueryLogInsights
+    _prune_schedule: PruneSchedule
 
     def __new__(cls, path: Path) -> Self:
         self = super().__new__(cls)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        TelemetryPathGuard(path).secure()
         # check_same_thread=False: background ingest/task threads share the
         # daemon's one connection with the request-handling thread, matching
         # SyncRegistry's rationale. The connection itself serializes nothing --
@@ -175,12 +57,26 @@ class QueryLog:
             self._conn.close()
             raise
         self._insights = QueryLogInsights(self._conn, self._lock)
+        # Unconfigured by default -- a bare ``QueryLog(path)`` (every test in
+        # this module, plus ``prune()``'s own direct callers) never re-prunes
+        # itself as a record() side effect; only :func:`get_query_log`, via
+        # :meth:`configure_retention`, opts a daemon-lifetime instance in.
+        self._prune_schedule = PruneSchedule()
         return self
 
     @property
     def insights(self) -> QueryLogInsights:
         """Return the read-only aggregation surface sharing this connection."""
         return self._insights
+
+    def configure_retention(self, retention_days: int, prune_cadence_s: float) -> None:
+        """Enable opportunistic pruning from :meth:`record`, at *prune_cadence_s*.
+
+        Called once by :func:`get_query_log` right after its initial prune --
+        see :meth:`__new__`'s comment for why a bare instance stays inert
+        without this call.
+        """
+        self._prune_schedule.configure(retention_days, prune_cadence_s)
 
     def _ensure_schema(self) -> None:
         """Set connection pragmas, create tables, and apply migrations."""
@@ -244,6 +140,25 @@ class QueryLog:
                         for hit in hits
                     ],
                 )
+        self._maybe_prune()
+
+    def _maybe_prune(self) -> None:
+        """Prune expired rows if :attr:`_prune_schedule` says one is due.
+
+        A daemon that stays up past ``telemetry_retention_days`` must keep
+        pruning, not just once at :func:`get_query_log`'s first construction --
+        :meth:`record` is the one steady heartbeat a long-lived daemon gets, so
+        it is where the second (and every later) prune is triggered from. The
+        schedule check runs under a short-lived lock acquisition of its own,
+        separate from :meth:`prune`'s -- :meth:`record`'s own lock is already
+        released by the time this runs, and ``threading.Lock`` is not
+        reentrant, so calling :meth:`prune` while still holding it would
+        deadlock.
+        """
+        with self._lock:
+            retention_days = self._prune_schedule.due()
+        if retention_days is not None:
+            self.prune(retention_days)
 
     def prune(self, retention_days: int) -> int:
         """Delete events and hits older than *retention_days*; return the count.
@@ -280,18 +195,25 @@ def get_query_log(path: Path) -> QueryLog:
     same connection without a new field on ``DaemonContext`` -- the same "build
     once, cache for the process" shape as ``ProviderSelection.display_cached()``.
     Pruned once here, at first construction, which approximates "on daemon
-    start" for the process that first touches telemetry (search or insights);
-    :meth:`QueryLog.prune` runs again opportunistically from the search route.
+    start" for the process that first touches telemetry (search or insights).
+    :meth:`QueryLog.configure_retention` then arms :meth:`~QueryLog.record`'s
+    opportunistic re-prune, so a daemon that stays up past
+    ``telemetry_retention_days`` keeps enforcing it rather than pruning only
+    this once.
 
     ``@cache`` does not memoize a raised call, so a prune failure must close the
     connection before re-raising -- otherwise every subsequent search or
     insights read opens (and leaks) a fresh, never-closed connection to the
     same file, exhausting file descriptors under sustained failure.
     """
+    settings = Settings.load()
     log = QueryLog(path)
     try:
-        log.prune(Settings.load().telemetry_retention_days)
+        log.prune(settings.telemetry_retention_days)
     except Exception:
         log.close()
         raise
+    log.configure_retention(
+        settings.telemetry_retention_days, settings.telemetry_prune_cadence_s
+    )
     return log

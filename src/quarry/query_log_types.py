@@ -71,7 +71,7 @@ class RecallAggregate:
     ``document_name``/``collection`` against LanceDB's ``ingestion_timestamp``,
     which lives outside this engine-free store — the caller (a route handler
     with database access) computes it from
-    :meth:`~quarry.query_log.QueryLogInsights.recent_hits`.
+    :meth:`~quarry.query_log_insights.QueryLogInsights.recent_hits`.
     """
 
     total_queries: int
