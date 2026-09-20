@@ -1238,7 +1238,7 @@
     },
     "/v1/insights": {
       "get": {
-        "description": "Return the recall-telemetry snapshot behind ``quarry insights``.",
+        "description": "Return the recall-telemetry snapshot behind ``quarry insights``.\n\nA disabled toggle short-circuits before ``get_query_log`` -- opening\n(and so creating) the telemetry database file for a store the operator\nturned off would surprise a \"disabled means untouched\" reading of the\nsetting.",
         "operationId": "insights_v1_insights_get",
         "responses": {
           "200": {
