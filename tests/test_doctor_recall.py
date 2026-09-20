@@ -7,7 +7,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from quarry.doctor_recall import RecallDiagnostics
-from quarry.query_log import QueryEvent, QueryLog
+from quarry.query_log import QueryLog
+from quarry.query_log_types import QueryEvent
 
 
 def _event(*, result_count: int = 1, latency_ms: float = 10.0) -> QueryEvent:
