@@ -115,6 +115,7 @@ class McpTools:
         server.add_tool(self.deregister_directory)
         server.add_tool(self.sync_all_registrations)
         server.add_tool(self.status)
+        server.add_tool(self.insights)
         server.add_tool(self.use_database, name="use")
         MissionTools(self._connect).register(server)
 
@@ -163,6 +164,7 @@ class McpTools:
             source_format=source_format,
             agent_handle=agent_handle,
             memory_type=memory_type,
+            surface="mcp",
         )
         resp = self._connect().search(req)
         return format_search_results(query, [hit.model_dump() for hit in resp.results])
@@ -463,6 +465,21 @@ class McpTools:
     def status(self) -> str:
         """Use to check how much is indexed before you search or ingest."""
         return format_status(self._connect().status().model_dump())
+
+    @ToolGuard.wrap
+    def insights(self) -> str:
+        """Use to read your own recall stats: query volume, latency, recall mix."""
+        info = self._connect().insights().model_dump()
+        enabled = "enabled" if info["telemetry_enabled"] else "disabled"
+        return (
+            f"▶  Recall insights (telemetry {enabled})\n"
+            f"   Total queries:     {info['total_queries']}\n"
+            f"   Empty-result rate: {info['empty_result_rate'] * 100:.1f}%\n"
+            f"   Latency p50/p95:   {info['p50_latency_ms']:.1f}ms / "
+            f"{info['p95_latency_ms']:.1f}ms\n"
+            f"   Memory/Knowledge:  {info['memory_queries']} / "
+            f"{info['knowledge_queries']}"
+        )
 
     @ToolGuard.wrap
     def use_database(self, name: str) -> str:

@@ -49,8 +49,8 @@
     "avg_lcom": 0.782
   },
   "src/quarry/api/__init__.py": {
-    "efferent_coupling": 14.0,
-    "public_names": 35.0,
+    "efferent_coupling": 15.0,
+    "public_names": 40.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
@@ -560,7 +560,7 @@
     "avg_lcom": 0.952
   },
   "src/quarry/daemon/routes/meta.py": {
-    "efferent_coupling": 7.0,
+    "efferent_coupling": 8.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 1.0,

@@ -23,6 +23,10 @@ class SearchRequest(BaseModel):
     source_format: str = ""
     agent_handle: str = ""
     memory_type: str = ""
+    # Provenance for recall telemetry (DES-056): which surface issued the
+    # query ("cli"/"mcp"/"http"/"plugin"). Empty means the caller didn't say;
+    # the daemon records "unknown" rather than guessing.
+    surface: str = ""
 
 
 class SearchHit(BaseModel):

@@ -37,6 +37,7 @@
     {"name": "deregister_directory", "description": "Remove a directory registration (optionally keeping indexed data)."},
     {"name": "sync_all_registrations", "description": "Sync all registered directories: ingest new/changed, drop deleted."},
     {"name": "status", "description": "Report database status: document/chunk counts, storage size, model info."},
+    {"name": "insights", "description": "Read your own recall stats: query volume, latency, and recall mix."},
     {"name": "use", "description": "Switch to a different named database for subsequent operations."}
   ],
   "keywords": ["search", "documents", "ocr", "vector-search", "knowledge-base", "semantic-search"],

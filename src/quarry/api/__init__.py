@@ -28,6 +28,13 @@ from quarry.api.deregister import DeregisterAccepted, DeregisterRequest
 from quarry.api.documents import DeleteDocumentRequest, DocumentInfo, DocumentList
 from quarry.api.errors import ErrorBody
 from quarry.api.ingestion import IngestRequest, LearnRequest, RememberRequest
+from quarry.api.insights import (
+    AgentRecallCount,
+    CollectionHitCount,
+    DecayBandCount,
+    EmptyQueryCount,
+    InsightsResponse,
+)
 from quarry.api.maintenance import BackfillRequest, OptimizeRequest
 from quarry.api.meta import CoverageResponse, HealthResponse, StatusResponse
 from quarry.api.registrations import (
@@ -46,25 +53,30 @@ API_VERSION = "1"
 
 __all__ = [
     "API_VERSION",
+    "AgentRecallCount",
     "BackfillRequest",
     "CaptureIngestRequest",
     "CapturesLookupRequest",
     "CapturesLookupResponse",
     "CapturesPushResponse",
+    "CollectionHitCount",
     "CollectionInfo",
     "CollectionList",
     "CoverageResponse",
     "DatabaseInfo",
     "DatabaseList",
+    "DecayBandCount",
     "DeleteCollectionRequest",
     "DeleteDocumentRequest",
     "DeregisterAccepted",
     "DeregisterRequest",
     "DocumentInfo",
     "DocumentList",
+    "EmptyQueryCount",
     "ErrorBody",
     "HealthResponse",
     "IngestRequest",
+    "InsightsResponse",
     "LearnRequest",
     "OptimizeRequest",
     "RegisterRequest",

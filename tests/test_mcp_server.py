@@ -45,6 +45,7 @@ _EXPECTED_TOOLS = {
     "deregister_directory",
     "sync_all_registrations",
     "status",
+    "insights",
     "use",
     "missions_sync",
 }
