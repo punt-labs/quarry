@@ -14,6 +14,12 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [3.3.0] - 2026-09-19
+
+## [3.3.0] - 2026-09-19
+
+## [3.3.0] - 2026-09-19
+
 ### Added
 
 - tool: `quarry missions sync` (CLI), `missions_sync` (MCP)
