@@ -103,18 +103,18 @@ class TestInsightsCommand:
 
 class TestRenderInsights:
     def test_empty_store_renders_without_breakdown_sections(self) -> None:
-        text = SyncCli._render_insights(_EMPTY_RESPONSE.model_dump())
+        text = SyncCli._render_insights(_EMPTY_RESPONSE)
         assert "Total queries:    0" in text
         assert "Top empty queries:" not in text
         assert "Per-collection hits:" not in text
 
     def test_telemetry_disabled_renders_as_disabled(self) -> None:
         disabled = _EMPTY_RESPONSE.model_copy(update={"telemetry_enabled": False})
-        text = SyncCli._render_insights(disabled.model_dump())
+        text = SyncCli._render_insights(disabled)
         assert "disabled" in text
 
     def test_populated_store_renders_every_breakdown(self) -> None:
-        text = SyncCli._render_insights(_POPULATED_RESPONSE.model_dump())
+        text = SyncCli._render_insights(_POPULATED_RESPONSE)
         assert "Top empty queries:" in text
         assert "nada: 2" in text
         assert "Per-collection hits:" in text
@@ -125,7 +125,7 @@ class TestRenderInsights:
         assert "0-7d: 4" in text
 
     def test_latency_and_rate_are_formatted(self) -> None:
-        text = SyncCli._render_insights(_POPULATED_RESPONSE.model_dump())
+        text = SyncCli._render_insights(_POPULATED_RESPONSE)
         assert "20.0%" in text
         assert "12.3ms" in text
         assert "45.6ms" in text
