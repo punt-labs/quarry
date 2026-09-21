@@ -46,6 +46,9 @@ learn(lesson) — project-scoped, no handle, retrieval preference.
 Memory types: fact = objective, verifiable · observation = neutral summary ·
 procedure = how-to · opinion = subjective assessment with confidence.
 Memories decay with a 30-day half-life; lessons and documents do not.
+
+Full triggers, scoping, and failure recovery: the quarry-recall (retrieve)
+and quarry-capture (persist) skills.
 """
 
 _KEY_LINE: Final = re.compile(r"^session_context:(?P<value>.*)$")
