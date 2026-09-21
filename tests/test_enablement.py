@@ -340,6 +340,26 @@ class TestDisableRetractsOwnSkills:
 
         assert deposited.is_dir()
 
+    def test_a_pyproject_toml_with_invalid_utf8_is_untouched(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``read_text(encoding="utf-8")`` raises ``UnicodeDecodeError`` (a
+        ``ValueError`` subclass) on invalid UTF-8 bytes, not caught by name
+        alongside ``tomllib.TOMLDecodeError`` -- must still fail safe to "not
+        provably quarry's own checkout" rather than crash ``disable()``."""
+        home = tmp_path / "home"
+        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
+        repo = tmp_path / "quarry-checkout"
+        self._write_skill(repo, "demo")
+        (repo / "pyproject.toml").write_bytes(b"[project]\nname = \xff\xfe\n")
+        SkillsInstaller(repo / "plugin" / "skills", home).install(Harness.CODEX)
+        deposited = home / ".codex" / "skills" / "demo"
+        Enablement(repo).enable()
+
+        Enablement(repo).disable()  # must not raise
+
+        assert deposited.is_dir()  # not retracted -- identity unprovable
+
     def test_nested_dir_inside_the_real_checkout_never_reaches_home(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

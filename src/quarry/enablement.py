@@ -242,15 +242,17 @@ class _SkillRetraction:
     def _is_own_checkout(self) -> bool:
         """Whether *root* is quarry's OWN checkout, per its ``pyproject.toml``.
 
-        Never raises: a missing, unreadable, or malformed ``pyproject.toml``,
-        or one missing a ``[project]`` table or ``name`` key, all mean "not
-        provably quarry's own checkout" (PY-EH-1) — the safe default for a
-        guard that gates a destructive operation.
+        Never raises: a missing or unreadable file, invalid UTF-8, malformed
+        TOML, or one missing a ``[project]`` table or ``name`` key, all mean
+        "not provably quarry's own checkout" (PY-EH-1) — the safe default for
+        a guard that gates a destructive operation. ``ValueError`` subsumes
+        both ``tomllib.TOMLDecodeError`` and the ``UnicodeDecodeError`` that
+        ``read_text(encoding="utf-8")`` raises on invalid UTF-8 bytes.
         """
         pyproject = self._root / "pyproject.toml"
         try:
             data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
             name = data["project"]["name"]
-        except (OSError, tomllib.TOMLDecodeError, KeyError, TypeError):
+        except (OSError, ValueError, KeyError, TypeError):
             return False
         return isinstance(name, str) and name == _OWN_PACKAGE_NAME
