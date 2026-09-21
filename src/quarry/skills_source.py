@@ -106,7 +106,7 @@ class SkillSource:
         return self._hash_tree(self._root / name)
 
     @staticmethod
-    def _hash_tree(skill_dir: Path) -> str:
+    def _hash_tree(skill_dir: Path, *, exclude: str | None = None) -> str:
         """Return a short, order-independent content hash of *skill_dir*.
 
         A symlink is hashed by its link-target string, never dereferenced.
@@ -115,10 +115,18 @@ class SkillSource:
         ``copytree`` would (see :meth:`deposit`'s ``symlinks=True``) — the
         hash must reflect what actually gets copied, a link, not a
         substitute for its target's content.
+
+        *exclude*, when given, is a path relative to *skill_dir* (as a
+        POSIX string) skipped entirely -- :meth:`is_owned` recomputes this
+        same hash over a DEPOSITED directory, which carries the manifest
+        file the SOURCE tree never had; excluding it is what makes the two
+        hashes comparable at all.
         """
         digest = hashlib.sha256()
         for path in sorted(skill_dir.rglob("*")):
             relative = path.relative_to(skill_dir).as_posix()
+            if relative == exclude:
+                continue
             if path.is_symlink():
                 digest.update(relative.encode())
                 digest.update(path.readlink().as_posix().encode())
@@ -128,13 +136,16 @@ class SkillSource:
         return digest.hexdigest()[:16]
 
     @staticmethod
-    def read_manifest(target: Path) -> str | None:
-        """Return the deposited content hash, or ``None`` if absent/unreadable.
+    def _load_manifest(target: Path) -> dict[str, object] | None:
+        """Return *target*'s parsed manifest, or ``None`` if absent/unreadable.
 
-        ``None`` is the documented "no valid manifest here" contract (a fresh
-        target, a hand-edited one, or a corrupt file all look the same to an
-        idempotent re-install: deposit fresh, or to a removal: refuse to
-        touch it), not an error the caller handles.
+        The one JSON-parsing routine shared by :meth:`read_manifest` (which
+        trusts the declared hash) and :meth:`is_owned` (which does not) --
+        a missing file, unreadable file, invalid JSON, or a JSON value that
+        is not an object all collapse to the same "nothing to read here"
+        outcome (PY-EH-8's ``None``-for-absence contract applies; a
+        manifest's shape is a wire boundary, so ``dict[str, object]`` is
+        the honest type until each field is validated by its caller).
         """
         manifest = target / _MANIFEST_NAME
         if not manifest.is_file():
@@ -143,8 +154,53 @@ class SkillSource:
             data = json.loads(manifest.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return None
-        content_hash = data.get("content_hash") if isinstance(data, dict) else None
+        return data if isinstance(data, dict) else None
+
+    @staticmethod
+    def read_manifest(target: Path) -> str | None:
+        """Return the deposited content hash, or ``None`` if absent/unreadable.
+
+        ``None`` is the documented "no valid manifest here" contract (a fresh
+        target, a hand-edited one, or a corrupt file all look the same to an
+        idempotent re-install: deposit fresh, or to a removal: refuse to
+        touch it), not an error the caller handles. This is the manifest's
+        DECLARED hash, unverified -- see :meth:`is_owned` for the check that
+        the declaration is actually true of the directory's current contents.
+        """
+        data = SkillSource._load_manifest(target)
+        if data is None:
+            return None
+        content_hash = data.get("content_hash")
         return content_hash if isinstance(content_hash, str) else None
+
+    @staticmethod
+    def is_owned(target: Path) -> bool:
+        """Whether *target* is a directory this installer can PROVE it deposited.
+
+        Presence of a parseable manifest is forgeable: any directory can
+        carry a hand-crafted ``.quarry-skill.json`` naming an arbitrary
+        string as its ``content_hash``. Ownership instead requires the
+        declared hash to MATCH one recomputed from the directory's CURRENT
+        contents (:meth:`_hash_tree`, excluding the manifest file itself --
+        the same exclusion the SOURCE tree gets for free by never
+        containing one). A forged or minimal manifest fails this
+        comparison and is reported "foreign" by every caller (see
+        :meth:`quarry.skills_install.SkillsInstaller._is_foreign`) rather
+        than trusted; so does a manifest an operator hand-edited alongside
+        the skill's content, which is the intended, conservative failure
+        mode -- refuse rather than silently overwrite or delete.
+        """
+        if not target.is_dir():
+            return False
+        data = SkillSource._load_manifest(target)
+        if data is None:
+            return False
+        if data.get("format_version") != _MANIFEST_FORMAT_VERSION:
+            return False
+        content_hash = data.get("content_hash")
+        if not isinstance(content_hash, str):
+            return False
+        return content_hash == SkillSource._hash_tree(target, exclude=_MANIFEST_NAME)
 
     def deposit(self, name: str, target: Path) -> str:
         """Copy skill *name* into *target*, atomically; return its content hash.

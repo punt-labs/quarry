@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -119,11 +121,11 @@ class TestLocateSourceIdentityGuard:
 
 
 class TestHarnessPaths:
-    @pytest.fixture(autouse=True)
-    def _no_codex_home_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Keep ``CODEX_HOME`` unset so these default-path tests are hermetic
-        regardless of what the host running the suite has exported."""
-        monkeypatch.delenv("CODEX_HOME", raising=False)
+    """``CODEX_HOME`` starts unset in every test here (and every test in this
+    suite): ``tests.hermetic_env`` drops it once, for the whole session --
+    see ``TestAmbientCodexHome`` in ``test_hermeticity.py`` for the isolation
+    regression test itself. Tests below that need a specific value opt in
+    explicitly with ``monkeypatch.setenv``."""
 
     def test_claude_has_no_deposit_root(self, tmp_path: Path) -> None:
         assert Harness.CLAUDE.deposit_root(tmp_path) is None
@@ -766,3 +768,219 @@ class TestSymlinkSafety:
         secret.write_text("changed\n", encoding="utf-8")
 
         assert source.content_hash("demo-a") == content_hash
+
+
+class TestForgedManifestOwnership:
+    """§ safety: a parseable manifest whose declared hash does not match the
+    directory's ACTUAL current contents is foreign, not owned -- presence
+    of a readable ``.quarry-skill.json`` alone is forgeable (see
+    :meth:`SkillSource.is_owned`)."""
+
+    @staticmethod
+    def _forge(target: Path, content_hash: str) -> None:
+        target.mkdir(parents=True)
+        (target / "EVIL.md").write_text("not quarry's content\n", encoding="utf-8")
+        (target / ".quarry-skill.json").write_text(
+            json.dumps({"content_hash": content_hash, "format_version": 1}),
+            encoding="utf-8",
+        )
+
+    def test_install_refuses_to_overwrite_a_forged_manifest(
+        self, tmp_path: Path
+    ) -> None:
+        source_dir = _source_dir(tmp_path, names=("demo-a",))
+        home = tmp_path / "home"
+        installer = SkillsInstaller(source_dir, home)
+        forged = home / ".pi" / "agent" / "skills" / "demo-a"
+        self._forge(forged, "0" * 16)
+
+        outcomes = installer.install(Harness.PI)
+
+        assert outcomes == (SkillOutcome(Harness.PI, "demo-a", "foreign", forged),)
+        assert (forged / "EVIL.md").is_file()
+        assert not (forged / "SKILL.md").exists()
+
+    def test_remove_refuses_to_delete_a_forged_manifest(self, tmp_path: Path) -> None:
+        source_dir = _source_dir(tmp_path, names=("demo-a",))
+        home = tmp_path / "home"
+        installer = SkillsInstaller(source_dir, home)
+        forged = home / ".pi" / "agent" / "skills" / "demo-a"
+        self._forge(forged, "0" * 16)
+
+        outcomes = installer.remove(Harness.PI)
+
+        assert outcomes[0].action == "foreign"
+        assert forged.is_dir()
+        assert (forged / "EVIL.md").is_file()
+
+    def test_is_owned_rejects_a_declared_hash_matching_the_sources_current_hash(
+        self, tmp_path: Path
+    ) -> None:
+        """The sharper forgery: a declared hash that happens to equal the
+        SOURCE's current content hash must still fail ownership -- it was
+        never actually recomputed from the target directory's own,
+        unrelated contents."""
+        source_dir = _source_dir(tmp_path, names=("demo-a",))
+        real_hash = SkillSource(source_dir).content_hash("demo-a")
+        forged = tmp_path / "forged"
+        self._forge(forged, real_hash)
+
+        assert SkillSource.is_owned(forged) is False
+
+    def test_is_owned_accepts_a_genuine_deposit(self, tmp_path: Path) -> None:
+        source_dir = _source_dir(tmp_path, names=("demo-a",))
+        installer = SkillsInstaller(source_dir, tmp_path / "home")
+        installer.install(Harness.PI)
+        target = tmp_path / "home" / ".pi" / "agent" / "skills" / "demo-a"
+
+        assert SkillSource.is_owned(target) is True
+
+    def test_is_owned_rejects_a_genuine_deposit_after_an_operator_edit(
+        self, tmp_path: Path
+    ) -> None:
+        """An operator hand-editing a deposited skill's content -- without
+        touching the manifest -- must also be refused, not silently
+        clobbered on the next install or removed on the next disable."""
+        source_dir = _source_dir(tmp_path, names=("demo-a",))
+        installer = SkillsInstaller(source_dir, tmp_path / "home")
+        installer.install(Harness.PI)
+        target = tmp_path / "home" / ".pi" / "agent" / "skills" / "demo-a"
+        (target / "SKILL.md").write_text("operator-edited\n", encoding="utf-8")
+
+        assert SkillSource.is_owned(target) is False
+
+
+class TestForeignNonDirectoryTargets:
+    """§ safety: a same-named regular file or symlink is foreign too --
+    :meth:`SkillSource.is_owned` requires a DIRECTORY, so neither can ever
+    be verified-owned, no matter what it contains or points at."""
+
+    def test_install_refuses_a_same_named_regular_file(self, tmp_path: Path) -> None:
+        source_dir = _source_dir(tmp_path, names=("demo-a",))
+        home = tmp_path / "home"
+        installer = SkillsInstaller(source_dir, home)
+        target_dir = home / ".pi" / "agent" / "skills"
+        target_dir.mkdir(parents=True)
+        collision = target_dir / "demo-a"
+        collision.write_text("not a directory\n", encoding="utf-8")
+
+        outcomes = installer.install(Harness.PI)
+
+        assert outcomes == (SkillOutcome(Harness.PI, "demo-a", "foreign", collision),)
+        assert collision.read_text(encoding="utf-8") == "not a directory\n"
+
+    def test_install_refuses_a_dangling_symlink(self, tmp_path: Path) -> None:
+        source_dir = _source_dir(tmp_path, names=("demo-a",))
+        home = tmp_path / "home"
+        installer = SkillsInstaller(source_dir, home)
+        target_dir = home / ".pi" / "agent" / "skills"
+        target_dir.mkdir(parents=True)
+        collision = target_dir / "demo-a"
+        collision.symlink_to(target_dir / "nowhere")
+
+        outcomes = installer.install(Harness.PI)
+
+        assert outcomes == (SkillOutcome(Harness.PI, "demo-a", "foreign", collision),)
+        assert collision.is_symlink()
+        assert not collision.exists()  # still dangling -- never replaced
+
+    def test_remove_refuses_a_same_named_regular_file(self, tmp_path: Path) -> None:
+        source_dir = _source_dir(tmp_path, names=("demo-a",))
+        home = tmp_path / "home"
+        installer = SkillsInstaller(source_dir, home)
+        target_dir = home / ".pi" / "agent" / "skills"
+        target_dir.mkdir(parents=True)
+        collision = target_dir / "demo-a"
+        collision.write_text("not a directory\n", encoding="utf-8")
+
+        outcomes = installer.remove(Harness.PI)
+
+        assert outcomes[0].action == "foreign"
+        assert collision.is_file()
+
+    def test_status_reports_foreign_for_a_same_named_regular_file(
+        self, tmp_path: Path
+    ) -> None:
+        source_dir = _source_dir(tmp_path, names=("demo-a",))
+        home = tmp_path / "home"
+        installer = SkillsInstaller(source_dir, home)
+        target_dir = home / ".pi" / "agent" / "skills"
+        target_dir.mkdir(parents=True)
+        collision = target_dir / "demo-a"
+        collision.write_text("not a directory\n", encoding="utf-8")
+
+        statuses = [
+            o
+            for o in installer.status()
+            if o.skill == "demo-a" and o.harness is Harness.PI
+        ]
+
+        assert statuses == [SkillOutcome(Harness.PI, "demo-a", "foreign", collision)]
+
+
+class TestRemoveOrphanedDeposits:
+    """§ safety: disable sweeps a quarry-owned deposit under a RETIRED name too.
+
+    :meth:`SkillSource.skill_names` lists only what the source tree ships
+    TODAY, so a rename or removal upstream (like this PR's own
+    ``recall`` → renamed skill) would otherwise leave the old deposit
+    behind forever, invisible to a by-current-name-only removal loop.
+    """
+
+    def test_a_deposit_under_a_retired_skill_name_is_swept_on_remove(
+        self, tmp_path: Path
+    ) -> None:
+        source_dir = _source_dir(tmp_path, names=("old-skill",))
+        home = tmp_path / "home"
+        installer = SkillsInstaller(source_dir, home)
+        installer.install(Harness.PI)
+        target = home / ".pi" / "agent" / "skills" / "old-skill"
+        assert target.is_dir()
+
+        shutil.rmtree(source_dir / "old-skill")  # simulate the upstream rename
+
+        outcomes = installer.remove(Harness.PI)
+
+        assert outcomes == (SkillOutcome(Harness.PI, "old-skill", "removed", target),)
+        assert not target.exists()
+
+    def test_remove_all_sweeps_an_orphaned_deposit_across_every_harness(
+        self, tmp_path: Path
+    ) -> None:
+        source_dir = _source_dir(tmp_path, names=("old-skill",))
+        home = tmp_path / "home"
+        installer = SkillsInstaller(source_dir, home)
+        for harness in (Harness.PI, Harness.OPENCODE, Harness.CODEX):
+            installer.install(harness)
+        shutil.rmtree(source_dir / "old-skill")
+
+        outcomes = installer.remove_all()
+
+        removed = {
+            o.harness
+            for o in outcomes
+            if o.skill == "old-skill" and o.action == "removed"
+        }
+        assert removed == {Harness.PI, Harness.OPENCODE, Harness.CODEX}
+        for harness in (Harness.PI, Harness.OPENCODE, Harness.CODEX):
+            root = harness.deposit_root(home)
+            assert root is not None
+            assert not (root / "old-skill").exists()
+
+    def test_a_foreign_directory_under_an_unknown_name_is_never_swept(
+        self, tmp_path: Path
+    ) -> None:
+        source_dir = _source_dir(tmp_path, names=("demo-a",))
+        home = tmp_path / "home"
+        installer = SkillsInstaller(source_dir, home)
+        target_dir = home / ".pi" / "agent" / "skills"
+        target_dir.mkdir(parents=True)
+        foreign = target_dir / "unrelated-tool"
+        foreign.mkdir()
+        (foreign / "notes.txt").write_text("keep\n", encoding="utf-8")
+
+        outcomes = installer.remove(Harness.PI)
+
+        assert all(o.skill != "unrelated-tool" for o in outcomes)
+        assert foreign.is_dir()
+        assert (foreign / "notes.txt").is_file()

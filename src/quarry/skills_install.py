@@ -202,19 +202,22 @@ class SkillsInstaller:
         return tuple(outcomes)
 
     def remove(self, harness: Harness) -> tuple[SkillOutcome, ...]:
-        """Delete every deposited skill for *harness*; idempotent.
+        """Delete every deposited skill for *harness*, PLUS any orphaned one.
 
-        Refuses (``action="foreign"``) any same-named directory that lacks
-        quarry's own manifest — a directory this installer never deposited
-        is never a candidate for ``shutil.rmtree``, no matter how it got
-        there (see the safety note on :meth:`_is_foreign`).
+        Refuses (``action="foreign"``) any same-named entry that is not a
+        directory quarry can verify it deposited — never a candidate for
+        ``shutil.rmtree``, no matter how it got there (see the safety note
+        on :meth:`_is_foreign`). Also sweeps *root* for verified-owned
+        deposits under names :meth:`SkillSource.skill_names` no longer
+        lists — a renamed or retired skill (see :meth:`_remove_orphans`).
         """
         root = harness.deposit_root(self._home)
         if root is None:
             return self._unsupported(harness)
-        return tuple(
-            self._remove_one(harness, name, root) for name in self._source.skill_names()
-        )
+        known = self._source.skill_names()
+        outcomes = [self._remove_one(harness, name, root) for name in known]
+        outcomes.extend(self._remove_orphans(harness, root, known))
+        return tuple(outcomes)
 
     def remove_all(self) -> tuple[SkillOutcome, ...]:
         """Delete every deposited skill from every harness; idempotent."""
@@ -230,31 +233,36 @@ class SkillsInstaller:
         )
 
     def _install_one(self, harness: Harness, name: str, root: Path) -> SkillOutcome:
-        """Deposit *name* into *root* -- but never overwrite a foreign directory.
+        """Deposit *name* into *root* -- but never overwrite a foreign entry.
 
-        A same-named directory with no readable quarry manifest is left
-        alone and reported ``"foreign"`` rather than upgraded: :meth:`deposit`
-        renames the live directory aside and deletes it on success, the same
-        destructive shape as :meth:`_remove_one`'s ``rmtree``, so it needs the
-        identical ownership guard (see :meth:`_is_foreign`) -- otherwise a
-        harness-root collision with an unrelated directory of the same name
-        would clobber it silently on the very first install.
+        Any existing filesystem entry at *target* that quarry cannot VERIFY
+        it deposited -- a foreign directory, a same-named regular file, or
+        even a dangling symlink -- is left alone and reported ``"foreign"``
+        rather than upgraded: :meth:`deposit` renames the live directory
+        aside and deletes it on success, the same destructive shape as
+        :meth:`_remove_one`'s ``rmtree``, so it needs the identical
+        ownership guard (see :meth:`_is_foreign`) -- otherwise a
+        harness-root collision with an unrelated entry of the same name
+        would clobber it silently on the very first install. Checking
+        ownership BEFORE comparing hashes also closes a forgery angle a
+        presence-only check would miss: a manifest whose declared hash
+        happens to equal the source's CURRENT hash would otherwise read as
+        ``"current"`` -- untouched, but never proven to be quarry's.
         """
         target = root / name
-        content_hash = self._source.content_hash(name)
-        manifest_hash = SkillSource.read_manifest(target)
-        if manifest_hash == content_hash:
-            return SkillOutcome(harness, name, "current", target)
         if self._is_foreign(target):
             return SkillOutcome(harness, name, "foreign", target)
-        existed_before = target.exists()
+        content_hash = self._source.content_hash(name)
+        if SkillSource.read_manifest(target) == content_hash:
+            return SkillOutcome(harness, name, "current", target)
+        existed_before = SkillsInstaller._exists(target)
         self._source.deposit(name, target)
         action: Action = "upgraded" if existed_before else "deposited"
         return SkillOutcome(harness, name, action, target)
 
     def _status_one(self, harness: Harness, name: str, root: Path) -> SkillOutcome:
         target = root / name
-        if not target.is_dir():
+        if not self._exists(target):
             return SkillOutcome(harness, name, "absent", target)
         if self._is_foreign(target):
             return SkillOutcome(harness, name, "foreign", target)
@@ -271,7 +279,7 @@ class SkillsInstaller:
         provenance.
         """
         target = root / name
-        if not target.is_dir():
+        if not SkillsInstaller._exists(target):
             return SkillOutcome(harness, name, "absent", target)
         if SkillsInstaller._is_foreign(target):
             return SkillOutcome(harness, name, "foreign", target)
@@ -279,16 +287,53 @@ class SkillsInstaller:
         return SkillOutcome(harness, name, "removed", target)
 
     @staticmethod
+    def _remove_orphans(
+        harness: Harness, root: Path, known: tuple[str, ...]
+    ) -> tuple[SkillOutcome, ...]:
+        """Remove every verified-owned deposit under *root* NOT in *known*.
+
+        :meth:`SkillSource.skill_names` lists skills the source tree ships
+        TODAY -- a skill renamed or retired upstream leaves its old,
+        still-verified-owned deposit behind forever, invisible to a
+        by-current-name-only removal loop. Sweeping *root* directly catches
+        it; :meth:`SkillSource.is_owned` still gates every deletion, so an
+        unrelated foreign directory under an unrecognized name is never a
+        candidate.
+        """
+        if not root.is_dir():
+            return ()
+        known_names = set(known)
+        outcomes: list[SkillOutcome] = []
+        for entry in sorted(root.iterdir()):
+            if entry.name in known_names or not SkillSource.is_owned(entry):
+                continue
+            SkillSource.remove_tree(entry)
+            outcomes.append(SkillOutcome(harness, entry.name, "removed", entry))
+        return tuple(outcomes)
+
+    @staticmethod
+    def _exists(target: Path) -> bool:
+        """Whether *target* names ANY filesystem entry -- file, dir, or symlink.
+
+        ``Path.exists()`` alone follows symlinks and reports ``False`` for a
+        dangling one, which would let a dangling symlink masquerade as
+        "nothing here" and be silently replaced -- the same foreign-entry
+        blind spot :meth:`_is_foreign` closes for install and remove.
+        """
+        return target.is_symlink() or target.exists()
+
+    @staticmethod
     def _is_foreign(target: Path) -> bool:
-        """Whether *target* exists but carries no readable quarry manifest.
+        """Whether *target* exists but is not a directory quarry can PROVE it deposited.
 
         The one "not provably ours" signal shared by install (refuse to
         overwrite), status (report honestly), and remove (refuse to
         delete). Every marketplace-layout Claude Code plugin ships an
         identically-shaped ``plugin/skills/`` tree, so a bare directory-name
-        match proves nothing about provenance — a missing, hand-edited, or
-        corrupt manifest all collapse to the same "no proof quarry deposited
-        this" answer (PY-EH-8: :meth:`SkillSource.read_manifest` already
-        documents ``None`` as that one contract for all three causes).
+        match proves nothing about provenance, and neither does an
+        unverified manifest (see :meth:`SkillSource.is_owned`) -- a missing
+        manifest, a forged one, a hand-edited one, a corrupt one, a
+        same-named regular file, or a dangling symlink all collapse to the
+        same "no proof quarry deposited this" answer.
         """
-        return target.is_dir() and SkillSource.read_manifest(target) is None
+        return SkillsInstaller._exists(target) and not SkillSource.is_owned(target)
