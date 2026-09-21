@@ -1392,7 +1392,68 @@ decay-band join --- a hit's document identity against the live catalog's
 query log has no LanceDB import, so only the code already holding
 \texttt{ctx.database} can perform it.  \texttt{SearchRequest} carries an
 optional \texttt{surface} field (\texttt{cli}/\texttt{mcp}/\texttt{http}/
-\texttt{plugin}) for provenance.
+\texttt{plugin}) for provenance; the CLI \texttt{find} path stamps
+\texttt{surface="cli"} the same way the MCP \texttt{find} tool stamps
+\texttt{"mcp"}.
+
+\subsection{Skills and Cross-Harness Distribution (quarry-x7ja)}
+
+Quarry ships two Agent Skills at \texttt{plugin/skills/}: \texttt{quarry-recall}
+(retrieve --- understand code, recall a project decision, recall memory, all
+backed by \texttt{quarry find} with different scope flags) and
+\texttt{quarry-capture} (persist --- \texttt{remember}/\texttt{learn}/
+\texttt{ingest}, the five-moments timing, the \texttt{agent\_handle}
+discipline).  Both drive the \texttt{quarry} CLI directly rather than naming
+MCP tools, so the same skill content works unmodified on any harness; deep
+detail (the failure-mode recovery table, scoping and decay, the memory-type
+vocabulary) lives in each skill's \texttt{references/} for progressive
+disclosure, while the SessionStart trigger trailer, the MCP server's
+\texttt{instructions} block, and the ethos-injected memory guide are kept to
+short pointer sentences naming the two skills, rather than each independently
+restating the same how-to.
+
+Claude Code reads \texttt{plugin/skills/} directly through the marketplace
+plugin tree --- no deposit step.  \modpath{skills\_install.py}
+(\texttt{SkillsInstaller}) copies the same two skill directories, verbatim,
+into the auto-load location each other harness was confirmed (not guessed)
+to read skills from:
+
+\begin{itemize}
+  \item \textbf{pi} --- \texttt{\textasciitilde{}/.pi/agent/skills/<name>/}, matching
+    \texttt{getAgentDir()}'s resolution to \texttt{\textasciitilde{}/.pi/agent}.
+  \item \textbf{opencode} ---
+    \texttt{\textasciitilde{}/.config/opencode/skills/<name>/},
+    one of the paths opencode's own skill loader globs
+    (\texttt{\{skill,skills\}/**/SKILL.md}) as its ``global skills'' root.
+  \item \textbf{codex} --- \texttt{\textasciitilde{}/.codex/skills/<name>/} (or
+    \texttt{\$CODEX\_HOME}), the location codex's own preinstalled
+    \texttt{skill-installer} skill deposits third-party skills into,
+    explicitly alongside the sibling \texttt{.system/} directory that holds
+    codex's own preinstalled skills --- never inside it.
+\end{itemize}
+
+Each deposit is idempotent and version-stamped: a \texttt{.quarry-skill.json}
+manifest beside the deposited \texttt{SKILL.md} records a short content hash,
+so a re-run with unchanged source content is a no-op and a changed source
+overwrites the stale copy wholesale.  The copy itself is swapped in
+atomically --- written into a temp sibling directory first, the previous
+deposit (if any) renamed to a backup sibling, then the temp directory renamed
+into place, with the backup restored on any rename failure --- so an
+interrupted write never leaves a half-deposited skill on disk (the file-I/O
+safety class this repo's review history flags first).
+
+\texttt{quarry skills install [--agent <id>|--all]} and \texttt{quarry skills
+status} (\modpath{cli\_skills.py}) expose this: \texttt{--all} (the default)
+targets every harness \texttt{SkillsInstaller.detected\_harnesses()} finds on
+the machine (a harness's own top-level config directory, e.g. \texttt{\textasciitilde{}/.codex},
+existing); \texttt{--agent} targets one harness explicitly, detected or not.
+\texttt{quarry disable} retracts the deposits again, but only when the
+disabled repo is quarry's own checkout (\texttt{plugin/skills/} exists directly
+under the repo root being disabled, never found via an ancestor walk --- an
+ancestor walk would true-positive on every path nested inside the quarry
+checkout, including every test's own temp directory, and reach the
+operator's real home directory as a side effect of an unrelated
+\texttt{disable} call).
 
 % ===================================================================
 \section{Logging and Exceptions}
