@@ -13,23 +13,25 @@ harness orchestration — which harness, which root, which skills go where.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, Literal, Self, final
+from pathlib import Path
+from typing import Literal, Self, final
 
+from quarry.own_checkout import OwnCheckout
 from quarry.skills_source import SkillSource
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 __all__ = ["Harness", "SkillOutcome", "SkillsInstaller"]
 
 # The closed vocabulary a deposit/status/removal call reports. "unsupported"
-# is Claude Code only (no deposit target); "current"/"stale" are status-only;
-# "deposited"/"upgraded" are install-only; "removed"/"absent"/"foreign" are
-# removal-only ("foreign": a same-named directory exists but carries no
-# quarry manifest, so it was refused, not deleted — see PY-EH-8/safety note
-# on :meth:`SkillsInstaller._remove_one`).
+# is Claude Code only (no deposit target); "current"/"stale" are status
+# outcomes reported alongside it; "deposited"/"upgraded" are install-only;
+# "removed"/"absent" are removal-only; "foreign" is shared by all three
+# write/read paths (install, status, remove) — a same-named directory exists
+# but carries no quarry manifest, so it was refused/reported-as-is rather
+# than overwritten or deleted (see PY-EH-8/safety note on
+# :meth:`SkillsInstaller._is_foreign`).
 Action = Literal[
     "deposited",
     "upgraded",
@@ -75,7 +77,7 @@ class Harness(StrEnum):
             return home / ".pi" / "agent" / "skills"
         if self is Harness.OPENCODE:
             return home / ".config" / "opencode" / "skills"
-        return home / ".codex" / "skills"
+        return self._codex_home(home) / "skills"
 
     def detected(self, home: Path) -> bool:
         """Return whether this harness looks installed on *home*'s machine."""
@@ -85,7 +87,18 @@ class Harness(StrEnum):
             return (home / ".pi").is_dir()
         if self is Harness.OPENCODE:
             return (home / ".config" / "opencode").is_dir()
-        return (home / ".codex").is_dir()
+        return self._codex_home(home).is_dir()
+
+    @staticmethod
+    def _codex_home(home: Path) -> Path:
+        """Codex's own root: ``$CODEX_HOME`` if set, else ``<home>/.codex``.
+
+        Codex itself resolves its home this way; hardcoding ``~/.codex``
+        would deposit nowhere codex actually loads from on a machine where
+        the operator points ``CODEX_HOME`` elsewhere.
+        """
+        codex_home = os.environ.get("CODEX_HOME")
+        return Path(codex_home) if codex_home else home / ".codex"
 
 
 @final
@@ -128,12 +141,30 @@ class SkillsInstaller:
 
     @staticmethod
     def locate_source(start: Path) -> Path:
-        """Walk upward from *start* to find the repo's ``plugin/skills`` tree.
+        """Walk upward from *start* to find quarry's OWN ``plugin/skills`` tree.
 
-        Delegates to :meth:`SkillSource.locate`; kept here too since this is
-        the class every caller (the CLI, tests) already names.
+        Delegates to :meth:`SkillSource.locate` for the shape match, then
+        refuses the result unless the enclosing repo is provably quarry's
+        OWN checkout (:class:`quarry.own_checkout.OwnCheckout`). Shape
+        alone proves nothing -- every marketplace-layout Claude Code plugin
+        (lux, prfaq, dungeon, punt-kit, ...) ships an identically-shaped
+        ``plugin/skills/`` tree, so running ``quarry skills install`` from a
+        hostile or unrelated checkout would otherwise deposit THAT repo's
+        skills as quarry's own (mirrors the disable-side ownership guard in
+        :mod:`quarry.enablement`). Raising ``FileNotFoundError`` here, the
+        same type :meth:`SkillSource.locate` already raises for "no tree
+        found," keeps one error type for every "nothing installable here"
+        outcome at this boundary.
         """
-        return SkillSource.locate(start)
+        skills_dir = SkillSource.locate(start)
+        repo_root = skills_dir.parent.parent
+        if not OwnCheckout(repo_root).confirmed():
+            msg = (
+                f"{skills_dir} is not part of quarry's own checkout -- "
+                "refusing to install skills from an untrusted source."
+            )
+            raise FileNotFoundError(msg)
+        return skills_dir
 
     def detected_harnesses(self) -> tuple[Harness, ...]:
         """Return every harness that looks installed on this machine."""
@@ -176,7 +207,7 @@ class SkillsInstaller:
         Refuses (``action="foreign"``) any same-named directory that lacks
         quarry's own manifest — a directory this installer never deposited
         is never a candidate for ``shutil.rmtree``, no matter how it got
-        there (see the safety note on :meth:`_remove_one`).
+        there (see the safety note on :meth:`_is_foreign`).
         """
         root = harness.deposit_root(self._home)
         if root is None:
@@ -199,10 +230,23 @@ class SkillsInstaller:
         )
 
     def _install_one(self, harness: Harness, name: str, root: Path) -> SkillOutcome:
+        """Deposit *name* into *root* -- but never overwrite a foreign directory.
+
+        A same-named directory with no readable quarry manifest is left
+        alone and reported ``"foreign"`` rather than upgraded: :meth:`deposit`
+        renames the live directory aside and deletes it on success, the same
+        destructive shape as :meth:`_remove_one`'s ``rmtree``, so it needs the
+        identical ownership guard (see :meth:`_is_foreign`) -- otherwise a
+        harness-root collision with an unrelated directory of the same name
+        would clobber it silently on the very first install.
+        """
         target = root / name
         content_hash = self._source.content_hash(name)
-        if SkillSource.read_manifest(target) == content_hash:
+        manifest_hash = SkillSource.read_manifest(target)
+        if manifest_hash == content_hash:
             return SkillOutcome(harness, name, "current", target)
+        if self._is_foreign(target):
+            return SkillOutcome(harness, name, "foreign", target)
         existed_before = target.exists()
         self._source.deposit(name, target)
         action: Action = "upgraded" if existed_before else "deposited"
@@ -212,6 +256,8 @@ class SkillsInstaller:
         target = root / name
         if not target.is_dir():
             return SkillOutcome(harness, name, "absent", target)
+        if self._is_foreign(target):
+            return SkillOutcome(harness, name, "foreign", target)
         content_hash = self._source.content_hash(name)
         matches = SkillSource.read_manifest(target) == content_hash
         action: Action = "current" if matches else "stale"
@@ -221,17 +267,28 @@ class SkillsInstaller:
     def _remove_one(harness: Harness, name: str, root: Path) -> SkillOutcome:
         """Remove *name* from *root* — but only a directory quarry itself deposited.
 
-        A same-named directory that carries no ``.quarry-skill.json`` manifest
-        is left alone and reported ``"foreign"``. Every marketplace-layout
-        Claude Code plugin ships a ``plugin/skills/`` tree, so a name match
-        alone proves nothing about provenance — a bare ``target.is_dir()``
-        check here would ``rmtree`` a directory this installer never wrote,
-        including one holding real, unrelated user data.
+        See :meth:`_is_foreign` for why a name match alone never proves
+        provenance.
         """
         target = root / name
         if not target.is_dir():
             return SkillOutcome(harness, name, "absent", target)
-        if SkillSource.read_manifest(target) is None:
+        if SkillsInstaller._is_foreign(target):
             return SkillOutcome(harness, name, "foreign", target)
         SkillSource.remove_tree(target)
         return SkillOutcome(harness, name, "removed", target)
+
+    @staticmethod
+    def _is_foreign(target: Path) -> bool:
+        """Whether *target* exists but carries no readable quarry manifest.
+
+        The one "not provably ours" signal shared by install (refuse to
+        overwrite), status (report honestly), and remove (refuse to
+        delete). Every marketplace-layout Claude Code plugin ships an
+        identically-shaped ``plugin/skills/`` tree, so a bare directory-name
+        match proves nothing about provenance — a missing, hand-edited, or
+        corrupt manifest all collapse to the same "no proof quarry deposited
+        this" answer (PY-EH-8: :meth:`SkillSource.read_manifest` already
+        documents ``None`` as that one contract for all three causes).
+        """
+        return target.is_dir() and SkillSource.read_manifest(target) is None

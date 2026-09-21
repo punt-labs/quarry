@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
@@ -13,16 +12,11 @@ from quarry.enablement_result import DisablementResult, EnablementResult
 from quarry.file_lock import FileLock
 from quarry.gitignore import QuarryGitignore
 from quarry.guidance import REPO_IMPORT_LINE, Guidance
+from quarry.own_checkout import OwnCheckout
 from quarry.skills_install import SkillsInstaller
 
 if TYPE_CHECKING:
     from quarry.skills_install import SkillOutcome
-
-# The PyPI/pyproject name that identifies quarry's OWN checkout (PL-PL-2).
-# ``_retract_own_skills`` gates on this, not merely a matching directory
-# shape -- every marketplace-layout Claude Code plugin (lux, prfaq, dungeon,
-# punt-kit, ...) ships an identically-shaped ``plugin/skills/`` tree.
-_OWN_PACKAGE_NAME = "punt-quarry"
 
 __all__ = ["DisablementResult", "Enablement", "EnablementResult"]
 
@@ -167,7 +161,7 @@ class _SkillRetraction:
     Two guards, both required (defense-in-depth for an ``rmtree`` under the
     operator's real ``$HOME``):
 
-    1. **Identity** (:meth:`_is_own_checkout`): every marketplace-layout
+    1. **Identity** (:class:`quarry.own_checkout.OwnCheckout`): every marketplace-layout
        Claude Code plugin — lux, prfaq, dungeon, punt-kit, and quarry itself
        — ships an identically-shaped ``plugin/skills/`` tree, so that shape
        alone proves nothing. Only a checkout whose ``pyproject.toml`` names
@@ -234,25 +228,8 @@ class _SkillRetraction:
 
     def _should_retract(self) -> bool:
         """Whether a real source tree exists AND *root* is our own checkout."""
-        return self._skills_source_dir().is_dir() and self._is_own_checkout()
+        has_source = self._skills_source_dir().is_dir()
+        return has_source and OwnCheckout(self._root).confirmed()
 
     def _skills_source_dir(self) -> Path:
         return self._root / "plugin" / "skills"
-
-    def _is_own_checkout(self) -> bool:
-        """Whether *root* is quarry's OWN checkout, per its ``pyproject.toml``.
-
-        Never raises: a missing or unreadable file, invalid UTF-8, malformed
-        TOML, or one missing a ``[project]`` table or ``name`` key, all mean
-        "not provably quarry's own checkout" (PY-EH-1) — the safe default for
-        a guard that gates a destructive operation. ``ValueError`` subsumes
-        both ``tomllib.TOMLDecodeError`` and the ``UnicodeDecodeError`` that
-        ``read_text(encoding="utf-8")`` raises on invalid UTF-8 bytes.
-        """
-        pyproject = self._root / "pyproject.toml"
-        try:
-            data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-            name = data["project"]["name"]
-        except (OSError, ValueError, KeyError, TypeError):
-            return False
-        return isinstance(name, str) and name == _OWN_PACKAGE_NAME

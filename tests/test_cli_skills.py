@@ -74,6 +74,12 @@ def _repo_with_skills(tmp_path: Path, names: tuple[str, ...] = ("demo",)) -> Pat
     repo = tmp_path / "repo"
     for name in names:
         _write_skill(repo / "plugin" / "skills", name)
+    # ``locate_source`` refuses a tree it cannot prove is quarry's own
+    # (identity guard) -- every fixture repo here stands in for quarry
+    # itself, so it needs a matching pyproject.toml.
+    (repo / "pyproject.toml").write_text(
+        '[project]\nname = "punt-quarry"\n', encoding="utf-8"
+    )
     return repo
 
 
@@ -191,6 +197,9 @@ class TestInstall:
         distinct from the "no harnesses" case (mdm review finding)."""
         repo = tmp_path / "repo"
         (repo / "plugin" / "skills").mkdir(parents=True)  # empty -- no skills
+        (repo / "pyproject.toml").write_text(
+            '[project]\nname = "punt-quarry"\n', encoding="utf-8"
+        )
         home = tmp_path / "home"
         (home / ".codex").mkdir(parents=True)
         monkeypatch.chdir(repo)

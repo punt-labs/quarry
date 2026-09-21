@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from quarry.skills_install import Harness, SkillOutcome, SkillsInstaller
-from quarry.skills_source import SkillDepositError
+from quarry.skills_source import SkillDepositError, SkillSource
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -28,11 +28,37 @@ def _write_skill(root: Path, name: str, body: str = "hello") -> None:
     (references / "detail.md").write_text("detail\n", encoding="utf-8")
 
 
-def _source_dir(tmp_path: Path, names: Iterable[str] = ("demo-a", "demo-b")) -> Path:
+def _write_pyproject(root: Path, package_name: str) -> None:
+    """Write a minimal ``pyproject.toml`` naming *package_name*."""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "pyproject.toml").write_text(
+        f'[project]\nname = "{package_name}"\n', encoding="utf-8"
+    )
+
+
+def _source_dir(
+    tmp_path: Path,
+    names: Iterable[str] = ("demo-a", "demo-b"),
+    *,
+    own: bool = True,
+) -> Path:
+    """Build ``<tmp_path>/repo/plugin/skills/`` and return it via ``locate_source``.
+
+    ``own=True`` (the default) stamps the repo as quarry's OWN checkout --
+    ``locate_source`` refuses any tree it cannot prove is quarry's, so every
+    fixture exercising a real install/status/remove path needs one unless a
+    test is specifically exercising that refusal (``own=False``).
+    """
     root = tmp_path / "repo" / "plugin" / "skills"
     root.mkdir(parents=True)
     for name in names:
         _write_skill(root, name)
+    if not own:
+        # No pyproject.toml at all -- ``locate_source`` would refuse this
+        # tree, so callers exercising that refusal need the raw path, not
+        # a round trip through the guard they are testing.
+        return root
+    _write_pyproject(tmp_path / "repo", "punt-quarry")
     return SkillsInstaller.locate_source(tmp_path / "repo")
 
 
@@ -57,7 +83,48 @@ class TestLocateSource:
             SkillsInstaller.locate_source(outside)
 
 
+class TestLocateSourceIdentityGuard:
+    """§ safety: install never deposits from a source it cannot prove is quarry's own.
+
+    Mirrors the disable-side ownership guard (``TestDisableRetractsOwnSkills``
+    in ``test_enablement.py``): shape alone (a ``plugin/skills/`` tree) proves
+    nothing, since every marketplace-layout Claude Code plugin ships an
+    identically-shaped tree.
+    """
+
+    def test_refuses_a_tree_with_no_pyproject_toml_at_all(self, tmp_path: Path) -> None:
+        source_dir = _source_dir(tmp_path, names=("demo-a",), own=False)
+        with pytest.raises(
+            FileNotFoundError, match="not part of quarry's own checkout"
+        ):
+            SkillsInstaller.locate_source(source_dir.parent.parent)
+
+    def test_refuses_a_tree_belonging_to_a_different_package(
+        self, tmp_path: Path
+    ) -> None:
+        """The blocking safety hole: an unrelated marketplace-layout plugin
+        (e.g. lux) shipping the identically-shaped tree must never be
+        accepted as an install source."""
+        source_dir = _source_dir(tmp_path, names=("demo-a",), own=False)
+        _write_pyproject(source_dir.parent.parent, "punt-lux")
+
+        with pytest.raises(
+            FileNotFoundError, match="not part of quarry's own checkout"
+        ):
+            SkillsInstaller.locate_source(source_dir.parent.parent)
+
+    def test_accepts_a_tree_naming_the_real_package(self, tmp_path: Path) -> None:
+        source_dir = _source_dir(tmp_path, names=("demo-a",), own=True)
+        assert SkillsInstaller.locate_source(source_dir.parent.parent) == source_dir
+
+
 class TestHarnessPaths:
+    @pytest.fixture(autouse=True)
+    def _no_codex_home_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Keep ``CODEX_HOME`` unset so these default-path tests are hermetic
+        regardless of what the host running the suite has exported."""
+        monkeypatch.delenv("CODEX_HOME", raising=False)
+
     def test_claude_has_no_deposit_root(self, tmp_path: Path) -> None:
         assert Harness.CLAUDE.deposit_root(tmp_path) is None
 
@@ -86,6 +153,46 @@ class TestHarnessPaths:
         assert Harness.CODEX.detected(tmp_path) is False
         (tmp_path / ".codex").mkdir()
         assert Harness.CODEX.detected(tmp_path) is True
+
+    def test_codex_deposit_root_honors_codex_home_env_var(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A non-default-configured codex must be deposited to where IT
+        loads from, not the hardcoded ``~/.codex`` default."""
+        codex_home = tmp_path / "custom-codex"
+        monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+        assert Harness.CODEX.deposit_root(tmp_path / "home") == codex_home / "skills"
+
+    def test_codex_detected_honors_codex_home_env_var(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        codex_home = tmp_path / "custom-codex"
+        codex_home.mkdir()
+        monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+        assert Harness.CODEX.detected(tmp_path / "home") is True
+
+    def test_codex_not_detected_when_codex_home_env_var_points_elsewhere(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "nonexistent-codex-home"))
+        (tmp_path / "home" / ".codex").mkdir(parents=True)  # the default, unused
+
+        assert Harness.CODEX.detected(tmp_path / "home") is False
+
+    def test_install_deposits_under_codex_home_when_set(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        source_dir = _source_dir(tmp_path, names=("demo-a",))
+        codex_home = tmp_path / "custom-codex"
+        monkeypatch.setenv("CODEX_HOME", str(codex_home))
+        installer = SkillsInstaller(source_dir, tmp_path / "home")
+
+        installer.install(Harness.CODEX)
+
+        assert (codex_home / "skills" / "demo-a" / "SKILL.md").is_file()
+        assert not (tmp_path / "home" / ".codex").exists()
 
 
 class TestInstall:
@@ -380,6 +487,39 @@ class TestDepositAtomicity:
         assert excinfo.value.backup.is_dir()  # the last-known-good copy survives
         assert excinfo.value.__cause__ is not None
 
+    def test_a_failed_backup_rename_cleans_up_the_freshly_copied_tmp(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failure renaming the live target aside to its backup name happens
+        BEFORE tmp is ever swapped in; the freshly-copied tmp must still be
+        cleaned up immediately, not left for the next deposit's orphan sweep
+        to eventually find."""
+        source_dir = _source_dir(tmp_path, names=("demo-a",))
+        home = tmp_path / "home"
+        installer = SkillsInstaller(source_dir, home)
+        installer.install(Harness.PI)
+        target = home / ".pi" / "agent" / "skills" / "demo-a"
+        original_text = (target / "SKILL.md").read_text(encoding="utf-8")
+        (source_dir / "demo-a" / "SKILL.md").write_text("v2\n", encoding="utf-8")
+
+        real_rename = Path.rename
+
+        def _boom(self: Path, target_path: str | Path) -> Path:
+            if self == target:
+                msg = "permission denied"
+                raise OSError(msg)
+            return real_rename(self, target_path)
+
+        monkeypatch.setattr(Path, "rename", _boom)
+
+        with pytest.raises(OSError, match="permission denied"):
+            installer.install(Harness.PI)
+
+        assert target.is_dir()  # the original deposit is untouched
+        assert (target / "SKILL.md").read_text(encoding="utf-8") == original_text
+        # no leaked tmp (or backup, which was never created) siblings
+        assert list(target.parent.glob(".demo-a.*")) == []
+
 
 class TestOrphanSweep:
     def test_a_stale_tmp_from_a_different_pid_is_swept_on_the_next_deposit(
@@ -416,6 +556,41 @@ class TestOrphanSweep:
         installer.install(Harness.PI)
 
         assert not stray_file.exists()
+
+    def test_a_skill_named_with_a_glob_metacharacter_does_not_sweep_unrelated_siblings(
+        self, tmp_path: Path
+    ) -> None:
+        """A skill literally named ``*`` must not turn the orphan-sweep glob
+        into a wildcard matching -- and deleting -- an unrelated sibling's
+        own orphaned temp directory."""
+        source_dir = _source_dir(tmp_path, names=("*",))
+        home = tmp_path / "home"
+        installer = SkillsInstaller(source_dir, home)
+        target_dir = home / ".pi" / "agent" / "skills"
+        target_dir.mkdir(parents=True)
+        unrelated_orphan = target_dir / ".demo-a.tmp-999999"
+        unrelated_orphan.mkdir()
+        (unrelated_orphan / "keep.txt").write_text("keep\n", encoding="utf-8")
+
+        installer.install(Harness.PI)
+
+        assert unrelated_orphan.exists()  # untouched despite the "*" skill's sweep
+        assert (target_dir / "*" / "SKILL.md").is_file()
+
+    def test_sweep_orphans_escapes_a_glob_metacharacter_directly(
+        self, tmp_path: Path
+    ) -> None:
+        """Unit-level regression for the escape itself, independent of a
+        full install round trip."""
+        parent = tmp_path / "skills"
+        parent.mkdir()
+        unrelated = parent / ".demo-a.tmp-12345"
+        unrelated.mkdir()
+        (unrelated / "keep.txt").write_text("keep\n", encoding="utf-8")
+
+        SkillSource._sweep_orphans(parent, "*")
+
+        assert unrelated.exists()
 
 
 class TestRemoveManifestOwnership:
@@ -469,9 +644,16 @@ class TestRemoveManifestOwnership:
 
 
 class TestCorruptManifest:
-    """A hand-edited or corrupt ``.quarry-skill.json`` never crashes."""
+    """A hand-edited or corrupt ``.quarry-skill.json`` never crashes -- and,
+    per the foreign-overwrite guard, is never silently upgraded either: a
+    corrupt manifest is indistinguishable from "no manifest at all" (see
+    :meth:`SkillsInstaller._is_foreign`), so both install and status treat
+    it as foreign, not stale.
+    """
 
-    def test_install_upgrades_over_a_corrupt_manifest(self, tmp_path: Path) -> None:
+    def test_install_refuses_to_overwrite_a_corrupt_manifest(
+        self, tmp_path: Path
+    ) -> None:
         source_dir = _source_dir(tmp_path, names=("demo-a",))
         home = tmp_path / "home"
         installer = SkillsInstaller(source_dir, home)
@@ -482,10 +664,12 @@ class TestCorruptManifest:
 
         outcomes = installer.install(Harness.PI)
 
-        assert outcomes == (SkillOutcome(Harness.PI, "demo-a", "upgraded", target),)
-        assert (target / ".quarry-skill.json").is_file()
+        assert outcomes == (SkillOutcome(Harness.PI, "demo-a", "foreign", target),)
+        assert (target / "SKILL.md").read_text(encoding="utf-8") == "stale\n"
 
-    def test_status_reports_stale_over_a_corrupt_manifest(self, tmp_path: Path) -> None:
+    def test_status_reports_foreign_over_a_corrupt_manifest(
+        self, tmp_path: Path
+    ) -> None:
         source_dir = _source_dir(tmp_path, names=("demo-a",))
         home = tmp_path / "home"
         installer = SkillsInstaller(source_dir, home)
@@ -503,4 +687,82 @@ class TestCorruptManifest:
             if o.skill == "demo-a" and o.harness is Harness.PI
         ]
 
-        assert statuses[0].action == "stale"
+        assert statuses[0].action == "foreign"
+
+
+class TestInstallForeignOverwriteGuard:
+    """§ safety: install never clobbers a same-named directory it never deposited."""
+
+    def test_install_refuses_a_directory_with_no_manifest_and_does_not_touch_it(
+        self, tmp_path: Path
+    ) -> None:
+        source_dir = _source_dir(tmp_path, names=("demo-a",))
+        home = tmp_path / "home"
+        installer = SkillsInstaller(source_dir, home)
+        foreign = home / ".pi" / "agent" / "skills" / "demo-a"
+        foreign.mkdir(parents=True)
+        (foreign / "NOTES.md").write_text("not quarry's\n", encoding="utf-8")
+
+        outcomes = installer.install(Harness.PI)
+
+        assert outcomes == (SkillOutcome(Harness.PI, "demo-a", "foreign", foreign),)
+        assert (foreign / "NOTES.md").is_file()
+        assert not (foreign / "SKILL.md").exists()
+
+    def test_status_reports_foreign_for_a_directory_with_no_manifest(
+        self, tmp_path: Path
+    ) -> None:
+        source_dir = _source_dir(tmp_path, names=("demo-a",))
+        home = tmp_path / "home"
+        installer = SkillsInstaller(source_dir, home)
+        foreign = home / ".pi" / "agent" / "skills" / "demo-a"
+        foreign.mkdir(parents=True)
+        (foreign / "NOTES.md").write_text("not quarry's\n", encoding="utf-8")
+
+        statuses = [
+            o
+            for o in installer.status()
+            if o.skill == "demo-a" and o.harness is Harness.PI
+        ]
+
+        assert statuses == [SkillOutcome(Harness.PI, "demo-a", "foreign", foreign)]
+
+
+class TestSymlinkSafety:
+    """§ safety: a symlink in the source tree is never dereferenced into the
+    deposited copy -- a ``stolen.txt -> /secret`` link must land as a
+    symlink, never as a regular file materializing the target's bytes."""
+
+    def test_deposit_preserves_a_symlink_instead_of_dereferencing_it(
+        self, tmp_path: Path
+    ) -> None:
+        secret = tmp_path / "secret.txt"
+        secret.write_text("do-not-leak\n", encoding="utf-8")
+        source_dir = _source_dir(tmp_path, names=("demo-a",))
+        (source_dir / "demo-a" / "stolen.txt").symlink_to(secret)
+        installer = SkillsInstaller(source_dir, tmp_path / "home")
+
+        installer.install(Harness.PI)
+
+        deposited = (
+            tmp_path / "home" / ".pi" / "agent" / "skills" / "demo-a" / "stolen.txt"
+        )
+        assert deposited.is_symlink()
+        assert deposited.readlink() == secret
+
+    def test_content_hash_is_based_on_the_link_target_not_its_bytes(
+        self, tmp_path: Path
+    ) -> None:
+        secret = tmp_path / "secret.txt"
+        secret.write_text("do-not-leak\n", encoding="utf-8")
+        source_dir = _source_dir(tmp_path, names=("demo-a",))
+        (source_dir / "demo-a" / "stolen.txt").symlink_to(secret)
+        source = SkillSource(source_dir)
+        content_hash = source.content_hash("demo-a")
+
+        # Changing the SECRET's bytes (not the link itself) must not move
+        # the hash -- the hash reflects what deposit() actually copies (the
+        # link), not whatever the link happens to point at right now.
+        secret.write_text("changed\n", encoding="utf-8")
+
+        assert source.content_hash("demo-a") == content_hash

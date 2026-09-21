@@ -10,6 +10,7 @@ top — this module knows nothing about harnesses.
 
 from __future__ import annotations
 
+import glob
 import hashlib
 import json
 import os
@@ -106,11 +107,23 @@ class SkillSource:
 
     @staticmethod
     def _hash_tree(skill_dir: Path) -> str:
-        """Return a short, order-independent content hash of *skill_dir*."""
+        """Return a short, order-independent content hash of *skill_dir*.
+
+        A symlink is hashed by its link-target string, never dereferenced.
+        Reading through a symlink to hash whatever bytes it points at would
+        follow it anywhere on the filesystem the same way an unguarded
+        ``copytree`` would (see :meth:`deposit`'s ``symlinks=True``) — the
+        hash must reflect what actually gets copied, a link, not a
+        substitute for its target's content.
+        """
         digest = hashlib.sha256()
         for path in sorted(skill_dir.rglob("*")):
-            if path.is_file():
-                digest.update(path.relative_to(skill_dir).as_posix().encode())
+            relative = path.relative_to(skill_dir).as_posix()
+            if path.is_symlink():
+                digest.update(relative.encode())
+                digest.update(path.readlink().as_posix().encode())
+            elif path.is_file():
+                digest.update(relative.encode())
                 digest.update(path.read_bytes())
         return digest.hexdigest()[:16]
 
@@ -157,7 +170,12 @@ class SkillSource:
 
         tmp = target.parent / f".{target.name}.tmp-{os.getpid()}"
         try:
-            shutil.copytree(source_dir, tmp)
+            # symlinks=True: preserve a symlink as a symlink rather than
+            # dereferencing it -- the default would silently copy whatever
+            # bytes the link happens to point at (anywhere on the
+            # filesystem the process can read), materializing them as a
+            # regular file in the deposited skill.
+            shutil.copytree(source_dir, tmp, symlinks=True)
             manifest = {
                 "content_hash": content_hash,
                 "format_version": _MANIFEST_FORMAT_VERSION,
@@ -172,16 +190,25 @@ class SkillSource:
 
     @classmethod
     def _swap_in(cls, name: str, tmp: Path, target: Path) -> None:
-        """Rename *tmp* into *target*, backing up and restoring on failure."""
+        """Rename *tmp* into *target*, backing up and restoring on failure.
+
+        The backup-rename and the tmp-rename share one ``try`` so a failure
+        at EITHER step cleans up the freshly-copied *tmp* — a failed
+        backup-rename used to happen before any ``try``, leaking *tmp*
+        until the next deposit's orphan sweep happened to find it.
+        """
         backup = target.parent / f".{target.name}.bak-{os.getpid()}"
         had_target = target.exists()
-        if had_target:
-            target.rename(backup)
         try:
+            if had_target:
+                target.rename(backup)
             tmp.rename(target)
         except OSError as exc:
             shutil.rmtree(tmp, ignore_errors=True)
-            if not had_target:
+            # ``backup.exists()`` distinguishes the two failure sites: if the
+            # backup rename itself failed, *target* was never touched (POSIX
+            # rename is all-or-nothing) and there is nothing to restore.
+            if not had_target or not backup.exists():
                 raise
             cls._restore_backup(name, backup, target, exc)
         else:
@@ -216,8 +243,15 @@ class SkillSource:
         also means a run that crashed mid-deposit leaves its pid-named
         orphan behind forever, since nothing with that pid will ever clean
         it up. Swept unconditionally at the start of every real deposit.
+
+        ``name`` is escaped with :func:`glob.escape` before it goes into the
+        pattern: a skill directory literally named e.g. ``*`` would
+        otherwise turn ``.{name}.tmp-*`` into the wildcard ``.*.tmp-*``,
+        matching -- and deleting -- unrelated siblings' orphaned temp/backup
+        directories.
         """
-        for pattern in (f".{name}.tmp-*", f".{name}.bak-*"):
+        escaped = glob.escape(name)
+        for pattern in (f".{escaped}.tmp-*", f".{escaped}.bak-*"):
             for orphan in parent.glob(pattern):
                 if orphan.is_dir():
                     shutil.rmtree(orphan, ignore_errors=True)
