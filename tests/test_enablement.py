@@ -23,6 +23,7 @@ from quarry.enablement_result import DisablementResult
 from quarry.file_lock import FileLock
 from quarry.gitignore import CAPTURES_GITIGNORE_ENTRY, QuarryGitignore
 from quarry.guidance import REPO_IMPORT_LINE
+from quarry.skills_install import Harness, SkillsInstaller
 from tests.conftest import FakeRegistryClient
 
 
@@ -224,6 +225,65 @@ def test_disable_is_idempotent(tmp_path: Path) -> None:
     second = Enablement(tmp_path).disable()
     assert second.import_pruned is False
     assert second.enabled_marker_removed is False
+
+
+class TestDisableRetractsOwnSkills:
+    """§ cross-harness skills: disable retracts them only for quarry's own checkout.
+
+    An ordinary target repo (every ``Enablement(tmp_path)`` call in this
+    file) must never touch the operator's real home directory — this is
+    checked directly by asserting on a stub ``Path.home`` rather than by
+    absence of a crash, since a bug here would silently reach outside the
+    test's own tmp_path.
+    """
+
+    @staticmethod
+    def _write_skill(root: Path, name: str) -> None:
+        skill_dir = root / "plugin" / "skills" / name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: test\n---\n\nbody\n", encoding="utf-8"
+        )
+
+    def test_ordinary_repo_never_touches_the_home_directory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
+        Enablement(tmp_path / "repo").enable()
+
+        Enablement(tmp_path / "repo").disable()
+
+        assert not home.exists()  # never created -- disable never looked here
+
+    def test_own_checkout_retracts_deposited_skills(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
+        repo = tmp_path / "quarry-checkout"
+        self._write_skill(repo, "demo")
+        Enablement(repo).enable()
+        SkillsInstaller(repo / "plugin" / "skills", home).install(Harness.CODEX)
+        deposited = home / ".codex" / "skills" / "demo"
+        assert deposited.is_dir()
+
+        Enablement(repo).disable()
+
+        assert not deposited.exists()
+
+    def test_own_checkout_with_nothing_deposited_is_a_noop(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
+        repo = tmp_path / "quarry-checkout"
+        self._write_skill(repo, "demo")
+        Enablement(repo).enable()
+
+        result = Enablement(repo).disable()  # must not raise
+
+        assert result.import_pruned is True
 
 
 # ── concurrency: enable/disable are atomic, never stranding the marker ─

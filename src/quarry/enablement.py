@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Self, final
+import logging
+from pathlib import Path
+from typing import Self, final
 
 from quarry.claude_import import ClaudeMdImport
 from quarry.enabled_marker import EnabledMarker
@@ -10,11 +12,11 @@ from quarry.enablement_result import DisablementResult, EnablementResult
 from quarry.file_lock import FileLock
 from quarry.gitignore import QuarryGitignore
 from quarry.guidance import REPO_IMPORT_LINE, Guidance
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from quarry.skills_install import SkillsInstaller
 
 __all__ = ["DisablementResult", "Enablement", "EnablementResult"]
+
+logger = logging.getLogger(__name__)
 
 
 @final
@@ -48,12 +50,13 @@ class Enablement:
     for the edit itself share the one hold.
     """
 
-    __slots__ = ("_gitignore", "_guidance", "_import", "_marker")
+    __slots__ = ("_gitignore", "_guidance", "_import", "_marker", "_root")
 
     _guidance: Guidance
     _marker: EnabledMarker
     _import: ClaudeMdImport
     _gitignore: QuarryGitignore
+    _root: Path
 
     def __new__(cls, root: Path) -> Self:
         self = super().__new__(cls)
@@ -61,6 +64,7 @@ class Enablement:
         self._marker = EnabledMarker(root)
         self._import = ClaudeMdImport(root / "CLAUDE.md")
         self._gitignore = QuarryGitignore(root)
+        self._root = root
         return self
 
     def enable(self) -> EnablementResult:
@@ -101,9 +105,15 @@ class Enablement:
         interleave under the shared lock.
 
         Deregistering the sync collection is the CALLER's responsibility.
-        This method owns marker + import atomicity only; it deliberately
-        depends on no daemon/HTTP client so the file-system commit point
-        stays pure stdlib. The orchestrator (:func:`quarry.enable.disable_project`)
+        This method owns marker + import atomicity, plus one best-effort side
+        step run after the lock releases: when the disabled repo IS quarry's
+        own checkout, it also retracts quarry's cross-harness skill deposits
+        (``quarry skills install``) — those live under the OPERATOR's home
+        directory, not this repo's tree, so there is nothing to retract for
+        the other 99% of repos ``disable`` runs against, and that absence is
+        the expected case (PY-EH-8), not a failure. It deliberately depends
+        on no daemon/HTTP client so the file-system commit point stays pure
+        stdlib. The orchestrator (:func:`quarry.enable.disable_project`)
         sequences the deregister AFTER this call, so a deregister failure
         leaves a coherent disabled surface (marker-absent, import-absent)
         with only a runtime registration residue a retry converges.
@@ -122,7 +132,30 @@ class Enablement:
             except ValueError:
                 enabled_marker_removed = False
             import_pruned = self._import.prune(REPO_IMPORT_LINE)
+        self._retract_own_skills()
         return DisablementResult(
             import_pruned=import_pruned,
             enabled_marker_removed=enabled_marker_removed,
+        )
+
+    def _retract_own_skills(self) -> None:
+        """Remove quarry's cross-harness skill deposits, only for its own checkout.
+
+        Checks *root* itself for a ``plugin/skills/`` child — never an
+        ancestor walk (unlike :meth:`SkillsInstaller.locate_source`), because
+        an ancestor walk would true-positive on any directory nested inside
+        the quarry checkout (every test's ``tmp_path`` included) and retract
+        the OPERATOR's real cross-harness deposits as a side effect of
+        disabling an unrelated nested path. No match is the expected, normal
+        outcome for every repo except quarry's own — an ordinary repo's
+        ``quarry disable`` has nothing to do with the operator's
+        globally-deposited skills, so it is swallowed, not surfaced.
+        """
+        source_dir = self._root / "plugin" / "skills"
+        if not source_dir.is_dir():
+            return
+        removed = SkillsInstaller(source_dir, Path.home()).remove_all()
+        logger.info(
+            "quarry disable: retracted %d cross-harness skill deposit(s)",
+            sum(1 for outcome in removed if outcome.action == "removed"),
         )
