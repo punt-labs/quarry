@@ -477,7 +477,7 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
         assert "myproject-mine" in collections
 
     def test_context_includes_recall_hint(self, tmp_path: Path) -> None:
-        """Active-mode context leads with the identity line plus R1/R2/R3."""
+        """Active-mode context leads with the identity line plus the skill pointers."""
         project = tmp_path / "hintproject"
         project.mkdir()
         _opt_in(project)
@@ -510,21 +510,17 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
         ctx = str(output["additionalContext"])
         assert ctx.startswith("Quarry semantic search is active")
         assert (
-            "Use find before WebSearch or WebFetch for research, or before "
-            "answering a why/how/what-did-we-decide question." in ctx
+            "Understanding code, a project decision, or a memory? See the "
+            "quarry-recall skill." in ctx
         )
         assert (
-            "Prefer grep for symbol and value lookups; prefer find for meaning." in ctx
-        )
-        assert (
-            "Use remember when you learn something durable — a decision, a gotcha, "
-            "a non-obvious fact, a procedure — so it survives context compaction."
-            in ctx
+            "Remembering, learning, or ingesting something? See the "
+            "quarry-capture skill." in ctx
         )
 
 
 class TestSessionStartTriggerRules(_ReachableDaemonEmptyCatalog):
-    """SessionStart context carries the three canonical R1/R2/R3 sentences.
+    """SessionStart context carries the two canonical skill-pointer sentences.
 
     Each surface — reachable-coverage, unreachable-coverage, subsumption,
     daemon-unreachable-auto-register — must emit the sentences verbatim so an
@@ -532,14 +528,10 @@ class TestSessionStartTriggerRules(_ReachableDaemonEmptyCatalog):
     """
 
     _R1 = (
-        "Use find before WebSearch or WebFetch for research, or before "
-        "answering a why/how/what-did-we-decide question."
+        "Understanding code, a project decision, or a memory? See the "
+        "quarry-recall skill."
     )
-    _R2 = "Prefer grep for symbol and value lookups; prefer find for meaning."
-    _R3 = (
-        "Use remember when you learn something durable — a decision, a gotcha, "
-        "a non-obvious fact, a procedure — so it survives context compaction."
-    )
+    _R2 = "Remembering, learning, or ingesting something? See the quarry-capture skill."
 
     @staticmethod
     def _settings(tmp_path: Path) -> MagicMock:
@@ -551,7 +543,6 @@ class TestSessionStartTriggerRules(_ReachableDaemonEmptyCatalog):
     def _assert_trailer(self, ctx: str) -> None:
         assert self._R1 in ctx
         assert self._R2 in ctx
-        assert self._R3 in ctx
 
     def test_active_reachable_coverage_line_and_trailer(self, tmp_path: Path) -> None:
         project = tmp_path / "reachable"
@@ -638,7 +629,7 @@ class TestSessionStartTriggerRules(_ReachableDaemonEmptyCatalog):
 
 
 class TestSessionStartDaemonUnreachableCarriesTrailer:
-    """R2b: a daemon-unreachable auto-register defer still emits R1/R2/R3.
+    """R2b: a daemon-unreachable auto-register defer still emits the trailer.
 
     The design body proposed withholding the trailer here on the reasoning
     that ``find``/``remember`` would fail at the client boundary. R2b reverses
@@ -647,14 +638,10 @@ class TestSessionStartDaemonUnreachableCarriesTrailer:
     """
 
     _R1 = (
-        "Use find before WebSearch or WebFetch for research, or before "
-        "answering a why/how/what-did-we-decide question."
+        "Understanding code, a project decision, or a memory? See the "
+        "quarry-recall skill."
     )
-    _R2 = "Prefer grep for symbol and value lookups; prefer find for meaning."
-    _R3 = (
-        "Use remember when you learn something durable — a decision, a gotcha, "
-        "a non-obvious fact, a procedure — so it survives context compaction."
-    )
+    _R2 = "Remembering, learning, or ingesting something? See the quarry-capture skill."
 
     def test_unreachable_defer_carries_r1_r2_r3_and_restart_hint(
         self, tmp_path: Path
@@ -686,7 +673,6 @@ class TestSessionStartDaemonUnreachableCarriesTrailer:
         assert "systemctl --user restart quarry" in ctx
         assert self._R1 in ctx
         assert self._R2 in ctx
-        assert self._R3 in ctx
 
 
 class TestSessionStartReadopt:

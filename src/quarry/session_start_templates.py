@@ -10,17 +10,16 @@ if TYPE_CHECKING:
     from quarry.results import CoverageCounts
 
 
-# Three canonical trigger sentences — used verbatim in the SessionStart
-# ``additionalContext``, the MCP server ``instructions`` block, and the recall
-# skill.  Any drift between surfaces is what the design set out to prevent, so
-# the sentences live in a single module constant and are spliced by reference,
-# not paraphrase.
+# Two canonical pointer sentences, spliced verbatim into the SessionStart
+# ``additionalContext`` and the MCP server ``instructions`` block. The deep
+# how-to — trigger clusters, scoping, failure recovery, the five moments, the
+# agent_handle discipline — lives in the quarry-recall/quarry-capture skills;
+# these sentences exist so every surface points at the same two skills instead
+# of each maintaining its own paraphrase of the same guidance (the drift the
+# design set out to prevent).
 _TRIGGER_RULES = (
-    "Use find before WebSearch or WebFetch for research, or before "
-    "answering a why/how/what-did-we-decide question.",
-    "Prefer grep for symbol and value lookups; prefer find for meaning.",
-    "Use remember when you learn something durable — a decision, a gotcha, "
-    "a non-obvious fact, a procedure — so it survives context compaction.",
+    "Understanding code, a project decision, or a memory? See the quarry-recall skill.",
+    "Remembering, learning, or ingesting something? See the quarry-capture skill.",
 )
 
 
@@ -43,7 +42,7 @@ class SessionStartTemplates:
 
     @classmethod
     def _trailer(cls) -> str:
-        """Return the R1/R2/R3 rules joined by newlines."""
+        """Return the skill-pointer rules joined by newlines."""
         return "\n".join(_TRIGGER_RULES)
 
     @classmethod

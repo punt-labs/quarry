@@ -8,15 +8,10 @@ from quarry.results import CoverageCounts
 from quarry.session_start_templates import SessionStartTemplates
 
 _R1 = (
-    "Use find before WebSearch or WebFetch for research, or before "
-    "answering a why/how/what-did-we-decide question."
+    "Understanding code, a project decision, or a memory? See the quarry-recall skill."
 )
-_R2 = "Prefer grep for symbol and value lookups; prefer find for meaning."
-_R3 = (
-    "Use remember when you learn something durable — a decision, a gotcha, "
-    "a non-obvious fact, a procedure — so it survives context compaction."
-)
-_TRAILER = f"{_R1}\n{_R2}\n{_R3}"
+_R2 = "Remembering, learning, or ingesting something? See the quarry-capture skill."
+_TRAILER = f"{_R1}\n{_R2}"
 _SLASH_TAIL = (
     "Slash commands: /find, /ingest, /remember, /explain, /source, /quarry. "
     "For deep research across local docs and the web, use the researcher agent."
