@@ -141,6 +141,20 @@ class TestAmbientGitConfig:
         assert leftovers == []
 
 
+class TestAmbientCodexHome:
+    """The operator's ``CODEX_HOME`` does not follow the suite in.
+
+    Left ambient, ``Harness._codex_home`` reads ``$CODEX_HOME`` directly and
+    ignores whatever stubbed ``home`` a skills-install test constructs a
+    ``SkillsInstaller`` with — silently depositing a skill into the
+    operator's REAL codex directory regardless of the sandbox the test
+    believes it is writing to.
+    """
+
+    def test_codex_home_is_dropped(self) -> None:
+        assert "CODEX_HOME" not in os.environ
+
+
 class TestThreadPins:
     """The per-run thread budget is pinned before lance builds its runtime."""
 

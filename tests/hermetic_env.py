@@ -67,6 +67,21 @@ _NETWORK_PINS: Final[dict[str, str]] = {
 }
 
 
+def _drop_ambient_codex_home() -> None:
+    """Remove the operator's ``CODEX_HOME`` from this process's environment.
+
+    ``Harness._codex_home`` reads ``$CODEX_HOME`` straight from the process
+    environment and ignores whatever ``home`` a caller constructs a
+    ``SkillsInstaller`` with -- an operator shell configured to point codex
+    at a non-default install would otherwise make every cross-harness
+    skill test deposit into that REAL directory, regardless of the sandbox
+    ``home`` each test believes it is writing to. Dropped once here, for
+    the whole session, rather than per test: no test author has to
+    remember to manage it, and none can forget to.
+    """
+    os.environ.pop("CODEX_HOME", None)
+
+
 def _drop_ambient_git_config() -> None:
     """Remove the shell's ``GIT_CONFIG_*`` injection for this process.
 
@@ -117,6 +132,7 @@ class HermeticEnv:
         os.environ.update(_THREAD_PINS)
         os.environ.update(_NETWORK_PINS)
         _drop_ambient_git_config()
+        _drop_ambient_codex_home()
 
         return cls(home, real_tree)
 
