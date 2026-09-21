@@ -31,7 +31,44 @@ across `transform`, `index`, and `connector`).
   (decay-band) breakdown. Mirrors the existing `status` chain across all three
   surfaces.
 - query: `SearchRequest` gains an optional `surface` field ("cli"/"mcp"/
-  "http"/"plugin") for query provenance; the MCP `find` tool now sets it.
+  "http"/"plugin") for query provenance; the MCP `find` tool now sets it, and
+  the CLI `find` path now stamps `surface="cli"` too (was left unset — the
+  daemon recorded it as `"unknown"`).
+- tool: `quarry-recall` and `quarry-capture` Agent Skills (`plugin/skills/`) —
+  CLI-driven (`quarry find`/`quarry remember`/`quarry learn`/`quarry ingest`,
+  not MCP tool names, for portability across harnesses), with progressive
+  disclosure into `references/` for failure-mode recovery, scoping/decay, and
+  the memory-type vocabulary.
+- tool: `quarry skills install [--agent <id>|--all]` and `quarry skills
+  status` deposit the two skills into every detected coding-agent harness —
+  pi (`~/.pi/agent/skills/`), opencode (`~/.config/opencode/skills/`), and
+  codex (`~/.codex/skills/`, confirmed alongside its own preinstalled
+  `.system/` skills, never inside it). Claude Code needs no deposit; it reads
+  `plugin/skills/` directly. Each deposit is content-hash version-stamped
+  (idempotent re-install) and atomically swapped in (temp-then-backup-then-
+  rename), so an interrupted write never leaves a half-deposited skill.
+  `quarry disable` retracts the deposits again, but only when the disabled
+  repo's own `pyproject.toml` names the `punt-quarry` package (identity —
+  every marketplace-layout Claude Code plugin ships an identically-shaped
+  `plugin/skills/` tree, so shape alone proves nothing) AND the target
+  directory carries quarry's own `.quarry-skill.json` manifest (ownership —
+  a same-named directory this installer never wrote is refused, not
+  deleted). Retraction is best-effort: a filesystem failure is logged and
+  swallowed, never aborting `disable`.
+- tool: `mcp_guard.ToolGuard` renders an actionable recovery hint for a
+  down/unreachable `quarryd` (a restart command for a loopback target, a
+  `QUARRY_URL`/`quarry login` hint for a remote one) instead of a bare
+  `Error: QuarryConnectionError: …` string.
+
+### Changed
+
+- tool: the single `recall` skill is replaced by `quarry-recall` (retrieve:
+  understand code / recall a decision / recall memory, one skill, three
+  trigger clusters) and `quarry-capture` (persist: remember/learn/ingest) —
+  no back-compat shim. The SessionStart trigger trailer, the MCP server's
+  `instructions` block, and the injected ethos memory guide are now concise
+  nudges pointing at the two skills instead of each independently restating
+  the same deep how-to.
 
 ### Removed
 

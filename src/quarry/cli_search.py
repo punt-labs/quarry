@@ -74,6 +74,7 @@ class SearchCli:
             source_format=source_format,
             agent_handle=agent_handle,
             memory_type=memory_type,
+            surface="cli",
         )
         resp = self._p.client().search(req)
         hits = [hit.model_dump() for hit in resp.results]

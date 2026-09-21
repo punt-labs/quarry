@@ -168,9 +168,11 @@ class TestFindParamParity:
             assert key in params, f"filter {key} did not reach the daemon"
 
     def test_empty_filters_are_dropped(self, transport: RecordingTransport) -> None:
+        """Every optional filter is dropped when blank; ``surface`` is not
+        optional -- the CLI always stamps its own provenance (DES-056)."""
         _run(["find", "hello"])
         params = transport.params_for("GET", "/v1/search")
-        assert params == {"q": "hello"}
+        assert params == {"q": "hello", "surface": "cli"}
 
 
 class TestShow:

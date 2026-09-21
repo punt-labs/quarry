@@ -191,6 +191,8 @@ Search by meaning:
 | `quarry sync` | Re-index registered directories |
 | `quarry enable` / `quarry disable` | Set up / tear down project collections + captures |
 | `quarry missions sync` | File each frozen ethos mission round into `memory-<worker>` (`--mission`, `--dry-run`, `--force`) |
+| `quarry skills install [--agent <id>\|--all]` | Deposit the quarry-recall/quarry-capture skills into every detected coding-agent harness (pi, opencode, codex); `--all` is the default |
+| `quarry skills status` | Report which harnesses have the skills deposited, and whether current |
 | `quarry use <name>` | Switch the active database |
 | `quarry status` | Database dashboard |
 | `quarry insights` | Recall telemetry: query volume, latency, empty-result rate, recall mix |
@@ -204,6 +206,8 @@ Agent-memory tagging is available on `ingest`/`remember`/`find` via `--agent-han
 `--memory-type` is one vocabulary on every surface (`fact`, `observation`, `opinion`, `procedure`; `lesson` is reserved for `quarry learn`) — an unknown value is a 400 on `remember`, `ingest`, and the capture route alike. Always pass your own handle: the daemon cannot infer it, and a subagent's working directory resolves to the repo's leader, not to the subagent.
 
 Each ethos identity gets a versioned `## Memory (quarry guide v2)` block in its `session_context` — when to `remember` (the five moments), what never to store, and why the handle is yours — written to the vendored `.punt-labs/ethos/identities/<handle>.ext/quarry.yaml` on `quarry enable` (commit it via PR) and to the global identities on `quarry install`.
+
+Two Agent Skills carry the deep how-to that used to be restated across the SessionStart context, the MCP `instructions` block, and the memory guide: `quarry-recall` (understand code, recall a decision, recall memory — all backed by `quarry find`) and `quarry-capture` (`remember`/`learn`/`ingest`, the five-moments timing, the `agent_handle` discipline). Claude Code reads them straight from this repo's `plugin/skills/`; `quarry skills install` deposits the same two skills into pi (`~/.pi/agent/skills/`), opencode (`~/.config/opencode/skills/`), and codex (`~/.codex/skills/`, alongside its own preinstalled `.system/` skills) — version-stamped by content hash, so a re-run only touches a harness whose deposit is stale. `quarry disable` retracts them again, but only when the disabled repo's own `pyproject.toml` names the `punt-quarry` package (never merely because a `plugin/skills/` tree exists — every marketplace-layout plugin ships one) and only for a directory carrying quarry's own deposit manifest; a same-named directory it never wrote is left alone.
 
 A registered directory isn't cron-driven — `quarryd` runs a live filesystem
 watch (debounced, ~1s) that reacts to changes as they happen, backed by a

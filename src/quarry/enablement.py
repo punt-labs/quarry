@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.claude_import import ClaudeMdImport
@@ -10,11 +12,15 @@ from quarry.enablement_result import DisablementResult, EnablementResult
 from quarry.file_lock import FileLock
 from quarry.gitignore import QuarryGitignore
 from quarry.guidance import REPO_IMPORT_LINE, Guidance
+from quarry.own_checkout import OwnCheckout
+from quarry.skills_install import SkillsInstaller
 
 if TYPE_CHECKING:
-    from pathlib import Path
+    from quarry.skills_install import SkillOutcome
 
 __all__ = ["DisablementResult", "Enablement", "EnablementResult"]
+
+logger = logging.getLogger(__name__)
 
 
 @final
@@ -48,12 +54,13 @@ class Enablement:
     for the edit itself share the one hold.
     """
 
-    __slots__ = ("_gitignore", "_guidance", "_import", "_marker")
+    __slots__ = ("_gitignore", "_guidance", "_import", "_marker", "_root")
 
     _guidance: Guidance
     _marker: EnabledMarker
     _import: ClaudeMdImport
     _gitignore: QuarryGitignore
+    _root: Path
 
     def __new__(cls, root: Path) -> Self:
         self = super().__new__(cls)
@@ -61,6 +68,7 @@ class Enablement:
         self._marker = EnabledMarker(root)
         self._import = ClaudeMdImport(root / "CLAUDE.md")
         self._gitignore = QuarryGitignore(root)
+        self._root = root
         return self
 
     def enable(self) -> EnablementResult:
@@ -101,10 +109,20 @@ class Enablement:
         interleave under the shared lock.
 
         Deregistering the sync collection is the CALLER's responsibility.
-        This method owns marker + import atomicity only; it deliberately
-        depends on no daemon/HTTP client so the file-system commit point
-        stays pure stdlib. The orchestrator (:func:`quarry.enable.disable_project`)
-        sequences the deregister AFTER this call, so a deregister failure
+        This method owns marker + import atomicity, plus one best-effort side
+        step run after the lock releases: when the disabled repo IS quarry's
+        own checkout, it also retracts quarry's cross-harness skill deposits
+        (``quarry skills install``) — those live under the OPERATOR's home
+        directory, not this repo's tree, so there is nothing to retract for
+        the other 99% of repos ``disable`` runs against, and that absence is
+        the expected case (PY-EH-8), not a failure. Genuinely best-effort:
+        :meth:`_retract_own_skills` never raises, so a retraction failure
+        (e.g. a permission error under an unusual home layout) can never
+        abort this method or block the marker/import teardown above it. It
+        deliberately depends on no daemon/HTTP client so the file-system
+        commit point stays pure stdlib. The orchestrator
+        (:func:`quarry.enable.disable_project`) sequences the deregister
+        AFTER this call, so a deregister failure
         leaves a coherent disabled surface (marker-absent, import-absent)
         with only a runtime registration residue a retry converges.
 
@@ -122,7 +140,96 @@ class Enablement:
             except ValueError:
                 enabled_marker_removed = False
             import_pruned = self._import.prune(REPO_IMPORT_LINE)
+        _SkillRetraction(self._root).run()
         return DisablementResult(
             import_pruned=import_pruned,
             enabled_marker_removed=enabled_marker_removed,
         )
+
+
+@final
+class _SkillRetraction:
+    """Best-effort retraction of quarry's cross-harness skill deposits.
+
+    A collaborator, not a method on :class:`Enablement`: every method here
+    operates on *root* alone (never the guide/marker/import machinery), so
+    folding this logic into ``Enablement`` would pull the class into two
+    disjoint clusters of state (PL-CO-1/PY-IC-6) — one bundle of methods
+    for the CLAUDE.md guidance steps, one for skill retraction, sharing no
+    attributes. Kept private: :meth:`Enablement.disable` is the only caller.
+
+    Two guards, both required (defense-in-depth for an ``rmtree`` under the
+    operator's real ``$HOME``):
+
+    1. **Identity** (:class:`quarry.own_checkout.OwnCheckout`): every marketplace-layout
+       Claude Code plugin — lux, prfaq, dungeon, punt-kit, and quarry itself
+       — ships an identically-shaped ``plugin/skills/`` tree, so that shape
+       alone proves nothing. Only a checkout whose ``pyproject.toml`` names
+       the ``punt-quarry`` package is quarry's own. Checked on *root*
+       itself, never an ancestor walk (unlike
+       :meth:`SkillsInstaller.locate_source`) — an ancestor walk would
+       true-positive on any directory nested inside the quarry checkout
+       (every test's ``tmp_path`` included) and retract the operator's real
+       cross-harness deposits as a side effect of disabling an unrelated
+       nested path.
+    2. **Manifest ownership** (:meth:`SkillsInstaller.remove`/
+       ``remove_all``): even given identity, removal only ever touches a
+       deposit carrying quarry's own ``.quarry-skill.json`` manifest — never
+       a same-named directory this installer did not write.
+
+    No match on guard 1 is the expected, normal outcome for every repo
+    except quarry's own — an ordinary repo's ``quarry disable`` has nothing
+    to do with the operator's globally-deposited skills, so it is
+    swallowed, not surfaced. A retraction failure (e.g. a permission error
+    walking an unusual home layout) is logged and swallowed too: this is a
+    best-effort side step, and its failure must never abort
+    :meth:`Enablement.disable` or block the marker/import teardown that
+    already committed.
+    """
+
+    __slots__ = ("_root",)
+
+    _root: Path
+
+    def __new__(cls, root: Path) -> Self:
+        self = super().__new__(cls)
+        self._root = root
+        return self
+
+    def run(self) -> None:
+        """Retract every deposit if, and only if, both guards clear."""
+        if not self._should_retract():
+            return
+        removed = self._remove_all_deposits()
+        if removed is None:
+            return
+        logger.info(
+            "quarry disable: retracted %d cross-harness skill deposit(s)",
+            sum(1 for outcome in removed if outcome.action == "removed"),
+        )
+
+    def _remove_all_deposits(self) -> tuple[SkillOutcome, ...] | None:
+        """Best-effort ``SkillsInstaller.remove_all()``.
+
+        ``None`` means the attempt raised (a filesystem failure, already
+        logged here) — the documented "could not retract, but that must
+        never abort the caller" contract, not a value :meth:`run` inspects
+        further.
+        """
+        installer = SkillsInstaller(self._skills_source_dir(), Path.home())
+        try:
+            return installer.remove_all()
+        except OSError:
+            logger.warning(
+                "quarry disable: failed to retract cross-harness skill deposits",
+                exc_info=True,
+            )
+            return None
+
+    def _should_retract(self) -> bool:
+        """Whether a real source tree exists AND *root* is our own checkout."""
+        has_source = self._skills_source_dir().is_dir()
+        return has_source and OwnCheckout(self._root).confirmed()
+
+    def _skills_source_dir(self) -> Path:
+        return self._root / "plugin" / "skills"
