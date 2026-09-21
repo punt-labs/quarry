@@ -19,6 +19,7 @@ from quarry.cli_missions import MissionsCli
 from quarry.cli_project import ProjectCli
 from quarry.cli_remote import RemoteCli
 from quarry.cli_search import SearchCli
+from quarry.cli_skills import SkillsCli
 from quarry.cli_sync import SyncCli
 from quarry.client import (
     HttpError,
@@ -61,6 +62,7 @@ _COMMAND_ORDER: list[str] = [
     "optimize",
     "captures",
     "missions",
+    "skills",
     "backfill-sessions",
     "login",
     "logout",
@@ -251,6 +253,7 @@ MaintenanceCli(_plumbing).register(app)
 RemoteCli(_plumbing).register(app)
 app.add_typer(CapturesCli(_plumbing).build(), name="captures")
 app.add_typer(MissionsCli(_plumbing).build(), name="missions")
+app.add_typer(SkillsCli(_plumbing).build(), name="skills")
 
 
 @app.command(name="use")
