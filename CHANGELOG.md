@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [3.4.0] - 2026-09-21
+
 ### Added
 
 - query: recall telemetry (DES-056, quarry-x7ja). Every search records one
