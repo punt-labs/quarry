@@ -14,6 +14,25 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Added
+
+- query: recall telemetry (DES-056, quarry-x7ja). Every search records one
+  scrubbed `query_events` row plus one `query_hits` row per ranked result in a
+  local, engine-free SQLite store (`~/.punt-labs/quarry/data/<db>/telemetry.db`),
+  gated by two new `Settings` knobs: `telemetry_enabled` (default on) and
+  `telemetry_retention_days` (pruned automatically). The query text is scrubbed
+  through the same secret/PII pass captures already use before it ever touches
+  disk; a telemetry write failure is logged and swallowed, never turning a
+  search into a 500.
+- tool: `quarry insights` (CLI), an `insights` MCP tool, and `GET /insights`
+  (HTTP) — the aggregate recall snapshot: total queries, empty-result rate,
+  p50/p95 latency, top empty (scrubbed) queries, per-collection hit counts,
+  per-agent recall counts, a memory-vs-knowledge split, and a hit recency
+  (decay-band) breakdown. Mirrors the existing `status` chain across all three
+  surfaces.
+- query: `SearchRequest` gains an optional `surface` field ("cli"/"mcp"/
+  "http"/"plugin") for query provenance; the MCP `find` tool now sets it.
+
 ### Removed
 
 - Removed the misleading `quarry doctor` sync-recency (`>24h stale`) check —

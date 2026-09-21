@@ -17,6 +17,7 @@ from quarry.doctor_daemon import DaemonDiagnostics
 from quarry.doctor_ethos import EthosExtDiagnostics
 from quarry.doctor_inference import InferenceDiagnostics
 from quarry.doctor_memory import MemoryDiagnostics
+from quarry.doctor_recall import RecallDiagnostics
 from quarry.doctor_sync import SyncDiagnostics
 from quarry.results import CheckResult
 
@@ -672,6 +673,9 @@ def check_environment(*, _skip_header: bool = False) -> int:
             CaptureDiagnostics.shadow_repo(cwd),
             MemoryDiagnostics.corpus(settings.lancedb_path),
             MemoryDiagnostics.identity_active(cwd, settings.lancedb_path),
+            RecallDiagnostics.recent_activity(
+                settings.telemetry_path, telemetry_enabled=settings.telemetry_enabled
+            ),
         ]
         checks: list[CheckResult] = [c for c in all_results if c is not None]
 

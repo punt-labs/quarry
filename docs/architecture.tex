@@ -680,8 +680,16 @@ Sitemap    & \modpath{sitemap.py}    & Sitemap discovery and URL
              extraction for web ingestion. \\
 Doctor     & \modpath{doctor.py} + \modpath{doctor\_*.py} & Health checks
              and install flow: model availability, database access, MCP
-             configuration, daemon, sync, captures, ethos memory
-             (\modpath{doctor\_memory.py}, \modpath{doctor\_ethos.py}). \\
+             configuration, daemon, sync, captures, ethos memory, recall
+             telemetry (\modpath{doctor\_memory.py}, \modpath{doctor\_ethos.py},
+             \modpath{doctor\_recall.py}). \\
+Recall Telemetry & \modpath{query\_log.py} + \modpath{query\_log\_schema.py}
+             & Local, engine-free SQLite store for recall telemetry
+             (DES-056): one \texttt{query\_events} row + N
+             \texttt{query\_hits} rows per search, written from
+             \modpath{daemon/routes/search.py} and read back through
+             \texttt{GET /insights}. Mirrors \modpath{sync\_registry.py}'s
+             connection lifecycle. \\
 Enable     & \modpath{enable.py}     & Project activation and
              deactivation: register directory, refresh the vendored
              ethos memory-guide blocks (\modpath{ethos\_ext\_block.py},
@@ -936,6 +944,7 @@ raises \texttt{QuarryVersionError} in the client.
 \texttt{/v1/registrations}    & DELETE & Deregister directory (sync + 202 purge) & Yes & async \\
 \texttt{/v1/databases}        & GET    & List named databases             & Yes & sync  \\
 \texttt{/v1/status}           & GET    & Database statistics              & Yes & sync  \\
+\texttt{/v1/insights}         & GET    & Recall telemetry snapshot (DES-056) & Yes & sync  \\
 \texttt{/v1/coverage}         & GET    & Per-collection coverage counts   & Yes & sync  \\
 \texttt{/v1/use}              & POST   & Switch active database           & Yes & sync  \\
 \texttt{/v1/remember}         & POST   & Ingest inline content (returns 202) & Yes & async \\
@@ -994,6 +1003,8 @@ All settings are environment variables read via pydantic-settings.
   Vector database location \\
 \texttt{REGISTRY\_PATH}  & \texttt{<root>/default/registry.db} &
   Directory sync SQLite database \\
+\texttt{TELEMETRY\_PATH} & \texttt{<root>/default/telemetry.db} &
+  Recall-telemetry SQLite database (DES-056) \\
 \texttt{QUARRY\_LOG\_DIR} & \texttt{\~{}/.punt-labs/quarry/logs/} &
   Log directory (\texttt{quarry.log} for the CLI/MCP client tier,
   \texttt{quarryd.log} for the daemon --- DES-048; rotating, 5\,MB
@@ -1021,6 +1032,14 @@ All settings are environment variables read via pydantic-settings.
 \texttt{EMBED\_WINDOW\_CHUNKS} & \texttt{512} &
   Chunks embedded per window, so a large document never materializes
   all its vectors (a kpz throughput seam) \\
+\midrule
+\multicolumn{3}{l}{\textbf{Recall telemetry (DES-056)}} \\
+\midrule
+\texttt{TELEMETRY\_ENABLED}         & \texttt{true} &
+  Record one \texttt{query\_events} row + N \texttt{query\_hits} rows per
+  search; \texttt{false} makes the write path a true no-op \\
+\texttt{TELEMETRY\_RETENTION\_DAYS} & \texttt{90} &
+  Prune query-log rows older than this many days \\
 \midrule
 \multicolumn{3}{l}{\textbf{Watch/index loop (DES-045)}} \\
 \midrule
@@ -1348,6 +1367,32 @@ Subagent    & \modpath{subagent\_capture.py},
 \bottomrule
 \end{tabular}
 \end{center}
+
+\subsection{Recall Telemetry (DES-056)}
+
+DES-055 gave agents a place to write memory; DES-056 answers whether recall
+is actually exercised.  \modpath{daemon/routes/search.py} times every
+\texttt{SearchService.search()} call and, when
+\texttt{Settings.telemetry\_enabled}, scrubs the query text through the same
+\texttt{Scrubber} pass captures use (DES-041) and records one
+\texttt{query\_events} row plus one \texttt{query\_hits} row per ranked
+result to a local, engine-free SQLite store (\modpath{query\_log.py} +
+\modpath{query\_log\_schema.py}), mirroring \modpath{sync\_registry.py}'s
+WAL/busy-timeout connection lifecycle.  The write is boundary I/O: wrapped in
+\texttt{try/except}, a failure is logged and swallowed so a telemetry outage
+never turns a search into a 500.
+
+\texttt{GET /v1/insights} mirrors the \texttt{status} chain across all three
+surfaces (\texttt{quarry insights}, the \texttt{insights} MCP tool, the HTTP
+route) and reports total queries, empty-result rate, p50/p95 latency, top
+empty (scrubbed) queries, per-collection and per-agent recall counts, a
+memory-vs-knowledge split, and a hit recency (decay-band) breakdown.  The
+decay-band join --- a hit's document identity against the live catalog's
+\texttt{ingestion\_timestamp} --- runs in the route, not the store: the
+query log has no LanceDB import, so only the code already holding
+\texttt{ctx.database} can perform it.  \texttt{SearchRequest} carries an
+optional \texttt{surface} field (\texttt{cli}/\texttt{mcp}/\texttt{http}/
+\texttt{plugin}) for provenance.
 
 % ===================================================================
 \section{Logging and Exceptions}

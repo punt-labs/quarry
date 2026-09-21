@@ -50,6 +50,7 @@ _COMMAND_ORDER: list[str] = [
     "show",
     "remember",
     "status",
+    "insights",
     "use",
     "delete",
     "register",

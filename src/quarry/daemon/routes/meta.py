@@ -1,4 +1,4 @@
-"""Server-meta routes: liveness, aggregate status, and the CA-cert bootstrap."""
+"""Server-meta routes: liveness, aggregate status, insights, CA-cert bootstrap."""
 
 from __future__ import annotations
 
@@ -9,10 +9,13 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse, Response
 
 from quarry.api import API_VERSION
+from quarry.api.insights import InsightsResponse
 from quarry.api.meta import FdHealth
 from quarry.daemon.routes.base import RouteGroup
+from quarry.daemon.routes.insights_builder import InsightsBuilder
 from quarry.fd_headroom import FdHeadroom
 from quarry.ingestion.provider import ProviderSelection
+from quarry.query_log import get_query_log
 from quarry.sync_registry import SyncRegistry
 
 # The running package version, read once at import for the health snapshot.
@@ -132,3 +135,23 @@ class MetaRoutes(RouteGroup):
             collection, f"{collection}{_CAPTURES_SUFFIX}"
         )
         return JSONResponse(dict(counts))
+
+    def insights(self, request: Request) -> JSONResponse:
+        """Return the recall-telemetry snapshot behind ``quarry insights``.
+
+        A disabled toggle short-circuits before ``get_query_log`` -- opening
+        (and so creating) the telemetry database file for a store the operator
+        turned off would surprise a "disabled means untouched" reading of the
+        setting.
+        """
+        auth_resp = self.reject_unauthorized(request)
+        if auth_resp is not None:
+            return auth_resp
+
+        settings = self.ctx.settings
+        if not settings.telemetry_enabled:
+            return JSONResponse(InsightsResponse.disabled().model_dump())
+
+        query_log = get_query_log(settings.telemetry_path)
+        response = InsightsBuilder(self.ctx.database, query_log).build()
+        return JSONResponse(response.model_dump())

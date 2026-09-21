@@ -71,6 +71,16 @@ def _mock_settings(tmp_path: Path) -> MagicMock:
     s.lancedb_path = tmp_path / "lancedb"
     s.lancedb_path.mkdir(parents=True)
     s.registry_path = tmp_path / "registry.db"  # does not exist -> regs = []
+    # A real Path (never a bare MagicMock attribute): QueryLog.__new__ calls
+    # path.parent.mkdir() and sqlite3.connect(str(path)) unconditionally, so an
+    # unconfigured mock would stringify to its own repr and sqlite3 would
+    # silently create a junk file with that literal name in the process's cwd.
+    # Off by default like watch_enabled -- tests that exercise telemetry set it
+    # explicitly (see test_search_telemetry.py).
+    s.telemetry_path = tmp_path / "telemetry.db"
+    s.telemetry_enabled = False
+    s.telemetry_retention_days = 90
+    s.telemetry_prune_cadence_s = 3600.0
     s.embedding_model = "Snowflake/snowflake-arctic-embed-m-v1.5"
     s.embedding_dimension = 768
     s.ingest_queue_depth = 32
@@ -707,6 +717,39 @@ class TestStatus:
             data = no_reg_client.get("/v1/status").json()
 
         assert data["registered_directories"] == 0
+
+
+class TestInsights:
+    def test_empty_store_returns_zeroed_defaults(self, client: TestClient) -> None:
+        data = client.get("/v1/insights").json()
+        assert data["total_queries"] == 0
+        assert data["empty_result_rate"] == 0.0
+        assert data["top_empty_queries"] == []
+        assert data["per_collection_hits"] == []
+        assert data["per_agent_recall"] == []
+        assert data["hit_decay_bands"] == []
+
+    def test_reports_telemetry_enabled_from_settings(
+        self, tmp_path: Path, client: TestClient
+    ) -> None:
+        """telemetry_enabled reflects the daemon's own setting, on or off."""
+        settings = _mock_settings(tmp_path / "enabled")
+        settings.telemetry_enabled = True
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        enabled_client = TestClient(build_app(ctx), raise_server_exceptions=False)
+
+        assert enabled_client.get("/v1/insights").json()["telemetry_enabled"] is True
+        assert client.get("/v1/insights").json()["telemetry_enabled"] is False
+
+    def test_requires_authorization_when_api_key_configured(
+        self, tmp_path: Path
+    ) -> None:
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings, api_key="secret")
+        _inject_mocks(ctx)
+        keyed_client = TestClient(build_app(ctx), raise_server_exceptions=False)
+        assert keyed_client.get("/v1/insights").status_code == 401
 
 
 class TestServeToken:

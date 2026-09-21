@@ -31,8 +31,26 @@ class Settings(BaseSettings):
     quarry_root: Path = _DEFAULT_QUARRY_ROOT
     lancedb_path: Path = quarry_root / "default" / "lancedb"
     registry_path: Path = quarry_root / "default" / "registry.db"
+    telemetry_path: Path = quarry_root / "default" / "telemetry.db"
     embedding_model: str = "Snowflake/snowflake-arctic-embed-m-v1.5"
     embedding_dimension: int = 768
+
+    # Recall telemetry (DES-056): a local, scrubbed query log behind `GET
+    # /insights`.  ``telemetry_enabled=False`` makes the search route's write a
+    # true no-op (no connection ever opens); ``telemetry_retention_days`` bounds
+    # how long a query_events/query_hits row survives before ``QueryLog.prune``
+    # deletes it.  90 days -- long enough to see a recall trend across a
+    # quarter, short enough that a never-cleaned database stays small on a
+    # laptop-scale deployment.
+    telemetry_enabled: bool = True
+    telemetry_retention_days: int = Field(default=90, ge=1)
+    # ``QueryLog.prune`` runs once at daemon start (inside ``get_query_log``'s
+    # first construction) and then opportunistically from the search write
+    # path -- a long-lived quarryd must keep enforcing the retention window,
+    # not just apply it once. This cadence bounds how often a ``record()``
+    # call re-checks, so a busy daemon isn't re-scanning the table on every
+    # single write.
+    telemetry_prune_cadence_s: float = Field(default=3600.0, gt=0)
 
     chunk_max_chars: int = 1800
     chunk_overlap_chars: int = 200
@@ -145,7 +163,7 @@ class Settings(BaseSettings):
     _DEFAULT_LANCEDB: ClassVar[Path] = quarry_root / "default" / "lancedb"
 
     def resolve_db_paths(self, db_name: str | None = None) -> Settings:
-        """Return a copy with lancedb_path and registry_path resolved.
+        """Return a copy with lancedb_path, registry_path, and telemetry_path resolved.
 
         With *db_name*, paths resolve under ``quarry_root / db_name``. An explicit
         ``LANCEDB_PATH`` override is preserved; otherwise the ``default`` database
@@ -162,6 +180,7 @@ class Settings(BaseSettings):
             update={
                 "lancedb_path": self.quarry_root / name / "lancedb",
                 "registry_path": self.quarry_root / name / "registry.db",
+                "telemetry_path": self.quarry_root / name / "telemetry.db",
             },
         )
 

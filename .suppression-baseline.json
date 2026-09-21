@@ -1,7 +1,7 @@
 {
-  "total": 209,
+  "total": 210,
   "by_category": {
-    "noqa": 172,
+    "noqa": 173,
     "type_ignore": 7,
     "pylint_disable": 0,
     "pyright_ignore": 1,
@@ -78,6 +78,9 @@
     },
     "src/quarry/doctor_memory.py": {
       "noqa": 2
+    },
+    "src/quarry/doctor_recall.py": {
+      "noqa": 1
     },
     "src/quarry/doctor_sync.py": {
       "noqa": 4
@@ -181,5 +184,5 @@
       "noqa": 2
     }
   },
-  "updated_at": "2026-09-20T02:15:55Z"
+  "updated_at": "2026-09-20T23:48:38Z"
 }

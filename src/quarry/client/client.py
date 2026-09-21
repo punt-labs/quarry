@@ -36,6 +36,7 @@ from quarry.api import (
     DocumentList,
     HealthResponse,
     IngestRequest,
+    InsightsResponse,
     LearnRequest,
     OptimizeRequest,
     RegisterRequest,
@@ -222,6 +223,10 @@ class QuarryClient:
     def status(self) -> StatusResponse:
         """Return the aggregate status over the daemon's database."""
         return self._get("/status", StatusResponse)
+
+    def insights(self) -> InsightsResponse:
+        """Return the recall-telemetry snapshot (DES-056)."""
+        return self._get("/insights", InsightsResponse)
 
     def coverage(self, collection: str) -> CoverageResponse:
         """Return the three per-repo counts for ``collection`` and its captures."""

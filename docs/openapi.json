@@ -1,6 +1,25 @@
 {
   "components": {
     "schemas": {
+      "AgentRecallCount": {
+        "description": "One agent handle's query volume.",
+        "properties": {
+          "agent_handle": {
+            "title": "Agent Handle",
+            "type": "string"
+          },
+          "query_count": {
+            "title": "Query Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "agent_handle",
+          "query_count"
+        ],
+        "title": "AgentRecallCount",
+        "type": "object"
+      },
       "CapturesLookupResponse": {
         "description": "Whether a URL is already indexed under a project's captures collection.\n\n``document_name`` names the stored capture when ``matched`` is true; it is\nabsent (``None``) on a miss \u2014 there is nothing to name, not a lookup\nfailure.",
         "properties": {
@@ -42,6 +61,25 @@
           "results"
         ],
         "title": "CapturesPushResponse",
+        "type": "object"
+      },
+      "CollectionHitCount": {
+        "description": "One collection's share of recorded hits.",
+        "properties": {
+          "collection": {
+            "title": "Collection",
+            "type": "string"
+          },
+          "hit_count": {
+            "title": "Hit Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "collection",
+          "hit_count"
+        ],
+        "title": "CollectionHitCount",
         "type": "object"
       },
       "CollectionInfo": {
@@ -156,6 +194,25 @@
         "title": "DatabaseList",
         "type": "object"
       },
+      "DecayBandCount": {
+        "description": "One recency band's share of recorded hits, by chunk ingestion age.",
+        "properties": {
+          "band": {
+            "title": "Band",
+            "type": "string"
+          },
+          "hit_count": {
+            "title": "Hit Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "band",
+          "hit_count"
+        ],
+        "title": "DecayBandCount",
+        "type": "object"
+      },
       "DeregisterAccepted": {
         "description": "The 202 body for a deregister \u2014 carries the removed-file count.\n\nDistinct from the plain ``TaskAccepted`` because deregister reports\n``removed`` synchronously (the registry rows are gone before the chunk\npurge task runs).",
         "properties": {
@@ -247,6 +304,25 @@
         "title": "DocumentList",
         "type": "object"
       },
+      "EmptyQueryCount": {
+        "description": "One scrubbed query text that returned zero hits, and how often.",
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "query_scrubbed": {
+            "title": "Query Scrubbed",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query_scrubbed",
+          "count"
+        ],
+        "title": "EmptyQueryCount",
+        "type": "object"
+      },
       "ErrorBody": {
         "additionalProperties": true,
         "description": "The wire error shape: ``{\"error\": \"...\"}`` plus any endpoint extras.\n\n``extra=\"allow\"`` preserves the richer error payloads some routes emit \u2014\ne.g. the sync-conflict 409 adds ``status`` and ``task_id`` \u2014 so the\nenvelope stays a faithful superset of every current error response.",
@@ -325,6 +401,82 @@
           "quarry_version"
         ],
         "title": "HealthResponse",
+        "type": "object"
+      },
+      "InsightsResponse": {
+        "description": "The aggregate recall-telemetry snapshot behind ``quarry insights``.",
+        "properties": {
+          "empty_result_rate": {
+            "title": "Empty Result Rate",
+            "type": "number"
+          },
+          "hit_decay_bands": {
+            "items": {
+              "$ref": "#/components/schemas/DecayBandCount"
+            },
+            "title": "Hit Decay Bands",
+            "type": "array"
+          },
+          "knowledge_queries": {
+            "title": "Knowledge Queries",
+            "type": "integer"
+          },
+          "memory_queries": {
+            "title": "Memory Queries",
+            "type": "integer"
+          },
+          "p50_latency_ms": {
+            "title": "P50 Latency Ms",
+            "type": "number"
+          },
+          "p95_latency_ms": {
+            "title": "P95 Latency Ms",
+            "type": "number"
+          },
+          "per_agent_recall": {
+            "items": {
+              "$ref": "#/components/schemas/AgentRecallCount"
+            },
+            "title": "Per Agent Recall",
+            "type": "array"
+          },
+          "per_collection_hits": {
+            "items": {
+              "$ref": "#/components/schemas/CollectionHitCount"
+            },
+            "title": "Per Collection Hits",
+            "type": "array"
+          },
+          "telemetry_enabled": {
+            "title": "Telemetry Enabled",
+            "type": "boolean"
+          },
+          "top_empty_queries": {
+            "items": {
+              "$ref": "#/components/schemas/EmptyQueryCount"
+            },
+            "title": "Top Empty Queries",
+            "type": "array"
+          },
+          "total_queries": {
+            "title": "Total Queries",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "telemetry_enabled",
+          "total_queries",
+          "empty_result_rate",
+          "p50_latency_ms",
+          "p95_latency_ms",
+          "top_empty_queries",
+          "per_collection_hits",
+          "per_agent_recall",
+          "memory_queries",
+          "knowledge_queries",
+          "hit_decay_bands"
+        ],
+        "title": "InsightsResponse",
         "type": "object"
       },
       "RegistrationInfo": {
@@ -1082,6 +1234,25 @@
           }
         },
         "summary": "Ingest"
+      }
+    },
+    "/v1/insights": {
+      "get": {
+        "description": "Return the recall-telemetry snapshot behind ``quarry insights``.\n\nA disabled toggle short-circuits before ``get_query_log`` -- opening\n(and so creating) the telemetry database file for a store the operator\nturned off would surprise a \"disabled means untouched\" reading of the\nsetting.",
+        "operationId": "insights_v1_insights_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InsightsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Insights"
       }
     },
     "/v1/learn": {

@@ -1,4 +1,5 @@
-"""The directory-sync commands: ``sync``, ``register``, ``deregister``, ``status``.
+"""The directory-sync commands: ``sync``, ``register``, ``deregister``, ``status``,
+``insights``.
 
 All pure client calls against the daemon that owns the registry (DES-031 I2): the
 CLI never touches a local ``SyncRegistry``.  The task-dispatching commands are
@@ -16,7 +17,7 @@ from typing import TYPE_CHECKING, Annotated, Self, final
 import typer
 
 from quarry.api import DeregisterRequest, RegisterRequest
-from quarry.formatting import format_status
+from quarry.formatting import format_insights, format_status
 
 if TYPE_CHECKING:
     from quarry.cli_captures import CliPlumbing
@@ -24,7 +25,7 @@ if TYPE_CHECKING:
 
 @final
 class SyncCli:
-    """Serve ``sync``/``register``/``deregister``/``status`` on an injected plumbing."""
+    """Serve ``sync``/``register``/``deregister``/``status``/``insights``."""
 
     __slots__ = ("_p",)
 
@@ -36,11 +37,12 @@ class SyncCli:
         return self
 
     def register(self, app: typer.Typer) -> None:
-        """Attach ``sync``, ``register``, ``deregister``, and ``status`` to *app*."""
+        """Attach ``sync``/``register``/``deregister``/``status``/``insights``."""
         app.command(name="sync")(self._p.cli_errors(self._sync))
         app.command(name="register")(self._p.cli_errors(self._register))
         app.command(name="deregister")(self._p.cli_errors(self._deregister))
         app.command(name="status")(self._p.cli_errors(self._status))
+        app.command(name="insights")(self._p.cli_errors(self._insights))
 
     def _sync(
         self,
@@ -120,3 +122,8 @@ class SyncCli:
         resp = self._p.client().status()
         data = resp.model_dump()
         self._p.emit(data, format_status(data))
+
+    def _insights(self) -> None:
+        """Show recall telemetry: query volume, latency, and recall breakdowns."""
+        resp = self._p.client().insights()
+        self._p.emit(resp.model_dump(), format_insights(resp))
