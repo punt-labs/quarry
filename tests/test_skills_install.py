@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from quarry.skills_install import Harness, SkillOutcome, SkillsInstaller
+from quarry.skills_source import SkillDepositError
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -277,3 +278,229 @@ class TestDepositAtomicity:
         # No leftover backup/tmp siblings after the restore.
         leftovers = list(target.parent.glob(".demo-a.*"))
         assert leftovers == []
+
+    def test_fresh_install_swap_failure_leaves_no_target_and_no_orphans(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No prior deposit to restore -- the original error propagates plain."""
+        source_dir = _source_dir(tmp_path, names=("demo-a",))
+        home = tmp_path / "home"
+        installer = SkillsInstaller(source_dir, home)
+        target = home / ".pi" / "agent" / "skills" / "demo-a"
+
+        real_rename = Path.rename
+
+        def _boom(self: Path, target_path: str | Path) -> Path:
+            if self.name.startswith(".demo-a.tmp-"):
+                msg = "disk full"
+                raise OSError(msg)
+            return real_rename(self, target_path)
+
+        monkeypatch.setattr(Path, "rename", _boom)
+
+        with pytest.raises(OSError, match="disk full"):
+            installer.install(Harness.PI)
+
+        assert not target.exists()
+        assert list(target.parent.glob(".demo-a.*")) == []
+
+    def test_copytree_failure_leaves_no_orphan_tmp(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        source_dir = _source_dir(tmp_path, names=("demo-a",))
+        home = tmp_path / "home"
+        installer = SkillsInstaller(source_dir, home)
+
+        def _boom(*_args: object, **_kwargs: object) -> None:
+            msg = "permission denied"
+            raise OSError(msg)
+
+        monkeypatch.setattr("shutil.copytree", _boom)
+
+        with pytest.raises(OSError, match="permission denied"):
+            installer.install(Harness.PI)
+
+        target = home / ".pi" / "agent" / "skills" / "demo-a"
+        assert not target.exists()
+        assert list(target.parent.glob(".demo-a.*")) == []
+
+    def test_manifest_write_failure_leaves_no_orphan_tmp(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        source_dir = _source_dir(tmp_path, names=("demo-a",))
+        home = tmp_path / "home"
+        installer = SkillsInstaller(source_dir, home)
+
+        real_write_text = Path.write_text
+
+        def _boom(self: Path, *args: object, **kwargs: object) -> int:
+            if self.name == ".quarry-skill.json":
+                msg = "disk full"
+                raise OSError(msg)
+            return real_write_text(self, *args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(Path, "write_text", _boom)
+
+        with pytest.raises(OSError, match="disk full"):
+            installer.install(Harness.PI)
+
+        target = home / ".pi" / "agent" / "skills" / "demo-a"
+        assert not target.exists()
+        assert list(target.parent.glob(".demo-a.*")) == []
+
+    def test_double_failure_raises_a_chained_deposit_error_naming_the_backup(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Swap fails AND restoring the backup also fails: the backup path is
+        preserved and named in a chained :class:`SkillDepositError`, never a
+        silent loss of the last-known-good copy."""
+        source_dir = _source_dir(tmp_path, names=("demo-a",))
+        home = tmp_path / "home"
+        installer = SkillsInstaller(source_dir, home)
+        installer.install(Harness.PI)
+        (source_dir / "demo-a" / "SKILL.md").write_text("v2\n", encoding="utf-8")
+
+        real_rename = Path.rename
+
+        def _boom(self: Path, target_path: str | Path) -> Path:
+            if self.name.startswith(".demo-a.tmp-") or self.name.startswith(
+                ".demo-a.bak-"
+            ):
+                msg = "disk full"
+                raise OSError(msg)
+            return real_rename(self, target_path)
+
+        monkeypatch.setattr(Path, "rename", _boom)
+
+        with pytest.raises(SkillDepositError) as excinfo:
+            installer.install(Harness.PI)
+
+        target = home / ".pi" / "agent" / "skills" / "demo-a"
+        assert str(target.parent / ".demo-a.bak-") in str(excinfo.value.backup)
+        assert excinfo.value.backup.is_dir()  # the last-known-good copy survives
+        assert excinfo.value.__cause__ is not None
+
+
+class TestOrphanSweep:
+    def test_a_stale_tmp_from_a_different_pid_is_swept_on_the_next_deposit(
+        self, tmp_path: Path
+    ) -> None:
+        source_dir = _source_dir(tmp_path, names=("demo-a",))
+        home = tmp_path / "home"
+        installer = SkillsInstaller(source_dir, home)
+        target_dir = home / ".pi" / "agent" / "skills"
+        target_dir.mkdir(parents=True)
+        orphan_tmp = target_dir / ".demo-a.tmp-999999"
+        orphan_tmp.mkdir()
+        (orphan_tmp / "leftover.txt").write_text("stale\n", encoding="utf-8")
+        orphan_bak = target_dir / ".demo-a.bak-999999"
+        orphan_bak.mkdir()
+
+        installer.install(Harness.PI)
+
+        assert not orphan_tmp.exists()
+        assert not orphan_bak.exists()
+        assert (target_dir / "demo-a" / "SKILL.md").is_file()
+
+    def test_a_stale_backup_file_not_a_directory_is_also_swept(
+        self, tmp_path: Path
+    ) -> None:
+        source_dir = _source_dir(tmp_path, names=("demo-a",))
+        home = tmp_path / "home"
+        installer = SkillsInstaller(source_dir, home)
+        target_dir = home / ".pi" / "agent" / "skills"
+        target_dir.mkdir(parents=True)
+        stray_file = target_dir / ".demo-a.bak-123"
+        stray_file.write_text("not a dir\n", encoding="utf-8")
+
+        installer.install(Harness.PI)
+
+        assert not stray_file.exists()
+
+
+class TestRemoveManifestOwnership:
+    """§ safety: removal never touches a directory quarry didn't deposit."""
+
+    def test_a_directory_lacking_a_quarry_manifest_is_refused_not_deleted(
+        self, tmp_path: Path
+    ) -> None:
+        source_dir = _source_dir(tmp_path, names=("demo-a",))
+        home = tmp_path / "home"
+        installer = SkillsInstaller(source_dir, home)
+        foreign = home / ".pi" / "agent" / "skills" / "demo-a"
+        foreign.mkdir(parents=True)
+        (foreign / "NOTES.md").write_text("not quarry's\n", encoding="utf-8")
+
+        outcomes = installer.remove(Harness.PI)
+
+        assert outcomes == (SkillOutcome(Harness.PI, "demo-a", "foreign", foreign),)
+        assert foreign.is_dir()
+        assert (foreign / "NOTES.md").is_file()
+
+    def test_a_directory_with_a_corrupt_manifest_is_also_refused(
+        self, tmp_path: Path
+    ) -> None:
+        source_dir = _source_dir(tmp_path, names=("demo-a",))
+        home = tmp_path / "home"
+        installer = SkillsInstaller(source_dir, home)
+        foreign = home / ".pi" / "agent" / "skills" / "demo-a"
+        foreign.mkdir(parents=True)
+        (foreign / ".quarry-skill.json").write_text("not json{{{", encoding="utf-8")
+
+        outcomes = installer.remove(Harness.PI)
+
+        assert outcomes[0].action == "foreign"
+        assert foreign.is_dir()
+
+    def test_a_genuinely_deposited_directory_is_still_removed(
+        self, tmp_path: Path
+    ) -> None:
+        source_dir = _source_dir(tmp_path, names=("demo-a",))
+        home = tmp_path / "home"
+        installer = SkillsInstaller(source_dir, home)
+        installer.install(Harness.PI)
+        target = home / ".pi" / "agent" / "skills" / "demo-a"
+        assert target.is_dir()
+
+        outcomes = installer.remove(Harness.PI)
+
+        assert outcomes[0].action == "removed"
+        assert not target.exists()
+
+
+class TestCorruptManifest:
+    """A hand-edited or corrupt ``.quarry-skill.json`` never crashes."""
+
+    def test_install_upgrades_over_a_corrupt_manifest(self, tmp_path: Path) -> None:
+        source_dir = _source_dir(tmp_path, names=("demo-a",))
+        home = tmp_path / "home"
+        installer = SkillsInstaller(source_dir, home)
+        target = home / ".pi" / "agent" / "skills" / "demo-a"
+        target.mkdir(parents=True)
+        (target / "SKILL.md").write_text("stale\n", encoding="utf-8")
+        (target / ".quarry-skill.json").write_text("{not valid json", encoding="utf-8")
+
+        outcomes = installer.install(Harness.PI)
+
+        assert outcomes == (SkillOutcome(Harness.PI, "demo-a", "upgraded", target),)
+        assert (target / ".quarry-skill.json").is_file()
+
+    def test_status_reports_stale_over_a_corrupt_manifest(self, tmp_path: Path) -> None:
+        source_dir = _source_dir(tmp_path, names=("demo-a",))
+        home = tmp_path / "home"
+        installer = SkillsInstaller(source_dir, home)
+        target = home / ".pi" / "agent" / "skills" / "demo-a"
+        target.mkdir(parents=True)
+        (target / "SKILL.md").write_text("stale\n", encoding="utf-8")
+        (target / ".quarry-skill.json").write_text(
+            '{"content_hash": 12345}',
+            encoding="utf-8",  # wrong type, not a string
+        )
+
+        statuses = [
+            o
+            for o in installer.status()
+            if o.skill == "demo-a" and o.harness is Harness.PI
+        ]
+
+        assert statuses[0].action == "stale"

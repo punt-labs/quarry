@@ -65,11 +65,16 @@ class SkillsCli:
         if agent and all_:
             self._usage_error("--agent and --all are mutually exclusive")
         installer = self._installer()
+        no_harnesses = False
         if agent:
             outcomes = installer.install(self._parse_harness(agent))
         else:
+            no_harnesses = not installer.detected_harnesses()
             outcomes = installer.install_detected()
-        self._p.emit([self._row(o) for o in outcomes], self._render(outcomes))
+        self._p.emit(
+            [self._row(o) for o in outcomes],
+            self._render(outcomes, no_harnesses=no_harnesses),
+        )
 
     def _status(self) -> None:
         """Report which harnesses have the skills deposited, and whether current."""
@@ -91,12 +96,17 @@ class SkillsCli:
         self._p.err_console.print(f"Error: {message}", style="red")
         raise typer.Exit(code=_USAGE_ERROR)
 
-    def _render(self, outcomes: tuple[SkillOutcome, ...]) -> str:
-        if not outcomes:
+    @staticmethod
+    def _render(
+        outcomes: tuple[SkillOutcome, ...], *, no_harnesses: bool = False
+    ) -> str:
+        if outcomes:
+            return "\n".join(
+                f"{o.harness.value:<8} {o.skill:<15} {o.action}" for o in outcomes
+            )
+        if no_harnesses:
             return "No harnesses detected."
-        return "\n".join(
-            f"{o.harness.value:<8} {o.skill:<15} {o.action}" for o in outcomes
-        )
+        return "No skills found in plugin/skills/ to deposit."
 
     @staticmethod
     def _row(outcome: SkillOutcome) -> dict[str, object]:

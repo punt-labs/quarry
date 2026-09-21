@@ -93,6 +93,21 @@ class TestConnectionErrorRecovery:
 
         assert "\n" not in tool()
 
+    def test_remote_bare_host_with_no_scheme_gets_the_remote_hint(self) -> None:
+        """``urlparse`` on a schemeless host yields no ``.hostname``, falling
+        back to the raw target -- confirm that fallback still classifies a
+        remote bare host as remote, not loopback."""
+
+        @ToolGuard.wrap
+        def tool() -> str:
+            raise QuarryConnectionError("down", "quarry.example.com")
+
+        result = tool()
+
+        assert "QUARRY_URL" in result
+        assert "systemctl" not in result
+        assert "launchctl" not in result
+
     def test_non_connection_error_keeps_the_generic_form(self) -> None:
         @ToolGuard.wrap
         def tool() -> str:

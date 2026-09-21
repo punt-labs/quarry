@@ -5,36 +5,40 @@ Code's marketplace plugin tree). This module copies that content, verbatim,
 into the harness-specific locations that pi, opencode, and codex auto-load
 skills from — Claude Code needs no deposit of its own, since it already reads
 the canonical tree directly. Every deposit is version-stamped by content hash
-so a re-run is a no-op unless the source changed, and safe: a deposit writes
-into a temp sibling directory first and swaps it in with a backup, so an
-interrupted write never leaves a half-written skill in place (bug class 1).
+so a re-run is a no-op unless the source changed. :class:`SkillSource`
+(``skills_source.py``) owns the source-tree and single-deposit mechanics
+(locate, hash, manifest, the atomic copy-and-swap); this module owns only
+harness orchestration — which harness, which root, which skills go where.
 """
 
 from __future__ import annotations
 
-import hashlib
-import json
-import os
-import shutil
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, Final, Literal, Self, final
+from typing import TYPE_CHECKING, Literal, Self, final
+
+from quarry.skills_source import SkillSource
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 __all__ = ["Harness", "SkillOutcome", "SkillsInstaller"]
 
-# Bumped only if the manifest's OWN shape changes (e.g. a new field); a skill
-# content edit is tracked by its content hash, not this constant.
-_MANIFEST_FORMAT_VERSION: Final = 1
-_MANIFEST_NAME: Final = ".quarry-skill.json"
-
 # The closed vocabulary a deposit/status/removal call reports. "unsupported"
 # is Claude Code only (no deposit target); "current"/"stale" are status-only;
-# "deposited"/"upgraded" are install-only; "removed"/"absent" are removal-only.
+# "deposited"/"upgraded" are install-only; "removed"/"absent"/"foreign" are
+# removal-only ("foreign": a same-named directory exists but carries no
+# quarry manifest, so it was refused, not deleted — see PY-EH-8/safety note
+# on :meth:`SkillsInstaller._remove_one`).
 Action = Literal[
-    "deposited", "upgraded", "current", "stale", "removed", "absent", "unsupported"
+    "deposited",
+    "upgraded",
+    "current",
+    "stale",
+    "removed",
+    "absent",
+    "unsupported",
+    "foreign",
 ]
 
 
@@ -95,6 +99,11 @@ class SkillOutcome:
     # None only when action == "unsupported" (Claude Code has no deposit path).
     path: Path | None
 
+    def __post_init__(self) -> None:
+        if (self.action == "unsupported") != (self.path is None):
+            msg = "SkillOutcome.path must be set iff action is not 'unsupported'"
+            raise ValueError(msg)
+
 
 @final
 class SkillsInstaller:
@@ -106,14 +115,14 @@ class SkillsInstaller:
     source overwrites the stale copy wholesale (``action="upgraded"``).
     """
 
-    __slots__ = ("_home", "_source_dir")
+    __slots__ = ("_home", "_source")
 
-    _source_dir: Path
+    _source: SkillSource
     _home: Path
 
     def __new__(cls, source_dir: Path, home: Path) -> Self:
         self = super().__new__(cls)
-        self._source_dir = source_dir
+        self._source = SkillSource(source_dir)
         self._home = home
         return self
 
@@ -121,20 +130,10 @@ class SkillsInstaller:
     def locate_source(start: Path) -> Path:
         """Walk upward from *start* to find the repo's ``plugin/skills`` tree.
 
-        Raises ``FileNotFoundError`` (PY-EH-8) rather than returning ``None``:
-        a caller asking to install skills has nothing to copy without a
-        source, and silently no-op-ing would hide a usage mistake (running
-        outside a quarry checkout) as an empty success.
+        Delegates to :meth:`SkillSource.locate`; kept here too since this is
+        the class every caller (the CLI, tests) already names.
         """
-        for candidate in (start, *start.parents):
-            skills_dir = candidate / "plugin" / "skills"
-            if skills_dir.is_dir():
-                return skills_dir
-        msg = (
-            f"no plugin/skills/ tree found above {start} -- run "
-            "'quarry skills install' from inside a quarry checkout."
-        )
-        raise FileNotFoundError(msg)
+        return SkillSource.locate(start)
 
     def detected_harnesses(self) -> tuple[Harness, ...]:
         """Return every harness that looks installed on this machine."""
@@ -146,7 +145,8 @@ class SkillsInstaller:
         if root is None:
             return self._unsupported(harness)
         return tuple(
-            self._install_one(harness, name, root) for name in self._skill_names()
+            self._install_one(harness, name, root)
+            for name in self._source.skill_names()
         )
 
     def install_detected(self) -> tuple[SkillOutcome, ...]:
@@ -165,17 +165,24 @@ class SkillsInstaller:
                 outcomes.extend(self._unsupported(harness))
                 continue
             outcomes.extend(
-                self._status_one(harness, name, root) for name in self._skill_names()
+                self._status_one(harness, name, root)
+                for name in self._source.skill_names()
             )
         return tuple(outcomes)
 
     def remove(self, harness: Harness) -> tuple[SkillOutcome, ...]:
-        """Delete every deposited skill for *harness*; idempotent."""
+        """Delete every deposited skill for *harness*; idempotent.
+
+        Refuses (``action="foreign"``) any same-named directory that lacks
+        quarry's own manifest — a directory this installer never deposited
+        is never a candidate for ``shutil.rmtree``, no matter how it got
+        there (see the safety note on :meth:`_remove_one`).
+        """
         root = harness.deposit_root(self._home)
         if root is None:
             return self._unsupported(harness)
         return tuple(
-            self._remove_one(harness, name, root) for name in self._skill_names()
+            self._remove_one(harness, name, root) for name in self._source.skill_names()
         )
 
     def remove_all(self) -> tuple[SkillOutcome, ...]:
@@ -185,29 +192,19 @@ class SkillsInstaller:
             outcomes.extend(self.remove(harness))
         return tuple(outcomes)
 
-    def _skill_names(self) -> tuple[str, ...]:
-        """Return every canonical skill's name, sorted, that carries a SKILL.md."""
-        return tuple(
-            sorted(
-                path.name
-                for path in self._source_dir.iterdir()
-                if path.is_dir() and (path / "SKILL.md").is_file()
-            )
-        )
-
     def _unsupported(self, harness: Harness) -> tuple[SkillOutcome, ...]:
         return tuple(
             SkillOutcome(harness, name, "unsupported", None)
-            for name in self._skill_names()
+            for name in self._source.skill_names()
         )
 
     def _install_one(self, harness: Harness, name: str, root: Path) -> SkillOutcome:
         target = root / name
-        digest = self._hash_tree(self._source_dir / name)
-        if self._read_manifest(target) == digest:
+        content_hash = self._source.content_hash(name)
+        if SkillSource.read_manifest(target) == content_hash:
             return SkillOutcome(harness, name, "current", target)
         existed_before = target.exists()
-        self._deposit(self._source_dir / name, target, digest)
+        self._source.deposit(name, target)
         action: Action = "upgraded" if existed_before else "deposited"
         return SkillOutcome(harness, name, action, target)
 
@@ -215,79 +212,26 @@ class SkillsInstaller:
         target = root / name
         if not target.is_dir():
             return SkillOutcome(harness, name, "absent", target)
-        digest = self._hash_tree(self._source_dir / name)
-        action: Action = "current" if self._read_manifest(target) == digest else "stale"
+        content_hash = self._source.content_hash(name)
+        matches = SkillSource.read_manifest(target) == content_hash
+        action: Action = "current" if matches else "stale"
         return SkillOutcome(harness, name, action, target)
 
     @staticmethod
     def _remove_one(harness: Harness, name: str, root: Path) -> SkillOutcome:
+        """Remove *name* from *root* — but only a directory quarry itself deposited.
+
+        A same-named directory that carries no ``.quarry-skill.json`` manifest
+        is left alone and reported ``"foreign"``. Every marketplace-layout
+        Claude Code plugin ships a ``plugin/skills/`` tree, so a name match
+        alone proves nothing about provenance — a bare ``target.is_dir()``
+        check here would ``rmtree`` a directory this installer never wrote,
+        including one holding real, unrelated user data.
+        """
         target = root / name
         if not target.is_dir():
             return SkillOutcome(harness, name, "absent", target)
-        shutil.rmtree(target)
+        if SkillSource.read_manifest(target) is None:
+            return SkillOutcome(harness, name, "foreign", target)
+        SkillSource.remove_tree(target)
         return SkillOutcome(harness, name, "removed", target)
-
-    @staticmethod
-    def _hash_tree(skill_dir: Path) -> str:
-        """Return a short, order-independent content hash of *skill_dir*."""
-        digest = hashlib.sha256()
-        for path in sorted(skill_dir.rglob("*")):
-            if path.is_file():
-                digest.update(path.relative_to(skill_dir).as_posix().encode())
-                digest.update(path.read_bytes())
-        return digest.hexdigest()[:16]
-
-    @staticmethod
-    def _read_manifest(target: Path) -> str | None:
-        """Return the deposited content hash, or ``None`` if absent/unreadable.
-
-        ``None`` is the documented "no valid manifest here" contract (a fresh
-        target, a hand-edited one, or a corrupt file all look the same to an
-        idempotent re-install: deposit fresh), not an error the caller handles.
-        """
-        manifest = target / _MANIFEST_NAME
-        if not manifest.is_file():
-            return None
-        try:
-            data = json.loads(manifest.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return None
-        content_hash = data.get("content_hash") if isinstance(data, dict) else None
-        return content_hash if isinstance(content_hash, str) else None
-
-    @staticmethod
-    def _deposit(source_dir: Path, target: Path, content_hash: str) -> None:
-        """Copy *source_dir* to *target* and stamp its manifest, swapped in atomically.
-
-        Writes into a temp sibling first, then swaps the old target (if any)
-        to a backup sibling before renaming the temp into place — an
-        interrupted copy never reaches *target*, and a failed rename restores
-        the backup rather than leaving *target* missing (bug class 1).
-        """
-        target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = target.parent / f".{target.name}.tmp-{os.getpid()}"
-        if tmp.exists():
-            shutil.rmtree(tmp)
-        shutil.copytree(source_dir, tmp)
-        manifest = {
-            "content_hash": content_hash,
-            "format_version": _MANIFEST_FORMAT_VERSION,
-        }
-        (tmp / _MANIFEST_NAME).write_text(json.dumps(manifest), encoding="utf-8")
-
-        backup = target.parent / f".{target.name}.bak-{os.getpid()}"
-        if backup.exists():
-            shutil.rmtree(backup)
-        had_target = target.exists()
-        if had_target:
-            target.rename(backup)
-        try:
-            tmp.rename(target)
-        except OSError:
-            if had_target:
-                backup.rename(target)
-            shutil.rmtree(tmp, ignore_errors=True)
-            raise
-        else:
-            if had_target:
-                shutil.rmtree(backup)

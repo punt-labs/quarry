@@ -184,6 +184,67 @@ class TestInstall:
         assert _rows(calls) == []
         assert calls[-1][1] == "No harnesses detected."
 
+    def test_no_skills_in_source_reports_a_distinct_message(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A harness IS detected, but plugin/skills/ carries no SKILL.md --
+        distinct from the "no harnesses" case (mdm review finding)."""
+        repo = tmp_path / "repo"
+        (repo / "plugin" / "skills").mkdir(parents=True)  # empty -- no skills
+        home = tmp_path / "home"
+        (home / ".codex").mkdir(parents=True)
+        monkeypatch.chdir(repo)
+        _patch_home(monkeypatch, home)
+        calls: list[Emitted] = []
+
+        result = runner.invoke(_app(calls), ["skills", "install", "--all"])
+
+        assert result.exit_code == 0
+        assert _rows(calls) == []
+        assert calls[-1][1] == "No skills found in plugin/skills/ to deposit."
+
+    def test_all_deposits_into_multiple_detected_harnesses_together(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = _repo_with_skills(tmp_path)
+        home = tmp_path / "home"
+        (home / ".pi").mkdir(parents=True)
+        (home / ".config" / "opencode").mkdir(parents=True)
+        monkeypatch.chdir(repo)
+        _patch_home(monkeypatch, home)
+        calls: list[Emitted] = []
+
+        result = runner.invoke(_app(calls), ["skills", "install", "--all"])
+
+        assert result.exit_code == 0, result.output
+        rows = _rows(calls)
+        assert {r["harness"] for r in rows} == {"pi", "opencode"}
+        assert all(r["action"] == "deposited" for r in rows)
+        assert (home / ".pi" / "agent" / "skills" / "demo").is_dir()
+        assert (home / ".config" / "opencode" / "skills" / "demo").is_dir()
+
+    def test_agent_claude_alongside_all_shows_the_unsupported_row(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = _repo_with_skills(tmp_path)
+        home = tmp_path / "home"
+        monkeypatch.chdir(repo)
+        _patch_home(monkeypatch, home)
+        calls: list[Emitted] = []
+
+        result = runner.invoke(_app(calls), ["skills", "install", "--agent", "claude"])
+
+        assert result.exit_code == 0, result.output
+        rows = _rows(calls)
+        assert rows == [
+            {
+                "harness": "claude",
+                "skill": "demo",
+                "action": "unsupported",
+                "path": None,
+            }
+        ]
+
 
 class TestStatus:
     def test_reports_absent_then_current(

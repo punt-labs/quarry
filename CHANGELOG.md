@@ -47,8 +47,14 @@ across `transform`, `index`, and `connector`).
   `plugin/skills/` directly. Each deposit is content-hash version-stamped
   (idempotent re-install) and atomically swapped in (temp-then-backup-then-
   rename), so an interrupted write never leaves a half-deposited skill.
-  `quarry disable` retracts the deposits again when run against quarry's own
-  checkout.
+  `quarry disable` retracts the deposits again, but only when the disabled
+  repo's own `pyproject.toml` names the `punt-quarry` package (identity —
+  every marketplace-layout Claude Code plugin ships an identically-shaped
+  `plugin/skills/` tree, so shape alone proves nothing) AND the target
+  directory carries quarry's own `.quarry-skill.json` manifest (ownership —
+  a same-named directory this installer never wrote is refused, not
+  deleted). Retraction is best-effort: a filesystem failure is logged and
+  swallowed, never aborting `disable`.
 - tool: `mcp_guard.ToolGuard` renders an actionable recovery hint for a
   down/unreachable `quarryd` (a restart command for a loopback target, a
   `QUARRY_URL`/`quarry login` hint for a remote one) instead of a bare

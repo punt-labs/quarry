@@ -276,8 +276,8 @@
     "efferent_coupling": 1.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.607,
-    "avg_lcom": 0.607
+    "max_lcom": 0.476,
+    "avg_lcom": 0.476
   },
   "src/quarry/cli_sync.py": {
     "efferent_coupling": 2.0,
@@ -822,8 +822,8 @@
     "efferent_coupling": 7.0,
     "public_names": 3.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.333,
-    "avg_lcom": 0.333
+    "max_lcom": 0.733,
+    "avg_lcom": 0.366
   },
   "src/quarry/enablement_result.py": {
     "efferent_coupling": 0.0,
@@ -1582,11 +1582,18 @@
     "public_names": 1.0
   },
   "src/quarry/skills_install.py": {
-    "efferent_coupling": 0.0,
+    "efferent_coupling": 1.0,
     "public_names": 3.0,
     "circular_imports": 0.0,
     "max_lcom": 1.0,
-    "avg_lcom": 0.828
+    "avg_lcom": 0.722
+  },
+  "src/quarry/skills_source.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 1.0,
+    "avg_lcom": 0.5
   },
   "src/quarry/subagent_capture.py": {
     "efferent_coupling": 5.0,

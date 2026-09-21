@@ -1414,9 +1414,12 @@ restating the same how-to.
 
 Claude Code reads \texttt{plugin/skills/} directly through the marketplace
 plugin tree --- no deposit step.  \modpath{skills\_install.py}
-(\texttt{SkillsInstaller}) copies the same two skill directories, verbatim,
-into the auto-load location each other harness was confirmed (not guessed)
-to read skills from:
+(\texttt{SkillsInstaller}) composes \modpath{skills\_source.py}
+(\texttt{SkillSource}, which owns every source-tree and single-deposit
+mechanic: locate, hash, manifest, the atomic copy-and-swap) and adds only
+harness orchestration on top --- which harness, which root. Together they
+copy the same two skill directories, verbatim, into the auto-load location
+each other harness was confirmed (not guessed) to read skills from:
 
 \begin{itemize}
   \item \textbf{pi} --- \texttt{\textasciitilde{}/.pi/agent/skills/<name>/}, matching
@@ -1447,13 +1450,27 @@ status} (\modpath{cli\_skills.py}) expose this: \texttt{--all} (the default)
 targets every harness \texttt{SkillsInstaller.detected\_harnesses()} finds on
 the machine (a harness's own top-level config directory, e.g. \texttt{\textasciitilde{}/.codex},
 existing); \texttt{--agent} targets one harness explicitly, detected or not.
-\texttt{quarry disable} retracts the deposits again, but only when the
-disabled repo is quarry's own checkout (\texttt{plugin/skills/} exists directly
-under the repo root being disabled, never found via an ancestor walk --- an
-ancestor walk would true-positive on every path nested inside the quarry
-checkout, including every test's own temp directory, and reach the
-operator's real home directory as a side effect of an unrelated
-\texttt{disable} call).
+
+\texttt{quarry disable} retracts the deposits again through a private
+\texttt{\_SkillRetraction} collaborator, gated by two guards, both required
+(defense-in-depth for an \texttt{rmtree} under the operator's real
+\texttt{\$HOME}): \textbf{identity} --- every marketplace-layout Claude Code
+plugin (lux, prfaq, dungeon, punt-kit, quarry itself) ships an
+identically-shaped \texttt{plugin/skills/} tree, so that shape alone proves
+nothing; only a checkout whose own \texttt{pyproject.toml} names the
+\texttt{punt-quarry} package is quarry's own, checked on the disabled repo's
+root directly, never via an ancestor walk (an ancestor walk would
+true-positive on every path nested inside the quarry checkout, including
+every test's own temp directory, and reach the operator's real home
+directory as a side effect of an unrelated \texttt{disable} call); and
+\textbf{manifest ownership} --- \texttt{SkillsInstaller.remove}/
+\texttt{remove\_all} refuse (\texttt{action="foreign"}) any same-named
+directory that lacks a \texttt{.quarry-skill.json} manifest, so a directory
+this installer never deposited is never an \texttt{rmtree} candidate no
+matter how it got there. Retraction is best-effort: a filesystem failure
+during either guard's checks or the removal itself is logged and swallowed,
+never aborting \texttt{disable} or blocking the marker/import teardown that
+already committed.
 
 % ===================================================================
 \section{Logging and Exceptions}
