@@ -50,13 +50,16 @@ follow, not just your own note-to-self → `learn` instead of `remember`.
 ## Run it
 
 ```sh
-quarry remember "<content>" --document-name <topic-slug> \
+printf '%s' "<content>" | quarry remember --name <topic-slug> \
   --agent-handle <your-handle> --memory-type fact --summary "<one line>"
 
 quarry learn "<lesson, <=500 chars>" [--topic <domain>] [--name <slug>]
 
 quarry ingest <url> [--overwrite] [--collection <name>]
 ```
+
+`remember` reads its content from stdin, not a positional argument — pipe
+it in.
 
 Confirm the exact flags with `quarry remember --help` / `quarry learn
 --help` / `quarry ingest --help` before relying on one not shown here.
