@@ -45,7 +45,7 @@ jobs:
           shellcheck -x install.sh tests/harness/*.sh
 
       # uv (cached) + Python back the host-side `uv build` in the orchestrator.
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
