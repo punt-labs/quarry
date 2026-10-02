@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Self, final
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from quarry.api import (
     DeleteCollectionRequest,
@@ -57,7 +57,7 @@ logger = logging.getLogger(__name__)
 _NOT_FOUND = 404
 
 
-mcp = FastMCP(
+mcp = MCPServer(
     "punt-quarry",
     instructions=(
         "Use find before WebSearch or WebFetch for research, or before "
@@ -97,7 +97,7 @@ class McpTools:
         self._connect = connect
         return self
 
-    def register(self, server: FastMCP) -> None:
+    def register(self, server: MCPServer) -> None:
         """Attach every guarded tool to *server* under its wire name.
 
         ``list`` and ``use`` keep their short wire names; the rest register under

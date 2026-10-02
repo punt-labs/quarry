@@ -14,6 +14,14 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Changed
+
+- Migrate the `quarry mcp` stdio server from `FastMCP` (mcp 1.x) to
+  `MCPServer` (mcp 2.x). The `mcp.server.fastmcp.FastMCP` entry point was
+  removed in mcp 2.0; `mcp_server.py` and `mcp_missions.py` now construct and
+  type against `MCPServer`. `add_tool`, `run`, and the `instructions=` kwarg
+  are unchanged, so tool registration and the wire surface are identical.
+
 ## [3.4.0] - 2026-09-21
 
 ### Added
