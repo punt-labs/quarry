@@ -132,7 +132,7 @@ class WatchReconciler:
         ctx = self._deps.ctx
         try:
             orphans = await run_in_threadpool(self._read_orphans)
-        except Exception as exc:  # noqa: BLE001 — backstop liveness: a read error of
+        except Exception as exc:
             # any type (incl. LanceDB/pyarrow errors outside the stdlib hierarchy)
             # must skip the cycle, never kill the safety loop; fails toward safety.
             logger.warning(
@@ -233,7 +233,7 @@ class WatchReconciler:
                         self._deps.begin(name, collection, root)
                     else:
                         sweep.add(key, resolved)
-        except Exception as exc:  # noqa: BLE001 — reconcile liveness: no enumeration
+        except Exception as exc:
             # error may escape and kill the safety loop; fail closed and self-heal.
             # exc_info: a production enumeration failure needs the traceback.
             logger.warning(

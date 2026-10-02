@@ -134,7 +134,9 @@ For deeper integration, import quarry's Python client. The library holds no engi
 import quarry
 from quarry.api import RememberRequest, SearchRequest
 
-client = quarry.TargetResolver.connect()  # resolves the local daemon (or a logged-in remote)
+client = (
+    quarry.TargetResolver.connect()
+)  # resolves the local daemon (or a logged-in remote)
 
 # Remember
 accepted = client.remember(

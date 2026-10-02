@@ -150,9 +150,9 @@ class IngestQueue:
     """Daemon-owned queue: one FIFO writer per collection, bounded embed globally."""
 
     _ctx: DaemonContext
-    _workers: dict[str, CollectionWorker]   # collection -> its single worker
-    _embed_gate: asyncio.Semaphore          # global embed-concurrency bound
-    _admit: asyncio.Semaphore               # global queue-depth admission bound
+    _workers: dict[str, CollectionWorker]  # collection -> its single worker
+    _embed_gate: asyncio.Semaphore  # global embed-concurrency bound
+    _admit: asyncio.Semaphore  # global queue-depth admission bound
     _closing: bool
 
     def try_submit(self, collection: str, job: IngestUnit, state: TaskState) -> bool:
@@ -190,11 +190,11 @@ async def _run(self) -> None:
         try:
             if isinstance(item, _Stop):
                 return
-            item.state.status = "running"          # queued -> running here
-            async with self._embed_gate:           # global concurrency bound
+            item.state.status = "running"  # queued -> running here
+            async with self._embed_gate:  # global concurrency bound
                 await item.job.run(self._ctx, item.state)  # task_terminal inside
         finally:
-            self._admit_release()                  # free one queue-depth slot
+            self._admit_release()  # free one queue-depth slot
             self._queue.task_done()
 ```
 
@@ -223,10 +223,13 @@ async def _run(self) -> None:
 ```python
 def submit(self, collection, job, state) -> JSONResponse:
     if not self._ctx.ingest_queue.try_submit(collection, job, state):
-        self._ctx.tasks.drop(state)               # no orphan task record
+        self._ctx.tasks.drop(state)  # no orphan task record
         return JSONResponse(
-            {"error": "ingest queue full; capture retained locally, retry via "
-                      "`quarry backfill`", "status": "rejected"},
+            {
+                "error": "ingest queue full; capture retained locally, retry via "
+                "`quarry backfill`",
+                "status": "rejected",
+            },
             status_code=503,
         )
     return JSONResponse({"task_id": state.task_id, "status": "accepted"}, 202)

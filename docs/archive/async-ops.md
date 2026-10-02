@@ -206,9 +206,9 @@ handler is registered on all three paths. No redirect -- direct handler
 reuse.
 
 ```python
-Route("/tasks/{task_id}", _task_status_route, methods=["GET"]),
-Route("/sync/{task_id}", _task_status_route, methods=["GET"]),
-Route("/ingest/{task_id}", _task_status_route, methods=["GET"]),
+(Route("/tasks/{task_id}", _task_status_route, methods=["GET"]),)
+(Route("/sync/{task_id}", _task_status_route, methods=["GET"]),)
+(Route("/ingest/{task_id}", _task_status_route, methods=["GET"]),)
 ```
 
 The task_id prefix (`sync-`, `ingest-`, `remember-`, etc.) already
@@ -310,10 +310,12 @@ Eviction runs as a sweep before each new task creation:
 ```python
 TASK_TTL_SECONDS = 3600  # 1 hour
 
+
 def _gc_tasks(ctx: _QuarryContext) -> None:
     now = time.monotonic()
     expired = [
-        tid for tid, t in ctx.tasks.items()
+        tid
+        for tid, t in ctx.tasks.items()
         if t.status != "running" and (now - t.created_at) > TASK_TTL_SECONDS
     ]
     for tid in expired:
@@ -369,7 +371,9 @@ switch to `ctx.tasks`:
 ctx.sync_task = SyncTaskState(task_id="sync-test123", status="running")
 
 # After
-ctx.tasks["sync-test123"] = TaskState(task_id="sync-test123", kind="sync", status="running")
+ctx.tasks["sync-test123"] = TaskState(
+    task_id="sync-test123", kind="sync", status="running"
+)
 ```
 
 The `test_concurrent_sync_returns_409` test (line 1266) and

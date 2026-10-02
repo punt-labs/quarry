@@ -179,6 +179,7 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class EnableResult:
     """Result of quarry enable for a single project directory."""
+
     directory: str
     collection: str
     captures_collection: str
@@ -347,6 +348,7 @@ def disable_project(directory: Path, *, keep_data: bool = False) -> DisableResul
 @dataclass(frozen=True)
 class DisableResult:
     """Result of quarry disable for a single project directory."""
+
     directory: str
     collection: str
     captures_collection: str
@@ -435,8 +437,7 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
             # subsume existing child registrations, causing data loss.
             registrations = list_registrations(conn)
             has_children = any(
-                _is_ancestor_of(directory, Path(r.directory))
-                for r in registrations
+                _is_ancestor_of(directory, Path(r.directory)) for r in registrations
             )
             if has_children:
                 logger.warning(
@@ -444,7 +445,8 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
                     "under %s; skipping auto-register to prevent "
                     "subsumption. Run 'quarry enable %s' to explicitly "
                     "register the parent.",
-                    directory, directory,
+                    directory,
+                    directory,
                 )
                 return {
                     "hookSpecificOutput": {
@@ -461,7 +463,8 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
                 register_directory(conn, directory, collection)
                 logger.info(
                     "session-start: auto-registered %s as '%s'",
-                    directory, collection,
+                    directory,
+                    collection,
                 )
 
         captures_collection = f"{collection}-captures"
@@ -546,7 +549,9 @@ collection = _collection_for_cwd(cwd) or _WEB_CAPTURES_FALLBACK
 
 # After:
 base_collection = _collection_for_cwd(cwd)
-collection = f"{base_collection}-captures" if base_collection else _WEB_CAPTURES_FALLBACK
+collection = (
+    f"{base_collection}-captures" if base_collection else _WEB_CAPTURES_FALLBACK
+)
 ```
 
 Change `handle_pre_compact`:
@@ -557,7 +562,9 @@ collection = _collection_for_cwd(cwd) or _SESSION_NOTES_FALLBACK
 
 # After:
 base_collection = _collection_for_cwd(cwd)
-collection = f"{base_collection}-captures" if base_collection else _SESSION_NOTES_FALLBACK
+collection = (
+    f"{base_collection}-captures" if base_collection else _SESSION_NOTES_FALLBACK
+)
 ```
 
 The fallback constants `_WEB_CAPTURES_FALLBACK` and
@@ -1294,7 +1301,9 @@ collection = _collection_for_cwd(cwd) or _WEB_CAPTURES_FALLBACK
 
 # After:
 base_collection = _collection_for_cwd(cwd)
-collection = f"{base_collection}-captures" if base_collection else _WEB_CAPTURES_FALLBACK
+collection = (
+    f"{base_collection}-captures" if base_collection else _WEB_CAPTURES_FALLBACK
+)
 ```
 
 In `handle_pre_compact` (line 725):
@@ -1305,7 +1314,9 @@ collection = _collection_for_cwd(cwd) or _SESSION_NOTES_FALLBACK
 
 # After:
 base_collection = _collection_for_cwd(cwd)
-collection = f"{base_collection}-captures" if base_collection else _SESSION_NOTES_FALLBACK
+collection = (
+    f"{base_collection}-captures" if base_collection else _SESSION_NOTES_FALLBACK
+)
 ```
 
 ### S3. Module: `src/quarry/__main__.py` (modify)
@@ -1330,7 +1341,7 @@ _COMMAND_ORDER: list[str] = [
     "enable",
     "disable",
     "optimize",
-    ...
+    ...,
 ]
 ```
 
@@ -1375,13 +1386,9 @@ def enable_cmd(
         lines.append("  Ethos: not installed (agent memory skipped)")
     else:
         if result.ethos_created:
-            lines.append(
-                f"  Ethos created: {', '.join(result.ethos_created)}"
-            )
+            lines.append(f"  Ethos created: {', '.join(result.ethos_created)}")
         if result.ethos_updated:
-            lines.append(
-                f"  Ethos updated: {', '.join(result.ethos_updated)}"
-            )
+            lines.append(f"  Ethos updated: {', '.join(result.ethos_updated)}")
         if result.memory_collections:
             lines.append(
                 f"  Memory collections: {', '.join(result.memory_collections)}"
@@ -1487,9 +1494,7 @@ def _check_orphaned_captures(
 
     db = get_db(db_path)
     cols = db_list_collections(db)
-    col_names = {
-        c["collection"] for c in cols if isinstance(c.get("collection"), str)
-    }
+    col_names = {c["collection"] for c in cols if isinstance(c.get("collection"), str)}
 
     conn = open_registry(registry_path)
     try:
@@ -1526,8 +1531,8 @@ Add these two checks to the `all_results` list in `check_environment`
 (line 1034), after `_check_sync_directories`:
 
 ```python
-_check_enable_status(settings.registry_path, os.getcwd()),
-_check_orphaned_captures(settings.registry_path, settings.lancedb_path),
+(_check_enable_status(settings.registry_path, os.getcwd()),)
+(_check_orphaned_captures(settings.registry_path, settings.lancedb_path),)
 ```
 
 Import `os` is already at the top of `doctor.py`.

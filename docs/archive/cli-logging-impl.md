@@ -133,6 +133,7 @@ the default `stderr_level="WARNING"`.
 def test_configure_logging_not_called_at_import():
     """Module-level code does not call configure_logging."""
     import ast
+
     src = Path("src/quarry/__main__.py").read_text()
     tree = ast.parse(src)
     # Walk top-level statements only (not inside functions/classes)
@@ -432,12 +433,15 @@ Asserts: JSON output includes the message.
 def test_login_abort_message_on_stderr():
     """login_cmd abort message goes to stderr, not stdout."""
     _reset_globals()
-    with patch(
-        "quarry.__main__.fetch_ca_cert",
-        return_value=b"-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n",
-    ), patch(
-        "quarry.__main__.cert_fingerprint",
-        return_value="AA:BB:CC",
+    with (
+        patch(
+            "quarry.__main__.fetch_ca_cert",
+            return_value=b"-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n",
+        ),
+        patch(
+            "quarry.__main__.cert_fingerprint",
+            return_value="AA:BB:CC",
+        ),
     ):
         result = runner.invoke(app, ["login", "example.com"], input="n\n")
     assert result.exit_code == 0
@@ -483,8 +487,7 @@ So the import stays -- only the `console` variable is deleted.
 def test_no_stdout_console_variable():
     """The module has no stdout Console instance (only err_console)."""
     assert not hasattr(cli_mod, "console"), (
-        "cli_mod.console still exists -- all output should use "
-        "err_console or _emit"
+        "cli_mod.console still exists -- all output should use err_console or _emit"
     )
 ```
 
@@ -560,23 +563,21 @@ a non-zero exit. Guard it for consistency:
 **Current code**:
 
 ```python
-        if workers is not None:
-            err_console.print(
-                "Warning: --workers is ignored when a remote quarry server is "
-                "configured",
-                style="yellow",
-            )
+if workers is not None:
+    err_console.print(
+        "Warning: --workers is ignored when a remote quarry server is configured",
+        style="yellow",
+    )
 ```
 
 **Target code**:
 
 ```python
-        if workers is not None and not _quiet:
-            err_console.print(
-                "Warning: --workers is ignored when a remote quarry server is "
-                "configured",
-                style="yellow",
-            )
+if workers is not None and not _quiet:
+    err_console.print(
+        "Warning: --workers is ignored when a remote quarry server is configured",
+        style="yellow",
+    )
 ```
 
 ### Tests
@@ -816,17 +817,19 @@ Asserts: `progress_callback` is `None` in quiet mode (no spinner).
 ### Current code (line 163)
 
 ```python
-        typer.Option("--verbose", "-v", help="Verbose output."),
+(typer.Option("--verbose", "-v", help="Verbose output."),)
 ```
 
 ### Target code
 
 ```python
-        typer.Option(
-            "--verbose",
-            "-v",
-            help="Show INFO-level diagnostic logs on stderr (timing, plans, counts).",
-        ),
+(
+    typer.Option(
+        "--verbose",
+        "-v",
+        help="Show INFO-level diagnostic logs on stderr (timing, plans, counts).",
+    ),
+)
 ```
 
 ### Tests

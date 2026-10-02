@@ -169,7 +169,7 @@ client never constructs (the api models carry `collection` as a plain `str`).
 ```python
 from quarry import Database, ingest_url, ChunkSearch  # loads lancedb + onnxruntime
 
-db = Database.connect(lancedb_path)          # ~1.6 GB engine in THIS process
+db = Database.connect(lancedb_path)  # ~1.6 GB engine in THIS process
 ingest_url("https://example.com/doc", db, settings)
 hits = ChunkSearch(db).search(query_vector, limit=10)
 ```
@@ -180,7 +180,7 @@ hits = ChunkSearch(db).search(query_vector, limit=10)
 import quarry
 from quarry.api import IngestRequest, SearchRequest
 
-client = quarry.TargetResolver.connect()     # resolves the local daemon; no engine
+client = quarry.TargetResolver.connect()  # resolves the local daemon; no engine
 client.ingest_url(IngestRequest(url="https://example.com/doc"))
 resp = client.search(SearchRequest(query="what did we decide about X", limit=10))
 for hit in resp.hits:
