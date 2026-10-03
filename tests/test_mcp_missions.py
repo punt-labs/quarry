@@ -6,7 +6,7 @@ import asyncio
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from quarry.client import QuarryClient, QuarryConnectionError
 from quarry.mcp_missions import MissionTools
@@ -25,7 +25,7 @@ def _down() -> QuarryClient:
 
 class TestRegister:
     def test_registers_missions_sync(self) -> None:
-        server = FastMCP("t")
+        server = MCPServer("t")
         MissionTools(connect=_down).register(server)
         names = {tool.name for tool in asyncio.run(server.list_tools())}
         assert names == {"missions_sync"}
@@ -48,7 +48,7 @@ class TestBoundary:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.chdir(repo_with_missions(tmp_path / "quarry"))
-        server = FastMCP("t")
+        server = MCPServer("t")
         tools = MissionTools(connect=_down)
         tools.register(server)
         direct = tools.missions_sync()

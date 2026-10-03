@@ -18,7 +18,10 @@ import asyncio
 from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Self, final
+from typing import TYPE_CHECKING, Self, cast, final
+
+if TYPE_CHECKING:
+    import httpx
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -122,7 +125,10 @@ class _TestClientTransport:
             params=dict(params) if params else None,
             json=dict(json_body) if json_body is not None else None,
         )
-        return HttpxTransport._parse(resp)
+        # starlette's TestClient now returns an httpx2 Response (pulled in by the
+        # mcp 2.x dependency tree); it is structurally identical to the httpx
+        # Response _parse reads (.content, .status_code), so bridge the type here.
+        return HttpxTransport._parse(cast("httpx.Response", resp))
 
 
 @final
