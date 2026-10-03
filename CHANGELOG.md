@@ -21,6 +21,22 @@ across `transform`, `index`, and `connector`).
   removed in mcp 2.0; `mcp_server.py` and `mcp_missions.py` now construct and
   type against `MCPServer`. `add_tool`, `run`, and the `instructions=` kwarg
   are unchanged, so tool registration and the wire surface are identical.
+- tool: decompose `mcp_server.py` (555 lines, over the 500-line module cap)
+  into three sibling tool classes: `ResourceCatalog` (`src/quarry/mcp_catalog.py`)
+  owns the `list` tool; `DocumentTools` (`src/quarry/mcp_documents.py`) owns
+  `show`, `delete`, `register_directory`, `deregister_directory`, and
+  `sync_all_registrations`. `mcp_server.py` drops to 315 lines and keeps
+  `find`, `ingest`, `remember`, `learn`, `status`, `insights`, and
+  `use_database`, plus the registration wiring that delegates to all three
+  sibling classes (mirroring the existing `MissionTools` pattern). The stdio
+  wire surface — tool names, behavior, `MCPServer` construction — is
+  unchanged. `McpTools.main()` moves to a `McpTools.run_stdio` staticmethod.
+
+### Fixed
+
+- tool: add the `missions_sync` tool to `scripts/mcpb-manifest.template.json`
+  — it was never added when the tool shipped, so the Claude Desktop bundle's
+  tool list silently omitted it.
 
 ## [3.4.0] - 2026-09-21
 

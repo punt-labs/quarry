@@ -31,7 +31,18 @@ PLUGIN_ROOT = REPO_ROOT / "plugin"
 BUILD_MCPB = SCRIPTS_DIR / "build-mcpb.sh"
 MANIFEST_TEMPLATE = SCRIPTS_DIR / "mcpb-manifest.template.json"
 README_SHA_CHECK = SCRIPTS_DIR / "check-readme-install-sha.sh"
-MCP_SERVER = REPO_ROOT / "src" / "quarry" / "mcp_server.py"
+# Every module that registers MCP tools via ``add_tool`` — split across
+# sibling classes (ResourceCatalog, DocumentTools, MissionTools) so no single
+# module holds every tool, per the 500-line module cap.
+MCP_TOOL_MODULES = tuple(
+    REPO_ROOT / "src" / "quarry" / name
+    for name in (
+        "mcp_server.py",
+        "mcp_catalog.py",
+        "mcp_documents.py",
+        "mcp_missions.py",
+    )
+)
 
 # The bundle invokes ``quarry mcp`` — the stdio client of quarryd (DES-031 v2.2).
 # It ships the BARE command ``quarry`` (not an absolute path) on purpose: the
@@ -61,16 +72,17 @@ def _shell_scripts() -> list[Path]:
 
 
 def _registered_tool_names() -> set[str]:
-    """Wire names the MCP server registers, parsed from ``register()``.
+    """Wire names the MCP server registers, parsed from every ``register()``.
 
     A tool registered with ``name="x"`` uses that wire name; otherwise the
-    bound method name is the wire name (FastMCP's default).
+    bound method name is the wire name (FastMCP's default). Tools are spread
+    across :data:`MCP_TOOL_MODULES`, not just ``mcp_server.py``.
     """
-    source = MCP_SERVER.read_text()
-    names: set[str] = set()
     pattern = re.compile(r'add_tool\(\s*self\.(\w+)\s*(?:,\s*name="(\w+)")?\s*\)')
-    for method, override in pattern.findall(source):
-        names.add(override or method)
+    names: set[str] = set()
+    for module in MCP_TOOL_MODULES:
+        for method, override in pattern.findall(module.read_text()):
+            names.add(override or method)
     return names
 
 

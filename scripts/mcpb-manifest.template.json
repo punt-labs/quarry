@@ -38,7 +38,8 @@
     {"name": "sync_all_registrations", "description": "Sync all registered directories: ingest new/changed, drop deleted."},
     {"name": "status", "description": "Report database status: document/chunk counts, storage size, model info."},
     {"name": "insights", "description": "Read your own recall stats: query volume, latency, and recall mix."},
-    {"name": "use", "description": "Switch to a different named database for subsequent operations."}
+    {"name": "use", "description": "Switch to a different named database for subsequent operations."},
+    {"name": "missions_sync", "description": "File each frozen ethos mission round into the worker's memory."}
   ],
   "keywords": ["search", "documents", "ocr", "vector-search", "knowledge-base", "semantic-search"],
   "license": "MIT",
