@@ -303,12 +303,12 @@ def doctor() -> None:
 @app.command()
 def mcp() -> None:
     """Start the MCP server (stdio transport)."""
-    from quarry.mcp_server import main as mcp_main  # noqa: PLC0415
+    from quarry.mcp_server import McpTools  # noqa: PLC0415
 
     # stdout is the stdio transport, so the server's log goes to stderr at INFO
     # regardless of the CLI's --quiet/--verbose default; the launcher owns this.
     LoggingConfig.configure(stderr_level="INFO")
-    mcp_main(db_name=_global_db or SELECTION.persisted())
+    McpTools.run_stdio(db_name=_global_db or SELECTION.persisted())
 
 
 @app.command()

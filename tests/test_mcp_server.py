@@ -15,7 +15,7 @@ exception or an in-process engine fallback.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, cast, final
@@ -33,6 +33,8 @@ from quarry.client.transport import HttpxTransport, Response
 from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
 from quarry.db_pointer import SELECTION
+from quarry.mcp_catalog import ResourceCatalog
+from quarry.mcp_documents import DocumentTools
 from quarry.mcp_server import McpTools, mcp
 from quarry.query_log import QueryLog, get_query_log
 from quarry.query_log_types import QueryEvent, QueryHit
@@ -140,21 +142,33 @@ class _ToolHarness:
     over that same app — the tool round-trips through the real ``/v1`` handlers.
     """
 
-    __slots__ = ("_client", "_tools")
+    __slots__ = ("_catalog", "_client", "_documents", "_tools")
 
     _client: TestClient
     _tools: McpTools
+    _catalog: ResourceCatalog
+    _documents: DocumentTools
 
     def __new__(cls, tc: TestClient) -> Self:
         self = super().__new__(cls)
         self._client = tc
         quarry_client = QuarryClient(_TestClientTransport(tc))
         self._tools = McpTools(connect=lambda: quarry_client)
+        self._catalog = ResourceCatalog(connect=lambda: quarry_client)
+        self._documents = DocumentTools(connect=lambda: quarry_client)
         return self
 
     @property
     def tools(self) -> McpTools:
         return self._tools
+
+    @property
+    def catalog(self) -> ResourceCatalog:
+        return self._catalog
+
+    @property
+    def documents(self) -> DocumentTools:
+        return self._documents
 
     @property
     def http(self) -> TestClient:
@@ -363,7 +377,7 @@ class TestListResources:
         with patch(
             "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=docs
         ):
-            result = harness.tools.list_resources("documents")
+            result = harness.catalog.list_resources("documents")
         assert "a.pdf" in result
         assert "DOCUMENT" in result
 
@@ -371,7 +385,7 @@ class TestListResources:
         with patch(
             "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
         ) as list_docs:
-            harness.tools.list_resources("documents", collection="math")
+            harness.catalog.list_resources("documents", collection="math")
         assert list_docs.call_args.kwargs["collection_filter"] == "math"
 
     def test_collections(self, harness: _ToolHarness) -> None:
@@ -379,21 +393,21 @@ class TestListResources:
         with patch(
             "quarry.db.chunk_catalog.ChunkCatalog.list_collections", return_value=cols
         ):
-            result = harness.tools.list_resources("collections")
+            result = harness.catalog.list_resources("collections")
         assert "math" in result
         assert "COLLECTION" in result
 
     def test_databases(self, harness: _ToolHarness) -> None:
-        result = harness.tools.list_resources("databases")
+        result = harness.catalog.list_resources("databases")
         # The daemon reports the single database it is fixed to.
         assert "DATABASE" in result
 
     def test_registrations_empty(self, harness: _ToolHarness) -> None:
-        result = harness.tools.list_resources("registrations")
+        result = harness.catalog.list_resources("registrations")
         assert "No registered directories" in result
 
     def test_unknown_kind(self, harness: _ToolHarness) -> None:
-        result = harness.tools.list_resources("bogus")
+        result = harness.catalog.list_resources("bogus")
         assert "unknown kind" in result
 
 
@@ -403,7 +417,7 @@ class TestShow:
             "quarry.db.chunk_catalog.ChunkCatalog.get_page_text",
             return_value="The quick brown fox",
         ):
-            result = harness.tools.show("report.pdf", page_number=3)
+            result = harness.documents.show("report.pdf", page_number=3)
         assert "Page: 3" in result
         assert "The quick brown fox" in result
 
@@ -420,7 +434,7 @@ class TestShow:
         with patch(
             "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[doc]
         ):
-            result = harness.tools.show("report.pdf")
+            result = harness.documents.show("report.pdf")
         assert "report.pdf" in result
         assert "math" in result
 
@@ -429,7 +443,7 @@ class TestShow:
         with patch(
             "quarry.db.chunk_catalog.ChunkCatalog.get_page_text", return_value=None
         ):
-            result = harness.tools.show("missing.pdf", page_number=99)
+            result = harness.documents.show("missing.pdf", page_number=99)
         assert result == "No data found for missing.pdf page 99"
 
     def test_missing_document_is_friendly_not_found(
@@ -438,7 +452,7 @@ class TestShow:
         with patch(
             "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
         ):
-            result = harness.tools.show("missing.pdf")
+            result = harness.documents.show("missing.pdf")
         assert result == "Document 'missing.pdf' not found"
 
 
@@ -581,17 +595,17 @@ class TestLearn:
 
 class TestDelete:
     def test_document_dispatches(self, harness: _ToolHarness) -> None:
-        result = harness.tools.delete("report.pdf")
+        result = harness.documents.delete("report.pdf")
         assert "report.pdf" in result
         assert "task" in result
 
     def test_collection_dispatches(self, harness: _ToolHarness) -> None:
-        result = harness.tools.delete("math", kind="collection")
+        result = harness.documents.delete("math", kind="collection")
         assert "math" in result
         assert "task" in result
 
     def test_invalid_kind(self, harness: _ToolHarness) -> None:
-        result = harness.tools.delete("x", kind="bogus")
+        result = harness.documents.delete("x", kind="bogus")
         assert "Invalid kind" in result
 
 
@@ -603,7 +617,7 @@ class TestRegisterDeregister:
             "quarry.daemon.routes.registrations.RegistrationRoutes._server_home",
             return_value=(tmp_path, None),
         ):
-            result = harness.tools.register_directory(str(target), "my-course")
+            result = harness.documents.register_directory(str(target), "my-course")
         assert "my-course" in result
         assert "task" in result
 
@@ -616,17 +630,17 @@ class TestRegisterDeregister:
             "quarry.daemon.routes.registrations.RegistrationRoutes._server_home",
             return_value=(tmp_path / "elsewhere", None),
         ):
-            result = harness.tools.register_directory(str(target))
+            result = harness.documents.register_directory(str(target))
         assert result.startswith("Error:")
 
     def test_deregister_unknown_is_clean_error(self, harness: _ToolHarness) -> None:
-        result = harness.tools.deregister_directory("ghost")
+        result = harness.documents.deregister_directory("ghost")
         assert result.startswith("Error:")
 
 
 class TestSync:
     def test_dispatches(self, harness: _ToolHarness) -> None:
-        result = harness.tools.sync_all_registrations()
+        result = harness.documents.sync_all_registrations()
         assert "task" in result
 
 
@@ -802,11 +816,19 @@ class TestInputValidation:
     """
 
     @staticmethod
-    def _tools() -> McpTools:
+    def _connect_refuses() -> Callable[[], QuarryClient]:
         def _connect() -> QuarryClient:
             raise AssertionError("guard must short-circuit before connecting")
 
-        return McpTools(connect=_connect)
+        return _connect
+
+    @classmethod
+    def _tools(cls) -> McpTools:
+        return McpTools(connect=cls._connect_refuses())
+
+    @classmethod
+    def _documents(cls) -> DocumentTools:
+        return DocumentTools(connect=cls._connect_refuses())
 
     def test_find_blank_query(self) -> None:
         result = self._tools().find("   ")
@@ -829,17 +851,17 @@ class TestInputValidation:
         assert "document_name" in result
 
     def test_delete_blank_name(self) -> None:
-        result = self._tools().delete("")
+        result = self._documents().delete("")
         assert result.startswith("Error:")
         assert "name" in result
 
     def test_register_blank_directory(self) -> None:
-        result = self._tools().register_directory("   ")
+        result = self._documents().register_directory("   ")
         assert result.startswith("Error:")
         assert "directory" in result
 
     def test_deregister_blank_collection(self) -> None:
-        result = self._tools().deregister_directory("")
+        result = self._documents().deregister_directory("")
         assert result.startswith("Error:")
         assert "collection" in result
 
@@ -868,7 +890,7 @@ class TestInputValidation:
                 "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
                 return_value=[],
             ):
-                result = harness.tools.show("missing.pdf", page_number=page)
+                result = harness.documents.show("missing.pdf", page_number=page)
             assert result == "Document 'missing.pdf' not found", page
 
 
@@ -954,20 +976,30 @@ class TestToolDocstringOpeners:
         the occasion an agent would reach for it.
         """
         expected_openers = {
-            "ingest": "Use when you have a URL to add to the knowledge base",
-            "list_resources": "Use to see what's already indexed before ingesting",
-            "show": "Use to read a specific page, or to check whether a document",
-            "delete": "Use to remove stale or wrong content before re-ingesting",
-            "register_directory": (
+            (McpTools, "ingest"): (
+                "Use when you have a URL to add to the knowledge base"
+            ),
+            (ResourceCatalog, "list_resources"): (
+                "Use to see what's already indexed before ingesting"
+            ),
+            (DocumentTools, "show"): (
+                "Use to read a specific page, or to check whether a document"
+            ),
+            (DocumentTools, "delete"): (
+                "Use to remove stale or wrong content before re-ingesting"
+            ),
+            (DocumentTools, "register_directory"): (
                 "Use to track a local directory so future changes sync"
             ),
-            "deregister_directory": "Use to stop tracking a directory",
-            "sync_all_registrations": "Use after registering a new directory",
-            "status": "Use to check how much is indexed",
-            "use_database": "Use to point every other tool at a different",
+            (DocumentTools, "deregister_directory"): "Use to stop tracking a directory",
+            (DocumentTools, "sync_all_registrations"): (
+                "Use after registering a new directory"
+            ),
+            (McpTools, "status"): "Use to check how much is indexed",
+            (McpTools, "use_database"): "Use to point every other tool at a different",
         }
-        for name, opener in expected_openers.items():
-            doc = getattr(McpTools, name).__doc__
+        for (cls, name), opener in expected_openers.items():
+            doc = getattr(cls, name).__doc__
             assert doc is not None, name
             first_line = doc.lstrip().split("\n", 1)[0]
             assert opener in first_line, f"{name}: got {first_line!r}"

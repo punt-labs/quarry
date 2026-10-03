@@ -187,6 +187,7 @@ ignore = [
 "src/quarry/daemon/routes/*.py" = ["TC002"]
 "src/quarry/__main__.py" = ["T20", "FBT"]
 "src/quarry/mcp_server.py" = ["FBT"]  # typer boolean flags
+"src/quarry/mcp_documents.py" = ["FBT"]  # MCP tool boolean kwargs (keep_data, overwrite)
 "src/quarry/cli_captures.py" = ["FBT"]  # typer boolean CLI flags
 "src/quarry/cli_ingest.py" = ["FBT"]  # typer boolean CLI flags
 "src/quarry/cli_sync.py" = ["FBT"]  # typer boolean CLI flags

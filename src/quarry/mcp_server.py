@@ -7,10 +7,14 @@ and running ``quarry mcp`` load zero LanceDB/ONNX.  It mirrors vox's
 ``vox mcp`` → ``server.py`` → ``VoxClientSync`` shape: the MCP server is a client
 of the resident daemon, never a second in-process engine.
 
-The twelve tools and their docstrings are the surface Claude Code sees; the
+The fourteen tools and their docstrings are the surface Claude Code sees; the
 bodies changed (client calls, fire-and-forget 202s), the surface did not.
-``missions_sync`` lives in the sibling :mod:`quarry.mcp_missions` and is
-registered from here so the surface stays one registration call.
+This module owns retrieval/write (``find``, ``ingest``, ``remember``,
+``learn``), status, and database selection; ``list`` lives in the sibling
+:mod:`quarry.mcp_catalog`, the document/collection lifecycle tools in
+:mod:`quarry.mcp_documents`, and ``missions_sync`` in
+:mod:`quarry.mcp_missions` — all four register from here so the surface
+stays one registration call.
 """
 
 from __future__ import annotations
@@ -20,30 +24,18 @@ from typing import TYPE_CHECKING, Self, final
 
 from mcp.server.mcpserver import MCPServer
 
-from quarry.api import (
-    DeleteCollectionRequest,
-    DeleteDocumentRequest,
-    DeregisterRequest,
-    IngestRequest,
-    RegisterRequest,
-    RememberRequest,
-    SearchRequest,
-    ShowRequest,
-)
-from quarry.client import HttpError, QuarryClient, TargetResolver
+from quarry.api import IngestRequest, RememberRequest, SearchRequest
+from quarry.client import QuarryClient, TargetResolver
 from quarry.config import Settings
 from quarry.db_pointer import SELECTION
 from quarry.formatting import (
-    format_collections,
-    format_databases,
-    format_document_detail,
-    format_documents,
     format_insights,
-    format_registrations,
     format_search_results,
     format_status,
     format_switch_summary,
 )
+from quarry.mcp_catalog import ResourceCatalog
+from quarry.mcp_documents import DocumentTools
 from quarry.mcp_guard import ToolGuard
 from quarry.mcp_missions import MissionTools
 
@@ -51,10 +43,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
-
-# The daemon returns 404 for a missing document/page; `show` translates it into a
-# plain "not found" line rather than the guard's terse "Error: HttpError: …".
-_NOT_FOUND = 404
 
 
 mcp = MCPServer(
@@ -108,15 +96,11 @@ class McpTools:
         server.add_tool(self.ingest)
         server.add_tool(self.remember)
         server.add_tool(self.learn)
-        server.add_tool(self.list_resources, name="list")
-        server.add_tool(self.show)
-        server.add_tool(self.delete)
-        server.add_tool(self.register_directory)
-        server.add_tool(self.deregister_directory)
-        server.add_tool(self.sync_all_registrations)
         server.add_tool(self.status)
         server.add_tool(self.insights)
         server.add_tool(self.use_database, name="use")
+        ResourceCatalog(self._connect).register(server)
+        DocumentTools(self._connect).register(server)
         MissionTools(self._connect).register(server)
 
     @ToolGuard.wrap
@@ -303,165 +287,6 @@ class McpTools:
         return f"▶  Learning saved ({accepted.status}, task {accepted.task_id})"
 
     @ToolGuard.wrap
-    def list_resources(self, kind: str, collection: str = "") -> str:
-        """Use to see what's already indexed before ingesting it again.
-
-        Args:
-            kind: What to list — "documents", "collections", "databases",
-                  or "registrations".
-            collection: Optional collection filter (only for kind="documents").
-        """
-        handler = {
-            "documents": self._list_documents,
-            "collections": self._list_collections,
-            "databases": self._list_databases,
-            "registrations": self._list_registrations,
-        }.get(kind)
-        if handler is None:
-            return (
-                f"Error: unknown kind {kind!r}. "
-                "Use documents, collections, databases, or registrations."
-            )
-        return handler(collection)
-
-    @ToolGuard.wrap
-    def show(
-        self,
-        document_name: str,
-        page_number: int = 0,
-        collection: str = "",
-    ) -> str:
-        (
-            """Use to read a specific page, or to check whether a document is """
-            """already indexed.
-
-        Without page_number: shows document metadata (pages, chunks, collection).
-        With page_number: shows the full text for that page.
-
-        Args:
-            document_name: Document filename (e.g., 'report.pdf').
-            page_number: Page number (1-indexed). 0 means show metadata only.
-            collection: Optional collection scope.
-        """
-        )
-        if err := self._reject_blank(document_name, "document_name"):
-            return err
-        client = self._connect()
-        # A page is 1-based: 0 or negative means "no page" (metadata), never a
-        # nonsensical page sent to the daemon.
-        req = ShowRequest(
-            document=document_name,
-            collection=collection,
-            page=page_number if page_number > 0 else None,
-        )
-        try:
-            if page_number > 0:
-                page = client.show_page(req)
-                return (
-                    f"Document: {page.document_name}\nPage: {page.page_number}\n---\n"
-                    f"{page.text}"
-                )
-            return format_document_detail(client.show_document(req).model_dump())
-        except HttpError as exc:
-            # A 404 is the documented "no such document/page" outcome — render the
-            # plain domain message a model expects, not the guard's "Error: HttpError".
-            if exc.status != _NOT_FOUND:
-                raise
-            if page_number > 0:
-                return f"No data found for {document_name} page {page_number}"
-            return f"Document {document_name!r} not found"
-
-    @ToolGuard.wrap
-    def delete(
-        self,
-        name: str,
-        kind: str = "document",
-        collection: str = "",
-    ) -> str:
-        """Use to remove stale or wrong content before re-ingesting it.
-
-        Returns immediately — the daemon removes chunks in the background.
-
-        Args:
-            name: Document filename or collection name to delete.
-            kind: What to delete — "document" or "collection".
-            collection: Optional collection scope (only for kind="document").
-        """
-        # Validate the input before reaching for the daemon: a blank name or bad
-        # kind is a caller error, answerable without a connection.
-        if err := self._reject_blank(name, "name"):
-            return err
-        if kind not in ("document", "collection"):
-            return f"Error: Invalid kind {kind!r}. Must be 'document' or 'collection'."
-        client = self._connect()
-        if kind == "document":
-            accepted = client.delete_document(
-                DeleteDocumentRequest(name=name, collection=collection)
-            )
-        else:
-            accepted = client.delete_collection(DeleteCollectionRequest(name=name))
-        return f"▶  Deleting {kind} {name!r} (task {accepted.task_id})"
-
-    @ToolGuard.wrap
-    def register_directory(self, directory: str, collection: str = "") -> str:
-        """Use to track a local directory so future changes sync automatically.
-
-        Returns immediately — the daemon records the registration in the background.
-
-        Args:
-            directory: Absolute path to the directory.
-            collection: Collection name. Uses directory name if empty.
-        """
-        from pathlib import Path  # noqa: PLC0415 — path leaf only, no engine
-
-        # An empty directory would resolve to the cwd and silently register it.
-        if err := self._reject_blank(directory, "directory"):
-            return err
-        resolved = Path(directory).expanduser().resolve()
-        col = collection or resolved.name or "root"
-        accepted = self._connect().register(
-            RegisterRequest(directory=str(resolved), collection=col)
-        )
-        return f"▶  Registering {resolved} as {col!r} (task {accepted.task_id})"
-
-    @ToolGuard.wrap
-    def deregister_directory(self, collection: str, keep_data: bool = False) -> str:
-        (
-            """Use to stop tracking a directory — keep its indexed data with """
-            """``keep_data=True``, or purge it.
-
-        Returns the removed-file count synchronously; the chunk purge runs as a
-        background task. An unknown collection surfaces as an error, not a
-        removal confirmation.
-
-        Args:
-            collection: Collection name to deregister.
-            keep_data: If true, keep indexed data in LanceDB.
-        """
-        )
-        if err := self._reject_blank(collection, "collection"):
-            return err
-        accepted = self._connect().deregister(
-            DeregisterRequest(collection=collection, keep_data=keep_data)
-        )
-        return (
-            f"Deregistered collection {collection!r} ({accepted.removed} files); "
-            f"chunk purge task {accepted.task_id}"
-        )
-
-    @ToolGuard.wrap
-    def sync_all_registrations(self) -> str:
-        (
-            """Use after registering a new directory, or when tracked files """
-            """changed outside quarry's own writes.
-
-        Returns immediately — the daemon runs the sync in the background.
-        """
-        )
-        accepted = self._connect().sync()
-        return f"▶  Syncing all registrations (task {accepted.task_id})"
-
-    @ToolGuard.wrap
     def status(self) -> str:
         """Use to check how much is indexed before you search or ingest."""
         return format_status(self._connect().status().model_dump())
@@ -510,25 +335,6 @@ class McpTools:
         SELECTION.override(name)
         return format_switch_summary(previous, name, str(resolved.lancedb_path))
 
-    def _list_documents(self, collection: str) -> str:
-        docs = self._connect().list_documents(collection)
-        return format_documents([doc.model_dump() for doc in docs.documents])
-
-    def _list_collections(self, _collection: str) -> str:
-        cols = self._connect().list_collections()
-        return format_collections([col.model_dump() for col in cols.collections])
-
-    def _list_databases(self, _collection: str) -> str:
-        dbs = self._connect().list_databases()
-        current = SELECTION.active() or "default"
-        return format_databases(
-            [db.model_dump() for db in dbs.databases], current=current
-        )
-
-    def _list_registrations(self, _collection: str) -> str:
-        regs = self._connect().list_registrations()
-        return format_registrations([reg.model_dump() for reg in regs.registrations])
-
     @staticmethod
     def _reject_blank(value: str, label: str) -> str | None:
         # Returns an Error: string for a blank required arg, else None. None is
@@ -538,18 +344,18 @@ class McpTools:
             return None
         return f"Error: {label} is required (got an empty value)."
 
+    @staticmethod
+    def run_stdio(db_name: str | None = None) -> None:
+        """Run the stdio MCP server, targeting *db_name* (the daemon's database).
+
+        Logging is the launcher's job: ``quarry mcp`` (the only entry point)
+        configures the stderr level before calling in, so this stays a pure
+        "select the database and serve" step.
+        """
+        SELECTION.override(db_name or "")
+        logger.info("Starting quarry MCP server (client tier)")
+        mcp.run(transport="stdio")
+
 
 _tools = McpTools()
 _tools.register(mcp)
-
-
-def main(db_name: str | None = None) -> None:
-    """Run the stdio MCP server, targeting *db_name* (the daemon's database).
-
-    Logging is the launcher's job: ``quarry mcp`` (the only entry point)
-    configures the stderr level before calling in, so this stays a pure
-    "select the database and serve" step.
-    """
-    SELECTION.override(db_name or "")
-    logger.info("Starting quarry MCP server (client tier)")
-    mcp.run(transport="stdio")

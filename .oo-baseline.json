@@ -2521,6 +2521,32 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/quarry/mcp_catalog.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.14,
+    "max_complexity": 3.0,
+    "avg_complexity": 1.86,
+    "module_size": 74.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
+  "src/quarry/mcp_documents.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.75,
+    "max_complexity": 6.0,
+    "avg_complexity": 2.62,
+    "module_size": 180.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/quarry/mcp_guard.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
@@ -2548,14 +2574,14 @@
     "future_annotations": 1.0
   },
   "src/quarry/mcp_server.py": {
-    "method_ratio": 0.952,
+    "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 2.1,
-    "max_complexity": 6.0,
-    "avg_complexity": 2.43,
-    "module_size": 486.0,
+    "avg_params": 2.55,
+    "max_complexity": 4.0,
+    "avg_complexity": 2.09,
+    "module_size": 315.0,
     "classes_per_module": 1.0,
-    "class_to_func_ratio": 0.5,
+    "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
