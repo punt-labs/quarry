@@ -34,10 +34,12 @@ PROVIDER_MODEL_MAP: dict[str, str] = {
     "CPUExecutionProvider": "onnx/model_int8.onnx",
 }
 
+
 @dataclass(frozen=True)
 class ProviderSelection:
-    provider: str       # e.g. "CUDAExecutionProvider"
-    model_file: str     # e.g. "onnx/model_fp16.onnx" (HF repo-relative path)
+    provider: str  # e.g. "CUDAExecutionProvider"
+    model_file: str  # e.g. "onnx/model_fp16.onnx" (HF repo-relative path)
+
 
 def select_provider() -> ProviderSelection:
     """Detect the best ONNX Runtime execution provider.
@@ -145,9 +147,7 @@ def __init__(self) -> None:
     import onnxruntime as ort  # noqa: PLC0415
 
     sess_options = ort.SessionOptions()
-    sess_options.graph_optimization_level = (
-        ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    )
+    sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
     try:
         self._session = ort.InferenceSession(
@@ -251,6 +251,7 @@ after the existing `download_model_files()` call:
 # Also download FP16 model if CUDA is available
 try:
     import onnxruntime as ort  # noqa: PLC0415
+
     if "CUDAExecutionProvider" in ort.get_available_providers():
         download_model_files(model_file="onnx/model_fp16.onnx")
         print("  \u2713 FP16 model cached (for CUDA)")  # noqa: T201

@@ -331,13 +331,17 @@ New `src/quarry/memory_types.py` (layer 1, zero heavy deps):
 
 ```python
 class MemoryType(StrEnum):
-    FACT = "fact"; OBSERVATION = "observation"; OPINION = "opinion"
-    PROCEDURE = "procedure"; LESSON = "lesson"
+    FACT = "fact"
+    OBSERVATION = "observation"
+    OPINION = "opinion"
+    PROCEDURE = "procedure"
+    LESSON = "lesson"
 
     @classmethod
-    def parse(cls, raw: str) -> MemoryType: ...   # ValueError on unknown (PY-EH-8)
+    def parse(cls, raw: str) -> MemoryType: ...  # ValueError on unknown (PY-EH-8)
     @property
-    def is_decayable(self) -> bool: ...            # every type but LESSON
+    def is_decayable(self) -> bool: ...  # every type but LESSON
+
 
 DECAYABLE_MEMORY_TYPES: Final[frozenset[str]]
 ```

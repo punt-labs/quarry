@@ -203,7 +203,7 @@ dataclass and their `_bool_field` reads in `load_hook_config`:
 ```python
 session_end: bool = True
 web_search: bool = True
-read: bool = False       # deliberate exception — see PostToolUse:Read below
+read: bool = False  # deliberate exception — see PostToolUse:Read below
 subagent_stop: bool = True
 ```
 

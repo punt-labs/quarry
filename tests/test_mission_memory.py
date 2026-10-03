@@ -433,8 +433,10 @@ class TestRun:
         )
         assert outcome.filed == ()
         assert outcome.errors == (
-            f"mission m-9999-99-99-999 not found: "
-            f"no .punt-labs/ethos/missions/ above {bare}",
+            (
+                f"mission m-9999-99-99-999 not found: "
+                f"no .punt-labs/ethos/missions/ above {bare}"
+            ),
         )
 
 
