@@ -1,7 +1,7 @@
 {
-  "total": 208,
+  "total": 211,
   "by_category": {
-    "noqa": 170,
+    "noqa": 173,
     "type_ignore": 7,
     "pylint_disable": 0,
     "pyright_ignore": 1,
@@ -56,6 +56,9 @@
     },
     "src/quarry/daemon/server.py": {
       "type_ignore": 1
+    },
+    "src/quarry/daemon/watch_reconcile.py": {
+      "noqa": 2
     },
     "src/quarry/daemon_capture.py": {
       "noqa": 1
@@ -126,7 +129,7 @@
       "noqa": 1
     },
     "src/quarry/ingestion/provider.py": {
-      "noqa": 1
+      "noqa": 2
     },
     "src/quarry/ingestion/sitemap_ingest.py": {
       "noqa": 4
@@ -137,7 +140,7 @@
     "src/quarry/lesson.py": {
       "noqa": 1
     },
-    "src/quarry/mcp_documents.py": {
+    "src/quarry/mcp_server.py": {
       "noqa": 1
     },
     "src/quarry/onnx_session.py": {
@@ -181,5 +184,5 @@
       "noqa": 2
     }
   },
-  "updated_at": "2026-10-03T17:47:52Z"
+  "updated_at": "2026-10-06T14:44:56Z"
 }
