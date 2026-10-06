@@ -13,7 +13,7 @@ from quarry.mission_sync_types import SyncOptions
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
 
     from quarry.client import QuarryClient
 
@@ -37,7 +37,7 @@ class MissionTools:
         self._connect = connect
         return self
 
-    def register(self, server: FastMCP) -> None:
+    def register(self, server: MCPServer) -> None:
         """Attach the guarded tool to *server* under its wire name."""
         server.add_tool(self.missions_sync)
 

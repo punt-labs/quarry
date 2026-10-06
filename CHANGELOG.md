@@ -14,6 +14,44 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Added
+
+- infra: `--relax-category` on the suppression ratchet
+  (`tools/suppression_ratchet.py`), the config-level sibling of the existing
+  file-scoped `--relax`. It records an audited, justified, single-category
+  increase in a config-derived suppression category (e.g. `per_file_ignores`,
+  which is scored from `pyproject.toml` and never attributed to any file's
+  bucket, so `--relax` could not target it and `--update` refuses all
+  increases). `Audit.relaxations_since` is split into waivable files and
+  waivable categories so `check`'s forgiveness path recognizes a
+  category-keyed waiver without relying on a file-path-vs-category-name
+  coincidence; an unjustified category increase with no matching audit entry
+  still fails the gate.
+
+### Changed
+
+- Migrate the `quarry mcp` stdio server from `FastMCP` (mcp 1.x) to
+  `MCPServer` (mcp 2.x). The `mcp.server.fastmcp.FastMCP` entry point was
+  removed in mcp 2.0; `mcp_server.py` and `mcp_missions.py` now construct and
+  type against `MCPServer`. `add_tool`, `run`, and the `instructions=` kwarg
+  are unchanged, so tool registration and the wire surface are identical.
+- tool: decompose `mcp_server.py` (555 lines, over the 500-line module cap)
+  into three sibling tool classes: `ResourceCatalog` (`src/quarry/mcp_catalog.py`)
+  owns the `list` tool; `DocumentTools` (`src/quarry/mcp_documents.py`) owns
+  `show`, `delete`, `register_directory`, `deregister_directory`, and
+  `sync_all_registrations`. `mcp_server.py` drops to 315 lines and keeps
+  `find`, `ingest`, `remember`, `learn`, `status`, `insights`, and
+  `use_database`, plus the registration wiring that delegates to all three
+  sibling classes (mirroring the existing `MissionTools` pattern). The stdio
+  wire surface — tool names, behavior, `MCPServer` construction — is
+  unchanged. `McpTools.main()` moves to a `McpTools.run_stdio` staticmethod.
+
+### Fixed
+
+- tool: add the `missions_sync` tool to `scripts/mcpb-manifest.template.json`
+  — it was never added when the tool shipped, so the Claude Desktop bundle's
+  tool list silently omitted it.
+
 ## [3.4.0] - 2026-09-21
 
 ### Added

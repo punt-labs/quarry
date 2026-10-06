@@ -327,6 +327,163 @@ class TestRelax:
         assert code == 1
 
 
+class TestRelaxCategory:
+    """``--relax-category`` scoped-rebaselines one config-level category.
+
+    ``per_file_ignores`` has no owning file (it is counted once, globally,
+    from ``pyproject.toml``), so no ``--relax FILE`` call can ever record its
+    increase, and ``--update`` refuses ANY total increase unconditionally
+    (its pure-paydown invariant, unchanged by this feature). This verb is the
+    parallel, audited path for that one config-level category.
+    """
+
+    def test_relax_category_updates_baseline_and_waives_check(
+        self,
+        git_sandbox: GitSandbox,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.chdir(git_sandbox.root)
+        base = _seat_and_commit(git_sandbox, _SRC)
+        # A legitimate config-level increase: a new per-file-ignores entry.
+        git_sandbox.write(
+            "pyproject.toml",
+            '[tool.ruff.lint.per-file-ignores]\n"tests/*" = ["S101"]\n',
+        )
+        code = tools.suppression.main(
+            [
+                "src",
+                "--relax-category",
+                "per_file_ignores",
+                "--justify",
+                "reason",
+                "--allow-ci-write",
+            ]
+        )
+        assert code == 0
+        data = json.loads((git_sandbox.root / ".suppression-baseline.json").read_text())
+        assert data["by_category"]["per_file_ignores"] == 1
+        assert data["total"] == 2
+        git_sandbox.commit("relax-category")
+        # The base-commit comparison still says 0 for per_file_ignores, but the
+        # category-relax audit entry waives it.
+        code = tools.suppression.main(
+            ["src", "--check", "--base-ref", base, "--require-base"]
+        )
+        out = capsys.readouterr().out
+        assert code == 0
+        assert "Relaxed by audited --relax" in out
+
+    def test_relax_category_refuses_without_justify(
+        self, git_sandbox: GitSandbox, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(git_sandbox.root)
+        _seat_and_commit(git_sandbox, _SRC)
+        git_sandbox.write(
+            "pyproject.toml",
+            '[tool.ruff.lint.per-file-ignores]\n"tests/*" = ["S101"]\n',
+        )
+        code = tools.suppression.main(
+            ["src", "--relax-category", "per_file_ignores", "--allow-ci-write"]
+        )
+        assert code == 1
+
+    def test_relax_category_refuses_on_paydown(
+        self, git_sandbox: GitSandbox, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(git_sandbox.root)
+        git_sandbox.write(
+            "pyproject.toml",
+            '[tool.ruff.lint.per-file-ignores]\n"tests/*" = ["S101"]\n',
+        )
+        _seat_and_commit(git_sandbox, _SRC)  # 1 (noqa) + 1 (per_file_ignores) = 2
+        git_sandbox.write("pyproject.toml", "")  # dropped to 0 -- a paydown
+        code = tools.suppression.main(
+            [
+                "src",
+                "--relax-category",
+                "per_file_ignores",
+                "--justify",
+                "not a real relax",
+                "--allow-ci-write",
+            ]
+        )
+        assert code == 1
+
+    def test_relax_category_refuses_unknown_category(
+        self, git_sandbox: GitSandbox, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(git_sandbox.root)
+        _seat_and_commit(git_sandbox, _SRC)
+        code = tools.suppression.main(
+            [
+                "src",
+                "--relax-category",
+                "not_a_real_category",
+                "--justify",
+                "reason",
+                "--allow-ci-write",
+            ]
+        )
+        assert code == 1
+
+    def test_unjustified_category_increase_still_fails_check(
+        self,
+        git_sandbox: GitSandbox,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """The security-critical assertion: no audit entry means no forgiveness.
+
+        Adding a per-file-ignores entry WITHOUT ever calling
+        ``--relax-category`` must still fail ``check`` -- the gate is not
+        silently bypassable by any mechanism other than the audited verb.
+        """
+        monkeypatch.chdir(git_sandbox.root)
+        base = _seat_and_commit(git_sandbox, _SRC)
+        git_sandbox.write(
+            "pyproject.toml",
+            '[tool.ruff.lint.per-file-ignores]\n"tests/*" = ["S101"]\n',
+        )
+        # No --relax-category call, no audit entry -- the increase is raw and
+        # unaudited. Manually seating the baseline (as a stray --update would
+        # refuse) is not attempted; this proves check() itself never forgives
+        # an increase it cannot find an audit entry for.
+        code = tools.suppression.main(
+            ["src", "--check", "--base-ref", base, "--require-base"]
+        )
+        out = capsys.readouterr().out
+        assert code == 1
+        assert "increased by 1" in out
+
+    def test_relax_category_holds_other_categories(
+        self,
+        git_sandbox: GitSandbox,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Relaxing one category must not move any other category's count."""
+        monkeypatch.chdir(git_sandbox.root)
+        _seat_and_commit(git_sandbox, _SRC)  # seats noqa=1, per_file_ignores=0
+        git_sandbox.write(
+            "pyproject.toml",
+            '[tool.ruff.lint.per-file-ignores]\n"tests/*" = ["S101"]\n',
+        )
+        code = tools.suppression.main(
+            [
+                "src",
+                "--relax-category",
+                "per_file_ignores",
+                "--justify",
+                "reason",
+                "--allow-ci-write",
+            ]
+        )
+        assert code == 0
+        data = json.loads((git_sandbox.root / ".suppression-baseline.json").read_text())
+        assert data["by_category"]["noqa"] == 1  # untouched by the category relax
+        assert data["by_category"]["per_file_ignores"] == 1
+
+
 class TestFailClosed:
     """A corrupt base baseline blob fails closed rather than fail-open."""
 

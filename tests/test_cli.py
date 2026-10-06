@@ -553,7 +553,7 @@ class TestMcpCommand:
                 "quarry.__main__.LoggingConfig.configure",
                 side_effect=lambda *, stderr_level: calls.append(stderr_level),
             ),
-            patch("quarry.mcp_server.main") as serve,
+            patch("quarry.mcp_server.McpTools.run_stdio") as serve,
         ):
             result = runner.invoke(app, ["mcp"])
         assert result.exit_code == 0, result.output
