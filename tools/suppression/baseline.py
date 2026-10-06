@@ -11,6 +11,7 @@ from typing import ClassVar, Self
 from .audit import SuppressionAudit
 from .gitio import GitRepo
 from .outcome import Outcome
+from .patterns import CATEGORIES
 from .report import SuppressionReport
 
 
@@ -64,8 +65,10 @@ class SuppressionBaseline:
         base_data = self._git.show_baseline(base)
         if base_data is None:
             return self._absent_base()
-        waivable = self._audit.relaxations_since(self._git.show_audit(base))
-        return self._compare(report, base_data, waivable)
+        base_audit = self._git.show_audit(base)
+        waivable_files = self._audit.relaxations_since(base_audit)
+        waivable_categories = self._audit.category_relaxations_since(base_audit)
+        return self._compare(report, base_data, waivable_files, waivable_categories)
 
     def _no_base(self, *, require_base: bool) -> Outcome:
         """Decide the verdict when no comparison base can be resolved.
@@ -119,13 +122,20 @@ class SuppressionBaseline:
         self,
         report: SuppressionReport,
         data: dict[str, object],
-        waivable: frozenset[str],
+        waivable_files: frozenset[str],
+        waivable_categories: frozenset[str],
     ) -> Outcome:
         baseline_total = self._as_int(data.get("total", 0))
         current_total = report.total
         baseline_by_file = self._baseline_by_file(data)
         current_by_file = report.by_file
-        forgiven = self._forgiven_increase(baseline_by_file, current_by_file, waivable)
+        forgiven_files = self._forgiven_increase(
+            baseline_by_file, current_by_file, waivable_files
+        )
+        forgiven_categories = self._forgiven_category_increase(
+            self._category_totals(data), dict(report.by_category), waivable_categories
+        )
+        forgiven = forgiven_files + forgiven_categories
         adjusted_total = baseline_total + forgiven
         head = [
             f"\nBaseline total: {baseline_total}",
@@ -164,6 +174,32 @@ class SuppressionBaseline:
             base_count = sum(baseline_by_file.get(path, {}).values())
             cur_count = sum(current_by_file.get(path, {}).values())
             intree_count = sum(intree_by_file.get(path, {}).values())
+            if cur_count > base_count and intree_count == cur_count:
+                forgiven += cur_count - base_count
+        return forgiven
+
+    def _forgiven_category_increase(
+        self,
+        baseline_by_category: dict[str, int],
+        current_by_category: dict[str, int],
+        waivable: frozenset[str],
+    ) -> int:
+        """Return the total increase legitimately waived by an audited
+        ``--relax-category``.
+
+        Mirrors :meth:`_forgiven_increase` exactly but over ``by_category``
+        counts: a category's increase is forgiven only when it was named by a
+        category relax recorded since the comparison base AND the in-tree
+        baseline is locked to its current count. An UNAUDITED increase in a
+        category absent from ``waivable`` is never forgiven here -- this is
+        the gate ``--relax-category`` exists to pass and nothing else can.
+        """
+        intree_by_category = self._category_totals(self._entries)
+        forgiven = 0
+        for category in waivable:
+            base_count = baseline_by_category.get(category, 0)
+            cur_count = current_by_category.get(category, 0)
+            intree_count = intree_by_category.get(category, 0)
             if cur_count > base_count and intree_count == cur_count:
                 forgiven += cur_count - base_count
         return forgiven
@@ -259,6 +295,70 @@ class SuppressionBaseline:
             f"\nRelaxed {file} (reason: {justify})",
             f"  baseline: {self._baseline_path}",
             f"  {file}: {base_total} -> {current_total}",
+        )
+
+    def relax_category(
+        self,
+        report: SuppressionReport,
+        category: str,
+        *,
+        justify: str,
+        allow_ci_write: bool,
+        source: str | None,
+    ) -> Outcome:
+        """Write *category*'s current count even if higher, with reason.
+
+        The config-level sibling of :meth:`relax`: ``--relax`` moves one
+        file's per-pattern counts (noqa/type_ignore/pylint_disable/
+        pyright_ignore) in ``by_file``; this moves one whole-tree category in
+        ``by_category`` -- ``per_file_ignores`` has no owning file, so no
+        file-scoped relax can ever record its increase (``update()``'s
+        pure-paydown invariant is untouched; this is a parallel, equally
+        audited path, not a loosening of it). Only the named category's count
+        moves; every other category is held, so an unrelated in-flight change
+        elsewhere in the tree cannot ride along on the same relaxation.
+        """
+        blocked = self._guard(allow_ci_write=allow_ci_write)
+        if blocked is not None:
+            return blocked
+        if not justify.strip():
+            return Outcome.failed(
+                "FAIL: --relax-category requires a non-empty --justify"
+            )
+        if category not in CATEGORIES:
+            return Outcome.failed(
+                f"FAIL: unknown category {category!r}; must be one of "
+                f"{', '.join(CATEGORIES)}"
+            )
+        current_count = report.by_category.get(category, 0)
+        intree_by_category = self._category_totals(self._entries)
+        base_count = intree_by_category.get(category, 0)
+        if current_count <= base_count:
+            return Outcome.failed(
+                f"FAIL: {category} has {current_count} suppression(s), not more "
+                f"than its baseline {base_count}; that is a paydown -- use --update"
+            )
+        new_by_category = dict(intree_by_category)
+        new_by_category[category] = current_count
+        old_total = self._as_int(self._entries.get("total", 0))
+        new_total = old_total - base_count + current_count
+        new_by_file = self._baseline_by_file(self._entries)
+        self._write(new_total, new_by_category, new_by_file)
+        category_deltas = {category: [base_count, current_count]}
+        self._audit.append(
+            total=new_total,
+            by_category=new_by_category,
+            verdict="relaxed",
+            deltas={},
+            category_deltas=category_deltas,
+            commit=self._git.short_head(),
+            source=source,
+            reason=justify,
+        )
+        return Outcome.passed(
+            f"\nRelaxed category {category} (reason: {justify})",
+            f"  baseline: {self._baseline_path}",
+            f"  {category}: {base_count} -> {current_count}",
         )
 
     @staticmethod

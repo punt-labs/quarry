@@ -44,11 +44,17 @@ class SuppressionAudit:
         commit: str | None,
         source: str | None = None,
         reason: str | None = None,
+        category_deltas: dict[str, list[int]] | None = None,
     ) -> None:
         """Append one verdict entry, recording its source (PR/bead ref).
 
         ``reason`` carries the human justification for a ``relaxed`` verdict;
-        it is an audit marker, not an enforcement gate.
+        it is an audit marker, not an enforcement gate. ``category_deltas``
+        is populated ONLY by a category relax (:meth:`SuppressionBaseline.
+        relax_category`) and is a distinct field from ``deltas`` (file
+        relaxations) -- the two scopes never share a key namespace, so
+        :meth:`relaxations_since` and :meth:`category_relaxations_since` read
+        disjoint data rather than disambiguating by name collision.
         """
         entry = {
             "ts": self._now(),
@@ -57,6 +63,7 @@ class SuppressionAudit:
             "verdict": verdict,
             "reason": reason,
             "deltas": deltas,
+            "category_deltas": category_deltas,
             "total": total,
             "by_category": by_category,
         }
@@ -85,6 +92,28 @@ class SuppressionAudit:
             if isinstance(deltas, dict):
                 files.update(deltas)
         return frozenset(files)
+
+    def category_relaxations_since(self, base_text: str | None) -> frozenset[str]:
+        """Return config-level categories relaxed by the *current* change only.
+
+        Mirrors :meth:`relaxations_since` exactly but reads the distinct
+        ``category_deltas`` field a category relax writes, never ``deltas``
+        (file relaxations) -- so a category-keyed waiver can never be
+        conflated with a file-keyed one, by construction rather than by a
+        file-path-vs-category-name string coincidence.
+        """
+        base_keys = self._canonical_set(base_text)
+        categories: set[str] = set()
+        for line in self._raw_lines():
+            entry = self._parse(line)
+            if self._canonical(entry) in base_keys:
+                continue
+            if entry.get("verdict") != "relaxed":
+                continue
+            category_deltas = entry.get("category_deltas")
+            if isinstance(category_deltas, dict):
+                categories.update(category_deltas)
+        return frozenset(categories)
 
     @classmethod
     def _canonical_set(cls, base_text: str | None) -> frozenset[str]:
