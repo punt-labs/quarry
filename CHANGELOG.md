@@ -14,6 +14,20 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Added
+
+- infra: `--relax-category` on the suppression ratchet
+  (`tools/suppression_ratchet.py`), the config-level sibling of the existing
+  file-scoped `--relax`. It records an audited, justified, single-category
+  increase in a config-derived suppression category (e.g. `per_file_ignores`,
+  which is scored from `pyproject.toml` and never attributed to any file's
+  bucket, so `--relax` could not target it and `--update` refuses all
+  increases). `Audit.relaxations_since` is split into waivable files and
+  waivable categories so `check`'s forgiveness path recognizes a
+  category-keyed waiver without relying on a file-path-vs-category-name
+  coincidence; an unjustified category increase with no matching audit entry
+  still fails the gate.
+
 ### Changed
 
 - Migrate the `quarry mcp` stdio server from `FastMCP` (mcp 1.x) to
