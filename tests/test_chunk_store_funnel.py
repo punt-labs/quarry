@@ -254,8 +254,10 @@ class TestDocumentNameRedaction:
         # look-alike string.
         warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
         assert warnings == [
-            "pipeline: https://example.com/page produced zero chunks — "
-            "keeping any prior document, storing nothing"
+            (
+                "pipeline: https://example.com/page produced zero chunks — "
+                "keeping any prior document, storing nothing"
+            )
         ]
 
     def test_plain_document_name_is_unaffected(

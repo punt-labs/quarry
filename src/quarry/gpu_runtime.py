@@ -145,8 +145,10 @@ class GpuRuntime:
                 [
                     self._python,
                     "-c",
-                    "import onnxruntime; "
-                    "print(','.join(onnxruntime.get_available_providers()))",
+                    (
+                        "import onnxruntime; "
+                        "print(','.join(onnxruntime.get_available_providers()))"
+                    ),
                 ],
                 capture_output=True,
                 text=True,

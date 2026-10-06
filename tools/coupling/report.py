@@ -43,8 +43,10 @@ class CouplingReport:
             return []
         lines = [
             "\n--- Package-level metrics ---",
-            f"\n  {'Package':<20} {'Modules':>8} {'Ext Deps':>9} "
-            f"{'Interface':>10} {'Density':>8} {'Cohesion':>9}",
+            (
+                f"\n  {'Package':<20} {'Modules':>8} {'Ext Deps':>9} "
+                f"{'Interface':>10} {'Density':>8} {'Cohesion':>9}"
+            ),
             "  " + "-" * 68,
         ]
         lines.extend(

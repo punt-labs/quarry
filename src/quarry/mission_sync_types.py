@@ -46,8 +46,10 @@ class MissionSyncOutcome:
         """Return the human summary, one line per document and per error."""
         verb = "would file" if self.dry_run else "filed"
         lines = [
-            f"▶  Mission memories: {verb} {len(self.filed)}, "
-            f"skipped {len(self.skipped)}, errors {len(self.errors)}"
+            (
+                f"▶  Mission memories: {verb} {len(self.filed)}, "
+                f"skipped {len(self.skipped)}, errors {len(self.errors)}"
+            )
         ]
         lines.extend(f"  {verb}: {name}" for name in self.filed)
         lines.extend(f"  skipped (already filed): {name}" for name in self.skipped)

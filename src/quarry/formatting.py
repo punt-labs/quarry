@@ -406,8 +406,10 @@ def format_insights(info: InsightsResponse) -> str:
         f"   Telemetry:        {enabled}",
         f"   Total queries:    {info.total_queries}",
         f"   Empty-result rate: {info.empty_result_rate * 100:.1f}%",
-        f"   Latency p50/p95:  {info.p50_latency_ms:.1f}ms / "
-        f"{info.p95_latency_ms:.1f}ms",
+        (
+            f"   Latency p50/p95:  {info.p50_latency_ms:.1f}ms / "
+            f"{info.p95_latency_ms:.1f}ms"
+        ),
         f"   Memory/Knowledge: {info.memory_queries} / {info.knowledge_queries}",
     ]
     for breakdown in _INSIGHTS_BREAKDOWNS:

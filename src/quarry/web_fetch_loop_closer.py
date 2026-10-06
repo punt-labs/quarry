@@ -66,9 +66,11 @@ class WebFetchLoopCloser:
 
         redacted_url = CaptureUrl.for_web_fetch(self._url)
         lines = [
-            f"You already fetched {redacted_url} earlier — use find with a "
-            f"query like {self._suggested_query(redacted_url)!r} instead of "
-            "re-fetching next time."
+            (
+                f"You already fetched {redacted_url} earlier — use find with a "
+                f"query like {self._suggested_query(redacted_url)!r} instead of "
+                "re-fetching next time."
+            )
         ]
         if document_name:
             lines.append(

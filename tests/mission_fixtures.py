@@ -88,9 +88,11 @@ class Rounds:
                 "author": "claude",
                 "converging": True,
                 "signals": [
-                    "evaluator djb: REJECT — blocker: WatchedTree._watches mutated "
-                    "from event-loop and observer threads with no lock; release() "
-                    "can abort mid-cleanup and re-leak watches",
+                    (
+                        "evaluator djb: REJECT — blocker: WatchedTree._watches mutated "
+                        "from event-loop and observer threads with no lock; release() "
+                        "can abort mid-cleanup and re-leak watches"
+                    ),
                     "evaluator djb: major — schedule_tree aborts the whole tree",
                 ],
                 "recommendation": "continue",

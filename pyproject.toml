@@ -138,7 +138,10 @@ module-name = "quarry"
 line-length = 88
 target-version = "py313"
 # Eval fixtures are raw corpus data (sample source files), not project code.
-extend-exclude = ["tools/eval/fixtures"]
+# Markdown is excluded because ruff 0.16 formats fenced `python` blocks by
+# default and mangles illustrative snippets (loose comma-separated expressions
+# become one-element tuples). Markdown is markdownlint's job, not ruff's.
+extend-exclude = ["tools/eval/fixtures", "*.md"]
 
 [tool.ruff.lint]
 select = [
