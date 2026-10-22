@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import logging
 from typing import TYPE_CHECKING
 
@@ -73,3 +74,38 @@ class TestHandlers:
             log.read_text()
             == "quarry.test_log_redaction fetching https://h.test/…(1 segment)\n"
         )
+
+
+class TestHandleError:
+    """A failing emit must not echo the record's message or arguments to stderr."""
+
+    def test_the_message_and_arguments_never_reach_stderr(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        class _Broken(io.StringIO):
+            def write(self, _text: str) -> int:
+                msg = "disk gone while writing https://u:PWSEC@h.test/p?t=QSEC"
+                raise OSError(msg)
+
+        handler = RedactingStreamHandler(_Broken())
+        record = _record(
+            "quarry.x", logging.WARNING, "fetch %s", "https://u:PWSEC@h.test/p?t=QSEC"
+        )
+        handler.handle(record)
+        err = capsys.readouterr().err
+        assert err.startswith("--- Logging error ---\n")
+        assert "OSError" in err
+        for secret in ("PWSEC", "QSEC", "fetch", "disk gone"):
+            assert secret not in err
+
+    def test_nothing_is_written_when_logging_errors_are_silenced(
+        self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(logging, "raiseExceptions", False)
+
+        class _Broken(io.StringIO):
+            def write(self, _text: str) -> int:
+                raise OSError
+
+        RedactingStreamHandler(_Broken()).handle(_record("quarry.x", logging.INFO, "m"))
+        assert capsys.readouterr().err == ""

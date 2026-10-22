@@ -5,7 +5,9 @@ from __future__ import annotations
 import copy
 import logging
 import logging.handlers
-from typing import TextIO, final
+import sys
+import traceback
+from typing import TextIO, final, override
 
 from quarry.log_redactor import LogRedactor
 
@@ -34,6 +36,23 @@ class _FirstPartyHandler(logging.Handler):
         single = copy.copy(record)
         single.msg, single.args = LogRedactor.one_line(record.getMessage()), ()
         return LogRedactor.redact(super().format(single))
+
+    @override
+    def handleError(self, record: logging.LogRecord) -> None:
+        """Report an emit failure without echoing the record.
+
+        The stdlib prints the raw message and arguments, which is where a URL
+        secret lives, straight to stderr.  This writes a fixed line, the logger's
+        name, the exception's class and a redacted traceback with no message.
+        """
+        error = sys.exception()
+        if not logging.raiseExceptions or error is None or sys.stderr is None:
+            return
+        frames = "".join(traceback.format_tb(error.__traceback__))
+        report = (
+            f"--- Logging error ---\n{record.name}: {type(error).__name__}\n{frames}"
+        )
+        sys.stderr.write(LogRedactor.redact(report))
 
 
 @final
