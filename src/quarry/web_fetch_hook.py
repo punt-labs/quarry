@@ -40,16 +40,14 @@ class WebFetchHook:
     skipped quietly: nothing about it is worth a log line or a daemon call.
     """
 
-    __slots__ = ("_cwd", "_parsed", "_payload", "_trace")
+    __slots__ = ("_cwd", "_parsed", "_trace")
 
-    _payload: dict[str, object]
     _cwd: str
     _parsed: WebFetchPayload
     _trace: HookTrace
 
     def __new__(cls, payload: dict[str, object]) -> Self:
         self = super().__new__(cls)
-        self._payload = payload
         self._cwd = HookPayload.as_dir(payload.get("cwd"))
         self._parsed = WebFetchPayload(payload)
         self._trace = HookTrace("post-web-fetch")
