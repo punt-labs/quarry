@@ -45,10 +45,10 @@ def test_stored(name: str, stored: str) -> None:
 @pytest.mark.parametrize(
     ("name", "shown"),
     [
-        ("https://x.test/p?token=abc", "https://x.test/…(1 segments)"),
+        ("https://x.test/p?token=abc", "https://x.test/…(1 segment)"),
         (f"https://x.test{_RESET_PATH}?t=1", "https://x.test/…(2 segments)"),
-        ("  https://x.test/p?t=1", "https://x.test/…(1 segments)"),
-        ("https://u:secret@x.test/p", "https://x.test/…(1 segments)"),
+        ("  https://x.test/p?t=1", "https://x.test/…(1 segment)"),
+        ("https://u:secret@x.test/p", "https://x.test/…(1 segment)"),
         ("notes #3 (draft)?.md", "notes #3 (draft)?.md"),
         ("http://u:secret@h:99999/a", "(unparseable URL)"),
     ],

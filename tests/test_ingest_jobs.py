@@ -99,7 +99,7 @@ async def test_plain_ingest_of_a_refused_url_fails_the_task_without_a_traceback(
     [record] = [r for r in caplog.records if r.levelno >= logging.WARNING]
     assert record.exc_info is None
     assert record.getMessage() == (
-        "Background ingest https://example.com/…(1 segments) (task t-3) rejected: "
+        "Background ingest https://example.com/…(1 segment) (task t-3) rejected: "
         "content rejected: unsupported media type x"
     )
 

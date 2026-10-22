@@ -57,6 +57,13 @@ class TestRedactedForms:
         assert str(HttpUrl("http://example.com")) == "http://example.com/…(0 segments)"
         assert str(HttpUrl("http://example.com/")) == "http://example.com/…(0 segments)"
 
+    def test_one_segment_is_singular(self) -> None:
+        assert str(HttpUrl("http://example.com/a")) == "http://example.com/…(1 segment)"
+
+    @pytest.mark.parametrize("raw", ["http://example.com", "http://example.com/"])
+    def test_a_bare_host_has_one_stored_name(self, raw: str) -> None:
+        assert HttpUrl(raw).document_name == "http://example.com/"
+
     def test_the_stored_name_keeps_the_path_but_not_secrets(self) -> None:
         url = HttpUrl("https://example.com/reset/9f8e7d6c5b4a39281706f5e4d3c2b1a0?t=Q")
         assert url.document_name == (
@@ -69,7 +76,7 @@ class TestDocumentName:
         ("raw", "name"),
         [
             (_RAW, "https://example.com:8443/docs/guide"),
-            ("http://example.com", "http://example.com"),
+            ("http://example.com", "http://example.com/"),
             ("http://[2606:4700::1111]:8080/a?x=1", "http://[2606:4700::1111]:8080/a"),
             ("http://Example.com./a#f", "http://example.com/a"),
             ("http://example.com:80/a", "http://example.com/a"),

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Self, final
+from typing import TYPE_CHECKING, Self, final
 
 from quarry.artifacts import (
     SessionArtifacts,
@@ -13,14 +13,17 @@ from quarry.artifacts import (
     format_artifacts_header,
 )
 from quarry.backfill_mapping import ProjectMapping, ProjectMappingResolver
-from quarry.config import Settings
 from quarry.db.facade import Database
+from quarry.failure_reason import FailureReason
 from quarry.ingestion.ingest_context import IngestContext, Progress
 from quarry.ingestion.web_ingest import InlineIngest, ingest_content
 from quarry.scrub import scrub_and_log
 from quarry.sync_registry import SyncRegistry
 from quarry.transcript import Transcript
 from quarry.transcript_reader import TranscriptReader
+
+if TYPE_CHECKING:
+    from quarry.config import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -181,18 +184,16 @@ class _ProjectProcessor:
             self._skipped += 1
             self._acc.skipped_existing += 1
             return
+        self._acc.processed += 1
         if self._config.dry_run:
             self._ingested += 1
             self._acc.ingested += 1
-            self._acc.processed += 1
             return
         text = TranscriptReader(transcript).text()
         if not text.strip():
             self._acc.skipped_empty += 1
-            self._acc.processed += 1
             return
         self._ingest(transcript, text)
-        self._acc.processed += 1
 
     def _ingest(self, transcript: Path, text: str) -> None:
         """Write the capture file and ingest the transcript through the pipeline."""
@@ -229,7 +230,7 @@ class _ProjectProcessor:
                 ),
             )
         except Exception as exc:
-            self._acc.errors.append(f"{transcript.name}: {exc}")
+            self._acc.errors.append(FailureReason.line(transcript.name, exc))
             logger.exception("backfill: failed to ingest %s", transcript.name)
             return
         self._existing.add(doc_name)

@@ -223,7 +223,7 @@ class TestDocumentNameRedaction:
         # document_name itself is untouched -- identity/storage is unaffected.
         assert result["document_name"] == credentialed_name
         done = [m for m in messages if m.startswith("Done:")]
-        assert done == ["Done: 1 chunks indexed from https://example.com/…(1 segments)"]
+        assert done == ["Done: 1 chunks indexed from https://example.com/…(1 segment)"]
         assert "user:pass" not in caplog.text
         assert "token=abc123" not in caplog.text
         # Exact match, not a host substring check (CodeQL
@@ -231,7 +231,7 @@ class TestDocumentNameRedaction:
         # record rather than a fragment that could also match an unrelated
         # look-alike string.
         info_records = [r.getMessage() for r in caplog.records]
-        expected = "Done: 1 chunks indexed from https://example.com/…(1 segments)"
+        expected = "Done: 1 chunks indexed from https://example.com/…(1 segment)"
         assert expected in info_records
 
     def test_url_document_name_redacts_secrets_on_zero_chunks(
@@ -255,7 +255,7 @@ class TestDocumentNameRedaction:
         warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
         assert warnings == [
             (
-                "pipeline: https://example.com/…(1 segments) produced zero chunks — "
+                "pipeline: https://example.com/…(1 segment) produced zero chunks — "
                 "keeping any prior document, storing nothing"
             )
         ]

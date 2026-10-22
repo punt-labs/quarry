@@ -63,8 +63,10 @@ class HttpUrl:
         self._fetch_url = raw
         self._host = host
         self._path = path
-        self._document_name = urlunsplit((parts.scheme, netloc, path, "", ""))
-        self._log_form = f"{parts.scheme}://{netloc}/…({segments} segments)"
+        self._document_name = urlunsplit((parts.scheme, netloc, path or "/", "", ""))
+        self._log_form = (
+            f"{parts.scheme}://{netloc}/…({segments} segment{'s' * (segments != 1)})"
+        )
         return self
 
     @property

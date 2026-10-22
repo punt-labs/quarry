@@ -647,7 +647,7 @@ class TestIngestSitemapIntegration:
         # redacted message rather than a fragment that could also match an
         # unrelated look-alike string.
         fetching = [m for m in messages if m.startswith("Fetching sitemap:")]
-        assert fetching == ["Fetching sitemap: https://docs.python.org/…(1 segments)"]
+        assert fetching == ["Fetching sitemap: https://docs.python.org/…(1 segment)"]
 
     @patch("quarry.ingestion.sitemap_ingest.ingest_url")
     @patch("quarry.db.chunk_catalog.ChunkCatalog.list_documents")
@@ -985,7 +985,7 @@ class TestIngestAuto:
         ]
         assert warning_records == [
             (
-                "Sitemap discovery failed for https://example.com/…(1 segments): "
+                "Sitemap discovery failed for https://example.com/…(1 segment): "
                 "fetch failed: sitemap URL not accepted by the parser"
             )
         ]
@@ -1515,8 +1515,8 @@ class TestInvalidSitemapFailsTheFetch:
         with caplog.at_level(logging.INFO):
             SitemapDiscovery.discover_urls(HttpUrl(self._URL))
         assert [r.getMessage() for r in caplog.records] == [
-            "Fetching sitemap: https://example.com/…(1 segments)",
-            "Parsed 0 pages from https://example.com/…(1 segments)",
+            "Fetching sitemap: https://example.com/…(1 segment)",
+            "Parsed 0 pages from https://example.com/…(1 segment)",
         ]
 
 

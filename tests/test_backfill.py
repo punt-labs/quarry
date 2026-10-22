@@ -405,6 +405,23 @@ class TestBackfillSessions:
         assert stats.ingested == 0
         assert stats.skipped_existing == 1
 
+    def test_an_ingest_failure_reports_the_class_not_the_message(
+        self, tmp_path: Path
+    ) -> None:
+        from quarry.backfill import backfill_sessions
+
+        env = _make_env(tmp_path)
+        settings = _make_settings(env["db_path"], env["registry_path"])
+        _setup_registry(env["registry_path"], str(env["real_project"]), "myproject")
+        boom = OSError("/home/jane/secret-token-path")
+        with (
+            patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", env["projects_dir"]),
+            patch("quarry.backfill.ingest_content", side_effect=boom),
+        ):
+            stats = backfill_sessions(settings)
+
+        assert stats.errors == [f"{env['transcript'].name}: internal error: OSError"]
+
     def test_limit_flag(self, tmp_path: Path) -> None:
         from quarry.backfill import backfill_sessions
 
