@@ -48,6 +48,32 @@ across `transform`, `index`, and `connector`).
 
 ### Fixed
 
+- index: binary content can no longer be stored as chunk text. A PDF captured
+  through the WebFetch hook was decoded as text, and its multi-megabyte page
+  was copied onto every one of its chunks. That poisoned the `chunks` table:
+  every `optimize()` failed with an Arrow `Offset overflow`. Because cleanup
+  runs inside the same call, each failed compaction also left orphaned files
+  on disk. Ingestion now refuses binary content and bounds every stored row
+  (DES-057):
+  - A media-type allow-list is checked before a fetched body is read.
+  - A document-level binary classifier (`content_guard.py`) checks for magic
+    bytes and the share of replacement and control characters.
+  - Pages over 1 MiB are split at the best available boundary and never
+    truncated.
+  - Overlong unpunctuated runs are hard-wrapped so a chunk's stored text
+    equals its embedded text.
+  - `ChunkTable.build_records` raises if any row exceeds the budget.
+
+  A refused payload fails with its reason on every surface, with no traceback
+  in the daemon log:
+  - `remember`, `learn` and `capture` return HTTP 400.
+  - A URL ingest task ends `failed`.
+  - Directory sync reports a per-file error and indexes the rest.
+  - The hook never blocks the session.
+- infra: `chunk_max_chars` and `chunk_overlap_chars` are validated in
+  `Settings`. A value that would exceed the per-chunk row budget is refused at
+  load, with an error naming the field. Previously it made every ingest fail
+  with an error that never named the setting.
 - tool: add the `missions_sync` tool to `scripts/mcpb-manifest.template.json`
   — it was never added when the tool shipped, so the Claude Desktop bundle's
   tool list silently omitted it.

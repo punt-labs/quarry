@@ -1747,7 +1747,7 @@ LanceDB writer assumes a single caller; concurrent overwrite delete-then-adds
 interleave so both chunk sets survive (lost update).
 
 **Decision.** A daemon-owned serialized queue: one resident FIFO worker per
-collection — one in-flight `progressive_insert` per LanceDB table, the
+collection — one in-flight `DocumentStreamer.insert` per LanceDB table, the
 daemon-scope generalization of DES-034's single-writer invariant (not a fork;
 `_write_lock`/`ProgressiveIndexer` untouched) — plus a global embed `Semaphore`
 hard-clamped to 1 (DES-032: >1 buys no matmul parallelism behind the shared ONNX
@@ -3126,3 +3126,97 @@ telemetry write completes (rejected — this is precisely the failure mode
 Class-1/Class-2 bug histories warn about; the write is fire-and-forget from
 the caller's perspective, wrapped in the same boundary-I/O contract as every
 other best-effort side effect in this codebase).
+
+## DES-057: Row budget, binary rejection, and normalized page text
+
+**Date:** 2026-10-22
+**Status:** SETTLED (implemented in four sequential PRs: prevent, resilience, normalize, repair and visibility)
+**Topic:** Keeping the chunks table compactable; rejecting content that is not text
+**Bead:** quarry-70zm
+
+### Context
+
+Since 2026-09-27 every daemon `optimize()` on the operator's database failed
+with an Arrow `Offset overflow error`. A PDF captured through the WebFetch hook
+fallback was fetched by `fetch_body`, which had no media-type policy and
+decoded with `errors="replace"`. The PDF was stored as a single 4.5 MB "page"
+of mostly replacement characters. The chunker copied the full page text onto
+every chunk (`page_raw_text`), so one document became 831 rows of 4.5 MB each
+(3.78 GB).
+
+Arrow string offsets are 32-bit, so a decoded batch can hold at most 2^31 bytes
+in one column. Any read batch spanning roughly 473 of those rows overflowed.
+Cleanup runs inside the same `optimize()` call, so each failed compaction left
+about 525 MB of orphaned files that nothing removed. On the operator's machine
+`data/` reached 1.2 TB for a 3 GB table. The failure surfaced only as "Background
+sync failed" in the daemon log.
+
+The cleanup could not simply be separated out. In lancedb 0.36.0 without
+pylance, `Table.optimize(cleanup_older_than, delete_unverified)` is the only
+maintenance entry point. `cleanup_old_versions` and `compact_files` raise
+`ImportError`, and the Rust binding exposes no compaction batch options. So the
+fix removes the trigger and isolates the failure, rather than tuning Lance.
+
+### Decision
+
+1. **Reject binary content; never store it as text.**
+   - A media-type allow-list is checked before a fetched body is read.
+   - A document-level classifier in the neutral, stdlib-only `content_guard.py`
+     looks for magic bytes after an optional media-type marker. It also
+     measures the aggregate share of U+FFFD and C0 control characters, with a
+     threshold of 0.25. The measured separation on the live corpus was 0.521
+     for the PDF against at most 0.0188 for every legitimate document.
+   - A per-page check applies only to pages of at least `LARGE_PAGE_CHARS`
+     (64 KiB), because small legitimate PDF pages can exceed the ratio. One
+     677-character page measured 0.341.
+   - A refused payload fails with its reason on every surface and never logs a
+     traceback.
+2. **Bound every stored row; split, never truncate.**
+   - Pages over 1 MiB are split at the best boundary.
+   - Overlong sentences are hard-wrapped to `max_chars`.
+   - `RowBudget` encodes the invariant `max_page_bytes × assumed_batch_rows ×
+     safety_factor ≤ 2^31` and is enforced at `ChunkTable.build_records`, the
+     single record builder.
+   - The 1,024-row batch is measured for scans (512 and 1,024 fail on a
+     poisoned table, 256 passes) and inferred for compaction.
+   - `Settings` bounds `chunk_max_chars` so a configuration cannot exceed the
+     per-chunk budget.
+3. **Normalize page text.**
+   - Page text moves out of `chunks` into its own `pages` table, keyed by
+     `(collection, document_name, page_number)` and stored once per page.
+   - Writers insert pages before the chunks that need them and delete them
+     after. The invariant "a chunk exists only if its page exists" therefore
+     survives a crash between the two tables; a crash can only leave orphan
+     pages, which are invisible to readers and swept after a 24 h grace period.
+   - The invariant also depends on the ingest queue's single-unit embed gate
+     (`EMBED_CONCURRENCY_CEILING == 1`), which a test pins.
+   - A one-time migration backfills `pages` in small adaptive batches,
+     verifies completeness and equality, then drops `page_raw_text`
+     automatically at first daemon start (`drop_columns` is metadata-only).
+4. **Isolate and surface failure.**
+   - Finalize steps run independently, so an optimize failure no longer skips
+     shadow push or GC.
+   - A per-database failure ledger applies exponential backoff.
+   - `/health.finalize` exposes the ledger.
+   - `quarry repair` removes provably binary documents and reclaims orphaned
+     files.
+   - `quarry doctor` fails (required) on a failing optimize, a row-budget
+     violation, or pages-table inconsistency.
+5. **Upgrade-only.** Quarry builds no downgrade or restore machinery; a
+   downgrade is at most a schema-only revert.
+
+### Rejected alternatives
+
+- **Store `page_raw_text` only on each page's first chunk, empty elsewhere.**
+  This encodes a relationship in row order and a magic empty value, and leaves
+  bulky text in the hot table. Rejected by the operator: avoiding a schema
+  change is not a reason to choose a workaround over the normalized design.
+- **Truncate oversized text.** It loses data silently.
+- **Delete oversized-but-genuine text in repair.** It violates "no loss beyond
+  provably bad rows".
+- **SQL length predicates or a `page_raw_text <> ''` filter.** Both decode the
+  overflowing column on a poisoned table.
+- **Add pylance to get `compact_files` options.** It is a heavy new dependency
+  to tune a symptom whose cause is removed anyway.
+- **Per-page binary classification at all sizes.** It falsely rejects
+  legitimate small PDF pages.

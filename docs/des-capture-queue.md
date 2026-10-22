@@ -24,7 +24,7 @@ transcripts. Each POST becomes an independent asyncio task that runs
 Two things break under a burst:
 
 - **Write contention / lost update.** `_chunk_embed_store` does
-  `delete_document(...)` then `progressive_insert(...)` against one shared write
+  `delete_document(...)` then `DocumentStreamer.insert(...)` against one shared write
   connection (`src/quarry/ingestion/pipeline.py:975-988`). DES-034's module-global
   `chunk_store._write_lock` (`chunk_store.py:27`) serializes each individual
   `table.add()`/`table.delete()`, so there is no torn write and no LanceDB
@@ -59,8 +59,8 @@ A `POST /v1/capture` reaches embedding + write like this:
 | `accept` → **`asyncio.create_task(coro)`** + track, return 202 | `daemon/routes/base.py:116-127` |
 | `CaptureIngestJob.run` → `run_in_threadpool(self._capture, ctx)` | `daemon/ingest_jobs.py:174-186` |
 | `_capture` → `ScrubbedIngestJob.scrub_and_ingest` → `ingest_content` | `daemon/ingest_jobs.py:181-183`, `58-80` |
-| `ingest_content` → `_chunk_embed_store` (delete + `progressive_insert`) | `ingestion/pipeline.py:449-455`, `975-988` |
-| `progressive_insert` embeds via the **shared cached** write backend | `ingestion/streaming.py:111`; `ingestion/backends.py:36-43` |
+| `ingest_content` → `_chunk_embed_store` (delete + `DocumentStreamer.insert`) | `ingestion/pipeline.py:449-455`, `975-988` |
+| `DocumentStreamer.insert` embeds via the **shared cached** write backend | `ingestion/ingestion/streaming.py`; `ingestion/backends.py:36-43` |
 
 `POST /v1/remember` (`daemon/routes/ingestion.py:30-43`) and `POST /v1/ingest`
 (`daemon/routes/ingestion.py:45-71`) take the identical `accept → create_task →
@@ -94,7 +94,7 @@ path:
   `sync_collection(...)` call (`sync.py:220`) and lives only for that sync's
   duration. This is the single consumer DES-034 §2 describes.
 - **Captures take a *different* writer.** `ingest_content` → `_chunk_embed_store`
-  (`pipeline.py:975-988`) → `progressive_insert` (`streaming.py:111`) constructs a
+  (`pipeline.py:975-988`) → `DocumentStreamer.insert` (`ingestion/streaming.py`) constructs a
   **fresh** `ProgressiveIndexer` with a `_PlainFlushTarget` (`streaming.py:87`)
   per call, with **no consumer thread and no queue**. `ProgressiveIndexer`'s own
   docstring states its writes are performed "by exactly one caller (the sync
@@ -380,8 +380,8 @@ safe *because* "exactly one consumer thread performs writes, and serializes
 producer overwrite-deletes against the consumer's adds." §2.1 shows, with
 file:line evidence, that this invariant is realized **only within a single sync
 run** (`CollectionIngestor`, `sync_ingest.py:41-137`); the daemon's capture path
-violates it, because every concurrent capture is an independent `progressive_insert`
-caller (`streaming.py:111`) with its own `ProgressiveIndexer` and no shared
+violates it, because every concurrent capture is an independent `DocumentStreamer.insert`
+caller (`ingestion/streaming.py`) with its own `ProgressiveIndexer` and no shared
 consumer.
 
 The per-collection queue is therefore **the daemon-scope generalization of
@@ -394,7 +394,7 @@ composition is layered, not parallel:
 - **`ProgressiveIndexer` (DES-034, `progressive.py`)** stays exactly as is — it
   still assumes one caller and needs no lock of its own. **Untouched.**
 - **The per-collection worker (this design)** supplies the missing top layer: for
-  a given collection there is only ever **one** `progressive_insert` caller in
+  a given collection there is only ever **one** `DocumentStreamer.insert` caller in
   flight, restoring the single-writer precondition DES-034's ingest primitives are
   built to trust. It is the same invariant DES-034 gives sync, now provided for
   captures.
@@ -505,7 +505,7 @@ counts (no real ONNX needed for the concurrency assertions):
 - **DES-034 composition (the §2.1 regression).** With the queue active, two
   same-document captures submitted concurrently to one collection produce a
   document with **only the last** writer's chunks. As a control, the pre-queue
-  path (concurrent `progressive_insert` under `_write_lock` alone) is shown to
+  path (concurrent `DocumentStreamer.insert` under `_write_lock` alone) is shown to
   leave **both** chunk sets resident — the exact interleave the queue closes. This
   test is the executable proof that op-level `_write_lock` does not subsume the
   job-level serializer.
@@ -566,7 +566,7 @@ The design mission owns the final set; this is the proposal.
   ≤ 2, but see §9.1 — 2 conflicts with DES-032 and is not recommended),
   `ingest_queue_depth` (default 32), `ingest_drain_timeout_s` (default 30).
 - **UNCHANGED (by design):** `chunk_store._write_lock`, `ProgressiveIndexer`
-  (`progressive.py`), and `streaming.progressive_insert` are **not** modified — the
+  (`progressive.py`), and `streaming.DocumentStreamer.insert` are **not** modified — the
   per-collection worker layers *above* them (§4.2). The queue supplies the
   single-writer-per-collection precondition those DES-034 primitives already
   assume; it does not replace their op-level guarantees.
