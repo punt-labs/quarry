@@ -45,6 +45,16 @@ across `transform`, `index`, and `connector`).
   sibling classes (mirroring the existing `MissionTools` pattern). The stdio
   wire surface — tool names, behavior, `MCPServer` construction — is
   unchanged. `McpTools.main()` moves to a `McpTools.run_stdio` staticmethod.
+- index: a URL's stored document name is `scheme://host[:port]/path`.
+  Userinfo, query string and fragment are dropped, as WebFetch captures
+  already did. This applies to `quarry ingest <url>`, sitemap pages, a
+  `remember` whose name is a URL, and captures. URLs that differ only in
+  query or fragment now resolve to the same document.
+- tool: a failed task's error shows its reason only when the task was
+  refused (binary content, an over-budget row, a rejected or failed fetch).
+  Every other failure reads `internal error: <ExceptionClass>`, with the
+  detail in the redacted `quarry.log`. This applies to directory
+  registration as well.
 
 ### Fixed
 
@@ -60,9 +70,9 @@ across `transform`, `index`, and `connector`).
     bytes and the share of replacement and control characters. Prose that
     merely begins with `%PDF-` or `GIF8` still passes.
   - A text or markdown section, code section, or spreadsheet row group over
-    the page cap (just under 1 MiB) is split at the best available boundary, never truncated. An
-    oversized PDF or other paginated page fails its document instead, so page
-    numbers always match the source.
+    the page cap (just under 1 MiB) is split at the best available boundary,
+    never truncated. An oversized PDF or other paginated page fails its
+    document instead, so page numbers always match the source.
   - Overlong unpunctuated runs are hard-wrapped so a chunk's stored text
     equals its embedded text.
   - Label columns (`summary`, document name and path, collection, agent
@@ -77,6 +87,10 @@ across `transform`, `index`, and `connector`).
       unknown `format_hint`.
     - `learn`: binary content or an over-budget label.
     - `ingest`: an over-budget label.
+    - `ingest` and `capture`: a URL with userinfo, whitespace or control
+      characters, `\` or `%` in the host, or an out-of-range port. The
+      reason is fixed text (`malformed URL`, `unsupported scheme`) and never
+      echoes the URL.
   - A URL ingest task ends `failed`.
   - Directory sync reports a per-file error and indexes the rest.
   - A sitemap crawl records the reason per page. A crawl in which every page
@@ -88,11 +102,24 @@ across `transform`, `index`, and `connector`).
   redacted log line. These cases used to end `completed` with zero chunks:
   - Scrubbed URL ingests and capture re-fetches that hit an HTTP error,
     timeout, unreachable host, or over-cap body.
-  - A sitemap URL that could not be fetched or parsed.
-  - A capture whose content extracted to no text.
-- security: network errors on a plain URL ingest no longer write the raw URL
-  (including any credentials or tokens) to the daemon log or to the task
-  error.
+  - A sitemap URL that could not be fetched or parsed, or a sitemap index
+    whose sub-sitemaps all failed.
+  - A crawl in which every listed URL was rejected as unsafe.
+  - A capture or scrubbed URL ingest whose content extracted to no text.
+- security: URL secrets can no longer reach logs, task errors, HTTP
+  responses, MCP results, or stored document names (DES-057). Credentials,
+  query strings and tokens in a URL used to leak through several paths:
+  network errors, sitemap-parser exceptions and logs, document-name log
+  lines, and a parse differential that put userinfo into connection errors.
+  The fix is structural rather than per call site:
+  - One admission gate rejects any URL that the URL parser, urllib, and the
+    sitemap parser could read differently.
+  - URLs are carried as an `HttpUrl` value whose printed form is redacted.
+  - Every log handler redacts URLs and control characters in the final
+    text, and drops third-party log records below WARNING.
+- index: a CSV with a single cell larger than 128 KiB no longer crashes
+  extraction. Large cells are chunked within the row budget, and a cell
+  over the page cap fails its file with a reason.
 - infra: `chunk_max_chars` is bounded in `Settings` (1 to 16,384), so every
   chunk fits the 64 KiB per-chunk row budget. `chunk_overlap_chars` must be
   non-negative. An out-of-range value is refused at load, with an error naming

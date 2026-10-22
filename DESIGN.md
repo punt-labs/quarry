@@ -3230,6 +3230,37 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
      violation, or pages-table inconsistency.
 5. **Upgrade-only.** Quarry builds no downgrade or restore machinery; a
    downgrade is at most a schema-only revert.
+6. **URL secrets are structurally unreachable from every sink.** Review
+   rounds on the first PR kept finding the same defect in new call sites: a
+   raw URL, or an exception message containing one, reached a log line, task
+   error, response, or stored name. An adversarial audit proved a parse
+   differential behind several of them. `urlsplit` saw the host, while
+   urllib connected to `user:secret@host` and echoed it in errors. Patching
+   each call site did not converge, so the fix is structural:
+   - **Admission (layer A).** `UrlAdmission.reject_reason`
+     (`url_admission.py`) is the single gate for routes, captures, sitemap
+     entries, and every redirect hop. Its decisions are made over one
+     canonical reading (`UrlSyntax`). It rejects userinfo, `\` or `%` in the
+     netloc, whitespace or control characters anywhere, and a port that is
+     out of range or 0. Its reasons are fixed text. This supersedes
+     `UrlSafetyCheck.reject_reason` as cited in DES-042 and DES-049;
+     `UrlSafetyCheck` keeps the resolved-address checks.
+   - **`HttpUrl`.** An admitted URL is carried as a value type:
+     - `.fetch_url` is the only fetchable form.
+     - `.document_name` is the stored form, `scheme://host[:port]/path`.
+     - `str()` is the log form: path parameters are dropped and
+       token-shaped segments elided.
+
+     `WebFetchName.of` derives capture names from it, replacing
+     `CaptureUrl.for_web_fetch`.
+   - **Logging (layer B).** The configured file and stream handlers redact
+     URLs and escape control characters in the finished text, tracebacks
+     included. They drop third-party records below WARNING. This backstop
+     catches what a library logs on its own.
+   - **Task errors (layer C).** Only a refusal (`UnindexableContentError`,
+     including `RowBudgetError`) keeps its message. Every other failure is
+     recorded as `internal error: <Class>`. Fetch refusals are raised
+     `from None`, so a traceback cannot chain the raw cause.
 
 ### Rejected alternatives
 
@@ -3246,3 +3277,8 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
   to tune a symptom whose cause is removed anyway.
 - **Per-page binary classification at all sizes.** It falsely rejects
   legitimate small PDF pages.
+- **Redact URLs at each call site.** Several review rounds showed this does
+  not converge; every new sink is a new leak.
+- **A regex log filter alone.** It is a backstop, not a guarantee. A space
+  inside a query string defeats it, so admission and `HttpUrl` carry the
+  guarantee.
