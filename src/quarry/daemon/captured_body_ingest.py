@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar, Protocol, Self, cast, final, get_args
 
 from quarry.capture_url import CaptureUrl
+from quarry.content_guard import UnindexableContentError
 from quarry.ingestion import ingest_context, web_ingest
 from quarry.ingestion.ingest_context import IngestContext, MemoryType
 from quarry.ingestion.web_fetch import WebFetcher
@@ -154,9 +155,19 @@ class CapturedBodyIngest:
         """Fetch ``source``; every failure is a URL-free :class:`FetchRefusedError`."""
         return self._fetcher.fetch_body(self._source)
 
-    def run(self, ctx: DaemonContext) -> dict[str, object]:
-        """Fetch and store ``source``, returning the ingest result."""
-        return self.ingest(ctx, self.fetch())
+    def run(
+        self, ctx: DaemonContext, *, require_text: bool = False
+    ) -> dict[str, object]:
+        """Fetch and store ``source``, returning the ingest result.
+
+        Raises:
+            UnindexableContentError: *require_text* is set and nothing was stored.
+        """
+        result = self.ingest(ctx, self.fetch())
+        if require_text and not result.get("chunks"):
+            msg = "capture stored nothing: no text extracted"
+            raise UnindexableContentError(msg)
+        return result
 
     def ingest(self, ctx: DaemonContext, body: FetchedBody) -> dict[str, object]:
         """Route a fetched body: HTML via extractor, else text with a mime marker.

@@ -92,3 +92,36 @@ def test_the_subject_is_built_only_when_a_refusal_is_logged() -> None:
     with RefusalAwareTerminal(state, subject).record():
         state.status = "completed"
     assert calls == []
+
+
+def test_a_raising_subject_cannot_stop_the_task_ending_failed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def subject() -> str:
+        msg = "cannot name this"
+        raise ValueError(msg)
+
+    state = _state()
+    with (
+        caplog.at_level(logging.WARNING),
+        RefusalAwareTerminal(state, subject).record(),
+    ):
+        _raise(UnindexableContentError("binary content rejected: pdf header"))
+
+    assert (state.status, state.error) == (
+        "failed",
+        "binary content rejected: pdf header",
+    )
+    assert "(unnamed)" in caplog.text
+
+
+def test_complete_records_the_results() -> None:
+    state = _state()
+    terminal = RefusalAwareTerminal(state)
+    with terminal.record():
+        terminal.complete({"chunks": 3})
+    assert (state.status, state.results, state.error) == (
+        "completed",
+        {"chunks": 3},
+        "",
+    )

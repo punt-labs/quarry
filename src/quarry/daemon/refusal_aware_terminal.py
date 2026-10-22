@@ -10,7 +10,7 @@ from quarry.content_guard import UnindexableContentError
 from quarry.daemon.tasks import task_terminal
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Generator
+    from collections.abc import Callable, Generator, Mapping
 
     from quarry.daemon.tasks import TaskState
 
@@ -47,6 +47,11 @@ class RefusalAwareTerminal:
         self._subject = subject
         return self
 
+    def complete(self, results: Mapping[str, object]) -> None:
+        """Record the task as completed with *results*."""
+        self._state.status = "completed"
+        self._state.results = dict(results)
+
     @contextmanager
     def record(self) -> Generator[None]:
         """Run the body, recording the task's terminal state when it exits."""
@@ -54,12 +59,20 @@ class RefusalAwareTerminal:
             try:
                 yield
             except UnindexableContentError as exc:
-                logger.warning(
-                    "Background %s %s (task %s) rejected: %s",
-                    self._state.kind,
-                    self._subject(),
-                    self._state.task_id,
-                    exc,
-                )
-                self._state.status = "failed"
-                self._state.error = str(exc)
+                self._fail(exc)
+
+    def _fail(self, exc: UnindexableContentError) -> None:
+        """Record the failure first, then log it: naming the task cannot undo it."""
+        self._state.status = "failed"
+        self._state.error = str(exc)
+        try:
+            subject = self._subject()
+        except ValueError:  # the subject only decorates a log line
+            subject = "(unnamed)"
+        logger.warning(
+            "Background %s %s (task %s) rejected: %s",
+            self._state.kind,
+            subject,
+            self._state.task_id,
+            exc,
+        )

@@ -54,10 +54,9 @@ class IngestJob:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Fetch and index the URL in a background thread, updating task state."""
         subject = partial(CapturedBodyIngest.redacted, self.source)
-        with RefusalAwareTerminal(state, subject).record():
-            result = await run_in_threadpool(self._ingest, ctx)
-            state.status = "completed"
-            state.results = dict(result)
+        terminal = RefusalAwareTerminal(state, subject)
+        with terminal.record():
+            terminal.complete(await run_in_threadpool(self._ingest, ctx))
 
     def spool_record(self) -> SpoolRecord | None:
         """Return a snapshot of the source URL; an ``ingest`` has no client copy.

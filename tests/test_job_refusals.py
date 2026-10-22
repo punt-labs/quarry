@@ -13,6 +13,7 @@ import pytest
 from quarry.daemon.content_jobs import CaptureIngestJob, ScrubbedIngestJob
 from quarry.daemon.ingest_jobs import IngestJob
 from quarry.daemon.tasks import TaskState
+from quarry.ingestion.fetched_body import FetchedBody, FetchRefusedError
 from tests.inproc_daemon import InProcessDaemon
 
 if TYPE_CHECKING:
@@ -188,28 +189,45 @@ async def test_an_unknown_charset_is_a_content_refusal(
     assert state.error == "content rejected: unsupported charset nonsense-9"
 
 
-async def test_a_scrub_failure_while_naming_the_task_still_ends_it(
+async def test_a_url_that_cannot_be_named_still_ends_the_task(
     tmp_path: Path,
 ) -> None:
-    """Building the log subject can never leave a task pending."""
+    """``CaptureUrl`` raises on this URL; naming it must not strand the task."""
     daemon = InProcessDaemon(tmp_path)
-    state = TaskState(task_id="t-subj", kind="remember")
-    job = ScrubbedIngestJob(
-        name="n",
-        content="x",
+    state = TaskState(task_id="t-subj", kind="ingest")
+    job = IngestJob(
+        source="http://h.test:99999/",
+        overwrite=False,
         collection="c",
-        format_hint="auto",
-        overwrite=True,
-        scrub_label="remember",
+        scrub=True,
         agent_handle="",
         memory_type="",
         summary="",
     )
-    with patch.object(
-        ScrubbedIngestJob, "scrub_and_ingest", side_effect=ValueError("x")
-    ):
+    refusal = FetchRefusedError("fetch failed: timed out")
+    with patch("quarry.ingestion.web_fetch.WebFetcher.fetch_body", side_effect=refusal):
         await job.run(daemon.ctx, state)
     assert state.status == "failed"
+    assert state.error == "fetch failed: timed out"
+
+
+async def test_an_empty_capture_fails_the_task(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Neither the inline phase nor the re-fetch extracted text: nothing is stored."""
+    daemon = InProcessDaemon(tmp_path)
+    state = TaskState(task_id="t-empty", kind="capture")
+    body = FetchedBody("<html><body></body></html>", "text/html")
+
+    with (
+        caplog.at_level(logging.WARNING),
+        patch("quarry.ingestion.web_fetch.WebFetcher.fetch_body", return_value=body),
+    ):
+        await _capture_job().run(daemon.ctx, state)
+
+    assert state.status == "failed"
+    assert state.error == "capture stored nothing: no text extracted"
+    assert daemon.ctx.database.store.count() == 0
 
 
 def test_a_sitemap_with_one_pdf_page_ingests_the_rest(
