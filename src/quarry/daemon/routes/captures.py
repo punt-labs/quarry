@@ -13,7 +13,7 @@ from quarry.captures_collection import CapturesCollection
 from quarry.daemon.content_jobs import CaptureIngestJob, ScrubbedIngestJob
 from quarry.daemon.routes.content_group import ContentRouteGroup
 from quarry.http_guards import RequestGuards
-from quarry.url_safety import UrlSafetyCheck
+from quarry.url_admission import UrlAdmission
 from quarry.web_fetch_name import WebFetchName
 
 if TYPE_CHECKING:
@@ -81,14 +81,14 @@ class CaptureRoutes(ContentRouteGroup):
 
         The daemon re-fetches this URL server-side when the inline HTML extracts
         to zero chunks, so it is an SSRF sink identical to ``POST /ingest`` — it
-        must run the same UrlSafetyCheck gate at the route boundary, fail-closed,
+        must run the same UrlAdmission gate at the route boundary, fail-closed,
         before the job is built.  An empty source_url (a transcript) is nothing
         to fetch and needs no gate.  reject_reason calls getaddrinfo, which can
         block on DNS, so run it in the threadpool.
         """
         if not source_url:
             return None
-        reason = await run_in_threadpool(UrlSafetyCheck.reject_reason, source_url)
+        reason = await run_in_threadpool(UrlAdmission.reject_reason, source_url)
         if reason is not None:
             return JSONResponse({"error": f"URL rejected: {reason}"}, status_code=400)
         return None

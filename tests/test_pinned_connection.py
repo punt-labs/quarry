@@ -19,7 +19,7 @@ from urllib.error import URLError
 import pytest
 from usp.web_client.abstract_client import WebClientErrorResponse
 
-from quarry.ingestion.fetched_body import FetchRefusedError
+from quarry.ingestion.fetch_refused import FetchRefusedError
 from quarry.ingestion.pinned_connection import (
     PinnedHTTPConnection,
     PinnedHTTPSConnection,
@@ -28,6 +28,7 @@ from quarry.ingestion.pinned_opener import PinnedHTTPSHandler
 from quarry.ingestion.ssrf_redirect import GUARDED_OPENER, SsrfGuardedRedirectHandler
 from quarry.ingestion.web_fetch import WebFetcher
 from quarry.sitemap_web_client import GatedSitemapWebClient
+from quarry.url_admission import UrlAdmission
 from quarry.url_safety import UrlRejectedError, UrlSafetyCheck
 
 _GETADDRINFO = "quarry.url_safety.socket_module.getaddrinfo"
@@ -342,7 +343,7 @@ class TestExceptionBoundaries:
 
     def test_reject_reason_returns_string_on_overlong_idna_label(self) -> None:
         """reject_reason never raises on an over-long label — it returns a reason."""
-        reason = UrlSafetyCheck.reject_reason(_OVERLONG_LABEL_URL)
+        reason = UrlAdmission.reject_reason(_OVERLONG_LABEL_URL)
         assert reason is not None
         assert "cannot resolve hostname" in reason
 
@@ -359,7 +360,7 @@ class TestExceptionBoundaries:
 
     def test_reject_reason_returns_string_on_malformed_url(self) -> None:
         """A malformed URL yields a reason string, not a crash (never raises)."""
-        reason = UrlSafetyCheck.reject_reason("http://[")
+        reason = UrlAdmission.reject_reason("http://[")
         assert reason is not None
         assert "malformed URL" in reason
 

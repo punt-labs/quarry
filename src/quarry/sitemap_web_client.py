@@ -9,7 +9,7 @@ against the internal service.  Gating the flattened leaf URLs after the crawl
 is too late — the internal fetches already happened during recursion.
 
 :class:`GatedSitemapWebClient` closes that hole at USP's fetch boundary: it runs
-``UrlSafetyCheck`` on the initial URL and, through :data:`GUARDED_OPENER`, on
+``UrlAdmission`` on the initial URL and, through :data:`GUARDED_OPENER`, on
 every redirect hop, and refuses a blocked target fail-closed by returning a
 non-retryable error response (USP then skips the URL and does not recurse into
 it).  Passed to every USP entry point, it covers index recursion, robots.txt,
@@ -33,7 +33,7 @@ from usp.web_client.abstract_client import (
 )
 
 from quarry.ingestion.ssrf_redirect import GUARDED_OPENER, RedirectRejectedError
-from quarry.url_safety import UrlSafetyCheck
+from quarry.url_admission import UrlAdmission
 
 if TYPE_CHECKING:
     from http.client import HTTPMessage, HTTPResponse
@@ -96,7 +96,7 @@ class GatedSitemapWebClient(AbstractWebClient):
         USP skips the URL instead of fetching it.  SSRF blocks are non-retryable
         so an attacker-listed URL is never retried.
         """
-        reason = UrlSafetyCheck.reject_reason(url)
+        reason = UrlAdmission.reject_reason(url)
         if reason is not None:
             return self._error(f"SSRF-blocked URL: {reason}", retryable=False)
         try:
@@ -132,7 +132,7 @@ class GatedSitemapWebClient(AbstractWebClient):
             url, headers={"User-Agent": _USER_AGENT}
         )
         with GUARDED_OPENER.open(request, timeout=self._timeout) as resp:
-            final = UrlSafetyCheck.reject_reason(resp.url)
+            final = UrlAdmission.reject_reason(resp.url)
             if final is not None:
                 reason = f"SSRF-blocked final URL: {final}"
                 return self._error(reason, retryable=False)

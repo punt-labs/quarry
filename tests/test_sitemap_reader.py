@@ -14,7 +14,7 @@ from usp.objects.sitemap import (
     PagesXMLSitemap,
 )
 
-from quarry.ingestion.fetched_body import FetchRefusedError
+from quarry.ingestion.fetch_refused import FetchRefusedError
 from quarry.ingestion.sitemap_reader import SitemapReader
 
 _URL = "https://u:pw@example.com/sitemap.xml?token=SECRET"

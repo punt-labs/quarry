@@ -14,7 +14,7 @@ from fnmatch import fnmatch
 from urllib.parse import urlparse
 
 from quarry.ingestion.sitemap_reader import SitemapReader
-from quarry.url_safety import UrlSafetyCheck
+from quarry.url_admission import UrlAdmission
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +131,7 @@ class SitemapDiscovery:
         for entry in entries:
             if not SitemapDiscovery._matches(entry, include, exclude):
                 continue
-            reason = UrlSafetyCheck.reject_reason(entry.loc)
+            reason = UrlAdmission.reject_reason(entry.loc)
             if reason is not None:
                 logger.warning(
                     "Dropping unsafe sitemap URL %s: %s",

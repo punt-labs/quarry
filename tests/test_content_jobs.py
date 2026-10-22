@@ -12,7 +12,8 @@ import pytest
 from quarry.content_guard import UnindexableContentError
 from quarry.daemon.captured_body_ingest import IngestLabels
 from quarry.daemon.content_jobs import CaptureIngestJob, ScrubbedIngestJob
-from quarry.ingestion.fetched_body import FetchedBody, FetchRefusedError
+from quarry.ingestion.fetch_refused import FetchRefusedError
+from quarry.ingestion.fetched_body import FetchedBody
 from quarry.ingestion.media_type_policy import UnsupportedContentError
 
 if TYPE_CHECKING:

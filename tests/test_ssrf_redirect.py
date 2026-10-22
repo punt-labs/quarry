@@ -15,8 +15,8 @@ from typing import Any
 
 import pytest
 
+import quarry.ingestion.opened_response as wf
 import quarry.ingestion.ssrf_redirect as sr
-import quarry.ingestion.web_fetch as wf
 import quarry.sitemap_web_client as swc
 from quarry.ingestion.ssrf_redirect import (
     GUARDED_OPENER,

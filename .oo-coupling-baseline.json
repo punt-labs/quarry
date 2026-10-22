@@ -1133,9 +1133,16 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
+  "src/quarry/ingestion/fetch_refused.py": {
+    "efferent_coupling": 3.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
   "src/quarry/ingestion/fetched_body.py": {
-    "efferent_coupling": 4.0,
-    "public_names": 5.0,
+    "efferent_coupling": 3.0,
+    "public_names": 3.0,
     "circular_imports": 0.0,
     "max_lcom": 1.0,
     "avg_lcom": 1.0
@@ -1216,6 +1223,13 @@
     "circular_imports": 0.0,
     "max_lcom": 0.667,
     "avg_lcom": 0.667
+  },
+  "src/quarry/ingestion/opened_response.py": {
+    "efferent_coupling": 2.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.286,
+    "avg_lcom": 0.286
   },
   "src/quarry/ingestion/page_chunker.py": {
     "efferent_coupling": 5.0,
@@ -1323,11 +1337,11 @@
     "avg_lcom": 0.0
   },
   "src/quarry/ingestion/ssrf_redirect.py": {
-    "avg_lcom": 0.0,
-    "circular_imports": 0.0,
     "efferent_coupling": 2.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
     "max_lcom": 0.0,
-    "public_names": 2.0
+    "avg_lcom": 0.0
   },
   "src/quarry/ingestion/streaming.py": {
     "efferent_coupling": 4.0,
@@ -1355,7 +1369,7 @@
     "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 1.0,
-    "avg_lcom": 0.5
+    "avg_lcom": 1.0
   },
   "src/quarry/ingestion/web_ingest.py": {
     "efferent_coupling": 7.0,
@@ -1917,9 +1931,23 @@
     "max_lcom": 0.0,
     "public_names": 6.0
   },
+  "src/quarry/url_admission.py": {
+    "efferent_coupling": 2.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
   "src/quarry/url_safety.py": {
     "efferent_coupling": 0.0,
     "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/quarry/url_syntax.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0

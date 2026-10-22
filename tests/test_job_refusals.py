@@ -14,15 +14,16 @@ from quarry.daemon.captured_body_ingest import IngestLabels
 from quarry.daemon.content_jobs import CaptureIngestJob, ScrubbedIngestJob
 from quarry.daemon.ingest_jobs import IngestJob
 from quarry.daemon.tasks import TaskState
-from quarry.ingestion.fetched_body import FetchedBody, FetchRefusedError
+from quarry.ingestion.fetch_refused import FetchRefusedError
+from quarry.ingestion.fetched_body import FetchedBody
 from quarry.ingestion.ssrf_redirect import RedirectRejectedError
 from tests.inproc_daemon import InProcessDaemon
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-_URL = "http://u:p@example.com/doc?token=SECRET"
-_OPEN = "quarry.ingestion.web_fetch.GUARDED_OPENER.open"
+_URL = "http://example.com/doc?token=SECRET"
+_OPEN = "quarry.ingestion.opened_response.GUARDED_OPENER.open"
 _DISCOVER = "quarry.sitemap.SitemapDiscovery.discover_pages"
 
 
@@ -315,7 +316,7 @@ def test_a_sitemap_with_one_pdf_page_ingests_the_rest(
     daemon = InProcessDaemon(tmp_path)
     entries = [
         SitemapEntry("https://good.test/a", None),
-        SitemapEntry("https://u:pw@good.test/paper.pdf?token=SECRET", None),
+        SitemapEntry("https://good.test/paper.pdf?token=SECRET", None),
     ]
 
     def opener(request: object, timeout: float | None = None) -> MagicMock:
@@ -372,7 +373,7 @@ async def test_an_invalid_request_url_fails_the_task_url_free(
     _assert_quiet_and_url_free(
         state, caplog, subject="ingest https://example.com/p (task "
     )
-    assert state.error == "fetch failed: InvalidURL"
+    assert state.error == "URL rejected: malformed URL"
     assert "abc" not in caplog.text
 
 
@@ -465,7 +466,7 @@ async def test_a_crawl_where_every_page_is_a_pdf_fails_the_task(
     sitemap = PagesXMLSitemap(
         url=_SITEMAP_URL,
         pages=[
-            SitemapPage(url="https://u:pw@a.test/one.pdf?token=SECRET"),
+            SitemapPage(url="https://a.test/one.pdf?token=SECRET"),
             SitemapPage(url="https://b.test/two.pdf"),
         ],
     )

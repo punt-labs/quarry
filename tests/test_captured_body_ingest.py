@@ -10,7 +10,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from quarry.daemon.captured_body_ingest import CapturedBodyIngest, IngestLabels
-from quarry.ingestion.fetched_body import FetchedBody, FetchRefusedError
+from quarry.ingestion.fetch_refused import FetchRefusedError
+from quarry.ingestion.fetched_body import FetchedBody
 from quarry.ingestion.web_fetch import WebFetcher
 
 if TYPE_CHECKING:

@@ -11,7 +11,7 @@ import pytest
 
 from quarry.db import Database
 from quarry.ingestion.bulk_ingest import BulkOptions
-from quarry.ingestion.fetched_body import FetchRefusedError
+from quarry.ingestion.fetch_refused import FetchRefusedError
 from quarry.ingestion.ingest_context import IngestContext, Progress
 from quarry.sitemap import (
     SitemapDiscovery,
@@ -1252,7 +1252,7 @@ class TestSelectSafe:
         """A dropped entry is logged with its redacted URL and reason (CWE-532)."""
         monkeypatch.setattr(_GETADDRINFO, lambda *a, **k: _addrinfo("127.0.0.1"))
         entries = [
-            SitemapEntry(loc="https://u:secret@loops.example/x?token=t", lastmod=None),
+            SitemapEntry(loc="https://loops.example/x?token=t", lastmod=None),
             SitemapEntry(loc="http://u:secret@h:99999/x?token=t", lastmod=None),
         ]
         with caplog.at_level(logging.WARNING, logger="quarry.sitemap"):
@@ -1484,7 +1484,7 @@ class TestInvalidSitemapFailsTheFetch:
     ) -> None:
         from usp.objects.sitemap import InvalidSitemap
 
-        from quarry.ingestion.fetched_body import FetchRefusedError
+        from quarry.ingestion.fetch_refused import FetchRefusedError
 
         mock_fetcher_cls.return_value.sitemap.return_value = InvalidSitemap(
             url=self._URL, reason=f"HTTP 500 for {self._URL}"

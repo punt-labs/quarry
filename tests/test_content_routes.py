@@ -269,7 +269,7 @@ class TestIngestRoute:
     ) -> None:
         with (
             patch(
-                "quarry.daemon.routes.ingestion.UrlSafetyCheck.reject_reason",
+                "quarry.daemon.routes.ingestion.UrlAdmission.reject_reason",
                 return_value=None,
             ),
             patch(
@@ -277,7 +277,7 @@ class TestIngestRoute:
                 return_value=[(2, 1, 6, "", ("93.184.216.34", 0))],
             ),
             patch(
-                "quarry.ingestion.web_fetch.GUARDED_OPENER.open",
+                "quarry.ingestion.opened_response.GUARDED_OPENER.open",
                 return_value=self._pdf_response(),
             ),
         ):
@@ -595,3 +595,40 @@ class TestFormatHint:
                 json={"name": "n.md", "content": _CLEAN, "format_hint": hint},
             )
         assert resp.status_code == 202
+
+
+class TestUrlAdmission:
+    """A URL with userinfo, a bad port or whitespace is a fixed-text 400."""
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "http://u:SECRET@example.com/p?token=SECRET",
+            "http://example.com:99999/p",
+            "http://example.com/p?token=SECRET x",
+        ],
+        ids=["userinfo", "port", "space"],
+    )
+    def test_ingest_refuses_it_without_echoing_it(
+        self, http: TestClient, daemon: InProcessDaemon, source: str
+    ) -> None:
+        resp = http.post("/v1/ingest", json={"source": source})
+        assert resp.status_code == 400
+        assert resp.json() == {"error": "URL rejected: malformed URL"}
+        assert len(daemon.ctx.tasks) == 0
+
+    def test_capture_refuses_a_source_url_with_userinfo(
+        self, http: TestClient, daemon: InProcessDaemon, tmp_path: Path
+    ) -> None:
+        resp = http.post(
+            "/v1/capture",
+            json={
+                "content": _CLEAN,
+                "session_id": "abcd1234ef",
+                "cwd": str(tmp_path),
+                "source_url": "http://u:SECRET@example.com/p",
+            },
+        )
+        assert resp.status_code == 400
+        assert "SECRET" not in resp.text
+        assert len(daemon.ctx.tasks) == 0

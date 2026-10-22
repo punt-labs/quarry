@@ -6,7 +6,7 @@ import pytest
 
 from quarry.ingestion.bulk_ingest import BulkOptions
 from quarry.ingestion.crawl_guard import CrawlGuard
-from quarry.ingestion.fetched_body import FetchRefusedError
+from quarry.ingestion.fetch_refused import FetchRefusedError
 
 
 def test_every_discovered_url_rejected_is_refused() -> None:

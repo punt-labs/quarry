@@ -20,7 +20,7 @@ from quarry.daemon.routes.content_group import ContentRouteGroup
 from quarry.http_guards import RequestGuards
 from quarry.ingest_collection import IngestCollection
 from quarry.lesson import LessonComposer, LessonsCollection
-from quarry.url_safety import UrlSafetyCheck
+from quarry.url_admission import UrlAdmission
 
 # Maximum request body sizes.  Remember accepts content, ingest only a URL.
 MAX_REMEMBER_BODY_BYTES = 50 * 1024 * 1024
@@ -60,9 +60,9 @@ class IngestionRoutes(ContentRouteGroup):
         source = self._require_text(body, "source")
         if isinstance(source, JSONResponse):
             return source
-        # UrlSafetyCheck owns all scheme + address validation.  It calls
+        # UrlAdmission owns all scheme + address validation.  It calls
         # getaddrinfo(), which can block on DNS — run it in the threadpool.
-        reason = await run_in_threadpool(UrlSafetyCheck.reject_reason, source)
+        reason = await run_in_threadpool(UrlAdmission.reject_reason, source)
         if reason is not None:
             return JSONResponse({"error": f"URL rejected: {reason}"}, status_code=400)
 

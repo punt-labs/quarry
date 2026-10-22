@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Self, final
 
-from quarry.ingestion.fetched_body import FetchRefusedError
+from quarry.ingestion.fetch_refused import FetchRefusedError
 
 if TYPE_CHECKING:
     from quarry.ingestion.bulk_ingest import BulkOptions

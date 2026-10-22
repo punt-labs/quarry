@@ -4,7 +4,7 @@ urllib's default ``HTTPRedirectHandler`` follows 30x responses automatically
 with no per-hop check, so a caller-supplied public URL that 302s to a private,
 loopback, link-local, CGNAT, or cloud-metadata address would reach an internal
 service.  :data:`GUARDED_OPENER` replaces that handler with one that gates each
-redirect target against its resolved address -- the same :class:`UrlSafetyCheck`
+redirect target against its resolved address -- the same :class:`UrlAdmission`
 the ingest route runs on the initial source -- and refuses an unsafe hop before
 it is opened.  It also replaces urllib's default HTTP(S) handlers with the pinned
 ones (:mod:`quarry.ingestion.pinned_opener`), so each hop is connected to a
@@ -20,7 +20,7 @@ import urllib.request
 from typing import IO, TYPE_CHECKING, final
 
 from quarry.ingestion.pinned_opener import PinnedHTTPHandler, PinnedHTTPSHandler
-from quarry.url_safety import UrlSafetyCheck
+from quarry.url_admission import UrlAdmission
 
 if TYPE_CHECKING:
     from http.client import HTTPMessage
@@ -90,7 +90,7 @@ class SsrfGuardedRedirectHandler(urllib.request.HTTPRedirectHandler):
         This pre-check is defense in depth ahead of the connection-level pin,
         and it closes the intermediate 3xx response.
         """
-        reason = UrlSafetyCheck.reject_reason(newurl)
+        reason = UrlAdmission.reject_reason(newurl)
         if reason is not None:
             # urllib's http_error_30x calls this BEFORE it reads/closes fp, so
             # raising here would leak the intermediate 3xx response's fd on every

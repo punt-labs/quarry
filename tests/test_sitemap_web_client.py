@@ -601,7 +601,7 @@ def test_failing_fetches_do_not_leak_real_fds(
 class TestErrorMessagesAreUrlFree:
     """USP logs the error response message, so it must not quote the URL."""
 
-    _URL = "https://u:pw@safe.example/s.xml?token=SECRET"
+    _URL = "https://safe.example/s.xml?token=SECRET"
 
     def test_an_unreachable_host_is_reported_by_class(
         self, monkeypatch: pytest.MonkeyPatch

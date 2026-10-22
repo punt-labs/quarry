@@ -1964,7 +1964,7 @@ class TestCapture:
         _inject_mocks(ctx)
         app = build_app(ctx)
         empty = {"document_name": "p", "collection": "default-captures", "chunks": 0}
-        raw_url = "https://user:pass@example.com/p?api_key=secret123"
+        raw_url = "https://example.com/p?api_key=secret123"
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
             patch("quarry.ingestion.web_ingest.ingest_content", return_value=empty),
@@ -1973,7 +1973,7 @@ class TestCapture:
                 return_value=[(2, 1, 6, "", ("93.184.216.34", 0))],
             ),
             patch(
-                "quarry.ingestion.web_fetch.GUARDED_OPENER.open",
+                "quarry.ingestion.opened_response.GUARDED_OPENER.open",
                 side_effect=URLError(f"boom fetching {raw_url}"),
             ),
             caplog.at_level(logging.WARNING),
@@ -1992,7 +1992,6 @@ class TestCapture:
         assert data["status"] == "failed"
         assert data["error"] == "fetch failed: cannot reach the host (str)"
         assert "secret123" not in caplog.text
-        assert "user:pass" not in caplog.text
         assert all(r.exc_info is None for r in caplog.records)
 
     def test_nonempty_extraction_does_not_refetch(self, tmp_path: Path) -> None:

@@ -14,7 +14,7 @@ from quarry.ingestion.bulk_ingest import (
     SafeEntrySelector,
 )
 from quarry.ingestion.crawl_guard import CrawlGuard
-from quarry.ingestion.fetched_body import FetchRefusedError
+from quarry.ingestion.fetch_refused import FetchRefusedError
 from quarry.ingestion.web_ingest import UrlIngest, ingest_url
 from quarry.results import SitemapResult
 

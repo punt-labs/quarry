@@ -14,7 +14,7 @@ from usp.exceptions import (
 from usp.objects.sitemap import InvalidSitemap
 
 from quarry.capture_url import CaptureUrl
-from quarry.ingestion.fetched_body import FetchRefusedError
+from quarry.ingestion.fetch_refused import FetchRefusedError
 from quarry.sitemap_web_client import GatedSitemapWebClient
 
 if TYPE_CHECKING:
