@@ -23,8 +23,6 @@ from quarry.daemon.job_spool import SpoolRecord
 from quarry.daemon.refusal_aware_terminal import RefusalAwareTerminal
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.tasks import TaskState
     from quarry.http_url import HttpUrl
@@ -140,16 +138,6 @@ class ScrubbedIngestJob:
             self._scrubbed(self.name), self.collection
         )
 
-    @staticmethod
-    def is_stored(result: Mapping[str, object]) -> bool:
-        """Return whether the document is in the store after *result*.
-
-        True when chunks were written, or when the create-if-absent check found
-        it already there (``skipped: "exists"``). Only a result that is neither
-        — an extraction that produced nothing — leaves the store without it.
-        """
-        return bool(result.get("chunks")) or _SKIPPED in result
-
 
 @dataclass(frozen=True, slots=True)
 class CaptureIngestJob:
@@ -198,7 +186,7 @@ class CaptureIngestJob:
         daemon holds (and then skip or rewrite it a second time).
         """
         result = self.inline.scrub_and_ingest(ctx)
-        if ScrubbedIngestJob.is_stored(result) or self.source_url is None:
+        if RefusalAwareTerminal.is_stored(result) or self.source_url is None:
             return result
         return self._refetch(ctx, self.source_url)
 

@@ -2158,7 +2158,9 @@ class TestRemember:
         assert resp.status_code == 400
         assert "name" in resp.json()["error"].lower()
 
-    def test_scrubs_name_and_summary_not_just_content(self, tmp_path: Path) -> None:
+    def test_scrubs_name_and_summary_not_just_content(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """A secret in the free-form name or summary is redacted before store.
 
         The daemon forwards the raw name/summary and a content_scrubber; the
@@ -2184,6 +2186,7 @@ class TestRemember:
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
             patch.object(DocumentStreamer, "build_chunks", _capture_build_chunks),
+            caplog.at_level(logging.WARNING),
         ):
             resp = tc.post(
                 "/v1/remember",
@@ -2195,8 +2198,10 @@ class TestRemember:
             )
             data = _poll_task_done(tc, resp.json()["task_id"])
 
-        assert "jdoe@example.com" not in str(data["results"]["document_name"])
-        assert "[REDACTED:email]" in str(data["results"]["document_name"])
+        # No chunks were built, so the task refuses; the log names the scrubbed name.
+        assert data["status"] == "failed"
+        assert "jdoe@example.com" not in caplog.text
+        assert "note [REDACTED:email]" in caplog.text
         assert "jdoe@example.com" not in str(seen["summary"])
         assert "[REDACTED:email]" in str(seen["summary"])
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
@@ -12,6 +13,7 @@ import pytest
 from quarry.content_guard import UnindexableContentError
 from quarry.daemon.captured_body_ingest import IngestLabels
 from quarry.daemon.content_jobs import CaptureIngestJob, ScrubbedIngestJob
+from quarry.daemon.tasks import TaskState
 from quarry.http_url import HttpUrl
 from quarry.ingestion.fetch_refused import FetchRefusedError
 from quarry.ingestion.fetched_body import FetchedBody
@@ -176,17 +178,22 @@ class TestCaptureSkipVersusEmpty:
         refetch.assert_called_once_with(ctx, HttpUrl("https://x.test/page"))
         assert result == {"chunks": 2}
 
-    def test_empty_extraction_without_a_source_url_stores_what_it_has(self) -> None:
+    def test_empty_extraction_without_a_source_url_is_a_refusal(self) -> None:
+        """Nothing stored and nothing to re-fetch fails the task; it is not complete."""
         ctx, _catalog = _ctx(exists=False)
         job = self._job(has_source=False)
         empty = {"document_name": "note", "collection": "repo-captures", "chunks": 0}
+        state = TaskState(task_id="t", kind="capture")
         with (
             patch("quarry.ingestion.web_ingest.ingest_content", return_value=empty),
             patch.object(CaptureIngestJob, "_refetch") as refetch,
         ):
-            result = job._capture(ctx)
+            asyncio.run(job.run(ctx, state))
         refetch.assert_not_called()
-        assert result == empty
+        assert state.status == "failed"
+        assert (
+            state.error == "nothing was stored: the content produced no indexable text"
+        )
 
     def test_non_empty_extraction_never_refetches(self) -> None:
         ctx, _catalog = _ctx(exists=False)

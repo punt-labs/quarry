@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 from contextlib import contextmanager, suppress
-from typing import TYPE_CHECKING, Self, final
+from typing import TYPE_CHECKING, ClassVar, Self, final
 
+from quarry.content_guard import UnindexableContentError
 from quarry.daemon.tasks import task_terminal
 from quarry.refusal import RefusalError
 
@@ -40,6 +41,10 @@ class RefusalAwareTerminal:
 
     __slots__ = ("_state", "_subject")
 
+    NOTHING_STORED: ClassVar[str] = (
+        "nothing was stored: the content produced no indexable text"
+    )
+
     _state: TaskState
     _subject: Callable[[], str]
 
@@ -49,8 +54,26 @@ class RefusalAwareTerminal:
         self._subject = subject
         return self
 
+    @staticmethod
+    def is_stored(results: Mapping[str, object]) -> bool:
+        """Return whether a job's *results* left something in the store.
+
+        True when rows were written (``chunks``), pages were ingested
+        (``ingested``), or every candidate was already stored (``skipped``: the
+        text ``"exists"`` of a create-if-absent skip, or a crawl's positive count).
+        """
+        return any(results.get(key) for key in ("chunks", "ingested", "skipped"))
+
     def complete(self, results: Mapping[str, object]) -> None:
-        """Record the task as completed with *results*."""
+        """Record the task as completed with *results*, or refused if none stored.
+
+        A job that wrote no rows did not do what was asked, so reporting
+        ``completed`` would claim a store that never happened: it ends ``failed``
+        with a fixed reason, the same way a refused fetch does.
+        """
+        if not self.is_stored(results):
+            self._fail(UnindexableContentError(self.NOTHING_STORED))
+            return
         self._state.status = "completed"
         self._state.results = dict(results)
 
