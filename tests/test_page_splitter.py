@@ -107,7 +107,9 @@ class TestPaginatedFormats:
         pages = [_page("one", 4, 9, PageType.TEXT), _page("two", 7, 9, PageType.TEXT)]
         assert PageSplitter(100).expand(pages) == pages
 
-    @pytest.mark.parametrize("page_type", [PageType.SECTION, PageType.CODE])
+    @pytest.mark.parametrize(
+        "page_type", [PageType.SECTION, PageType.CODE, PageType.SPREADSHEET]
+    )
     def test_logical_sections_are_split_and_renumbered(
         self, page_type: PageType
     ) -> None:

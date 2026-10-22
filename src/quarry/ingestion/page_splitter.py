@@ -17,10 +17,14 @@ logger = logging.getLogger(__name__)
 class PageSplitter:
     """Cut oversized logical sections so every part fits ``max_bytes``.
 
-    Only logical sections (text, markdown and HTML sections, code definitions) are
-    split and renumbered.  A paginated page (a PDF or OCR page, a slide, a sheet)
-    keeps its physical number; one over the budget fails the document, since real
-    pages never approach it and later stages key rows by ``page_number``.
+    Only logical sections (text, markdown and HTML sections, code definitions, and
+    spreadsheet row groups) are split and renumbered.  A spreadsheet page is
+    logical: the extractor already cuts a sheet into row groups and numbers them
+    sequentially, so there is no physical sheet page to preserve, and one row
+    wider than the budget must not fail the file.  A paginated page (a PDF or OCR
+    page, a slide) keeps its physical number; one over the budget fails the
+    document, since real pages never approach it and later stages key rows by
+    ``page_number``.
 
     The parts concatenate back to the original text exactly: a separator stays at
     the end of the part it closes, so nothing is dropped or rewritten.  A cut
@@ -32,7 +36,7 @@ class PageSplitter:
     max_bytes: int
 
     _LOGICAL: ClassVar[frozenset[PageType]] = frozenset(
-        {PageType.SECTION, PageType.CODE}
+        {PageType.SECTION, PageType.CODE, PageType.SPREADSHEET}
     )
     _FILL: ClassVar[float] = 0.5
     _SENTENCE_ENDS: ClassVar[tuple[bytes, ...]] = (b". ", b"! ", b"? ")

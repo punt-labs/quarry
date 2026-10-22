@@ -166,7 +166,7 @@ class TestChunkBounds:
     def test_the_ceiling_is_the_chunk_budget_at_four_bytes_a_character(self) -> None:
         from quarry.db.row_budget import RowBudget
 
-        limit = RowBudget().max_chunk_bytes // 4
+        limit = RowBudget().max_chunk_chars
         assert Settings(chunk_max_chars=limit).chunk_max_chars == 16_384
         with pytest.raises(ValidationError, match="chunk_max_chars"):
             Settings(chunk_max_chars=limit + 1)
