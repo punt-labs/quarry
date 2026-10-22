@@ -370,6 +370,13 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
+  "src/quarry/content_guard.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 4.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.933,
+    "avg_lcom": 0.933
+  },
   "src/quarry/daemon/__init__.py": {
     "avg_lcom": 0.0,
     "circular_imports": 0.0,
