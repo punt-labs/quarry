@@ -57,19 +57,32 @@ across `transform`, `index`, and `connector`).
   (DES-057):
   - A media-type allow-list is checked before a fetched body is read.
   - A document-level binary classifier (`content_guard.py`) checks for magic
-    bytes and the share of replacement and control characters.
-  - Pages over 1 MiB are split at the best available boundary and never
-    truncated.
+    bytes and the share of replacement and control characters. Prose that
+    merely begins with `%PDF-` or `GIF8` still passes.
+  - A text or code page over the page cap (just under 1 MiB) is split at the best available
+    boundary, never truncated. An oversized PDF or other paginated page fails
+    its document instead, so page numbers always match the source.
   - Overlong unpunctuated runs are hard-wrapped so a chunk's stored text
     equals its embedded text.
-  - `ChunkTable.build_records` raises if any row exceeds the budget.
+  - The row budget is checked before any overwrite-delete, so a refused
+    document never replaces the previous version with a partial one.
 
   A refused payload fails with its reason on every surface, with no traceback
   in the daemon log:
   - `remember`, `learn` and `capture` return HTTP 400.
   - A URL ingest task ends `failed`.
   - Directory sync reports a per-file error and indexes the rest.
+  - A sitemap crawl records the reason per page.
   - The hook never blocks the session.
+  - MCP tools render a daemon refusal as `Error: <message>`, the same text as
+    the CLI.
+- index: a failed fetch now fails its task. URL ingests and capture re-fetches
+  that hit an HTTP error, timeout, unreachable host, or over-cap body used to
+  end `completed` with zero chunks. They now end `failed` with a URL-free
+  reason and one redacted log line.
+- security: network errors on a plain URL ingest no longer write the raw URL
+  (including any credentials or tokens) to the daemon log or to the task
+  error.
 - infra: `chunk_max_chars` is bounded in `Settings` (1 to 16,384), so every
   chunk fits the 64 KiB per-chunk row budget. `chunk_overlap_chars` must be
   non-negative. An out-of-range value is refused at load, with an error naming

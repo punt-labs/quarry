@@ -3167,21 +3167,31 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
 1. **Reject binary content; never store it as text.**
    - A media-type allow-list is checked before a fetched body is read.
    - A document-level classifier in the neutral, stdlib-only `content_guard.py`
-     looks for magic bytes after an optional media-type marker. It also
-     measures the aggregate share of U+FFFD and C0 control characters, with a
-     threshold of 0.25. The measured separation on the live corpus was 0.521
-     for the PDF against at most 0.0188 for every legitimate document.
+     looks for magic bytes after an optional media-type marker. Non-printable
+     signatures (PNG, ZIP, ELF, JPEG) reject outright. The printable ones
+     (`%PDF-`, `GIF8`) also require non-text evidence, so prose that merely
+     begins with them passes. The classifier also measures the aggregate share
+     of U+FFFD and C0 control characters, with a threshold of 0.25. The measured
+     separation on the live corpus was 0.521 for the PDF against at most 0.0188
+     for every legitimate document.
    - A per-page check applies only to pages of at least `LARGE_PAGE_CHARS`
      (65,536 characters), because small legitimate PDF pages can exceed the
      ratio. One 677-character page measured 0.341.
-   - A refused payload fails with its reason on every surface and never logs a
-     traceback.
+   - A refused payload or a failed fetch fails with a URL-free reason on every
+     surface (CLI, HTTP, MCP and task) and never logs a traceback. A refusal is
+     always an exception; it is never an empty "completed" result.
 2. **Bound every stored row; split, never truncate.**
-   - Pages over 1 MiB are split at the best boundary.
+   - A logical-section page (text, code) over the page cap (2^20 − 1 bytes) is
+     split at the best boundary and renumbered. A paginated page (PDF, OCR,
+     slide, sheet) is never renumbered, so an oversized one fails its document
+     with a reason. Real PDF pages never approach the cap.
+   - The budget is checked over the whole document before any overwrite-delete,
+     so a violation never leaves a partial document.
    - Overlong sentences are hard-wrapped to `max_chars`.
    - `RowBudget` encodes the invariant `max(max_page_bytes, max_chunk_bytes) ×
-     assumed_batch_rows × safety_factor < 2^31`, the Arrow i32 offset limit.
-     It is enforced at `ChunkTable.build_records`, the single record builder.
+     assumed_batch_rows × safety_factor ≤ 2^31 − 1`, the Arrow i32 offset
+     limit. `build_records`, the single record builder, keeps it as a
+     backstop.
    - `assumed_batch_rows` (1,024) is Lance's default scan batch. On the
      poisoned table (about 4.5 MB rows), scans with batches of 512 and 1,024
      overflowed and 256 passed. The batch size is measured for scans and
