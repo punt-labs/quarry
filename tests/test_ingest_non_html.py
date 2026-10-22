@@ -115,7 +115,7 @@ def test_ingest_captures_non_html_as_text(media_type: str, body_text: str) -> No
         "the non-HTML body was dropped instead of stored as text."
     )
     call = mock_ingest_content.call_args
-    content_arg = call.args[0] if call.args else call.kwargs.get("content", "")
+    content_arg = call.args[0].content
     assert content_arg.startswith("<!-- media_type: "), (
         f"{_QUARRY_JZQW_SUMMARY}\n"
         f"  media_type={media_type!r}: stored content lacks the "
@@ -218,7 +218,7 @@ def test_captured_body_ingest_sanitizes_media_type_in_marker() -> None:
     ):
         _job("https://example.test/data")._ingest(_ctx())
 
-    content_arg = mock_ingest_content.call_args.args[0]
+    content_arg = mock_ingest_content.call_args.args[0].content
     first_line, _, _ = content_arg.partition("\n")
     assert first_line.startswith("<!-- media_type: "), (
         f"marker line does not start with the media_type comment: {first_line!r}"
@@ -253,7 +253,7 @@ def test_ingest_fetch_failure_logs_redacted_url_and_returns_zero_chunks(
             "quarry.ingestion.web_fetch.WebFetcher.fetch_body",
             side_effect=boom,
         ),
-        caplog.at_level(logging.WARNING, logger="quarry.daemon.ingest_jobs"),
+        caplog.at_level(logging.WARNING, logger="quarry.daemon.captured_body_ingest"),
     ):
         result = _job(url)._ingest(_ctx())
 
@@ -280,7 +280,7 @@ def _capture_ingest_failure_log(
             "quarry.ingestion.web_fetch.WebFetcher.fetch_body",
             side_effect=exc,
         ),
-        caplog.at_level(logging.WARNING, logger="quarry.daemon.ingest_jobs"),
+        caplog.at_level(logging.WARNING, logger="quarry.daemon.captured_body_ingest"),
     ):
         _job(url)._ingest(_ctx())
     return caplog.text
@@ -334,6 +334,11 @@ def test_classify_fetch_error_appends_only_safe_prefixes() -> None:
     safe = ValueError("URL rejected: metadata hostname")
     assert CapturedBodyIngest._classify_fetch_error(safe) == (
         "ValueError: URL rejected: metadata hostname"
+    )
+
+    refusal = ValueError("content rejected: unsupported media type application/pdf")
+    assert CapturedBodyIngest._classify_fetch_error(refusal) == (
+        "ValueError: content rejected: unsupported media type application/pdf"
     )
 
     unsafe = OSError("Cannot reach https://user:pw@host/?token=secretxyz")
