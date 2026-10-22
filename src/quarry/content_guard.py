@@ -45,12 +45,12 @@ class BinaryContent:
 
     max_nontext_ratio: float = 0.25
 
-    # A page this long is classified on its own as well as in the document
-    # aggregate.  Measured over a corpus of real extractions, no legitimate page of
-    # 64 KiB or more exceeded a 0.12 non-text ratio, while the one binary page (a
-    # PDF stored as text) was millions of characters at 0.52.  Below the limit a
-    # dense page is indistinguishable from legitimate math or tables, so only the
-    # document aggregate judges it.
+    # A page this long (65,536 characters) is classified on its own as well as in
+    # the document aggregate.  Measured over a corpus of real extractions, no
+    # legitimate page of this size or more exceeded a 0.12 non-text ratio, while
+    # the one binary page (a PDF stored as text) was millions of characters at
+    # 0.52.  Below the limit a dense page is indistinguishable from legitimate
+    # math or tables, so only the document aggregate judges it.
     LARGE_PAGE_CHARS: ClassVar[int] = 64 * 1024
     # Characters taken from each of the head, middle and tail of a request body by
     # ``sniff``; three windows keep the check independent of the body size.

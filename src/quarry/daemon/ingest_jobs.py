@@ -37,9 +37,11 @@ class IngestJob:
     ingested document is stored byte-for-byte.  ``collection`` is the routing key
     the queue serializes on, so the route resolves it before the job is built.
 
-    A URL whose fetch fails or is refused, whose media type is not text, or whose
-    body classifies as binary ends the task ``failed`` with a URL-free reason and
-    one WARN naming the redacted URL; nothing is stored.
+    A single URL whose fetch fails or is refused, whose media type is not text,
+    or whose body classifies as binary ends the task ``failed`` with a URL-free
+    reason and one WARN naming the redacted URL; nothing is stored.  A sitemap
+    crawl records each failed page and indexes the rest, and fails only when the
+    sitemap itself cannot be read or every page failed.
     """
 
     source: str

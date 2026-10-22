@@ -233,8 +233,20 @@ Funnel      & \modpath{ingestion/chunk\_store\_funnel.py} & The single
               convergence point for chunking, embedding, and storing pages
               (the DES-036 choke point every ingest path shares). \\
 Chunker     & \modpath{ingestion/page\_chunker.py}     & \texttt{PageChunker}:
-              refuse binary documents, split pages to the row budget, and pack
+              refuse binary documents, split logical sections to the row
+              budget (an oversized paginated page fails the document), and pack
               overlapping chunks; respects page and heading boundaries. \\
+Binary guard & \modpath{content\_guard.py} & \texttt{BinaryContent}
+              classifies text that is really a binary payload (signature plus
+              non-text ratio) and \texttt{UnindexableContentError}, the single
+              refusal channel: a ``\texttt{ValueError}'' whose message is a
+              stable, URL-free reason.  Neutral and stdlib-only, so the HTTP
+              routes and the pipeline share it. \\
+Row budget  & \modpath{db/row\_budget.py} & \texttt{RowBudget}: caps a stored
+              page, chunk and label so a Lance scan batch of 1,024 rows stays
+              under the 32-bit Arrow offset limit; \texttt{RowBudgetError} on
+              overflow, never truncation.  Enforced where rows are built
+              (\modpath{db/chunk\_table.py}) and before any delete. \\
 Web ingest  & \modpath{ingestion/web\_ingest.py} & \texttt{WebIngest}:
               inline content (\texttt{ingest\_content}) and URL
               (\texttt{ingest\_url}) ingest --- extract, scrub when the
@@ -242,9 +254,14 @@ Web ingest  & \modpath{ingestion/web\_ingest.py} & \texttt{WebIngest}:
               the store. \\
 Bulk / sitemap & \modpath{ingestion/bulk\_ingest.py},
               \modpath{ingestion/sitemap\_ingest.py} & Threaded bulk fan-out
-              and sitemap-driven URL ingestion. \\
-Web fetch   & \modpath{ingestion/web\_fetch.py}  & Fetch a URL over
-              HTTP(S) and return validated HTML text. \\
+              and sitemap-driven URL ingestion; a sitemap that cannot be read,
+              or a crawl in which every page failed, fails the task. \\
+Web fetch   & \modpath{ingestion/web\_fetch.py},
+              \modpath{ingestion/fetched\_body.py},
+              \modpath{ingestion/media\_type\_policy.py} & Fetch a URL over
+              HTTP(S) behind the SSRF gate; a media type outside the text
+              allow-list is refused from the headers before the body is read.
+              Every failure is a URL-free \texttt{FetchRefusedError}. \\
 Ingest stats & \modpath{ingestion/ingest\_stats.py} & Per-format ingest
               counters merged into an ingest result. \\
 \bottomrule

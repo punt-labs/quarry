@@ -94,7 +94,8 @@ class SentenceChunker:
         return pieces
 
     def _tail(self, chunk: str) -> str:
-        """Return the overlap carried into the next chunk, starting at a word."""
+        """Return the overlap carried into the next chunk, starting at a word
+        when the tail holds a space."""
         if self._overlap_chars == 0 or len(chunk) <= self._overlap_chars:
             return ""
         tail = chunk[-self._overlap_chars :]

@@ -24,10 +24,14 @@ logger = logging.getLogger(__name__)
 class ContentRouteGroup(RouteGroup):
     """Validate what ``remember``, ``learn``, ``capture`` and ``ingest`` share.
 
-    The three content routes take free text, sniffed for a binary payload by
-    :meth:`_require_content`; all four routes validate ``memory_type`` through
-    :meth:`_require_memory_type` and queue their job through :meth:`_accept`, so
-    no route can drift from the others.
+    ``remember`` and ``capture`` take free text and run :meth:`_require_content`
+    (the label cap, then the binary sniff).  ``learn`` runs the same two checks
+    itself, through :meth:`_reject_oversized` and :meth:`_reject_binary`, because
+    it also composes the lesson.  ``ingest`` takes a URL, so only the label cap
+    applies.  ``remember``, ``capture`` and ``ingest`` validate ``memory_type``
+    through :meth:`_require_memory_type` (``learn`` fixes its own), and all four
+    queue their job through :meth:`_accept`, so no route can drift from the
+    others.
     """
 
     _GUARD: ClassVar[BinaryContent] = BinaryContent()

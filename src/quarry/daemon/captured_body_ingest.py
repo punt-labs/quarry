@@ -96,7 +96,7 @@ class CapturedBodyIngest:
         return CaptureUrl.for_web_fetch(self._source)
 
     def fetch(self) -> FetchedBody:
-        """Fetch ``source``; every failure is a URL-free :class:`FetchRefusedError`."""
+        """Fetch ``source``; any failure is a URL-free ``UnindexableContentError``."""
         return self._fetcher.fetch_body(self._source)
 
     def run(

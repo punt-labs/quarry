@@ -18,13 +18,13 @@ logger = logging.getLogger(__name__)
 
 
 class FetchRefusedError(UnindexableContentError):
-    """Raised when a fetch is refused or fails; the message never embeds the URL.
+    """Raised when a fetch is refused or fails; the message is safe to log verbatim.
 
     Network libraries quote the raw URL (userinfo, path, query tokens) in their
     messages, so the fetch layer replaces every such failure with one of these:
-    the reason names a rule or a kind of failure, never userinfo, path or query
-    (a host name may appear), so it is safe to log, to store as a task error, and
-    to return to a client verbatim.
+    the reason names a rule or a kind of failure and never embeds userinfo, path
+    or query (a host name may appear), so it is safe to log, to store as a task
+    error, and to return to a client verbatim.
     """
 
     @classmethod

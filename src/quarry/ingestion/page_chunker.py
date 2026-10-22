@@ -51,7 +51,8 @@ class PageChunker:
     """Turn a document's pages into chunks that can always be stored.
 
     A document that is binary is refused with a reason (:class:`BinaryContent`);
-    a page larger than the row budget is split, never truncated; and every chunk
+    a logical section larger than the row budget is split, never truncated, and an
+    oversized paginated page fails the document; and every chunk
     is at most ``max_chars`` characters, so the stored text is the embedded text.
     Each chunk keeps the full text of its page for LLM reference.
     """

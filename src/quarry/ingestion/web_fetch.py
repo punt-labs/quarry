@@ -1,7 +1,8 @@
 """Fetch a URL over HTTP(S) and return validated HTML or text.
 
 Every failure leaves this module as a :class:`FetchRefusedError` (or its content
-siblings) whose message never embeds the URL, so no caller has to redact it.
+siblings) whose message never embeds userinfo, path or query, so no caller has
+to redact it.
 """
 
 from __future__ import annotations
