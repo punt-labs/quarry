@@ -8,8 +8,11 @@ from functools import partial
 from typing import TYPE_CHECKING, Final, cast, final
 
 from quarry.capture_url import CaptureUrl
-from quarry.content_guard import UnindexableContentError, UnsupportedContentError
-from quarry.ingestion.fetched_body import MediaTypePolicy
+from quarry.content_guard import UnindexableContentError
+from quarry.ingestion.media_type_policy import (
+    MediaTypePolicy,
+    UnsupportedContentError,
+)
 from quarry.ingestion.web_fetch import WebFetcher
 
 if TYPE_CHECKING:

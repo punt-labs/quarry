@@ -9,9 +9,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from quarry.content_guard import UnsupportedContentError
 from quarry.daemon.captured_body_ingest import CapturedBodyIngest
 from quarry.ingestion.fetched_body import FetchedBody
+from quarry.ingestion.media_type_policy import UnsupportedContentError
 
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext

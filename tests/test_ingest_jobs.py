@@ -9,10 +9,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from quarry.content_guard import UnsupportedContentError
 from quarry.daemon.ingest_jobs import IngestJob
 from quarry.daemon.tasks import TaskState
 from quarry.ingestion.fetched_body import FetchedBody
+from quarry.ingestion.media_type_policy import UnsupportedContentError
 from tests.inproc_daemon import InProcessDaemon
 
 if TYPE_CHECKING:

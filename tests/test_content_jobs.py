@@ -7,9 +7,9 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 from unittest.mock import MagicMock, patch
 
-from quarry.content_guard import UnsupportedContentError
 from quarry.daemon.content_jobs import CaptureIngestJob, ScrubbedIngestJob
 from quarry.ingestion.fetched_body import FetchedBody
+from quarry.ingestion.media_type_policy import UnsupportedContentError
 
 if TYPE_CHECKING:
     import pytest

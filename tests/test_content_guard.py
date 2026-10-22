@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from quarry.content_guard import (
-    LARGE_PAGE_CHARS,
-    BinaryContent,
-    UnindexableContentError,
-)
+from quarry.content_guard import BinaryContent, UnindexableContentError
+
+LARGE_PAGE_CHARS = BinaryContent.LARGE_PAGE_CHARS
+SAMPLE_WINDOW = BinaryContent.SAMPLE_WINDOW_CHARS
+_PDF_EVIDENCE = "%PDF-1.5\n%" + "\ufffd" * 4 + "\n"
 
 _NONTEXT = "\ufffd"
 
@@ -23,13 +23,13 @@ class TestMagic:
     @pytest.mark.parametrize(
         ("prefix", "label"),
         [
-            ("%PDF-1.5\n", "pdf header"),
+            (_PDF_EVIDENCE, "pdf header"),
             ("PK\x03\x04rest", "zip archive header"),
             ("\x89PNG\r\n", "png header"),
             ("\ufffdPNG\r\n", "png header"),
-            ("GIF89a", "gif header"),
+            ("GIF89a\x00\x01\x02\x03\x04", "gif header"),
             ("\xff\xd8\xff\xe0", "jpeg header"),
-            ("\ufffd\ufffd\ufffd\ufffd", "jpeg header"),
+            ("\ufffd\ufffd\ufffd\ufffd", "undecodable binary header"),
             ("\x7fELF\x02", "elf header"),
         ],
     )
@@ -38,7 +38,7 @@ class TestMagic:
             BinaryContent().require_document([prefix + "x" * 100])
 
     def test_magic_after_media_type_marker_is_rejected(self) -> None:
-        content = "<!-- media_type: application/pdf -->\n%PDF-1.5\n" + "x" * 50
+        content = "<!-- media_type: application/pdf -->\n" + _PDF_EVIDENCE + "x" * 50
         with pytest.raises(UnindexableContentError, match="pdf header"):
             BinaryContent().require_document([content])
 
@@ -50,7 +50,7 @@ class TestMagic:
 
     def test_message_carries_the_stable_prefix(self) -> None:
         with pytest.raises(UnindexableContentError) as info:
-            BinaryContent().require_document(["%PDF-1.5"])
+            BinaryContent().require_document([_PDF_EVIDENCE])
         assert str(info.value) == "binary content rejected: pdf header"
 
     def test_error_is_a_value_error(self) -> None:
@@ -129,20 +129,20 @@ class TestSniff:
 
     def test_magic_is_rejected(self) -> None:
         with pytest.raises(UnindexableContentError, match="pdf header"):
-            BinaryContent().sniff("%PDF-1.7\n" + "x" * 500)
+            BinaryContent().sniff(_PDF_EVIDENCE + "x" * 500)
 
     def test_dense_small_body_is_rejected(self) -> None:
         with pytest.raises(UnindexableContentError, match="non-text ratio"):
             BinaryContent().sniff(_with_ratio(2000, 0.6))
 
     def test_binary_tail_of_a_large_body_is_sampled(self) -> None:
-        window = 32 * 1024
+        window = SAMPLE_WINDOW
         body = "a" * (window * 4) + _NONTEXT * (window * 2)
         with pytest.raises(UnindexableContentError, match="non-text ratio"):
             BinaryContent().sniff(body)
 
     def test_binary_middle_of_a_large_body_is_sampled(self) -> None:
-        window = 32 * 1024
+        window = SAMPLE_WINDOW
         body = "a" * (window * 3) + _NONTEXT * (window * 3) + "a" * (window * 3)
         with pytest.raises(UnindexableContentError, match="non-text ratio"):
             BinaryContent().sniff(body)
@@ -152,3 +152,69 @@ class TestSniff:
 
     def test_sniff_is_bounded_for_huge_bodies(self) -> None:
         BinaryContent().sniff("a" * (50 * 1024 * 1024))
+
+
+class TestSoftSignatures:
+    """Printable signatures reject only with non-text evidence."""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "GIF89a is an image format",
+            "%PDF-1.7 notes on the spec",
+            "  \n%PDF-1.4 is how a PDF begins",
+        ],
+    )
+    def test_prose_that_starts_with_a_printable_signature_passes(
+        self, text: str
+    ) -> None:
+        BinaryContent().sniff(text)
+        BinaryContent().require_document([text])
+
+    def test_a_printable_signature_with_binary_evidence_is_rejected(self) -> None:
+        with pytest.raises(UnindexableContentError, match="pdf header"):
+            BinaryContent().sniff(_PDF_EVIDENCE)
+
+    def test_magic_after_leading_whitespace_is_still_found(self) -> None:
+        with pytest.raises(UnindexableContentError, match="zip archive header"):
+            BinaryContent().sniff("  \n\tPK\x03\x04rest")
+
+    @pytest.mark.parametrize("prefix", ["PK\x03\x04", "\x89PNG", "\x7fELF"])
+    def test_non_printable_signatures_need_no_evidence(self, prefix: str) -> None:
+        with pytest.raises(UnindexableContentError):
+            BinaryContent().sniff(prefix + "plain looking tail")
+
+
+class TestRatioValidation:
+    @pytest.mark.parametrize("ratio", [float("nan"), 0.0, 1.0, -1.0, 2.0])
+    def test_a_ratio_outside_the_open_unit_interval_is_refused(
+        self, ratio: float
+    ) -> None:
+        with pytest.raises(ValueError, match="max_nontext_ratio"):
+            BinaryContent(max_nontext_ratio=ratio)
+
+
+class TestSniffBoundaries:
+    def test_a_ratio_of_exactly_the_threshold_passes_on_the_sniff_path(self) -> None:
+        BinaryContent().sniff(_with_ratio(1000, 0.25))
+
+    def test_a_body_just_over_the_threshold_is_rejected_on_the_sniff_path(
+        self,
+    ) -> None:
+        with pytest.raises(UnindexableContentError):
+            BinaryContent().sniff(_with_ratio(1000, 0.251))
+
+    @pytest.mark.parametrize("extra", [0, 1])
+    def test_binary_in_the_middle_window_is_caught_at_3w_and_3w_plus_1(
+        self, extra: int
+    ) -> None:
+        w = SAMPLE_WINDOW
+        body = "a" * w + _NONTEXT * w + "a" * (w + extra)
+        with pytest.raises(UnindexableContentError):
+            BinaryContent().sniff(body)
+
+    def test_the_one_character_the_sample_skips_cannot_matter(self) -> None:
+        w = SAMPLE_WINDOW
+        body = "a" * (2 * w) + _NONTEXT + "a" * w
+        assert len(body) == 3 * w + 1
+        BinaryContent().sniff(body)

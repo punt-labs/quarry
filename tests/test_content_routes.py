@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
 
-_PDF = "%PDF-1.5\n" + "x" * 400
+_PDF = "%PDF-1.5\n%" + "\ufffd" * 4 + "\n" + "x" * 400
 _PDF_REASON = "binary content rejected: pdf header"
 _DENSE = "a" * 100 + "�" * 300
 _DENSE_REASON = "binary content rejected: non-text ratio 0.75 exceeds 0.25"

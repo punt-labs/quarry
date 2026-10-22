@@ -10,9 +10,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from quarry.content_guard import UnsupportedContentError
 from quarry.ingestion import web_fetch as wf
-from quarry.ingestion.fetched_body import FetchGate, MediaTypePolicy
+from quarry.ingestion.fetched_body import FetchGate
+from quarry.ingestion.media_type_policy import MediaTypePolicy, UnsupportedContentError
 from quarry.ingestion.ssrf_redirect import (
     RedirectRejectedError,
     SsrfGuardedRedirectHandler,
