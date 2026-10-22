@@ -10,7 +10,7 @@ import pytest
 
 from quarry.db.chunk_store import ChunkStore
 from quarry.db.chunk_table import ChunkTable
-from quarry.db.document_ref import DocumentRef
+from quarry.db.document_ref import CollectionRef, DocumentRef
 from quarry.db.schema import TABLE_NAME
 from quarry.models import Chunk
 
@@ -81,7 +81,7 @@ class TestDeleteDocumentTail:
     def test_removes_tail_preserves_prefix(self, lance_db: LanceDB) -> None:
         store = ChunkStore(lance_db)
         _seed(store, total=10)
-        removed = store.delete_document_tail(DocumentRef("doc.txt", "col", 6))
+        removed = store.delete_document_tail(DocumentRef.tail("doc.txt", "col", 6))
         assert removed == 4
         assert _chunk_indexes(lance_db, "doc.txt") == [0, 1, 2, 3, 4, 5]
 
@@ -92,13 +92,13 @@ class TestDeleteDocumentTail:
         store = ChunkStore(lance_db)
         _seed(store, total=5)
         with pytest.raises(ValueError, match="positive watermark"):
-            store.delete_document_tail(DocumentRef("doc.txt", "col", 0))
+            store.delete_document_tail(DocumentRef("doc.txt", CollectionRef("col"), 0))
         assert _chunk_indexes(lance_db, "doc.txt") == [0, 1, 2, 3, 4]  # untouched
 
     def test_watermark_at_total_removes_nothing(self, lance_db: LanceDB) -> None:
         store = ChunkStore(lance_db)
         _seed(store, total=5)
-        removed = store.delete_document_tail(DocumentRef("doc.txt", "col", 5))
+        removed = store.delete_document_tail(DocumentRef.tail("doc.txt", "col", 5))
         assert removed == 0
         assert _chunk_indexes(lance_db, "doc.txt") == [0, 1, 2, 3, 4]
 
@@ -106,12 +106,27 @@ class TestDeleteDocumentTail:
         store = ChunkStore(lance_db)
         _seed(store, total=4, document_name="a.txt")
         _seed(store, total=4, document_name="b.txt")
-        store.delete_document_tail(DocumentRef("a.txt", "col", 2))
+        store.delete_document_tail(DocumentRef.tail("a.txt", "col", 2))
         assert _chunk_indexes(lance_db, "a.txt") == [0, 1]
         assert _chunk_indexes(lance_db, "b.txt") == [0, 1, 2, 3]
 
     def test_no_table_returns_zero(self, lance_db: LanceDB) -> None:
         assert (
-            ChunkStore(lance_db).delete_document_tail(DocumentRef("doc.txt", "col", 1))
+            ChunkStore(lance_db).delete_document_tail(
+                DocumentRef.tail("doc.txt", "col", 1)
+            )
             == 0
         )
+
+
+class TestCollectionPredicates:
+    def test_a_collection_with_a_quote_is_counted_and_deleted(
+        self, lance_db: LanceDB
+    ) -> None:
+        store = ChunkStore(lance_db)
+        _seed(store, 3, collection="o'brien")
+        _seed(store, 2, document_name="other.txt", collection="plain")
+
+        assert store.count(collection_filter="o'brien") == 3
+        assert store.delete_collection("o'brien") == 3
+        assert store.count() == 2

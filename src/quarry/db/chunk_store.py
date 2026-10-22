@@ -7,7 +7,7 @@ import threading
 from typing import TYPE_CHECKING, Self
 
 from quarry.db.chunk_table import ChunkTable
-from quarry.db.document_ref import DocumentRef
+from quarry.db.document_ref import CollectionRef, DocumentRef
 from quarry.db.schema import TABLE_NAME
 from quarry.types import LanceDB
 
@@ -83,7 +83,9 @@ class ChunkStore:
         table = self._open()
         if table is None:
             return 0
-        predicate = DocumentRef(document_name, collection).predicate()
+        predicate = DocumentRef(
+            document_name, CollectionRef.optional(collection)
+        ).predicate()
         deleted = table.count_rows(predicate) if count else 0
         with _write_lock:
             table.delete(predicate)
@@ -131,7 +133,7 @@ class ChunkStore:
             return 0
         before = table.count_rows()
         with _write_lock:
-            table.delete(DocumentRef.collection_clause(collection))
+            table.delete(CollectionRef(collection).clause())
         after = table.count_rows()
         deleted = before - after
         logger.info("Deleted %d chunks for collection %s", deleted, collection)
@@ -143,5 +145,5 @@ class ChunkStore:
         if table is None:
             return 0
         if collection_filter:
-            return table.count_rows(DocumentRef.collection_clause(collection_filter))
+            return table.count_rows(CollectionRef(collection_filter).clause())
         return table.count_rows()

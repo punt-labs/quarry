@@ -165,7 +165,7 @@ class SingleFileIndexer:
         document_name, watermark = meta.record.document_name, meta.resume_watermark
         if watermark > 0:
             self._store.delete_document_tail(
-                DocumentRef(document_name, self._collection, watermark)
+                DocumentRef.tail(document_name, self._collection, watermark)
             )
         else:
             self._store.delete_document(
