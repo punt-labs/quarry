@@ -102,8 +102,10 @@ class CapturedBodyIngest:
     ) -> dict[str, object]:
         """Run *action*, reporting an unindexable body as an empty ``rejected`` result.
 
-        One redacted WARN and no traceback: the reason is URL-free, the URL is
-        redacted, and the caller decides whether the rejection fails a task.
+        On success the result is *action*'s own.  On a refusal it is
+        ``{"chunks": 0, "sections": 0, "rejected": <reason>}``, with one redacted
+        WARN and no traceback: the reason is URL-free, the URL is redacted, and the
+        caller decides whether ``rejected`` fails a task.
         """
         try:
             return action()

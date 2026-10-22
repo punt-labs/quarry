@@ -59,12 +59,12 @@ class PageChunker:
         budget: RowBudget | None = None,
     ) -> Self:
         budget = budget or RowBudget()
-        # A chunk of max_chars characters takes up to four bytes each, plus the
-        # overlap the next chunk opens with: all of it must fit the chunk cap.
-        if 4 * (max_chars + overlap_chars) > budget.max_chunk_bytes:
+        # A chunk takes up to four bytes a character.  The overlap a chunk opens
+        # with is counted inside max_chars, so max_chars alone must fit the cap.
+        if 4 * max_chars > budget.max_chunk_bytes:
             msg = (
-                f"chunk size {max_chars} + overlap {overlap_chars} characters can "
-                f"exceed the {budget.max_chunk_bytes:,}-byte chunk budget"
+                f"chunk size {max_chars} characters can exceed the "
+                f"{budget.max_chunk_bytes:,}-byte chunk budget"
             )
             raise ValueError(msg)
         self = super().__new__(cls)

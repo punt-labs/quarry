@@ -160,3 +160,32 @@ class TestRetrievalLessonBoost:
     def test_zero_rejected(self):
         with pytest.raises(ValidationError, match="greater_than_equal"):
             Settings.model_validate({"QUARRY_RETRIEVAL_LESSON_BOOST": 0.0})
+
+
+class TestChunkBounds:
+    def test_the_ceiling_is_the_chunk_budget_at_four_bytes_a_character(self) -> None:
+        from quarry.db.row_budget import RowBudget
+
+        limit = RowBudget().max_chunk_bytes // 4
+        assert Settings(chunk_max_chars=limit).chunk_max_chars == 16_384
+        with pytest.raises(ValidationError, match="chunk_max_chars"):
+            Settings(chunk_max_chars=limit + 1)
+
+    def test_a_chunk_size_that_could_overflow_the_budget_names_field_and_limit(
+        self,
+    ) -> None:
+        with pytest.raises(ValidationError) as info:
+            Settings(chunk_max_chars=20_000)
+        assert "chunk_max_chars" in str(info.value)
+        assert "16384" in str(info.value)
+
+    def test_a_non_positive_chunk_size_is_refused(self) -> None:
+        with pytest.raises(ValidationError, match="chunk_max_chars"):
+            Settings(chunk_max_chars=0)
+
+    def test_a_negative_overlap_is_refused(self) -> None:
+        with pytest.raises(ValidationError, match="chunk_overlap_chars"):
+            Settings(chunk_overlap_chars=-1)
+
+    def test_zero_overlap_is_accepted(self) -> None:
+        assert Settings(chunk_overlap_chars=0).chunk_overlap_chars == 0

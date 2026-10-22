@@ -14,7 +14,13 @@ from typing import final
 
 
 class RowBudgetError(ValueError):
-    """Raised when a row's text exceeds the budget; the text is never truncated."""
+    """Raised when a row's text exceeds the budget; the text is never truncated.
+
+    A backstop for a chunker that failed to bound its output, so it should not
+    fire in normal use.  The message names the column and sizes only, but the
+    callers that wrap it (a task error, a sync log line) may add a document name,
+    which is a raw URL for a plain ingest: it is not guaranteed URL-free.
+    """
 
 
 @final

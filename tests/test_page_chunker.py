@@ -178,7 +178,16 @@ class TestConstruction:
         self,
     ) -> None:
         with pytest.raises(ValueError, match="chunk budget"):
-            PageChunker(16_000, 1_000)
+            PageChunker(16_385, 0)
+
+    def test_the_overlap_is_counted_inside_max_chars(self) -> None:
+        """The bound is four bytes a character of max_chars alone: 65,536 / 4."""
+        PageChunker(16_384, 16_000)
+
+    def test_the_largest_chunk_fits_the_budget_exactly(self) -> None:
+        chunks = PageChunker(16_384, 0).chunk([_page("x" * 40_000)])
+        assert max(len(c.text) for c in chunks) == 16_384
+        RowBudget().require_chunk("é" * 16_384 * 2)
 
     def test_a_non_positive_chunk_size_is_refused(self) -> None:
         with pytest.raises(ValueError, match="max_chars"):

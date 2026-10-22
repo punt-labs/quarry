@@ -122,7 +122,7 @@ class BinaryContent:
         return content[:window] + content[middle : middle + window] + content[-window:]
 
     def _count_nontext(self, text: str) -> int:
-        return len(self._NONTEXT.findall(text))
+        return sum(1 for _ in self._NONTEXT.finditer(text))
 
     def _exceeds(self, nontext: int, total: int) -> bool:
         return nontext > self.max_nontext_ratio * total
