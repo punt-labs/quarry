@@ -55,7 +55,9 @@ class TestFailure:
     ) -> None:
         with caplog.at_level(logging.WARNING):
             text = PageReport(HttpUrl(_URL)).failure(exc)
-        assert text == f"https://example.com/…(1 segment): {type(exc).__name__}"
+        assert text == (
+            f"https://example.com/…(1 segment): internal error: {type(exc).__name__}"
+        )
         assert caplog.records[0].levelno == logging.WARNING
         assert "token" not in caplog.text
 
@@ -68,7 +70,7 @@ class TestFailure:
         except KeyError as exc:
             with caplog.at_level(logging.WARNING):
                 text = PageReport(HttpUrl(_URL)).failure(exc)
-        assert text == "https://example.com/…(1 segment): KeyError"
+        assert text == "https://example.com/…(1 segment): internal error: KeyError"
         [record] = caplog.records
         assert record.levelno == logging.ERROR
         assert "test_page_report" in record.getMessage()
@@ -88,13 +90,3 @@ class TestRequireProgress:
 
     def test_an_empty_crawl_passes(self) -> None:
         PageReport.require_progress(0, 0, [])
-
-
-class TestReason:
-    def test_a_refusal_keeps_its_url_free_message(self) -> None:
-        assert PageReport.reason(UnindexableContentError("content rejected: x")) == (
-            "content rejected: x"
-        )
-
-    def test_any_other_exception_is_its_class_name_only(self) -> None:
-        assert PageReport.reason(KeyError("https://u:p@h/?token=SECRET")) == "KeyError"

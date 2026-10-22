@@ -464,7 +464,9 @@ class TestBulkIngestRunnerRun:
             )
 
         assert (ingested, failed) == (1, 1)
-        assert errors == ["https://example.com/…(1 segment): ValueError"]
+        assert errors == [
+            "https://example.com/…(1 segment): internal error: ValueError"
+        ]
         for haystack in (errors[0], caplog.text, *messages):
             assert "abc123" not in haystack
             assert "token=abc123" not in haystack
@@ -487,7 +489,7 @@ class TestBulkIngestRunnerRun:
                 BulkOptions(),
             )
         assert str(info.value) == (
-            "crawl ingested nothing: 1 pages failed (first: OSError)"
+            "crawl ingested nothing: 1 pages failed (first: internal error: OSError)"
         )
 
     def test_empty_to_ingest_short_circuits_without_calling_ingest_one(self) -> None:

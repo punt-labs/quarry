@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import logging
-import traceback
 from http.client import HTTPException
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.content_guard import UnindexableContentError
+from quarry.failure_reason import FailureReason
+from quarry.refusal import RefusalError
 
 if TYPE_CHECKING:
     from quarry.http_url import HttpUrl
@@ -21,10 +22,10 @@ class PageReport:
 
     The page URL is program-discovered and may carry a userinfo or query secret,
     so every progress, log and error sink sees only :attr:`url`, the redacted form
-    (CWE-532).  A failure is described by its reason when it is an
-    :class:`UnindexableContentError` (documented URL-free: a refusal or a failed
-    fetch) and otherwise by its class name alone, because other messages quote the
-    raw URL.  An expected failure (a refusal, a transport or protocol error, a
+    (CWE-532).  A failure is described by :class:`FailureReason`: its reason when
+    it is a :class:`RefusalError` (documented URL-free: a refusal or a failed
+    fetch) and otherwise ``internal error: <Class>``, because other messages quote
+    the raw URL.  An expected failure (a refusal, a transport or protocol error, a
     row-budget violation) is a WARNING; anything else is a programming error and
     is logged at ERROR with a message-free traceback so it stays diagnosable
     without the URL.
@@ -46,30 +47,23 @@ class PageReport:
 
     def failure(self, exc: Exception) -> str:
         """Log *exc* for this page and return its ``"<url>: <reason>"`` line."""
-        reason = self.reason(exc)
-        if isinstance(exc, UnindexableContentError | OSError | HTTPException):
+        reason = FailureReason.of(exc)
+        if isinstance(exc, RefusalError | OSError | HTTPException):
             logger.warning("Failed to ingest %s (%s)", self._url, reason)
         else:
             logger.error(
                 "Failed to ingest %s (%s):\n%s",
                 self._url,
                 reason,
-                "".join(traceback.format_tb(exc.__traceback__)),
+                FailureReason.frames(exc),
             )
         return f"{self._url}: {reason}"
-
-    @staticmethod
-    def reason(exc: Exception) -> str:
-        """Return why a page failed: the URL-free refusal, else the class name."""
-        if isinstance(exc, UnindexableContentError):
-            return str(exc)
-        return type(exc).__name__
 
     @staticmethod
     def require_progress(ingested: int, failed: int, reasons: list[str]) -> None:
         """Raise if a crawl indexed nothing because every page failed.
 
-        *reasons* are bare :meth:`reason` values, so the task error names no URL.
+        *reasons* are :meth:`FailureReason.of` values, so the task error names no URL.
 
         Raises:
             UnindexableContentError: ``ingested == 0`` and ``failed > 0``.

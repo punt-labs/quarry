@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, final
 
+from quarry.failure_reason import FailureReason
 from quarry.http_url import HttpUrl
 from quarry.ingestion.ingest_context import Progress
 from quarry.ingestion.page_report import PageReport
@@ -202,7 +203,7 @@ class BulkIngestRunner:
                         # abort the others.  PageReport logs the redacted URL
                         # (a programming error loudly) and renders a URL-free line.
                         failed += 1
-                        reasons.append(PageReport.reason(exc))
+                        reasons.append(FailureReason.of(exc))
                         errors.append(report.failure(exc))
                         progress("Failed %s", errors[-1])
             PageReport.require_progress(ingested, failed, reasons)
