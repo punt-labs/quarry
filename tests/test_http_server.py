@@ -2401,7 +2401,7 @@ class TestIngest:
             }
 
         # scrub=True flows through IngestJob._ingest → WebFetcher.fetch_body →
-        # ingest_captured_body → ingest_url; patch fetch_body so no real HTTP fires.
+        # CapturedBodyIngest.ingest → ingest_url; patch fetch_body (no real HTTP).
         body = FetchedBody(text="<html><body>hi</body></html>", media_type="text/html")
         with (
             TestClient(app, raise_server_exceptions=False) as tc,

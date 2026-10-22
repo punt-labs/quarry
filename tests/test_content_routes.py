@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import time
+from http.client import HTTPMessage, HTTPResponse
 from typing import TYPE_CHECKING
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from starlette.testclient import TestClient
@@ -194,3 +196,58 @@ class TestSurfacesAgree:
         assert reason in mcp
         assert cli.exit_code == 1
         assert f"Error: {reason}" in cli.output
+
+
+class TestIngestRoute:
+    """A URL is fetched after the 202, so a refusal arrives on the task."""
+
+    @staticmethod
+    def _pdf_response() -> MagicMock:
+        headers = HTTPMessage()
+        headers["Content-Type"] = "application/pdf"
+        resp = MagicMock(spec=HTTPResponse)
+        resp.headers = headers
+        resp.url = "https://example.com/paper.pdf"
+        resp.__enter__ = lambda s: s
+        resp.__exit__ = MagicMock(return_value=False)
+        return resp
+
+    def test_a_pdf_url_is_accepted_then_fails_with_the_reason(
+        self, http: TestClient
+    ) -> None:
+        with (
+            patch(
+                "quarry.daemon.routes.ingestion.UrlSafetyCheck.reject_reason",
+                return_value=None,
+            ),
+            patch(
+                "quarry.url_safety.socket_module.getaddrinfo",
+                return_value=[(2, 1, 6, "", ("93.184.216.34", 0))],
+            ),
+            patch(
+                "quarry.ingestion.web_fetch.GUARDED_OPENER.open",
+                return_value=self._pdf_response(),
+            ),
+        ):
+            accepted = http.post(
+                "/v1/ingest",
+                json={"source": "https://example.com/paper.pdf", "scrub": True},
+            )
+            assert accepted.status_code == 202
+            task = self._await_terminal(http, accepted.json()["task_id"])
+
+        assert task["status"] == "failed"
+        assert task["error"] == (
+            "content rejected: unsupported media type application/pdf"
+        )
+
+    @staticmethod
+    def _await_terminal(http: TestClient, task_id: str) -> dict[str, object]:
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            task: dict[str, object] = http.get(f"/v1/tasks/{task_id}").json()
+            if task["status"] in {"completed", "failed"}:
+                return task
+            time.sleep(0.05)
+        msg = f"task {task_id} did not finish"
+        raise AssertionError(msg)

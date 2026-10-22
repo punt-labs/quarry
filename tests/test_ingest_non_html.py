@@ -176,7 +176,7 @@ def test_non_html_ingest_redacts_url_secrets_in_document_name(
     raw URL leaks the secret into the pushable captures collection (CWE-532).
     ``ingest_url`` already calls ``CaptureUrl(url).redacted(scrub)`` before
     ``_scrub_metadata``; the non-HTML branch of
-    :meth:`IngestJob.ingest_captured_body` must do the same for parity.
+    :meth:`CapturedBodyIngest.ingest` must do the same for parity.
     """
     _assert_document_name_omits(url, leak)
 
@@ -196,7 +196,7 @@ def test_non_html_ingest_redacts_userinfo_in_document_name() -> None:
     _assert_document_name_omits(url, leak)
 
 
-def test_ingest_captured_body_sanitizes_media_type_in_marker() -> None:
+def test_captured_body_ingest_sanitizes_media_type_in_marker() -> None:
     """A hostile Content-Type never breaks the single-line ``<!-- media_type: X -->``.
 
     Marker escape is the CWE-79-adjacent risk: a header carrying ``\\n<!-- foo -->``

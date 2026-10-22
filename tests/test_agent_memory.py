@@ -304,7 +304,7 @@ class TestNewColumnsInPipeline:
 
 
 class TestChunkerThreading:
-    def test_chunk_pages_passes_new_fields(self) -> None:
+    def test_page_chunker_passes_new_fields(self) -> None:
         """PageChunker threads agent_handle, memory_type, summary to Chunks."""
         from quarry.ingestion.page_chunker import ChunkLabels, PageChunker
         from quarry.models import PageContent, PageType
@@ -331,7 +331,7 @@ class TestChunkerThreading:
         assert chunks[0].memory_type == "observation"
         assert chunks[0].summary == "Test observation"
 
-    def test_chunk_pages_defaults_new_fields(self) -> None:
+    def test_page_chunker_defaults_new_fields(self) -> None:
         """PageChunker defaults new fields to empty strings."""
         from quarry.ingestion.page_chunker import PageChunker
         from quarry.models import PageContent, PageType
