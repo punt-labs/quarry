@@ -114,7 +114,8 @@ def test_index_one_mid_stream_error_is_graceful(
     finally:
         conn.close()
     assert outcome.error is not None
-    assert "stream boom" in outcome.error
+    assert outcome.error.endswith(": internal error: OSError")
+    assert "stream boom" not in outcome.error
 
 
 def test_file_index_job_run_completes(tmp_path: Path) -> None:
@@ -369,3 +370,27 @@ def test_index_one_does_not_reembed_unchanged_content(tmp_path: Path) -> None:
     assert outcome.error is None
     assert not second.embedded
     assert "a.md" in _docs(db)  # the chunks are still there, not deleted
+
+
+def test_index_one_planning_refusal_keeps_its_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refusal is URL-free by construction, so the file's error keeps it."""
+    from quarry.content_guard import UnindexableContentError
+
+    db, settings, root = _fixture(tmp_path)
+    (root / "d.md").write_text("body")
+
+    def _refuse(*_args: object, **_kwargs: object) -> object:
+        msg = "binary content rejected: pdf header"
+        raise UnindexableContentError(msg)
+
+    monkeypatch.setattr("quarry.ingestion.file_indexer.plan_file_chunks", _refuse)
+    conn = SyncRegistry(settings.registry_path)
+    try:
+        outcome = SingleFileIndexer(
+            db.store, conn, settings, collection="col", resolved=root
+        ).index_one(root / "d.md")
+    finally:
+        conn.close()
+    assert outcome.error == "d.md: binary content rejected: pdf header"

@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from quarry.db.chunk_store import ChunkStore
     from quarry.ingestion.extracted_document import ExtractedDocument
     from quarry.ingestion.ingest_context import IngestContext
+    from quarry.ingestion.progressive import FlushTarget
     from quarry.models import Chunk, PageContent
 
 
@@ -88,16 +89,18 @@ class DocumentStreamer:
             vectors: NDArray[np.float32] = embedder.embed_texts([c.text for c in batch])
             yield batch, vectors
 
+    def progressive(self, target: FlushTarget) -> ProgressiveIndexer:
+        """Return an indexer flushing *target* at the configured byte budget."""
+        flush_bytes = self._settings.sync_flush_mb * 1024 * 1024
+        return ProgressiveIndexer(target, flush_bytes=flush_bytes)
+
     def insert(self, chunks: list[Chunk], store: ChunkStore, document_name: str) -> int:
         """Embed *chunks* in windows and progressively insert via ProgressiveIndexer.
 
         Bounds peak resident vectors to ``sync_flush_mb + one window`` and makes
         each flushed window searchable, even for a single very large document.
         """
-        indexer = ProgressiveIndexer(
-            PlainFlushTarget(store),
-            flush_bytes=self._settings.sync_flush_mb * 1024 * 1024,
-        )
+        indexer = self.progressive(PlainFlushTarget(store))
         indexer.begin_file(document_name, total_chunks=len(chunks))
         for batch, vectors in self.stream_batches(chunks):
             indexer.add_window(document_name, batch, vectors)
