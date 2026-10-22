@@ -3130,7 +3130,12 @@ other best-effort side effect in this codebase).
 ## DES-057: Row budget, binary rejection, and normalized page text
 
 **Date:** 2026-10-22
-**Status:** SETTLED (implemented in four sequential PRs: prevent, resilience, normalize, repair and visibility)
+**Status:** ACCEPTED. Delivery is four sequential PRs:
+
+1. Prevent (decisions 1 and 2, including the `Settings` bound). This one ships first.
+2. Resilience (the finalize half of decision 4). Pending.
+3. Normalize (decision 3). Pending.
+4. Repair and visibility (the rest of decision 4). Pending.
 **Topic:** Keeping the chunks table compactable; rejecting content that is not text
 **Bead:** quarry-70zm
 
@@ -3167,18 +3172,21 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
      threshold of 0.25. The measured separation on the live corpus was 0.521
      for the PDF against at most 0.0188 for every legitimate document.
    - A per-page check applies only to pages of at least `LARGE_PAGE_CHARS`
-     (64 KiB), because small legitimate PDF pages can exceed the ratio. One
-     677-character page measured 0.341.
+     (65,536 characters), because small legitimate PDF pages can exceed the
+     ratio. One 677-character page measured 0.341.
    - A refused payload fails with its reason on every surface and never logs a
      traceback.
 2. **Bound every stored row; split, never truncate.**
    - Pages over 1 MiB are split at the best boundary.
    - Overlong sentences are hard-wrapped to `max_chars`.
-   - `RowBudget` encodes the invariant `max_page_bytes × assumed_batch_rows ×
-     safety_factor ≤ 2^31` and is enforced at `ChunkTable.build_records`, the
-     single record builder.
-   - The 1,024-row batch is measured for scans (512 and 1,024 fail on a
-     poisoned table, 256 passes) and inferred for compaction.
+   - `RowBudget` encodes the invariant `max(max_page_bytes, max_chunk_bytes) ×
+     assumed_batch_rows × safety_factor < 2^31`, the Arrow i32 offset limit.
+     It is enforced at `ChunkTable.build_records`, the single record builder.
+   - `assumed_batch_rows` (1,024) is Lance's default scan batch. On the
+     poisoned table (about 4.5 MB rows), scans with batches of 512 and 1,024
+     overflowed and 256 passed. The batch size is measured for scans and
+     inferred for compaction, and `safety_factor` covers compaction batches up
+     to twice the scan batch.
    - `Settings` bounds `chunk_max_chars` so a configuration cannot exceed the
      per-chunk budget.
 3. **Normalize page text.**

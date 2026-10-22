@@ -70,9 +70,10 @@ across `transform`, `index`, and `connector`).
   - A URL ingest task ends `failed`.
   - Directory sync reports a per-file error and indexes the rest.
   - The hook never blocks the session.
-- infra: `chunk_max_chars` and `chunk_overlap_chars` are validated in
-  `Settings`. A value that would exceed the per-chunk row budget is refused at
-  load, with an error naming the field. Previously it made every ingest fail
+- infra: `chunk_max_chars` is bounded in `Settings` (1 to 16,384), so every
+  chunk fits the 64 KiB per-chunk row budget. `chunk_overlap_chars` must be
+  non-negative. An out-of-range value is refused at load, with an error naming
+  the field. Previously an oversized `chunk_max_chars` made every ingest fail
   with an error that never named the setting.
 - tool: add the `missions_sync` tool to `scripts/mcpb-manifest.template.json`
   — it was never added when the tool shipped, so the Claude Desktop bundle's

@@ -60,7 +60,7 @@ A `POST /v1/capture` reaches embedding + write like this:
 | `CaptureIngestJob.run` → `run_in_threadpool(self._capture, ctx)` | `daemon/ingest_jobs.py:174-186` |
 | `_capture` → `ScrubbedIngestJob.scrub_and_ingest` → `ingest_content` | `daemon/ingest_jobs.py:181-183`, `58-80` |
 | `ingest_content` → `_chunk_embed_store` (delete + `DocumentStreamer.insert`) | `ingestion/pipeline.py:449-455`, `975-988` |
-| `DocumentStreamer.insert` embeds via the **shared cached** write backend | `ingestion/ingestion/streaming.py`; `ingestion/backends.py:36-43` |
+| `DocumentStreamer.insert` embeds via the **shared cached** write backend | `ingestion/streaming.py`; `ingestion/backends.py:36-43` |
 
 `POST /v1/remember` (`daemon/routes/ingestion.py:30-43`) and `POST /v1/ingest`
 (`daemon/routes/ingestion.py:45-71`) take the identical `accept → create_task →
@@ -95,7 +95,7 @@ path:
   duration. This is the single consumer DES-034 §2 describes.
 - **Captures take a *different* writer.** `ingest_content` → `_chunk_embed_store`
   (`pipeline.py:975-988`) → `DocumentStreamer.insert` (`ingestion/streaming.py`) constructs a
-  **fresh** `ProgressiveIndexer` with a `_PlainFlushTarget` (`streaming.py:87`)
+  **fresh** `ProgressiveIndexer` with a `_PlainFlushTarget` (`ingestion/streaming.py`)
   per call, with **no consumer thread and no queue**. `ProgressiveIndexer`'s own
   docstring states its writes are performed "by exactly one caller (the sync
   consumer thread or the single-doc path), so no lock is needed here —
@@ -367,7 +367,7 @@ them**:
   (`sync_registry.py:83`). That bounded-wait guards the **registry** SQLite
   writes — sync's domain. Captures do **not** write the registry: their
   single-document `_PlainFlushTarget.on_flush` is a deliberate no-op
-  (`streaming.py:107-109`), so no watermark / registry row is touched. The capture
+  (`_PlainFlushTarget.on_flush`), so no watermark / registry row is touched. The capture
   queue therefore governs a **different resource** (the chunks-table writes) from
   the busy_timeout guard, and the two do not overlap. Sync's registry writes and
   captures' chunk writes stay independently serialized — busy_timeout for the
@@ -404,7 +404,7 @@ batch producer/consumer coupled to the sync **registry**: its `FlushTarget.on_fl
 writes `files`-table watermarks and its `run(files: list[Path])` is a
 whole-collection sweep (`sync_ingest.py:44-137`, `265-298`). Captures are single
 inline documents that keep **no** resume watermark (`_PlainFlushTarget.on_flush`
-is a no-op, `streaming.py:107-109`). Forcing captures through `CollectionIngestor`
+is a no-op, `_PlainFlushTarget.on_flush`). Forcing captures through `CollectionIngestor`
 would drag registry / resume machinery they do not use. And there is no persistent
 sync consumer to hang captures on — `CollectionIngestor` exists only for a sync's
 duration (`sync.py:220`), whereas captures arrive continuously *between* syncs and
@@ -566,7 +566,8 @@ The design mission owns the final set; this is the proposal.
   ≤ 2, but see §9.1 — 2 conflicts with DES-032 and is not recommended),
   `ingest_queue_depth` (default 32), `ingest_drain_timeout_s` (default 30).
 - **UNCHANGED (by design):** `chunk_store._write_lock`, `ProgressiveIndexer`
-  (`progressive.py`), and `streaming.DocumentStreamer.insert` are **not** modified — the
+  (`progressive.py`), and the single-document insert path (then
+  `streaming.progressive_insert`, now `DocumentStreamer.insert`) are **not** modified — the
   per-collection worker layers *above* them (§4.2). The queue supplies the
   single-writer-per-collection precondition those DES-034 primitives already
   assume; it does not replace their op-level guarantees.
