@@ -67,6 +67,9 @@ class TestRememberRoute:
         content = "a" * (window * 4) + "�" * (window * 2)
         resp = http.post("/v1/remember", json={"name": "n.md", "content": content})
         assert resp.status_code == 400
+        assert resp.json() == {
+            "error": "binary content rejected: non-text ratio 0.33 exceeds 0.25"
+        }
 
     def test_nothing_is_queued_for_a_refused_body(
         self, http: TestClient, daemon: InProcessDaemon
@@ -125,6 +128,19 @@ class TestCaptureRoute:
 
 
 class TestLearnRoute:
+    def test_nothing_is_queued_for_a_refused_lesson(
+        self, http: TestClient, daemon: InProcessDaemon
+    ) -> None:
+        http.post("/v1/learn", json={"lesson": _PDF})
+        assert len(daemon.ctx.tasks) == 0
+
+    def test_a_lesson_both_binary_and_overlong_reports_the_binary_refusal(
+        self, http: TestClient
+    ) -> None:
+        resp = http.post("/v1/learn", json={"lesson": _PDF + "x" * 1000})
+        assert resp.status_code == 400
+        assert resp.json() == {"error": _PDF_REASON}
+
     def test_a_binary_lesson_is_a_400_with_the_exact_reason(
         self, http: TestClient
     ) -> None:
@@ -171,17 +187,19 @@ class TestSurfacesAgree:
         client: QuarryClient,
         payload: str,
         reason: str,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         wire = http.post("/v1/remember", json={"name": "n.md", "content": payload})
-        mcp = McpTools(connect=lambda: client).remember(payload, "n.md")
+        with caplog.at_level(logging.WARNING):
+            mcp = McpTools(connect=lambda: client).remember(payload, "n.md")
         with patch.object(TargetResolver, "connect", return_value=client):
             cli = runner.invoke(app, ["remember", "--name", "n.md"], input=payload)
 
         assert wire.json()["error"] == reason
-        assert mcp.startswith("Error:")
-        assert reason in mcp
+        assert mcp == f"Error: {reason}"
         assert cli.exit_code == 1
         assert f"Error: {reason}" in cli.output
+        assert not [r for r in caplog.records if r.exc_info]
 
     def test_learn(
         self,
@@ -189,17 +207,19 @@ class TestSurfacesAgree:
         client: QuarryClient,
         payload: str,
         reason: str,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         wire = http.post("/v1/learn", json={"lesson": payload})
-        mcp = McpTools(connect=lambda: client).learn(payload)
+        with caplog.at_level(logging.WARNING):
+            mcp = McpTools(connect=lambda: client).learn(payload)
         with patch.object(TargetResolver, "connect", return_value=client):
             cli = runner.invoke(app, ["learn", payload])
 
         assert wire.json()["error"] == reason
-        assert mcp.startswith("Error:")
-        assert reason in mcp
+        assert mcp == f"Error: {reason}"
         assert cli.exit_code == 1
         assert f"Error: {reason}" in cli.output
+        assert not [r for r in caplog.records if r.exc_info]
 
 
 class TestIngestRoute:
@@ -238,23 +258,12 @@ class TestIngestRoute:
                 json={"source": "https://example.com/paper.pdf", "scrub": True},
             )
             assert accepted.status_code == 202
-            task = self._await_terminal(http, accepted.json()["task_id"])
+            task = _await_terminal(http, accepted.json()["task_id"])
 
         assert task["status"] == "failed"
         assert task["error"] == (
             "content rejected: unsupported media type application/pdf"
         )
-
-    @staticmethod
-    def _await_terminal(http: TestClient, task_id: str) -> dict[str, object]:
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline:
-            task: dict[str, object] = http.get(f"/v1/tasks/{task_id}").json()
-            if task["status"] in {"completed", "failed"}:
-                return task
-            time.sleep(0.05)
-        msg = f"task {task_id} did not finish"
-        raise AssertionError(msg)
 
 
 def _gap_binary() -> str:

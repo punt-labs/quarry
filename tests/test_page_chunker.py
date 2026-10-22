@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 
 from quarry.content_guard import UnindexableContentError
@@ -87,9 +89,12 @@ class TestChunking:
         assert (chunk.page_number, chunk.total_pages) == (5, 20)
         assert chunk.page_type == "text"
 
-    def test_timestamp_set(self) -> None:
-        [chunk] = _chunker().chunk([_page("Some text.")])
-        assert chunk.ingestion_timestamp is not None
+    def test_one_utc_timestamp_stamps_the_whole_document(self) -> None:
+        pages = [_page("First page.", 1, 2), _page("Second page.", 2, 2)]
+        chunks = _chunker().chunk(pages)
+        stamps = {c.ingestion_timestamp for c in chunks}
+        assert len(stamps) == 1
+        assert stamps.pop().utcoffset() == timedelta(0)
 
     def test_page_type_mapped_from_page_content(self) -> None:
         code = PageContent(

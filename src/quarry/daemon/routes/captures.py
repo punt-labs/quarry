@@ -45,7 +45,7 @@ class CaptureRoutes(ContentRouteGroup):
         self, body: dict[str, object]
     ) -> CaptureIngestJob | JSONResponse:
         """Validate a capture body into a :class:`CaptureIngestJob` or a 400."""
-        content = self._require_content(body, "content")
+        content = self._require_content(body, "content", "capture")
         if isinstance(content, JSONResponse):
             return content
         name = self._capture_name(body)

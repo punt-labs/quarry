@@ -86,14 +86,14 @@ class IngestionRoutes(ContentRouteGroup):
         """Validate a remember body into a :class:`ScrubbedIngestJob` or a 400.
 
         Collection routing is a single server-side rule so no surface can
-        drift (bug class 3): an empty collection with an ``agent_handle`` lands
+        drift: an empty collection with an ``agent_handle`` lands
         in ``memory-<handle>``; empty on both sides falls back to ``default``;
         an explicit collection always wins.
         """
         name = self._require_text(body, "name")
         if isinstance(name, JSONResponse):
             return name
-        content = self._require_content(body, "content")
+        content = self._require_content(body, "content", "remember")
         if isinstance(content, JSONResponse):
             return content
         overwrite = RequestGuards.coerce_bool_field(body, "overwrite", default=True)
@@ -124,12 +124,12 @@ class IngestionRoutes(ContentRouteGroup):
         """Validate a learn body into a :class:`ScrubbedIngestJob` or a 400.
 
         Naming, collection routing, and memory_type are single server-side
-        rules so no surface can drift them (bug class 3).
+        rules so no surface can drift them.
         """
         lesson = self._require_text(body, "lesson")
         if isinstance(lesson, JSONResponse):
             return lesson
-        rejection = self._reject_binary(lesson)
+        rejection = self._reject_binary(lesson, "learn")
         if rejection is not None:
             return rejection
         try:

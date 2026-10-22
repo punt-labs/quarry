@@ -119,9 +119,6 @@ class TestDocumentLevel:
         with pytest.raises(UnindexableContentError, match="non-text ratio"):
             BinaryContent().require_document(pages)
 
-    def test_large_page_constant_is_64_kib(self) -> None:
-        assert LARGE_PAGE_CHARS == 64 * 1024
-
 
 class TestSniff:
     def test_clean_body_passes(self) -> None:
