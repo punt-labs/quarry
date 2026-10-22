@@ -59,20 +59,25 @@ across `transform`, `index`, and `connector`).
   - A document-level binary classifier (`content_guard.py`) checks for magic
     bytes and the share of replacement and control characters. Prose that
     merely begins with `%PDF-` or `GIF8` still passes.
-  - A text or code page over the page cap (just under 1 MiB) is split at the
-    best available boundary, never truncated. An oversized PDF or other paginated page fails
-    its document instead, so page numbers always match the source.
+  - A text page, code page, or spreadsheet row group over the page cap (just
+    under 1 MiB) is split at the best available boundary, never truncated. An
+    oversized PDF or other paginated page fails its document instead, so page
+    numbers always match the source.
   - Overlong unpunctuated runs are hard-wrapped so a chunk's stored text
     equals its embedded text.
+  - Label columns (`summary`, document name and path, collection, agent
+    handle) are capped at 8 KiB.
   - The row budget is checked before any overwrite-delete, so a refused
     document never replaces the previous version with a partial one.
 
   A refused payload fails with its reason on every surface, with no traceback
   in the daemon log:
-  - `remember`, `learn` and `capture` return HTTP 400.
+  - `remember`, `learn`, `capture` and `ingest` return HTTP 400 for binary
+    content, an over-budget label, or an unknown `format_hint`.
   - A URL ingest task ends `failed`.
   - Directory sync reports a per-file error and indexes the rest.
-  - A sitemap crawl records the reason per page.
+  - A sitemap crawl records the reason per page. A crawl in which every page
+    failed fails its task.
   - The hook never blocks the session.
   - MCP tools render a daemon refusal as `Error: <message>`, the same text as
     the CLI.

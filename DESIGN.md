@@ -3183,14 +3183,20 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
      surface (CLI, HTTP, MCP and task) and never logs a traceback. A refusal is
      always an exception; it is never an empty "completed" result.
 2. **Bound every stored row; split, never truncate.**
-   - A logical-section page (text, code) over the page cap (2^20 − 1 bytes) is
-     split at the best boundary and renumbered. A paginated page (PDF, OCR,
-     slide, sheet) is never renumbered, so an oversized one fails its document
-     with a reason. Real PDF pages never approach the cap.
+   - A logical-section page over the page cap (2^20 − 1 bytes) is split at the
+     best boundary and renumbered. Logical sections are text, code, and
+     spreadsheet row groups, which the extractor already numbers sequentially.
+   - A paginated page (PDF, OCR, slide) is never renumbered, so an oversized
+     one fails its document with a reason. Real PDF pages never approach the
+     cap.
+   - Label columns (`summary`, `document_name`, `document_path`, `collection`,
+     `agent_handle`) have their own 8 KiB budget. `summary` is copied onto
+     every chunk, so an unbounded label could recreate the overflow. The
+     content routes refuse an over-budget label with HTTP 400.
    - The budget is checked over the whole document before any overwrite-delete,
      so a violation never leaves a partial document.
    - Overlong sentences are hard-wrapped to `max_chars`.
-   - `RowBudget` encodes the invariant `max(max_page_bytes, max_chunk_bytes) ×
+   - `RowBudget` encodes the invariant `max(page, chunk, label budget) ×
      assumed_batch_rows × safety_factor ≤ 2^31 − 1`, the Arrow i32 offset
      limit. `build_records`, the single record builder, keeps it as a
      backstop.
