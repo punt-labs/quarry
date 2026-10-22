@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import patch
+import logging
+from typing import TYPE_CHECKING
+from unittest.mock import MagicMock, patch
 
+from quarry.client import HttpError, QuarryConnectionError
 from quarry.web_fetch_hook import WebFetchHook
+
+if TYPE_CHECKING:
+    import pytest
 
 _SEND_CAPTURE = "quarry.daemon_capture.DaemonCaptureSender.send_capture"
 _SEND_INGEST = "quarry.daemon_capture.DaemonCaptureSender.send_ingest_url"
@@ -38,6 +44,35 @@ def test_fetched_content_is_sent_under_the_storage_name() -> None:
     request = cap.call_args[0][0]
     assert request.document_name == "https://h.test/p"
     assert request.source_url == "https://h.test/p?token=S#f"
+
+
+def test_a_daemon_refusal_is_not_traced_as_unreachable(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = MagicMock()
+    client.capture.side_effect = HttpError("content rejected", 400, "")
+    with (
+        patch("quarry.client.TargetResolver.connect", return_value=client),
+        caplog.at_level(logging.INFO),
+    ):
+        WebFetchHook(_payload("https://h.test/p", "<html>x</html>")).run()
+    line = next(r for r in caplog.records if r.name == "quarry.hooks").getMessage()
+    assert "-> error:daemon-refused" in line
+    assert "daemon-unreachable" not in line
+
+
+def test_an_unreachable_daemon_is_traced_as_unreachable(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = MagicMock()
+    client.capture.side_effect = QuarryConnectionError("refused", "http://x:1")
+    with (
+        patch("quarry.client.TargetResolver.connect", return_value=client),
+        caplog.at_level(logging.INFO),
+    ):
+        WebFetchHook(_payload("https://h.test/p", "<html>x</html>")).run()
+    line = next(r for r in caplog.records if r.name == "quarry.hooks").getMessage()
+    assert "-> error:daemon-unreachable" in line
 
 
 def test_without_content_the_daemon_is_asked_to_refetch() -> None:

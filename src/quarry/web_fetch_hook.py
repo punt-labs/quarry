@@ -78,7 +78,7 @@ class WebFetchHook:
         return context
 
     def _send(self, url: str, document_name: str) -> tuple[bool, str]:
-        """Send the capture; return whether the daemon took it, and by which path."""
+        """Send the capture; return (taken, the path taken or why it was not)."""
         sender = DaemonCaptureSender()
         content = self._parsed.content
         if content:
@@ -96,21 +96,23 @@ class WebFetchHook:
                 source_url=url,
             )
             sent = sender.send_capture(request, unreachable_log=_WEB_FETCH_UNREACHABLE)
-            return sent, "inline"
+            return bool(sent), "inline" if sent else sent.label
         # Fallback: no usable content — the daemon re-fetches through the
         # SSRF-checked ingest route, scrubbing the page into <repo>-captures.
         logger.debug("post-web-fetch: no content in payload, re-fetching via daemon")
         fetch = IngestRequest(source=url, cwd=self._cwd, overwrite=True, scrub=True)
         sent = sender.send_ingest_url(fetch, unreachable_log=_WEB_FETCH_UNREACHABLE)
-        return sent, "ingest-url"
+        return bool(sent), "ingest-url" if sent else sent.label
 
     def _record(self, outcome: tuple[bool, str]) -> None:
-        """Close the trace.  The sender already logged the specific failure class
-        (misconfig, down, HTTP, malformed); the trace only needs the binary
-        distinction so the entered line closes on every exit path.
+        """Close the trace, naming the kind of failure.
+
+        The sender already logged the specific failure; the trace says whether
+        the daemon refused, was unreachable or erred, so a daemon that said no is
+        not reported as down.
         """
         sent, detail = outcome
         if sent:
             self._trace.capture(detail)
         else:
-            self._trace.error("daemon-unreachable")
+            self._trace.error(detail)

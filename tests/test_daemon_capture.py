@@ -68,8 +68,31 @@ class TestSendRemember:
             sent = DaemonCaptureSender().send_remember(
                 _REMEMBER, unreachable_log="no daemon"
             )
-        assert sent is False
+        assert not sent
         assert any(logged in rec.getMessage() for rec in caplog.records)
+
+    @pytest.mark.parametrize(
+        ("error", "label"),
+        [
+            (ClientConfigError("bad QUARRY_URL"), "daemon-error"),
+            (
+                QuarryConnectionError("refused", "http://127.0.0.1:8420"),
+                "daemon-unreachable",
+            ),
+            (HttpError("bad request", 400, ""), "daemon-refused"),
+            (HttpError("unprocessable", 422, ""), "daemon-refused"),
+            (HttpError("boom", 500, ""), "daemon-error"),
+            (QuarryError("not json"), "daemon-error"),
+        ],
+        ids=["config", "connection", "400", "422", "500", "malformed"],
+    )
+    def test_the_trace_label_tells_a_refusal_from_an_unreachable_daemon(
+        self, daemon_client: MagicMock, error: QuarryError, label: str
+    ) -> None:
+        daemon_client.capture.side_effect = error
+        outcome = DaemonCaptureSender().send_capture(_CAPTURE, unreachable_log="x")
+        assert not outcome
+        assert outcome.label == label
 
     def test_non_quarry_error_propagates(self, daemon_client: MagicMock) -> None:
         """A programmer error is not one of the four classes -- it must surface."""
@@ -114,5 +137,5 @@ class TestSendCaptureRefusedAsBinary:
         daemon_client.capture.side_effect = HttpError(reason, 400, "")
         with caplog.at_level("WARNING", logger="quarry.daemon_capture"):
             sent = DaemonCaptureSender().send_capture(_CAPTURE, unreachable_log="x")
-        assert sent is False
+        assert not sent
         assert any(reason in rec.getMessage() for rec in caplog.records)

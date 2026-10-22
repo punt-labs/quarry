@@ -142,9 +142,8 @@ class SessionTranscriptCapture:
                 text=raw_text,
             )
 
-        sent = self._send(wire_text)
         return TranscriptCaptureOutcome(
-            archived=archived, sent=sent, text_captured=True
+            archived=archived, sent=self._send(wire_text), text_captured=True
         )
 
     def _archive(self) -> bool:
@@ -193,8 +192,9 @@ class SessionTranscriptCapture:
             summary=self._summary,
             format_hint="markdown",
         )
-        unreachable = (
+        down = (
             f"{self._source.label}: daemon unreachable; transcript archived, "
             "run backfill-sessions to index it"
         )
-        return DaemonCaptureSender().send_capture(request, unreachable_log=unreachable)
+        outcome = DaemonCaptureSender().send_capture(request, unreachable_log=down)
+        return bool(outcome)
