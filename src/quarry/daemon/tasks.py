@@ -13,10 +13,12 @@ import asyncio
 import logging
 import time
 import uuid
-from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Self, final
+from typing import TYPE_CHECKING, Self, final
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
 
 logger = logging.getLogger(__name__)
 
@@ -45,10 +47,9 @@ class TaskState:
 def task_terminal(state: TaskState) -> Generator[None]:
     """Record *state*'s terminal status when its background body exits.
 
-    Cancellation is recorded then re-raised so the event loop still observes
-    it; any other exception is logged and recorded as the failure reason; a
-    body that exits without setting a terminal status is marked failed so no
-    task is ever left stuck in ``running`` (a guard for future code paths).
+    Cancellation is recorded and re-raised; any other exception is logged and recorded
+    as ``internal error: <Class>`` (see :class:`RefusalAwareTerminal`); a body that sets
+    no terminal status is marked failed, so no task is left in ``running``.
     """
     try:
         yield
@@ -59,7 +60,7 @@ def task_terminal(state: TaskState) -> Generator[None]:
     except Exception as exc:
         logger.exception("Background %s failed", state.kind)
         state.status = "failed"
-        state.error = str(exc)
+        state.error = f"internal error: {type(exc).__name__}"
     finally:
         if state.status == "running":
             state.status = "failed"

@@ -1811,7 +1811,7 @@ class TestCapture:
             data = _poll_task_done(tc, resp.json()["task_id"])
 
         assert data["status"] == "failed"
-        assert "scrub exploded" in data["error"]
+        assert data["error"] == "internal error: ValueError"
         store.assert_not_called()  # nothing stored
         delete.assert_not_called()  # AND the prior document is not deleted
 
@@ -2208,7 +2208,7 @@ class TestRemember:
             task_id = resp.json()["task_id"]
             data = _poll_task_done(tc, task_id)
         assert data["status"] == "failed"
-        assert "bad content encoding" in data["error"]
+        assert data["error"] == "internal error: ValueError"
 
     def test_pipeline_os_error_marks_task_failed(self, tmp_path: Path) -> None:
         """ingest_content raising OSError marks the task as failed."""
@@ -2231,7 +2231,7 @@ class TestRemember:
             task_id = resp.json()["task_id"]
             data = _poll_task_done(tc, task_id)
         assert data["status"] == "failed"
-        assert "disk full" in data["error"]
+        assert data["error"] == "internal error: OSError"
 
     def test_rejects_oversized_body(self, client: TestClient) -> None:
         """Remember body > 50 MB must be rejected with HTTP 413."""
@@ -2601,7 +2601,7 @@ class TestIngest:
             task_id = resp.json()["task_id"]
             data = _poll_task_done(tc, task_id)
         assert data["status"] == "failed"
-        assert "unsupported URL" in data["error"]
+        assert data["error"] == "internal error: ValueError"
 
     def test_pipeline_os_error_marks_task_failed(self, tmp_path: Path) -> None:
         """ingest_auto raising OSError marks the task as failed."""
@@ -2625,7 +2625,7 @@ class TestIngest:
             task_id = resp.json()["task_id"]
             data = _poll_task_done(tc, task_id)
         assert data["status"] == "failed"
-        assert "upstream refused connection" in data["error"]
+        assert data["error"] == "internal error: OSError"
 
     def test_rejects_oversized_body(self, client: TestClient) -> None:
         """Ingest body > 1 MB must be rejected with HTTP 413."""
@@ -3789,7 +3789,7 @@ class TestRunPurgeTask:
         ):
             asyncio.run(RegistrationLifecycle(ctx).run_purge(state, "docs"))
         assert state.status == "failed"
-        assert "purge boom" in state.error
+        assert state.error == "internal error: RuntimeError"
 
 
 class TestSubsumeTeardownForceScoping:
@@ -3935,7 +3935,7 @@ class TestSyncGenericFailure:
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "failed"
-        assert "embedder crashed" in data["error"]
+        assert data["error"] == "embedder crashed"
 
     def test_remember_runtime_error_marks_task_failed(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
@@ -3957,7 +3957,7 @@ class TestSyncGenericFailure:
             task_id = resp.json()["task_id"]
             data = _poll_task_done(tc, task_id)
         assert data["status"] == "failed"
-        assert "embedder crashed" in data["error"]
+        assert data["error"] == "internal error: RuntimeError"
 
     def test_ingest_runtime_error_marks_task_failed(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
@@ -3983,7 +3983,7 @@ class TestSyncGenericFailure:
             task_id = resp.json()["task_id"]
             data = _poll_task_done(tc, task_id)
         assert data["status"] == "failed"
-        assert "embedder crashed" in data["error"]
+        assert data["error"] == "internal error: RuntimeError"
 
 
 class TestUnifiedTaskPolling:

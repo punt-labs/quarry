@@ -86,13 +86,10 @@ class RegistrationLifecycle:
             state.status = "failed"
             state.error = "task was cancelled"
             raise
-        except (FileNotFoundError, ValueError) as exc:
-            state.status = "failed"
-            state.error = str(exc)
         except Exception as exc:
             logger.exception("Background register failed")
             state.status = "failed"
-            state.error = str(exc)
+            state.error = f"internal error: {type(exc).__name__}"
         finally:
             if state.status == "running":
                 state.status = "failed"

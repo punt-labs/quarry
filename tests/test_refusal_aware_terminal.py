@@ -45,7 +45,7 @@ def test_any_other_error_is_still_logged_with_its_traceback(
     with caplog.at_level(logging.WARNING), RefusalAwareTerminal(state).record():
         _raise(RuntimeError("boom"))
 
-    assert (state.status, state.error) == ("failed", "boom")
+    assert (state.status, state.error) == ("failed", "internal error: RuntimeError")
     [record] = caplog.records
     assert record.levelno == logging.ERROR
     assert record.exc_info is not None

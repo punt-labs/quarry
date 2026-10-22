@@ -24,9 +24,11 @@ class RefusalAwareTerminal:
     :func:`task_terminal` logs every exception with a traceback.  A refusal
     (:class:`UnindexableContentError`: binary content, a refused media type, a
     failed or refused fetch) is an expected answer, so it ends the task
-    ``failed`` with the reason and one WARN naming the task, no traceback; any
-    other exception still goes to :func:`task_terminal` unchanged.  This class is
-    the single owner of that failure write.
+    ``failed`` with the reason and one WARN naming the task, no traceback.  Any
+    other exception fails closed: the task error is client-visible and such a
+    message can quote a URL, a path or a credential, so :func:`task_terminal`
+    records ``internal error: <Class>`` and logs the detail, redacted.  This class
+    is the single owner of the refusal write.
 
     Every content job runs under it.  ``CaptureIngestJob._refetch`` does not
     swallow a refusal: it runs only when the inline phase stored nothing, so a
