@@ -4,46 +4,19 @@ from __future__ import annotations
 
 import contextlib
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 from time import monotonic
-from typing import TYPE_CHECKING, ClassVar, final
+from typing import TYPE_CHECKING, ClassVar, Self, final
 from urllib.error import HTTPError, URLError
 
+from quarry.ingestion.fetched_body import FetchedBody, FetchGate
 from quarry.ingestion.ssrf_redirect import GUARDED_OPENER
-from quarry.url_safety import UrlSafetyCheck
 
 if TYPE_CHECKING:
     from http.client import HTTPResponse
 
-_ALLOWED_MEDIA_TYPES = frozenset({"text/html", "application/xhtml+xml"})
 _USER_AGENT = "quarry/1.0 (+https://github.com/punt-labs/quarry)"
-
-
-@final
-@dataclass(frozen=True, slots=True)
-class FetchedBody:
-    """The decoded body of an HTTP fetch plus its declared media type.
-
-    ``media_type`` is the lower-cased ``Content-Type`` primary token
-    (before any parameters) — ``"text/html"``, ``"application/json"``,
-    ``"text/plain"``, or ``""`` when the response omitted the header.
-    Callers decide how to route the body: HTML through the extractor,
-    everything else through the text pipeline (G4 capture-as-text).
-    """
-
-    text: str
-    media_type: str
-
-    @property
-    def is_html(self) -> bool:
-        """Return True when the body is HTML/XHTML or Content-Type was absent.
-
-        A missing ``Content-Type`` is treated as HTML for backward
-        compatibility with servers that omit the header — the pre-G4
-        contract for :meth:`WebFetcher.fetch`.
-        """
-        return not self.media_type or self.media_type in _ALLOWED_MEDIA_TYPES
 
 
 # Bound one response body.  Mirrors the daemon's 4 MiB capture-body cap
@@ -52,6 +25,57 @@ class FetchedBody:
 # instead of streaming without limit.
 _MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 _READ_CHUNK_BYTES = 64 * 1024
+
+
+@final
+class _OpenedResponse:
+    """An open HTTP response bound to the wall-clock deadline of its fetch."""
+
+    __slots__ = ("_deadline", "_resp")
+
+    _resp: HTTPResponse
+    _deadline: float
+
+    def __new__(cls, resp: HTTPResponse, deadline: float) -> Self:
+        self = super().__new__(cls)
+        self._resp = resp
+        self._deadline = deadline
+        return self
+
+    @property
+    def url(self) -> str:
+        """Return the final URL, after any redirects."""
+        return self._resp.url
+
+    def media_type(self) -> str:
+        """Return the primary media type from the ``Content-Type`` header."""
+        content_type: str = self._resp.headers.get("Content-Type", "")
+        return content_type.split(";", 1)[0].strip().lower()
+
+    def decode(self) -> str:
+        """Return the body decoded leniently, read under the cap and deadline."""
+        charset = self._resp.headers.get_content_charset() or "utf-8"
+        return self._read().decode(charset, errors="replace")
+
+    def _read(self) -> bytes:
+        """Read the body in chunks under the size cap and wall-clock deadline.
+
+        The deadline and the running total are both checked after each read
+        returns: a slow-drip body is aborted once the deadline has passed, and an
+        oversize body fails without being buffered whole.
+        """
+        chunks: list[bytes] = []
+        total = 0
+        for chunk in iter(partial(self._resp.read, _READ_CHUNK_BYTES), b""):
+            if monotonic() > self._deadline:
+                msg = "fetch exceeded its total time budget"
+                raise TimeoutError(msg)
+            total += len(chunk)
+            if total > _MAX_RESPONSE_BYTES:
+                msg = f"response exceeds {_MAX_RESPONSE_BYTES}-byte cap"
+                raise ValueError(msg)
+            chunks.append(chunk)
+        return b"".join(chunks)
 
 
 @final
@@ -74,6 +98,7 @@ class WebFetcher:
     """
 
     timeout: int = 30
+    gate: FetchGate = field(default_factory=FetchGate)
 
     _DEADLINE_MARGIN_S: ClassVar[float] = 1.0
 
@@ -100,28 +125,20 @@ class WebFetcher:
     def fetch_body(self, url: str) -> FetchedBody:
         """Fetch *url* and return its decoded body + declared media type.
 
-        Unlike :meth:`fetch`, does NOT reject non-HTML content — the
-        caller decides how to route JSON, plain text, or XHTML through
-        the pipeline.  Underlying safety checks (SSRF, size cap,
-        deadline) still apply.
+        Unlike :meth:`fetch`, does NOT reject non-HTML text — the caller
+        decides how to route JSON, plain text, or XHTML through the pipeline.
+        A media type outside :class:`MediaTypePolicy` (a PDF, an image) is
+        refused from the headers alone, before the body is read.  Underlying
+        safety checks (SSRF, size cap, deadline) still apply.
 
         Raises:
+            UnsupportedContentError: The media type is not indexable text.
             ValueError: URL is not HTTP(S), the final URL is unsafe, or
                 the body exceeds the size cap.
             OSError: Network error.
             TimeoutError: Total-time deadline exceeded.
         """
-        if not url.lower().startswith(("http://", "https://")):
-            msg = f"Only HTTP(S) URLs are supported: {url}"
-            raise ValueError(msg)
-        # Self-gate the initial URL (host + resolved address) BEFORE opening the
-        # socket -- defence in depth behind the route boundary, and so a direct
-        # caller cannot reach an internal address.  Redirect hops are gated by
-        # GUARDED_OPENER; this covers the first hop.
-        reason = UrlSafetyCheck.reject_reason(url)
-        if reason is not None:
-            msg = f"URL rejected: {reason}"
-            raise ValueError(msg)
+        self.gate.check_url(url)
 
         request = urllib.request.Request(  # noqa: S310
             url,
@@ -130,7 +147,7 @@ class WebFetcher:
         deadline = monotonic() + self.timeout + self._DEADLINE_MARGIN_S
         try:
             with GUARDED_OPENER.open(request, timeout=self.timeout) as resp:
-                return self._decode_body(resp, deadline)
+                return self._decode_body(_OpenedResponse(resp, deadline))
         except HTTPError as exc:
             # HTTPError IS an open response holding a socket fd; close it before
             # re-raising or a failed fetch leaks an fd (EMFILE over a crawl).
@@ -147,47 +164,13 @@ class WebFetcher:
             msg = f"Timed out fetching {url} (exceeded total time budget)"
             raise TimeoutError(msg) from exc
 
-    @staticmethod
-    def _decode_body(resp: HTTPResponse, deadline: float) -> FetchedBody:
-        """Validate the final URL, decode the body, return it with its media type."""
-        WebFetcher._check_final_url(resp)
-        charset = resp.headers.get_content_charset() or "utf-8"
-        body = WebFetcher._read_body(resp, deadline)
-        media_type = WebFetcher._media_type(resp)
-        text = body.decode(charset, errors="replace")
-        return FetchedBody(text=text, media_type=media_type)
+    def _decode_body(self, opened: _OpenedResponse) -> FetchedBody:
+        """Validate the URL and media type, then decode the body.
 
-    @staticmethod
-    def _check_final_url(resp: HTTPResponse) -> None:
-        """Raise if the final URL (post-redirect) is unsafe/internal."""
-        reason = UrlSafetyCheck.reject_reason(resp.url)
-        if reason is not None:
-            msg = f"final URL rejected: {reason}"
-            raise ValueError(msg)
-
-    @staticmethod
-    def _media_type(resp: HTTPResponse) -> str:
-        """Return the primary media type from the ``Content-Type`` header."""
-        content_type: str = resp.headers.get("Content-Type", "")
-        return content_type.split(";", 1)[0].strip().lower()
-
-    @staticmethod
-    def _read_body(resp: HTTPResponse, deadline: float) -> bytes:
-        """Read the body in chunks under the size cap and wall-clock deadline.
-
-        The deadline and the running total are both checked after each read
-        returns: a slow-drip body is aborted once the deadline has passed, and an
-        oversize body fails without being buffered whole.
+        The media type is checked before the body is read, so a rejected download
+        costs no bandwidth.
         """
-        chunks: list[bytes] = []
-        total = 0
-        for chunk in iter(partial(resp.read, _READ_CHUNK_BYTES), b""):
-            if monotonic() > deadline:
-                msg = "fetch exceeded its total time budget"
-                raise TimeoutError(msg)
-            total += len(chunk)
-            if total > _MAX_RESPONSE_BYTES:
-                msg = f"response exceeds {_MAX_RESPONSE_BYTES}-byte cap"
-                raise ValueError(msg)
-            chunks.append(chunk)
-        return b"".join(chunks)
+        self.gate.check_final_url(opened.url)
+        media_type = opened.media_type()
+        self.gate.check_media_type(media_type)
+        return FetchedBody(text=opened.decode(), media_type=media_type)

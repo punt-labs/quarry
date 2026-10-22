@@ -10,7 +10,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from quarry.content_guard import UnsupportedContentError
 from quarry.ingestion import web_fetch as wf
+from quarry.ingestion.fetched_body import FetchGate, MediaTypePolicy
 from quarry.ingestion.ssrf_redirect import (
     RedirectRejectedError,
     SsrfGuardedRedirectHandler,
@@ -64,8 +66,14 @@ class TestWebFetcher:
 
     @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
     def test_rejects_non_html_content_type(self, mock_open: MagicMock) -> None:
-        mock_open.return_value = _mock_response(b"%PDF-1.4", "application/pdf")
+        mock_open.return_value = _mock_response(b"raw log", "text/plain")
         with pytest.raises(ValueError, match="non-HTML"):
+            WebFetcher().fetch("https://example.com/log.txt")
+
+    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    def test_rejects_pdf_media_type(self, mock_open: MagicMock) -> None:
+        mock_open.return_value = _mock_response(b"%PDF-1.4", "application/pdf")
+        with pytest.raises(UnsupportedContentError, match="content rejected"):
             WebFetcher().fetch("https://example.com/report.pdf")
 
     @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
@@ -208,6 +216,51 @@ class TestFetchBody:
         result = WebFetcher().fetch_body("https://example.com/log")
         assert result.text == "raw log line"
         assert result.is_html is False
+
+
+class TestMediaTypeBoundary:
+    """The media-type allow-list is enforced from the headers, before the body."""
+
+    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    def test_pdf_is_rejected_before_the_body_is_read(
+        self, mock_open: MagicMock
+    ) -> None:
+        resp = _mock_response(b"%PDF-1.5", "application/pdf")
+        mock_open.return_value = resp
+        with pytest.raises(UnsupportedContentError):
+            WebFetcher().fetch_body("https://example.com/paper.pdf")
+        resp.read.assert_not_called()
+
+    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    def test_rejection_message_has_no_url_and_the_safe_prefix(
+        self, mock_open: MagicMock
+    ) -> None:
+        url = "https://user:secret@example.com/paper.pdf?token=abc"
+        mock_open.return_value = _mock_response(b"%PDF", "application/pdf")
+        with pytest.raises(UnsupportedContentError) as info:
+            WebFetcher().fetch_body(url)
+        message = str(info.value)
+        assert message.startswith("content rejected:")
+        assert "secret" not in message
+        assert "token" not in message
+
+    @pytest.mark.parametrize(
+        "content_type",
+        ["text/html", "application/json", "application/vnd.api+json", ""],
+    )
+    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    def test_text_media_types_and_an_absent_header_are_accepted(
+        self, mock_open: MagicMock, content_type: str
+    ) -> None:
+        mock_open.return_value = _mock_response(b"hello", content_type)
+        assert WebFetcher().fetch_body("https://example.com/x").text == "hello"
+
+    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    def test_the_policy_is_injectable(self, mock_open: MagicMock) -> None:
+        mock_open.return_value = _mock_response(b"{}", "application/json")
+        strict = MediaTypePolicy(exact=frozenset(), suffixes=())
+        with pytest.raises(UnsupportedContentError):
+            WebFetcher(gate=FetchGate(strict)).fetch_body("https://example.com/x")
 
 
 class TestInitialUrlGate:

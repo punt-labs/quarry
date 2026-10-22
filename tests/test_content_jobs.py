@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 from unittest.mock import MagicMock, patch
 
+from quarry.content_guard import UnsupportedContentError
 from quarry.daemon.content_jobs import CaptureIngestJob, ScrubbedIngestJob
-from quarry.ingestion.web_fetch import FetchedBody
+from quarry.ingestion.fetched_body import FetchedBody
 
 if TYPE_CHECKING:
+    import pytest
+
     from quarry.daemon.context import DaemonContext
 
 
@@ -220,3 +224,58 @@ def test_html_refetch_fetches_the_source_url_exactly_once() -> None:
     request = mock_ingest_url.call_args.args[0]
     assert request.prefetched_html == body.text
     assert result == {"chunks": 1}
+
+
+def _refetch_job() -> CaptureIngestJob:
+    return CaptureIngestJob(
+        inline=_remember("", collection="repo-captures"),
+        source_url="https://user:secret@x.test/paper.pdf?token=abc",
+    )
+
+
+def test_refetch_of_a_refused_media_type_is_a_logged_empty_result(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A PDF behind the source URL is reported, never raised, and never stored."""
+    ctx = cast(
+        "DaemonContext", SimpleNamespace(database=MagicMock(), settings=MagicMock())
+    )
+    refusal = UnsupportedContentError("content rejected: unsupported media type x")
+
+    with (
+        caplog.at_level(logging.WARNING),
+        patch("quarry.ingestion.web_fetch.WebFetcher.fetch_body", side_effect=refusal),
+        patch("quarry.ingestion.web_ingest.ingest_content") as stored,
+    ):
+        result = _refetch_job()._refetch(ctx)
+
+    assert result == {
+        "chunks": 0,
+        "sections": 0,
+        "rejected": "content rejected: unsupported media type x",
+    }
+    stored.assert_not_called()
+    [record] = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert record.exc_info is None
+    assert "secret" not in record.getMessage()
+    assert "token" not in record.getMessage()
+
+
+def test_refetch_of_an_unreachable_url_is_a_class_only_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A network failure quotes the raw URL, so only its class reaches the log."""
+    ctx = cast(
+        "DaemonContext", SimpleNamespace(database=MagicMock(), settings=MagicMock())
+    )
+    failure = OSError("Cannot reach https://user:secret@x.test/p: refused")
+
+    with (
+        caplog.at_level(logging.WARNING),
+        patch("quarry.ingestion.web_fetch.WebFetcher.fetch_body", side_effect=failure),
+    ):
+        result = _refetch_job()._refetch(ctx)
+
+    assert result == {"chunks": 0, "sections": 0}
+    assert "secret" not in caplog.text
+    assert "OSError" in caplog.text

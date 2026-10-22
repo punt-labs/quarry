@@ -36,6 +36,14 @@ class UnindexableContentError(ValueError):
     """
 
 
+class UnsupportedContentError(UnindexableContentError):
+    """Raised before the body is read when the media type is not indexable text.
+
+    The message carries no URL, so ``"content rejected:"`` is safe to log and to
+    return to a client verbatim.
+    """
+
+
 @final
 @dataclass(frozen=True, slots=True)
 class BinaryContent:

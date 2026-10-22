@@ -32,7 +32,7 @@ from quarry.daemon.context import DaemonContext
 from quarry.daemon.server import DaemonServer, ServeConfig
 from quarry.daemon.tasks import TASK_TTL_SECONDS, TaskState
 from quarry.fd_headroom import FdHeadroom
-from quarry.ingestion.web_fetch import FetchedBody
+from quarry.ingestion.fetched_body import FetchedBody
 from quarry.results import SearchResult
 
 # Bound on how long fixture teardown waits for a background job to finish for

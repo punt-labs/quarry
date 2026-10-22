@@ -1,7 +1,7 @@
 {
-  "total": 208,
+  "total": 206,
   "by_category": {
-    "noqa": 170,
+    "noqa": 168,
     "type_ignore": 7,
     "pylint_disable": 0,
     "pyright_ignore": 1,
@@ -36,11 +36,14 @@
     "src/quarry/collections.py": {
       "type_ignore": 1
     },
+    "src/quarry/daemon/captured_body_ingest.py": {
+      "noqa": 3
+    },
     "src/quarry/daemon/content_jobs.py": {
       "noqa": 3
     },
     "src/quarry/daemon/ingest_jobs.py": {
-      "noqa": 8
+      "noqa": 3
     },
     "src/quarry/daemon/routes/captures.py": {
       "noqa": 1
@@ -181,5 +184,5 @@
       "noqa": 2
     }
   },
-  "updated_at": "2026-10-22T07:33:25Z"
+  "updated_at": "2026-10-22T07:47:35Z"
 }

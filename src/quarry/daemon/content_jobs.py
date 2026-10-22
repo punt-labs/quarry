@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, cast
 
 from starlette.concurrency import run_in_threadpool
 
-from quarry.daemon.ingest_jobs import IngestJob
+from quarry.daemon.captured_body_ingest import CapturedBodyIngest
 from quarry.daemon.job_spool import SpoolRecord
 from quarry.daemon.tasks import task_terminal
 
@@ -215,33 +215,25 @@ class CaptureIngestJob:
         return self._refetch(ctx)
 
     def _refetch(self, ctx: DaemonContext) -> dict[str, object]:
-        """Re-fetch source URL and delegate routing to :class:`IngestJob`.
+        """Re-fetch the source URL and store the body by its media type.
 
-        A safety/network failure logs cleanly at WARN and returns an empty
-        result — never a traceback — because ``_capture`` already stored what
-        the inline phase had.  Failure handling delegates to
-        :meth:`IngestJob.safe_fetch_body` so both fetch paths share the same
-        redacted-log semantics (CWE-532).  A successful fetch flows through
-        the same HTML-vs-text routing :class:`IngestJob` uses for the primary
-        URL path (:meth:`IngestJob.ingest_captured_body`), so both paths
-        agree on the media-type contract instead of drifting.
+        A safety/network failure, a refused media type, or a binary body logs
+        cleanly at WARN and returns an empty result — never a traceback —
+        because ``_capture`` already stored what the inline phase had.  A
+        successful fetch flows through the same HTML-vs-text routing the primary
+        URL path uses (:class:`CapturedBodyIngest`), so both agree on the
+        media-type contract instead of drifting.
         """
-        body = IngestJob.safe_fetch_body(self.source_url, "capture: refetch")
-        if body is None:
-            return {"chunks": 0, "sections": 0}
-
         logger.info(
-            "capture: %s inline extracted to zero chunks — re-fetching via daemon (%s)",
+            "capture: %s inline extracted to zero chunks — re-fetching via daemon",
             self.inline.name,
-            IngestJob.sanitize_media_type(body.media_type),
         )
-        return IngestJob(
-            source=self.source_url,
-            overwrite=self.inline.overwrite,
-            collection=self.inline.collection,
-            scrub=True,
-            agent_handle=self.inline.agent_handle,
-            memory_type=self.inline.memory_type,
-            summary=self.inline.summary,
-            document_name_override=self.inline.name,
-        ).ingest_captured_body(ctx, body)
+        return CapturedBodyIngest(
+            self.source_url,
+            self.inline.overwrite,
+            self.inline.collection,
+            self.inline.agent_handle,
+            self.inline.memory_type,
+            self.inline.summary,
+            self.inline.name,
+        ).run(ctx, "capture: refetch")
