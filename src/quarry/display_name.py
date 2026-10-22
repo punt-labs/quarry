@@ -35,12 +35,15 @@ class DisplayName:
         text = self.name.lstrip(self._LEADING)
         if not text.lower().startswith(("http://", "https://")):
             return self.name
-        return CaptureUrl.display(text)
+        try:
+            return HttpUrl(text).document_name
+        except ValueError:
+            return CaptureUrl.display(text)  # tolerant of userinfo; never shows it
 
     def redacted(self) -> str:
-        """Return the log form: the storage form with token-like path parts elided."""
-        text = self.name.lstrip(self._LEADING)
+        """Return the log form: ``scheme://host[:port]/…(N segments)``, no path."""
+        stored = self.stored()
         try:
-            return str(HttpUrl(text))
+            return str(HttpUrl(stored))
         except ValueError:
-            return self.stored()
+            return stored

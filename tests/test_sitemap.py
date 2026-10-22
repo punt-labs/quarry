@@ -647,7 +647,7 @@ class TestIngestSitemapIntegration:
         # redacted message rather than a fragment that could also match an
         # unrelated look-alike string.
         fetching = [m for m in messages if m.startswith("Fetching sitemap:")]
-        assert fetching == ["Fetching sitemap: https://docs.python.org/sitemap.xml"]
+        assert fetching == ["Fetching sitemap: https://docs.python.org/…(1 segments)"]
 
     @patch("quarry.ingestion.sitemap_ingest.ingest_url")
     @patch("quarry.db.chunk_catalog.ChunkCatalog.list_documents")
@@ -691,7 +691,7 @@ class TestIngestSitemapIntegration:
         assert result["ingested"] == 1
         assert result["failed"] == 1
         assert len(result["errors"]) == 1
-        assert "bad" in result["errors"][0]
+        assert "ValueError" in result["errors"][0]
 
 
 # ---------------------------------------------------------------------------
@@ -985,7 +985,7 @@ class TestIngestAuto:
         ]
         assert warning_records == [
             (
-                "Sitemap discovery failed for https://example.com/page: "
+                "Sitemap discovery failed for https://example.com/…(1 segments): "
                 "fetch failed: sitemap URL not accepted by the parser"
             )
         ]
@@ -1025,7 +1025,9 @@ class TestIngestAuto:
         # py/incomplete-url-substring-sanitization): pins the whole
         # message rather than a fragment that could also match an
         # unrelated look-alike host.
-        assert discovering == ["Discovering sitemaps for https://example.com/"]
+        assert discovering == [
+            "Discovering sitemaps for https://example.com/…(0 segments)"
+        ]
 
     @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
     def test_unexpected_discovery_error_propagates(
@@ -1513,6 +1515,6 @@ class TestInvalidSitemapFailsTheFetch:
         with caplog.at_level(logging.INFO):
             SitemapDiscovery.discover_urls(HttpUrl(self._URL))
         assert [r.getMessage() for r in caplog.records] == [
-            "Fetching sitemap: https://example.com/sitemap.xml",
-            "Parsed 0 pages from https://example.com/sitemap.xml",
+            "Fetching sitemap: https://example.com/…(1 segments)",
+            "Parsed 0 pages from https://example.com/…(1 segments)",
         ]

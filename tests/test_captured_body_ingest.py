@@ -144,4 +144,4 @@ class TestRun:
 
 def test_the_subject_drops_userinfo_query_and_fragment() -> None:
     captured = _captured("https://x.test/p?token=abc#f")
-    assert captured.subject() == "https://x.test/p"
+    assert captured.subject() == "https://x.test/…(1 segments)"

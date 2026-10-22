@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
@@ -9,9 +10,9 @@ from urllib.parse import urlsplit, urlunsplit
 
 from quarry.remote import to_netloc
 
-# What a log or progress line shows for a URL that cannot be parsed: never the
-# raw text, which is exactly where a userinfo or query secret sits.
+# Shown for a URL that cannot be parsed, never its raw text (where secrets sit).
 _UNPARSEABLE = "(unparseable URL)"
+_PARAMS = re.compile(r";[^/]*")  # path parameters: ";jsessionid=..." on any segment
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,13 +41,12 @@ class CaptureUrl:
         A URL that cannot be parsed (an out-of-range port, a malformed netloc)
         shows as a fixed placeholder rather than as its raw text.
         """
-        shown = _UNPARSEABLE
         with suppress(ValueError):
-            shown = cls(raw).redacted(lambda text: text)
-        return shown
+            return cls(raw).redacted(lambda text: text)
+        return _UNPARSEABLE
 
     def redacted(self, scrubber: Callable[[str], str]) -> str:
-        """Return the metadata URL: userinfo/query/fragment stripped, then scrubbed.
+        """Return the metadata URL: userinfo, query, fragment and params stripped.
 
         ``to_netloc`` re-brackets an IPv6 literal that ``urlsplit(...).hostname``
         stripped (``2001:db8::1`` -> ``[2001:db8::1]``), so the reassembled netloc
@@ -54,5 +54,5 @@ class CaptureUrl:
         """
         parts = urlsplit(self._raw)
         netloc = to_netloc(parts.hostname or "", parts.port)
-        bare = urlunsplit((parts.scheme, netloc, parts.path, "", ""))
-        return scrubber(bare)
+        path = _PARAMS.sub("", parts.path)
+        return scrubber(urlunsplit((parts.scheme, netloc, path, "", "")))

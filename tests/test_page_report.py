@@ -16,7 +16,7 @@ _URL = "https://example.com/p?token=SECRET#frag"
 
 
 def test_the_url_is_redacted() -> None:
-    assert PageReport(HttpUrl(_URL)).url == "https://example.com/p"
+    assert PageReport(HttpUrl(_URL)).url == "https://example.com/…(1 segments)"
 
 
 class TestFailure:
@@ -27,7 +27,8 @@ class TestFailure:
         with caplog.at_level(logging.WARNING):
             text = PageReport(HttpUrl(_URL)).failure(exc)
         assert text == (
-            "https://example.com/p: content rejected: unsupported media type x"
+            "https://example.com/…(1 segments): "
+            "content rejected: unsupported media type x"
         )
         [record] = caplog.records
         assert record.levelno == logging.WARNING
@@ -39,7 +40,7 @@ class TestFailure:
         reason = "row budget exceeded: text 70,000 bytes > 65,536"
         with caplog.at_level(logging.WARNING):
             text = PageReport(HttpUrl(_URL)).failure(RowBudgetError(reason))
-        assert text == f"https://example.com/p: {reason}"
+        assert text == f"https://example.com/…(1 segments): {reason}"
         assert caplog.records[0].levelno == logging.WARNING
 
     @pytest.mark.parametrize(
@@ -54,7 +55,7 @@ class TestFailure:
     ) -> None:
         with caplog.at_level(logging.WARNING):
             text = PageReport(HttpUrl(_URL)).failure(exc)
-        assert text == f"https://example.com/p: {type(exc).__name__}"
+        assert text == f"https://example.com/…(1 segments): {type(exc).__name__}"
         assert caplog.records[0].levelno == logging.WARNING
         assert "token" not in caplog.text
 
@@ -67,7 +68,7 @@ class TestFailure:
         except KeyError as exc:
             with caplog.at_level(logging.WARNING):
                 text = PageReport(HttpUrl(_URL)).failure(exc)
-        assert text == "https://example.com/p: KeyError"
+        assert text == "https://example.com/…(1 segments): KeyError"
         [record] = caplog.records
         assert record.levelno == logging.ERROR
         assert "test_page_report" in record.getMessage()

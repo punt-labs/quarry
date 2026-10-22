@@ -13,6 +13,8 @@ _RESET_PATH = "/reset/9f8e7d6c5b4a39281706f5e4d3c2b1a0"
     ("name", "stored"),
     [
         ("https://u:pw@x.test/p?token=abc#f", "https://x.test/p"),
+        ("https://x.test/p;jsessionid=PSEC?t=1", "https://x.test/p"),
+        ("https://x.test:443/a/;p=1", "https://x.test/a/"),
         ("HTTP://x.test/a?email=a@b.c", "http://x.test/a"),
         ("  \t https://u:SECRET@x.test/p?t=1", "https://x.test/p"),
         ("\x01\x1fhttps://x.test/p?t=1", "https://x.test/p"),
@@ -24,6 +26,8 @@ _RESET_PATH = "/reset/9f8e7d6c5b4a39281706f5e4d3c2b1a0"
     ],
     ids=[
         "secrets-dropped",
+        "path-params-dropped",
+        "default-port-and-params",
         "scheme-any-case",
         "leading-whitespace",
         "leading-control",
@@ -41,10 +45,10 @@ def test_stored(name: str, stored: str) -> None:
 @pytest.mark.parametrize(
     ("name", "shown"),
     [
-        ("https://x.test/p?token=abc", "https://x.test/p"),
-        (f"https://x.test{_RESET_PATH}?t=1", "https://x.test/reset/[…]"),
-        ("  https://x.test/p?t=1", "https://x.test/p"),
-        ("https://u:secret@x.test/p", "https://x.test/p"),
+        ("https://x.test/p?token=abc", "https://x.test/…(1 segments)"),
+        (f"https://x.test{_RESET_PATH}?t=1", "https://x.test/…(2 segments)"),
+        ("  https://x.test/p?t=1", "https://x.test/…(1 segments)"),
+        ("https://u:secret@x.test/p", "https://x.test/…(1 segments)"),
         ("notes #3 (draft)?.md", "notes #3 (draft)?.md"),
         ("http://u:secret@h:99999/a", "(unparseable URL)"),
     ],
@@ -59,3 +63,11 @@ def test_stored(name: str, stored: str) -> None:
 )
 def test_redacted(name: str, shown: str) -> None:
     assert DisplayName(name).redacted() == shown
+
+
+def test_a_url_named_document_is_stored_as_a_url_ingest_of_it_would_be() -> None:
+    from quarry.http_url import HttpUrl
+
+    url = "https://x.test:443/docs/a;jsessionid=PSEC?t=1#f"
+    assert DisplayName(url).stored() == HttpUrl(url).document_name
+    assert "PSEC" not in DisplayName(url).stored()

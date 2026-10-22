@@ -25,9 +25,13 @@ class HttpUrl:
     * :attr:`document_name` is the storage form, ``scheme://host[:port]/path``:
       userinfo, query, fragment and ``;params`` are dropped, the path stays
       because it names the document.
-    * ``str`` and ``repr`` are the log form: the storage form with each
-      high-entropy path segment (a token, a hash, a UUID) elided, since a secret
-      can live in the path.
+    * ``str`` and ``repr`` are the log form, ``scheme://host[:port]/…(N segments)``:
+      never any of the path, because a secret can live in it and no heuristic
+      recognizes every token (a JWT, padded base64, a short code).
+
+    The host is normalized so equivalent URLs share a name: lower-cased, the
+    ideographic full stops IDNA reads as ``.`` replaced, a trailing dot dropped,
+    and the scheme's default port omitted.
 
     A leak is therefore a ``fetch_url`` call you can grep for, not a regex miss.
     """
@@ -40,22 +44,27 @@ class HttpUrl:
     _log_form: str
     _path: str
 
-    _TOKEN: ClassVar[re.Pattern[str]] = re.compile(r"[A-Za-z0-9_\-]{16,}")
     _PARAMS: ClassVar[re.Pattern[str]] = re.compile(r";[^/]*")
+    # IDNA reads these as the label separator; so do we, or "example\u3002com" and
+    # "example.com" would be two documents.
+    _STOPS: ClassVar[dict[int, str]] = dict.fromkeys((0x3002, 0xFF0E, 0xFF61), ".")
+    _DEFAULT_PORTS: ClassVar[dict[str, int]] = {"http": 80, "https": 443}
 
     def __new__(cls, raw: str) -> Self:
         parts = UrlSyntax.parse(raw)
-        host = parts.hostname
-        if parts.scheme.lower() not in {"http", "https"} or not host:
+        host = (parts.hostname or "").translate(cls._STOPS).rstrip(".")
+        if parts.scheme not in cls._DEFAULT_PORTS or not host:
             raise ValueError(_MALFORMED)
-        netloc = to_netloc(host, parts.port)
+        port = None if parts.port == cls._DEFAULT_PORTS[parts.scheme] else parts.port
+        netloc = to_netloc(host, port)
         path = cls._PARAMS.sub("", parts.path)
+        segments = len([part for part in path.split("/") if part])
         self = super().__new__(cls)
         self._fetch_url = raw
         self._host = host
         self._path = path
         self._document_name = urlunsplit((parts.scheme, netloc, path, "", ""))
-        self._log_form = urlunsplit((parts.scheme, netloc, cls._elide(path), "", ""))
+        self._log_form = f"{parts.scheme}://{netloc}/…({segments} segments)"
         return self
 
     @property
@@ -98,15 +107,3 @@ class HttpUrl:
 
     def __hash__(self) -> int:
         return hash((HttpUrl, self._fetch_url))
-
-    @classmethod
-    def _elide(cls, path: str) -> str:
-        """Return *path* with each token-like segment elided."""
-        return "/".join(cls._segment(segment) for segment in path.split("/"))
-
-    @classmethod
-    def _segment(cls, segment: str) -> str:
-        """Return *segment*, or ``[…]`` when it looks like a token, hash or UUID."""
-        is_token = cls._TOKEN.fullmatch(segment) is not None
-        mixed = any(c.isdigit() for c in segment) and any(c.isalpha() for c in segment)
-        return "[…]" if is_token and mixed else segment

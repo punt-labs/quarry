@@ -82,7 +82,7 @@ def _capture_job(content: str = "") -> CaptureIngestJob:
 def _assert_quiet_and_url_free(
     state: TaskState,
     caplog: pytest.LogCaptureFixture,
-    subject: str = "ingest http://example.com/doc (task ",
+    subject: str = "ingest http://example.com/…(1 segments) (task ",
 ) -> None:
     assert state.status == "failed"
     for leak in ("SECRET", "u:p", "token"):
@@ -315,19 +315,19 @@ def test_a_sitemap_with_one_pdf_page_ingests_the_rest(
 
     assert (result["ingested"], result["failed"]) == (1, 1)
     pdf_reason = "content rejected: unsupported media type application/pdf"
-    assert result["errors"] == [f"https://good.test/paper.pdf: {pdf_reason}"]
+    assert result["errors"] == [f"https://good.test/…(1 segments): {pdf_reason}"]
     for leak in ("SECRET", "pw@", "token"):
         assert leak not in caplog.text
         assert leak not in result["errors"][0]
     [page_warning] = [r for r in caplog.records if r.name.endswith("page_report")]
     assert page_warning.levelno == logging.WARNING
     assert page_warning.getMessage() == (
-        f"Failed to ingest https://good.test/paper.pdf ({pdf_reason})"
+        f"Failed to ingest https://good.test/…(1 segments) ({pdf_reason})"
     )
 
 
 _SITEMAP_URL = "https://example.com/sitemap.xml?token=SECRET"
-_SITEMAP_SUBJECT = "ingest https://example.com/sitemap.xml (task "
+_SITEMAP_SUBJECT = "ingest https://example.com/…(1 segments) (task "
 _FETCHER = "usp.fetch_parse.SitemapFetcher"
 
 
@@ -423,8 +423,8 @@ async def test_a_crawl_where_every_page_is_a_pdf_fails_the_task(
         if r.name.endswith("page_report") and r.levelno >= logging.WARNING
     )
     assert reports == [
-        f"Failed to ingest https://a.test/one.pdf ({reason})",
-        f"Failed to ingest https://b.test/two.pdf ({reason})",
+        f"Failed to ingest https://a.test/…(1 segments) ({reason})",
+        f"Failed to ingest https://b.test/…(1 segments) ({reason})",
     ]
     terminal = [r for r in caplog.records if r.name.endswith("refusal_aware_terminal")]
     assert [r.levelno for r in terminal] == [logging.WARNING]

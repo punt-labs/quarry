@@ -25,33 +25,37 @@ class TestFetchUrl:
 
 
 class TestRedactedForms:
-    def test_str_is_the_log_form_without_query_fragment_or_params(self) -> None:
-        assert str(HttpUrl(_RAW)) == "https://example.com:8443/docs/guide"
+    def test_str_is_the_log_form_with_no_path_at_all(self) -> None:
+        assert str(HttpUrl(_RAW)) == "https://example.com:8443/…(2 segments)"
 
     def test_repr_names_the_type_and_shows_only_the_log_form(self) -> None:
-        assert repr(HttpUrl(_RAW)) == "HttpUrl('https://example.com:8443/docs/guide')"
+        assert (
+            repr(HttpUrl(_RAW)) == "HttpUrl('https://example.com:8443/…(2 segments)')"
+        )
 
     @pytest.mark.parametrize(
-        "path",
+        ("segment", "needle"),
         [
-            "/reset/9f8e7d6c5b4a39281706f5e4d3c2b1a0",
-            "/u/123e4567-e89b-12d3-a456-426614174000/profile",
-            "/t/AbCdEf0123456789xyzXYZ/page",
+            ("9f8e7d6c5b4a39281706f5e4d3c2b1a0", "9f8e7d6c"),
+            ("123e4567-e89b-12d3-a456-426614174000", "123e4567"),
+            ("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.c2lnbmF0dXJl", "eyJhbGci"),
+            ("dGhpcy1pcy1hLXRva2Vu==", "dGhpcy1p"),
+            ("abcdefghijklmnopqrstuvwxyz", "abcdefgh"),
+            ("x7Qp", "x7Qp"),
+            ("2024-05-17-launch-notes", "launch-notes"),
         ],
-        ids=["hex-token", "uuid", "mixed-token"],
+        ids=["hex", "uuid", "jwt", "padded-base64", "all-alpha", "short-code", "slug"],
     )
-    def test_a_high_entropy_path_segment_is_elided_from_the_log_form(
-        self, path: str
+    def test_no_path_segment_reaches_the_log_form(
+        self, segment: str, needle: str
     ) -> None:
-        shown = str(HttpUrl(f"https://example.com{path}"))
-        assert "9f8e7d6c" not in shown
-        assert "123e4567" not in shown
-        assert "AbCdEf" not in shown
-        assert "/[…]" in shown
+        shown = str(HttpUrl(f"https://example.com/a/{segment}/b"))
+        assert needle not in shown
+        assert shown == "https://example.com/…(3 segments)"
 
-    def test_a_readable_path_is_kept(self) -> None:
-        url = HttpUrl("https://example.com/documentation-overview/getting-started")
-        assert str(url) == "https://example.com/documentation-overview/getting-started"
+    def test_a_bare_host_has_no_segments(self) -> None:
+        assert str(HttpUrl("http://example.com")) == "http://example.com/…(0 segments)"
+        assert str(HttpUrl("http://example.com/")) == "http://example.com/…(0 segments)"
 
     def test_the_stored_name_keeps_the_path_but_not_secrets(self) -> None:
         url = HttpUrl("https://example.com/reset/9f8e7d6c5b4a39281706f5e4d3c2b1a0?t=Q")
@@ -67,10 +71,28 @@ class TestDocumentName:
             (_RAW, "https://example.com:8443/docs/guide"),
             ("http://example.com", "http://example.com"),
             ("http://[2606:4700::1111]:8080/a?x=1", "http://[2606:4700::1111]:8080/a"),
-            ("http://Example.com./a#f", "http://example.com./a"),
+            ("http://Example.com./a#f", "http://example.com/a"),
+            ("http://example.com:80/a", "http://example.com/a"),
+            ("https://example.com:443/a", "https://example.com/a"),
+            ("http://example.com:443/a", "http://example.com:443/a"),
+            ("https://example.com:80/a", "https://example.com:80/a"),
+            ("http://example\u3002com\uff0e/a", "http://example.com/a"),
+            ("http://example.com\uff61/a", "http://example.com/a"),
             ("https://example.com/docs/", "https://example.com/docs/"),
         ],
-        ids=["full", "bare-host", "ipv6-port", "trailing-dot", "trailing-slash"],
+        ids=[
+            "full",
+            "bare-host",
+            "ipv6-port",
+            "trailing-dot",
+            "http-default-port",
+            "https-default-port",
+            "http-on-443",
+            "https-on-80",
+            "ideographic-full-stop",
+            "halfwidth-ideographic-stop",
+            "trailing-slash",
+        ],
     )
     def test_scheme_host_port_and_path_only(self, raw: str, name: str) -> None:
         assert HttpUrl(raw).document_name == name
@@ -88,6 +110,9 @@ class TestDocumentName:
 
 
 class TestParts:
+    def test_the_host_is_normalized_like_idna_does(self) -> None:
+        assert HttpUrl("http://Example\u3002Com.:81/a").host == "example.com"
+
     def test_host_and_path_are_the_admitted_parts(self) -> None:
         url = HttpUrl(_RAW)
         assert (url.host, url.path) == ("example.com", "/docs/guide")

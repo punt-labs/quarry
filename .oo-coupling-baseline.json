@@ -794,8 +794,8 @@
     "efferent_coupling": 2.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.0,
-    "avg_lcom": 0.0
+    "max_lcom": 1.0,
+    "avg_lcom": 1.0
   },
   "src/quarry/doctor.py": {
     "efferent_coupling": 9.0,

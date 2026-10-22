@@ -90,3 +90,8 @@ def test_display_is_total_and_never_echoes_an_unparseable_url() -> None:
 
 def test_display_of_a_good_url_drops_userinfo_query_and_fragment() -> None:
     assert CaptureUrl.display("https://u:pw@x.test/p?t=1#f") == "https://x.test/p"
+
+
+def test_redacted_drops_path_parameters_on_every_segment() -> None:
+    url = "https://x.test/a;sess=PSEC/b;x=1/c?q=1"
+    assert CaptureUrl(url).redacted(_scrub) == "https://x.test/a/b/c"

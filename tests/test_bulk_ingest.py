@@ -329,7 +329,7 @@ class TestBulkIngestRunnerRun:
         # py/incomplete-url-substring-sanitization): pins the whole
         # redacted message rather than a fragment that could also match an
         # unrelated look-alike string.
-        assert messages == ["Ingested https://example.com/page (1/1)"]
+        assert messages == ["Ingested https://example.com/…(1 segments) (1/1)"]
 
     def test_one_failure_is_isolated_and_its_message_captured(self) -> None:
         def _stub(
@@ -464,7 +464,7 @@ class TestBulkIngestRunnerRun:
             )
 
         assert (ingested, failed) == (1, 1)
-        assert errors == ["https://example.com/page: ValueError"]
+        assert errors == ["https://example.com/…(1 segments): ValueError"]
         for haystack in (errors[0], caplog.text, *messages):
             assert "abc123" not in haystack
             assert "token=abc123" not in haystack

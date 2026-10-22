@@ -217,7 +217,7 @@ class TestIngestUrl:
         # py/incomplete-url-substring-sanitization): pins the whole
         # redacted message rather than a fragment that could also match an
         # unrelated look-alike string.
-        assert fetching == ["Fetching: https://x.test/reset"]
+        assert fetching == ["Fetching: https://x.test/…(1 segments)"]
 
     @patch(_FETCH)
     def test_prefetched_html_skips_the_network_fetch(self, mock_fetch: MagicMock):
