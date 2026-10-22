@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 
 from quarry.content_guard import UnindexableContentError
@@ -103,3 +105,38 @@ class TestLabel:
     )
     def test_anything_else_is_not_echoed(self, raw: str) -> None:
         assert MediaTypePolicy.label(raw) == "(invalid)"
+
+
+class TestPolicyEntryValidation:
+    @pytest.mark.parametrize(
+        "build",
+        [
+            lambda: MediaTypePolicy(prefixes=("",)),
+            lambda: MediaTypePolicy(suffixes=("",)),
+            lambda: MediaTypePolicy(exact=frozenset({""})),
+            lambda: MediaTypePolicy(prefixes=("text",)),
+            lambda: MediaTypePolicy(suffixes=("json",)),
+            lambda: MediaTypePolicy(exact=frozenset({"application"})),
+            lambda: MediaTypePolicy(exact=frozenset({"Application/JSON"})),
+            lambda: MediaTypePolicy(prefixes=("Text/",)),
+            lambda: MediaTypePolicy(suffixes=("+JSON",)),
+            lambda: MediaTypePolicy(exact=frozenset({"text/plain; charset=utf-8"})),
+        ],
+        ids=[
+            "empty-prefix",
+            "empty-suffix",
+            "empty-exact",
+            "prefix-without-slash",
+            "suffix-without-plus",
+            "exact-without-subtype",
+            "uppercase-exact",
+            "uppercase-prefix",
+            "uppercase-suffix",
+            "exact-with-parameters",
+        ],
+    )
+    def test_a_malformed_entry_is_refused(
+        self, build: Callable[[], MediaTypePolicy]
+    ) -> None:
+        with pytest.raises(ValueError, match="media type policy entry"):
+            build()

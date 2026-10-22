@@ -12,8 +12,8 @@ from quarry.content_guard import UnindexableContentError
 class UnsupportedContentError(UnindexableContentError):
     """Raised before the body is read when the media type is not indexable text.
 
-    The message carries no URL, so ``"content rejected:"`` is safe to log and to
-    return to a client verbatim.
+    The message (prefixed ``content rejected:``) carries no URL, so it is safe to
+    log and to return to a client verbatim.
     """
 
 
@@ -24,8 +24,9 @@ class MediaTypePolicy:
 
     Anything else (a PDF, an image, an archive) is refused from the headers alone,
     before a single body byte is read.  An absent header is allowed: the content
-    classifier still judges the decoded body.  Entries are lowercase and a media
-    type is normalized (parameters dropped, lowercased) before it is compared.
+    classifier still judges the decoded body.  Entries are lowercase and
+    well-formed (an empty prefix would allow everything), and a media type is
+    normalized (parameters dropped, lowercased) before it is compared.
     """
 
     exact: frozenset[str] = frozenset(
@@ -43,12 +44,20 @@ class MediaTypePolicy:
     _TOKEN: ClassVar[re.Pattern[str]] = re.compile(
         r"[a-z0-9][a-z0-9.+_-]{0,126}/[a-z0-9.+_-]{1,127}"
     )
+    _PREFIX: ClassVar[re.Pattern[str]] = re.compile(r"[a-z0-9][a-z0-9.+_-]{0,126}/")
+    _SUFFIX: ClassVar[re.Pattern[str]] = re.compile(r"\+[a-z0-9.+_-]{1,127}")
 
     def __post_init__(self) -> None:
-        for entry in (*self.exact, *self.prefixes, *self.suffixes):
-            if entry != entry.lower():
-                msg = f"media type policy entries must be lowercase, got {entry!r}"
-                raise ValueError(msg)
+        shapes = (
+            (self.exact, self._TOKEN, "a lowercase type/subtype"),
+            (self.prefixes, self._PREFIX, "a lowercase type and a slash"),
+            (self.suffixes, self._SUFFIX, "a plus sign and a lowercase suffix"),
+        )
+        for entries, shape, expected in shapes:
+            for entry in entries:
+                if not shape.fullmatch(entry):
+                    msg = f"media type policy entry {entry!r} must be {expected}"
+                    raise ValueError(msg)
 
     @staticmethod
     def normalize(raw: str) -> str:
