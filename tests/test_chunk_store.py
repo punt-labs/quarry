@@ -9,7 +9,8 @@ import numpy as np
 import pytest
 
 from quarry.db.chunk_store import ChunkStore
-from quarry.db.chunk_table import ChunkTable, DocumentRef
+from quarry.db.chunk_table import ChunkTable
+from quarry.db.document_ref import DocumentRef
 from quarry.db.schema import TABLE_NAME
 from quarry.models import Chunk
 
@@ -114,20 +115,3 @@ class TestDeleteDocumentTail:
             ChunkStore(lance_db).delete_document_tail(DocumentRef("doc.txt", "col", 1))
             == 0
         )
-
-
-class TestDocumentRefInvariants:
-    def test_rejects_empty_document_name(self) -> None:
-        with pytest.raises(ValueError, match="document_name must be non-empty"):
-            DocumentRef("", "col")
-
-    def test_rejects_negative_watermark(self) -> None:
-        with pytest.raises(ValueError, match="min_chunk_index must be >= 0"):
-            DocumentRef("doc.txt", "col", -1)
-
-    def test_zero_watermark_is_a_valid_whole_document_ref(self) -> None:
-        # min 0 is legal for a whole-document selector (delete_document uses it);
-        # only delete_document_tail additionally requires a positive watermark.
-        ref = DocumentRef("doc.txt", "col")
-        assert ref.min_chunk_index == 0
-        assert "chunk_index" not in ref.predicate()

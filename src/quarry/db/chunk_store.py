@@ -6,8 +6,8 @@ import logging
 import threading
 from typing import TYPE_CHECKING, Self
 
-from quarry._sql import escape_sql
-from quarry.db.chunk_table import ChunkTable, DocumentRef
+from quarry.db.chunk_table import ChunkTable
+from quarry.db.document_ref import DocumentRef
 from quarry.db.schema import TABLE_NAME
 from quarry.types import LanceDB
 
@@ -133,7 +133,7 @@ class ChunkStore:
             return 0
         before = table.count_rows()
         with _write_lock:
-            table.delete(f"collection = '{escape_sql(collection)}'")
+            table.delete(DocumentRef.collection_clause(collection))
         after = table.count_rows()
         deleted = before - after
         logger.info("Deleted %d chunks for collection %s", deleted, collection)
@@ -145,5 +145,5 @@ class ChunkStore:
         if table is None:
             return 0
         if collection_filter:
-            return table.count_rows(f"collection = '{escape_sql(collection_filter)}'")
+            return table.count_rows(DocumentRef.collection_clause(collection_filter))
         return table.count_rows()

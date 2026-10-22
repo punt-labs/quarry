@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Self
 
 from quarry.db.chunk_table import ChunkTable
 from quarry.ingestion.backends import get_embedding_backend
-from quarry.ingestion.chunker import chunk_pages
+from quarry.ingestion.page_chunker import ChunkLabels, PageChunker
 from quarry.ingestion.progressive import ProgressiveIndexer
 
 if TYPE_CHECKING:
@@ -51,16 +51,12 @@ class DocumentStreamer:
         summary: str = "",
     ) -> list[Chunk]:
         """Chunk *pages* and assign a document-global, contiguous ``chunk_index``."""
-        chunks = chunk_pages(
-            pages,
-            max_chars=self._settings.chunk_max_chars,
-            overlap_chars=self._settings.chunk_overlap_chars,
-            collection=collection,
-            source_format=source_format,
-            agent_handle=agent_handle,
-            memory_type=memory_type,
-            summary=summary,
+        chunker = PageChunker(
+            self._settings.chunk_max_chars,
+            self._settings.chunk_overlap_chars,
+            ChunkLabels(collection, source_format, agent_handle, memory_type, summary),
         )
+        chunks = chunker.chunk(pages)
         return [replace(chunk, chunk_index=i) for i, chunk in enumerate(chunks)]
 
     def stream_batches(
@@ -82,6 +78,23 @@ class DocumentStreamer:
             batch = tail[offset : offset + window]
             vectors: NDArray[np.float32] = embedder.embed_texts([c.text for c in batch])
             yield batch, vectors
+
+    def insert(self, chunks: list[Chunk], store: ChunkStore, document_name: str) -> int:
+        """Embed *chunks* in windows and progressively insert via ProgressiveIndexer.
+
+        Bounds peak resident vectors to ``sync_flush_mb + one window`` and makes
+        each flushed window searchable, even for a single very large document.
+        """
+        indexer = ProgressiveIndexer(
+            _PlainFlushTarget(store),
+            flush_bytes=self._settings.sync_flush_mb * 1024 * 1024,
+        )
+        indexer.begin_file(document_name, total_chunks=len(chunks))
+        for batch, vectors in self.stream_batches(chunks):
+            indexer.add_window(document_name, batch, vectors)
+        indexer.complete_file(document_name)
+        indexer.drain()
+        return indexer.inserted_count
 
 
 class _PlainFlushTarget:
@@ -106,26 +119,3 @@ class _PlainFlushTarget:
 
     def on_flush(self, checkpoints: Sequence[FlushCheckpoint]) -> None:
         """Single-document ingest keeps no resume watermark — nothing to commit."""
-
-
-def progressive_insert(
-    chunks: list[Chunk],
-    store: ChunkStore,
-    settings: Settings,
-    document_name: str,
-) -> int:
-    """Embed *chunks* in windows and progressively insert via ProgressiveIndexer.
-
-    Bounds peak resident vectors to ``sync_flush_mb + one window`` and makes each
-    flushed window searchable, even for a single very large document.
-    """
-    target = _PlainFlushTarget(store)
-    indexer = ProgressiveIndexer(
-        target, flush_bytes=settings.sync_flush_mb * 1024 * 1024
-    )
-    indexer.begin_file(document_name, total_chunks=len(chunks))
-    for batch, vectors in DocumentStreamer(settings).stream_batches(chunks):
-        indexer.add_window(document_name, batch, vectors)
-    indexer.complete_file(document_name)
-    indexer.drain()
-    return indexer.inserted_count

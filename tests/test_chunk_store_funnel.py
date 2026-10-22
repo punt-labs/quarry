@@ -71,8 +71,8 @@ class TestEmptyChunksFailClosed:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [],
         )
         deleted: list[str] = []
         monkeypatch.setattr(
@@ -103,8 +103,8 @@ class TestNonEmptyChunksStore:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [_chunk()],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [_chunk()],
         )
         calls: list[str] = []
 
@@ -129,8 +129,8 @@ class TestNonEmptyChunksStore:
 
     def test_no_overwrite_skips_delete(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [_chunk()],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [_chunk()],
         )
         monkeypatch.setattr(
             "quarry.db.chunk_store.ChunkStore.insert_records",
@@ -153,8 +153,8 @@ class TestStatsMergedIntoResult:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [],
         )
 
         stats = IngestStats(total_pages=1, text_pages=1, image_pages=0)
@@ -174,8 +174,8 @@ class TestProgressReporting:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [_chunk()],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [_chunk()],
         )
         monkeypatch.setattr(
             "quarry.db.chunk_store.ChunkStore.insert_records",
@@ -202,8 +202,8 @@ class TestDocumentNameRedaction:
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [_chunk()],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [_chunk()],
         )
         monkeypatch.setattr(
             "quarry.db.chunk_store.ChunkStore.insert_records",
@@ -238,8 +238,8 @@ class TestDocumentNameRedaction:
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [],
         )
         credentialed_name = "https://user:pass@example.com/page?token=abc123"
 
@@ -267,8 +267,8 @@ class TestDocumentNameRedaction:
         must round-trip unchanged through the same redaction call.
         """
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [_chunk()],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [_chunk()],
         )
         monkeypatch.setattr(
             "quarry.db.chunk_store.ChunkStore.insert_records",
@@ -293,8 +293,8 @@ class TestDocumentNameRedaction:
         name whole, not hand it to CaptureUrl at all.
         """
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [_chunk()],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [_chunk()],
         )
         monkeypatch.setattr(
             "quarry.db.chunk_store.ChunkStore.insert_records",
@@ -319,8 +319,8 @@ class TestDocumentNameRedaction:
         must never raise, and the display value is the name unchanged.
         """
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [_chunk()],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [_chunk()],
         )
         monkeypatch.setattr(
             "quarry.db.chunk_store.ChunkStore.insert_records",

@@ -131,8 +131,8 @@ class TestIngestDocument:
             lambda _path, _pages, _total, **_kw: text_pages,
         )
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: chunks,
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: chunks,
         )
         _mock_embedding_backend(monkeypatch, vectors)
         monkeypatch.setattr(
@@ -188,8 +188,8 @@ class TestIngestDocument:
         )
         _mock_ocr_backend(monkeypatch, ocr_document_return=ocr_pages)
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: chunks,
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: chunks,
         )
         _mock_embedding_backend(monkeypatch, vectors)
         monkeypatch.setattr(
@@ -224,8 +224,8 @@ class TestIngestDocument:
         )
         _mock_ocr_backend(monkeypatch, ocr_document_return=ocr_pages)
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [],
         )
 
         from quarry.ingestion.pipeline import ingest_document
@@ -274,8 +274,8 @@ class TestIngestDocument:
             lambda _path, _pages, _total, **_kw: text_pages,
         )
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: chunks,
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: chunks,
         )
         _mock_embedding_backend(monkeypatch, np.zeros((1, 768), dtype=np.float32))
         monkeypatch.setattr(
@@ -326,8 +326,8 @@ class TestIngestDocument:
         )
         # Pages extract, but chunking yields nothing.
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [],
         )
 
         deleted: list[str] = []
@@ -363,8 +363,8 @@ class TestIngestDocument:
             lambda _path, _pages, _total, **_kw: [_make_page_content(1, PageType.TEXT)],
         )
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [],
         )
 
         from quarry.ingestion.pipeline import ingest_document
@@ -398,8 +398,8 @@ class TestIngestDocument:
         vectors = np.zeros((1, 768), dtype=np.float32)
 
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: chunks,
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: chunks,
         )
         _mock_embedding_backend(monkeypatch, vectors)
         monkeypatch.setattr(
@@ -440,8 +440,8 @@ class TestIngestDocument:
         vectors = np.zeros((1, 768), dtype=np.float32)
 
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: chunks,
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: chunks,
         )
         _mock_embedding_backend(monkeypatch, vectors)
         monkeypatch.setattr(
@@ -482,8 +482,8 @@ class TestIngestDocument:
         vectors = np.zeros((1, 768), dtype=np.float32)
 
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: chunks,
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: chunks,
         )
         _mock_embedding_backend(monkeypatch, vectors)
         monkeypatch.setattr(
@@ -530,8 +530,8 @@ class TestIngestText:
         vectors = np.zeros((1, 768), dtype=np.float32)
 
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: chunks,
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: chunks,
         )
         _mock_embedding_backend(monkeypatch, vectors)
         monkeypatch.setattr(
@@ -574,8 +574,8 @@ class TestIngestText:
             )
         ]
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: chunks,
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: chunks,
         )
         _mock_embedding_backend(monkeypatch, np.zeros((1, 768), dtype=np.float32))
         monkeypatch.setattr(
@@ -609,8 +609,8 @@ class TestIngestText:
     def test_overwrite_keeps_prior_when_chunks_empty(self, monkeypatch) -> None:
         """Inline content that chunks to zero must not delete the prior document."""
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [],
         )
 
         deleted: list[str] = []
@@ -635,8 +635,8 @@ class TestIngestText:
 
     def test_empty_text_returns_zero_chunks(self, monkeypatch):
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [],
         )
 
         from quarry.ingestion.ingest_context import IngestContext, Progress

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
@@ -1202,6 +1203,28 @@ class TestSyncCollectionProgressive:
         assert result.ingested == 1
         assert result.failed == 1
         assert any("bad.txt" in e for e in result.errors)
+        conn.close()
+
+    def test_binary_file_is_a_per_file_error_and_the_rest_index(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ):
+        settings = _settings(tmp_path)
+        db, conn, d = _make_collection(tmp_path, settings)
+        (d / "good.txt").write_text(_SENTENCE * 2)
+        (d / "other.txt").write_text(_SENTENCE * 3)
+        (d / "bad.txt").write_text("%PDF-1.5\n" + "\x00\x01\x02\x03" * 400)
+
+        with caplog.at_level(logging.WARNING), patched_embedder(FakeEmbeddingBackend()):
+            result = sync_collection(d, "col", db, settings, conn, max_workers=1)
+
+        assert result.ingested == 2
+        assert result.failed == 1
+        assert any(
+            "bad.txt" in e and "binary content rejected: pdf header" in e
+            for e in result.errors
+        )
+        assert _docnames(db) == {"good.txt", "other.txt"}
+        assert "bad.txt" in caplog.text
         conn.close()
 
     def test_deletes_removed_files(self, tmp_path: Path):

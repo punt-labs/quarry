@@ -12,6 +12,7 @@ import pytest
 from quarry.content_guard import UnsupportedContentError
 from quarry.daemon.ingest_jobs import IngestJob
 from quarry.daemon.tasks import TaskState
+from quarry.ingestion.fetched_body import FetchedBody
 from tests.inproc_daemon import InProcessDaemon
 
 if TYPE_CHECKING:
@@ -170,3 +171,24 @@ async def test_a_stored_url_completes_the_task_with_its_results(
     assert state.status == "completed"
     assert state.results == {"chunks": 7}
     assert state.error == ""
+
+
+async def test_a_binary_body_behind_a_text_media_type_stores_nothing(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A PDF served as text/plain passes the allow-list but not the classifier."""
+    daemon = InProcessDaemon(tmp_path)
+    state = TaskState(task_id="t-5", kind="ingest")
+    body = FetchedBody(text="%PDF-1.5\n" + "�" * 4000, media_type="text/plain")
+
+    with (
+        caplog.at_level(logging.WARNING),
+        patch("quarry.ingestion.web_fetch.WebFetcher.fetch_body", return_value=body),
+    ):
+        await _scrubbed_job("https://example.com/paper").run(daemon.ctx, state)
+
+    assert state.status == "failed"
+    assert state.error == "binary content rejected: pdf header"
+    assert daemon.ctx.database.store.count() == 0
+    [record] = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert record.exc_info is None

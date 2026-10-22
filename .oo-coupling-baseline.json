@@ -707,18 +707,18 @@
     "public_names": 2.0
   },
   "src/quarry/db/chunk_store.py": {
-    "avg_lcom": 0.679,
-    "circular_imports": 0.0,
     "efferent_coupling": 4.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
     "max_lcom": 0.679,
-    "public_names": 2.0
+    "avg_lcom": 0.679
   },
   "src/quarry/db/chunk_table.py": {
-    "avg_lcom": 0.5,
-    "circular_imports": 0.0,
     "efferent_coupling": 3.0,
-    "max_lcom": 1.0,
-    "public_names": 3.0
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.267,
+    "avg_lcom": 0.267
   },
   "src/quarry/db/connection.py": {
     "avg_lcom": 0.1,
@@ -726,6 +726,13 @@
     "efferent_coupling": 1.0,
     "max_lcom": 0.2,
     "public_names": 3.0
+  },
+  "src/quarry/db/document_ref.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 1.0,
+    "avg_lcom": 1.0
   },
   "src/quarry/db/facade.py": {
     "avg_lcom": 0.714,
@@ -740,6 +747,13 @@
     "efferent_coupling": 2.0,
     "max_lcom": 0.0,
     "public_names": 3.0
+  },
+  "src/quarry/db/row_budget.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.667,
+    "avg_lcom": 0.667
   },
   "src/quarry/db/schema.py": {
     "avg_lcom": 0.833,
@@ -1063,12 +1077,12 @@
     "max_lcom": 0.0,
     "public_names": 4.0
   },
-  "src/quarry/ingestion/chunker.py": {
-    "avg_lcom": 0.0,
+  "src/quarry/ingestion/chunk_store_funnel.py": {
+    "efferent_coupling": 2.0,
+    "public_names": 2.0,
     "circular_imports": 0.0,
-    "efferent_coupling": 1.0,
     "max_lcom": 0.0,
-    "public_names": 2.0
+    "avg_lcom": 0.0
   },
   "src/quarry/ingestion/extracted_document.py": {
     "efferent_coupling": 0.0,
@@ -1147,12 +1161,26 @@
     "max_lcom": 0.667,
     "avg_lcom": 0.667
   },
+  "src/quarry/ingestion/page_chunker.py": {
+    "efferent_coupling": 5.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.333,
+    "avg_lcom": 0.333
+  },
   "src/quarry/ingestion/page_geometry.py": {
     "avg_lcom": 0.667,
     "circular_imports": 0.0,
     "efferent_coupling": 0.0,
     "max_lcom": 0.667,
     "public_names": 1.0
+  },
+  "src/quarry/ingestion/page_splitter.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 1.0,
+    "avg_lcom": 1.0
   },
   "src/quarry/ingestion/pdf_reflow.py": {
     "avg_lcom": 0.982,
@@ -1203,6 +1231,13 @@
     "max_lcom": 0.0,
     "public_names": 2.0
   },
+  "src/quarry/ingestion/sentence_chunker.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.267,
+    "avg_lcom": 0.267
+  },
   "src/quarry/ingestion/ssrf_redirect.py": {
     "avg_lcom": 0.0,
     "circular_imports": 0.0,
@@ -1211,11 +1246,11 @@
     "public_names": 2.0
   },
   "src/quarry/ingestion/streaming.py": {
-    "avg_lcom": 0.416,
-    "circular_imports": 0.0,
     "efferent_coupling": 4.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
     "max_lcom": 0.833,
-    "public_names": 2.0
+    "avg_lcom": 0.416
   },
   "src/quarry/ingestion/text_format.py": {
     "avg_lcom": 1.0,

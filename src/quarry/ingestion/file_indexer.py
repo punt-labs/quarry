@@ -25,7 +25,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Self, final
 
-from quarry.db.chunk_table import DocumentRef
+from quarry.db.document_ref import DocumentRef
 from quarry.ingestion.file_flush_target import SingleFileFlushTarget
 from quarry.ingestion.pipeline import plan_file_chunks
 from quarry.ingestion.progressive import ProgressiveIndexer

@@ -305,8 +305,8 @@ class TestNewColumnsInPipeline:
 
 class TestChunkerThreading:
     def test_chunk_pages_passes_new_fields(self) -> None:
-        """chunk_pages threads agent_handle, memory_type, summary to Chunks."""
-        from quarry.ingestion.chunker import chunk_pages
+        """PageChunker threads agent_handle, memory_type, summary to Chunks."""
+        from quarry.ingestion.page_chunker import ChunkLabels, PageChunker
         from quarry.models import PageContent, PageType
 
         pages = [
@@ -319,20 +319,21 @@ class TestChunkerThreading:
                 page_type=PageType.TEXT,
             )
         ]
-        chunks = chunk_pages(
-            pages,
-            agent_handle="kpz",
-            memory_type="observation",
-            summary="Test observation",
-        )
+        chunks = PageChunker(
+            labels=ChunkLabels(
+                agent_handle="kpz",
+                memory_type="observation",
+                summary="Test observation",
+            )
+        ).chunk(pages)
         assert len(chunks) >= 1
         assert chunks[0].agent_handle == "kpz"
         assert chunks[0].memory_type == "observation"
         assert chunks[0].summary == "Test observation"
 
     def test_chunk_pages_defaults_new_fields(self) -> None:
-        """chunk_pages defaults new fields to empty strings."""
-        from quarry.ingestion.chunker import chunk_pages
+        """PageChunker defaults new fields to empty strings."""
+        from quarry.ingestion.page_chunker import PageChunker
         from quarry.models import PageContent, PageType
 
         pages = [
@@ -345,7 +346,7 @@ class TestChunkerThreading:
                 page_type=PageType.TEXT,
             )
         ]
-        chunks = chunk_pages(pages)
+        chunks = PageChunker().chunk(pages)
         assert len(chunks) >= 1
         assert chunks[0].agent_handle == ""
         assert chunks[0].memory_type == ""

@@ -16,7 +16,7 @@ import time
 from typing import TYPE_CHECKING, cast, final
 
 from quarry.capture_url import CaptureUrl
-from quarry.ingestion.streaming import DocumentStreamer, progressive_insert
+from quarry.ingestion.streaming import DocumentStreamer
 
 if TYPE_CHECKING:
     from quarry.ingestion.extracted_document import ExtractedDocument
@@ -90,8 +90,8 @@ class ChunkStoreFunnel:
             )
         progress("Embedding + storing in bounded windows")
         t0 = time.perf_counter()
-        inserted = progressive_insert(
-            chunks, context.database.store, context.settings, document_name
+        inserted = DocumentStreamer(context.settings).insert(
+            chunks, context.database.store, document_name
         )
         logger.info(
             "pipeline: embedded + stored %d chunks in %.2fs",

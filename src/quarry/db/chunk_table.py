@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import logging
 import threading
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from typing import TYPE_CHECKING, Self
 
-from quarry._sql import escape_sql
+from quarry.db.row_budget import RowBudget
 from quarry.db.schema import TABLE_NAME, SchemaManager
 from quarry.types import LanceDB, LanceTable
 
@@ -23,38 +23,6 @@ logger = logging.getLogger(__name__)
 
 # Guards ``create_table`` against concurrent creation (double-checked below).
 _table_lock = threading.Lock()
-
-
-@dataclass(frozen=True, slots=True)
-class DocumentRef:
-    """A scoped selector for a document's chunks.
-
-    Owns the SQL predicate that selects the document's rows. ``min_chunk_index``
-    of 0 selects the whole document; a positive watermark restricts to the resume
-    tail ``chunk_index >= min_chunk_index`` (DES-034 §5.3), so a single value
-    object drives both full-document and tail deletes.
-    """
-
-    document_name: str
-    collection: str | None = None
-    min_chunk_index: int = 0
-
-    def __post_init__(self) -> None:
-        if not self.document_name:
-            msg = "DocumentRef.document_name must be non-empty"
-            raise ValueError(msg)
-        if self.min_chunk_index < 0:
-            msg = f"min_chunk_index must be >= 0, got {self.min_chunk_index}"
-            raise ValueError(msg)
-
-    def predicate(self) -> str:
-        """Return the document/collection/watermark selection clause."""
-        clause = f"document_name = '{escape_sql(self.document_name)}'"
-        if self.collection:
-            clause += f" AND collection = '{escape_sql(self.collection)}'"
-        if self.min_chunk_index > 0:
-            clause += f" AND chunk_index >= {self.min_chunk_index}"
-        return clause
 
 
 class ChunkTable:
@@ -74,9 +42,16 @@ class ChunkTable:
         chunks: list[Chunk],
         vectors: NDArray[np.float32],
     ) -> list[dict[str, object]]:
-        """Build LanceDB row dicts from chunks and their embedding vectors."""
+        """Build LanceDB row dicts from chunks and their embedding vectors.
+
+        The one place every writer builds rows, so it is where the row budget is
+        enforced: a page or chunk over budget raises, never truncates.
+        """
+        budget = RowBudget()
         records: list[dict[str, object]] = []
         for chunk, vector in zip(chunks, vectors, strict=True):
+            budget.require_page(chunk.page_raw_text)
+            budget.require_chunk(chunk.text)
             record: dict[str, object] = asdict(chunk)
             record["vector"] = vector.tolist()
             records.append(record)
@@ -88,7 +63,7 @@ class ChunkTable:
         Tolerates a stale ``list_tables`` cache that lists the table but whose
         ``open_table`` then raises a "not found" ``ValueError``.
         """
-        if TABLE_NAME not in self._db.list_tables().tables:
+        if not self._is_listed():
             return None
         try:
             return self._db.open_table(TABLE_NAME)
@@ -117,18 +92,13 @@ class ChunkTable:
         inserts *records* as part of creation). Uses double-checked locking so
         concurrent sync workers cannot race table creation.
         """
-        mgr = SchemaManager(self._db)
-        if TABLE_NAME in self._db.list_tables().tables:
-            table = self.open_migrated()
+        table = self._open_listed()
+        if table is not None:
+            return table
+        with _table_lock:
+            table = self._open_listed()
             if table is not None:
                 return table
-            logger.debug("open_table failed after list_tables, creating")
-        with _table_lock:
-            if TABLE_NAME in self._db.list_tables().tables:
-                table = self.open_migrated()
-                if table is not None:
-                    return table
-                logger.debug("Table listed but open_table failed under lock, creating")
             try:
                 table = self._db.create_table(
                     TABLE_NAME, data=list(records), schema=SchemaManager.schema()
@@ -143,5 +113,17 @@ class ChunkTable:
                         f"Table {TABLE_NAME} reported as existing but cannot be opened"
                     ) from exc
                 return table
-            mgr.ensure_fts_index(table)
+            SchemaManager(self._db).ensure_fts_index(table)
             return None
+
+    def _is_listed(self) -> bool:
+        return TABLE_NAME in self._db.list_tables().tables
+
+    def _open_listed(self) -> LanceTable | None:
+        """Open the table if it is listed; ``None`` when absent or unopenable."""
+        if not self._is_listed():
+            return None
+        table = self.open_migrated()
+        if table is None:
+            logger.debug("open_table failed after list_tables, creating")
+        return table
