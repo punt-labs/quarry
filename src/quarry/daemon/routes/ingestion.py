@@ -53,7 +53,7 @@ class IngestionRoutes(ContentRouteGroup):
         body = await self._authorized_body(request, MAX_INGEST_BODY_BYTES)
         if isinstance(body, JSONResponse):
             return body
-        oversized = self._reject_oversized(body)
+        oversized = self._reject_oversized(body, "ingest")
         if oversized is not None:
             return oversized
 
@@ -99,17 +99,18 @@ class IngestionRoutes(ContentRouteGroup):
         content = self._require_content(body, "content", "remember")
         if isinstance(content, JSONResponse):
             return content
-        overwrite = RequestGuards.coerce_bool_field(body, "overwrite", default=True)
-        if isinstance(overwrite, JSONResponse):
-            return overwrite
-        tags = self._require_tags(body)
-        if isinstance(tags, JSONResponse):
-            return tags
-        memory_type, format_hint = tags
-        agent_handle = self._str_field(body, "agent_handle", "")
+        options = self._require_options(body)
+        if isinstance(options, JSONResponse):
+            return options
+        overwrite, memory_type, format_hint = options
+        # ``memory-<handle>`` is longer than the handle that passed the label cap.
         collection = self._resolve_memory_collection(
-            self._str_field(body, "collection", ""), agent_handle
+            self._str_field(body, "collection", ""),
+            self._str_field(body, "agent_handle", ""),
         )
+        refused = self._reject_oversized({"collection": collection}, "remember")
+        if refused is not None:
+            return refused
         labels = self._labels(
             memory_type, body, overwrite=overwrite, collection=collection
         )
@@ -126,7 +127,9 @@ class IngestionRoutes(ContentRouteGroup):
         lesson = self._require_text(body, "lesson")
         if isinstance(lesson, JSONResponse):
             return lesson
-        rejection = self._reject_oversized(body) or self._reject_binary(lesson, "learn")
+        rejection = self._reject_oversized(body, "learn") or self._reject_binary(
+            lesson, "learn"
+        )
         if rejection is not None:
             return rejection
         try:

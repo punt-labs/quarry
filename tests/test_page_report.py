@@ -32,12 +32,20 @@ class TestFailure:
         assert record.levelno == logging.WARNING
         assert record.exc_info is None
 
+    def test_a_row_budget_violation_is_a_refusal_with_its_reason(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        reason = "row budget exceeded: text 70,000 bytes > 65,536"
+        with caplog.at_level(logging.WARNING):
+            text = PageReport(_URL).failure(RowBudgetError(reason))
+        assert text == f"https://example.com/p: {reason}"
+        assert caplog.records[0].levelno == logging.WARNING
+
     @pytest.mark.parametrize(
         "exc",
         [
             OSError("Cannot reach https://u:p@h/?token=1"),
             BadStatusLine("token=1"),
-            RowBudgetError("row budget exceeded: text 70,000 bytes > 65,536"),
         ],
     )
     def test_other_expected_failures_name_their_class_alone(

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from quarry.content_guard import UnindexableContentError
 from quarry.daemon.refusal_aware_terminal import RefusalAwareTerminal
 from quarry.daemon.tasks import TaskState
+from quarry.db.row_budget import RowBudgetError
 
 if TYPE_CHECKING:
     import pytest
@@ -125,3 +126,39 @@ def test_complete_records_the_results() -> None:
         {"chunks": 3},
         "",
     )
+
+
+def test_a_subject_that_raises_anything_falls_back_to_unnamed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def subject() -> str:
+        msg = "not a ValueError"
+        raise RuntimeError(msg)
+
+    state = _state()
+    with (
+        caplog.at_level(logging.WARNING),
+        RefusalAwareTerminal(state, subject).record(),
+    ):
+        _raise(UnindexableContentError("binary content rejected: pdf header"))
+
+    assert state.status == "failed"
+    [record] = caplog.records
+    assert record.getMessage() == (
+        "Background remember (unnamed) (task t-1) rejected: "
+        "binary content rejected: pdf header"
+    )
+
+
+def test_a_row_budget_violation_is_a_refusal_not_a_fault(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    state = _state()
+    reason = "row budget exceeded: summary 8,193 bytes > 8,192"
+    with caplog.at_level(logging.WARNING), RefusalAwareTerminal(state).record():
+        _raise(RowBudgetError(reason))
+
+    assert (state.status, state.error) == ("failed", reason)
+    [record] = caplog.records
+    assert record.levelno == logging.WARNING
+    assert record.exc_info is None

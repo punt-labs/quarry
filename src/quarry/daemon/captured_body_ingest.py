@@ -99,16 +99,15 @@ class CapturedBodyIngest:
         """Fetch ``source``; any failure is a URL-free ``UnindexableContentError``."""
         return self._fetcher.fetch_body(self._source)
 
-    def run(
-        self, ctx: DaemonContext, *, require_text: bool = False
-    ) -> dict[str, object]:
+    def run(self, ctx: DaemonContext) -> dict[str, object]:
         """Fetch and store ``source``, returning the ingest result.
 
         Raises:
-            UnindexableContentError: *require_text* is set and nothing was stored.
+            UnindexableContentError: The fetch failed or was refused, or nothing
+                was stored: a page that extracts to no text is not a success.
         """
         result = self.ingest(ctx, self.fetch())
-        if require_text and not result.get("chunks"):
+        if not result.get("chunks"):
             msg = "capture stored nothing: no text extracted"
             raise UnindexableContentError(msg)
         return result

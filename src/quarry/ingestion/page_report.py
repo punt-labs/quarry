@@ -9,7 +9,6 @@ from typing import Self, final
 
 from quarry.capture_url import CaptureUrl
 from quarry.content_guard import UnindexableContentError
-from quarry.db.row_budget import RowBudgetError
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +45,7 @@ class PageReport:
     def failure(self, exc: Exception) -> str:
         """Log *exc* for this page and return its ``"<url>: <reason>"`` line."""
         reason = self.reason(exc)
-        if isinstance(
-            exc, UnindexableContentError | OSError | HTTPException | RowBudgetError
-        ):
+        if isinstance(exc, UnindexableContentError | OSError | HTTPException):
             logger.warning("Failed to ingest %s (%s)", self._url, reason)
         else:
             logger.error(

@@ -51,13 +51,10 @@ class CaptureRoutes(ContentRouteGroup):
         name = self._capture_name(body)
         if isinstance(name, JSONResponse):
             return name
-        overwrite = RequestGuards.coerce_bool_field(body, "overwrite", default=True)
-        if isinstance(overwrite, JSONResponse):
-            return overwrite
-        tags = self._require_tags(body)
-        if isinstance(tags, JSONResponse):
-            return tags
-        memory_type, format_hint = tags
+        options = self._require_options(body)
+        if isinstance(options, JSONResponse):
+            return options
+        overwrite, memory_type, format_hint = options
         source_url = self._str_field(body, "source_url")
         url_rejection = await self._reject_unsafe_source(source_url)
         if url_rejection is not None:

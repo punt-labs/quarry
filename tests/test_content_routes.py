@@ -447,6 +447,78 @@ class TestOversizedLabels:
         )
         self._assert_refused(resp.status_code, resp.json(), "summary", daemon)
 
+    @pytest.mark.parametrize("field", ["agent_handle", "collection"])
+    def test_remember_refuses_an_oversized_routing_label(
+        self, http: TestClient, daemon: InProcessDaemon, field: str
+    ) -> None:
+        resp = http.post(
+            "/v1/remember", json={"name": "n.md", "content": _CLEAN, field: self._BIG}
+        )
+        self._assert_refused(resp.status_code, resp.json(), field, daemon)
+
+    def test_remember_refuses_a_derived_collection_over_the_cap(
+        self, http: TestClient, daemon: InProcessDaemon
+    ) -> None:
+        """``memory-<handle>`` is 7 bytes longer than the handle that passed."""
+        resp = http.post(
+            "/v1/remember",
+            json={"name": "n.md", "content": _CLEAN, "agent_handle": "h" * 8_190},
+        )
+        assert resp.status_code == 400
+        assert resp.json() == {
+            "error": "row budget exceeded: collection 8,197 bytes > 8,192"
+        }
+        assert len(daemon.ctx.tasks) == 0
+
+    @pytest.mark.parametrize("field", ["agent_handle", "collection"])
+    def test_ingest_refuses_an_oversized_routing_label(
+        self, http: TestClient, daemon: InProcessDaemon, field: str
+    ) -> None:
+        resp = http.post(
+            "/v1/ingest", json={"source": "https://example.com/p", field: self._BIG}
+        )
+        self._assert_refused(resp.status_code, resp.json(), field, daemon)
+
+    @pytest.mark.parametrize("field", ["agent_handle", "collection"])
+    def test_capture_refuses_an_oversized_routing_label(
+        self, http: TestClient, daemon: InProcessDaemon, tmp_path: Path, field: str
+    ) -> None:
+        resp = http.post(
+            "/v1/capture",
+            json={
+                "content": _CLEAN,
+                "session_id": "abcd1234ef",
+                "cwd": str(tmp_path),
+                field: self._BIG,
+            },
+        )
+        self._assert_refused(resp.status_code, resp.json(), field, daemon)
+
+    def test_ingest_refuses_an_over_long_source(
+        self, http: TestClient, daemon: InProcessDaemon
+    ) -> None:
+        resp = http.post("/v1/ingest", json={"source": "https://e.test/" + self._BIG})
+        assert resp.status_code == 400
+        assert resp.json() == {
+            "error": "row budget exceeded: source 8,208 bytes > 8,192"
+        }
+        assert len(daemon.ctx.tasks) == 0
+
+    def test_an_oversized_label_is_logged_once_at_warning(
+        self, http: TestClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING):
+            http.post(
+                "/v1/remember",
+                json={"name": "n.md", "content": _CLEAN, "summary": self._BIG},
+            )
+        assert [(r.levelname, r.getMessage()) for r in caplog.records] == [
+            (
+                "WARNING",
+                "remember refused: row budget exceeded: summary 8,193 bytes > 8,192",
+            )
+        ]
+
     def test_labels_at_the_cap_are_accepted(self, http: TestClient) -> None:
         with patch(
             "quarry.ingestion.web_ingest.ingest_content", return_value={"chunks": 1}

@@ -11,6 +11,7 @@ from quarry.content_guard import BinaryContent, UnindexableContentError
 from quarry.daemon.captured_body_ingest import IngestLabels
 from quarry.daemon.routes.base import RouteGroup
 from quarry.db.row_budget import RowBudget, RowBudgetError
+from quarry.http_guards import RequestGuards
 from quarry.ingestion.memory_type_guard import MemoryTypeGuard
 from quarry.ingestion.web_ingest import FormatHint
 
@@ -43,6 +44,8 @@ class ContentRouteGroup(RouteGroup):
         "summary",
         "topic",
         "source",
+        "agent_handle",
+        "collection",
     )
 
     @classmethod
@@ -63,11 +66,14 @@ class ContentRouteGroup(RouteGroup):
         return None
 
     @classmethod
-    def _reject_oversized(cls, body: dict[str, object]) -> JSONResponse | None:
-        """Return a 400 if a name or summary field of *body* is over the label cap.
+    def _reject_oversized(
+        cls, body: dict[str, object], kind: str
+    ) -> JSONResponse | None:
+        """Return a 400 if a name, summary or routing field of *body* is over the cap.
 
         Each is copied onto every chunk row, so an oversized one could overflow a
-        scan batch.  The reason names the field and the sizes, never the value.
+        scan batch.  The reason names the field and the sizes, never the value, and
+        the refusal is logged once with the route *kind*, like a binary one.
         """
         try:
             for key in cls._LABEL_FIELDS:
@@ -75,6 +81,7 @@ class ContentRouteGroup(RouteGroup):
                 if isinstance(value, str):
                     cls._BUDGET.require_label(key, value)
         except RowBudgetError as exc:
+            logger.warning("%s refused: %s", kind, exc)
             return JSONResponse({"error": str(exc)}, status_code=400)
         return None
 
@@ -88,7 +95,9 @@ class ContentRouteGroup(RouteGroup):
         text = self._require_text(body, key)
         if isinstance(text, JSONResponse):
             return text
-        rejection = self._reject_oversized(body) or self._reject_binary(text, kind)
+        rejection = self._reject_oversized(body, kind) or self._reject_binary(
+            text, kind
+        )
         return text if rejection is None else rejection
 
     def _accept(self, kind: str, job: IngestUnit | JSONResponse) -> JSONResponse:
@@ -111,17 +120,23 @@ class ContentRouteGroup(RouteGroup):
     def _is_format_hint(cls, raw: str) -> TypeIs[FormatHint]:
         return raw in cls._FORMAT_HINTS
 
-    def _require_tags(
+    def _require_options(
         self, body: dict[str, object]
-    ) -> tuple[MemoryType, FormatHint] | JSONResponse:
-        """Return the validated ``(memory_type, format_hint)`` of *body*, or a 400."""
+    ) -> tuple[bool, MemoryType, FormatHint] | JSONResponse:
+        """Return ``(overwrite, memory_type, format_hint)`` of *body*, or a 400.
+
+        ``overwrite`` defaults to true, as it does for ``remember`` and ``capture``.
+        """
+        overwrite = RequestGuards.coerce_bool_field(body, "overwrite", default=True)
+        if isinstance(overwrite, JSONResponse):
+            return overwrite
         memory_type = self._require_memory_type(body)
         if isinstance(memory_type, JSONResponse):
             return memory_type
         format_hint = self._require_format_hint(body)
         if isinstance(format_hint, JSONResponse):
             return format_hint
-        return memory_type, format_hint
+        return overwrite, memory_type, format_hint
 
     def _require_memory_type(
         self, body: dict[str, object]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.content_guard import UnindexableContentError
@@ -65,10 +65,11 @@ class RefusalAwareTerminal:
         """Record the failure first, then log it: naming the task cannot undo it."""
         self._state.status = "failed"
         self._state.error = str(exc)
-        try:
+        subject = "(unnamed)"
+        # The subject only decorates a log line, so whatever naming it raises must
+        # not stop the failure from being logged.
+        with suppress(Exception):
             subject = self._subject()
-        except ValueError:  # the subject only decorates a log line
-            subject = "(unnamed)"
         logger.warning(
             "Background %s %s (task %s) rejected: %s",
             self._state.kind,

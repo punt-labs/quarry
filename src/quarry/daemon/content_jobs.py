@@ -218,4 +218,4 @@ class CaptureIngestJob:
         )
         return CapturedBodyIngest(
             self.source_url, self.inline.labels, self.inline.name
-        ).run(ctx, require_text=True)
+        ).run(ctx)

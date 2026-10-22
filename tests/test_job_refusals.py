@@ -494,3 +494,39 @@ async def test_a_crawl_where_every_page_is_a_pdf_fails_the_task(
     terminal = [r for r in caplog.records if r.name.endswith("refusal_aware_terminal")]
     assert [r.levelno for r in terminal] == [logging.WARNING]
     assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+
+async def test_a_refetched_empty_text_body_fails_the_capture(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A marker-only body is no text: nothing meaningful would be stored."""
+    daemon = InProcessDaemon(tmp_path)
+    state = TaskState(task_id="t-blank", kind="capture")
+    body = FetchedBody("  \n", "text/plain")
+
+    with (
+        caplog.at_level(logging.WARNING),
+        patch("quarry.ingestion.web_fetch.WebFetcher.fetch_body", return_value=body),
+    ):
+        await _capture_job().run(daemon.ctx, state)
+
+    assert state.status == "failed"
+    assert state.error == "capture stored nothing: no text extracted"
+    assert daemon.ctx.database.store.count() == 0
+
+
+async def test_a_scrubbed_ingest_of_an_empty_page_fails_the_task(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    daemon = InProcessDaemon(tmp_path)
+    state = TaskState(task_id="t-empty-ingest", kind="ingest")
+    body = FetchedBody("<html><body></body></html>", "text/html")
+
+    with (
+        caplog.at_level(logging.WARNING),
+        patch("quarry.ingestion.web_fetch.WebFetcher.fetch_body", return_value=body),
+    ):
+        await _ingest_job(scrub=True).run(daemon.ctx, state)
+
+    _assert_quiet_and_url_free(state, caplog)
+    assert state.error == "capture stored nothing: no text extracted"
