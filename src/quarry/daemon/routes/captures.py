@@ -12,7 +12,7 @@ from quarry.api.capture_ingest import SESSION_ID_PREFIX_LEN
 from quarry.capture_url import CaptureUrl
 from quarry.captures_collection import CapturesCollection
 from quarry.daemon.content_jobs import CaptureIngestJob, ScrubbedIngestJob
-from quarry.daemon.routes.base import RouteGroup
+from quarry.daemon.routes.content_group import ContentRouteGroup
 from quarry.http_guards import RequestGuards
 from quarry.url_safety import UrlSafetyCheck
 
@@ -27,7 +27,7 @@ MAX_CAPTURE_BODY_BYTES = 4 * 1024 * 1024
 
 
 @final
-class CaptureRoutes(RouteGroup):
+class CaptureRoutes(ContentRouteGroup):
     """Serve capture ingest (``POST /v1/capture``) and capture push."""
 
     async def capture(self, request: Request) -> JSONResponse:
@@ -49,7 +49,7 @@ class CaptureRoutes(RouteGroup):
         self, body: dict[str, object]
     ) -> CaptureIngestJob | JSONResponse:
         """Validate a capture body into a :class:`CaptureIngestJob` or a 400."""
-        content = self._require_text(body, "content")
+        content = self._require_content(body, "content")
         if isinstance(content, JSONResponse):
             return content
         name = self._capture_name(body)
@@ -58,10 +58,9 @@ class CaptureRoutes(RouteGroup):
         overwrite = RequestGuards.coerce_bool_field(body, "overwrite", default=True)
         if isinstance(overwrite, JSONResponse):
             return overwrite
-        memory_type = self._str_field(body, "memory_type")
-        rejection = self.reject_invalid_memory_type(memory_type)
-        if rejection is not None:
-            return rejection
+        memory_type = self._require_memory_type(body)
+        if isinstance(memory_type, JSONResponse):
+            return memory_type
         source_url = self._str_field(body, "source_url")
         url_rejection = await self._reject_unsafe_source(source_url)
         if url_rejection is not None:

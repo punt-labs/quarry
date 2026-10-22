@@ -16,7 +16,7 @@ from starlette.responses import JSONResponse
 from quarry.captures_collection import CapturesCollection
 from quarry.daemon.content_jobs import ScrubbedIngestJob
 from quarry.daemon.ingest_jobs import IngestJob
-from quarry.daemon.routes.base import RouteGroup
+from quarry.daemon.routes.content_group import ContentRouteGroup
 from quarry.http_guards import RequestGuards
 from quarry.ingest_collection import IngestCollection
 from quarry.lesson import LessonComposer, LessonsCollection
@@ -29,7 +29,7 @@ MAX_LEARN_BODY_BYTES = 64 * 1024
 
 
 @final
-class IngestionRoutes(RouteGroup):
+class IngestionRoutes(ContentRouteGroup):
     """Serve inline-text and URL ingestion as 202 background tasks."""
 
     async def remember(self, request: Request) -> JSONResponse:
@@ -59,7 +59,7 @@ class IngestionRoutes(RouteGroup):
         if isinstance(body, JSONResponse):
             return body
 
-        source = self._require_text(body, "source")
+        source = self._require_content(body, "source")
         if isinstance(source, JSONResponse):
             return source
         # UrlSafetyCheck owns all scheme + address validation.  It calls
@@ -107,16 +107,15 @@ class IngestionRoutes(RouteGroup):
         name = self._require_text(body, "name")
         if isinstance(name, JSONResponse):
             return name
-        content = self._require_text(body, "content")
+        content = self._require_content(body, "content")
         if isinstance(content, JSONResponse):
             return content
         overwrite = RequestGuards.coerce_bool_field(body, "overwrite", default=True)
         if isinstance(overwrite, JSONResponse):
             return overwrite
-        memory_type = self._str_field(body, "memory_type", "")
-        rejection = self.reject_invalid_memory_type(memory_type)
-        if rejection is not None:
-            return rejection
+        memory_type = self._require_memory_type(body)
+        if isinstance(memory_type, JSONResponse):
+            return memory_type
         agent_handle = self._str_field(body, "agent_handle", "")
         collection = self._resolve_memory_collection(
             self._str_field(body, "collection", ""), agent_handle
@@ -141,7 +140,7 @@ class IngestionRoutes(RouteGroup):
         Naming, collection routing, and memory_type are single server-side
         rules so no surface can drift them (bug class 3).
         """
-        lesson = self._require_text(body, "lesson")
+        lesson = self._require_content(body, "lesson")
         if isinstance(lesson, JSONResponse):
             return lesson
         try:
@@ -186,10 +185,9 @@ class IngestionRoutes(RouteGroup):
         scrub = RequestGuards.coerce_bool_field(body, "scrub", default=False)
         if isinstance(scrub, JSONResponse):
             return scrub
-        memory_type = self._str_field(body, "memory_type", "")
-        rejection = self.reject_invalid_memory_type(memory_type)
-        if rejection is not None:
-            return rejection
+        memory_type = self._require_memory_type(body)
+        if isinstance(memory_type, JSONResponse):
+            return memory_type
         collection = await self._ingest_collection(body, scrub=scrub)
         # Key the queue on the ACTUAL table: the explicit/captures name if set,
         # else the URL hostname — the SAME resolver the pipeline applies, so the

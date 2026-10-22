@@ -103,3 +103,16 @@ class TestOtherDoorsShareTheBoundary:
             "pre-compact: run backfill-sessions" in rec.getMessage()
             for rec in caplog.records
         )
+
+
+class TestSendCaptureRefusedAsBinary:
+    def test_the_hook_logs_the_reason_and_never_raises(
+        self, daemon_client: MagicMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A PDF capture earns a 400 from the daemon; the hook only logs it."""
+        reason = "binary content rejected: pdf header"
+        daemon_client.capture.side_effect = HttpError(reason, 400, "")
+        with caplog.at_level("WARNING", logger="quarry.daemon_capture"):
+            sent = DaemonCaptureSender().send_capture(_CAPTURE, unreachable_log="x")
+        assert sent is False
+        assert any(reason in rec.getMessage() for rec in caplog.records)
