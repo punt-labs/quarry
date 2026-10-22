@@ -84,15 +84,13 @@ class ChunkStore:
         if table is None:
             return 0
         predicate = DocumentRef(document_name, collection).predicate()
-        if not count:
-            with _write_lock:
-                table.delete(predicate)
-            logger.info("Issued chunk delete for %s (counting disabled)", document_name)
-            return 0
-        deleted = table.count_rows(predicate)
+        deleted = table.count_rows(predicate) if count else 0
         with _write_lock:
             table.delete(predicate)
-        logger.info("Deleted %d chunks for %s", deleted, document_name)
+        if count:
+            logger.info("Deleted %d chunks for %s", deleted, document_name)
+        else:
+            logger.info("Issued chunk delete for %s (counting disabled)", document_name)
         return deleted
 
     def delete_document_tail(self, ref: DocumentRef) -> int:
