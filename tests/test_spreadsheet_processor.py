@@ -300,15 +300,6 @@ class TestHugeCsvCell:
         assert pages
         assert sum(page.text.count("x") for page in pages) >= len(cell)
 
-    def test_the_stdlib_limit_is_restored_afterwards(self, tmp_path: Path):
-        import csv
-
-        before = csv.field_size_limit()
-        path = tmp_path / "wide.csv"
-        path.write_text("note\n" + "x" * 140_000 + "\n")
-        _extractor.extract_pages(path)
-        assert csv.field_size_limit() == before
-
     def test_a_cell_over_the_page_cap_is_a_quiet_refusal(self, tmp_path: Path):
         from quarry.content_guard import UnindexableContentError
         from quarry.db.row_budget import RowBudget

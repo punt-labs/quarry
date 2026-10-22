@@ -10,6 +10,11 @@ from quarry.content_guard import UnindexableContentError
 from quarry.db.row_budget import RowBudget
 from quarry.latex_utils import LatexSerializer
 
+# The csv module's field limit is process-global, so it is set exactly once, here,
+# to a fixed value that is only ever above the stdlib default.  An idempotent
+# assignment cannot race; a per-parse set and restore would, across sync workers.
+csv.field_size_limit(RowBudget().max_page_bytes)
+
 
 @final
 class SheetTables:
@@ -18,11 +23,11 @@ class SheetTables:
     CSV text parses with the ``csv`` module's field limit set on purpose.
 
     The stdlib refuses a field over 128 KiB, which a legitimate wide cell can
-    exceed.  The limit is raised only as far as one stored page may be, not to
-    ``sys.maxsize``, so a hostile file cannot make the parser hold an unbounded
-    field.  The limit is process-global, so it is restored afterwards.  A field
-    that still does not fit is a refusal with fixed, path-free text, so it is a
-    per-file refusal in sync and a quiet task failure elsewhere, never a crash.
+    exceed.  The limit is raised, once at import, only as far as one stored page
+    may be, not to ``sys.maxsize``, so a hostile file cannot make the parser hold
+    an unbounded field.  A field that still does not fit is a refusal with fixed,
+    path-free text, so it is a per-file refusal in sync and a quiet task failure
+    elsewhere, never a crash.
     """
 
     __slots__ = ()
@@ -35,14 +40,11 @@ class SheetTables:
             UnindexableContentError: A field exceeds the page budget, or the
                 text is not parseable CSV.
         """
-        previous = csv.field_size_limit(RowBudget().max_page_bytes)
         try:
             return list(csv.reader(io.StringIO(text)))
         except csv.Error:
             msg = "content rejected: CSV field exceeds the page budget"
             raise UnindexableContentError(msg) from None
-        finally:
-            csv.field_size_limit(previous)
 
     @staticmethod
     def sections(
