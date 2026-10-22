@@ -144,6 +144,7 @@ class BulkIngestRunner:
         ingested = 0
         failed = 0
         errors: list[str] = []
+        reasons: list[str] = []
 
         if to_ingest:
             # Always replace existing chunks for URLs that passed dedup — the
@@ -198,8 +199,9 @@ class BulkIngestRunner:
                         # abort the others.  PageReport logs it (a programming
                         # error loudly) and renders a URL-free line.
                         failed += 1
+                        reasons.append(PageReport.reason(exc))
                         errors.append(report.failure(exc))
                         progress("Failed %s", errors[-1])
-            PageReport.require_progress(ingested, failed, errors)
+            PageReport.require_progress(ingested, failed, reasons)
 
         return ingested, failed, errors

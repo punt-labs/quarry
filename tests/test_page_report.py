@@ -68,13 +68,23 @@ class TestFailure:
 class TestRequireProgress:
     def test_a_crawl_where_every_page_failed_is_refused(self) -> None:
         with pytest.raises(UnindexableContentError) as info:
-            PageReport.require_progress(0, 2, ["https://a/: x", "https://b/: y"])
+            PageReport.require_progress(0, 2, ["content rejected: x", "y"])
         assert str(info.value) == (
-            "crawl ingested nothing: 2 pages failed (first: https://a/: x)"
+            "crawl ingested nothing: 2 pages failed (first: content rejected: x)"
         )
 
     def test_a_partial_crawl_passes(self) -> None:
-        PageReport.require_progress(1, 1, ["https://a/: x"])
+        PageReport.require_progress(1, 1, ["x"])
 
     def test_an_empty_crawl_passes(self) -> None:
         PageReport.require_progress(0, 0, [])
+
+
+class TestReason:
+    def test_a_refusal_keeps_its_url_free_message(self) -> None:
+        assert PageReport.reason(UnindexableContentError("content rejected: x")) == (
+            "content rejected: x"
+        )
+
+    def test_any_other_exception_is_its_class_name_only(self) -> None:
+        assert PageReport.reason(KeyError("https://u:p@h/?token=SECRET")) == "KeyError"

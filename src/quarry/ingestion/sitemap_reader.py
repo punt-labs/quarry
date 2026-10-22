@@ -5,6 +5,12 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Self, final
 
+from usp.exceptions import (
+    GunzipException,
+    SitemapException,
+    SitemapXMLParsingException,
+    StripURLToHomepageException,
+)
 from usp.objects.sitemap import InvalidSitemap
 
 from quarry.capture_url import CaptureUrl
@@ -16,15 +22,28 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# USP's documented failure modes.  Their messages embed the raw URL verbatim, so
+# each is replaced, never re-raised or chained.
+_PARSER_FAILURES = (
+    SitemapException,
+    SitemapXMLParsingException,
+    GunzipException,
+    StripURLToHomepageException,
+)
+_PARSER_REFUSAL = "fetch failed: sitemap URL not accepted by the parser"
+_UNREADABLE = "fetch failed: sitemap could not be fetched or parsed"
+
 
 @final
 class SitemapReader:
     """Read the pages a sitemap lists via ultimate-sitemap-parser (USP).
 
     Every fetch goes through :class:`GatedSitemapWebClient`, so each hop passes
-    the SSRF gate.  URLs reach the log only in redacted form (CWE-532), and a
-    sitemap that could not be fetched or parsed raises instead of reading as an
-    empty crawl.
+    the SSRF gate.  URLs reach the log only in redacted form (CWE-532).  ``read``
+    raises for a sitemap that could not be fetched or parsed instead of reading
+    as an empty crawl; ``discover`` treats an unreadable sitemap as absent.  Both
+    turn a USP parser failure, whose message quotes the URL, into a URL-free
+    :class:`FetchRefusedError`.
     """
 
     __slots__ = ("_client",)
@@ -42,12 +61,20 @@ class SitemapReader:
         return CaptureUrl.display(url)
 
     def discover(self, homepage: str) -> list[SitemapPage]:
-        """Return every page found by sitemap discovery for *homepage*."""
+        """Return every page found by sitemap discovery for *homepage*.
+
+        Raises:
+            FetchRefusedError: The parser rejected *homepage*.  An absent or
+                unreadable sitemap is not a failure here: the tree is just empty.
+        """
         from usp.tree import sitemap_tree_for_homepage  # noqa: PLC0415
 
         logger.info("Discovering sitemaps for %s", self.shown(homepage))
-        tree = sitemap_tree_for_homepage(homepage, web_client=self._client)
-        return list(tree.all_pages())
+        try:
+            tree = sitemap_tree_for_homepage(homepage, web_client=self._client)
+            return list(tree.all_pages())
+        except _PARSER_FAILURES:
+            raise FetchRefusedError(_PARSER_REFUSAL) from None
 
     def read(self, url: str) -> list[SitemapPage]:
         """Return the pages of the sitemap at *url*, recursing into indexes.
@@ -60,12 +87,17 @@ class SitemapReader:
 
         shown = self.shown(url)
         logger.info("Fetching sitemap: %s", shown)
-        sitemap = SitemapFetcher(
-            url=url, recursion_level=0, web_client=self._client
-        ).sitemap()
-        if isinstance(sitemap, InvalidSitemap):
-            msg = "fetch failed: sitemap could not be fetched or parsed"
-            raise FetchRefusedError(msg)
-        pages = list(sitemap.all_pages())
+        try:
+            sitemap = SitemapFetcher(
+                url=url, recursion_level=0, web_client=self._client
+            ).sitemap()
+            pages = list(sitemap.all_pages())
+        except _PARSER_FAILURES:
+            raise FetchRefusedError(_PARSER_REFUSAL) from None
+        failed = isinstance(sitemap, InvalidSitemap) or any(
+            isinstance(node, InvalidSitemap) for node in sitemap.all_sitemaps()
+        )
+        if failed and not pages:
+            raise FetchRefusedError(_UNREADABLE)
         logger.info("Parsed %d pages from %s", len(pages), shown)
         return pages

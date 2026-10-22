@@ -45,9 +45,7 @@ class PageReport:
 
     def failure(self, exc: Exception) -> str:
         """Log *exc* for this page and return its ``"<url>: <reason>"`` line."""
-        reason = (
-            str(exc) if isinstance(exc, UnindexableContentError) else type(exc).__name__
-        )
+        reason = self.reason(exc)
         if isinstance(
             exc, UnindexableContentError | OSError | HTTPException | RowBudgetError
         ):
@@ -62,12 +60,21 @@ class PageReport:
         return f"{self._url}: {reason}"
 
     @staticmethod
-    def require_progress(ingested: int, failed: int, errors: list[str]) -> None:
+    def reason(exc: Exception) -> str:
+        """Return why a page failed: the URL-free refusal, else the class name."""
+        if isinstance(exc, UnindexableContentError):
+            return str(exc)
+        return type(exc).__name__
+
+    @staticmethod
+    def require_progress(ingested: int, failed: int, reasons: list[str]) -> None:
         """Raise if a crawl indexed nothing because every page failed.
+
+        *reasons* are bare :meth:`reason` values, so the task error names no URL.
 
         Raises:
             UnindexableContentError: ``ingested == 0`` and ``failed > 0``.
         """
         if ingested == 0 and failed > 0:
-            msg = f"crawl ingested nothing: {failed} pages failed (first: {errors[0]})"
+            msg = f"crawl ingested nothing: {failed} pages failed (first: {reasons[0]})"
             raise UnindexableContentError(msg)

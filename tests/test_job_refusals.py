@@ -340,6 +340,11 @@ def test_a_sitemap_with_one_pdf_page_ingests_the_rest(
     for leak in ("SECRET", "pw@", "token"):
         assert leak not in caplog.text
         assert leak not in result["errors"][0]
+    [page_warning] = [r for r in caplog.records if r.name.endswith("page_report")]
+    assert page_warning.levelno == logging.WARNING
+    assert page_warning.getMessage() == (
+        f"Failed to ingest https://good.test/paper.pdf ({pdf_reason})"
+    )
 
 
 @pytest.mark.parametrize("scrub", [False, True])
@@ -364,8 +369,128 @@ async def test_an_invalid_request_url_fails_the_task_url_free(
     with caplog.at_level(logging.WARNING), patch(_DISCOVER, return_value=[]):
         await job.run(daemon.ctx, state)
 
-    assert state.status == "failed"
+    _assert_quiet_and_url_free(
+        state, caplog, subject="ingest https://example.com/p (task "
+    )
     assert state.error == "fetch failed: InvalidURL"
     assert "abc" not in caplog.text
-    [record] = [r for r in caplog.records if r.name.endswith("refusal_aware_terminal")]
-    assert record.exc_info is None
+
+
+_SITEMAP_URL = "https://example.com/sitemap.xml?token=SECRET"
+_SITEMAP_SUBJECT = "ingest https://example.com/sitemap.xml (task "
+_FETCHER = "usp.fetch_parse.SitemapFetcher"
+
+
+def _sitemap_job(source: str = _SITEMAP_URL) -> IngestJob:
+    return IngestJob(
+        source=source,
+        scrub=False,
+        labels=IngestLabels(
+            overwrite=False,
+            collection="example.com",
+            agent_handle="",
+            memory_type="",
+            summary="",
+        ),
+    )
+
+
+async def test_a_sitemap_url_the_parser_rejects_fails_the_task_url_free(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """USP quotes the whole URL, query included, in its exception (CWE-532)."""
+    daemon = InProcessDaemon(tmp_path)
+    state = TaskState(task_id="t-usp", kind="ingest")
+    job = _sitemap_job("https://example.com/sitemap.xml?token=SECRET x")
+
+    with caplog.at_level(logging.WARNING):
+        await job.run(daemon.ctx, state)
+
+    _assert_quiet_and_url_free(state, caplog, subject=_SITEMAP_SUBJECT)
+    assert state.error == "fetch failed: sitemap URL not accepted by the parser"
+
+
+async def test_an_unreadable_sitemap_fails_the_task(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    from usp.objects.sitemap import InvalidSitemap
+
+    daemon = InProcessDaemon(tmp_path)
+    state = TaskState(task_id="t-bad", kind="ingest")
+    invalid = InvalidSitemap(url=_SITEMAP_URL, reason=f"HTTP 500 for {_SITEMAP_URL}")
+    caplog.clear()  # usp logged the URL while the test built its fixture
+
+    with caplog.at_level(logging.WARNING), patch(_FETCHER) as fetcher:
+        fetcher.return_value.sitemap.return_value = invalid
+        await _sitemap_job().run(daemon.ctx, state)
+
+    _assert_quiet_and_url_free(state, caplog, subject=_SITEMAP_SUBJECT)
+    assert state.error == "fetch failed: sitemap could not be fetched or parsed"
+
+
+async def test_a_sitemap_listing_only_unsafe_urls_fails_the_task(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from usp.objects.page import SitemapPage
+    from usp.objects.sitemap import PagesXMLSitemap
+
+    monkeypatch.setattr(
+        "quarry.url_safety.socket_module.getaddrinfo",
+        lambda *a, **k: [(2, 1, 6, "", ("10.0.0.5", 0))],
+    )
+    daemon = InProcessDaemon(tmp_path)
+    state = TaskState(task_id="t-unsafe", kind="ingest")
+    sitemap = PagesXMLSitemap(
+        url=_SITEMAP_URL, pages=[SitemapPage(url="https://internal.test/a")]
+    )
+
+    with caplog.at_level(logging.WARNING), patch(_FETCHER) as fetcher:
+        fetcher.return_value.sitemap.return_value = sitemap
+        await _sitemap_job().run(daemon.ctx, state)
+
+    _assert_quiet_and_url_free(state, caplog, subject=_SITEMAP_SUBJECT)
+    assert state.error == "fetch failed: every URL the sitemap lists was rejected"
+
+
+async def test_a_crawl_where_every_page_is_a_pdf_fails_the_task(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    from usp.objects.page import SitemapPage
+    from usp.objects.sitemap import PagesXMLSitemap
+
+    daemon = InProcessDaemon(tmp_path)
+    state = TaskState(task_id="t-pdfs", kind="ingest")
+    sitemap = PagesXMLSitemap(
+        url=_SITEMAP_URL,
+        pages=[
+            SitemapPage(url="https://u:pw@a.test/one.pdf?token=SECRET"),
+            SitemapPage(url="https://b.test/two.pdf"),
+        ],
+    )
+    reason = "content rejected: unsupported media type application/pdf"
+
+    with (
+        caplog.at_level(logging.INFO),
+        patch(_FETCHER) as fetcher,
+        patch(_OPEN, return_value=_response("application/pdf", b"%PDF")),
+    ):
+        fetcher.return_value.sitemap.return_value = sitemap
+        await _sitemap_job().run(daemon.ctx, state)
+
+    assert state.status == "failed"
+    assert state.error == f"crawl ingested nothing: 2 pages failed (first: {reason})"
+    assert "SECRET" not in caplog.text
+    reports = sorted(
+        r.getMessage()
+        for r in caplog.records
+        if r.name.endswith("page_report") and r.levelno >= logging.WARNING
+    )
+    assert reports == [
+        f"Failed to ingest https://a.test/one.pdf ({reason})",
+        f"Failed to ingest https://b.test/two.pdf ({reason})",
+    ]
+    terminal = [r for r in caplog.records if r.name.endswith("refusal_aware_terminal")]
+    assert [r.levelno for r in terminal] == [logging.WARNING]
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]

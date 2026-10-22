@@ -13,9 +13,10 @@ from quarry.ingestion.bulk_ingest import (
     BulkOptions,
     SafeEntrySelector,
 )
+from quarry.ingestion.crawl_guard import CrawlGuard
+from quarry.ingestion.fetched_body import FetchRefusedError
 from quarry.ingestion.web_ingest import UrlIngest, ingest_url
 from quarry.results import SitemapResult
-from quarry.scrub import scrub_and_log
 
 if TYPE_CHECKING:
     from quarry.ingestion.ingest_context import IngestContext, Progress
@@ -56,6 +57,7 @@ class SitemapIngest:
             include=options.include, exclude=options.exclude, limit=options.limit
         )
         filtered = selector.select_safe(crawl.entries)
+        CrawlGuard.of(options).require_safe(len(crawl.entries), len(filtered))
         progress("Selected %d safe URLs to ingest", len(filtered))
         to_ingest, skipped = selector.partition(filtered, context)
         progress("%d to ingest, %d up-to-date", len(to_ingest), skipped)
@@ -164,13 +166,6 @@ class SitemapIngest:
         """
         from urllib.parse import urlparse  # noqa: PLC0415
 
-        from usp.exceptions import (  # noqa: PLC0415
-            GunzipException,
-            SitemapException,
-            SitemapXMLParsingException,
-            StripURLToHomepageException,
-        )
-
         from quarry.sitemap import SitemapDiscovery  # noqa: PLC0415
 
         parsed = urlparse(url)
@@ -203,33 +198,17 @@ class SitemapIngest:
         progress("Discovering sitemaps for %s://%s", parsed.scheme, safe_netloc)
         try:
             entries = SitemapDiscovery.discover_pages(url)
-        except (
-            SitemapException,
-            SitemapXMLParsingException,
-            GunzipException,
-            StripURLToHomepageException,
-        ) as exc:
-            # USP's own documented failure modes -- a malformed homepage URL,
-            # unparseable XML, a corrupt gzip body -- are the sitemap being
-            # genuinely absent or broken, so this still falls back to a
-            # single-page ingest below.  Anything else is a programmer error
-            # and must propagate, not be swallowed as "no sitemap found."
-            #
-            # usp's own exception messages embed the raw URL verbatim (e.g.
-            # "URL {url} is not a HTTP(s) URL") -- str(exc) is NOT safe to
-            # log or report, and neither is the raw url: either would carry
-            # ?token= query params or user:pass@ userinfo into the persistent
-            # quarry.log or the caller's progress stream (CWE-532). Redact
-            # through the same CaptureUrl machinery web_ingest.py uses for
-            # capture URLs, and log only the exception CLASS, not its message.
-            # This is an expected fallback, not a bug -- logger.warning, not
-            # .exception, so no stack trace.
-            redacted_url = CaptureUrl(url).redacted(
-                lambda text: scrub_and_log(text, "sitemap-discovery")
-            )
-            logger.warning(
-                "Sitemap discovery failed for %s (%s)", redacted_url, type(exc).__name__
-            )
+        except FetchRefusedError as exc:
+            # The reader replaces USP's own documented failure modes -- a
+            # malformed homepage URL, unparseable XML, a corrupt gzip body --
+            # with a URL-free refusal (their messages embed the raw URL).  That
+            # is the sitemap being genuinely absent or broken, so this still
+            # falls back to a single-page ingest below.  Anything else is a
+            # programmer error and must propagate, not be swallowed as "no
+            # sitemap found."  The URL is redacted for the log (CWE-532); this
+            # is an expected fallback, so logger.warning, not .exception.
+            redacted_url = CaptureUrl.display(url)
+            logger.warning("Sitemap discovery failed for %s: %s", redacted_url, exc)
             progress("Sitemap discovery error for %s", redacted_url)
             entries = []
 

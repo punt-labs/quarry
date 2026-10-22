@@ -11,6 +11,7 @@ import pytest
 
 from quarry.db import Database
 from quarry.ingestion.bulk_ingest import BulkOptions
+from quarry.ingestion.fetched_body import FetchRefusedError
 from quarry.ingestion.ingest_context import IngestContext, Progress
 from quarry.sitemap import (
     SitemapDiscovery,
@@ -907,11 +908,11 @@ class TestIngestAuto:
         catches are USP's own discovery/parse failures, not raw network
         errors.
         """
-        from usp.exceptions import SitemapException
-
         from quarry.ingestion.sitemap_ingest import ingest_auto
 
-        mock_discover.side_effect = SitemapException("malformed homepage URL")
+        mock_discover.side_effect = FetchRefusedError(
+            "fetch failed: sitemap URL not accepted by the parser"
+        )
         mock_ingest_url.return_value = {
             "document_name": "https://example.com/page",
             "collection": "example.com",
@@ -944,13 +945,11 @@ class TestIngestAuto:
         crawled URL itself must not reach either sink, regardless of what
         the exception message says.
         """
-        from usp.exceptions import SitemapException
-
         from quarry.ingestion.sitemap_ingest import ingest_auto
 
         credentialed_url = "https://user:pass@example.com/page?token=abc123"
-        mock_discover.side_effect = SitemapException(
-            f"URL {credentialed_url} is not a HTTP(s) URL."
+        mock_discover.side_effect = FetchRefusedError(
+            "fetch failed: sitemap URL not accepted by the parser"
         )
         mock_ingest_url.return_value = {
             "document_name": credentialed_url,
@@ -978,7 +977,10 @@ class TestIngestAuto:
             r.getMessage() for r in caplog.records if r.levelname == "WARNING"
         ]
         assert warning_records == [
-            "Sitemap discovery failed for https://example.com/page (SitemapException)"
+            (
+                "Sitemap discovery failed for https://example.com/page: "
+                "fetch failed: sitemap URL not accepted by the parser"
+            )
         ]
 
     @patch("quarry.sitemap.SitemapDiscovery.discover_pages")

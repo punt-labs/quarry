@@ -470,8 +470,7 @@ class TestBulkIngestRunnerRun:
                 BulkOptions(),
             )
         assert str(info.value) == (
-            "crawl ingested nothing: 1 pages failed "
-            "(first: https://a.example/x: OSError)"
+            "crawl ingested nothing: 1 pages failed (first: OSError)"
         )
 
     def test_empty_to_ingest_short_circuits_without_calling_ingest_one(self) -> None:
