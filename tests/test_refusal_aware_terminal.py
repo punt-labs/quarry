@@ -113,7 +113,11 @@ def test_a_raising_subject_cannot_stop_the_task_ending_failed(
         "failed",
         "binary content rejected: pdf header",
     )
-    [record] = caplog.records
+    naming, record = caplog.records
+    assert naming.levelno == logging.WARNING
+    assert naming.getMessage() == (
+        "Background remember (task t-1): naming the subject failed"
+    )
     assert record.getMessage() == (
         "Background remember (unnamed) (task t-1) rejected: "
         "binary content rejected: pdf header"
@@ -147,7 +151,11 @@ def test_a_subject_that_raises_anything_falls_back_to_unnamed(
         _raise(UnindexableContentError("binary content rejected: pdf header"))
 
     assert state.status == "failed"
-    [record] = caplog.records
+    naming, record = caplog.records
+    assert naming.levelno == logging.WARNING
+    assert naming.getMessage() == (
+        "Background remember (task t-1): naming the subject failed"
+    )
     assert record.getMessage() == (
         "Background remember (unnamed) (task t-1) rejected: "
         "binary content rejected: pdf header"
