@@ -74,3 +74,14 @@ def test_the_parse_result_is_what_every_later_parser_sees() -> None:
     parts = UrlSyntax.parse("HTTPS://Example.com:8443/a/b?x=1#f")
     assert (parts.scheme, parts.hostname, parts.port) == ("https", "example.com", 8443)
     assert (parts.path, parts.query, parts.fragment) == ("/a/b", "x=1", "f")
+
+
+def test_a_url_over_the_length_cap_is_refused() -> None:
+    long = "http://example.com/" + "a" * 8200
+    with pytest.raises(ValueError, match="malformed URL"):
+        UrlSyntax.parse(long)
+
+
+def test_a_url_at_the_length_cap_is_admitted() -> None:
+    url = "http://example.com/" + "a" * (8192 - len("http://example.com/"))
+    assert UrlSyntax.parse(url).hostname == "example.com"

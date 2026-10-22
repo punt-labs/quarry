@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 import logging.handlers
 from typing import TextIO, final
@@ -24,8 +25,15 @@ class _FirstPartyHandler(logging.Handler):
         )
 
     def format(self, record: logging.LogRecord) -> str:
-        """Return the formatted record, traceback included, redacted."""
-        return LogRedactor.redact(super().format(record))
+        """Return the formatted record, traceback included, redacted.
+
+        The message is made one line first, on a copy of the record (the other
+        handler formats the same one), so a forged line cannot start inside it;
+        the traceback the formatter appends keeps its own newlines.
+        """
+        single = copy.copy(record)
+        single.msg, single.args = LogRedactor.one_line(record.getMessage()), ()
+        return LogRedactor.redact(super().format(single))
 
 
 @final

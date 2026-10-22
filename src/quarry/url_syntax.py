@@ -6,6 +6,7 @@ from typing import final
 from urllib.parse import SplitResult, urlsplit
 
 _MALFORMED = "malformed URL"
+_MAX_LENGTH = 8192
 
 
 @final
@@ -18,8 +19,9 @@ class UrlSyntax:
     another, and a bad port parses lazily and fails far from the gate.  So the URL
     is admitted only if it is plain: no userinfo, no ``\\`` or ``%`` in the
     netloc, no control, space or other whitespace character anywhere, and a port
-    that is absent or in ``1..65535``.  After that, ``urlsplit``, ``urllib``,
-    ``http.client`` and the sitemap parser all see the same ``[host][:port]``.
+    that is absent or in ``1..65535``, and a length of at most 8192 characters.
+    After that, ``urlsplit``, ``urllib``, ``http.client`` and the sitemap parser
+    all see the same ``[host][:port]``.
 
     A refusal carries the fixed text ``malformed URL`` and no chained cause:
     Python's own messages quote the netloc, userinfo included.
@@ -30,7 +32,7 @@ class UrlSyntax:
     @classmethod
     def parse(cls, raw: str) -> SplitResult:
         """Return *raw* split into parts, or raise ``ValueError("malformed URL")``."""
-        if any(cls._is_unprintable(ch) for ch in raw):
+        if len(raw) > _MAX_LENGTH or any(cls._is_unprintable(ch) for ch in raw):
             raise ValueError(_MALFORMED)
         parts = cls._split(raw)
         if not cls._is_plain(parts):
