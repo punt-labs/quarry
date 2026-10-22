@@ -59,8 +59,8 @@ across `transform`, `index`, and `connector`).
   - A document-level binary classifier (`content_guard.py`) checks for magic
     bytes and the share of replacement and control characters. Prose that
     merely begins with `%PDF-` or `GIF8` still passes.
-  - A text page, code page, or spreadsheet row group over the page cap (just
-    under 1 MiB) is split at the best available boundary, never truncated. An
+  - A text or markdown section, code section, or spreadsheet row group over
+    the page cap (just under 1 MiB) is split at the best available boundary, never truncated. An
     oversized PDF or other paginated page fails its document instead, so page
     numbers always match the source.
   - Overlong unpunctuated runs are hard-wrapped so a chunk's stored text
@@ -72,8 +72,11 @@ across `transform`, `index`, and `connector`).
 
   A refused payload fails with its reason on every surface, with no traceback
   in the daemon log:
-  - `remember`, `learn`, `capture` and `ingest` return HTTP 400 for binary
-    content, an over-budget label, or an unknown `format_hint`.
+  - HTTP 400 is returned before any job is queued:
+    - `remember` and `capture`: binary content, an over-budget label, or an
+      unknown `format_hint`.
+    - `learn`: binary content or an over-budget label.
+    - `ingest`: an over-budget label.
   - A URL ingest task ends `failed`.
   - Directory sync reports a per-file error and indexes the rest.
   - A sitemap crawl records the reason per page. A crawl in which every page

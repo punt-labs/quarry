@@ -57,8 +57,8 @@ A `POST /v1/capture` reaches embedding + write like this:
 | `state = self.ctx.tasks.begin("capture")` (status `"running"`) | `daemon/routes/captures.py:43`; `daemon/tasks.py:84-98` |
 | `self.accept(state, job.run(self.ctx, state))` | `daemon/routes/captures.py:44` |
 | `accept` → **`asyncio.create_task(coro)`** + track, return 202 | `daemon/routes/base.py:116-127` |
-| `CaptureIngestJob.run` → `run_in_threadpool(self._capture, ctx)` | `daemon/ingest_jobs.py:174-186` |
-| `_capture` → `ScrubbedIngestJob.scrub_and_ingest` → `ingest_content` | `daemon/ingest_jobs.py:181-183`, `58-80` |
+| `CaptureIngestJob.run` → `run_in_threadpool(self._capture, ctx)` | `daemon/content_jobs.py` (`CaptureIngestJob.run`) |
+| `_capture` → `ScrubbedIngestJob.scrub_and_ingest` → `ingest_content` | `daemon/content_jobs.py` (`CaptureIngestJob._capture`, `ScrubbedIngestJob.scrub_and_ingest`) |
 | `ingest_content` → `_chunk_embed_store` (delete + `DocumentStreamer.insert`) | `ingestion/chunk_store_funnel.py` (`ChunkStoreFunnel._chunk_embed_store`) |
 | `DocumentStreamer.insert` embeds via the **shared cached** write backend | `ingestion/streaming.py`; `ingestion/backends.py:36-43` |
 
@@ -238,7 +238,7 @@ def submit(self, collection, job, state) -> JSONResponse:
 The 202 accepted-body is byte-identical to today. The collection key is resolved
 **at the route** (capture already does this via `CapturesCollection` at
 `routes/captures.py:63-67`); the web-fetch-fallback collection derivation that
-currently lives inside `IngestJob._ingest` (`ingest_jobs.py:122-124`) hoists up
+currently lives inside `IngestJob._ingest` (`daemon/ingest_jobs.py`) hoists up
 to the route so the key is known before enqueue — a de-duplication that also
 lets all three jobs expose `collection` uniformly (OO cleanup, §8).
 
