@@ -10,10 +10,13 @@ from __future__ import annotations
 import urllib.request
 from dataclasses import dataclass, field
 from time import monotonic
-from typing import ClassVar, final
+from typing import TYPE_CHECKING, ClassVar, final
 
 from quarry.ingestion.fetched_body import FetchedBody, FetchGate
 from quarry.ingestion.opened_response import OpenedResponse
+
+if TYPE_CHECKING:
+    from quarry.http_url import HttpUrl
 
 _USER_AGENT = "quarry/1.0 (+https://github.com/punt-labs/quarry)"
 
@@ -42,7 +45,7 @@ class WebFetcher:
 
     _DEADLINE_MARGIN_S: ClassVar[float] = 1.0
 
-    def fetch(self, url: str) -> str:
+    def fetch(self, url: HttpUrl) -> str:
         """Fetch *url* and return the decoded HTML body.
 
         Preserved for callers that require HTML (a sitemap crawl,
@@ -56,7 +59,7 @@ class WebFetcher:
         """
         return self.fetch_body(url).html_text()
 
-    def fetch_body(self, url: str) -> FetchedBody:
+    def fetch_body(self, url: HttpUrl) -> FetchedBody:
         """Fetch *url* and return its decoded body + declared media type.
 
         Unlike :meth:`fetch`, does NOT reject non-HTML text — the caller
@@ -70,10 +73,10 @@ class WebFetcher:
             FetchRefusedError: The URL, a redirect hop, or the transfer failed, or
                 the body is over the cap or in an unknown charset.
         """
-        self.gate.check_url(url)
+        self.gate.check_url(url.fetch_url)
 
         request = urllib.request.Request(  # noqa: S310
-            url,
+            url.fetch_url,
             headers={"User-Agent": _USER_AGENT},
         )
         deadline = monotonic() + self.timeout + self._DEADLINE_MARGIN_S

@@ -6,7 +6,6 @@ import logging
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, final
 
-from quarry.capture_url import CaptureUrl
 from quarry.ingest_collection import IngestCollection
 from quarry.ingestion.bulk_ingest import (
     BulkIngestRunner,
@@ -19,6 +18,7 @@ from quarry.ingestion.web_ingest import UrlIngest, ingest_url
 from quarry.results import SitemapResult
 
 if TYPE_CHECKING:
+    from quarry.http_url import HttpUrl
     from quarry.ingestion.ingest_context import IngestContext, Progress
     from quarry.results import IngestResult
     from quarry.sitemap import SitemapEntry
@@ -32,7 +32,7 @@ class SitemapCrawl:
     """A discovered set of sitemap entries plus their originating URL."""
 
     entries: list[SitemapEntry]
-    source_url: str
+    source_url: HttpUrl
 
 
 @final
@@ -67,7 +67,7 @@ class SitemapIngest:
         progress("Done: %d ingested, %d skipped, %d failed", ingested, skipped, failed)
 
         return SitemapResult(
-            sitemap_url=crawl.source_url,
+            sitemap_url=crawl.source_url.document_name,
             collection=context.collection,
             total_discovered=len(crawl.entries),
             after_filter=len(filtered),
@@ -79,7 +79,7 @@ class SitemapIngest:
 
     @staticmethod
     def ingest_sitemap(
-        url: str,
+        url: HttpUrl,
         progress: Progress,
         context: IngestContext,
         options: BulkOptions,
@@ -121,12 +121,7 @@ class SitemapIngest:
             context, collection=IngestCollection.resolve(url, context.collection).name
         )
 
-        # url itself is only for the discover_urls/IngestCollection.resolve
-        # calls above and below (the actual fetch/routing inputs) and for
-        # SitemapCrawl.source_url (returned data, not a log sink); the
-        # progress line gets the redacted form so a userinfo/query secret on
-        # the sitemap URL never reaches quarry.log (CWE-532).
-        progress("Fetching sitemap: %s", CaptureUrl.display(url))
+        progress("Fetching sitemap: %s", url)
         entries = SitemapDiscovery.discover_urls(url)
         progress("Discovered %d URLs", len(entries))
 
@@ -136,7 +131,7 @@ class SitemapIngest:
 
     @staticmethod
     def ingest_auto(
-        url: str,
+        url: HttpUrl,
         progress: Progress,
         context: IngestContext,
         options: BulkOptions,
@@ -164,11 +159,8 @@ class SitemapIngest:
         Returns:
             SitemapResult if a sitemap was discovered, IngestResult otherwise.
         """
-        from urllib.parse import urlparse  # noqa: PLC0415
-
         from quarry.sitemap import SitemapDiscovery  # noqa: PLC0415
 
-        parsed = urlparse(url)
         # See ingest_sitemap's matching comment: context.collection is passed
         # through verbatim -- the daemon route already resolved it to the
         # queue key this job serializes on, and re-resolving that name is a
@@ -180,7 +172,7 @@ class SitemapIngest:
         # If the URL itself is a sitemap, skip discovery and crawl directly.
         # Match sitemap files (*.xml, *.xml.gz) and /sitemap paths, but not
         # pages that merely contain "sitemap" as a substring (e.g. /sitemap-guide).
-        path_lower = parsed.path.lower()
+        path_lower = url.path.lower()
         last_segment = path_lower.rsplit("/", 1)[-1]
         is_sitemap = last_segment.startswith("sitemap") and (
             last_segment.endswith((".xml", ".xml.gz", ".txt"))
@@ -190,12 +182,7 @@ class SitemapIngest:
             progress("URL is a sitemap, crawling directly")
             return SitemapIngest.ingest_sitemap(url, progress, context, options)
 
-        # parsed.netloc can carry userinfo ("user:pass@host") -- re-derive the
-        # netloc from the redacted URL so a credential on the origin never
-        # reaches the progress stream or the log (CWE-532); scheme alone is
-        # never sensitive.
-        safe_netloc = urlparse(CaptureUrl.display(url)).netloc
-        progress("Discovering sitemaps for %s://%s", parsed.scheme, safe_netloc)
+        progress("Discovering sitemaps for %s", url.homepage)
         try:
             entries = SitemapDiscovery.discover_pages(url)
         except FetchRefusedError as exc:
@@ -207,9 +194,8 @@ class SitemapIngest:
             # programmer error and must propagate, not be swallowed as "no
             # sitemap found."  The URL is redacted for the log (CWE-532); this
             # is an expected fallback, so logger.warning, not .exception.
-            redacted_url = CaptureUrl.display(url)
-            logger.warning("Sitemap discovery failed for %s: %s", redacted_url, exc)
-            progress("Sitemap discovery error for %s", redacted_url)
+            logger.warning("Sitemap discovery failed for %s: %s", url, exc)
+            progress("Sitemap discovery error for %s", url)
             entries = []
 
         if not entries:
@@ -221,7 +207,7 @@ class SitemapIngest:
 
         # Derive include filter from input URL path, applied once up front to
         # avoid double-filtering inside _bulk_ingest_entries.
-        path = parsed.path.rstrip("/")
+        path = url.path.rstrip("/")
         if path:
             entries = SitemapDiscovery.filter_entries(
                 entries, include=[path, f"{path}/*"]
@@ -231,7 +217,7 @@ class SitemapIngest:
         # This handles sites whose sitemap is partially parseable but doesn't
         # contain the requested path (e.g. namespace-prefixed XML).
         if not entries:
-            progress("Sitemap has no pages matching %s, ingesting single page", path)
+            progress("Sitemap has no pages matching the path, ingesting single page")
             request = UrlIngest(url=url, timeout=options.timeout)
             return ingest_url(request, progress, context)
 

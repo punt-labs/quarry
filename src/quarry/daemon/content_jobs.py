@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.tasks import TaskState
+    from quarry.http_url import HttpUrl
     from quarry.ingestion.web_ingest import FormatHint
 
 logger = logging.getLogger(__name__)
@@ -167,7 +168,7 @@ class CaptureIngestJob:
     """
 
     inline: ScrubbedIngestJob
-    source_url: str
+    source_url: HttpUrl | None  # None: a transcript, nothing to re-fetch
 
     @property
     def collection(self) -> str:
@@ -197,11 +198,11 @@ class CaptureIngestJob:
         daemon holds (and then skip or rewrite it a second time).
         """
         result = self.inline.scrub_and_ingest(ctx)
-        if ScrubbedIngestJob.is_stored(result) or not self.source_url:
+        if ScrubbedIngestJob.is_stored(result) or self.source_url is None:
             return result
-        return self._refetch(ctx)
+        return self._refetch(ctx, self.source_url)
 
-    def _refetch(self, ctx: DaemonContext) -> dict[str, object]:
+    def _refetch(self, ctx: DaemonContext, source: HttpUrl) -> dict[str, object]:
         """Re-fetch the source URL and store the body by its media type.
 
         Runs only when the inline phase stored nothing, so a refused media type,
@@ -216,6 +217,4 @@ class CaptureIngestJob:
             "capture: %s inline extracted to zero chunks — re-fetching via daemon",
             self.inline.scrubbed_name(),
         )
-        return CapturedBodyIngest(
-            self.source_url, self.inline.labels, self.inline.name
-        ).run(ctx)
+        return CapturedBodyIngest(source, self.inline.labels, self.inline.name).run(ctx)

@@ -87,6 +87,18 @@ class TestDocumentName:
         assert len(names) == 1
 
 
+class TestParts:
+    def test_host_and_path_are_the_admitted_parts(self) -> None:
+        url = HttpUrl(_RAW)
+        assert (url.host, url.path) == ("example.com", "/docs/guide")
+
+    def test_an_ipv6_host_has_no_brackets(self) -> None:
+        assert HttpUrl("http://[2606:4700::1111]:80/a").host == "2606:4700::1111"
+
+    def test_a_bare_host_has_an_empty_path(self) -> None:
+        assert HttpUrl("http://example.com").path == ""
+
+
 class TestHomepage:
     def test_it_is_built_from_host_and_port_never_the_raw_netloc(self) -> None:
         assert HttpUrl(_RAW).homepage == HttpUrl("https://example.com:8443/")

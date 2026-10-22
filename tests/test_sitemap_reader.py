@@ -14,10 +14,11 @@ from usp.objects.sitemap import (
     PagesXMLSitemap,
 )
 
+from quarry.http_url import HttpUrl
 from quarry.ingestion.fetch_refused import FetchRefusedError
 from quarry.ingestion.sitemap_reader import SitemapReader
 
-_URL = "https://u:pw@example.com/sitemap.xml?token=SECRET"
+_URL = "https://example.com/sitemap.xml?token=SECRET"
 _PARSER_REFUSAL = "fetch failed: sitemap URL not accepted by the parser"
 _UNREADABLE = "fetch failed: sitemap could not be fetched or parsed"
 _FETCHER = "usp.fetch_parse.SitemapFetcher"
@@ -38,14 +39,14 @@ class TestRead:
     @patch(_FETCHER)
     def test_the_pages_of_a_sitemap_are_returned(self, fetcher: MagicMock) -> None:
         fetcher.return_value.sitemap.return_value = _pages("https://a.test/1")
-        pages = SitemapReader().read(_URL)
+        pages = SitemapReader().read(HttpUrl(_URL))
         assert [p.url for p in pages] == ["https://a.test/1"]
 
     @patch(_FETCHER)
     def test_the_injected_client_does_the_fetching(self, fetcher: MagicMock) -> None:
         fetcher.return_value.sitemap.return_value = _pages()
         client = MagicMock()
-        SitemapReader(client).read(_URL)
+        SitemapReader(client).read(HttpUrl(_URL))
         assert fetcher.call_args.kwargs["web_client"] is client
 
     @patch(_FETCHER)
@@ -56,7 +57,7 @@ class TestRead:
             url=_URL, reason=f"HTTP 500 for {_URL}"
         )
         with pytest.raises(FetchRefusedError) as info:
-            SitemapReader().read(_URL)
+            SitemapReader().read(HttpUrl(_URL))
         assert str(info.value) == _UNREADABLE
 
     @patch(_FETCHER)
@@ -68,7 +69,7 @@ class TestRead:
         )
         fetcher.return_value.sitemap.return_value = index
         with pytest.raises(FetchRefusedError) as info:
-            SitemapReader().read(_URL)
+            SitemapReader().read(HttpUrl(_URL))
         assert str(info.value) == _UNREADABLE
 
     @patch(_FETCHER)
@@ -80,22 +81,40 @@ class TestRead:
             sub_sitemaps=[_invalid(), _pages("https://a.test/1")],
         )
         fetcher.return_value.sitemap.return_value = index
-        assert [p.url for p in SitemapReader().read(_URL)] == ["https://a.test/1"]
+        assert [p.url for p in SitemapReader().read(HttpUrl(_URL))] == [
+            "https://a.test/1"
+        ]
 
     @patch(_FETCHER)
     def test_a_healthy_empty_sitemap_is_not_a_failure(self, fetcher: MagicMock) -> None:
         fetcher.return_value.sitemap.return_value = _pages()
-        assert SitemapReader().read(_URL) == []
+        assert SitemapReader().read(HttpUrl(_URL)) == []
 
-    def test_a_url_the_parser_rejects_raises_without_the_url_or_its_cause(
-        self,
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            SitemapException("URL https://h/s.xml?token=SECRET is not a HTTP(s) URL."),
+            ValueError("bad https://h/s.xml?token=SECRET"),
+            OSError("refused https://h/s.xml?token=SECRET"),
+        ],
+        ids=["sitemap", "value", "os"],
+    )
+    @patch(_FETCHER)
+    def test_a_parser_failure_raises_without_the_url_or_its_cause(
+        self, fetcher: MagicMock, failure: Exception
     ) -> None:
-        url = "https://example.com/sitemap.xml?token=SECRET x"
+        fetcher.side_effect = failure
         with pytest.raises(FetchRefusedError) as info:
-            SitemapReader().read(url)
+            SitemapReader().read(HttpUrl(_URL))
         assert str(info.value) == _PARSER_REFUSAL
         assert info.value.__cause__ is None
         assert info.value.__suppress_context__
+
+    @patch(_FETCHER)
+    def test_a_programming_error_is_not_swallowed(self, fetcher: MagicMock) -> None:
+        fetcher.side_effect = TypeError("a bug")
+        with pytest.raises(TypeError):
+            SitemapReader().read(HttpUrl(_URL))
 
     @patch(_FETCHER)
     def test_only_the_redacted_url_is_logged(
@@ -103,7 +122,7 @@ class TestRead:
     ) -> None:
         fetcher.return_value.sitemap.return_value = _pages("https://a.test/1")
         with caplog.at_level(logging.INFO, logger="quarry.ingestion.sitemap_reader"):
-            SitemapReader().read(_URL)
+            SitemapReader().read(HttpUrl(_URL))
         assert [r.getMessage() for r in caplog.records] == [
             "Fetching sitemap: https://example.com/sitemap.xml",
             "Parsed 1 pages from https://example.com/sitemap.xml",
@@ -114,12 +133,14 @@ class TestDiscover:
     @patch(_TREE)
     def test_the_pages_of_the_tree_are_returned(self, tree: MagicMock) -> None:
         tree.return_value = _pages("https://a.test/1")
-        assert [p.url for p in SitemapReader().discover(_URL)] == ["https://a.test/1"]
+        assert [p.url for p in SitemapReader().discover(HttpUrl(_URL))] == [
+            "https://a.test/1"
+        ]
 
     @patch(_TREE, side_effect=SitemapException("URL x?token=SECRET is bad"))
     def test_a_parser_failure_raises_without_the_url(self, _tree: MagicMock) -> None:
         with pytest.raises(FetchRefusedError) as info:
-            SitemapReader().discover(_URL)
+            SitemapReader().discover(HttpUrl(_URL))
         assert str(info.value) == _PARSER_REFUSAL
         assert info.value.__cause__ is None
 
@@ -129,7 +150,7 @@ class TestDiscover:
     ) -> None:
         tree.return_value = _pages()
         with caplog.at_level(logging.INFO, logger="quarry.ingestion.sitemap_reader"):
-            SitemapReader().discover(_URL)
+            SitemapReader().discover(HttpUrl(_URL))
         assert [r.getMessage() for r in caplog.records] == [
             "Discovering sitemaps for https://example.com/sitemap.xml"
         ]

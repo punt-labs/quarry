@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Self, final
-from urllib.parse import urlparse
+from typing import TYPE_CHECKING, Self, final
+
+if TYPE_CHECKING:
+    from quarry.http_url import HttpUrl
 
 
 @final
@@ -19,8 +21,6 @@ class IngestCollection:
     key the queue serializes on can never drift from the table the job writes.
     """
 
-    _FALLBACK_HOST = "default"
-
     _name: str
 
     def __new__(cls, name: str) -> Self:
@@ -34,14 +34,13 @@ class IngestCollection:
         return self._name
 
     @classmethod
-    def resolve(cls, url: str, collection: str) -> Self:
-        """Return *collection* if given, else the URL hostname (or the fallback).
+    def resolve(cls, url: HttpUrl, collection: str) -> Self:
+        """Return *collection* if given, else the URL hostname.
 
         An empty *collection* is the "let the pipeline decide" signal a plain
-        ingest sends; it resolves to ``urlparse(url).hostname`` or, for a URL
-        with no host, ``default`` — never left empty, so the queue key is always
-        the concrete table the job writes.
+        ingest sends; it resolves to the URL's host, which an admitted URL always
+        has, so the queue key is always the concrete table the job writes.
         """
         if collection:
             return cls(collection)
-        return cls(urlparse(url).hostname or cls._FALLBACK_HOST)
+        return cls(url.host)

@@ -14,7 +14,7 @@ from quarry.daemon.captured_body_ingest import IngestLabels
 from quarry.daemon.content_jobs import CaptureIngestJob, ScrubbedIngestJob
 from quarry.daemon.ingest_jobs import IngestJob
 from quarry.daemon.tasks import TaskState
-from quarry.ingestion.fetch_refused import FetchRefusedError
+from quarry.http_url import HttpUrl
 from quarry.ingestion.fetched_body import FetchedBody
 from quarry.ingestion.ssrf_redirect import RedirectRejectedError
 from tests.inproc_daemon import InProcessDaemon
@@ -50,7 +50,7 @@ def _response(content_type: str, body: bytes = b"") -> MagicMock:
 
 def _ingest_job(*, scrub: bool) -> IngestJob:
     return IngestJob(
-        source=_URL,
+        source=HttpUrl(_URL),
         scrub=scrub,
         labels=IngestLabels(
             overwrite=False,
@@ -76,7 +76,7 @@ def _capture_job(content: str = "") -> CaptureIngestJob:
             summary="",
         ),
     )
-    return CaptureIngestJob(inline=inline, source_url=_URL)
+    return CaptureIngestJob(inline=inline, source_url=HttpUrl(_URL))
 
 
 def _assert_quiet_and_url_free(
@@ -261,30 +261,6 @@ async def test_an_unknown_charset_is_a_content_refusal(
     assert state.error == "content rejected: unsupported charset nonsense-9"
 
 
-async def test_a_url_that_cannot_be_named_still_ends_the_task(
-    tmp_path: Path,
-) -> None:
-    """``CaptureUrl`` raises on this URL; naming it must not strand the task."""
-    daemon = InProcessDaemon(tmp_path)
-    state = TaskState(task_id="t-subj", kind="ingest")
-    job = IngestJob(
-        source="http://h.test:99999/",
-        scrub=True,
-        labels=IngestLabels(
-            overwrite=False,
-            collection="c",
-            agent_handle="",
-            memory_type="",
-            summary="",
-        ),
-    )
-    refusal = FetchRefusedError("fetch failed: timed out")
-    with patch("quarry.ingestion.web_fetch.WebFetcher.fetch_body", side_effect=refusal):
-        await job.run(daemon.ctx, state)
-    assert state.status == "failed"
-    assert state.error == "fetch failed: timed out"
-
-
 async def test_an_empty_capture_fails_the_task(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -329,7 +305,9 @@ def test_a_sitemap_with_one_pdf_page_ingests_the_rest(
     context = IngestContext(daemon.ctx.database, daemon.ctx.settings, collection="docs")
     with caplog.at_level(logging.WARNING), patch(_OPEN, side_effect=opener):
         result = SitemapIngest._bulk_ingest_entries(
-            SitemapCrawl(entries=entries, source_url="https://good.test/sitemap.xml"),
+            SitemapCrawl(
+                entries=entries, source_url=HttpUrl("https://good.test/sitemap.xml")
+            ),
             Progress(None),
             context,
             BulkOptions(workers=1),
@@ -348,35 +326,6 @@ def test_a_sitemap_with_one_pdf_page_ingests_the_rest(
     )
 
 
-@pytest.mark.parametrize("scrub", [False, True])
-async def test_an_invalid_request_url_fails_the_task_url_free(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture, *, scrub: bool
-) -> None:
-    """``http.client`` quotes the path and query of a malformed URL (CWE-532)."""
-    daemon = InProcessDaemon(tmp_path)
-    state = TaskState(task_id="t-inv", kind="ingest")
-    job = IngestJob(
-        source="https://example.com/p?token=abc def",
-        scrub=scrub,
-        labels=IngestLabels(
-            overwrite=False,
-            collection="repo-captures" if scrub else "example.com",
-            agent_handle="",
-            memory_type="",
-            summary="",
-        ),
-    )
-
-    with caplog.at_level(logging.WARNING), patch(_DISCOVER, return_value=[]):
-        await job.run(daemon.ctx, state)
-
-    _assert_quiet_and_url_free(
-        state, caplog, subject="ingest https://example.com/p (task "
-    )
-    assert state.error == "URL rejected: malformed URL"
-    assert "abc" not in caplog.text
-
-
 _SITEMAP_URL = "https://example.com/sitemap.xml?token=SECRET"
 _SITEMAP_SUBJECT = "ingest https://example.com/sitemap.xml (task "
 _FETCHER = "usp.fetch_parse.SitemapFetcher"
@@ -384,7 +333,7 @@ _FETCHER = "usp.fetch_parse.SitemapFetcher"
 
 def _sitemap_job(source: str = _SITEMAP_URL) -> IngestJob:
     return IngestJob(
-        source=source,
+        source=HttpUrl(source),
         scrub=False,
         labels=IngestLabels(
             overwrite=False,
@@ -394,21 +343,6 @@ def _sitemap_job(source: str = _SITEMAP_URL) -> IngestJob:
             summary="",
         ),
     )
-
-
-async def test_a_sitemap_url_the_parser_rejects_fails_the_task_url_free(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    """USP quotes the whole URL, query included, in its exception (CWE-532)."""
-    daemon = InProcessDaemon(tmp_path)
-    state = TaskState(task_id="t-usp", kind="ingest")
-    job = _sitemap_job("https://example.com/sitemap.xml?token=SECRET x")
-
-    with caplog.at_level(logging.WARNING):
-        await job.run(daemon.ctx, state)
-
-    _assert_quiet_and_url_free(state, caplog, subject=_SITEMAP_SUBJECT)
-    assert state.error == "fetch failed: sitemap URL not accepted by the parser"
 
 
 async def test_an_unreadable_sitemap_fails_the_task(

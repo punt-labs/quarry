@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, final
 
+from quarry.http_url import HttpUrl
 from quarry.ingestion.ingest_context import Progress
 from quarry.ingestion.page_report import PageReport
 from quarry.ingestion.web_ingest import UrlIngest
@@ -65,22 +66,23 @@ class SafeEntrySelector:
 
     def partition(
         self, filtered: list[SitemapEntry], context: IngestContext
-    ) -> tuple[list[tuple[str, str | None]], int]:
+    ) -> tuple[list[tuple[HttpUrl, str | None]], int]:
         """Split filtered entries into ``(to_ingest, skipped_count)`` via dedup.
 
         Dedup compares each entry's ``<lastmod>`` against the stored ingestion
         timestamp of the same document in *context*'s collection.
         """
-        existing_docs = context.database.catalog.list_documents(
+        existing = context.database.catalog.list_documents(
             collection_filter=context.collection
         )
-        existing_timestamps: dict[str, str] = {
-            doc["document_name"]: doc["ingestion_timestamp"] for doc in existing_docs
+        existing_timestamps = {
+            doc["document_name"]: doc["ingestion_timestamp"] for doc in existing
         }
-        to_ingest: list[tuple[str, str | None]] = []
+        to_ingest: list[tuple[HttpUrl, str | None]] = []
         skipped = 0
         for entry in filtered:
-            existing_ts = existing_timestamps.get(entry.loc)
+            url = HttpUrl(entry.loc)
+            existing_ts = existing_timestamps.get(url.document_name)
             if (
                 existing_ts
                 and not context.overwrite
@@ -89,7 +91,7 @@ class SafeEntrySelector:
             ):
                 skipped += 1
                 continue
-            to_ingest.append((entry.loc, None))
+            to_ingest.append((url, None))
         return to_ingest, skipped
 
     @staticmethod
@@ -135,7 +137,7 @@ class BulkIngestRunner:
 
     def run(
         self,
-        to_ingest: list[tuple[str, str | None]],
+        to_ingest: list[tuple[HttpUrl, str | None]],
         progress: Progress,
         context: IngestContext,
         options: BulkOptions,
@@ -159,10 +161,10 @@ class BulkIngestRunner:
             # Workers report through a callback-less Progress: the parallel ingest_url
             # calls never forward progress_callback (only this method's own
             # aggregation messages below use the caller's callback), and
-            # Progress.__call__
-            # invokes that callback with no lock — sharing one callback-bearing
-            # Progress across threads would be a new concurrency hazard for a
-            # stateful callback. Every worker message still reaches the logger.
+            # Progress.__call__ invokes that callback with no lock — sharing one
+            # callback-bearing Progress across threads would be a new concurrency
+            # hazard for a stateful callback. Every worker message still reaches
+            # the logger.
             worker_progress = Progress(None)
             with ThreadPoolExecutor(max_workers=self.workers) as executor:
                 futures = {
@@ -181,12 +183,8 @@ class BulkIngestRunner:
                 }
                 for future in as_completed(futures):
                     page_url = futures[future]
-                    # page_url is only for the actual submit() call above and the
-                    # futures dict key; every progress/log/errors sink below --
-                    # success or failure -- must see the redacted form, not the
-                    # raw URL, since a userinfo/query secret on a program-
-                    # discovered sitemap URL would otherwise leak into
-                    # quarry.log or the progress stream (CWE-532).
+                    # PageReport names the page by the URL's log form, so no sink
+                    # below sees a query, fragment or token-like path (CWE-532).
                     report = PageReport(page_url)
                     try:
                         future.result()

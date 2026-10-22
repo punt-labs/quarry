@@ -9,6 +9,7 @@ from unittest.mock import patch
 from quarry.daemon.captured_body_ingest import IngestLabels
 from quarry.daemon.ingest_jobs import IngestJob
 from quarry.daemon.tasks import TaskState
+from quarry.http_url import HttpUrl
 from quarry.ingestion.fetched_body import FetchedBody
 from quarry.ingestion.media_type_policy import UnsupportedContentError
 from tests.inproc_daemon import InProcessDaemon
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
 def test_ingest_spool_record_carries_the_source_url() -> None:
     """An ingest snapshot is the source URL — the recoverable retry unit."""
     job = IngestJob(
-        source="https://x.test/a",
+        source=HttpUrl("https://x.test/a"),
         scrub=False,
         labels=IngestLabels(
             overwrite=False,
@@ -38,12 +39,12 @@ def test_ingest_spool_record_carries_the_source_url() -> None:
     assert record.payload == "https://x.test/a"
 
 
-_PDF_URL = "https://user:secret@example.com/paper.pdf?token=abc"
+_PDF_URL = "https://example.com/paper.pdf?token=abc"
 
 
 def _scrubbed_job(url: str) -> IngestJob:
     return IngestJob(
-        source=url,
+        source=HttpUrl(url),
         scrub=True,
         labels=IngestLabels(
             overwrite=True,
@@ -57,7 +58,7 @@ def _scrubbed_job(url: str) -> IngestJob:
 
 def _plain_job() -> IngestJob:
     return IngestJob(
-        source="https://example.com/",
+        source=HttpUrl("https://example.com/"),
         scrub=False,
         labels=IngestLabels(
             overwrite=False,
@@ -75,7 +76,7 @@ async def test_plain_ingest_of_a_refused_url_fails_the_task_without_a_traceback(
     daemon = InProcessDaemon(tmp_path)
     state = TaskState(task_id="t-3", kind="ingest")
     job = IngestJob(
-        source=_PDF_URL,
+        source=HttpUrl(_PDF_URL),
         scrub=False,
         labels=IngestLabels(
             overwrite=False,

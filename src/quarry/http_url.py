@@ -32,11 +32,13 @@ class HttpUrl:
     A leak is therefore a ``fetch_url`` call you can grep for, not a regex miss.
     """
 
-    __slots__ = ("_document_name", "_fetch_url", "_log_form")
+    __slots__ = ("_document_name", "_fetch_url", "_host", "_log_form", "_path")
 
     _fetch_url: str
     _document_name: str
+    _host: str
     _log_form: str
+    _path: str
 
     _TOKEN: ClassVar[re.Pattern[str]] = re.compile(r"[A-Za-z0-9_\-]{16,}")
     _PARAMS: ClassVar[re.Pattern[str]] = re.compile(r";[^/]*")
@@ -47,9 +49,11 @@ class HttpUrl:
         if parts.scheme.lower() not in {"http", "https"} or not host:
             raise ValueError(_MALFORMED)
         netloc = to_netloc(host, parts.port)
+        path = cls._PARAMS.sub("", parts.path)
         self = super().__new__(cls)
         self._fetch_url = raw
-        path = cls._PARAMS.sub("", parts.path)
+        self._host = host
+        self._path = path
         self._document_name = urlunsplit((parts.scheme, netloc, path, "", ""))
         self._log_form = urlunsplit((parts.scheme, netloc, cls._elide(path), "", ""))
         return self
@@ -58,6 +62,16 @@ class HttpUrl:
     def fetch_url(self) -> str:
         """Return the admitted raw URL, the one form a fetch or a parser may use."""
         return self._fetch_url
+
+    @property
+    def host(self) -> str:
+        """Return the lower-cased host, without brackets or port."""
+        return self._host
+
+    @property
+    def path(self) -> str:
+        """Return the path with ``;params`` removed (``""`` for a bare host)."""
+        return self._path
 
     @property
     def document_name(self) -> str:

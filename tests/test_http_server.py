@@ -34,6 +34,7 @@ from quarry.daemon.context import DaemonContext
 from quarry.daemon.server import DaemonServer, ServeConfig
 from quarry.daemon.tasks import TASK_TTL_SECONDS, TaskState
 from quarry.fd_headroom import FdHeadroom
+from quarry.http_url import HttpUrl
 from quarry.ingestion.fetched_body import FetchedBody
 from quarry.results import SearchResult
 
@@ -1833,7 +1834,7 @@ class TestCapture:
         ) -> dict[str, object]:
             url_calls.append((request, context))
             return {
-                "document_name": request.url,  # type: ignore[attr-defined]
+                "document_name": request.url.document_name,  # type: ignore[attr-defined]
                 "collection": context.collection,  # type: ignore[attr-defined]
                 "chunks": 1,
             }
@@ -1871,7 +1872,7 @@ class TestCapture:
         assert data["results"]["chunks"] == 1  # the re-fetch indexed the page
         assert len(url_calls) == 1
         request, context = url_calls[0]
-        assert request.url == "https://example.com/p"  # type: ignore[attr-defined]
+        assert request.url == HttpUrl("https://example.com/p")  # type: ignore[attr-defined]
         assert context.collection == "default-captures"  # type: ignore[attr-defined]
         # The caller forwards the raw summary plus a content_scrubber; ingest_url
         # (the choke point) redacts summary+name — see test_pipeline's
@@ -2497,7 +2498,7 @@ class TestIngest:
         assert mock_ingest.call_count == 1
         args, _kwargs = mock_ingest.call_args
         source, _progress, context, _options = args
-        assert source == "https://example.com/docs"
+        assert source == HttpUrl("https://example.com/docs")
         assert context.overwrite is True
         assert context.collection == "mycol"
         assert context.agent_handle == "rmh"

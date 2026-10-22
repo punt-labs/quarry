@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from quarry.daemon.captured_body_ingest import CapturedBodyIngest, IngestLabels
+from quarry.http_url import HttpUrl
 from quarry.ingestion.fetch_refused import FetchRefusedError
 from quarry.ingestion.fetched_body import FetchedBody
 from quarry.ingestion.web_fetch import WebFetcher
@@ -33,7 +34,7 @@ def _labels() -> IngestLabels:
 def _captured(
     source: str = "https://x.test/page", name: str = ""
 ) -> CapturedBodyIngest:
-    return CapturedBodyIngest(source, _labels(), name)
+    return CapturedBodyIngest(HttpUrl(source), _labels(), name)
 
 
 def _ctx() -> DaemonContext:
@@ -52,9 +53,11 @@ class TestFetch:
         fetcher = MagicMock(spec=WebFetcher)
         body = FetchedBody(text="hi", media_type="text/plain")
         fetcher.fetch_body.return_value = body
-        captured = CapturedBodyIngest("https://x.test/a", _labels(), fetcher=fetcher)
+        captured = CapturedBodyIngest(
+            HttpUrl("https://x.test/a"), _labels(), fetcher=fetcher
+        )
         assert captured.fetch() == body
-        fetcher.fetch_body.assert_called_once_with("https://x.test/a")
+        fetcher.fetch_body.assert_called_once_with(HttpUrl("https://x.test/a"))
 
     def test_a_refusal_propagates_untouched(self) -> None:
         refusal = FetchRefusedError("fetch failed: HTTP 500")
@@ -92,7 +95,7 @@ class TestIngest:
         with patch(
             "quarry.ingestion.web_ingest.ingest_content", return_value={"chunks": 1}
         ) as ingest_content:
-            _captured("https://u:secret@x.test/p?token=abc").ingest(_ctx(), body)
+            _captured("https://x.test/p?token=abc").ingest(_ctx(), body)
         assert ingest_content.call_args.args[1] == "https://x.test/p"
 
     def test_the_labels_reach_the_pipeline_context(self) -> None:
@@ -107,7 +110,7 @@ class TestIngest:
         with patch(
             "quarry.ingestion.web_ingest.ingest_content", return_value={"chunks": 1}
         ) as ingest_content:
-            CapturedBodyIngest("https://x.test/p", labels).ingest(_ctx(), body)
+            CapturedBodyIngest(HttpUrl("https://x.test/p"), labels).ingest(_ctx(), body)
         context = ingest_content.call_args.args[3]
         assert (context.overwrite, context.collection) == (False, "notes")
         assert (context.agent_handle, context.memory_type) == ("rmh", "fact")
@@ -140,5 +143,5 @@ class TestRun:
 
 
 def test_the_subject_drops_userinfo_query_and_fragment() -> None:
-    captured = _captured("https://u:pw@x.test/p?token=abc#f")
+    captured = _captured("https://x.test/p?token=abc#f")
     assert captured.subject() == "https://x.test/p"

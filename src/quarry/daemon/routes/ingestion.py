@@ -7,7 +7,7 @@ ten-argument task function.
 
 from __future__ import annotations
 
-from typing import final
+from typing import TYPE_CHECKING, final
 
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
@@ -20,7 +20,9 @@ from quarry.daemon.routes.content_group import ContentRouteGroup
 from quarry.http_guards import RequestGuards
 from quarry.ingest_collection import IngestCollection
 from quarry.lesson import LessonComposer, LessonsCollection
-from quarry.url_admission import UrlAdmission
+
+if TYPE_CHECKING:
+    from quarry.http_url import HttpUrl
 
 # Maximum request body sizes.  Remember accepts content, ingest only a URL.
 MAX_REMEMBER_BODY_BYTES = 50 * 1024 * 1024
@@ -60,13 +62,10 @@ class IngestionRoutes(ContentRouteGroup):
         source = self._require_text(body, "source")
         if isinstance(source, JSONResponse):
             return source
-        # UrlAdmission owns all scheme + address validation.  It calls
-        # getaddrinfo(), which can block on DNS — run it in the threadpool.
-        reason = await run_in_threadpool(UrlAdmission.reject_reason, source)
-        if reason is not None:
-            return JSONResponse({"error": f"URL rejected: {reason}"}, status_code=400)
-
-        return self._accept("ingest", await self._ingest_job(body, source))
+        url = await self._admit_url(source)
+        if isinstance(url, JSONResponse):
+            return url
+        return self._accept("ingest", await self._ingest_job(body, url))
 
     async def learn(self, request: Request) -> JSONResponse:
         """Save a distilled lesson as a background task.
@@ -163,7 +162,7 @@ class IngestionRoutes(ContentRouteGroup):
         return "default"
 
     async def _ingest_job(
-        self, body: dict[str, object], source: str
+        self, body: dict[str, object], source: HttpUrl
     ) -> IngestJob | JSONResponse:
         """Validate an ingest body into an :class:`IngestJob` or a 400."""
         overwrite = RequestGuards.coerce_bool_field(body, "overwrite", default=False)

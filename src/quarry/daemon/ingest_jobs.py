@@ -22,6 +22,7 @@ from quarry.daemon.refusal_aware_terminal import RefusalAwareTerminal
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.tasks import TaskState
+    from quarry.http_url import HttpUrl
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,7 +45,7 @@ class IngestJob:
     sitemap itself cannot be read or every page failed.
     """
 
-    source: str
+    source: HttpUrl
     labels: IngestLabels
     scrub: bool
 
@@ -69,8 +70,8 @@ class IngestJob:
         return SpoolRecord(
             kind="ingest",
             collection=self.collection,
-            name=self.source,
-            payload=self.source,
+            name=self.source.document_name,
+            payload=self.source.document_name,
         )
 
     def _captured(self) -> CapturedBodyIngest:

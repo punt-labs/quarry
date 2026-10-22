@@ -13,7 +13,6 @@ from quarry.captures_collection import CapturesCollection
 from quarry.daemon.content_jobs import CaptureIngestJob, ScrubbedIngestJob
 from quarry.daemon.routes.content_group import ContentRouteGroup
 from quarry.http_guards import RequestGuards
-from quarry.url_admission import UrlAdmission
 from quarry.web_fetch_name import WebFetchName
 
 if TYPE_CHECKING:
@@ -56,15 +55,15 @@ class CaptureRoutes(ContentRouteGroup):
             return options
         overwrite, memory_type, format_hint = options
         source_url = self._str_field(body, "source_url")
-        url_rejection = await self._reject_unsafe_source(source_url)
-        if url_rejection is not None:
-            return url_rejection
+        source = await self._admit_url(source_url) if source_url else None
+        if isinstance(source, JSONResponse):
+            return source
         collection = await self._collection_for_cwd(self._str_field(body, "cwd"))
         labels = self._labels(
             memory_type, body, overwrite=overwrite, collection=collection.name
         )
         inline = ScrubbedIngestJob(name, content, labels, format_hint, "capture")
-        return CaptureIngestJob(inline=inline, source_url=source_url)
+        return CaptureIngestJob(inline=inline, source_url=source)
 
     async def _collection_for_cwd(self, cwd: str) -> CapturesCollection:
         """Derive the ``<repo>-captures`` collection for *cwd* off the event loop.
@@ -75,23 +74,6 @@ class CaptureRoutes(ContentRouteGroup):
         return await run_in_threadpool(
             CapturesCollection.for_registry_path, cwd, self.ctx.settings.registry_path
         )
-
-    async def _reject_unsafe_source(self, source_url: str) -> JSONResponse | None:
-        """Reject a source_url that resolves to a private/metadata address.
-
-        The daemon re-fetches this URL server-side when the inline HTML extracts
-        to zero chunks, so it is an SSRF sink identical to ``POST /ingest`` — it
-        must run the same UrlAdmission gate at the route boundary, fail-closed,
-        before the job is built.  An empty source_url (a transcript) is nothing
-        to fetch and needs no gate.  reject_reason calls getaddrinfo, which can
-        block on DNS, so run it in the threadpool.
-        """
-        if not source_url:
-            return None
-        reason = await run_in_threadpool(UrlAdmission.reject_reason, source_url)
-        if reason is not None:
-            return JSONResponse({"error": f"URL rejected: {reason}"}, status_code=400)
-        return None
 
     def _capture_name(self, body: dict[str, object]) -> str | JSONResponse:
         """Derive the document name: explicit name, else ``session-<id[:8]>``.

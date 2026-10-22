@@ -11,10 +11,14 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from fnmatch import fnmatch
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from quarry.ingestion.sitemap_reader import SitemapReader
 from quarry.url_admission import UrlAdmission
+
+if TYPE_CHECKING:
+    from quarry.http_url import HttpUrl
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +52,7 @@ class SitemapDiscovery:
         return entries
 
     @staticmethod
-    def discover_pages(url: str) -> list[SitemapEntry]:
+    def discover_pages(url: HttpUrl) -> list[SitemapEntry]:
         """Discover all pages for a website via sitemap auto-discovery.
 
         Uses USP's ``sitemap_tree_for_homepage`` to probe robots.txt and
@@ -62,12 +66,12 @@ class SitemapDiscovery:
         Returns:
             Deduplicated list of all discovered pages.
         """
-        parsed = urlparse(url)
-        homepage = f"{parsed.scheme}://{parsed.netloc}/"
-        return SitemapDiscovery._pages_to_entries(SitemapReader().discover(homepage))
+        return SitemapDiscovery._pages_to_entries(
+            SitemapReader().discover(url.homepage)
+        )
 
     @staticmethod
-    def discover_urls(url: str) -> list[SitemapEntry]:
+    def discover_urls(url: HttpUrl) -> list[SitemapEntry]:
         """Fetch and parse a specific sitemap URL, recursing into indexes.
 
         Uses USP's ``SitemapFetcher`` for robust parsing of XML, RSS, Atom,

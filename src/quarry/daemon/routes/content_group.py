@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, ClassVar, TypeIs, get_args
 
+from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 
 from quarry.content_guard import BinaryContent, UnindexableContentError
@@ -12,8 +13,10 @@ from quarry.daemon.captured_body_ingest import IngestLabels
 from quarry.daemon.routes.base import RouteGroup
 from quarry.db.row_budget import RowBudget, RowBudgetError
 from quarry.http_guards import RequestGuards
+from quarry.http_url import HttpUrl
 from quarry.ingestion.memory_type_guard import MemoryTypeGuard
 from quarry.ingestion.web_ingest import FormatHint
+from quarry.url_admission import UrlAdmission
 
 if TYPE_CHECKING:
     from quarry.daemon.ingest_unit import IngestUnit
@@ -99,6 +102,19 @@ class ContentRouteGroup(RouteGroup):
             text, kind
         )
         return text if rejection is None else rejection
+
+    async def _admit_url(self, raw: str) -> HttpUrl | JSONResponse:
+        """Return *raw* as an admitted :class:`HttpUrl`, or a 400 saying why not.
+
+        The one gate for every URL a request names (``ingest``'s source, a
+        capture's ``source_url`` the daemon re-fetches): syntax, scheme and a
+        public address, fail-closed, before any job is built.  The gate calls
+        ``getaddrinfo``, which can block on DNS, so it runs in the threadpool.
+        """
+        reason = await run_in_threadpool(UrlAdmission.reject_reason, raw)
+        if reason is not None:
+            return JSONResponse({"error": f"URL rejected: {reason}"}, status_code=400)
+        return HttpUrl(raw)
 
     def _accept(self, kind: str, job: IngestUnit | JSONResponse) -> JSONResponse:
         """Queue a validated *job* as a *kind* task, or pass its 400 through."""

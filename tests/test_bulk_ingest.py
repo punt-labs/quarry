@@ -17,6 +17,7 @@ import pytest
 from quarry.config import Settings
 from quarry.content_guard import UnindexableContentError
 from quarry.db import Database
+from quarry.http_url import HttpUrl
 from quarry.ingestion.bulk_ingest import (
     BulkIngestRunner,
     BulkOptions,
@@ -107,6 +108,24 @@ class TestSelectSafe:
         assert len(safe) == 2
 
 
+class TestUnparseableEntries:
+    def test_an_entry_that_cannot_be_parsed_is_dropped_before_the_crawl(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A bad port or userinfo never reaches a typed URL, a log or a report."""
+        entries = [
+            SitemapEntry(
+                loc="http://u:secret@bad.example:99999/x?token=t", lastmod=None
+            ),
+            SitemapEntry(loc="https://good.example/a", lastmod=None),
+        ]
+        with caplog.at_level(logging.WARNING):
+            safe = SafeEntrySelector().select_safe(entries)
+        assert [e.loc for e in safe] == ["https://good.example/a"]
+        assert "secret" not in caplog.text
+        assert "(unparseable URL)" in caplog.text
+
+
 class TestPartition:
     """partition: dedup filtered entries against existing docs' <lastmod>."""
 
@@ -118,7 +137,7 @@ class TestPartition:
 
         to_ingest, skipped = SafeEntrySelector().partition(entries, _context())
 
-        assert to_ingest == [("https://example.com/new", None)]
+        assert to_ingest == [(HttpUrl("https://example.com/new"), None)]
         assert skipped == 0
 
     def test_stale_entry_is_skipped_without_overwrite(
@@ -166,7 +185,7 @@ class TestPartition:
             entries, _context(overwrite=True)
         )
 
-        assert to_ingest == [("https://example.com/p", None)]
+        assert to_ingest == [(HttpUrl("https://example.com/p"), None)]
         assert skipped == 0
 
     def test_unparseable_stored_timestamp_forces_reingest(
@@ -190,7 +209,7 @@ class TestPartition:
 
         to_ingest, skipped = SafeEntrySelector().partition(entries, _context())
 
-        assert to_ingest == [("https://example.com/p", None)]
+        assert to_ingest == [(HttpUrl("https://example.com/p"), None)]
         assert skipped == 0
 
     def test_naive_lastmod_older_than_stored_is_skipped(
@@ -248,7 +267,7 @@ class TestPartition:
 
         to_ingest, skipped = SafeEntrySelector().partition(entries, _context())
 
-        assert to_ingest == [("https://example.com/p", None)]
+        assert to_ingest == [(HttpUrl("https://example.com/p"), None)]
         assert skipped == 0
 
 
@@ -259,12 +278,16 @@ class TestBulkIngestRunnerRun:
         def _stub(
             request: UrlIngest, _progress: Progress, _context: IngestContext
         ) -> IngestResult:
-            return {"document_name": request.url, "collection": "c", "chunks": 1}
+            return {
+                "document_name": request.url.document_name,
+                "collection": "c",
+                "chunks": 1,
+            }
 
         runner = BulkIngestRunner(ingest_one=_stub, workers=2)
-        to_ingest: list[tuple[str, str | None]] = [
-            ("https://a.example", None),
-            ("https://b.example", None),
+        to_ingest: list[tuple[HttpUrl, str | None]] = [
+            (HttpUrl("https://a.example"), None),
+            (HttpUrl("https://b.example"), None),
         ]
 
         ingested, failed, errors = runner.run(
@@ -283,11 +306,15 @@ class TestBulkIngestRunnerRun:
         def _stub(
             request: UrlIngest, _progress: Progress, _context: IngestContext
         ) -> IngestResult:
-            return {"document_name": request.url, "collection": "c", "chunks": 1}
+            return {
+                "document_name": request.url.document_name,
+                "collection": "c",
+                "chunks": 1,
+            }
 
-        credentialed_url = "https://user:pass@example.com/page?token=abc123"
+        credentialed_url = HttpUrl("https://example.com/page?token=abc123")
         runner = BulkIngestRunner(ingest_one=_stub)
-        to_ingest: list[tuple[str, str | None]] = [(credentialed_url, None)]
+        to_ingest: list[tuple[HttpUrl, str | None]] = [(credentialed_url, None)]
         messages: list[str] = []
 
         ingested, failed, _errors = runner.run(
@@ -296,7 +323,7 @@ class TestBulkIngestRunnerRun:
 
         assert (ingested, failed) == (1, 0)
         for message in messages:
-            assert "pass" not in message
+            assert "abc123" not in message
             assert "token=abc123" not in message
         # Exact match, not a host/path substring check (CodeQL
         # py/incomplete-url-substring-sanitization): pins the whole
@@ -308,15 +335,19 @@ class TestBulkIngestRunnerRun:
         def _stub(
             request: UrlIngest, _progress: Progress, _context: IngestContext
         ) -> IngestResult:
-            if "bad" in request.url:
+            if "bad" in request.url.fetch_url:
                 msg = "boom"
                 raise ValueError(msg)
-            return {"document_name": request.url, "collection": "c", "chunks": 1}
+            return {
+                "document_name": request.url.document_name,
+                "collection": "c",
+                "chunks": 1,
+            }
 
         runner = BulkIngestRunner(ingest_one=_stub, workers=2)
-        to_ingest: list[tuple[str, str | None]] = [
-            ("https://good.example", None),
-            ("https://bad.example", None),
+        to_ingest: list[tuple[HttpUrl, str | None]] = [
+            (HttpUrl("https://good.example"), None),
+            (HttpUrl("https://bad.example"), None),
         ]
 
         ingested, failed, errors = runner.run(
@@ -332,36 +363,6 @@ class TestBulkIngestRunnerRun:
         assert "ValueError" in errors[0]
         assert "boom" not in errors[0]
 
-    def test_a_url_that_cannot_be_parsed_fails_alone(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """Naming a bad-port URL must not abort the crawl or lose its counts."""
-
-        def _stub(
-            request: UrlIngest, _progress: Progress, _context: IngestContext
-        ) -> IngestResult:
-            if ":99999" in request.url:
-                msg = "unparseable"
-                raise UnindexableContentError(msg)
-            return {"document_name": request.url, "collection": "c", "chunks": 1}
-
-        runner = BulkIngestRunner(ingest_one=_stub, workers=2)
-        to_ingest: list[tuple[str, str | None]] = [
-            ("https://good.example/a", None),
-            ("http://u:secret@bad.example:99999/x?token=t", None),
-        ]
-        messages: list[str] = []
-
-        with caplog.at_level(logging.INFO):
-            ingested, failed, errors = runner.run(
-                to_ingest, Progress(messages.append), _context(), BulkOptions()
-            )
-
-        assert (ingested, failed) == (1, 1)
-        assert errors == ["(unparseable URL): unparseable"]
-        assert "secret" not in caplog.text
-        assert not any("secret" in m for m in messages)
-
     def test_forces_overwrite_for_every_url_that_passed_dedup(self) -> None:
         """run() always replaces chunks for URLs that passed dedup (bulk_ingest.py).
 
@@ -375,10 +376,16 @@ class TestBulkIngestRunnerRun:
             request: UrlIngest, _progress: Progress, context: IngestContext
         ) -> IngestResult:
             seen_contexts.append(context)
-            return {"document_name": request.url, "collection": "c", "chunks": 1}
+            return {
+                "document_name": request.url.document_name,
+                "collection": "c",
+                "chunks": 1,
+            }
 
         runner = BulkIngestRunner(ingest_one=_stub)
-        to_ingest: list[tuple[str, str | None]] = [("https://a.example", None)]
+        to_ingest: list[tuple[HttpUrl, str | None]] = [
+            (HttpUrl("https://a.example"), None)
+        ]
 
         runner.run(to_ingest, Progress(None), _context(overwrite=False), BulkOptions())
 
@@ -399,12 +406,18 @@ class TestBulkIngestRunnerRun:
             request: UrlIngest, progress: Progress, _context: IngestContext
         ) -> IngestResult:
             seen_progress.append(progress)
-            return {"document_name": request.url, "collection": "c", "chunks": 1}
+            return {
+                "document_name": request.url.document_name,
+                "collection": "c",
+                "chunks": 1,
+            }
 
         caller_messages: list[str] = []
         caller_progress = Progress(caller_messages.append, log=False)
         runner = BulkIngestRunner(ingest_one=_stub)
-        to_ingest: list[tuple[str, str | None]] = [("https://a.example", None)]
+        to_ingest: list[tuple[HttpUrl, str | None]] = [
+            (HttpUrl("https://a.example"), None)
+        ]
 
         runner.run(to_ingest, caller_progress, _context(), BulkOptions())
 
@@ -424,7 +437,7 @@ class TestBulkIngestRunnerRun:
         WebFetcher and its callees embed the raw URL verbatim in their
         exception messages (e.g. "Cannot reach {url}: ...").
         """
-        credentialed_url = "https://user:pass@example.com/page?token=abc123"
+        credentialed_url = HttpUrl("https://example.com/page?token=abc123")
 
         def _stub(
             request: UrlIngest, _progress: Progress, _context: IngestContext
@@ -432,12 +445,16 @@ class TestBulkIngestRunnerRun:
             if request.url == credentialed_url:
                 msg = f"Cannot reach {request.url}: connection refused"
                 raise ValueError(msg)
-            return {"document_name": request.url, "collection": "c", "chunks": 1}
+            return {
+                "document_name": request.url.document_name,
+                "collection": "c",
+                "chunks": 1,
+            }
 
         runner = BulkIngestRunner(ingest_one=_stub)
-        to_ingest: list[tuple[str, str | None]] = [
+        to_ingest: list[tuple[HttpUrl, str | None]] = [
             (credentialed_url, None),
-            ("https://ok.example/p", None),
+            (HttpUrl("https://ok.example/p"), None),
         ]
         messages: list[str] = []
 
@@ -449,7 +466,7 @@ class TestBulkIngestRunnerRun:
         assert (ingested, failed) == (1, 1)
         assert errors == ["https://example.com/page: ValueError"]
         for haystack in (errors[0], caplog.text, *messages):
-            assert "pass" not in haystack
+            assert "abc123" not in haystack
             assert "token=abc123" not in haystack
             assert "connection refused" not in haystack
         assert "ValueError" in caplog.text
@@ -464,7 +481,7 @@ class TestBulkIngestRunnerRun:
         runner = BulkIngestRunner(ingest_one=_stub)
         with pytest.raises(UnindexableContentError) as info:
             runner.run(
-                [("https://a.example/x", None)],
+                [(HttpUrl("https://a.example/x"), None)],
                 Progress(None),
                 _context(),
                 BulkOptions(),
@@ -480,7 +497,11 @@ class TestBulkIngestRunnerRun:
             request: UrlIngest, _progress: Progress, _context: IngestContext
         ) -> IngestResult:
             calls.append(request)
-            return {"document_name": request.url, "collection": "c", "chunks": 1}
+            return {
+                "document_name": request.url.document_name,
+                "collection": "c",
+                "chunks": 1,
+            }
 
         runner = BulkIngestRunner(ingest_one=_stub)
 

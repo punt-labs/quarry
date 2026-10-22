@@ -10,6 +10,7 @@ import pytest
 
 from quarry.config import Settings
 from quarry.db import Database
+from quarry.http_url import HttpUrl
 from quarry.models import Chunk, PageAnalysis, PageContent, PageType
 
 
@@ -709,7 +710,7 @@ class TestIngestUrlScrubbing:
 
         ingest_url(
             UrlIngest(
-                "https://example.com/p",
+                HttpUrl("https://example.com/p"),
                 content_scrubber=lambda t: scrub_and_log(t, "web-fetch"),
             ),
             Progress(None),
@@ -742,7 +743,7 @@ class TestIngestUrlScrubbing:
 
         result = ingest_url(
             UrlIngest(
-                "https://example.com/p",
+                HttpUrl("https://example.com/p"),
                 document_name="note jdoe@example.com",
                 content_scrubber=lambda t: scrub_and_log(t, "web-fetch"),
             ),
@@ -783,7 +784,7 @@ class TestIngestUrlScrubbing:
         calls = _capture_build_chunks(monkeypatch)
 
         result = ingest_url(
-            UrlIngest("https://example.com/p"),
+            UrlIngest(HttpUrl("https://example.com/p")),
             Progress(None),
             IngestContext(
                 Database(MagicMock()), _settings(), overwrite=True, collection="c"
@@ -814,7 +815,7 @@ class TestIngestUrlScrubbing:
 
         with pytest.raises(ValueError, match="scrub failed"):
             ingest_url(
-                UrlIngest("https://example.com/p", content_scrubber=_boom),
+                UrlIngest(HttpUrl("https://example.com/p"), content_scrubber=_boom),
                 Progress(None),
                 IngestContext(
                     Database(MagicMock()), _settings(), overwrite=True, collection="c"
@@ -834,7 +835,7 @@ class TestIngestUrlScrubbing:
         calls = _capture_build_chunks(monkeypatch)
 
         ingest_url(
-            UrlIngest("https://example.com/p"),
+            UrlIngest(HttpUrl("https://example.com/p")),
             Progress(None),
             IngestContext(Database(MagicMock()), _settings(), collection="default"),
         )

@@ -5,10 +5,12 @@ from __future__ import annotations
 import logging
 import traceback
 from http.client import HTTPException
-from typing import Self, final
+from typing import TYPE_CHECKING, Self, final
 
-from quarry.capture_url import CaptureUrl
 from quarry.content_guard import UnindexableContentError
+
+if TYPE_CHECKING:
+    from quarry.http_url import HttpUrl
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +34,9 @@ class PageReport:
 
     _url: str
 
-    def __new__(cls, page_url: str) -> Self:
+    def __new__(cls, page_url: HttpUrl) -> Self:
         self = super().__new__(cls)
-        self._url = CaptureUrl.display(page_url)
+        self._url = str(page_url)
         return self
 
     @property

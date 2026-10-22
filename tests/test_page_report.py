@@ -9,13 +9,14 @@ import pytest
 
 from quarry.content_guard import UnindexableContentError
 from quarry.db.row_budget import RowBudgetError
+from quarry.http_url import HttpUrl
 from quarry.ingestion.page_report import PageReport
 
-_URL = "https://user:pw@example.com/p?token=SECRET#frag"
+_URL = "https://example.com/p?token=SECRET#frag"
 
 
 def test_the_url_is_redacted() -> None:
-    assert PageReport(_URL).url == "https://example.com/p"
+    assert PageReport(HttpUrl(_URL)).url == "https://example.com/p"
 
 
 class TestFailure:
@@ -24,7 +25,7 @@ class TestFailure:
     ) -> None:
         exc = UnindexableContentError("content rejected: unsupported media type x")
         with caplog.at_level(logging.WARNING):
-            text = PageReport(_URL).failure(exc)
+            text = PageReport(HttpUrl(_URL)).failure(exc)
         assert text == (
             "https://example.com/p: content rejected: unsupported media type x"
         )
@@ -37,7 +38,7 @@ class TestFailure:
     ) -> None:
         reason = "row budget exceeded: text 70,000 bytes > 65,536"
         with caplog.at_level(logging.WARNING):
-            text = PageReport(_URL).failure(RowBudgetError(reason))
+            text = PageReport(HttpUrl(_URL)).failure(RowBudgetError(reason))
         assert text == f"https://example.com/p: {reason}"
         assert caplog.records[0].levelno == logging.WARNING
 
@@ -52,7 +53,7 @@ class TestFailure:
         self, exc: Exception, caplog: pytest.LogCaptureFixture
     ) -> None:
         with caplog.at_level(logging.WARNING):
-            text = PageReport(_URL).failure(exc)
+            text = PageReport(HttpUrl(_URL)).failure(exc)
         assert text == f"https://example.com/p: {type(exc).__name__}"
         assert caplog.records[0].levelno == logging.WARNING
         assert "token" not in caplog.text
@@ -65,7 +66,7 @@ class TestFailure:
             raise KeyError(msg)
         except KeyError as exc:
             with caplog.at_level(logging.WARNING):
-                text = PageReport(_URL).failure(exc)
+                text = PageReport(HttpUrl(_URL)).failure(exc)
         assert text == "https://example.com/p: KeyError"
         [record] = caplog.records
         assert record.levelno == logging.ERROR

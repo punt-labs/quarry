@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.capture_marker import CaptureMarker
-from quarry.capture_url import CaptureUrl
 from quarry.content_guard import UnindexableContentError
 from quarry.ingestion import ingest_context, web_ingest
 from quarry.ingestion.ingest_context import IngestContext, MemoryType
@@ -15,6 +14,7 @@ from quarry.scrub import scrub_and_log
 
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
+    from quarry.http_url import HttpUrl
     from quarry.ingestion.fetched_body import FetchedBody
 
 # WebFetcher is frozen, so one shared instance carries the default policy.
@@ -72,14 +72,14 @@ class CapturedBodyIngest:
 
     __slots__ = ("_fetcher", "_labels", "_name_override", "_source")
 
-    _source: str
+    _source: HttpUrl
     _labels: IngestLabels
     _name_override: str
     _fetcher: WebFetcher
 
     def __new__(
         cls,
-        source: str,
+        source: HttpUrl,
         labels: IngestLabels,
         name_override: str = "",
         fetcher: WebFetcher = _DEFAULT_FETCHER,
@@ -93,7 +93,7 @@ class CapturedBodyIngest:
 
     def subject(self) -> str:
         """Return the source with userinfo, query and fragment dropped, for a log."""
-        return CaptureUrl.display(self._source)
+        return str(self._source)
 
     def fetch(self) -> FetchedBody:
         """Fetch ``source``; any failure is a URL-free ``UnindexableContentError``."""
@@ -136,7 +136,7 @@ class CapturedBodyIngest:
             return dict(web_ingest.ingest_url(request, progress, context))
 
         content = CaptureMarker(body.media_type).render() + body.text
-        name = self._name_override or CaptureUrl(self._source).redacted(scrub)
+        name = self._name_override or scrub(self._source.document_name)
         inline = web_ingest.InlineIngest(
             content, format_hint="markdown", content_scrubber=scrub
         )

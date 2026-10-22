@@ -269,7 +269,7 @@ class TestIngestRoute:
     ) -> None:
         with (
             patch(
-                "quarry.daemon.routes.ingestion.UrlAdmission.reject_reason",
+                "quarry.daemon.routes.content_group.UrlAdmission.reject_reason",
                 return_value=None,
             ),
             patch(
@@ -397,7 +397,7 @@ async def test_a_capture_job_fails_quietly_on_gap_binary_inline_text(
     state = TaskState(task_id="t-cap", kind="capture")
 
     with caplog.at_level(logging.WARNING):
-        await CaptureIngestJob(inline=inline, source_url="").run(daemon.ctx, state)
+        await CaptureIngestJob(inline=inline, source_url=None).run(daemon.ctx, state)
 
     assert state.status == "failed"
     assert state.error == _GAP_REASON

@@ -12,6 +12,7 @@ import pytest
 from quarry.content_guard import UnindexableContentError
 from quarry.daemon.captured_body_ingest import IngestLabels
 from quarry.daemon.content_jobs import CaptureIngestJob, ScrubbedIngestJob
+from quarry.http_url import HttpUrl
 from quarry.ingestion.fetch_refused import FetchRefusedError
 from quarry.ingestion.fetched_body import FetchedBody
 from quarry.ingestion.media_type_policy import UnsupportedContentError
@@ -130,7 +131,7 @@ class TestCreateIfAbsent:
 def test_capture_spool_record_is_none() -> None:
     """A capture has a durable transcript .md, so it is not spooled."""
     inline = _remember("c", collection="repo-captures")
-    job = CaptureIngestJob(inline=inline, source_url="")
+    job = CaptureIngestJob(inline=inline, source_url=None)
     assert job.spool_record() is None
 
 
@@ -143,9 +144,10 @@ class TestCaptureSkipVersusEmpty:
     means a JS-rendered page produced nothing, and the re-fetch is the rescue.
     """
 
-    def _job(self, source_url: str = "https://x.test/page") -> CaptureIngestJob:
+    def _job(self, *, has_source: bool = True) -> CaptureIngestJob:
         inline = _remember("<html></html>", collection="repo-captures", overwrite=False)
-        return CaptureIngestJob(inline=inline, source_url=source_url)
+        source = HttpUrl("https://x.test/page") if has_source else None
+        return CaptureIngestJob(inline=inline, source_url=source)
 
     def test_existing_document_is_skipped_without_a_refetch(self) -> None:
         ctx, _catalog = _ctx(exists=True)
@@ -171,12 +173,12 @@ class TestCaptureSkipVersusEmpty:
             ) as refetch,
         ):
             result = job._capture(ctx)
-        refetch.assert_called_once_with(ctx)
+        refetch.assert_called_once_with(ctx, HttpUrl("https://x.test/page"))
         assert result == {"chunks": 2}
 
     def test_empty_extraction_without_a_source_url_stores_what_it_has(self) -> None:
         ctx, _catalog = _ctx(exists=False)
-        job = self._job(source_url="")
+        job = self._job(has_source=False)
         empty = {"document_name": "note", "collection": "repo-captures", "chunks": 0}
         with (
             patch("quarry.ingestion.web_ingest.ingest_content", return_value=empty),
@@ -208,7 +210,7 @@ def test_html_refetch_fetches_the_source_url_exactly_once() -> None:
     fetched body via ``prefetched_html`` and skips its own fetch.
     """
     inline = _remember("", collection="repo-captures")
-    job = CaptureIngestJob(inline=inline, source_url="https://x.test/page")
+    job = CaptureIngestJob(inline=inline, source_url=HttpUrl("https://x.test/page"))
     ctx = cast(
         "DaemonContext", SimpleNamespace(database=MagicMock(), settings=MagicMock())
     )
@@ -224,9 +226,9 @@ def test_html_refetch_fetches_the_source_url_exactly_once() -> None:
             "quarry.ingestion.web_ingest.ingest_url", return_value={"chunks": 1}
         ) as mock_ingest_url,
     ):
-        result = job._refetch(ctx)
+        result = job._refetch(ctx, HttpUrl("https://x.test/page"))
 
-    mock_fetch_body.assert_called_once_with("https://x.test/page")
+    mock_fetch_body.assert_called_once_with(HttpUrl("https://x.test/page"))
     mock_ingest_url.assert_called_once()
     request = mock_ingest_url.call_args.args[0]
     assert request.prefetched_html == body.text
@@ -236,7 +238,7 @@ def test_html_refetch_fetches_the_source_url_exactly_once() -> None:
 def _refetch_job() -> CaptureIngestJob:
     return CaptureIngestJob(
         inline=_remember("", collection="repo-captures"),
-        source_url="https://user:secret@x.test/paper.pdf?token=abc",
+        source_url=HttpUrl("https://x.test/paper.pdf?token=abc"),
     )
 
 
@@ -260,7 +262,7 @@ def test_a_refused_refetch_raises_its_reason_and_stores_nothing(
         patch("quarry.ingestion.web_ingest.ingest_content") as stored,
         pytest.raises(type(refusal)) as info,
     ):
-        _refetch_job()._refetch(ctx)
+        _refetch_job()._refetch(ctx, HttpUrl("https://x.test/page"))
     assert info.value is refusal
     stored.assert_not_called()
 
@@ -270,7 +272,7 @@ def test_the_refetch_log_names_the_scrubbed_inline_name(
 ) -> None:
     job = CaptureIngestJob(
         inline=_remember("", collection="repo-captures"),
-        source_url="https://x.test/p",
+        source_url=HttpUrl("https://x.test/p"),
     )
     ctx = cast(
         "DaemonContext", SimpleNamespace(database=MagicMock(), settings=MagicMock())
@@ -284,6 +286,6 @@ def test_the_refetch_log_names_the_scrubbed_inline_name(
         patch("quarry.ingestion.web_ingest.ingest_url", return_value={"chunks": 1}),
         patch.object(ScrubbedIngestJob, "_scrubbed", return_value="[scrubbed-name]"),
     ):
-        job._refetch(ctx)
+        job._refetch(ctx, HttpUrl("https://x.test/page"))
     assert "[scrubbed-name]" in caplog.text
     assert "note" not in caplog.text

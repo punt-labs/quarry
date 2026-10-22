@@ -19,6 +19,7 @@ from urllib.error import URLError
 import pytest
 from usp.web_client.abstract_client import WebClientErrorResponse
 
+from quarry.http_url import HttpUrl
 from quarry.ingestion.fetch_refused import FetchRefusedError
 from quarry.ingestion.pinned_connection import (
     PinnedHTTPConnection,
@@ -154,7 +155,7 @@ class TestRebindingSimulation:
         monkeypatch.setattr(_GETADDRINFO, resolver)
         targets = _forbid_create_connection(monkeypatch)
         with pytest.raises(FetchRefusedError, match=r"blocked address|metadata"):
-            WebFetcher().fetch("https://rebind.test/page")
+            WebFetcher().fetch(HttpUrl("https://rebind.test/page"))
         assert targets == []  # no socket ever opened to the blocked address
         assert resolver.calls >= 2  # admission gate, then the connect-time resolve
 
@@ -302,7 +303,7 @@ class TestRemoteLocalDivergence:
 
         monkeypatch.setattr(_GETADDRINFO, _Resolver((_PUBLIC,), (_BLOCKED_RFC1918,)))
         with pytest.raises(ValueError):
-            WebFetcher().fetch("https://rebind.test/page")
+            WebFetcher().fetch(HttpUrl("https://rebind.test/page"))
 
         monkeypatch.setattr(_GETADDRINFO, _Resolver((_PUBLIC,), (_BLOCKED_RFC1918,)))
         response = GatedSitemapWebClient().get("https://rebind.test/sitemap.xml")
@@ -356,7 +357,7 @@ class TestExceptionBoundaries:
     def test_webfetcher_surfaces_overlong_idna_label_as_rejection(self) -> None:
         """WebFetcher.fetch surfaces it as a clean ValueError URL rejection."""
         with pytest.raises(ValueError, match="URL rejected"):
-            WebFetcher().fetch(_OVERLONG_LABEL_URL)
+            WebFetcher().fetch(HttpUrl(_OVERLONG_LABEL_URL))
 
     def test_reject_reason_returns_string_on_malformed_url(self) -> None:
         """A malformed URL yields a reason string, not a crash (never raises)."""

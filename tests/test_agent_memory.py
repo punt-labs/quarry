@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 from quarry.db import ChunkSearch, ChunkStore, Database, SchemaManager, get_db
 from quarry.db.schema import TABLE_NAME
+from quarry.http_url import HttpUrl
 from quarry.models import Chunk
 from quarry.results import SearchFilter, SearchResult
 from quarry.retrieval import HybridRetriever, RetrievalConfig
@@ -761,7 +762,7 @@ class TestIngestUrlThreadsAgentHandle:
             patch("quarry.db.chunk_store.ChunkStore.delete_document"),
         ):
             ingest_url(
-                UrlIngest("https://example.com"),
+                UrlIngest(HttpUrl("https://example.com")),
                 Progress(None),
                 IngestContext(
                     Database(MagicMock()),

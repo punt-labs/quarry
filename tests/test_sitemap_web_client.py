@@ -22,6 +22,7 @@ import pytest
 from usp.web_client.abstract_client import WebClientErrorResponse
 
 import quarry.sitemap_web_client as swc
+from quarry.http_url import HttpUrl
 from quarry.ingestion.ssrf_redirect import SsrfGuardedRedirectHandler
 from quarry.sitemap import SitemapDiscovery
 from quarry.sitemap_web_client import GatedSitemapWebClient
@@ -380,7 +381,7 @@ class TestUspRecursionGated:
             _resolver({"safe.example": _PUBLIC, "internal.example": "10.0.0.9"}),
         )
 
-        entries = SitemapDiscovery.discover_urls(index)
+        entries = SitemapDiscovery.discover_urls(HttpUrl(index))
 
         locs = [e.loc for e in entries]
         assert "https://safe.example/page1" in locs
@@ -405,7 +406,7 @@ class TestUspRecursionGated:
             _resolver({"safe.example": _PUBLIC, "internal.example": "10.0.0.9"}),
         )
 
-        entries = SitemapDiscovery.discover_pages("https://safe.example/docs")
+        entries = SitemapDiscovery.discover_pages(HttpUrl("https://safe.example/docs"))
 
         locs = [e.loc for e in entries]
         assert evil_sm not in opener.opened  # robots-listed internal never fetched
@@ -427,7 +428,7 @@ class TestUspRecursionGated:
         monkeypatch.setattr(swc, "GUARDED_OPENER", opener)
         monkeypatch.setattr(_GETADDRINFO, _resolver({}))
 
-        entries = SitemapDiscovery.discover_urls(top)
+        entries = SitemapDiscovery.discover_urls(HttpUrl(top))
 
         assert [e.loc for e in entries] == ["https://safe.example/final"]
 

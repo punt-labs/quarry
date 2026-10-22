@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from quarry.db import Database
+from quarry.http_url import HttpUrl
 from quarry.ingestion.bulk_ingest import BulkOptions
 from quarry.ingestion.fetch_refused import FetchRefusedError
 from quarry.ingestion.ingest_context import IngestContext, Progress
@@ -69,7 +70,9 @@ class TestDiscoverPages:
         ]
         mock_tree_fn.return_value = mock_tree
 
-        entries = SitemapDiscovery.discover_pages("https://example.com/docs/guide")
+        entries = SitemapDiscovery.discover_pages(
+            HttpUrl("https://example.com/docs/guide")
+        )
         assert len(entries) == 2
         call = mock_tree_fn.call_args
         assert call.args == ("https://example.com/",)
@@ -81,7 +84,7 @@ class TestDiscoverPages:
         mock_tree.all_pages.return_value = []
         mock_tree_fn.return_value = mock_tree
 
-        entries = SitemapDiscovery.discover_pages("https://example.com/")
+        entries = SitemapDiscovery.discover_pages(HttpUrl("https://example.com/"))
         assert entries == []
 
     @patch("usp.tree.sitemap_tree_for_homepage")
@@ -95,7 +98,7 @@ class TestDiscoverPages:
         ]
         mock_tree_fn.return_value = mock_tree
 
-        entries = SitemapDiscovery.discover_pages("https://example.com/")
+        entries = SitemapDiscovery.discover_pages(HttpUrl("https://example.com/"))
         assert entries[0].lastmod == ts
 
     @patch("usp.tree.sitemap_tree_for_homepage")
@@ -110,7 +113,7 @@ class TestDiscoverPages:
         ]
         mock_tree_fn.return_value = mock_tree
 
-        entries = SitemapDiscovery.discover_pages("https://example.com/")
+        entries = SitemapDiscovery.discover_pages(HttpUrl("https://example.com/"))
         assert len(entries) == 2
         locs = [e.loc for e in entries]
         assert locs.count("https://example.com/dup") == 1
@@ -137,7 +140,9 @@ class TestDiscoverUrls:
         mock_fetcher.sitemap.return_value = mock_sitemap
         mock_fetcher_cls.return_value = mock_fetcher
 
-        entries = SitemapDiscovery.discover_urls("https://example.com/sitemap.xml")
+        entries = SitemapDiscovery.discover_urls(
+            HttpUrl("https://example.com/sitemap.xml")
+        )
         assert len(entries) == 2
         assert entries[0].loc == "https://example.com/page1"
         call = mock_fetcher_cls.call_args
@@ -159,7 +164,9 @@ class TestDiscoverUrls:
         mock_fetcher.sitemap.return_value = mock_sitemap
         mock_fetcher_cls.return_value = mock_fetcher
 
-        entries = SitemapDiscovery.discover_urls("https://example.com/sitemap.xml")
+        entries = SitemapDiscovery.discover_urls(
+            HttpUrl("https://example.com/sitemap.xml")
+        )
         assert len(entries) == 2
 
     @patch("usp.fetch_parse.SitemapFetcher")
@@ -170,7 +177,9 @@ class TestDiscoverUrls:
         mock_fetcher.sitemap.return_value = mock_sitemap
         mock_fetcher_cls.return_value = mock_fetcher
 
-        entries = SitemapDiscovery.discover_urls("https://example.com/sitemap.xml")
+        entries = SitemapDiscovery.discover_urls(
+            HttpUrl("https://example.com/sitemap.xml")
+        )
         assert entries == []
 
 
@@ -273,7 +282,7 @@ class TestIngestSitemapDedup:
         ]
 
         result = ingest_sitemap(
-            "https://example.com/sitemap.xml",
+            HttpUrl("https://example.com/sitemap.xml"),
             Progress(None),
             IngestContext(Database(MagicMock()), MagicMock(), collection="test"),
             BulkOptions(),
@@ -309,7 +318,7 @@ class TestIngestSitemapDedup:
         mock_ingest.return_value = _MOCK_RESULT
 
         result = ingest_sitemap(
-            "https://example.com/sitemap.xml",
+            HttpUrl("https://example.com/sitemap.xml"),
             Progress(None),
             IngestContext(Database(MagicMock()), MagicMock(), collection="test"),
             BulkOptions(),
@@ -339,7 +348,7 @@ class TestIngestSitemapDedup:
         mock_ingest.return_value = _MOCK_RESULT
 
         result = ingest_sitemap(
-            "https://example.com/sitemap.xml",
+            HttpUrl("https://example.com/sitemap.xml"),
             Progress(None),
             IngestContext(Database(MagicMock()), MagicMock(), collection="test"),
             BulkOptions(),
@@ -374,7 +383,7 @@ class TestIngestSitemapDedup:
         mock_ingest.return_value = _MOCK_RESULT
 
         result = ingest_sitemap(
-            "https://example.com/sitemap.xml",
+            HttpUrl("https://example.com/sitemap.xml"),
             Progress(None),
             IngestContext(
                 Database(MagicMock()), MagicMock(), overwrite=True, collection="test"
@@ -408,7 +417,7 @@ class TestIngestSitemapDedup:
         mock_ingest.return_value = _MOCK_RESULT
 
         result = ingest_sitemap(
-            "https://example.com/sitemap.xml",
+            HttpUrl("https://example.com/sitemap.xml"),
             Progress(None),
             IngestContext(Database(MagicMock()), MagicMock(), collection="test"),
             BulkOptions(),
@@ -464,7 +473,7 @@ class TestIngestSitemapIntegration:
             ),
         ):
             result = ingest_sitemap(
-                "https://docs.example.com/sitemap.xml",
+                HttpUrl("https://docs.example.com/sitemap.xml"),
                 Progress(None),
                 IngestContext(db, settings, collection="docs"),
                 BulkOptions(),
@@ -511,7 +520,7 @@ class TestIngestSitemapIntegration:
             ),
         ):
             result = ingest_sitemap(
-                "https://example.com/sitemap.xml",
+                HttpUrl("https://example.com/sitemap.xml"),
                 Progress(None),
                 IngestContext(db, settings),
                 BulkOptions(include=["/docs/*"], exclude=[]),
@@ -536,7 +545,7 @@ class TestIngestSitemapIntegration:
         mock_list_docs.return_value = []
 
         result = ingest_sitemap(
-            "https://docs.python.org/sitemap.xml",
+            HttpUrl("https://docs.python.org/sitemap.xml"),
             Progress(None),
             IngestContext(Database(MagicMock()), MagicMock(), collection=""),
             BulkOptions(),
@@ -568,7 +577,7 @@ class TestIngestSitemapIntegration:
         mock_list_docs.return_value = []
 
         result = ingest_sitemap(
-            "https://docs.python.org/sitemap.xml",
+            HttpUrl("https://docs.python.org/sitemap.xml"),
             Progress(None),
             IngestContext(Database(MagicMock()), MagicMock()),
             BulkOptions(),
@@ -596,7 +605,7 @@ class TestIngestSitemapIntegration:
         mock_list_docs.return_value = []
 
         result = ingest_sitemap(
-            "https://docs.python.org/sitemap.xml",
+            HttpUrl("https://docs.python.org/sitemap.xml"),
             Progress(None),
             IngestContext(Database(MagicMock()), MagicMock(), collection="default"),
             BulkOptions(),
@@ -620,11 +629,11 @@ class TestIngestSitemapIntegration:
 
         mock_discover.return_value = []
         mock_list_docs.return_value = []
-        credentialed_url = "https://user:pass@docs.python.org/sitemap.xml?token=abc123"
+        credentialed_url = "https://docs.python.org/sitemap.xml?token=abc123"
         messages: list[str] = []
 
         ingest_sitemap(
-            credentialed_url,
+            HttpUrl(credentialed_url),
             Progress(messages.append),
             IngestContext(Database(MagicMock()), MagicMock(), collection="test"),
             BulkOptions(),
@@ -632,7 +641,6 @@ class TestIngestSitemapIntegration:
 
         assert messages
         for message in messages:
-            assert "pass" not in message
             assert "token=abc123" not in message
         # Exact match, not a host/path substring check (CodeQL
         # py/incomplete-url-substring-sanitization): pins the whole
@@ -661,7 +669,7 @@ class TestIngestSitemapIntegration:
         def _side_effect(
             request: object, *args: object, **kwargs: object
         ) -> dict[str, object]:
-            url = request.url  # type: ignore[attr-defined]
+            url = request.url.document_name  # type: ignore[attr-defined]
             if "bad" in url:
                 msg = "HTTP 500"
                 raise ValueError(msg)
@@ -674,7 +682,7 @@ class TestIngestSitemapIntegration:
         mock_ingest.side_effect = _side_effect
 
         result = ingest_sitemap(
-            "https://example.com/sitemap.xml",
+            HttpUrl("https://example.com/sitemap.xml"),
             Progress(None),
             IngestContext(Database(MagicMock()), MagicMock(), collection="test"),
             BulkOptions(),
@@ -719,7 +727,7 @@ class TestIngestAuto:
         }
 
         result = ingest_auto(
-            "https://example.com/docs",
+            HttpUrl("https://example.com/docs"),
             Progress(None),
             IngestContext(Database(MagicMock()), MagicMock(), collection=""),
             BulkOptions(),
@@ -751,7 +759,7 @@ class TestIngestAuto:
         }
 
         result = ingest_auto(
-            "https://example.com/page",
+            HttpUrl("https://example.com/page"),
             Progress(None),
             IngestContext(Database(MagicMock()), MagicMock(), collection=""),
             BulkOptions(),
@@ -785,7 +793,7 @@ class TestIngestAuto:
         }
 
         ingest_auto(
-            "https://example.com/",
+            HttpUrl("https://example.com/"),
             Progress(None),
             IngestContext(Database(MagicMock()), MagicMock(), collection=""),
             BulkOptions(),
@@ -823,7 +831,7 @@ class TestIngestAuto:
         }
 
         ingest_auto(
-            "https://docs.python.org/3/library/",
+            HttpUrl("https://docs.python.org/3/library/"),
             Progress(None),
             IngestContext(Database(MagicMock()), MagicMock(), collection=""),
             BulkOptions(),
@@ -856,7 +864,7 @@ class TestIngestAuto:
         }
 
         ingest_auto(
-            "https://example.com/docs",
+            HttpUrl("https://example.com/docs"),
             Progress(None),
             IngestContext(Database(MagicMock()), MagicMock(), collection="my-docs"),
             BulkOptions(),
@@ -884,7 +892,7 @@ class TestIngestAuto:
         }
 
         result = ingest_auto(
-            "https://example.com/sitemap.xml",
+            HttpUrl("https://example.com/sitemap.xml"),
             Progress(None),
             IngestContext(Database(MagicMock()), MagicMock(), collection=""),
             BulkOptions(),
@@ -920,7 +928,7 @@ class TestIngestAuto:
         }
 
         result = ingest_auto(
-            "https://example.com/page",
+            HttpUrl("https://example.com/page"),
             Progress(None),
             IngestContext(Database(MagicMock()), MagicMock(), collection=""),
             BulkOptions(),
@@ -947,7 +955,7 @@ class TestIngestAuto:
         """
         from quarry.ingestion.sitemap_ingest import ingest_auto
 
-        credentialed_url = "https://user:pass@example.com/page?token=abc123"
+        credentialed_url = "https://example.com/page?token=abc123"
         mock_discover.side_effect = FetchRefusedError(
             "fetch failed: sitemap URL not accepted by the parser"
         )
@@ -960,15 +968,14 @@ class TestIngestAuto:
 
         with caplog.at_level(logging.WARNING):
             ingest_auto(
-                credentialed_url,
+                HttpUrl(credentialed_url),
                 Progress(messages.append),
                 IngestContext(Database(MagicMock()), MagicMock(), collection=""),
                 BulkOptions(),
             )
 
-        assert "user:pass" not in caplog.text
         assert "token=abc123" not in caplog.text
-        assert not any("user:pass" in m or "token=abc123" in m for m in messages)
+        assert not any("token=abc123" in m for m in messages)
         # Exact match, not a host substring check (CodeQL
         # py/incomplete-url-substring-sanitization): pins the whole log
         # record rather than a fragment that could also match an unrelated
@@ -984,19 +991,19 @@ class TestIngestAuto:
         ]
 
     @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
-    def test_discovering_progress_redacts_netloc_userinfo(
+    def test_discovering_progress_names_the_homepage_only(
         self, mock_discover: MagicMock
     ) -> None:
-        """The "Discovering sitemaps for %s://%s" progress line derives its
-        netloc from urlparse, which -- unlike CaptureUrl -- keeps userinfo
-        ("user:pass@host"); it must be redacted before reaching progress
-        (CWE-532). discover_pages returns no entries so the single-page
-        fallback below never runs a real fetch.
+        """The "Discovering sitemaps for %s" progress line names the homepage.
+
+        It is built from the host and port, never the raw netloc (CWE-532).
+        discover_pages returns no entries so the single-page fallback below
+        never runs a real fetch.
         """
         from quarry.ingestion.sitemap_ingest import ingest_auto
 
         mock_discover.return_value = []
-        credentialed_url = "https://user:pass@example.com/page"
+        credentialed_url = "https://example.com/page"
         messages: list[str] = []
 
         with patch("quarry.ingestion.sitemap_ingest.ingest_url") as mock_ingest_url:
@@ -1006,7 +1013,7 @@ class TestIngestAuto:
                 "chunks": 1,
             }
             ingest_auto(
-                credentialed_url,
+                HttpUrl(credentialed_url),
                 Progress(messages.append),
                 IngestContext(Database(MagicMock()), MagicMock(), collection=""),
                 BulkOptions(),
@@ -1014,12 +1021,11 @@ class TestIngestAuto:
 
         discovering = [m for m in messages if m.startswith("Discovering sitemaps for")]
         assert discovering
-        assert "user:pass" not in discovering[0]
         # Exact match, not a host substring check (CodeQL
         # py/incomplete-url-substring-sanitization): pins the whole
         # message rather than a fragment that could also match an
         # unrelated look-alike host.
-        assert discovering == ["Discovering sitemaps for https://example.com"]
+        assert discovering == ["Discovering sitemaps for https://example.com/"]
 
     @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
     def test_unexpected_discovery_error_propagates(
@@ -1034,7 +1040,7 @@ class TestIngestAuto:
 
         with pytest.raises(TypeError, match="boom"):
             ingest_auto(
-                "https://example.com/page",
+                HttpUrl("https://example.com/page"),
                 Progress(None),
                 IngestContext(Database(MagicMock()), MagicMock(), collection=""),
                 BulkOptions(),
@@ -1058,7 +1064,7 @@ class TestIngestAuto:
         }
 
         ingest_auto(
-            "https://example.com/page",
+            HttpUrl("https://example.com/page"),
             Progress(None),
             IngestContext(
                 Database(MagicMock()), MagicMock(), collection="my-custom-collection"
@@ -1090,7 +1096,7 @@ class TestIngestAuto:
         }
 
         ingest_auto(
-            "https://docs.example.com/ai/sandboxes/",
+            HttpUrl("https://docs.example.com/ai/sandboxes/"),
             Progress(None),
             IngestContext(
                 Database(MagicMock()), MagicMock(), collection="docker-sandboxes"
@@ -1121,7 +1127,7 @@ class TestIngestAuto:
         }
 
         ingest_auto(
-            "https://example.com/sitemap.xml",
+            HttpUrl("https://example.com/sitemap.xml"),
             Progress(None),
             IngestContext(Database(MagicMock()), MagicMock(), collection="my-docs"),
             BulkOptions(),
@@ -1147,7 +1153,7 @@ class TestIngestAuto:
                 "chunks": 2,
             }
             result = ingest_auto(
-                "https://example.com/docs/sitemap-guide",
+                HttpUrl("https://example.com/docs/sitemap-guide"),
                 Progress(None),
                 IngestContext(Database(MagicMock()), MagicMock(), collection=""),
                 BulkOptions(),
@@ -1178,7 +1184,7 @@ class TestIngestAuto:
         }
 
         result = ingest_auto(
-            "https://docs.example.com/ai/sandboxes/get-started/",
+            HttpUrl("https://docs.example.com/ai/sandboxes/get-started/"),
             Progress(None),
             IngestContext(Database(MagicMock()), MagicMock(), collection=""),
             BulkOptions(),
@@ -1378,14 +1384,16 @@ class TestBulkIngestSsrfGate:
         mock_ingest.return_value = _MOCK_RESULT
 
         result = ingest_sitemap(
-            "https://safe.example/sitemap.xml",
+            HttpUrl("https://safe.example/sitemap.xml"),
             Progress(None),
             IngestContext(Database(MagicMock()), MagicMock(), collection="test"),
             BulkOptions(),
         )
 
         assert result["ingested"] == 1  # only the safe entry
-        fetched = [call.args[0].url for call in mock_ingest.call_args_list]
+        fetched = [
+            call.args[0].url.document_name for call in mock_ingest.call_args_list
+        ]
         assert fetched == ["https://safe.example/page"]
         assert "https://internal.example/secret" not in fetched
 
@@ -1423,14 +1431,16 @@ class TestBulkIngestSsrfGate:
         mock_ingest.return_value = _MOCK_RESULT
 
         result = ingest_sitemap(
-            "https://safe.example/sitemap.xml",
+            HttpUrl("https://safe.example/sitemap.xml"),
             Progress(None),
             IngestContext(Database(MagicMock()), MagicMock(), collection="test"),
             BulkOptions(limit=2),
         )
 
         assert result["ingested"] == 2  # two SAFE pages, not limit-minus-internal
-        fetched = [call.args[0].url for call in mock_ingest.call_args_list]
+        fetched = [
+            call.args[0].url.document_name for call in mock_ingest.call_args_list
+        ]
         assert fetched == ["https://safe.example/a", "https://safe.example/b"]
         assert "https://internal.example/secret" not in fetched
 
@@ -1462,7 +1472,7 @@ class TestBulkIngestSsrfGate:
         mock_ingest.return_value = _MOCK_RESULT
 
         result = ingest_sitemap(
-            "https://safe.example/sitemap.xml",
+            HttpUrl("https://safe.example/sitemap.xml"),
             Progress(None),
             IngestContext(Database(MagicMock()), MagicMock(), collection="test"),
             BulkOptions(),
@@ -1476,7 +1486,7 @@ class TestBulkIngestSsrfGate:
 class TestInvalidSitemapFailsTheFetch:
     """A sitemap that cannot be fetched or parsed is an error, not an empty crawl."""
 
-    _URL = "https://u:pw@example.com/sitemap.xml?token=SECRET"
+    _URL = "https://example.com/sitemap.xml?token=SECRET"
 
     @patch("usp.fetch_parse.SitemapFetcher")
     def test_an_invalid_sitemap_raises_a_url_free_refusal(
@@ -1490,7 +1500,7 @@ class TestInvalidSitemapFailsTheFetch:
             url=self._URL, reason=f"HTTP 500 for {self._URL}"
         )
         with pytest.raises(FetchRefusedError) as info:
-            SitemapDiscovery.discover_urls(self._URL)
+            SitemapDiscovery.discover_urls(HttpUrl(self._URL))
         assert str(info.value) == (
             "fetch failed: sitemap could not be fetched or parsed"
         )
@@ -1501,7 +1511,7 @@ class TestInvalidSitemapFailsTheFetch:
     ) -> None:
         mock_fetcher_cls.return_value.sitemap.return_value.all_pages.return_value = []
         with caplog.at_level(logging.INFO):
-            SitemapDiscovery.discover_urls(self._URL)
+            SitemapDiscovery.discover_urls(HttpUrl(self._URL))
         assert [r.getMessage() for r in caplog.records] == [
             "Fetching sitemap: https://example.com/sitemap.xml",
             "Parsed 0 pages from https://example.com/sitemap.xml",
