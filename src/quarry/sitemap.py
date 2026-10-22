@@ -8,6 +8,7 @@ error tolerance for malformed content.
 from __future__ import annotations
 
 import logging
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
 from fnmatch import fnmatch
@@ -99,7 +100,9 @@ class SitemapDiscovery:
 
         Exclude takes precedence over include; no patterns means match-all.
         """
-        path = urlparse(entry.loc).path
+        path = ""  # an unparseable entry has no path; the gate drops it
+        with suppress(ValueError):
+            path = urlparse(entry.loc).path
         if exclude and any(fnmatch(path, pat) for pat in exclude):
             return False
         return not (include and not any(fnmatch(path, pat) for pat in include))

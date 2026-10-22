@@ -1518,3 +1518,32 @@ class TestInvalidSitemapFailsTheFetch:
             "Fetching sitemap: https://example.com/…(1 segments)",
             "Parsed 0 pages from https://example.com/…(1 segments)",
         ]
+
+
+class TestMalformedEntriesDoNotAbortTheCrawl:
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "http://[::1/docs/b",
+            "http://h:99999/docs/b",
+            "http://u:S@h/docs/b",
+            "http://h/docs/b c",
+        ],
+    )
+    @pytest.mark.parametrize("globs", [False, True], ids=["no-globs", "globs"])
+    def test_one_bad_entry_is_dropped_and_the_good_one_kept(
+        self, bad: str, *, globs: bool, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        entries = [
+            SitemapEntry(loc=bad, lastmod=None),
+            SitemapEntry(loc="https://good.example/docs/a", lastmod=None),
+        ]
+        include = ["/docs/*"] if globs else None
+        with caplog.at_level(logging.WARNING, logger="quarry.sitemap"):
+            safe = SitemapDiscovery.select_safe(entries, include=include)
+        assert [e.loc for e in safe] == ["https://good.example/docs/a"]
+        # an entry that cannot even be parsed has no path for a glob to match, so
+        # under globs it is filtered out before the gate and nothing is logged
+        unparsed_under_globs = globs and bad.startswith("http://[")
+        assert len(caplog.records) == (0 if unparsed_under_globs else 1)
+        assert "S@" not in caplog.text
