@@ -8,19 +8,18 @@ it was previously only reached transitively through ``ingest_document`` /
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
+
+import pytest
 
 from quarry.config import Settings
 from quarry.db import Database
+from quarry.db.row_budget import RowBudgetError
 from quarry.ingestion.chunk_store_funnel import _chunk_embed_store
 from quarry.ingestion.extracted_document import ExtractedDocument
 from quarry.ingestion.ingest_context import IngestContext, Progress
 from quarry.ingestion.ingest_stats import IngestStats
 from quarry.models import Chunk, PageContent, PageType
-
-if TYPE_CHECKING:
-    import pytest
 
 _PROGRESS = Progress(None)
 
@@ -333,3 +332,28 @@ class TestDocumentNameRedaction:
 
         done = [m for m in messages if m.startswith("Done:")]
         assert done == [f"Done: 1 chunks indexed from {name}"]
+
+
+class TestRefusedDocumentsAreNonDestructive:
+    """A violation found while chunking leaves the prior document untouched."""
+
+    def test_a_row_budget_violation_deletes_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def _violate(_self: object, _pages: object) -> list[Chunk]:
+            msg = "row budget exceeded: text 70,000 bytes > 65,536"
+            raise RowBudgetError(msg)
+
+        monkeypatch.setattr("quarry.ingestion.page_chunker.PageChunker.chunk", _violate)
+        deleted: list[str] = []
+        monkeypatch.setattr(
+            "quarry.db.chunk_store.ChunkStore.delete_document",
+            lambda _self, name, **_kw: deleted.append(name),
+        )
+
+        with pytest.raises(RowBudgetError):
+            _chunk_embed_store(
+                _extracted(), "doc.txt", _PROGRESS, _context(overwrite=True)
+            )
+
+        assert deleted == []
