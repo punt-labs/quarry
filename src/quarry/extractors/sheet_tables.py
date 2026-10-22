@@ -42,8 +42,13 @@ class SheetTables:
         """
         try:
             return list(csv.reader(io.StringIO(text)))
-        except csv.Error:
-            msg = "content rejected: CSV field exceeds the page budget"
+        except csv.Error as exc:
+            is_oversize = "field larger than field limit" in str(exc)
+            msg = (
+                "content rejected: CSV field exceeds the page budget"
+                if is_oversize
+                else "content rejected: not parseable CSV"
+            )
             raise UnindexableContentError(msg) from None
 
     @staticmethod
