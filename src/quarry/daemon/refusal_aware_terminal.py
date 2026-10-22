@@ -6,8 +6,8 @@ import logging
 from contextlib import contextmanager, suppress
 from typing import TYPE_CHECKING, Self, final
 
-from quarry.content_guard import UnindexableContentError
 from quarry.daemon.tasks import task_terminal
+from quarry.refusal import RefusalError
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Mapping
@@ -22,8 +22,8 @@ class RefusalAwareTerminal:
     """Bind a task's state to the way its body is allowed to end.
 
     :func:`task_terminal` logs every exception with a traceback.  A refusal
-    (:class:`UnindexableContentError`: binary content, a refused media type, a
-    failed or refused fetch) is an expected answer, so it ends the task
+    (:class:`RefusalError`: binary content, a refused media type, a failed or
+    refused fetch, a refused registration) is an expected answer, so it ends the task
     ``failed`` with the reason and one WARN naming the task, no traceback.  Any
     other exception fails closed: the task error is client-visible and such a
     message can quote a URL, a path or a credential, so :func:`task_terminal`
@@ -60,10 +60,10 @@ class RefusalAwareTerminal:
         with task_terminal(self._state):
             try:
                 yield
-            except UnindexableContentError as exc:
+            except RefusalError as exc:
                 self._fail(exc)
 
-    def _fail(self, exc: UnindexableContentError) -> None:
+    def _fail(self, exc: RefusalError) -> None:
         """Record the failure first, then log it: naming the task cannot undo it."""
         self._state.status = "failed"
         self._state.error = str(exc)

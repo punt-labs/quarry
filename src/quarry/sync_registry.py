@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import NoReturn, Self
 
 from quarry.collection_marker_store import CollectionMarkerStore
+from quarry.registration_rules import RegistrationRules
 from quarry.sync_file_store import FileStore
 from quarry.sync_schema import SyncSchema
 
@@ -123,9 +124,9 @@ class SyncRegistry:
 
         Raises:
             FileNotFoundError: If *directory* does not exist.
-            ValueError: If *directory* is already registered, *collection*
-                name is already in use, or *directory* is a child of an
-                existing registration.
+            RegistrationRefusedError: If *directory* is already registered,
+                *collection* name is already in use, or *directory* is a child
+                of an existing registration.
         """
         resolved = directory.resolve()
         if not resolved.is_dir():
@@ -141,7 +142,9 @@ class SyncRegistry:
         # consistent with what the INSERT would see.
         try:
             self._conn.execute("BEGIN IMMEDIATE")
-            self._guard_retained_identity(resolved, collection)
+            RegistrationRules.refuse_foreign_retained(
+                self._markers.retained_marker(collection), resolved, collection
+            )
             subsumed = self._enforce_subsumption(resolved)
             self._conn.execute(
                 "INSERT INTO directories (directory, collection, registered_at) "
@@ -168,21 +171,14 @@ class SyncRegistry:
     def _enforce_subsumption(self, resolved: Path) -> list[str]:
         """Reject child-of-parent, evict children of new parent, return them."""
         existing_regs = self.list_registrations()
-        for reg in existing_regs:
-            reg_path = Path(reg.directory).resolve()
-            if self._is_ancestor_of(reg_path, resolved):
-                msg = (
-                    f"directory already covered by parent registration "
-                    f"'{reg.collection}' ({reg.directory})"
-                )
-                raise ValueError(msg)
+        RegistrationRules.refuse_if_covered(existing_regs, resolved)
         # Inline the DELETE SQL instead of calling deregister_directory() so the
         # child removals and parent INSERT share one transaction — if the INSERT
         # fails, the children are preserved.
         subsumed = [
             reg.collection
             for reg in existing_regs
-            if self._is_ancestor_of(resolved, Path(reg.directory).resolve())
+            if RegistrationRules.is_ancestor_of(resolved, Path(reg.directory).resolve())
         ]
         self._evict_subsumed(subsumed)
         return subsumed
@@ -204,20 +200,16 @@ class SyncRegistry:
             self._markers.mark_pending(child_collection)
 
     def _raise_for_integrity(self, resolved: Path, collection: str) -> NoReturn:
-        """Translate an INSERT IntegrityError into a precise ValueError."""
+        """Translate an INSERT IntegrityError into a RegistrationRefusedError."""
         self._conn.rollback()
         existing = self._conn.execute(
             "SELECT directory, collection FROM directories "
             "WHERE directory = ? OR collection = ?",
             (str(resolved), collection),
         ).fetchone()
-        if existing and existing[0] == str(resolved):
-            msg = (
-                f"Directory already registered: {resolved} (collection '{existing[1]}')"
-            )
-        else:
-            msg = f"Collection name already in use: '{collection}'"
-        raise ValueError(msg) from None
+        raise RegistrationRules.integrity_refusal(
+            existing, resolved, collection
+        ) from None
 
     def deregister_directory(
         self, collection: str, *, keep_data: bool = False
@@ -266,30 +258,6 @@ class SyncRegistry:
         self._conn.commit()
         return document_names
 
-    def _guard_retained_identity(self, resolved: Path, collection: str) -> None:
-        """Refuse re-using an archived collection name from a different directory.
-
-        A keep-data deregister archives a collection's chunks under a retained
-        marker tagged with its original directory.  Only that same directory may
-        re-register the name — re-adopting its own kept chunks.  A different
-        directory re-using the name would silently merge two projects' data into
-        one collection (the opposite of keep-data's promise), so it is refused.
-
-        A legacy marker with no recorded origin (``original_directory`` NULL,
-        written before the column existed) matches no directory and is refused for
-        every directory: without a verifiable origin the safe default is to never
-        merge.  Delete the archived collection, or choose another name, to proceed.
-        """
-        marker = self._markers.retained_marker(collection)
-        if marker is None or marker.original_directory == str(resolved):
-            return
-        origin = marker.original_directory or "an unknown directory"
-        msg = (
-            f"collection {collection!r} holds archived (keep-data) chunks from "
-            f"{origin}; choose a different name or delete that collection first"
-        )
-        raise ValueError(msg)
-
     def has_registrations_under(self, directory: Path) -> bool:
         """Return whether any registration's directory lies strictly under *directory*.
 
@@ -299,7 +267,7 @@ class SyncRegistry:
         """
         resolved = directory.resolve()
         return any(
-            self._is_ancestor_of(resolved, Path(reg.directory).resolve())
+            RegistrationRules.is_ancestor_of(resolved, Path(reg.directory).resolve())
             for reg in self.list_registrations()
         )
 
@@ -326,12 +294,3 @@ class SyncRegistry:
         return DirectoryRegistration(
             directory=row[0], collection=row[1], registered_at=row[2]
         )
-
-    @staticmethod
-    def _is_ancestor_of(ancestor: Path, descendant: Path) -> bool:
-        """Return True if *ancestor* is a strict ancestor of *descendant*.
-
-        Both paths should be resolved (absolute, no symlinks); strict inequality
-        means a path is not its own ancestor.
-        """
-        return ancestor != descendant and descendant.is_relative_to(ancestor)

@@ -16,9 +16,10 @@ from dataclasses import dataclass
 from typing import ClassVar, final
 
 from quarry.capture_marker import CaptureMarker
+from quarry.refusal import RefusalError
 
 
-class UnindexableContentError(ValueError):
+class UnindexableContentError(RefusalError):
     """Raised when content cannot be indexed; the message is the stable reason.
 
     Messages never embed a URL or document name, so they are safe to log and to

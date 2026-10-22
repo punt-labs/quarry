@@ -296,6 +296,71 @@ def test_registering_a_parent_purges_subsumed_child_chunks(tmp_path: Path) -> No
     asyncio.run(_run())
 
 
+def _lifecycle_fixture(tmp_path: Path) -> tuple[Settings, Path]:
+    base = tmp_path / "data" / "testdb"
+    (base / "lancedb").mkdir(parents=True)
+    settings = Settings(
+        lancedb_path=base / "lancedb", registry_path=base / "registry.db"
+    )
+    parent = tmp_path / "proj"
+    (parent / "sub").mkdir(parents=True)
+    conn = SyncRegistry(settings.registry_path)
+    try:
+        conn.register_directory(parent.resolve(), "parent-col")
+    finally:
+        conn.close()
+    return settings, parent
+
+
+def test_a_registration_refusal_is_returned_to_the_client_and_logged(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    settings, parent = _lifecycle_fixture(tmp_path)
+
+    async def _run() -> TaskState:
+        ctx = DaemonContext(settings, embedder=FakeEmbeddingBackend(_DIM))
+        state = ctx.tasks.begin("register")
+        with caplog.at_level(logging.WARNING):
+            await RegistrationLifecycle(ctx).run_register(
+                state, (parent / "sub").resolve(), "child-col"
+            )
+        return state
+
+    state = asyncio.run(_run())
+    assert state.status == "failed"
+    assert state.error is not None
+    assert state.error.startswith("directory already covered by parent registration")
+    assert state.error in caplog.text
+    assert not [r for r in caplog.records if r.exc_info]
+
+
+def test_a_stray_value_error_in_registration_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    settings, parent = _lifecycle_fixture(tmp_path)
+
+    def _boom(*_a: object, **_k: object) -> None:
+        msg = "unexpected /home/me/secret/path"
+        raise ValueError(msg)
+
+    monkeypatch.setattr(RegistrationLifecycle, "_register_sync", _boom)
+
+    async def _run() -> TaskState:
+        ctx = DaemonContext(settings, embedder=FakeEmbeddingBackend(_DIM))
+        state = ctx.tasks.begin("register")
+        with caplog.at_level(logging.WARNING):
+            await RegistrationLifecycle(ctx).run_register(
+                state, (parent / "sub").resolve(), "child-col"
+            )
+        return state
+
+    state = asyncio.run(_run())
+    assert state.error == "internal error: ValueError"
+    assert "/home/me/secret/path" in caplog.text
+
+
 def test_subsume_purge_failure_is_logged_and_reported(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -9,14 +9,13 @@ this off the route class leaves each with a single responsibility.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import TYPE_CHECKING, Self, final
 
 from starlette.concurrency import run_in_threadpool
 
 from quarry.daemon.purge_service import CollectionPurger
-from quarry.daemon.tasks import task_terminal
+from quarry.daemon.refusal_aware_terminal import RefusalAwareTerminal
 from quarry.sync_registry import DirectoryRegistration, SyncRegistry
 
 if TYPE_CHECKING:
@@ -45,7 +44,7 @@ class RegistrationLifecycle:
         self, state: TaskState, resolved: Path, collection: str
     ) -> None:
         """Execute register_directory in the background and update *state*."""
-        try:
+        with RefusalAwareTerminal(state).record():
             reg, subsumed = await run_in_threadpool(
                 self._register_sync,
                 self._ctx.settings.registry_path,
@@ -82,22 +81,10 @@ class RegistrationLifecycle:
             # stale completed.
             state.results = results
             state.status = "completed"
-        except asyncio.CancelledError:
-            state.status = "failed"
-            state.error = "task was cancelled"
-            raise
-        except Exception as exc:
-            logger.exception("Background register failed")
-            state.status = "failed"
-            state.error = f"internal error: {type(exc).__name__}"
-        finally:
-            if state.status == "running":
-                state.status = "failed"
-                state.error = "task exited without setting terminal status"
 
     async def run_purge(self, state: TaskState, collection: str) -> None:
         """Purge a deregistered collection's chunks THROUGH the queue."""
-        with task_terminal(state):
+        with RefusalAwareTerminal(state).record():
             purge = await CollectionPurger(self._ctx).purge(
                 collection, "deregister-purge"
             )
