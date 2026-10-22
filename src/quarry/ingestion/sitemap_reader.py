@@ -36,11 +36,16 @@ class SitemapReader:
         self._client = client or GatedSitemapWebClient()
         return self
 
+    @staticmethod
+    def shown(url: str) -> str:
+        """Return *url* as it may appear in a log line: redacted, never raising."""
+        return CaptureUrl.display(url)
+
     def discover(self, homepage: str) -> list[SitemapPage]:
         """Return every page found by sitemap discovery for *homepage*."""
         from usp.tree import sitemap_tree_for_homepage  # noqa: PLC0415
 
-        logger.info("Discovering sitemaps for %s", CaptureUrl.for_web_fetch(homepage))
+        logger.info("Discovering sitemaps for %s", self.shown(homepage))
         tree = sitemap_tree_for_homepage(homepage, web_client=self._client)
         return list(tree.all_pages())
 
@@ -53,7 +58,7 @@ class SitemapReader:
         """
         from usp.fetch_parse import SitemapFetcher  # noqa: PLC0415
 
-        shown = CaptureUrl.for_web_fetch(url)
+        shown = self.shown(url)
         logger.info("Fetching sitemap: %s", shown)
         sitemap = SitemapFetcher(
             url=url, recursion_level=0, web_client=self._client

@@ -21,9 +21,6 @@
     "src/quarry/backfill.py": {
       "noqa": 1
     },
-    "src/quarry/capture_url.py": {
-      "noqa": 1
-    },
     "src/quarry/captures_collection.py": {
       "noqa": 1
     },
@@ -182,7 +179,10 @@
     },
     "src/quarry/web_fetch_loop_closer.py": {
       "noqa": 2
+    },
+    "src/quarry/web_fetch_name.py": {
+      "noqa": 1
     }
   },
-  "updated_at": "2026-10-22T12:51:47Z"
+  "updated_at": "2026-10-22T17:03:26Z"
 }

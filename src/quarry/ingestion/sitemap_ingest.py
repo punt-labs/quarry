@@ -124,7 +124,7 @@ class SitemapIngest:
         # SitemapCrawl.source_url (returned data, not a log sink); the
         # progress line gets the redacted form so a userinfo/query secret on
         # the sitemap URL never reaches quarry.log (CWE-532).
-        progress("Fetching sitemap: %s", CaptureUrl(url).redacted(lambda text: text))
+        progress("Fetching sitemap: %s", CaptureUrl.display(url))
         entries = SitemapDiscovery.discover_urls(url)
         progress("Discovered %d URLs", len(entries))
 
@@ -199,7 +199,7 @@ class SitemapIngest:
         # netloc from the redacted URL so a credential on the origin never
         # reaches the progress stream or the log (CWE-532); scheme alone is
         # never sensitive.
-        safe_netloc = urlparse(CaptureUrl(url).redacted(lambda text: text)).netloc
+        safe_netloc = urlparse(CaptureUrl.display(url)).netloc
         progress("Discovering sitemaps for %s://%s", parsed.scheme, safe_netloc)
         try:
             entries = SitemapDiscovery.discover_pages(url)

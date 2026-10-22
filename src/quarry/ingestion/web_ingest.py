@@ -178,9 +178,7 @@ class WebIngest:
             # quarry.log regardless of scrub status (CWE-532). The log line
             # gets its own always-redacted form; metadata persistence
             # (meta_url, document_name, document_path below) is unaffected.
-            progress(
-                "Fetching: %s", CaptureUrl(request.url).redacted(lambda text: text)
-            )
+            progress("Fetching: %s", CaptureUrl.display(request.url))
             html = WebFetcher(request.timeout).fetch(request.url)
             progress("Fetched %d characters", len(html))
 

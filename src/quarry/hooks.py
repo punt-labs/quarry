@@ -356,8 +356,8 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     trace.mark_payload(ok=True)
 
     from quarry.api import CaptureIngestRequest, IngestRequest  # noqa: PLC0415
-    from quarry.capture_url import CaptureUrl  # noqa: PLC0415
     from quarry.web_fetch_loop_closer import WebFetchLoopCloser  # noqa: PLC0415
+    from quarry.web_fetch_name import WebFetchName  # noqa: PLC0415
 
     context = WebFetchLoopCloser(url, cwd).context()
 
@@ -373,7 +373,7 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
             CaptureIngestRequest(
                 content=content,
                 cwd=cwd,
-                document_name=CaptureUrl.for_web_fetch(url),
+                document_name=WebFetchName.of(url),
                 format_hint="html",
                 source_url=url,
             ),

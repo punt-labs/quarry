@@ -64,6 +64,23 @@ class TestSchemeAndHost:
         assert reason is not None
         assert "unsupported scheme" in reason
 
+    @pytest.mark.parametrize(
+        "url", ["http://h:99999/", "https://h:0x50/", "http://h:abc/x"], ids=str
+    )
+    def test_an_unusable_port_is_rejected(
+        self, url: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(_GETADDRINFO, _boom)
+        assert UrlSafetyCheck.reject_reason(url) == "malformed URL"
+
+    def test_a_malformed_url_reason_does_not_echo_the_url(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """urlsplit's NFKC error embeds the netloc, userinfo included."""
+        monkeypatch.setattr(_GETADDRINFO, _boom)
+        reason = UrlSafetyCheck.reject_reason("http://user:secret@h\uff03x/")
+        assert reason == "malformed URL"
+
     def test_missing_host_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(_GETADDRINFO, _boom)
         reason = UrlSafetyCheck.reject_reason("https:///just/a/path")

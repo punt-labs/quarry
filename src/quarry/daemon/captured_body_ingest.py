@@ -93,7 +93,7 @@ class CapturedBodyIngest:
 
     def subject(self) -> str:
         """Return the source with userinfo, query and fragment dropped, for a log."""
-        return CaptureUrl.for_web_fetch(self._source)
+        return CaptureUrl.display(self._source)
 
     def fetch(self) -> FetchedBody:
         """Fetch ``source``; any failure is a URL-free ``UnindexableContentError``."""

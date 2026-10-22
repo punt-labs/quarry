@@ -17,10 +17,10 @@ class DisplayName:
     query secret would otherwise reach the log verbatim (CWE-532).  But the
     ingest funnel is also reached with an arbitrary caller-supplied name that is
     never a URL, and :class:`CaptureUrl` is unsafe on non-URL input: it silently
-    truncates at the first ``#`` or ``?`` (both valid in a plain name), and some
-    malformed strings resembling a URL authority raise ``ValueError`` out of
-    ``urlsplit``.  So only an ``http(s)://`` name is redacted, and any other name,
-    or a redaction that still fails, is shown verbatim, untruncated.
+    truncates at the first ``#`` or ``?`` (both valid in a plain name).  So only
+    an ``http(s)://`` name is redacted; any other name is shown verbatim,
+    untruncated.  An ``http(s)://`` name that cannot be parsed shows as a fixed
+    placeholder, never as its raw text.
     """
 
     name: str
@@ -29,7 +29,4 @@ class DisplayName:
         """Return the name with a URL's userinfo, query and fragment dropped."""
         if not self.name.lower().startswith(("http://", "https://")):
             return self.name
-        try:
-            return CaptureUrl(self.name).redacted(lambda text: text)
-        except ValueError:
-            return self.name
+        return CaptureUrl.display(self.name)

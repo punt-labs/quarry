@@ -332,6 +332,36 @@ class TestBulkIngestRunnerRun:
         assert "ValueError" in errors[0]
         assert "boom" not in errors[0]
 
+    def test_a_url_that_cannot_be_parsed_fails_alone(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Naming a bad-port URL must not abort the crawl or lose its counts."""
+
+        def _stub(
+            request: UrlIngest, _progress: Progress, _context: IngestContext
+        ) -> IngestResult:
+            if ":99999" in request.url:
+                msg = "unparseable"
+                raise UnindexableContentError(msg)
+            return {"document_name": request.url, "collection": "c", "chunks": 1}
+
+        runner = BulkIngestRunner(ingest_one=_stub, workers=2)
+        to_ingest: list[tuple[str, str | None]] = [
+            ("https://good.example/a", None),
+            ("http://u:secret@bad.example:99999/x?token=t", None),
+        ]
+        messages: list[str] = []
+
+        with caplog.at_level(logging.INFO):
+            ingested, failed, errors = runner.run(
+                to_ingest, Progress(messages.append), _context(), BulkOptions()
+            )
+
+        assert (ingested, failed) == (1, 1)
+        assert errors == ["(unparseable URL): unparseable"]
+        assert "secret" not in caplog.text
+        assert not any("secret" in m for m in messages)
+
     def test_forces_overwrite_for_every_url_that_passed_dedup(self) -> None:
         """run() always replaces chunks for URLs that passed dedup (bulk_ingest.py).
 

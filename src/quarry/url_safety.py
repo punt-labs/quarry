@@ -80,11 +80,11 @@ class UrlSafetyCheck:
         try:
             parsed = urlsplit(url)
             scheme = parsed.scheme.lower()
-            host = parsed.hostname
-        except ValueError as exc:
+            host, _port = parsed.hostname, parsed.port  # both parse lazily
+        except ValueError:
             # A malformed URL (bad IPv6 brackets, invalid port) must reject, not
-            # crash: ``urlsplit`` and lazy ``.hostname``/``.port`` both raise.
-            return f"malformed URL: {exc}"
+            # crash.  The error text quotes the userinfo, so it is not returned.
+            return "malformed URL"
         if scheme not in {"http", "https"}:
             return f"unsupported scheme {scheme!r}"
         if not host:

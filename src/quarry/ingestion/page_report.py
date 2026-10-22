@@ -35,7 +35,7 @@ class PageReport:
 
     def __new__(cls, page_url: str) -> Self:
         self = super().__new__(cls)
-        self._url = CaptureUrl(page_url).redacted(lambda text: text)
+        self._url = CaptureUrl.display(page_url)
         return self
 
     @property

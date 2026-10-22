@@ -129,7 +129,11 @@ class SitemapDiscovery:
                 continue
             reason = UrlSafetyCheck.reject_reason(entry.loc)
             if reason is not None:
-                logger.warning("Dropping unsafe sitemap URL %s: %s", entry.loc, reason)
+                logger.warning(
+                    "Dropping unsafe sitemap URL %s: %s",
+                    SitemapReader.shown(entry.loc),
+                    reason,
+                )
                 continue
             safe.append(entry)
             if limit > 0 and len(safe) >= limit:

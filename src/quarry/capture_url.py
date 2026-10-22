@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from urllib.parse import urlsplit, urlunsplit
 
 from quarry.remote import to_netloc
 
-# The scrub-log label every WebFetch capture URL is stamped with, at both the
-# write (hooks.handle_post_web_fetch) and read (captures/lookup route) sides —
-# a single constant keeps the two derivations from drifting into different
-# document names for what should be the same stored capture.
-_WEB_FETCH_LABEL = "web-fetch"
+# What a log or progress line shows for a URL that cannot be parsed: never the
+# raw text, which is exactly where a userinfo or query secret sits.
+_UNPARSEABLE = "(unparseable URL)"
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,16 +34,16 @@ class CaptureUrl:
     _raw: str
 
     @classmethod
-    def for_web_fetch(cls, raw: str) -> str:
-        """Return *raw*'s WebFetch document-name form: the one true derivation.
+    def display(cls, raw: str) -> str:
+        """Return *raw* redacted for a log or progress line; never raises.
 
-        Both the capture write path (``hooks.handle_post_web_fetch``) and the
-        lookup read path (``CaptureRoutes.lookup``) call this so a URL always
-        maps to the same document name regardless of which side computes it.
+        A URL that cannot be parsed (an out-of-range port, a malformed netloc)
+        shows as a fixed placeholder rather than as its raw text.
         """
-        from quarry.scrub import scrub_and_log  # noqa: PLC0415
-
-        return cls(raw).redacted(lambda text: scrub_and_log(text, _WEB_FETCH_LABEL))
+        shown = _UNPARSEABLE
+        with suppress(ValueError):
+            shown = cls(raw).redacted(lambda text: text)
+        return shown
 
     def redacted(self, scrubber: Callable[[str], str]) -> str:
         """Return the metadata URL: userinfo/query/fragment stripped, then scrubbed.

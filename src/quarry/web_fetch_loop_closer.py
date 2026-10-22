@@ -62,9 +62,9 @@ class WebFetchLoopCloser:
         ``additionalContext``, so any secret token in the query string must not
         survive into it.
         """
-        from quarry.capture_url import CaptureUrl  # noqa: PLC0415
+        from quarry.web_fetch_name import WebFetchName  # noqa: PLC0415
 
-        redacted_url = CaptureUrl.for_web_fetch(self._url)
+        redacted_url = WebFetchName.of(self._url)
         lines = [
             (
                 f"You already fetched {redacted_url} earlier — use find with a "

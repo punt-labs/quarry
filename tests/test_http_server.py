@@ -1582,16 +1582,16 @@ class TestCapturesLookup:
     def test_end_to_end_matches_a_real_stored_capture(self, tmp_path: Path) -> None:
         """No mocks on the catalog: a real chunk written under the derived
         captures collection is found by a lookup with a differing query string."""
-        from quarry.capture_url import CaptureUrl
         from quarry.db import ChunkStore
         from quarry.db.storage import get_db
+        from quarry.web_fetch_name import WebFetchName
         from tests.test_database import _make_chunk, _random_vectors
 
         settings = _mock_settings(tmp_path)
         ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         db = get_db(settings.lancedb_path)
-        stored_name = CaptureUrl.for_web_fetch("https://example.com/guide")
+        stored_name = WebFetchName.of("https://example.com/guide")
         ChunkStore(db).insert(
             [_make_chunk(document_name=stored_name, collection="default-captures")],
             _random_vectors(1),

@@ -9,12 +9,12 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from quarry.api.capture_ingest import SESSION_ID_PREFIX_LEN
-from quarry.capture_url import CaptureUrl
 from quarry.captures_collection import CapturesCollection
 from quarry.daemon.content_jobs import CaptureIngestJob, ScrubbedIngestJob
 from quarry.daemon.routes.content_group import ContentRouteGroup
 from quarry.http_guards import RequestGuards
 from quarry.url_safety import UrlSafetyCheck
+from quarry.web_fetch_name import WebFetchName
 
 if TYPE_CHECKING:
     from quarry.config import Settings
@@ -123,7 +123,7 @@ class CaptureRoutes(ContentRouteGroup):
         (:meth:`_capture_job`), so this thin client never opens the sync
         registry itself or spells the ``<repo>-captures`` naming rule.  The
         stored ``document_name`` for a WebFetch capture is the URL with
-        userinfo/query/fragment stripped (``CaptureUrl.for_web_fetch``), so this
+        userinfo/query/fragment stripped (``WebFetchName.of``), so this
         recomputes the identical normalization before comparing: two URLs
         differing only by query string or fragment collapse to the SAME
         document and match; a trailing-slash difference does NOT normalize and
@@ -136,7 +136,7 @@ class CaptureRoutes(ContentRouteGroup):
         if isinstance(url, JSONResponse):
             return url
         collection = await self._collection_for_cwd(self._str_field(body, "cwd"))
-        document_name = CaptureUrl.for_web_fetch(url)
+        document_name = WebFetchName.of(url)
         matched = await run_in_threadpool(
             self.ctx.database.catalog.document_exists, document_name, collection.name
         )

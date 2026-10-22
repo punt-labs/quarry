@@ -1244,15 +1244,24 @@ class TestSelectSafe:
         locs = [e.loc for e in safe]
         assert locs == ["https://safe.example/a", "https://safe.example/b"]
 
-    def test_logs_each_drop(
+    def test_logs_each_drop_with_the_redacted_url(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """A dropped entry is logged with its URL and reason."""
+        """A dropped entry is logged with its redacted URL and reason (CWE-532)."""
         monkeypatch.setattr(_GETADDRINFO, lambda *a, **k: _addrinfo("127.0.0.1"))
-        entries = [SitemapEntry(loc="https://loops.example/x", lastmod=None)]
+        entries = [
+            SitemapEntry(loc="https://u:secret@loops.example/x?token=t", lastmod=None),
+            SitemapEntry(loc="http://u:secret@h:99999/x?token=t", lastmod=None),
+        ]
         with caplog.at_level(logging.WARNING, logger="quarry.sitemap"):
             SitemapDiscovery.select_safe(entries)
-        assert "https://loops.example/x" in caplog.text
+        assert [r.getMessage() for r in caplog.records] == [
+            (
+                "Dropping unsafe sitemap URL https://loops.example/x: "
+                "host 'loops.example' resolves to blocked address 127.0.0.1"
+            ),
+            "Dropping unsafe sitemap URL (unparseable URL): malformed URL",
+        ]
 
     def test_limit_counts_safe_entries_not_raw(
         self, monkeypatch: pytest.MonkeyPatch
