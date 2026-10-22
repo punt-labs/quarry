@@ -39,11 +39,7 @@ class CaptureRoutes(ContentRouteGroup):
         body = await self._authorized_body(request, MAX_CAPTURE_BODY_BYTES)
         if isinstance(body, JSONResponse):
             return body
-        job = await self._capture_job(body)
-        if isinstance(job, JSONResponse):
-            return job
-        state = self.ctx.tasks.begin("capture")
-        return self.submit(job, state)
+        return self._accept("capture", await self._capture_job(body))
 
     async def _capture_job(
         self, body: dict[str, object]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from http.client import HTTPMessage, HTTPResponse
 from typing import TYPE_CHECKING
@@ -13,6 +14,9 @@ from typer.testing import CliRunner
 
 from quarry.__main__ import app
 from quarry.client import QuarryClient, TargetResolver
+from quarry.content_guard import BinaryContent
+from quarry.daemon.content_jobs import CaptureIngestJob, ScrubbedIngestJob
+from quarry.daemon.tasks import TaskState
 from quarry.mcp_server import McpTools
 from tests.inproc_daemon import InProcessDaemon
 
@@ -251,3 +255,87 @@ class TestIngestRoute:
             time.sleep(0.05)
         msg = f"task {task_id} did not finish"
         raise AssertionError(msg)
+
+
+def _gap_binary() -> str:
+    """Return text whose binary stretches sit between the sniff's sample windows.
+
+    200,000 characters; the head, middle and tail 32 KiB windows are clean, so
+    the sniff passes, but 40 percent of the whole document is non-text.
+    """
+    text = ["a"] * 200_000
+    for start in (40_000, 120_000):
+        text[start : start + 40_000] = ["�"] * 40_000
+    return "".join(text)
+
+
+def _await_terminal(http: TestClient, task_id: str) -> dict[str, object]:
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        task: dict[str, object] = http.get(f"/v1/tasks/{task_id}").json()
+        if task["status"] in {"completed", "failed"}:
+            return task
+        time.sleep(0.05)
+    msg = f"task {task_id} did not finish"
+    raise AssertionError(msg)
+
+
+class TestRefusedAfterTheSniff:
+    """Binary the sniff cannot see is refused by the chunker, quietly."""
+
+    def test_the_payload_really_passes_the_sniff(self) -> None:
+        BinaryContent().sniff(_gap_binary())
+
+    @pytest.mark.parametrize("path", ["/v1/remember", "/v1/capture"])
+    def test_the_task_fails_with_the_reason_and_one_quiet_warning(
+        self,
+        http: TestClient,
+        daemon: InProcessDaemon,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+        path: str,
+    ) -> None:
+        body = {
+            "name": "n.md",
+            "content": _gap_binary(),
+            "session_id": "abcd1234ef",
+            "cwd": str(tmp_path),
+        }
+        with caplog.at_level(logging.WARNING):
+            accepted = http.post(path, json=body)
+            assert accepted.status_code == 202
+            task = _await_terminal(http, accepted.json()["task_id"])
+
+        assert task["status"] == "failed"
+        assert str(task["error"]).startswith("binary content rejected: ")
+        [record] = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert record.levelno == logging.WARNING
+        assert record.exc_info is None
+        assert daemon.ctx.database.store.count() == 0
+
+
+async def test_a_capture_job_fails_quietly_on_gap_binary_inline_text(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    daemon = InProcessDaemon(tmp_path)
+    inline = ScrubbedIngestJob(
+        name="session-1",
+        content=_gap_binary(),
+        collection="repo-captures",
+        format_hint="auto",
+        overwrite=True,
+        scrub_label="capture",
+        agent_handle="",
+        memory_type="",
+        summary="",
+    )
+    state = TaskState(task_id="t-cap", kind="capture")
+
+    with caplog.at_level(logging.WARNING):
+        await CaptureIngestJob(inline=inline, source_url="").run(daemon.ctx, state)
+
+    assert state.status == "failed"
+    assert state.error.startswith("binary content rejected: ")
+    [record] = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert record.exc_info is None
+    assert daemon.ctx.database.store.count() == 0

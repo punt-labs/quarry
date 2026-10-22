@@ -40,12 +40,7 @@ class IngestionRoutes(ContentRouteGroup):
         body = await self._authorized_body(request, MAX_REMEMBER_BODY_BYTES)
         if isinstance(body, JSONResponse):
             return body
-        job = self._remember_job(body)
-        if isinstance(job, JSONResponse):
-            return job
-
-        state = self.ctx.tasks.begin("remember")
-        return self.submit(job, state)
+        return self._accept("remember", self._remember_job(body))
 
     async def ingest(self, request: Request) -> JSONResponse:
         """Ingest a URL as a background task.
@@ -59,7 +54,7 @@ class IngestionRoutes(ContentRouteGroup):
         if isinstance(body, JSONResponse):
             return body
 
-        source = self._require_content(body, "source")
+        source = self._require_text(body, "source")
         if isinstance(source, JSONResponse):
             return source
         # UrlSafetyCheck owns all scheme + address validation.  It calls
@@ -68,12 +63,7 @@ class IngestionRoutes(ContentRouteGroup):
         if reason is not None:
             return JSONResponse({"error": f"URL rejected: {reason}"}, status_code=400)
 
-        job = await self._ingest_job(body, source)
-        if isinstance(job, JSONResponse):
-            return job
-
-        state = self.ctx.tasks.begin("ingest")
-        return self.submit(job, state)
+        return self._accept("ingest", await self._ingest_job(body, source))
 
     async def learn(self, request: Request) -> JSONResponse:
         """Save a distilled lesson as a background task.
@@ -88,11 +78,7 @@ class IngestionRoutes(ContentRouteGroup):
         body = await self._authorized_body(request, MAX_LEARN_BODY_BYTES)
         if isinstance(body, JSONResponse):
             return body
-        job = await self._learn_job(body)
-        if isinstance(job, JSONResponse):
-            return job
-        state = self.ctx.tasks.begin("learn")
-        return self.submit(job, state)
+        return self._accept("learn", await self._learn_job(body))
 
     def _remember_job(
         self, body: dict[str, object]
@@ -140,9 +126,12 @@ class IngestionRoutes(ContentRouteGroup):
         Naming, collection routing, and memory_type are single server-side
         rules so no surface can drift them (bug class 3).
         """
-        lesson = self._require_content(body, "lesson")
+        lesson = self._require_text(body, "lesson")
         if isinstance(lesson, JSONResponse):
             return lesson
+        rejection = self._reject_binary(lesson)
+        if rejection is not None:
+            return rejection
         try:
             LessonComposer.check_length(lesson)
         except ValueError as exc:

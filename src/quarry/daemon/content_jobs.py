@@ -19,7 +19,7 @@ from starlette.concurrency import run_in_threadpool
 
 from quarry.daemon.captured_body_ingest import CapturedBodyIngest
 from quarry.daemon.job_spool import SpoolRecord
-from quarry.daemon.tasks import task_terminal
+from quarry.daemon.task_outcome import TaskOutcome
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -72,7 +72,7 @@ class ScrubbedIngestJob:
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Scrub then ingest the content in a background thread, tracking state."""
-        with task_terminal(state):
+        with TaskOutcome(state).record():
             result = await run_in_threadpool(self.scrub_and_ingest, ctx)
             state.status = "completed"
             state.results = dict(result)
@@ -196,7 +196,7 @@ class CaptureIngestJob:
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Ingest inline, re-fetching the source on empty, tracking task state."""
-        with task_terminal(state):
+        with TaskOutcome(state).record():
             result = await run_in_threadpool(self._capture, ctx)
             state.status = "completed"
             state.results = dict(result)
