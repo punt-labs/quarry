@@ -86,6 +86,6 @@ class TestConstruction:
         with pytest.raises(ValueError, match="max_chars"):
             SentenceChunker(0, 0)
 
-    def test_a_negative_overlap_means_none(self) -> None:
-        text = "Alpha beta. Gamma delta. Epsilon zeta."
-        assert SentenceChunker(20, -5).split(text) == SentenceChunker(20, 0).split(text)
+    def test_a_negative_overlap_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="overlap_chars"):
+            SentenceChunker(20, -5)

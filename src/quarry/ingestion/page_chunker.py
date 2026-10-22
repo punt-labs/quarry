@@ -23,8 +23,8 @@ class ChunkLabels:
 
     ``source_format`` is a file extension (``".pdf"``) or ``"inline"`` for
     programmatically supplied text.  ``agent_handle`` owns an agent memory (empty
-    for non-agent content) and ``memory_type`` classifies it (fact, observation,
-    opinion, procedure).
+    for non-agent content) and ``memory_type`` is the free-text memory class the
+    daemon has already validated.
     """
 
     collection: str = "default"
@@ -44,8 +44,9 @@ class PageChunker:
     Each chunk keeps the full text of its page for LLM reference.
     """
 
-    __slots__ = ("_guard", "_labels", "_sentences", "_splitter")
+    __slots__ = ("_budget", "_guard", "_labels", "_sentences", "_splitter")
 
+    _budget: RowBudget
     _guard: BinaryContent
     _splitter: PageSplitter
     _sentences: SentenceChunker
@@ -61,13 +62,14 @@ class PageChunker:
         budget = budget or RowBudget()
         # A chunk takes up to four bytes a character.  The overlap a chunk opens
         # with is counted inside max_chars, so max_chars alone must fit the cap.
-        if 4 * max_chars > budget.max_chunk_bytes:
+        if max_chars > budget.max_chunk_chars:
             msg = (
                 f"chunk size {max_chars} characters can exceed the "
                 f"{budget.max_chunk_bytes:,}-byte chunk budget"
             )
             raise ValueError(msg)
         self = super().__new__(cls)
+        self._budget = budget
         self._guard = BinaryContent()
         self._splitter = PageSplitter(budget.max_page_bytes)
         self._sentences = SentenceChunker(max_chars, overlap_chars)
@@ -75,10 +77,15 @@ class PageChunker:
         return self
 
     def chunk(self, pages: list[PageContent]) -> list[Chunk]:
-        """Return the chunks of *pages*, or raise if the document is binary.
+        """Return the chunks of *pages*, numbered contiguously across the document.
+
+        Every row is checked against the budget here, before the caller deletes or
+        writes anything, so a violation fails one document without side effects.
 
         Raises:
-            UnindexableContentError: The pages are a binary payload read as text.
+            UnindexableContentError: The pages are binary, or a paginated page is
+                over the page budget.
+            RowBudgetError: A page or chunk exceeds the row budget.
         """
         self._guard.require_document([page.text for page in pages])
         now = datetime.now(tz=UTC)
@@ -87,8 +94,10 @@ class PageChunker:
             text = page.text.strip()
             if not text:
                 continue
-            for index, piece in enumerate(self._sentences.split(text)):
-                chunks.append(self._chunk(page, index, piece, now))
+            self._budget.require_page(page.text)
+            for piece in self._sentences.split(text):
+                self._budget.require_chunk(piece)
+                chunks.append(self._chunk(page, len(chunks), piece, now))
         return chunks
 
     def _chunk(

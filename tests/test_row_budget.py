@@ -11,7 +11,7 @@ from quarry.db.chunk_table import ChunkTable
 from quarry.db.row_budget import RowBudget, RowBudgetError
 from quarry.models import Chunk
 
-_PAGE_LIMIT = 1_048_576
+_PAGE_LIMIT = 1_048_575
 _CHUNK_LIMIT = 65_536
 
 
@@ -32,20 +32,39 @@ def _chunk(*, text: str = "chunk", page_raw_text: str = "page") -> Chunk:
 
 
 class TestInvariant:
-    def test_defaults_sit_exactly_on_the_arrow_offset_limit(self) -> None:
+    def test_defaults_sit_just_under_the_arrow_offset_limit(self) -> None:
         budget = RowBudget()
-        assert (
-            budget.max_page_bytes * budget.assumed_batch_rows * budget.safety_factor
-            == 2**31
-        )
+        worst = budget.max_page_bytes * budget.assumed_batch_rows * budget.safety_factor
+        assert worst == 2**31 - 1024 * 2
+
+    def test_the_bound_is_strict_because_the_offset_limit_is_2_31_minus_1(
+        self,
+    ) -> None:
+        with pytest.raises(ValueError, match="2\\*\\*31"):
+            RowBudget(max_page_bytes=2**20)
+
+    @pytest.mark.parametrize(
+        "field", ["max_page_bytes", "assumed_batch_rows", "safety_factor"]
+    )
+    def test_every_field_must_be_positive(self, field: str) -> None:
+        with pytest.raises(ValueError, match=field):
+            RowBudget(**{field: 0})
+
+    def test_a_chunk_cap_must_hold_one_character(self) -> None:
+        with pytest.raises(ValueError, match="max_chunk_bytes"):
+            RowBudget(max_chunk_bytes=3)
+
+    def test_the_chunk_character_bound_has_one_source(self) -> None:
+        assert RowBudget().max_chunk_chars == 16_384
+        assert RowBudget(max_chunk_bytes=4097).max_chunk_chars == 1024
 
     def test_a_larger_page_cap_is_refused(self) -> None:
         with pytest.raises(ValueError, match="2\\*\\*31"):
-            RowBudget(max_page_bytes=_PAGE_LIMIT + 1)
+            RowBudget(max_page_bytes=2**20)
 
     def test_a_larger_chunk_cap_is_refused(self) -> None:
         with pytest.raises(ValueError, match="2\\*\\*31"):
-            RowBudget(max_chunk_bytes=_PAGE_LIMIT + 1)
+            RowBudget(max_chunk_bytes=2**20)
 
     def test_a_larger_batch_assumption_is_refused(self) -> None:
         with pytest.raises(ValueError, match="2\\*\\*31"):
@@ -60,7 +79,7 @@ class TestRequirePage:
         RowBudget().require_page("a" * _PAGE_LIMIT)
 
     def test_a_page_one_byte_over_is_rejected(self) -> None:
-        with pytest.raises(RowBudgetError, match="1,048,577 bytes > 1,048,576"):
+        with pytest.raises(RowBudgetError, match="1,048,576 bytes > 1,048,575"):
             RowBudget().require_page("a" * (_PAGE_LIMIT + 1))
 
     def test_two_byte_characters_are_measured_in_bytes(self) -> None:

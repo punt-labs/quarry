@@ -13,8 +13,9 @@ class SentenceChunker:
     Every chunk is at most ``max_chars`` characters: a sentence longer than that
     (a table, a minified file, a PDF stream with no punctuation) is wrapped at
     whitespace, else exactly at ``max_chars``, so stored text equals embedded text.
-    Each chunk after the first opens with the tail of the one before it, trimmed
-    to a word boundary, for context across the seam.
+    Each chunk after the first opens with the tail of the one before it (trimmed
+    to a word boundary, and only when there is room for it) for context across
+    the seam.
     """
 
     __slots__ = ("_max_chars", "_overlap_chars")
@@ -29,9 +30,12 @@ class SentenceChunker:
         if max_chars < 1:
             msg = f"max_chars must be >= 1, got {max_chars}"
             raise ValueError(msg)
+        if overlap_chars < 0:
+            msg = f"overlap_chars must be >= 0, got {overlap_chars}"
+            raise ValueError(msg)
         self = super().__new__(cls)
         self._max_chars = max_chars
-        self._overlap_chars = max(0, overlap_chars)
+        self._overlap_chars = overlap_chars
         return self
 
     def split(self, text: str) -> list[str]:

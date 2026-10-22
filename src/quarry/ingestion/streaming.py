@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from typing import TYPE_CHECKING, Self
 
 from quarry.db.chunk_table import ChunkTable
@@ -50,14 +49,13 @@ class DocumentStreamer:
         memory_type: str = "",
         summary: str = "",
     ) -> list[Chunk]:
-        """Chunk *pages* and assign a document-global, contiguous ``chunk_index``."""
+        """Chunk *pages* into a document-global, contiguous ``chunk_index`` sequence."""
         chunker = PageChunker(
             self._settings.chunk_max_chars,
             self._settings.chunk_overlap_chars,
             ChunkLabels(collection, source_format, agent_handle, memory_type, summary),
         )
-        chunks = chunker.chunk(pages)
-        return [replace(chunk, chunk_index=i) for i, chunk in enumerate(chunks)]
+        return chunker.chunk(pages)
 
     def stream_batches(
         self,

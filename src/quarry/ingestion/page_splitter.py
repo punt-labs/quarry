@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, ClassVar, final
+from typing import ClassVar, final
 
-if TYPE_CHECKING:
-    from quarry.models import PageContent
+from quarry.content_guard import UnindexableContentError
+from quarry.models import PageContent, PageType
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +15,12 @@ logger = logging.getLogger(__name__)
 @final
 @dataclass(frozen=True, slots=True)
 class PageSplitter:
-    """Cut oversized pages at the best boundary so every part fits ``max_bytes``.
+    """Cut oversized logical sections so every part fits ``max_bytes``.
+
+    Only logical sections (text, markdown and HTML sections, code definitions) are
+    split and renumbered.  A paginated page (a PDF or OCR page, a slide, a sheet)
+    keeps its physical number; one over the budget fails the document, since real
+    pages never approach it and later stages key rows by ``page_number``.
 
     The parts concatenate back to the original text exactly: a separator stays at
     the end of the part it closes, so nothing is dropped or rewritten.  A cut
@@ -26,6 +31,9 @@ class PageSplitter:
 
     max_bytes: int
 
+    _LOGICAL: ClassVar[frozenset[PageType]] = frozenset(
+        {PageType.SECTION, PageType.CODE}
+    )
     _FILL: ClassVar[float] = 0.5
     _SENTENCE_ENDS: ClassVar[tuple[bytes, ...]] = (b". ", b"! ", b"? ")
     _SPACES: ClassVar[tuple[bytes, ...]] = (b" ", b"\t")
@@ -38,13 +46,22 @@ class PageSplitter:
             raise ValueError(msg)
 
     def expand(self, pages: list[PageContent]) -> list[PageContent]:
-        """Return *pages* unchanged, or split and renumbered if any is oversized.
+        """Return *pages* unchanged, or split and renumbered if a section is oversized.
 
-        Pages are logical sections for text and code, so renumbering them
-        sequentially for the whole document is sound; it happens only when a
-        split did, so every other document keeps its extractor's numbering.
+        Sections are renumbered sequentially for the whole document, and only when
+        a split happened, so every other document keeps its extractor's numbering.
+
+        Raises:
+            UnindexableContentError: A paginated page exceeds the budget.
         """
         parts = [(page, self.split(page.text)) for page in pages]
+        for page, texts in parts:
+            if len(texts) > 1 and page.page_type not in self._LOGICAL:
+                msg = (
+                    f"content rejected: page {page.page_number} exceeds the page "
+                    f"budget of {self.max_bytes:,} bytes"
+                )
+                raise UnindexableContentError(msg)
         if all(len(texts) == 1 for _, texts in parts):
             return pages
         flat = [(page, text) for page, texts in parts for text in texts]

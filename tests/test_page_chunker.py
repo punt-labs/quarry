@@ -12,14 +12,19 @@ from quarry.models import PageContent, PageType
 _MIB = 1024 * 1024
 
 
-def _page(text: str, page_number: int = 1, total_pages: int = 1) -> PageContent:
+def _page(
+    text: str,
+    page_number: int = 1,
+    total_pages: int = 1,
+    page_type: PageType = PageType.SECTION,
+) -> PageContent:
     return PageContent(
         document_name="test.pdf",
         document_path="/tmp/test.pdf",
         page_number=page_number,
         total_pages=total_pages,
         text=text,
-        page_type=PageType.TEXT,
+        page_type=page_type,
     )
 
 
@@ -49,6 +54,12 @@ class TestChunking:
         result = PageChunker(50, 10).chunk([_page(long_text)])
         assert len(result) > 1
         assert {c.page_raw_text for c in result} == {long_text}
+
+    def test_chunk_index_is_contiguous_across_the_whole_document(self) -> None:
+        pages = [_page("Sentence one. " * 30, 1, 2), _page("Another. " * 30, 2, 2)]
+        result = PageChunker(50, 10).chunk(pages)
+        assert [c.chunk_index for c in result] == list(range(len(result)))
+        assert {c.page_number for c in result} == {1, 2}
 
     def test_chunk_indices_sequential(self) -> None:
         result = PageChunker(50, 10).chunk([_page("Sentence one. " * 30)])
@@ -154,6 +165,22 @@ class TestPageSplit:
         chunks = _chunker().chunk(pages)
         assert [(c.page_number, c.total_pages) for c in chunks] == [(4, 9), (7, 9)]
 
+    def test_an_oversized_pdf_page_is_refused_not_renumbered(self) -> None:
+        pdf_page = _page("word " * (2 * _MIB // 5), 3, 10, PageType.TEXT)
+        with pytest.raises(UnindexableContentError, match="page 3 exceeds the page"):
+            PageChunker().chunk([pdf_page])
+
+    def test_the_row_budget_is_checked_over_the_whole_chunk_list(self) -> None:
+        from unittest.mock import patch
+
+        from quarry.db.row_budget import RowBudgetError
+
+        with (
+            patch.object(RowBudget, "require_chunk", side_effect=RowBudgetError("x")),
+            pytest.raises(RowBudgetError),
+        ):
+            _chunker().chunk([_page("Short text.")])
+
     def test_every_split_chunk_fits_a_row(self) -> None:
         budget = RowBudget()
         for chunk in PageChunker().chunk([_page("word " * (2 * _MIB // 5))]):
@@ -182,12 +209,12 @@ class TestConstruction:
 
     def test_the_overlap_is_counted_inside_max_chars(self) -> None:
         """The bound is four bytes a character of max_chars alone: 65,536 / 4."""
-        PageChunker(16_384, 16_000)
+        PageChunker(16_384, 16_000)  # overlap rides inside max_chars
 
     def test_the_largest_chunk_fits_the_budget_exactly(self) -> None:
         chunks = PageChunker(16_384, 0).chunk([_page("x" * 40_000)])
         assert max(len(c.text) for c in chunks) == 16_384
-        RowBudget().require_chunk("é" * 16_384 * 2)
+        RowBudget().require_chunk("😀" * 16_384)
 
     def test_a_non_positive_chunk_size_is_refused(self) -> None:
         with pytest.raises(ValueError, match="max_chars"):

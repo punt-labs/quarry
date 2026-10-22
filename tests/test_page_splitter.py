@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import pytest
 
+from quarry.content_guard import UnindexableContentError
 from quarry.ingestion.page_splitter import PageSplitter
 from quarry.models import PageContent, PageType
 
 
-def _page(text: str, number: int = 1, total: int = 1) -> PageContent:
-    return PageContent("d.md", "/d.md", number, total, text, PageType.TEXT)
+def _page(
+    text: str,
+    number: int = 1,
+    total: int = 1,
+    page_type: PageType = PageType.SECTION,
+) -> PageContent:
+    return PageContent("d.md", "/d.md", number, total, text, page_type)
 
 
 class TestSplit:
@@ -83,7 +89,30 @@ class TestExpand:
     def test_metadata_is_kept_on_every_part(self) -> None:
         [first, *_] = PageSplitter(50).expand([_page("w " * 100)])
         assert (first.document_name, first.document_path) == ("d.md", "/d.md")
-        assert first.page_type is PageType.TEXT
+        assert first.page_type is PageType.SECTION
+
+
+class TestPaginatedFormats:
+    """Physical pages keep their numbers: an oversized one fails the document."""
+
+    @pytest.mark.parametrize(
+        "page_type", [PageType.TEXT, PageType.IMAGE, PageType.PRESENTATION]
+    )
+    def test_an_oversized_paginated_page_is_refused(self, page_type: PageType) -> None:
+        pages = [_page("ok", 1, 3, page_type), _page("w " * 100, 2, 3, page_type)]
+        with pytest.raises(UnindexableContentError, match="page 2 exceeds the page"):
+            PageSplitter(100).expand(pages)
+
+    def test_a_paginated_page_within_budget_keeps_its_numbering(self) -> None:
+        pages = [_page("one", 4, 9, PageType.TEXT), _page("two", 7, 9, PageType.TEXT)]
+        assert PageSplitter(100).expand(pages) == pages
+
+    @pytest.mark.parametrize("page_type", [PageType.SECTION, PageType.CODE])
+    def test_logical_sections_are_split_and_renumbered(
+        self, page_type: PageType
+    ) -> None:
+        result = PageSplitter(100).expand([_page("w " * 100, 5, 9, page_type)])
+        assert [p.page_number for p in result] == list(range(1, len(result) + 1))
 
 
 class TestConstruction:
