@@ -17,14 +17,17 @@ class TestRender:
 
     def test_a_down_daemon_renders_the_recovery_hint(self) -> None:
         exc = QuarryConnectionError("refused", "http://127.0.0.1:8420")
-        assert ToolFailure(exc).render().startswith("Error: refused — Restart it: ")
+        assert ToolFailure(exc).render() == (
+            "Error: refused — Restart it: 'systemctl --user restart quarry' (Linux) "
+            "or 'launchctl kickstart -k gui/$(id -u)/com.punt-labs.quarry' (macOS), "
+            "then retry. No results were returned for this call."
+        )
 
     def test_a_remote_daemon_renders_the_remote_hint(self) -> None:
         exc = QuarryConnectionError("refused", "https://quarry.example.com")
-        assert (
-            ToolFailure(exc)
-            .render()
-            .startswith("Error: refused — This is a remote target")
+        assert ToolFailure(exc).render() == (
+            "Error: refused — This is a remote target — restarting a local daemon "
+            "will not help. Check QUARRY_URL / 'quarry login', then retry."
         )
 
     def test_any_other_exception_names_its_class(self) -> None:

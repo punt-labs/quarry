@@ -462,6 +462,27 @@ class TestIngestDocument:
         assert sections is not None
         assert sections == 1
 
+    def test_a_spreadsheet_row_over_the_page_budget_is_chunked_not_refused(
+        self, tmp_path: Path
+    ):
+        """One row wider than a page is a logical section, split like any other."""
+        from quarry.db.row_budget import RowBudget
+        from quarry.ingestion.pipeline import plan_file_chunks
+
+        csv_file = tmp_path / "wide.csv"
+        header = ",".join(f"c{n}" for n in range(12))
+        cell = "word " * 20_000  # under the csv module's 128 KiB field limit
+        csv_file.write_text(header + "\n" + ",".join([cell] * 12) + "\n")
+        assert csv_file.stat().st_size > RowBudget().max_page_bytes
+
+        chunks, _ = plan_file_chunks(csv_file, _settings(), collection="c")
+
+        assert chunks
+        assert {c.page_type for c in chunks} == {"spreadsheet"}
+        for chunk in chunks:
+            RowBudget().require_chunk(chunk.text)
+            RowBudget().require_page(chunk.page_raw_text)
+
     def test_dispatches_html_file(self, monkeypatch, tmp_path: Path):
         html_file = tmp_path / "article.html"
         html_file.write_text("<html><body><h1>Title</h1><p>Content.</p></body></html>")

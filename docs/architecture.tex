@@ -235,7 +235,10 @@ Funnel      & \modpath{ingestion/chunk\_store\_funnel.py} & The single
 Chunker     & \modpath{ingestion/page\_chunker.py}     & \texttt{PageChunker}:
               refuse binary documents, split logical sections to the row
               budget (an oversized paginated page fails the document), and pack
-              overlapping chunks; respects page and heading boundaries. \\
+              overlapping chunks; respects page boundaries (extractors cut
+              sections at headings).  Splitting is
+              \modpath{ingestion/page\_splitter.py}, sentence packing
+              \modpath{ingestion/sentence\_chunker.py}. \\
 Binary guard & \modpath{content\_guard.py} & \texttt{BinaryContent}
               classifies text that is really a binary payload (signature plus
               non-text ratio) and \texttt{UnindexableContentError}, the single
@@ -261,7 +264,10 @@ Web fetch   & \modpath{ingestion/web\_fetch.py},
               \modpath{ingestion/media\_type\_policy.py} & Fetch a URL over
               HTTP(S) behind the SSRF gate; a media type outside the text
               allow-list is refused from the headers before the body is read.
-              Every failure is a URL-free \texttt{FetchRefusedError}. \\
+              Every failure is an \texttt{UnindexableContentError}
+              (\texttt{FetchRefusedError}, or \texttt{UnsupportedContentError}
+              for a refused media type) whose message never embeds userinfo,
+              path or query. \\
 Ingest stats & \modpath{ingestion/ingest\_stats.py} & Per-format ingest
               counters merged into an ingest result. \\
 \bottomrule

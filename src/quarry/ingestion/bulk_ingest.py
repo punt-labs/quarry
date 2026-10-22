@@ -140,7 +140,12 @@ class BulkIngestRunner:
         context: IngestContext,
         options: BulkOptions,
     ) -> tuple[int, int, list[str]]:
-        """Return ``(ingested_count, failed_count, error_messages)``."""
+        """Return ``(ingested_count, failed_count, error_messages)``.
+
+        Raises:
+            UnindexableContentError: Every page failed, so the crawl indexed
+                nothing; the reason names no URL.
+        """
         ingested = 0
         failed = 0
         errors: list[str] = []
@@ -151,10 +156,10 @@ class BulkIngestRunner:
             # dedup already skipped unchanged URLs, so every submitted entry is
             # a genuine (re)ingest.
             bulk_context = replace(context, overwrite=True)
-            # Workers report through a callback-less Progress: the pre-decomposition
-            # _bulk_ingest_entries never forwarded progress_callback into the
-            # parallel ingest_url calls (only this method's own aggregation
-            # messages below used the caller's callback), and Progress.__call__
+            # Workers report through a callback-less Progress: the parallel ingest_url
+            # calls never forward progress_callback (only this method's own
+            # aggregation messages below use the caller's callback), and
+            # Progress.__call__
             # invokes that callback with no lock — sharing one callback-bearing
             # Progress across threads would be a new concurrency hazard for a
             # stateful callback. Every worker message still reaches the logger.
@@ -196,8 +201,8 @@ class BulkIngestRunner:
                         # Broad except is correct here: this is the per-task
                         # outcome boundary for the parallel fan-out (PY-EH-6),
                         # not internal code -- one worker's failure must not
-                        # abort the others.  PageReport logs it (a programming
-                        # error loudly) and renders a URL-free line.
+                        # abort the others.  PageReport logs the redacted URL
+                        # (a programming error loudly) and renders a URL-free line.
                         failed += 1
                         reasons.append(PageReport.reason(exc))
                         errors.append(report.failure(exc))

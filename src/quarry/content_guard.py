@@ -22,7 +22,8 @@ class UnindexableContentError(ValueError):
     """Raised when content cannot be indexed; the message is the stable reason.
 
     Messages never embed a URL or document name, so they are safe to log and to
-    return to a client verbatim.
+    return to a client verbatim: the failures that carry one (a fetch, a crawl)
+    are replaced by a URL-free reason before they reach here.
     """
 
 

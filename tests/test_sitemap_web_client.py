@@ -631,5 +631,4 @@ class TestErrorMessagesAreUrlFree:
         monkeypatch.setattr(swc, "GUARDED_OPENER", _Opener())
         resp = GatedSitemapWebClient().get(self._URL)
         assert isinstance(resp, WebClientErrorResponse)
-        assert resp.message().startswith("fetch failed: ")
-        assert "SECRET" not in resp.message()
+        assert resp.message() == "fetch failed: IncompleteRead"

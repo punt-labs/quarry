@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from types import SimpleNamespace
 from typing import cast
@@ -33,11 +34,13 @@ class TestRequireContent:
 
     def test_missing_text_keeps_the_field_error(self) -> None:
         response = _group()._require_content({}, "c", "remember")
-        assert "Missing required field: c" in _error(response)
+        assert json.loads(_error(response)) == {"error": "Missing required field: c"}
 
     def test_binary_text_is_refused_with_the_reason(self) -> None:
         response = _group()._require_content({"c": _PDF}, "c", "remember")
-        assert "binary content rejected: pdf header" in _error(response)
+        assert json.loads(_error(response)) == {
+            "error": "binary content rejected: pdf header"
+        }
 
     def test_a_refusal_is_logged_once_with_the_kind_and_reason(
         self, caplog: pytest.LogCaptureFixture
@@ -72,11 +75,18 @@ class TestRequireMemoryType:
 
     def test_an_unknown_type_is_a_400(self) -> None:
         response = _group()._require_memory_type({"memory_type": "facts"})
-        assert "unknown memory_type 'facts'" in _error(response)
+        assert json.loads(_error(response)) == {
+            "error": (
+                "unknown memory_type 'facts'; expected one of "
+                "fact, observation, opinion, procedure"
+            )
+        }
 
     def test_the_reserved_lesson_type_is_a_400(self) -> None:
         response = _group()._require_memory_type({"memory_type": "lesson"})
-        assert "reserved for quarry learn" in _error(response)
+        assert json.loads(_error(response)) == {
+            "error": "memory_type 'lesson' is reserved for quarry learn"
+        }
 
 
 class TestAccept:

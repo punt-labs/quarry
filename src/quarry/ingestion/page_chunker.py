@@ -51,8 +51,9 @@ class PageChunker:
     """Turn a document's pages into chunks that can always be stored.
 
     A document that is binary is refused with a reason (:class:`BinaryContent`);
-    a logical section larger than the row budget is split, never truncated, and an
-    oversized paginated page fails the document; and every chunk
+    a logical section larger than the row budget is split, never truncated, an
+    oversized paginated page fails the document, and a label over its cap raises
+    :class:`RowBudgetError`; and every chunk
     is at most ``max_chars`` characters, so the stored text is the embedded text.
     Each chunk keeps the full text of its page for LLM reference.
     """
@@ -98,7 +99,7 @@ class PageChunker:
         Raises:
             UnindexableContentError: The pages are binary, or a paginated page is
                 over the page budget.
-            RowBudgetError: A page or chunk exceeds the row budget.
+            RowBudgetError: A page, chunk or label exceeds the row budget.
         """
         self._guard.require_document([page.text for page in pages])
         now = datetime.now(tz=UTC)

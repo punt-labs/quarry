@@ -54,7 +54,8 @@ def ingest_document(
             subdirectories.
         progress_callback: Optional callable for progress messages.
         agent_handle: Agent that owns this memory (empty for non-agent content).
-        memory_type: Memory classification (fact, observation, opinion, procedure).
+        memory_type: Memory classification (fact, observation, opinion, procedure,
+            or lesson).
         summary: One-line summary of the content.
 
     Returns:
@@ -63,7 +64,8 @@ def ingest_document(
     Raises:
         FileNotFoundError: If file does not exist.
         ValueError: If the format is unsupported; also its subclasses
-            UnindexableContentError (binary) and RowBudgetError (over budget).
+            UnindexableContentError (binary, or an oversized paginated page) and
+            RowBudgetError (over budget).
     """
     if not file_path.exists():
         msg = f"File not found: {file_path}"
@@ -102,7 +104,8 @@ def plan_file_chunks(
     Raises:
         FileNotFoundError: If *file_path* does not exist.
         ValueError: If the format is unsupported; also its subclasses
-            UnindexableContentError (binary) and RowBudgetError (over budget).
+            UnindexableContentError (binary, or an oversized paginated page) and
+            RowBudgetError (over budget).
     """
     if not file_path.exists():
         msg = f"File not found: {file_path}"

@@ -113,7 +113,11 @@ def test_a_raising_subject_cannot_stop_the_task_ending_failed(
         "failed",
         "binary content rejected: pdf header",
     )
-    assert "(unnamed)" in caplog.text
+    [record] = caplog.records
+    assert record.getMessage() == (
+        "Background remember (unnamed) (task t-1) rejected: "
+        "binary content rejected: pdf header"
+    )
 
 
 def test_complete_records_the_results() -> None:

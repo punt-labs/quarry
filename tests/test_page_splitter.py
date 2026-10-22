@@ -113,8 +113,11 @@ class TestPaginatedFormats:
     def test_logical_sections_are_split_and_renumbered(
         self, page_type: PageType
     ) -> None:
-        result = PageSplitter(100).expand([_page("w " * 100, 5, 9, page_type)])
+        text = "w " * 100
+        result = PageSplitter(100).expand([_page(text, 5, 9, page_type)])
         assert [p.page_number for p in result] == list(range(1, len(result) + 1))
+        assert {p.page_type for p in result} == {page_type}
+        assert "".join(p.text for p in result) == text
 
 
 class TestConstruction:

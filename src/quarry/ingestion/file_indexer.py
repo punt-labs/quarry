@@ -199,7 +199,7 @@ class SingleFileIndexer:
         reconcile the store, stream+embed in bounded windows, then drain.  A file
         that vanished or cannot be read since the event is a graceful per-file
         error (its stale chunks are dropped when the content no longer matches),
-        never a raised exception (bug-class 1: filesystem TOCTOU).
+        never a raised exception (the file can change between the event and the read).
         """
         document_name = str(file_path.relative_to(self._resolved))
         file_id = str(file_path)

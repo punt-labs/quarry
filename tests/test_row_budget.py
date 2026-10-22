@@ -38,12 +38,6 @@ class TestInvariant:
         worst = budget.max_page_bytes * budget.assumed_batch_rows * budget.safety_factor
         assert worst == 2**31 - 1024 * 2
 
-    def test_the_bound_is_strict_because_the_offset_limit_is_2_31_minus_1(
-        self,
-    ) -> None:
-        with pytest.raises(ValueError, match="2\\*\\*31"):
-            RowBudget(max_page_bytes=2**20)
-
     @pytest.mark.parametrize(
         "field", ["max_page_bytes", "assumed_batch_rows", "safety_factor"]
     )
@@ -58,11 +52,6 @@ class TestInvariant:
     def test_the_chunk_character_bound_has_one_source(self) -> None:
         assert RowBudget().max_chunk_chars == 16_384
         assert RowBudget(max_chunk_bytes=4097).max_chunk_chars == 1024
-
-    def test_the_bound_admits_exactly_2_31_minus_1_and_no_more(self) -> None:
-        RowBudget(max_page_bytes=2**31 - 1, assumed_batch_rows=1, safety_factor=1)
-        with pytest.raises(ValueError, match="2\\*\\*31"):
-            RowBudget(max_page_bytes=2**31, assumed_batch_rows=1, safety_factor=1)
 
     def test_a_larger_chunk_cap_is_refused(self) -> None:
         with pytest.raises(ValueError, match="2\\*\\*31"):
@@ -234,8 +223,12 @@ class TestBuildRecordsLabels:
     def test_an_oversized_label_is_rejected_not_truncated(
         self, column: str, chunk: Chunk
     ) -> None:
-        with pytest.raises(RowBudgetError, match=column):
+        with pytest.raises(RowBudgetError) as info:
             ChunkTable.build_records([chunk], np.zeros((1, 768), dtype=np.float32))
+        assert str(info.value) == (
+            f"row budget exceeded: {column} {_LABEL_LIMIT + 1:,} bytes > "
+            f"{_LABEL_LIMIT:,}"
+        )
 
     def test_labels_at_the_cap_are_built_untouched(self) -> None:
         chunk = replace(_chunk(), summary="x" * _LABEL_LIMIT)

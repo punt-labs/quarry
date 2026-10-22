@@ -78,6 +78,10 @@ class SitemapDiscovery:
 
         Returns:
             Deduplicated flat list of all SitemapEntry found.
+
+        Raises:
+            FetchRefusedError: The sitemap could not be fetched or parsed, or the
+                parser rejected *url*.  The message names no URL.
         """
         return SitemapDiscovery._pages_to_entries(SitemapReader().read(url))
 
@@ -112,8 +116,8 @@ class SitemapDiscovery:
         check the ingest route runs on the initial source -- and an unsafe or
         unresolvable URL is dropped and logged rather than fetched, so a public
         sitemap listing internal URLs triggers no internal fetch.  Complementary
-        to pinning the resolved IP (a separate follow-up): this gates each listed
-        URL, not the connection.
+        to pinning the resolved IP: this gates each listed URL, not the
+        connection.
 
         Fusing glob-filter, gate, and cap into one pass keeps the added work
         proportional to the result, not the sitemap: with *limit* > 0 the scan

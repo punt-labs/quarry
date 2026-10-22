@@ -1502,6 +1502,7 @@ class TestInvalidSitemapFailsTheFetch:
         mock_fetcher_cls.return_value.sitemap.return_value.all_pages.return_value = []
         with caplog.at_level(logging.INFO):
             SitemapDiscovery.discover_urls(self._URL)
-        assert "https://example.com/sitemap.xml" in caplog.text
-        assert "SECRET" not in caplog.text
-        assert "pw@" not in caplog.text
+        assert [r.getMessage() for r in caplog.records] == [
+            "Fetching sitemap: https://example.com/sitemap.xml",
+            "Parsed 0 pages from https://example.com/sitemap.xml",
+        ]

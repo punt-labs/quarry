@@ -45,7 +45,7 @@ class ChunkTable:
         """Build LanceDB row dicts from chunks and their embedding vectors.
 
         The one place every writer builds rows, so it is where the row budget is
-        enforced: a page or chunk over budget raises, never truncates.
+        enforced: a page, chunk or label over budget raises, never truncates.
         """
         budget = RowBudget()
         records: list[dict[str, object]] = []

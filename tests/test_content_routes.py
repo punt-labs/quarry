@@ -1,8 +1,9 @@
-"""Binary content is refused with one reason on every content surface (bug class 3)."""
+"""Binary content is refused with one reason on every content surface."""
 
 from __future__ import annotations
 
 import logging
+import re
 import time
 from http.client import HTTPMessage, HTTPResponse
 from typing import TYPE_CHECKING
@@ -167,7 +168,12 @@ class TestMemoryTypeStillRejected:
         }
         resp = http.post(path, json=body)
         assert resp.status_code == 400
-        assert "unknown memory_type 'facts'" in resp.json()["error"]
+        assert resp.json() == {
+            "error": (
+                "unknown memory_type 'facts'; expected one of "
+                "fact, observation, opinion, procedure"
+            )
+        }
 
 
 @pytest.mark.parametrize(
@@ -206,7 +212,11 @@ class TestSurfacesAgree:
         assert wire.json()["error"] == reason
         assert mcp == f"Error: {reason}"
         assert cli.exit_code == 1
-        assert cli.output.strip().splitlines()[-1] == f"Error: {reason}"
+        assert re.fullmatch(
+            rf"[\d-]+ [\d:]+ \[WARNING\] {re.escape(_ROUTE_LOGGER)}: "
+            rf"{re.escape(refused[0])}\nError: {re.escape(reason)}",
+            cli.output.strip(),
+        )
         assert not [r for r in caplog.records if r.exc_info]
 
     def test_learn(
@@ -232,7 +242,11 @@ class TestSurfacesAgree:
         assert wire.json()["error"] == reason
         assert mcp == f"Error: {reason}"
         assert cli.exit_code == 1
-        assert cli.output.strip().splitlines()[-1] == f"Error: {reason}"
+        assert re.fullmatch(
+            rf"[\d-]+ [\d:]+ \[WARNING\] {re.escape(_ROUTE_LOGGER)}: "
+            rf"{re.escape(refused[0])}\nError: {re.escape(reason)}",
+            cli.output.strip(),
+        )
         assert not [r for r in caplog.records if r.exc_info]
 
 
@@ -323,7 +337,13 @@ class TestRefusedAfterTheSniff:
     def test_the_payload_really_passes_the_sniff(self) -> None:
         BinaryContent().sniff(_gap_binary())
 
-    @pytest.mark.parametrize("path", ["/v1/remember", "/v1/capture"])
+    @pytest.mark.parametrize(
+        ("path", "kind", "subject"),
+        [
+            ("/v1/remember", "remember", "n.md"),
+            ("/v1/capture", "capture", "session-abcd1234"),
+        ],
+    )
     def test_the_task_fails_with_the_reason_and_one_quiet_warning(
         self,
         http: TestClient,
@@ -331,6 +351,8 @@ class TestRefusedAfterTheSniff:
         tmp_path: Path,
         caplog: pytest.LogCaptureFixture,
         path: str,
+        kind: str,
+        subject: str,
     ) -> None:
         body = {
             "name": "n.md",
@@ -348,7 +370,10 @@ class TestRefusedAfterTheSniff:
         [record] = [r for r in caplog.records if r.levelno >= logging.WARNING]
         assert record.levelno == logging.WARNING
         assert record.exc_info is None
-        assert record.getMessage().endswith(f"rejected: {_GAP_REASON}")
+        assert record.getMessage() == (
+            f"Background {kind} {subject} (task {accepted.json()['task_id']}) "
+            f"rejected: {_GAP_REASON}"
+        )
         assert daemon.ctx.database.store.count() == 0
 
 

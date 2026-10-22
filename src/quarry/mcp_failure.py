@@ -28,8 +28,9 @@ class ToolFailure:
 
     A 4xx from the daemon is an expected refusal (bad input, unknown name, binary
     content): its message is the whole story, so the guard logs it as a WARNING
-    without a traceback and it renders as the message alone, the same text the CLI
-    and HTTP surfaces carry.  Anything else is a fault and keeps its traceback.
+    without a traceback and it renders as ``Error: <message>``, the message being the
+    same text the CLI and HTTP surfaces carry.  Anything else is a fault and keeps
+    its traceback.
     """
 
     __slots__ = ("_exc",)
@@ -59,8 +60,8 @@ class ToolFailure:
         concrete recovery action (restart hint or remote-target hint) instead
         of a bare exception string — an agent reading the tool result can act
         on it without a separate ``quarry doctor`` round trip. A daemon
-        rejection (``HttpError`` — e.g. a 400 on binary content) renders its
-        message alone; any other exception renders ``Error: <class>: <message>``.
+        rejection (``HttpError`` — e.g. a 400 on binary content) renders
+        ``Error: <message>``; any other exception renders ``Error: <class>: <message>``.
         One line, not two: a registered tool's result is a pydantic-repr'd
         ``TextContent``, which escapes an embedded newline — a two-line
         message would fail the direct-call/registered-call string-identity

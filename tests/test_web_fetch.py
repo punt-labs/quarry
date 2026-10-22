@@ -546,20 +546,26 @@ class TestEveryFailureIsUrlFree:
     _URL = "https://user:pw@example.com/p?token=SECRET"
 
     @pytest.mark.parametrize(
-        "failure",
-        [ConnectionResetError("reset http://x/?token=SECRET"), TimeoutError("slow")],
+        ("failure", "reason"),
+        [
+            (
+                ConnectionResetError("reset http://x/?token=SECRET"),
+                "fetch failed: ConnectionResetError",
+            ),
+            (TimeoutError("slow"), "fetch failed: timed out"),
+        ],
         ids=["reset", "timeout"],
     )
     @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
     def test_a_read_failure_is_a_refusal(
-        self, mock_open: MagicMock, failure: BaseException
+        self, mock_open: MagicMock, failure: BaseException, reason: str
     ) -> None:
         resp = _mock_response(b"", "text/html")
         resp.read.side_effect = failure
         mock_open.return_value = resp
-        with pytest.raises(FetchRefusedError, match="fetch failed: ") as info:
+        with pytest.raises(FetchRefusedError) as info:
             WebFetcher().fetch_body(self._URL)
-        assert "SECRET" not in str(info.value)
+        assert str(info.value) == reason
 
     @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
     def test_an_incomplete_read_is_a_refusal(self, mock_open: MagicMock) -> None:
@@ -568,14 +574,16 @@ class TestEveryFailureIsUrlFree:
         resp = _mock_response(b"", "text/html")
         resp.read.side_effect = IncompleteRead(b"abc", 10)
         mock_open.return_value = resp
-        with pytest.raises(FetchRefusedError, match="IncompleteRead"):
+        with pytest.raises(FetchRefusedError) as info:
             WebFetcher().fetch_body(self._URL)
+        assert str(info.value) == "fetch failed: IncompleteRead"
 
     @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
     def test_an_unknown_charset_is_a_refusal(self, mock_open: MagicMock) -> None:
         mock_open.return_value = _mock_response(b"hi", "text/html; charset=nope-9")
-        with pytest.raises(FetchRefusedError, match="unsupported charset nope-9"):
+        with pytest.raises(FetchRefusedError) as info:
             WebFetcher().fetch_body(self._URL)
+        assert str(info.value) == "content rejected: unsupported charset nope-9"
 
     @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
     def test_a_refused_url_message_names_no_part_of_the_url(
@@ -592,8 +600,9 @@ class TestEveryFailureIsUrlFree:
         self, mock_open: MagicMock
     ) -> None:
         mock_open.return_value = _mock_response(b"x", "text/plain")
-        with pytest.raises(FetchRefusedError, match="non-HTML content text/plain"):
+        with pytest.raises(FetchRefusedError) as info:
             WebFetcher().fetch(self._URL)
+        assert str(info.value) == "content rejected: non-HTML content text/plain"
 
 
 class _AllowAll:
