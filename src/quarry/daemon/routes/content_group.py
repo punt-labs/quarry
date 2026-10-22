@@ -136,7 +136,7 @@ class ContentRouteGroup(RouteGroup):
     @staticmethod
     def _narrow(raw: str) -> MemoryType:
         """Return *raw* as a storage ``MemoryType`` (the single narrowing point)."""
-        return MemoryTypeGuard().require(raw)
+        return MemoryTypeGuard.require(raw)
 
     def _labels(
         self,
