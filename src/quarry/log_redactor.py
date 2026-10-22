@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import ClassVar, final
 
+from quarry.log_form import LogForm
+
 
 @final
 class LogRedactor:
@@ -14,7 +16,7 @@ class LogRedactor:
     traceback alike) at the one place every record is written.  The types that
     carry a URL are the guarantee; this catches whatever a library quotes
     regardless: ``scheme://user:pw@host/path?query#fragment`` becomes
-    ``scheme://host/path``, a bare ``user:pw@`` or ``?query`` is masked, and a
+    ``scheme://host/…(1 segment)``, a bare ``user:pw@`` or ``?query`` is masked, and a
     control character is escaped so it cannot forge or hide a log line.
 
     It runs under the handler lock and holds the GIL, so its cost must be linear
@@ -26,7 +28,7 @@ class LogRedactor:
 
     MAX_TOKEN: ClassVar[int] = 2048
 
-    _LONG_TOKEN: ClassVar[re.Pattern[str]] = re.compile(r"\S{2049,}")
+    _TOKEN: ClassVar[re.Pattern[str]] = re.compile(r"\S+")
     _SCHEME_URL: ClassVar[re.Pattern[str]] = re.compile(
         r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\-]{0,31})://(?P<auth>[^\s/?#'\"<>]{0,256})"
         r"(?P<path>[^\s?#'\"<>]{0,2048})(?:[?#][^\s'\"<>]{0,2048})?"
@@ -45,10 +47,7 @@ class LogRedactor:
     @classmethod
     def redact(cls, text: str) -> str:
         """Return *text* with URL userinfo, query and fragment masked."""
-        text = cls._LONG_TOKEN.sub("[…]", text)
-        text = cls._SCHEME_URL.sub(cls._bare_url, text)
-        text = cls._USERINFO.sub("[userinfo]@", text)
-        text = cls._QUERY.sub("?[query]", text)
+        text = cls._TOKEN.sub(cls._token, text)
         return cls._CONTROL.sub(cls._escape, text)
 
     @classmethod
@@ -60,13 +59,33 @@ class LogRedactor:
         """
         return cls._LINE_BREAKS.sub(cls._escape, message)
 
+    @classmethod
+    def _token(cls, match: re.Match[str]) -> str:
+        """Return one whitespace-free token, masked or replaced when too long.
+
+        Every pattern excludes whitespace, so working a token at a time finds what
+        a pass over the whole line would, and the length test is one comparison
+        per token rather than a quantifier retried at every offset.
+        """
+        token = match.group()
+        if len(token) > cls.MAX_TOKEN:
+            return "[…]"
+        token = cls._SCHEME_URL.sub(cls._bare_url, token)
+        token = cls._USERINFO.sub("[userinfo]@", token)
+        return cls._QUERY.sub("?[query]", token)
+
     @staticmethod
     def _escape(match: re.Match[str]) -> str:
         char = match.group()
-        return {"\n": "\\n", "\r": "\\r"}.get(char, f"\\x{ord(char):02x}")
+        code = ord(char)
+        if char in "\r\n":
+            return repr(char)[1:-1]
+        if code <= 0xFF:
+            return f"\\x{code:02x}"
+        return f"\\u{code:04x}" if code <= 0xFFFF else f"\\U{code:08x}"
 
     @staticmethod
     def _bare_url(match: re.Match[str]) -> str:
-        """Return a ``scheme://host/path`` URL match without its userinfo."""
+        """Return a URL match as ``scheme://host[:port]/…(N segments)``."""
         host = match.group("auth").rpartition("@")[2]
-        return f"{match.group('scheme')}://{host}{match.group('path')}"
+        return LogForm.of(match.group("scheme"), host, match.group("path"))

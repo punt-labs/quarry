@@ -188,9 +188,9 @@ class TestDaemonLoggingIsRealAndContained:
             root.handlers[:], root.level = prior
         for marker in ("USEC", "QSEC"):
             assert marker not in written
-        assert "fetch https://h.test/p" in written
+        assert "fetch https://h.test/…(1 segment)" in written
         assert "noise" not in written
-        assert "bad https://h.test/s" in written
+        assert "bad https://h.test/…(1 segment)" in written
         assert "RuntimeError" in written
 
     def test_the_suite_redirect_contains_daemon_logging(self) -> None:

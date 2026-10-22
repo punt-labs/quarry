@@ -7,6 +7,7 @@ from typing import ClassVar, Self, final
 from urllib.parse import urlsplit, urlunsplit
 
 from quarry.capture_url import CaptureUrl
+from quarry.log_form import LogForm
 from quarry.remote import to_netloc
 from quarry.url_syntax import UrlSyntax
 
@@ -65,7 +66,7 @@ class HttpUrl:
         self._host = host
         self._path = path
         self._document_name = urlunsplit((parts.scheme, netloc, path or "/", "", ""))
-        self._log_form = cls._form(parts.scheme, netloc, path)
+        self._log_form = LogForm.of(parts.scheme, netloc, path)
         return self
 
     @classmethod
@@ -84,13 +85,7 @@ class HttpUrl:
         host = tolerant.hostname or ""
         if tolerant.scheme not in cls._DEFAULT_PORTS or not 0 < len(host) <= 253:
             return _UNPARSEABLE
-        return cls._form(tolerant.scheme, tolerant.netloc, tolerant.path)
-
-    @staticmethod
-    def _form(scheme: str, netloc: str, path: str) -> str:
-        """Return ``scheme://netloc/…(N segments)``, the shape of a URL in a log."""
-        count = len([part for part in path.split("/") if part])
-        return f"{scheme}://{netloc}/…({count} segment{'s' * (count != 1)})"
+        return LogForm.of(tolerant.scheme, tolerant.netloc, tolerant.path)
 
     @property
     def fetch_url(self) -> str:
