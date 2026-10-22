@@ -4,24 +4,22 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Self
 
-from quarry.db.chunk_table import ChunkTable
 from quarry.ingestion.backends import get_embedding_backend
 from quarry.ingestion.page_chunker import ChunkLabels, PageChunker
+from quarry.ingestion.plain_flush_target import PlainFlushTarget
 from quarry.ingestion.progressive import ProgressiveIndexer
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Sequence
+    from collections.abc import Iterator
 
     import numpy as np
     from numpy.typing import NDArray
 
     from quarry.config import Settings
     from quarry.db.chunk_store import ChunkStore
-    from quarry.ingestion.progressive import FlushCheckpoint
+    from quarry.ingestion.extracted_document import ExtractedDocument
+    from quarry.ingestion.ingest_context import IngestContext
     from quarry.models import Chunk, PageContent
-
-
-__all__ = ["ChunkLabels", "DocumentStreamer"]
 
 
 class DocumentStreamer:
@@ -41,6 +39,24 @@ class DocumentStreamer:
         self = super().__new__(cls)
         self._settings = settings
         return self
+
+    @staticmethod
+    def ingest_labels(
+        extracted: ExtractedDocument, context: IngestContext
+    ) -> ChunkLabels:
+        """Return *context*'s collection and memory tags as the chunks' labels."""
+        return ChunkLabels(
+            context.collection,
+            extracted.source_format,
+            context.agent_handle,
+            context.memory_type,
+            context.summary,
+        )
+
+    @staticmethod
+    def sync_labels(extracted: ExtractedDocument, collection: str) -> ChunkLabels:
+        """Return the labels of a synced file in *collection* (no memory tags)."""
+        return ChunkLabels(collection, extracted.source_format)
 
     def build_chunks(
         self, pages: list[PageContent], labels: ChunkLabels
@@ -79,7 +95,7 @@ class DocumentStreamer:
         each flushed window searchable, even for a single very large document.
         """
         indexer = ProgressiveIndexer(
-            _PlainFlushTarget(store),
+            PlainFlushTarget(store),
             flush_bytes=self._settings.sync_flush_mb * 1024 * 1024,
         )
         indexer.begin_file(document_name, total_chunks=len(chunks))
@@ -88,27 +104,3 @@ class DocumentStreamer:
         indexer.complete_file(document_name)
         indexer.drain()
         return indexer.inserted_count
-
-
-class _PlainFlushTarget:
-    """FlushTarget for single-document ingest: write chunks, no registry."""
-
-    __slots__ = ("_store",)
-
-    _store: ChunkStore
-
-    def __new__(cls, store: ChunkStore) -> Self:
-        self = super().__new__(cls)
-        self._store = store
-        return self
-
-    def build_records(
-        self, chunks: list[Chunk], vectors: NDArray[np.float32]
-    ) -> list[dict[str, object]]:
-        return ChunkTable.build_records(chunks, vectors)
-
-    def insert_records(self, records: list[dict[str, object]]) -> int:
-        return self._store.insert_records(records)
-
-    def on_flush(self, checkpoints: Sequence[FlushCheckpoint]) -> None:
-        """Single-document ingest keeps no resume watermark — nothing to commit."""

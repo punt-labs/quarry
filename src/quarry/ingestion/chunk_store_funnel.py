@@ -16,7 +16,7 @@ import time
 from typing import TYPE_CHECKING, cast, final
 
 from quarry.ingestion.display_name import DisplayName
-from quarry.ingestion.streaming import ChunkLabels, DocumentStreamer
+from quarry.ingestion.streaming import DocumentStreamer
 
 if TYPE_CHECKING:
     from quarry.ingestion.extracted_document import ExtractedDocument
@@ -67,7 +67,7 @@ class ChunkStoreFunnel:
         """Chunk the extracted pages, labelled for this ingest."""
         t0 = time.perf_counter()
         chunks = DocumentStreamer(context.settings).build_chunks(
-            extracted.pages, ChunkStoreFunnel._labels(extracted, context)
+            extracted.pages, DocumentStreamer.ingest_labels(extracted, context)
         )
         logger.info(
             "pipeline: chunked %d pages → %d chunks in %.2fs",
@@ -78,15 +78,12 @@ class ChunkStoreFunnel:
         return chunks
 
     @staticmethod
-    def _labels(extracted: ExtractedDocument, context: IngestContext) -> ChunkLabels:
-        """Return the metadata every chunk of this ingest carries."""
-        return ChunkLabels(
-            context.collection,
-            extracted.source_format,
-            context.agent_handle,
-            context.memory_type,
-            context.summary,
-        )
+    def _replace_prior(document_name: str, context: IngestContext) -> None:
+        """Delete the document's earlier chunks when this ingest overwrites."""
+        if context.overwrite:
+            context.database.store.delete_document(
+                document_name, collection=context.collection, count=False
+            )
 
     @staticmethod
     def _embed_and_store(
@@ -96,10 +93,7 @@ class ChunkStoreFunnel:
         context: IngestContext,
     ) -> int:
         """Delete the prior document (if overwriting), then embed and store."""
-        if context.overwrite:
-            context.database.store.delete_document(
-                document_name, collection=context.collection, count=False
-            )
+        ChunkStoreFunnel._replace_prior(document_name, context)
         progress("Embedding + storing in bounded windows")
         t0 = time.perf_counter()
         inserted = DocumentStreamer(context.settings).insert(

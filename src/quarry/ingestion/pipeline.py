@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from quarry.ingestion.chunk_store_funnel import _chunk_embed_store
 from quarry.ingestion.format_strategies import SUPPORTED_EXTENSIONS, resolve_strategy
 from quarry.ingestion.ingest_context import IngestContext, Progress
-from quarry.ingestion.streaming import ChunkLabels, DocumentStreamer
+from quarry.ingestion.streaming import DocumentStreamer
 from quarry.models import PageType
 
 if TYPE_CHECKING:
@@ -113,8 +113,9 @@ def plan_file_chunks(
     deterministic = _pages_are_deterministic(extracted.pages)
     if not extracted.pages:
         return [], deterministic
-    labels = ChunkLabels(collection, extracted.source_format)
-    chunks = DocumentStreamer(settings).build_chunks(extracted.pages, labels)
+    chunks = DocumentStreamer(settings).build_chunks(
+        extracted.pages, DocumentStreamer.sync_labels(extracted, collection)
+    )
     return chunks, deterministic
 
 

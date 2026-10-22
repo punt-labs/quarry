@@ -738,7 +738,8 @@ class TestIngestUrlThreadsAgentHandle:
         from unittest.mock import MagicMock
 
         from quarry.ingestion.ingest_context import IngestContext, Progress
-        from quarry.ingestion.streaming import ChunkLabels, DocumentStreamer
+        from quarry.ingestion.page_chunker import ChunkLabels
+        from quarry.ingestion.streaming import DocumentStreamer
         from quarry.ingestion.web_ingest import UrlIngest, ingest_url
 
         html = "<html><body>hi</body></html>"

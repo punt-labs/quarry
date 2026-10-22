@@ -2146,7 +2146,8 @@ class TestRemember:
         patches the store boundary and asserts the REAL scrub ran end-to-end —
         the chunker copies name+summary onto every chunk, so content-only
         scrubbing would leak."""
-        from quarry.ingestion.streaming import ChunkLabels, DocumentStreamer
+        from quarry.ingestion.page_chunker import ChunkLabels
+        from quarry.ingestion.streaming import DocumentStreamer
 
         settings = _mock_settings(tmp_path)
         ctx = DaemonContext(settings)

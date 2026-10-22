@@ -68,7 +68,8 @@ def _capture_build_chunks(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, obj
     without patching a DES-036 internal. Returns zero chunks per call, which
     keeps the funnel on its fail-closed "no chunks" branch.
     """
-    from quarry.ingestion.streaming import ChunkLabels, DocumentStreamer
+    from quarry.ingestion.page_chunker import ChunkLabels
+    from quarry.ingestion.streaming import DocumentStreamer
 
     calls: list[dict[str, object]] = []
 
