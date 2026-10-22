@@ -97,8 +97,9 @@ class TestFromTransferFailure:
             msg = "boom http://u:p@h/?token=SECRET"
             raise RuntimeError(msg)
         except RuntimeError as exc:
-            with caplog.at_level(logging.DEBUG):
+            with caplog.at_level(logging.WARNING):
                 FetchRefusedError.from_transfer_failure(exc)
+        assert [r.levelno for r in caplog.records] == [logging.WARNING]
         assert "RuntimeError" in caplog.text
         assert "test_fetch_refused" in caplog.text
         assert "SECRET" not in caplog.text

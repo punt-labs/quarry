@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import traceback
 from typing import Self
 from urllib.error import HTTPError, URLError
 
 from quarry.content_guard import UnindexableContentError
+from quarry.failure_reason import FailureReason
 from quarry.ingestion.ssrf_redirect import RedirectRejectedError
 from quarry.url_safety import UrlRejectedError
 
@@ -36,9 +36,10 @@ class FetchRefusedError(UnindexableContentError):
         The SSRF policy's own rejections (a redirect hop, or the connect-time
         re-check after admission passed) name a rule, which an operator needs;
         every other exception reports only what kind of failure it was, and its
-        message-free traceback goes to the debug log so a programming error stays
-        diagnosable.  An :class:`HTTPError` holds an open socket, so it is closed
-        here, before the status is read out.
+        message-free traceback is logged at WARNING, because a programming error
+        must stay diagnosable and a DEBUG record is never written.  An
+        :class:`HTTPError` holds an open socket, so it is closed here, before the
+        status is read out.
         """
         if isinstance(exc, HTTPError):
             return cls(f"fetch failed: HTTP {cls._close(exc)}")
@@ -64,9 +65,9 @@ class FetchRefusedError(UnindexableContentError):
             return "fetch failed: timed out"
         if isinstance(exc, URLError):
             return f"fetch failed: cannot reach the host ({type(reason).__name__})"
-        logger.debug(
+        logger.warning(
             "unclassified fetch failure %s:\n%s",
             type(exc).__name__,
-            "".join(traceback.format_tb(exc.__traceback__)),
+            FailureReason.frames(exc),
         )
         return f"fetch failed: {type(exc).__name__}"

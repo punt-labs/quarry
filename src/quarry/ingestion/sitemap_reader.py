@@ -13,6 +13,7 @@ from usp.exceptions import (
 )
 from usp.objects.sitemap import InvalidSitemap
 
+from quarry.failure_reason import FailureReason
 from quarry.ingestion.fetch_refused import FetchRefusedError
 from quarry.sitemap_web_client import GatedSitemapWebClient
 
@@ -25,15 +26,14 @@ logger = logging.getLogger(__name__)
 
 # The parser's messages quote the URL verbatim, so each failure it can raise is
 # replaced by a fixed refusal, never chained or re-raised; only the type is
-# logged.  Anything outside this set is a programming error: it propagates to
-# the task terminal, which records only its class (internal error: <Class>).
+# logged with its frames.  These are the parser's own exceptions; anything else
+# (a ValueError, an OSError) is a programming error and propagates to the task
+# terminal, which records only its class (internal error: <Class>).
 _PARSER_FAILURES = (
     SitemapException,
     SitemapXMLParsingException,
     GunzipException,
     StripURLToHomepageException,
-    ValueError,
-    OSError,
 )
 _PARSER_REFUSAL = "fetch failed: sitemap URL not accepted by the parser"
 _UNREADABLE = "fetch failed: sitemap could not be fetched or parsed"
@@ -76,7 +76,11 @@ class SitemapReader:
             )
             return list(tree.all_pages())
         except _PARSER_FAILURES as exc:
-            logger.debug("sitemap parser failed: %s", type(exc).__name__)
+            logger.warning(
+                "sitemap parser failed: %s\n%s",
+                type(exc).__name__,
+                FailureReason.frames(exc),
+            )
             raise FetchRefusedError(_PARSER_REFUSAL) from None
 
     def read(self, url: HttpUrl) -> list[SitemapPage]:
@@ -95,7 +99,11 @@ class SitemapReader:
             ).sitemap()
             pages = list(sitemap.all_pages())
         except _PARSER_FAILURES as exc:
-            logger.debug("sitemap parser failed: %s", type(exc).__name__)
+            logger.warning(
+                "sitemap parser failed: %s\n%s",
+                type(exc).__name__,
+                FailureReason.frames(exc),
+            )
             raise FetchRefusedError(_PARSER_REFUSAL) from None
         failed = isinstance(sitemap, InvalidSitemap) or any(
             isinstance(node, InvalidSitemap) for node in sitemap.all_sitemaps()

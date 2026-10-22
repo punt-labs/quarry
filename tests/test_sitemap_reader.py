@@ -6,7 +6,12 @@ import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
-from usp.exceptions import SitemapException
+from usp.exceptions import (
+    GunzipException,
+    SitemapException,
+    SitemapXMLParsingException,
+    StripURLToHomepageException,
+)
 from usp.objects.page import SitemapPage
 from usp.objects.sitemap import (
     IndexXMLSitemap,
@@ -94,10 +99,11 @@ class TestRead:
         "failure",
         [
             SitemapException("URL https://h/s.xml?token=SECRET is not a HTTP(s) URL."),
-            ValueError("bad https://h/s.xml?token=SECRET"),
-            OSError("refused https://h/s.xml?token=SECRET"),
+            SitemapXMLParsingException("bad https://h/s.xml?token=SECRET"),
+            GunzipException("bad gzip https://h/s.xml?token=SECRET"),
+            StripURLToHomepageException("bad https://h/s.xml?token=SECRET"),
         ],
-        ids=["sitemap", "value", "os"],
+        ids=["sitemap", "xml", "gunzip", "homepage"],
     )
     @patch(_FETCHER)
     def test_a_parser_failure_raises_without_the_url_or_its_cause(
@@ -110,11 +116,33 @@ class TestRead:
         assert info.value.__cause__ is None
         assert info.value.__suppress_context__
 
+    @pytest.mark.parametrize(
+        "bug",
+        [TypeError("a bug"), ValueError("a bug"), OSError("a bug")],
+        ids=["type", "value", "os"],
+    )
     @patch(_FETCHER)
-    def test_a_programming_error_is_not_swallowed(self, fetcher: MagicMock) -> None:
-        fetcher.side_effect = TypeError("a bug")
-        with pytest.raises(TypeError):
+    def test_a_programming_error_is_not_swallowed(
+        self, fetcher: MagicMock, bug: Exception
+    ) -> None:
+        fetcher.side_effect = bug
+        with pytest.raises(type(bug)):
             SitemapReader().read(HttpUrl(_URL))
+
+    @patch(_FETCHER)
+    def test_a_parser_failure_is_logged_at_warning_without_its_message(
+        self, fetcher: MagicMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        fetcher.side_effect = SitemapException("quotes https://h/s.xml?token=SECRET")
+        with (
+            caplog.at_level(logging.WARNING, logger="quarry.ingestion.sitemap_reader"),
+            pytest.raises(FetchRefusedError),
+        ):
+            SitemapReader().read(HttpUrl(_URL))
+        assert "SitemapException" in caplog.text
+        assert "Traceback" not in caplog.text
+        assert "File " in caplog.text
+        assert "SECRET" not in caplog.text
 
     @patch(_FETCHER)
     def test_only_the_redacted_url_is_logged(

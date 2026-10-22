@@ -43,3 +43,14 @@ def test_every_expected_refusal_is_a_refusal() -> None:
     assert issubclass(RowBudgetError, RefusalError)
     assert issubclass(RegistrationRefusedError, RefusalError)
     assert not issubclass(ValueError, RefusalError)
+
+
+def test_frames_name_the_code_and_not_the_message() -> None:
+    try:
+        msg = "boom https://u:SECRET@h.test/p"
+        raise RuntimeError(msg)
+    except RuntimeError as exc:
+        frames = FailureReason.frames(exc)
+    assert "test_failure_reason" in frames
+    assert "SECRET" not in frames
+    assert "boom" not in frames

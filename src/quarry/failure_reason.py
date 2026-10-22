@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import traceback
 from typing import ClassVar, final
 
 from quarry.refusal import RefusalError
@@ -39,6 +40,14 @@ class FailureReason:
         if isinstance(exc, RefusalError):
             return str(exc)
         return f"internal error: {type(exc).__name__}"
+
+    @staticmethod
+    def frames(exc: BaseException) -> str:
+        """Return *exc*'s stack frames without its message, safe to log.
+
+        The message is where a URL or a path hides; the frames name only code.
+        """
+        return "".join(traceback.format_tb(exc.__traceback__))
 
     @classmethod
     def line(cls, name: str, exc: Exception) -> str:
