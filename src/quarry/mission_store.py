@@ -155,6 +155,7 @@ class MissionStore:
             try:
                 missions.append(self._load(mission_dir))
             except (OSError, yaml.YAMLError, ValueError) as exc:
+                logger.warning("missions: %s failed to load: %s", path, exc)
                 errors.append(FailureReason.line(str(path), exc))
         return MissionScan(missions=tuple(missions), errors=tuple(errors))
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 import pytest
@@ -176,6 +177,18 @@ class TestScanErrors:
         )
         scan = _store(repo).scan()
         assert any(e.endswith(": internal error: ValueError") for e in scan.errors)
+
+    def test_the_detail_is_logged_for_the_operator(
+        self, repo: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        (self._missions_dir(repo) / CLOSED_MISSION / "results.yaml").write_text(
+            "results: nope\n"
+        )
+        with caplog.at_level(logging.WARNING, logger="quarry.mission_store"):
+            _store(repo).scan()
+        assert [r.levelno for r in caplog.records] == [logging.WARNING]
+        assert CLOSED_MISSION in caplog.text
+        assert "is not a list" in caplog.text
 
     def test_an_error_line_never_carries_the_exception_message(
         self, repo: Path
