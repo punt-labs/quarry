@@ -11,6 +11,10 @@ from quarry.logging_config import LoggingConfig
 from tests.hermetic_env import ENV
 
 
+def _fail(msg: str) -> None:
+    raise RuntimeError(msg)
+
+
 def test_env_var_overrides_stderr_level(monkeypatch: pytest.MonkeyPatch) -> None:
     """QUARRY_LOG_LEVEL overrides the stderr_level parameter."""
     monkeypatch.setenv("QUARRY_LOG_LEVEL", "DEBUG")
@@ -122,7 +126,11 @@ class TestDaemonLogFile:
                 (handler["class"], handler["maxBytes"], handler["backupCount"])
             )
         assert policies[0] == policies[1]
-        assert policies[0] == ("logging.handlers.RotatingFileHandler", 5_242_880, 5)
+        assert policies[0] == (
+            "quarry.log_redaction.RedactingFileHandler",
+            5_242_880,
+            5,
+        )
 
 
 class TestDaemonLoggingIsRealAndContained:
@@ -151,6 +159,39 @@ class TestDaemonLoggingIsRealAndContained:
         # A timestamp is the whole point: an undated traceback in the
         # supervisor's stderr file is what made a dead error look live.
         assert re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} ", written)
+
+    def test_the_written_file_has_no_url_secret_and_no_library_chatter(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Configure for real: redaction and the first-party cap hold on disk."""
+        monkeypatch.setenv("QUARRY_LOG_DIR", str(tmp_path))
+        monkeypatch.delenv("QUARRY_LOG_LEVEL", raising=False)
+        root = logging.getLogger()
+        prior = (root.handlers[:], root.level)
+        try:
+            LoggingConfig.configure(log_file=LoggingConfig.DAEMON_LOG)
+            logging.getLogger("quarry.x").info(
+                "fetch %s", "https://u:USEC@h.test/p?q=QSEC"
+            )
+            logging.getLogger("usp.helpers").info("noise https://h.test/s?token=QSEC")
+            logging.getLogger("usp.helpers").warning("bad https://h.test/s?token=QSEC")
+            try:
+                _fail("boom http://u:USEC@h.test/p?token=QSEC")
+            except RuntimeError:
+                logging.getLogger("quarry.x").exception("failed")
+            for handler in logging.getLogger().handlers:
+                handler.flush()
+            written = (tmp_path / "quarryd.log").read_text()
+        finally:
+            for handler in logging.getLogger().handlers:
+                handler.close()
+            root.handlers[:], root.level = prior
+        for marker in ("USEC", "QSEC"):
+            assert marker not in written
+        assert "fetch https://h.test/p" in written
+        assert "noise" not in written
+        assert "bad https://h.test/s" in written
+        assert "RuntimeError" in written
 
     def test_the_suite_redirect_contains_daemon_logging(self) -> None:
         """Hermeticity: with no override set, the session HOME still binds it.
