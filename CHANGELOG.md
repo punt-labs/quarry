@@ -45,16 +45,22 @@ across `transform`, `index`, and `connector`).
   sibling classes (mirroring the existing `MissionTools` pattern). The stdio
   wire surface — tool names, behavior, `MCPServer` construction — is
   unchanged. `McpTools.main()` moves to a `McpTools.run_stdio` staticmethod.
-- index: a URL's stored document name is `scheme://host[:port]/path`.
-  Userinfo, query string and fragment are dropped, as WebFetch captures
-  already did. This applies to `quarry ingest <url>`, sitemap pages, a
-  `remember` whose name is a URL, and captures. URLs that differ only in
-  query or fragment now resolve to the same document.
+- index: a URL's stored document name is `scheme://host[:port]/path`. These
+  parts are removed:
+  - userinfo, query string, fragment, and `;params`;
+  - an explicit default port;
+  - a trailing dot on the host.
+
+  This applies to `quarry ingest <url>`, sitemap pages, a `remember` whose
+  name is a URL, and captures. Equivalent URLs, including those that differ
+  only in query or fragment, now resolve to the same document.
 - tool: a failed task's error shows its reason only when the task was
   refused (binary content, an over-budget row, a rejected or failed fetch).
   Every other failure reads `internal error: <ExceptionClass>`, with the
-  detail in the redacted `quarry.log`. This applies to directory
-  registration as well.
+  detail in the redacted `quarry.log`. This also applies to directory
+  registration and to per-file errors from sync and watch.
+- infra: log lines show a URL as `scheme://host[:port]/…(N segments)`, never
+  its path. The full path is kept in the stored document name.
 
 ### Fixed
 

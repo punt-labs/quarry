@@ -3242,14 +3242,19 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
      entries, and every redirect hop. Its decisions are made over one
      canonical reading (`UrlSyntax`). It rejects userinfo, `\` or `%` in the
      netloc, whitespace or control characters anywhere, and a port that is
-     out of range or 0. Its reasons are fixed text. This supersedes
+     out of range or 0, and any URL longer than 8,192 characters. Its
+     reasons are fixed text. This supersedes
      `UrlSafetyCheck.reject_reason` as cited in DES-042 and DES-049;
      `UrlSafetyCheck` keeps the resolved-address checks.
    - **`HttpUrl`.** An admitted URL is carried as a value type:
      - `.fetch_url` is the only fetchable form.
-     - `.document_name` is the stored form, `scheme://host[:port]/path`.
-     - `str()` is the log form: path parameters are dropped and
-       token-shaped segments elided.
+     - `.document_name` is the stored form, `scheme://host[:port]/path`,
+       with no default port, no `;params`, no trailing dot, and IDNA dot
+       variants folded, so equivalent URLs share one document.
+     - `str()` is the log form, `scheme://host[:port]/…(N segments)`. It
+       never carries the path. A heuristic cannot tell a slug from a
+       secret, so the path stays only in the stored name, where diagnosis
+       needs it.
 
      `WebFetchName.of` derives capture names from it, replacing
      `CaptureUrl.for_web_fetch`.
@@ -3257,6 +3262,11 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
      URLs and escape control characters in the finished text, tracebacks
      included. They drop third-party records below WARNING. This backstop
      catches what a library logs on its own.
+     - **Linear time.** Every pattern is bounded, and a token over 2,048
+       characters collapses to `[…]` before matching, so a crafted URL
+       cannot stall the handler.
+     - **No forged lines.** Newlines and bidi controls in a message are
+       escaped, so a message cannot add a log line.
    - **Task errors (layer C).** Only a refusal (`UnindexableContentError`,
      including `RowBudgetError`) keeps its message. Every other failure is
      recorded as `internal error: <Class>`. Fetch refusals are raised
