@@ -33,6 +33,12 @@ class ChunkLabels:
     memory_type: str = ""
     summary: str = ""
 
+    def require_within(self, budget: RowBudget) -> None:
+        """Raise :class:`RowBudgetError` if a label is over *budget*'s label cap."""
+        budget.require_label("collection", self.collection)
+        budget.require_label("agent_handle", self.agent_handle)
+        budget.require_label("summary", self.summary)
+
 
 @final
 class PageChunker:
@@ -74,6 +80,7 @@ class PageChunker:
         self._splitter = PageSplitter(budget.max_page_bytes)
         self._sentences = SentenceChunker(max_chars, overlap_chars)
         self._labels = labels or ChunkLabels()
+        self._labels.require_within(budget)
         return self
 
     def chunk(self, pages: list[PageContent]) -> list[Chunk]:
@@ -95,6 +102,8 @@ class PageChunker:
             if not text:
                 continue
             self._budget.require_page(page.text)
+            self._budget.require_label("document_name", page.document_name)
+            self._budget.require_label("document_path", page.document_path)
             for piece in self._sentences.split(text):
                 self._budget.require_chunk(piece)
                 chunks.append(self._chunk(page, len(chunks), piece, now))

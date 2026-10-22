@@ -53,6 +53,9 @@ class IngestionRoutes(ContentRouteGroup):
         body = await self._authorized_body(request, MAX_INGEST_BODY_BYTES)
         if isinstance(body, JSONResponse):
             return body
+        oversized = self._reject_oversized(body)
+        if oversized is not None:
+            return oversized
 
         source = self._require_text(body, "source")
         if isinstance(source, JSONResponse):
@@ -129,7 +132,7 @@ class IngestionRoutes(ContentRouteGroup):
         lesson = self._require_text(body, "lesson")
         if isinstance(lesson, JSONResponse):
             return lesson
-        rejection = self._reject_binary(lesson, "learn")
+        rejection = self._reject_oversized(body) or self._reject_binary(lesson, "learn")
         if rejection is not None:
             return rejection
         try:

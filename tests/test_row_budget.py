@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import numpy as np
@@ -152,3 +153,92 @@ class TestBuildRecordsBackstop:
         chunks = [_chunk(), _chunk(page_raw_text="a" * (_PAGE_LIMIT + 1))]
         with pytest.raises(RowBudgetError):
             ChunkTable.build_records(chunks, self._vectors(2))
+
+
+_LABEL_LIMIT = 8_192
+
+
+class TestLabelBudget:
+    """summary, names and paths are copied onto every chunk row, so they are capped."""
+
+    @pytest.mark.parametrize("column", ["summary", "document_name", "document_path"])
+    def test_a_label_of_exactly_the_cap_is_accepted(self, column: str) -> None:
+        RowBudget().require_label(column, "a" * _LABEL_LIMIT)
+
+    @pytest.mark.parametrize("column", ["summary", "document_name", "document_path"])
+    def test_a_label_one_byte_over_is_rejected_naming_the_column(
+        self, column: str
+    ) -> None:
+        with pytest.raises(RowBudgetError) as info:
+            RowBudget().require_label(column, "a" * (_LABEL_LIMIT + 1))
+        assert str(info.value) == (f"row budget exceeded: {column} 8,193 bytes > 8,192")
+
+    def test_label_bytes_are_multibyte_aware(self) -> None:
+        RowBudget().require_label("summary", "é" * (_LABEL_LIMIT // 2))
+        with pytest.raises(RowBudgetError):
+            RowBudget().require_label("summary", "é" * (_LABEL_LIMIT // 2 + 1))
+
+    def test_the_label_cap_is_part_of_the_batch_arithmetic(self) -> None:
+        with pytest.raises(ValueError, match="2\\*\\*31"):
+            RowBudget(max_label_bytes=2**20)
+
+    def test_the_label_cap_must_be_positive(self) -> None:
+        with pytest.raises(ValueError, match="max_label_bytes"):
+            RowBudget(max_label_bytes=0)
+
+    def test_a_three_mib_summary_on_many_chunks_is_refused(self) -> None:
+        """The unbounded column that could still overflow a 1,024-row batch."""
+        with pytest.raises(RowBudgetError, match="summary"):
+            RowBudget().require_label("summary", "s" * 3 * 2**20)
+
+
+class TestStrictBound:
+    def test_the_largest_budget_under_the_arrow_limit_is_accepted(self) -> None:
+        RowBudget(
+            max_page_bytes=2**31 - 1,
+            max_chunk_bytes=4,
+            max_label_bytes=4,
+            assumed_batch_rows=1,
+            safety_factor=1,
+        )
+
+    def test_one_byte_more_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="2\\*\\*31"):
+            RowBudget(
+                max_page_bytes=2**31,
+                max_chunk_bytes=4,
+                max_label_bytes=4,
+                assumed_batch_rows=1,
+                safety_factor=1,
+            )
+
+
+class TestBuildRecordsLabels:
+    @pytest.mark.parametrize(
+        ("column", "chunk"),
+        [
+            ("summary", replace(_chunk(), summary="x" * (_LABEL_LIMIT + 1))),
+            (
+                "document_name",
+                replace(_chunk(), document_name="x" * (_LABEL_LIMIT + 1)),
+            ),
+            (
+                "document_path",
+                replace(_chunk(), document_path="x" * (_LABEL_LIMIT + 1)),
+            ),
+            ("collection", replace(_chunk(), collection="x" * (_LABEL_LIMIT + 1))),
+            ("agent_handle", replace(_chunk(), agent_handle="x" * (_LABEL_LIMIT + 1))),
+        ],
+    )
+    def test_an_oversized_label_is_rejected_not_truncated(
+        self, column: str, chunk: Chunk
+    ) -> None:
+        with pytest.raises(RowBudgetError, match=column):
+            ChunkTable.build_records([chunk], np.zeros((1, 768), dtype=np.float32))
+
+    def test_labels_at_the_cap_are_built_untouched(self) -> None:
+        chunk = replace(_chunk(), summary="x" * _LABEL_LIMIT)
+        [record] = ChunkTable.build_records(
+            [chunk], np.zeros((1, 768), dtype=np.float32)
+        )
+        assert record["summary"] == "x" * _LABEL_LIMIT

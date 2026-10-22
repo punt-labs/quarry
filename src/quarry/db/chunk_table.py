@@ -53,6 +53,7 @@ class ChunkTable:
             budget.require_page(chunk.page_raw_text)
             budget.require_chunk(chunk.text)
             record: dict[str, object] = asdict(chunk)
+            budget.require_labels(record)
             record["vector"] = vector.tolist()
             records.append(record)
         return records

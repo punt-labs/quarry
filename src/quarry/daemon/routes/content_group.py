@@ -10,6 +10,7 @@ from starlette.responses import JSONResponse
 from quarry.content_guard import BinaryContent, UnindexableContentError
 from quarry.daemon.captured_body_ingest import IngestLabels
 from quarry.daemon.routes.base import RouteGroup
+from quarry.db.row_budget import RowBudget, RowBudgetError
 
 if TYPE_CHECKING:
     from quarry.daemon.ingest_unit import IngestUnit
@@ -28,6 +29,14 @@ class ContentRouteGroup(RouteGroup):
     """
 
     _GUARD: ClassVar[BinaryContent] = BinaryContent()
+    _BUDGET: ClassVar[RowBudget] = RowBudget()
+    _LABEL_FIELDS: ClassVar[tuple[str, ...]] = (
+        "name",
+        "document_name",
+        "summary",
+        "topic",
+        "source",
+    )
 
     @classmethod
     def _reject_binary(cls, text: str, kind: str) -> JSONResponse | None:
@@ -46,14 +55,33 @@ class ContentRouteGroup(RouteGroup):
             return JSONResponse({"error": str(exc)}, status_code=400)
         return None
 
+    @classmethod
+    def _reject_oversized(cls, body: dict[str, object]) -> JSONResponse | None:
+        """Return a 400 if a name or summary field of *body* is over the label cap.
+
+        Each is copied onto every chunk row, so an oversized one could overflow a
+        scan batch.  The reason names the field and the sizes, never the value.
+        """
+        try:
+            for key in cls._LABEL_FIELDS:
+                value = body.get(key)
+                if isinstance(value, str):
+                    cls._BUDGET.require_label(key, value)
+        except RowBudgetError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return None
+
     def _require_content(
         self, body: dict[str, object], key: str, kind: str
     ) -> str | JSONResponse:
-        """Return non-empty text ``body[key]`` that is not binary, or a 400."""
+        """Return non-empty text ``body[key]`` that is not binary, or a 400.
+
+        The name and summary fields are checked against the label cap first.
+        """
         text = self._require_text(body, key)
         if isinstance(text, JSONResponse):
             return text
-        rejection = self._reject_binary(text, kind)
+        rejection = self._reject_oversized(body) or self._reject_binary(text, kind)
         return text if rejection is None else rejection
 
     def _accept(self, kind: str, job: IngestUnit | JSONResponse) -> JSONResponse:

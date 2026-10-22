@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import timedelta
 
 import pytest
 
 from quarry.content_guard import UnindexableContentError
-from quarry.db.row_budget import RowBudget
+from quarry.db.row_budget import RowBudget, RowBudgetError
 from quarry.ingestion.page_chunker import ChunkLabels, PageChunker
 from quarry.models import PageContent, PageType
 
@@ -227,3 +228,23 @@ class TestConstruction:
 
     def test_the_default_settings_fit_the_budget(self) -> None:
         PageChunker(1800, 200)
+
+
+class TestLabelBudgetBeforeAnyWrite:
+    def test_an_oversized_summary_is_refused_at_construction(self) -> None:
+        with pytest.raises(RowBudgetError, match="summary 8,193 bytes"):
+            PageChunker(100, 20, ChunkLabels(summary="s" * 8_193))
+
+    def test_an_oversized_document_name_is_refused(self) -> None:
+        page = replace(_page("Short text."), document_name="n" * 8_193)
+        with pytest.raises(RowBudgetError, match="document_name"):
+            _chunker().chunk([page])
+
+    def test_an_oversized_document_path_is_refused(self) -> None:
+        page = replace(_page("Short text."), document_path="n" * 8_193)
+        with pytest.raises(RowBudgetError, match="document_path"):
+            _chunker().chunk([page])
+
+    def test_labels_at_the_cap_pass(self) -> None:
+        chunker = PageChunker(100, 20, ChunkLabels(summary="s" * 8_192))
+        assert chunker.chunk([_page("Short text.")])

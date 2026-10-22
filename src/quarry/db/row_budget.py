@@ -10,7 +10,10 @@ arithmetic is checked on construction rather than left in a comment.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar, final
+from typing import TYPE_CHECKING, ClassVar, final
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 
 class RowBudgetError(ValueError):
@@ -26,33 +29,55 @@ class RowBudgetError(ValueError):
 @final
 @dataclass(frozen=True, slots=True)
 class RowBudget:
-    """Cap a stored page and a stored chunk so a scan batch cannot overflow.
+    """Cap a stored page, chunk and label so a scan batch cannot overflow.
 
     ``max_page_bytes`` is measured on ``page_raw_text``; one byte under 1 MiB so
     the invariant holds strictly.  ``max_chunk_bytes`` is the last-line cap on
-    ``chunks.text``: the chunker wraps text to a few kilobytes, so this guards
-    only against a future change that stops doing so.  ``assumed_batch_rows`` is
-    the Lance scan default; on a table holding multi-megabyte rows a scan
-    overflowed at 512 rows and not at 256.  ``safety_factor`` is headroom: the
-    budget holds for batches up to that many times larger than assumed.
+    ``chunks.text``: the chunker wraps text to ``chunk_max_chars``, which
+    ``Settings`` bounds, so this guards only against a change that stops doing
+    so.
+
+    ``max_label_bytes`` caps each label column (``summary``, ``document_name``,
+    ``document_path``, ``collection``, ``agent_handle``).  A label is copied onto
+    every chunk of a document: 8 KiB is twice a ``PATH_MAX`` path and far above
+    any one-line summary, yet five such columns over a 1,024-row batch total
+    40 MiB, where an uncapped 3 MiB summary on 700 chunks overflowed the batch.
+
+    ``assumed_batch_rows`` is the Lance scan default; on a table holding
+    multi-megabyte rows a scan overflowed at 512 rows and not at 256.
+    ``safety_factor`` is headroom: the budget holds for batches up to that many
+    times larger than assumed.
     """
 
     max_page_bytes: int = 2**20 - 1
     max_chunk_bytes: int = 65_536
+    max_label_bytes: int = 8_192
     assumed_batch_rows: int = 1_024
     safety_factor: int = 2
 
     _ARROW_OFFSET_LIMIT: ClassVar[int] = 2**31 - 1
+    LABEL_COLUMNS: ClassVar[tuple[str, ...]] = (
+        "summary",
+        "document_name",
+        "document_path",
+        "collection",
+        "agent_handle",
+    )
 
     def __post_init__(self) -> None:
-        for name in ("max_page_bytes", "assumed_batch_rows", "safety_factor"):
+        for name in (
+            "max_page_bytes",
+            "max_label_bytes",
+            "assumed_batch_rows",
+            "safety_factor",
+        ):
             if getattr(self, name) < 1:
                 msg = f"{name} must be >= 1, got {getattr(self, name)}"
                 raise ValueError(msg)
         if self.max_chunk_bytes < 4:
             msg = f"max_chunk_bytes must be >= 4, got {self.max_chunk_bytes}"
             raise ValueError(msg)
-        worst = max(self.max_page_bytes, self.max_chunk_bytes)
+        worst = max(self.max_page_bytes, self.max_chunk_bytes, self.max_label_bytes)
         if (
             worst * self.assumed_batch_rows * self.safety_factor
             > self._ARROW_OFFSET_LIMIT
@@ -75,6 +100,15 @@ class RowBudget:
     def require_chunk(self, text: str) -> None:
         """Raise :class:`RowBudgetError` if chunk text is over ``max_chunk_bytes``."""
         self._require("text", text, self.max_chunk_bytes)
+
+    def require_label(self, column: str, text: str) -> None:
+        """Raise :class:`RowBudgetError` if label *text* is over ``max_label_bytes``."""
+        self._require(column, text, self.max_label_bytes)
+
+    def require_labels(self, row: Mapping[str, object]) -> None:
+        """Raise :class:`RowBudgetError` if a label column of *row* is over the cap."""
+        for column in self.LABEL_COLUMNS:
+            self.require_label(column, str(row[column]))
 
     @staticmethod
     def _require(column: str, text: str, limit: int) -> None:

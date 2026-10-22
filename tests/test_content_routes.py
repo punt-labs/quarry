@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
 
+
 _PDF = "%PDF-1.5\n%" + "\ufffd" * 4 + "\n" + "x" * 400
 _PDF_REASON = "binary content rejected: pdf header"
 _DENSE = "a" * 100 + "�" * 300
@@ -348,3 +349,80 @@ async def test_a_capture_job_fails_quietly_on_gap_binary_inline_text(
     [record] = [r for r in caplog.records if r.levelno >= logging.WARNING]
     assert record.exc_info is None
     assert daemon.ctx.database.store.count() == 0
+
+
+class TestOversizedLabels:
+    """summary and names are copied onto every chunk row, so the routes cap them."""
+
+    _BIG = "x" * 8_193
+    _REASON = "row budget exceeded: {column} 8,193 bytes > 8,192"
+
+    def _assert_refused(
+        self, status: int, body: object, column: str, daemon: InProcessDaemon
+    ) -> None:
+        assert status == 400
+        assert body == {"error": self._REASON.format(column=column)}
+        assert len(daemon.ctx.tasks) == 0
+
+    def test_remember_refuses_an_oversized_summary(
+        self, http: TestClient, daemon: InProcessDaemon
+    ) -> None:
+        resp = http.post(
+            "/v1/remember",
+            json={"name": "n.md", "content": _CLEAN, "summary": self._BIG},
+        )
+        self._assert_refused(resp.status_code, resp.json(), "summary", daemon)
+
+    def test_remember_refuses_an_oversized_name(
+        self, http: TestClient, daemon: InProcessDaemon
+    ) -> None:
+        resp = http.post("/v1/remember", json={"name": self._BIG, "content": _CLEAN})
+        self._assert_refused(resp.status_code, resp.json(), "name", daemon)
+
+    def test_capture_refuses_an_oversized_summary(
+        self, http: TestClient, daemon: InProcessDaemon, tmp_path: Path
+    ) -> None:
+        resp = http.post(
+            "/v1/capture",
+            json={
+                "content": _CLEAN,
+                "session_id": "abcd1234ef",
+                "cwd": str(tmp_path),
+                "summary": self._BIG,
+            },
+        )
+        self._assert_refused(resp.status_code, resp.json(), "summary", daemon)
+
+    def test_capture_refuses_an_oversized_document_name(
+        self, http: TestClient, daemon: InProcessDaemon, tmp_path: Path
+    ) -> None:
+        resp = http.post(
+            "/v1/capture",
+            json={"content": _CLEAN, "document_name": self._BIG, "cwd": str(tmp_path)},
+        )
+        self._assert_refused(resp.status_code, resp.json(), "document_name", daemon)
+
+    def test_learn_refuses_an_oversized_topic(
+        self, http: TestClient, daemon: InProcessDaemon
+    ) -> None:
+        resp = http.post("/v1/learn", json={"lesson": "short", "topic": self._BIG})
+        self._assert_refused(resp.status_code, resp.json(), "topic", daemon)
+
+    def test_ingest_refuses_an_oversized_summary(
+        self, http: TestClient, daemon: InProcessDaemon
+    ) -> None:
+        resp = http.post(
+            "/v1/ingest",
+            json={"source": "https://example.com/p", "summary": self._BIG},
+        )
+        self._assert_refused(resp.status_code, resp.json(), "summary", daemon)
+
+    def test_labels_at_the_cap_are_accepted(self, http: TestClient) -> None:
+        with patch(
+            "quarry.ingestion.web_ingest.ingest_content", return_value={"chunks": 1}
+        ):
+            resp = http.post(
+                "/v1/remember",
+                json={"name": "n.md", "content": _CLEAN, "summary": "x" * 8_192},
+            )
+        assert resp.status_code == 202
