@@ -6,10 +6,10 @@ import time
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal, final
 
+from quarry.display_name import DisplayName
 from quarry.extractors.html_extractor import HtmlExtractor
 from quarry.extractors.text_extractor import TextExtractor
 from quarry.ingestion.chunk_store_funnel import _chunk_embed_store
-from quarry.ingestion.display_name import DisplayName
 from quarry.ingestion.extracted_document import ExtractedDocument
 from quarry.ingestion.ingest_stats import IngestStats
 from quarry.ingestion.web_fetch import WebFetcher
@@ -98,7 +98,7 @@ class WebIngest:
             inline.content_scrubber,
         )
 
-        progress("Processing: %s", document_name)
+        progress("Processing: %s", DisplayName(document_name).redacted())
 
         pages = WebIngest._extract_inline_pages(
             inline.content, document_name, inline.format_hint

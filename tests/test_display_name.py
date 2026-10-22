@@ -1,10 +1,10 @@
-"""Tests for quarry.ingestion.display_name: a document name safe to log or store."""
+"""Tests for quarry.display_name: a document name safe to log or store."""
 
 from __future__ import annotations
 
 import pytest
 
-from quarry.ingestion.display_name import DisplayName
+from quarry.display_name import DisplayName
 
 _RESET_PATH = "/reset/9f8e7d6c5b4a39281706f5e4d3c2b1a0"
 

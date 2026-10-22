@@ -9,14 +9,14 @@ from typing import TYPE_CHECKING, Self
 from quarry.db.chunk_table import ChunkTable
 from quarry.db.document_ref import CollectionRef, DocumentRef
 from quarry.db.schema import TABLE_NAME
-from quarry.types import LanceDB
+from quarry.display_name import DisplayName
 
 if TYPE_CHECKING:
     import numpy as np
     from numpy.typing import NDArray
 
     from quarry.models import Chunk
-    from quarry.types import LanceTable
+    from quarry.types import LanceDB, LanceTable
 
 logger = logging.getLogger(__name__)
 
@@ -89,10 +89,11 @@ class ChunkStore:
         deleted = table.count_rows(predicate) if count else 0
         with _write_lock:
             table.delete(predicate)
+        shown = DisplayName(document_name).redacted()
         if count:
-            logger.info("Deleted %d chunks for %s", deleted, document_name)
+            logger.info("Deleted %d chunks for %s", deleted, shown)
         else:
-            logger.info("Issued chunk delete for %s (counting disabled)", document_name)
+            logger.info("Issued chunk delete for %s (counting disabled)", shown)
         return deleted
 
     def delete_document_tail(self, ref: DocumentRef) -> int:
@@ -119,7 +120,7 @@ class ChunkStore:
         logger.info(
             "Delete-tail removed %d chunks for %s (chunk_index >= %d)",
             deleted,
-            ref.document_name,
+            DisplayName(ref.document_name).redacted(),
             ref.min_chunk_index,
         )
         return deleted

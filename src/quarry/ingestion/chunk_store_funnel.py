@@ -15,7 +15,7 @@ import logging
 import time
 from typing import TYPE_CHECKING, cast, final
 
-from quarry.ingestion.display_name import DisplayName
+from quarry.display_name import DisplayName
 from quarry.ingestion.streaming import DocumentStreamer
 
 if TYPE_CHECKING:

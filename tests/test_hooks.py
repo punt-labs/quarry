@@ -891,6 +891,35 @@ class TestHandlePostWebFetch:
         # userinfo/query must be redacted from the stored document name.
         assert "token=secret" not in req.document_name
 
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://u:SECRET@example.com/page?token=SECRET",
+            "http://example.com:99999/page",
+            "http://example.com/a b?token=SECRET",
+        ],
+        ids=["userinfo", "port", "space"],
+    )
+    def test_an_unstorable_url_is_skipped_quietly(
+        self, url: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """No daemon call, no log line, no exception: nothing to capture."""
+        payload: dict[str, object] = {
+            "tool_input": {"url": url},
+            "tool_response": json.dumps({"result": "<html>Page</html>"}),
+        }
+        with (
+            caplog.at_level(logging.DEBUG),
+            patch("quarry.daemon_capture.DaemonCaptureSender.send_capture") as cap,
+            patch("quarry.daemon_capture.DaemonCaptureSender.send_ingest_url") as ing,
+        ):
+            result = handle_post_web_fetch(payload)
+
+        assert result == {}
+        cap.assert_not_called()
+        ing.assert_not_called()
+        assert "SECRET" not in caplog.text
+
     def test_falls_back_to_ingest_url_without_content(self) -> None:
         """No usable content -> the daemon re-fetches via the SSRF-checked route."""
         payload: dict[str, object] = {
@@ -1151,7 +1180,7 @@ class TestWebFetchLoopCloser:
 
         assert result == {}
 
-    def test_matched_context_redacts_query_fragment_and_userinfo(self) -> None:
+    def test_matched_context_redacts_query_and_fragment(self) -> None:
         """The URL echoed into additionalContext must never carry secrets.
 
         additionalContext lands in the session transcript, so a query-string
@@ -1161,7 +1190,7 @@ class TestWebFetchLoopCloser:
 
         client = MagicMock()
         client.captures_lookup.return_value = CapturesLookupResponse(matched=True)
-        raw_url = "https://user:pass@example.com/reset?api_key=secret123#frag"
+        raw_url = "https://example.com/reset?api_key=secret123#frag"
         payload: dict[str, object] = {"tool_input": {"url": raw_url}}
         with patch("quarry.client.TargetResolver.connect", return_value=client):
             result = handle_post_web_fetch(payload)
@@ -1170,7 +1199,6 @@ class TestWebFetchLoopCloser:
         assert isinstance(output, dict)
         context = str(output["additionalContext"])
         assert "secret123" not in context
-        assert "user:pass" not in context
         assert "?" not in context
         assert "#" not in context
         assert "@" not in context

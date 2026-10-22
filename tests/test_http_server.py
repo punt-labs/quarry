@@ -1504,6 +1504,26 @@ class TestCapturesLookup:
             "document_name": "https://example.com/docs",
         }
 
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://u:SECRET@example.com/p?token=SECRET",
+            "http://example.com:99999/p",
+            "http://example.com/a b",
+            "http://u:SECRET@\uff03host.example/p",
+        ],
+        ids=["userinfo", "port", "space", "nfkc"],
+    )
+    def test_an_unstorable_url_is_no_match_not_a_500(
+        self, client: TestClient, caplog: pytest.LogCaptureFixture, url: str
+    ) -> None:
+        with caplog.at_level(logging.DEBUG):
+            resp = client.post("/v1/captures/lookup", json={"url": url, "cwd": ""})
+
+        assert resp.status_code == 200
+        assert resp.json() == {"matched": False, "document_name": None}
+        assert "SECRET" not in caplog.text
+
     def test_no_match_returns_false_and_no_document_name(
         self, client: TestClient
     ) -> None:

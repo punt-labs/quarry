@@ -23,11 +23,9 @@ from typing import TYPE_CHECKING, Self, final
 
 from quarry._hook_trace import HookPayload, HookTrace
 from quarry._stdlib import load_hook_config
-from quarry.daemon_capture import DaemonCaptureSender
 from quarry.session_start_templates import SessionStartTemplates
 from quarry.session_transcript import SessionTranscriptCapture, TranscriptSource
 from quarry.sync_lock import SyncLock
-from quarry.web_capture import WebFetchPayload
 
 if TYPE_CHECKING:
     from quarry.collection_resolver import CollectionResolver
@@ -327,84 +325,13 @@ class _SessionStartContext:
 
 
 def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
-    """Handle PostToolUse on WebFetch.
+    """Handle PostToolUse on WebFetch: capture the fetched page, fail-open.
 
-    Sends the already-fetched page to the daemon, which extracts, scrubs, and
-    stores it in the project's ``<repo>-captures`` collection.  Uses the payload
-    ``tool_response`` directly — no second fetch.  When the payload has no usable
-    content, the daemon re-fetches through the SSRF-checked URL-ingest route
-    instead.  The hook imports no engine — only the thin client and the
-    lightweight URL/scrub helpers.  Looks up a PRIOR capture of this URL FIRST
-    — after the (unconditional) send would always match — via
-    :class:`~quarry.web_fetch_loop_closer.WebFetchLoopCloser`.
+    See :class:`~quarry.web_fetch_hook.WebFetchHook`.
     """
-    trace = HookTrace("post-web-fetch")
-    cwd = HookPayload.as_dir(payload.get("cwd"))
-    if cwd:
-        on = load_hook_config(cwd).web_fetch
-        trace.mark_config(on=on)
-        if not on:
-            trace.skip("config")
-            return {}
+    from quarry.web_fetch_hook import WebFetchHook  # noqa: PLC0415
 
-    parsed = WebFetchPayload(payload)
-    url = parsed.url
-    if not url:
-        trace.mark_payload(ok=False)
-        trace.skip("no-url")
-        return {}
-    trace.mark_payload(ok=True)
-
-    from quarry.api import CaptureIngestRequest, IngestRequest  # noqa: PLC0415
-    from quarry.web_fetch_loop_closer import WebFetchLoopCloser  # noqa: PLC0415
-    from quarry.web_fetch_name import WebFetchName  # noqa: PLC0415
-
-    context = WebFetchLoopCloser(url, cwd).context()
-
-    sender = DaemonCaptureSender()
-    content = parsed.content
-    if content:
-        # Primary: hand the raw HTML to the daemon (it extracts, scrubs, chunks).
-        # Carry the source URL so that if the HTML extracts to zero chunks (a
-        # JS-rendered page) the daemon can re-fetch it server-side — the capture
-        # route SSRF-gates source_url before the re-fetch — so the page is
-        # captured, not silently dropped, and the client stays engine-free.
-        sent = sender.send_capture(
-            CaptureIngestRequest(
-                content=content,
-                cwd=cwd,
-                document_name=WebFetchName.of(url),
-                format_hint="html",
-                source_url=url,
-            ),
-            unreachable_log=_WEB_FETCH_UNREACHABLE,
-        )
-        detail = "inline"
-    else:
-        # Fallback: no usable content — the daemon re-fetches through the
-        # SSRF-checked ingest route, scrubbing the page into <repo>-captures.
-        logger.debug("post-web-fetch: no content in payload, re-fetching via daemon")
-        sent = sender.send_ingest_url(
-            IngestRequest(source=url, cwd=cwd, overwrite=True, scrub=True),
-            unreachable_log=_WEB_FETCH_UNREACHABLE,
-        )
-        detail = "ingest-url"
-    # The sender logs the specific failure class (misconfig, down, HTTP, malformed);
-    # the trace only needs the binary distinction so the entered→ line closes on
-    # every exit path (G6).
-    if sent:
-        trace.capture(detail)
-    else:
-        trace.error("daemon-unreachable")
-    return context
-
-
-# A web fetch writes NO durable local copy and backfill-sessions only re-ingests
-# session transcripts, so a lost web capture is genuinely lost — the log must not
-# promise a backfill that will never happen.
-_WEB_FETCH_UNREACHABLE = (
-    "web-fetch: daemon unreachable; page not indexed (re-fetch to retry)"
-)
+    return WebFetchHook(payload).run()
 
 
 def _precompact_target(payload: dict[str, object]) -> TranscriptSource | None:

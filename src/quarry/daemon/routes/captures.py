@@ -115,8 +115,8 @@ class CaptureRoutes(ContentRouteGroup):
         if isinstance(url, JSONResponse):
             return url
         collection = await self._collection_for_cwd(self._str_field(body, "cwd"))
-        document_name = WebFetchName.of(url)
-        matched = await run_in_threadpool(
+        document_name = WebFetchName.maybe(url)
+        matched = document_name is not None and await run_in_threadpool(
             self.ctx.database.catalog.document_exists, document_name, collection.name
         )
         return JSONResponse(
