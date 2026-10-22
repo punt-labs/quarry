@@ -249,3 +249,30 @@ def test_a_sitemap_with_one_pdf_page_ingests_the_rest(
     for leak in ("SECRET", "pw@", "token"):
         assert leak not in caplog.text
         assert leak not in result["errors"][0]
+
+
+@pytest.mark.parametrize("scrub", [False, True])
+async def test_an_invalid_request_url_fails_the_task_url_free(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, *, scrub: bool
+) -> None:
+    """``http.client`` quotes the path and query of a malformed URL (CWE-532)."""
+    daemon = InProcessDaemon(tmp_path)
+    state = TaskState(task_id="t-inv", kind="ingest")
+    job = IngestJob(
+        source="https://example.com/p?token=abc def",
+        overwrite=False,
+        collection="repo-captures" if scrub else "example.com",
+        scrub=scrub,
+        agent_handle="",
+        memory_type="",
+        summary="",
+    )
+
+    with caplog.at_level(logging.WARNING), patch(_DISCOVER, return_value=[]):
+        await job.run(daemon.ctx, state)
+
+    assert state.status == "failed"
+    assert state.error == "fetch failed: InvalidURL"
+    assert "abc" not in caplog.text
+    [record] = [r for r in caplog.records if r.name.endswith("refusal_aware_terminal")]
+    assert record.exc_info is None

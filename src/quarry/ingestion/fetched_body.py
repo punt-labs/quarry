@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import contextlib
+import logging
+import traceback
 from dataclasses import dataclass, field
-from typing import ClassVar, Protocol, final
+from typing import ClassVar, Protocol, Self, final
 from urllib.error import HTTPError, URLError
 
 from quarry.content_guard import UnindexableContentError
@@ -12,15 +14,57 @@ from quarry.ingestion.media_type_policy import MediaTypePolicy
 from quarry.ingestion.ssrf_redirect import RedirectRejectedError
 from quarry.url_safety import UrlRejectedError, UrlSafetyCheck
 
+logger = logging.getLogger(__name__)
+
 
 class FetchRefusedError(UnindexableContentError):
     """Raised when a fetch is refused or fails; the message never embeds the URL.
 
-    Network libraries quote the raw URL (userinfo, query tokens) in their
+    Network libraries quote the raw URL (userinfo, path, query tokens) in their
     messages, so the fetch layer replaces every such failure with one of these:
-    the reason is safe to log, to store as a task error, and to return to a
-    client verbatim.
+    the reason names a rule or a kind of failure, never userinfo, path or query
+    (a host name may appear), so it is safe to log, to store as a task error, and
+    to return to a client verbatim.
     """
+
+    @classmethod
+    def from_transfer_failure(cls, exc: Exception) -> Self:
+        """Return the URL-free refusal for a failure while opening or reading.
+
+        *exc* is an :class:`OSError` (including :class:`URLError` and
+        :class:`HTTPError`), a :class:`ValueError`, or an
+        :class:`http.client.HTTPException` (``InvalidURL``, ``BadStatusLine``,
+        ``IncompleteRead``): the last carries the URL path and query verbatim.
+        The SSRF policy's own rejections (a redirect hop, or the connect-time
+        re-check after admission passed) name a rule, which an operator needs;
+        every other exception reports only what kind of failure it was, and its
+        message-free traceback goes to the debug log so a programming error stays
+        diagnosable.  An :class:`HTTPError` holds an open socket, so it is closed
+        here, before the status is read out.
+        """
+        if isinstance(exc, HTTPError):
+            code = exc.code
+            with contextlib.suppress(OSError, ValueError):
+                exc.close()
+            return cls(f"fetch failed: HTTP {code}")
+        if isinstance(exc, RedirectRejectedError):
+            return cls(str(exc))
+        if isinstance(exc, UrlRejectedError):
+            return cls(f"URL rejected: {exc}")
+        if isinstance(exc, TimeoutError) or (
+            isinstance(exc, URLError) and isinstance(exc.reason, TimeoutError)
+        ):
+            return cls("fetch failed: timed out")
+        if isinstance(exc, URLError):
+            return cls(
+                f"fetch failed: cannot reach the host ({type(exc.reason).__name__})"
+            )
+        logger.debug(
+            "unclassified fetch failure %s:\n%s",
+            type(exc).__name__,
+            "".join(traceback.format_tb(exc.__traceback__)),
+        )
+        return cls(f"fetch failed: {type(exc).__name__}")
 
 
 class UrlChecker(Protocol):
@@ -70,31 +114,6 @@ class FetchGate:
             msg = f"final URL rejected: {reason}"
             raise FetchRefusedError(msg)
 
-    @staticmethod
-    def translate(exc: Exception) -> FetchRefusedError:
-        """Return the URL-free refusal for a transfer failure.
-
-        The SSRF policy's own rejections (a redirect hop, or the connect-time
-        re-check after admission passed) name a rule, which an operator needs;
-        every other exception quotes the raw URL, so only what kind of failure it
-        was is reported.  An :class:`HTTPError` holds an open socket, so it is
-        closed here, before the status is read out.
-        """
-        if isinstance(exc, HTTPError):
-            code = exc.code
-            with contextlib.suppress(OSError, ValueError):
-                exc.close()
-            return FetchRefusedError(f"fetch failed: HTTP {code}")
-        if isinstance(exc, RedirectRejectedError):
-            return FetchRefusedError(str(exc))
-        if isinstance(exc, UrlRejectedError):
-            return FetchRefusedError(f"URL rejected: {exc}")
-        if isinstance(exc, TimeoutError):
-            return FetchRefusedError("fetch failed: timed out")
-        if isinstance(exc, URLError):
-            return FetchRefusedError("fetch failed: cannot reach the host")
-        return FetchRefusedError(f"fetch failed: {type(exc).__name__}")
-
     def check_media_type(self, media_type: str) -> None:
         """Raise :class:`UnsupportedContentError` unless the media type is text."""
         self.policy.require(media_type)
@@ -121,11 +140,6 @@ class FetchedBody:
         object.__setattr__(
             self, "media_type", MediaTypePolicy.normalize(self.media_type)
         )
-
-    @classmethod
-    def from_header(cls, text: str, content_type: str) -> FetchedBody:
-        """Return the body for a raw ``Content-Type`` header value."""
-        return cls(text=text, media_type=content_type)
 
     @property
     def label(self) -> str:

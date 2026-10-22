@@ -90,7 +90,7 @@ class _OpenedResponse:
                     raise FetchRefusedError(msg)
                 chunks.append(chunk)
         except (OSError, HTTPException) as exc:
-            raise FetchGate.translate(exc) from exc
+            raise FetchRefusedError.from_transfer_failure(exc) from exc
         return b"".join(chunks)
 
 
@@ -126,8 +126,9 @@ class WebFetcher:
         :meth:`fetch_body` instead.
 
         Raises:
-            FetchRefusedError: Anything :meth:`fetch_body` raises, or the response
-                is not HTML.
+            UnindexableContentError: A :class:`FetchRefusedError` or
+                :class:`UnsupportedContentError` from :meth:`fetch_body`, or a
+                ``FetchRefusedError`` if the response is not HTML.
         """
         body = self.fetch_body(url)
         if not body.is_html:
@@ -158,8 +159,8 @@ class WebFetcher:
         deadline = monotonic() + self.timeout + self._DEADLINE_MARGIN_S
         try:
             response = GUARDED_OPENER.open(request, timeout=self.timeout)
-        except (OSError, ValueError) as exc:
-            raise self.gate.translate(exc) from exc
+        except (OSError, ValueError, HTTPException) as exc:
+            raise FetchRefusedError.from_transfer_failure(exc) from exc
         with response as resp:
             return self._decode_body(_OpenedResponse(resp, deadline))
 
@@ -172,4 +173,4 @@ class WebFetcher:
         self.gate.check_final_url(opened.url)
         content_type = opened.content_type()
         self.gate.check_media_type(content_type)
-        return FetchedBody.from_header(opened.decode(), content_type)
+        return FetchedBody(opened.decode(), content_type)

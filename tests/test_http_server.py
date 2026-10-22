@@ -1989,7 +1989,7 @@ class TestCapture:
             data = _poll_task_done(tc, resp.json()["task_id"])
 
         assert data["status"] == "failed"
-        assert data["error"] == "fetch failed: cannot reach the host"
+        assert data["error"] == "fetch failed: cannot reach the host (str)"
         assert "secret123" not in caplog.text
         assert "user:pass" not in caplog.text
         assert all(r.exc_info is None for r in caplog.records)

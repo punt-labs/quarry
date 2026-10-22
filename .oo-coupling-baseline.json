@@ -1114,7 +1114,7 @@
   },
   "src/quarry/ingestion/fetched_body.py": {
     "efferent_coupling": 4.0,
-    "public_names": 4.0,
+    "public_names": 5.0,
     "circular_imports": 0.0,
     "max_lcom": 1.0,
     "avg_lcom": 1.0

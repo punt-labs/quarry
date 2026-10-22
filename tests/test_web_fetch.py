@@ -593,3 +593,35 @@ class TestEveryFailureIsUrlFree:
         mock_open.return_value = _mock_response(b"x", "text/plain")
         with pytest.raises(FetchRefusedError, match="non-HTML content text/plain"):
             WebFetcher().fetch(self._URL)
+
+
+class _AllowAll:
+    def reject_reason(self, url: str) -> str | None:
+        return None
+
+
+class TestHttpClientErrorsDoNotEscape:
+    """``http.client`` errors quote the request path and query verbatim (CWE-532)."""
+
+    @staticmethod
+    def _fetcher() -> WebFetcher:
+        return WebFetcher(gate=FetchGate(urls=_AllowAll()))
+
+    def test_a_space_in_the_query_is_a_refusal(self) -> None:
+        with pytest.raises(FetchRefusedError) as info:
+            self._fetcher().fetch_body("https://h.test/p?token=abc def")
+        assert str(info.value) == "fetch failed: InvalidURL"
+
+    def test_a_non_numeric_port_is_a_refusal(self) -> None:
+        with pytest.raises(FetchRefusedError) as info:
+            self._fetcher().fetch_body("https://h.test:abc/p?token=abc")
+        assert str(info.value) == "fetch failed: InvalidURL"
+
+    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    def test_a_bad_status_line_is_a_refusal(self, mock_open: MagicMock) -> None:
+        from http.client import BadStatusLine
+
+        mock_open.side_effect = BadStatusLine("token=abc")
+        with pytest.raises(FetchRefusedError) as info:
+            self._fetcher().fetch_body("https://h.test/p")
+        assert str(info.value) == "fetch failed: BadStatusLine"
