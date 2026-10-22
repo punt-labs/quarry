@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from quarry.config import Settings
+from quarry.content_guard import UnindexableContentError
 from quarry.db import Database
 from quarry.ingestion.bulk_ingest import (
     BulkIngestRunner,
@@ -393,16 +394,21 @@ class TestBulkIngestRunnerRun:
         WebFetcher and its callees embed the raw URL verbatim in their
         exception messages (e.g. "Cannot reach {url}: ...").
         """
+        credentialed_url = "https://user:pass@example.com/page?token=abc123"
 
         def _stub(
             request: UrlIngest, _progress: Progress, _context: IngestContext
         ) -> IngestResult:
-            msg = f"Cannot reach {request.url}: connection refused"
-            raise ValueError(msg)
+            if request.url == credentialed_url:
+                msg = f"Cannot reach {request.url}: connection refused"
+                raise ValueError(msg)
+            return {"document_name": request.url, "collection": "c", "chunks": 1}
 
-        credentialed_url = "https://user:pass@example.com/page?token=abc123"
         runner = BulkIngestRunner(ingest_one=_stub)
-        to_ingest: list[tuple[str, str | None]] = [(credentialed_url, None)]
+        to_ingest: list[tuple[str, str | None]] = [
+            (credentialed_url, None),
+            ("https://ok.example/p", None),
+        ]
         messages: list[str] = []
 
         with caplog.at_level(logging.WARNING):
@@ -410,13 +416,33 @@ class TestBulkIngestRunnerRun:
                 to_ingest, Progress(messages.append), _context(), BulkOptions()
             )
 
-        assert (ingested, failed) == (0, 1)
-        assert len(errors) == 1
+        assert (ingested, failed) == (1, 1)
+        assert errors == ["https://example.com/page: ValueError"]
         for haystack in (errors[0], caplog.text, *messages):
             assert "pass" not in haystack
             assert "token=abc123" not in haystack
             assert "connection refused" not in haystack
-            assert "ValueError" in haystack
+        assert "ValueError" in caplog.text
+
+    def test_a_crawl_where_every_page_failed_is_refused(self) -> None:
+        def _stub(
+            request: UrlIngest, _progress: Progress, _context: IngestContext
+        ) -> IngestResult:
+            msg = "boom"
+            raise OSError(msg)
+
+        runner = BulkIngestRunner(ingest_one=_stub)
+        with pytest.raises(UnindexableContentError) as info:
+            runner.run(
+                [("https://a.example/x", None)],
+                Progress(None),
+                _context(),
+                BulkOptions(),
+            )
+        assert str(info.value) == (
+            "crawl ingested nothing: 1 pages failed "
+            "(first: https://a.example/x: OSError)"
+        )
 
     def test_empty_to_ingest_short_circuits_without_calling_ingest_one(self) -> None:
         calls: list[UrlIngest] = []

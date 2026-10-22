@@ -596,3 +596,40 @@ def test_failing_fetches_do_not_leak_real_fds(
         f"fd leak across 200 failing fetches: {before} -> {after} "
         f"(delta {after - before}); a failed fetch is not releasing its fd"
     )
+
+
+class TestErrorMessagesAreUrlFree:
+    """USP logs the error response message, so it must not quote the URL."""
+
+    _URL = "https://u:pw@safe.example/s.xml?token=SECRET"
+
+    def test_an_unreachable_host_is_reported_by_class(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from urllib.error import URLError
+
+        class _Opener:
+            def open(self, request: Any, timeout: float | None = None) -> Any:
+                raise URLError(f"refused {self._url}")
+
+            _url = TestErrorMessagesAreUrlFree._URL
+
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _Opener())
+        resp = GatedSitemapWebClient().get(self._URL)
+        assert isinstance(resp, WebClientErrorResponse)
+        assert resp.message() == "unreachable: URLError"
+
+    def test_a_transport_failure_is_reported_by_class(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class _Opener:
+            def open(self, request: Any, timeout: float | None = None) -> Any:
+                return _BrokenReadResp(TestErrorMessagesAreUrlFree._URL)
+
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _Opener())
+        resp = GatedSitemapWebClient().get(self._URL)
+        assert isinstance(resp, WebClientErrorResponse)
+        assert resp.message().startswith("fetch failed: ")
+        assert "SECRET" not in resp.message()

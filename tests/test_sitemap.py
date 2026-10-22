@@ -1461,3 +1461,37 @@ class TestBulkIngestSsrfGate:
         assert result["total_discovered"] == 3
         assert result["after_filter"] == 2  # post-gate, not the pre-gate 3
         assert result["ingested"] == 2
+
+
+class TestInvalidSitemapFailsTheFetch:
+    """A sitemap that cannot be fetched or parsed is an error, not an empty crawl."""
+
+    _URL = "https://u:pw@example.com/sitemap.xml?token=SECRET"
+
+    @patch("usp.fetch_parse.SitemapFetcher")
+    def test_an_invalid_sitemap_raises_a_url_free_refusal(
+        self, mock_fetcher_cls: MagicMock
+    ) -> None:
+        from usp.objects.sitemap import InvalidSitemap
+
+        from quarry.ingestion.fetched_body import FetchRefusedError
+
+        mock_fetcher_cls.return_value.sitemap.return_value = InvalidSitemap(
+            url=self._URL, reason=f"HTTP 500 for {self._URL}"
+        )
+        with pytest.raises(FetchRefusedError) as info:
+            SitemapDiscovery.discover_urls(self._URL)
+        assert str(info.value) == (
+            "fetch failed: sitemap could not be fetched or parsed"
+        )
+
+    @patch("usp.fetch_parse.SitemapFetcher")
+    def test_discovery_logs_only_the_redacted_url(
+        self, mock_fetcher_cls: MagicMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        mock_fetcher_cls.return_value.sitemap.return_value.all_pages.return_value = []
+        with caplog.at_level(logging.INFO):
+            SitemapDiscovery.discover_urls(self._URL)
+        assert "https://example.com/sitemap.xml" in caplog.text
+        assert "SECRET" not in caplog.text
+        assert "pw@" not in caplog.text

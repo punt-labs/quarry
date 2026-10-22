@@ -118,13 +118,13 @@ class GatedSitemapWebClient(AbstractWebClient):
                 exc.close()
             return error
         except (TimeoutError, URLError) as exc:
-            return self._error(f"cannot reach {url}: {exc}", retryable=True)
+            return self._error(f"unreachable: {type(exc).__name__}", retryable=True)
         except (OSError, HTTPException, ValueError) as exc:
             # A body-read/transport failure (e.g. IncompleteRead) or a decode
             # error must not escape: USP catches it in nested recursion, but the
             # top-level discover_* path would propagate it. Fail closed — no
             # connection to an internal address happens on this path either way.
-            return self._error(f"fetch failed for {url}: {exc}", retryable=False)
+            return self._error(f"fetch failed: {type(exc).__name__}", retryable=False)
 
     def _fetch(self, url: str) -> AbstractWebClientResponse:
         """Open *url* through the guarded opener and gate the final URL."""

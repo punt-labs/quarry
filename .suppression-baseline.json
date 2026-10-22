@@ -131,6 +131,9 @@
     "src/quarry/ingestion/sitemap_ingest.py": {
       "noqa": 4
     },
+    "src/quarry/ingestion/sitemap_reader.py": {
+      "noqa": 2
+    },
     "src/quarry/ingestion/web_fetch.py": {
       "noqa": 1
     },
@@ -165,7 +168,7 @@
       "noqa": 1
     },
     "src/quarry/sitemap.py": {
-      "noqa": 3,
+      "noqa": 1,
       "type_ignore": 1
     },
     "src/quarry/sitemap_web_client.py": {
@@ -181,5 +184,5 @@
       "noqa": 2
     }
   },
-  "updated_at": "2026-10-22T11:09:28Z"
+  "updated_at": "2026-10-22T11:20:46Z"
 }

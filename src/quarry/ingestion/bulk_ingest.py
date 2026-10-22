@@ -181,13 +181,13 @@ class BulkIngestRunner:
                     # raw URL, since a userinfo/query secret on a program-
                     # discovered sitemap URL would otherwise leak into
                     # quarry.log or the progress stream (CWE-532).
-                    redacted_url = PageReport(page_url).url
+                    report = PageReport(page_url)
                     try:
                         future.result()
                         ingested += 1
                         progress(
                             "Ingested %s (%d/%d)",
-                            redacted_url,
+                            report.url,
                             ingested,
                             len(to_ingest),
                         )
@@ -195,13 +195,11 @@ class BulkIngestRunner:
                         # Broad except is correct here: this is the per-task
                         # outcome boundary for the parallel fan-out (PY-EH-6),
                         # not internal code -- one worker's failure must not
-                        # abort the others.  PageReport renders the failure:
-                        # a refusal's URL-free reason, else the class name alone
-                        # (other messages quote the raw URL).
+                        # abort the others.  PageReport logs it (a programming
+                        # error loudly) and renders a URL-free line.
                         failed += 1
-                        reason = PageReport.failure(exc)
-                        errors.append(f"{redacted_url}: {reason}")
-                        logger.warning("Failed to ingest %s (%s)", redacted_url, reason)
-                        progress("Failed %s: %s", redacted_url, reason)
+                        errors.append(report.failure(exc))
+                        progress("Failed %s", errors[-1])
+            PageReport.require_progress(ingested, failed, errors)
 
         return ingested, failed, errors
