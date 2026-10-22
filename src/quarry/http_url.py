@@ -39,10 +39,18 @@ class HttpUrl:
     A leak is therefore a ``fetch_url`` call you can grep for, not a regex miss.
     """
 
-    __slots__ = ("_document_name", "_fetch_url", "_host", "_log_form", "_path")
+    __slots__ = (
+        "_document_name",
+        "_fetch_url",
+        "_homepage",
+        "_host",
+        "_log_form",
+        "_path",
+    )
 
     _fetch_url: str
     _document_name: str
+    _homepage: Self
     _host: str
     _log_form: str
     _path: str
@@ -61,13 +69,29 @@ class HttpUrl:
         port = None if parts.port == cls._DEFAULT_PORTS[parts.scheme] else parts.port
         netloc = to_netloc(host, port)
         path = cls._PARAMS.sub("", parts.path)
+        root = urlunsplit(
+            (parts.scheme, to_netloc(parts.hostname or "", parts.port), "/", "", "")
+        )
         self = super().__new__(cls)
-        self._fetch_url = raw
-        self._host = host
-        self._path = path
-        self._document_name = urlunsplit((parts.scheme, netloc, path or "/", "", ""))
-        self._log_form = LogForm.of(parts.scheme, netloc, path)
+        fields = {
+            "_fetch_url": raw,
+            "_host": host,
+            "_path": path,
+            "_document_name": urlunsplit((parts.scheme, netloc, path or "/", "", "")),
+            "_log_form": LogForm.of(parts.scheme, netloc, path),
+        }
+        for name, value in fields.items():
+            object.__setattr__(self, name, value)
+        object.__setattr__(self, "_homepage", self if root == raw else cls(root))
         return self
+
+    def __setattr__(self, name: str, value: object) -> None:
+        msg = "HttpUrl is immutable"
+        raise AttributeError(msg)
+
+    def __delattr__(self, name: str) -> None:
+        msg = "HttpUrl is immutable"
+        raise AttributeError(msg)
 
     @classmethod
     def shown(cls, raw: str) -> str:
@@ -110,9 +134,7 @@ class HttpUrl:
     @property
     def homepage(self) -> Self:
         """Return the site root, built from the host and port, never the raw netloc."""
-        parts = UrlSyntax.parse(self._fetch_url)
-        netloc = to_netloc(parts.hostname or "", parts.port)
-        return type(self)(urlunsplit((parts.scheme, netloc, "/", "", "")))
+        return self._homepage
 
     def __str__(self) -> str:
         return self._log_form

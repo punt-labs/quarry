@@ -192,3 +192,32 @@ class TestShown:
 
     def test_a_host_too_long_to_be_a_host_is_not_shown(self) -> None:
         assert HttpUrl.shown("http://" + "h" * 300 + "/a b") == "(unparseable URL)"
+
+
+class TestHomepageIsComputedOnce:
+    def test_the_homepage_is_computed_once(self) -> None:
+        url = HttpUrl("https://example.com:8443/a/b?q=1")
+        assert url.homepage is url.homepage
+
+    def test_the_homepage_is_the_site_root(self) -> None:
+        assert HttpUrl("https://example.com:8443/a/b?q=1").homepage == HttpUrl(
+            "https://example.com:8443/"
+        )
+
+    def test_the_homepage_of_a_root_is_itself(self) -> None:
+        url = HttpUrl("https://example.com/")
+        assert url.homepage is url
+
+
+class TestImmutability:
+    """An ``HttpUrl`` is hashable, so it must also be unchangeable."""
+
+    @pytest.mark.parametrize("name", ["_fetch_url", "_host", "extra"])
+    def test_an_attribute_cannot_be_assigned(self, name: str) -> None:
+        with pytest.raises(AttributeError, match="immutable"):
+            setattr(HttpUrl(_RAW), name, "http://evil.test/")
+
+    @pytest.mark.parametrize("name", ["_fetch_url", "_host"])
+    def test_an_attribute_cannot_be_deleted(self, name: str) -> None:
+        with pytest.raises(AttributeError, match="immutable"):
+            delattr(HttpUrl(_RAW), name)
