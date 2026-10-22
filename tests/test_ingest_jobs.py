@@ -6,6 +6,7 @@ import logging
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
+from quarry.daemon.captured_body_ingest import IngestLabels
 from quarry.daemon.ingest_jobs import IngestJob
 from quarry.daemon.tasks import TaskState
 from quarry.ingestion.fetched_body import FetchedBody
@@ -22,12 +23,14 @@ def test_ingest_spool_record_carries_the_source_url() -> None:
     """An ingest snapshot is the source URL — the recoverable retry unit."""
     job = IngestJob(
         source="https://x.test/a",
-        overwrite=False,
-        collection="x.test",
         scrub=False,
-        agent_handle="",
-        memory_type="",
-        summary="",
+        labels=IngestLabels(
+            overwrite=False,
+            collection="x.test",
+            agent_handle="",
+            memory_type="",
+            summary="",
+        ),
     )
     record = job.spool_record()
     assert record is not None
@@ -41,24 +44,28 @@ _PDF_URL = "https://user:secret@example.com/paper.pdf?token=abc"
 def _scrubbed_job(url: str) -> IngestJob:
     return IngestJob(
         source=url,
-        overwrite=True,
-        collection="repo-captures",
         scrub=True,
-        agent_handle="",
-        memory_type="",
-        summary="",
+        labels=IngestLabels(
+            overwrite=True,
+            collection="repo-captures",
+            agent_handle="",
+            memory_type="",
+            summary="",
+        ),
     )
 
 
 def _plain_job() -> IngestJob:
     return IngestJob(
         source="https://example.com/",
-        overwrite=False,
-        collection="example.com",
         scrub=False,
-        agent_handle="",
-        memory_type="",
-        summary="",
+        labels=IngestLabels(
+            overwrite=False,
+            collection="example.com",
+            agent_handle="",
+            memory_type="",
+            summary="",
+        ),
     )
 
 
@@ -69,12 +76,14 @@ async def test_plain_ingest_of_a_refused_url_fails_the_task_without_a_traceback(
     state = TaskState(task_id="t-3", kind="ingest")
     job = IngestJob(
         source=_PDF_URL,
-        overwrite=False,
-        collection="example.com",
         scrub=False,
-        agent_handle="",
-        memory_type="",
-        summary="",
+        labels=IngestLabels(
+            overwrite=False,
+            collection="example.com",
+            agent_handle="",
+            memory_type="",
+            summary="",
+        ),
     )
     refusal = UnsupportedContentError("content rejected: unsupported media type x")
 

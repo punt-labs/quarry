@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from quarry.ingestion.chunk_store_funnel import _chunk_embed_store
 from quarry.ingestion.format_strategies import SUPPORTED_EXTENSIONS, resolve_strategy
@@ -33,7 +33,7 @@ def ingest_document(
     document_name: str | None = None,
     progress_callback: Callable[[str], None] | None = None,
     agent_handle: str = "",
-    memory_type: str = "",
+    memory_type: MemoryType = "",
     summary: str = "",
 ) -> IngestResult:
     """Ingest a document: dispatch to the format-specific extraction strategy.
@@ -62,7 +62,8 @@ def ingest_document(
 
     Raises:
         FileNotFoundError: If file does not exist.
-        ValueError: If file format is not supported.
+        ValueError: If the format is unsupported; also its subclasses
+            UnindexableContentError (binary) and RowBudgetError (over budget).
     """
     if not file_path.exists():
         msg = f"File not found: {file_path}"
@@ -76,11 +77,7 @@ def ingest_document(
         overwrite=overwrite,
         collection=collection,
         agent_handle=agent_handle,
-        # ingest_document's own memory_type stays a plain str (unvalidated public
-        # API param); IngestContext's field is the tightened Literal, so the
-        # cast marks this specific boundary crossing rather than widening the
-        # dataclass field back to str.
-        memory_type=cast("MemoryType", memory_type),
+        memory_type=memory_type,
         summary=summary,
     )
     strategy = resolve_strategy(file_path.suffix.lower(), settings)
@@ -107,7 +104,8 @@ def plan_file_chunks(
 
     Raises:
         FileNotFoundError: If *file_path* does not exist.
-        ValueError: If the file format is not supported.
+        ValueError: If the format is unsupported; also its subclasses
+            UnindexableContentError (binary) and RowBudgetError (over budget).
     """
     if not file_path.exists():
         msg = f"File not found: {file_path}"

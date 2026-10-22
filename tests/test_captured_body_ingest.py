@@ -20,7 +20,7 @@ _FETCH_BODY = "quarry.ingestion.web_fetch.WebFetcher.fetch_body"
 
 
 def _labels() -> IngestLabels:
-    return IngestLabels.of(
+    return IngestLabels(
         overwrite=True,
         collection="repo-captures",
         agent_handle="",
@@ -100,7 +100,7 @@ class TestIngest:
 
     def test_the_labels_reach_the_pipeline_context(self) -> None:
         body = FetchedBody(text="raw", media_type="text/plain")
-        labels = IngestLabels.of(
+        labels = IngestLabels(
             overwrite=False,
             collection="notes",
             agent_handle="rmh",
@@ -189,15 +189,3 @@ def test_falls_back_when_input_degrades_to_nothing(
 ) -> None:
     """Input that cleans to empty resolves to the RFC 2046 default octet-stream."""
     assert CapturedBodyIngest.marker_media_type(raw) == "application/octet-stream"
-
-
-class TestIngestLabels:
-    def test_an_unknown_memory_type_is_refused(self) -> None:
-        with pytest.raises(ValueError, match="unknown memory_type 'facts'"):
-            IngestLabels.memory_type_of("facts")
-
-    @pytest.mark.parametrize(
-        "memory_type", ["", "fact", "observation", "opinion", "procedure", "lesson"]
-    )
-    def test_every_storage_memory_type_is_accepted(self, memory_type: str) -> None:
-        assert IngestLabels.memory_type_of(memory_type) == memory_type

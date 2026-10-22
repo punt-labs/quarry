@@ -26,6 +26,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from quarry.daemon.captured_body_ingest import IngestLabels
 from quarry.daemon.ingest_jobs import IngestJob
 from quarry.ingestion.fetched_body import FetchedBody
 
@@ -54,12 +55,14 @@ def _job(url: str) -> IngestJob:
     """Return an IngestJob shaped like the daemon's capture-refetch fallback."""
     return IngestJob(
         source=url,
-        overwrite=True,
-        collection="repo-captures",
         scrub=True,
-        agent_handle="",
-        memory_type="",
-        summary="",
+        labels=IngestLabels(
+            overwrite=True,
+            collection="repo-captures",
+            agent_handle="",
+            memory_type="",
+            summary="",
+        ),
     )
 
 

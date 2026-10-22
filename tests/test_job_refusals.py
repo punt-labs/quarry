@@ -10,6 +10,7 @@ from urllib.error import HTTPError, URLError
 
 import pytest
 
+from quarry.daemon.captured_body_ingest import IngestLabels
 from quarry.daemon.content_jobs import CaptureIngestJob, ScrubbedIngestJob
 from quarry.daemon.ingest_jobs import IngestJob
 from quarry.daemon.tasks import TaskState
@@ -48,12 +49,14 @@ def _response(content_type: str, body: bytes = b"") -> MagicMock:
 def _ingest_job(*, scrub: bool) -> IngestJob:
     return IngestJob(
         source=_URL,
-        overwrite=False,
-        collection="repo-captures" if scrub else "example.com",
         scrub=scrub,
-        agent_handle="",
-        memory_type="",
-        summary="",
+        labels=IngestLabels(
+            overwrite=False,
+            collection="repo-captures" if scrub else "example.com",
+            agent_handle="",
+            memory_type="",
+            summary="",
+        ),
     )
 
 
@@ -61,13 +64,15 @@ def _capture_job(content: str = "") -> CaptureIngestJob:
     inline = ScrubbedIngestJob(
         name="WebFetch page",
         content=content,
-        collection="repo-captures",
         format_hint="auto",
-        overwrite=True,
         scrub_label="capture",
-        agent_handle="",
-        memory_type="",
-        summary="",
+        labels=IngestLabels(
+            overwrite=True,
+            collection="repo-captures",
+            agent_handle="",
+            memory_type="",
+            summary="",
+        ),
     )
     return CaptureIngestJob(inline=inline, source_url=_URL)
 
@@ -197,12 +202,14 @@ async def test_a_url_that_cannot_be_named_still_ends_the_task(
     state = TaskState(task_id="t-subj", kind="ingest")
     job = IngestJob(
         source="http://h.test:99999/",
-        overwrite=False,
-        collection="c",
         scrub=True,
-        agent_handle="",
-        memory_type="",
-        summary="",
+        labels=IngestLabels(
+            overwrite=False,
+            collection="c",
+            agent_handle="",
+            memory_type="",
+            summary="",
+        ),
     )
     refusal = FetchRefusedError("fetch failed: timed out")
     with patch("quarry.ingestion.web_fetch.WebFetcher.fetch_body", side_effect=refusal):
@@ -278,12 +285,14 @@ async def test_an_invalid_request_url_fails_the_task_url_free(
     state = TaskState(task_id="t-inv", kind="ingest")
     job = IngestJob(
         source="https://example.com/p?token=abc def",
-        overwrite=False,
-        collection="repo-captures" if scrub else "example.com",
         scrub=scrub,
-        agent_handle="",
-        memory_type="",
-        summary="",
+        labels=IngestLabels(
+            overwrite=False,
+            collection="repo-captures" if scrub else "example.com",
+            agent_handle="",
+            memory_type="",
+            summary="",
+        ),
     )
 
     with caplog.at_level(logging.WARNING), patch(_DISCOVER, return_value=[]):

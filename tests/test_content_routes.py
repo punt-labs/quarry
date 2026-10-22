@@ -15,6 +15,7 @@ from typer.testing import CliRunner
 from quarry.__main__ import app
 from quarry.client import QuarryClient, TargetResolver
 from quarry.content_guard import BinaryContent
+from quarry.daemon.captured_body_ingest import IngestLabels
 from quarry.daemon.content_jobs import CaptureIngestJob, ScrubbedIngestJob
 from quarry.daemon.tasks import TaskState
 from quarry.mcp_server import McpTools
@@ -331,13 +332,15 @@ async def test_a_capture_job_fails_quietly_on_gap_binary_inline_text(
     inline = ScrubbedIngestJob(
         name="session-1",
         content=_gap_binary(),
-        collection="repo-captures",
         format_hint="auto",
-        overwrite=True,
         scrub_label="capture",
-        agent_handle="",
-        memory_type="",
-        summary="",
+        labels=IngestLabels(
+            overwrite=True,
+            collection="repo-captures",
+            agent_handle="",
+            memory_type="",
+            summary="",
+        ),
     )
     state = TaskState(task_id="t-cap", kind="capture")
 
@@ -424,5 +427,47 @@ class TestOversizedLabels:
             resp = http.post(
                 "/v1/remember",
                 json={"name": "n.md", "content": _CLEAN, "summary": "x" * 8_192},
+            )
+        assert resp.status_code == 202
+
+
+class TestFormatHint:
+    _REASON = (
+        "unknown format_hint 'docx'; expected one of auto, plain, markdown, latex, html"
+    )
+
+    def test_remember_refuses_an_unknown_format_hint(self, http: TestClient) -> None:
+        resp = http.post(
+            "/v1/remember",
+            json={"name": "n.md", "content": _CLEAN, "format_hint": "docx"},
+        )
+        assert resp.status_code == 400
+        assert resp.json() == {"error": self._REASON}
+
+    def test_capture_refuses_an_unknown_format_hint(
+        self, http: TestClient, tmp_path: Path
+    ) -> None:
+        resp = http.post(
+            "/v1/capture",
+            json={
+                "content": _CLEAN,
+                "session_id": "abcd1234ef",
+                "cwd": str(tmp_path),
+                "format_hint": "docx",
+            },
+        )
+        assert resp.status_code == 400
+        assert resp.json() == {"error": self._REASON}
+
+    @pytest.mark.parametrize("hint", ["auto", "plain", "markdown", "latex", "html"])
+    def test_every_documented_hint_is_accepted(
+        self, http: TestClient, hint: str
+    ) -> None:
+        with patch(
+            "quarry.ingestion.web_ingest.ingest_content", return_value={"chunks": 1}
+        ):
+            resp = http.post(
+                "/v1/remember",
+                json={"name": "n.md", "content": _CLEAN, "format_hint": hint},
             )
         assert resp.status_code == 202

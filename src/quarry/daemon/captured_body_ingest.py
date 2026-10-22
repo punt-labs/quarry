@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar, Protocol, Self, cast, final, get_args
+from typing import TYPE_CHECKING, ClassVar, Self, final
 
 from quarry.capture_url import CaptureUrl
 from quarry.content_guard import UnindexableContentError
@@ -18,29 +18,15 @@ if TYPE_CHECKING:
     from quarry.ingestion.fetched_body import FetchedBody
 
 
-class LabelledJob(Protocol):
-    """A daemon job carrying the plain-string labels of an ingest."""
-
-    @property
-    def overwrite(self) -> bool: ...
-    @property
-    def collection(self) -> str: ...
-    @property
-    def agent_handle(self) -> str: ...
-    @property
-    def memory_type(self) -> str: ...
-    @property
-    def summary(self) -> str: ...
-
-
 @final
 @dataclass(frozen=True, slots=True)
 class IngestLabels:
-    """Where an ingest writes and how it is tagged.
+    """Where an ingest writes and how it is tagged, validated once at the route.
 
-    The job dataclasses carry the daemon boundary's plain strings; this is the one
-    place those become the pipeline's :class:`IngestContext`, so the
-    ``memory_type`` narrowing to its storage vocabulary happens exactly once.
+    Routes build this from the request and the jobs carry it unchanged, so the
+    narrowing of ``memory_type`` to its storage vocabulary happens exactly once
+    (:class:`MemoryTypeGuard`) and every job turns it into the pipeline's
+    :class:`IngestContext` the same way.
     """
 
     overwrite: bool
@@ -48,46 +34,6 @@ class IngestLabels:
     agent_handle: str
     memory_type: MemoryType
     summary: str
-
-    _MEMORY_TYPES: ClassVar[tuple[str, ...]] = get_args(MemoryType.__value__)
-
-    @classmethod
-    def memory_type_of(cls, raw: str) -> MemoryType:
-        """Return *raw* as a storage ``memory_type``, or raise ``ValueError``."""
-        if raw not in cls._MEMORY_TYPES:
-            msg = f"unknown memory_type {raw!r}"
-            raise ValueError(msg)
-        return cast("MemoryType", raw)
-
-    @classmethod
-    def from_job(cls, job: LabelledJob) -> Self:
-        """Build labels from a job's plain-string fields."""
-        return cls.of(
-            overwrite=job.overwrite,
-            collection=job.collection,
-            agent_handle=job.agent_handle,
-            memory_type=job.memory_type,
-            summary=job.summary,
-        )
-
-    @classmethod
-    def of(
-        cls,
-        *,
-        overwrite: bool,
-        collection: str,
-        agent_handle: str,
-        memory_type: str,
-        summary: str,
-    ) -> Self:
-        """Build labels from the daemon boundary's plain strings."""
-        return cls(
-            overwrite,
-            collection,
-            agent_handle,
-            cls.memory_type_of(memory_type),
-            summary,
-        )
 
     def context(self, ctx: DaemonContext) -> IngestContext:
         """Return the pipeline context writing to *ctx*'s database with these labels."""

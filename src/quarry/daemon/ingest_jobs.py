@@ -44,12 +44,13 @@ class IngestJob:
     """
 
     source: str
-    overwrite: bool
-    collection: str
+    labels: IngestLabels
     scrub: bool
-    agent_handle: str
-    memory_type: str
-    summary: str
+
+    @property
+    def collection(self) -> str:
+        """Return the collection this job writes (the queue routing key)."""
+        return self.labels.collection
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Fetch and index the URL in a background thread, updating task state."""
@@ -73,7 +74,7 @@ class IngestJob:
         )
 
     def _captured(self) -> CapturedBodyIngest:
-        return CapturedBodyIngest(self.source, IngestLabels.from_job(self))
+        return CapturedBodyIngest(self.source, self.labels)
 
     def _ingest(self, ctx: DaemonContext) -> dict[str, object]:
         """Run the capture re-fetch (scrubbed, captures collection) or plain ingest.
@@ -100,7 +101,7 @@ class IngestJob:
             ingest_auto(
                 self.source,
                 Progress(None),
-                IngestLabels.from_job(self).context(ctx),
+                self.labels.context(ctx),
                 BulkOptions(),
             )
         )

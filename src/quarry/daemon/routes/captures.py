@@ -54,25 +54,19 @@ class CaptureRoutes(ContentRouteGroup):
         overwrite = RequestGuards.coerce_bool_field(body, "overwrite", default=True)
         if isinstance(overwrite, JSONResponse):
             return overwrite
-        memory_type = self._require_memory_type(body)
-        if isinstance(memory_type, JSONResponse):
-            return memory_type
+        tags = self._require_tags(body)
+        if isinstance(tags, JSONResponse):
+            return tags
+        memory_type, format_hint = tags
         source_url = self._str_field(body, "source_url")
         url_rejection = await self._reject_unsafe_source(source_url)
         if url_rejection is not None:
             return url_rejection
         collection = await self._collection_for_cwd(self._str_field(body, "cwd"))
-        inline = ScrubbedIngestJob(
-            name=name,
-            content=content,
-            collection=collection.name,
-            format_hint=self._str_field(body, "format_hint", "auto"),
-            overwrite=overwrite,
-            scrub_label="capture",
-            agent_handle=self._str_field(body, "agent_handle"),
-            memory_type=memory_type,
-            summary=self._str_field(body, "summary"),
+        labels = self._labels(
+            memory_type, body, overwrite=overwrite, collection=collection.name
         )
+        inline = ScrubbedIngestJob(name, content, labels, format_hint, "capture")
         return CaptureIngestJob(inline=inline, source_url=source_url)
 
     async def _collection_for_cwd(self, cwd: str) -> CapturesCollection:

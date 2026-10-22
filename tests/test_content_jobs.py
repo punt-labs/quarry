@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from quarry.content_guard import UnindexableContentError
+from quarry.daemon.captured_body_ingest import IngestLabels
 from quarry.daemon.content_jobs import CaptureIngestJob, ScrubbedIngestJob
 from quarry.ingestion.fetched_body import FetchedBody, FetchRefusedError
 from quarry.ingestion.media_type_policy import UnsupportedContentError
@@ -24,13 +25,15 @@ def _remember(
     return ScrubbedIngestJob(
         name="note",
         content=content,
-        collection=collection,
         format_hint="auto",
-        overwrite=overwrite,
         scrub_label="remember",
-        agent_handle="",
-        memory_type="",
-        summary="",
+        labels=IngestLabels(
+            overwrite=overwrite,
+            collection=collection,
+            agent_handle="",
+            memory_type="",
+            summary="",
+        ),
     )
 
 
@@ -106,13 +109,15 @@ class TestCreateIfAbsent:
         job = ScrubbedIngestJob(
             name="note from user@example.com",
             content="body",
-            collection="mem",
             format_hint="auto",
-            overwrite=False,
             scrub_label="remember",
-            agent_handle="",
-            memory_type="",
-            summary="",
+            labels=IngestLabels(
+                overwrite=False,
+                collection="mem",
+                agent_handle="",
+                memory_type="",
+                summary="",
+            ),
         )
         with patch("quarry.ingestion.web_ingest.ingest_content"):
             job.scrub_and_ingest(ctx)

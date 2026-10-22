@@ -102,24 +102,18 @@ class IngestionRoutes(ContentRouteGroup):
         overwrite = RequestGuards.coerce_bool_field(body, "overwrite", default=True)
         if isinstance(overwrite, JSONResponse):
             return overwrite
-        memory_type = self._require_memory_type(body)
-        if isinstance(memory_type, JSONResponse):
-            return memory_type
+        tags = self._require_tags(body)
+        if isinstance(tags, JSONResponse):
+            return tags
+        memory_type, format_hint = tags
         agent_handle = self._str_field(body, "agent_handle", "")
         collection = self._resolve_memory_collection(
             self._str_field(body, "collection", ""), agent_handle
         )
-        return ScrubbedIngestJob(
-            name=name,
-            content=content,
-            collection=collection,
-            format_hint=self._str_field(body, "format_hint", "auto"),
-            overwrite=overwrite,
-            scrub_label="remember",
-            agent_handle=agent_handle,
-            memory_type=memory_type,
-            summary=self._str_field(body, "summary", ""),
+        labels = self._labels(
+            memory_type, body, overwrite=overwrite, collection=collection
         )
+        return ScrubbedIngestJob(name, content, labels, format_hint, "remember")
 
     async def _learn_job(
         self, body: dict[str, object]
@@ -146,16 +140,14 @@ class IngestionRoutes(ContentRouteGroup):
             self._str_field(body, "cwd", ""),
             self.ctx.settings.registry_path,
         )
-        return ScrubbedIngestJob(
-            name=LessonComposer.document_name(name, topic),
-            content=lesson,
-            collection=collection.name,
-            format_hint="auto",
+        labels = self._labels(
+            self._narrow(LessonComposer.memory_type()),
+            {"summary": topic},
             overwrite=False,
-            scrub_label="learn",
-            agent_handle="",
-            memory_type=LessonComposer.memory_type(),
-            summary=topic,
+            collection=collection.name,
+        )
+        return ScrubbedIngestJob(
+            LessonComposer.document_name(name, topic), lesson, labels, "auto", "learn"
         )
 
     @staticmethod
@@ -180,36 +172,29 @@ class IngestionRoutes(ContentRouteGroup):
         memory_type = self._require_memory_type(body)
         if isinstance(memory_type, JSONResponse):
             return memory_type
-        collection = await self._ingest_collection(body, scrub=scrub)
+        collection = (
+            await self._captures_collection(body)
+            if scrub
+            else self._str_field(body, "collection", "")
+        )
         # Key the queue on the ACTUAL table: the explicit/captures name if set,
         # else the URL hostname — the SAME resolver the pipeline applies, so the
         # queue key never diverges from the table the job writes (single writer).
         collection = IngestCollection.resolve(source, collection).name
-        return IngestJob(
-            source=source,
-            overwrite=overwrite,
-            collection=collection,
-            scrub=scrub,
-            agent_handle=self._str_field(body, "agent_handle", ""),
-            memory_type=memory_type,
-            summary=self._str_field(body, "summary", ""),
+        labels = self._labels(
+            memory_type, body, overwrite=overwrite, collection=collection
         )
+        return IngestJob(source, labels, scrub)
 
-    async def _ingest_collection(self, body: dict[str, object], *, scrub: bool) -> str:
-        """Resolve the base collection: captures for a web-fetch, else the body.
+    async def _captures_collection(self, body: dict[str, object]) -> str:
+        """Return the ``<repo>-captures`` collection derived from ``body['cwd']``.
 
-        A web-fetch capture (``scrub``) writes the ``<repo>-captures`` collection
-        derived from ``cwd`` — resolved here, off the event loop, since
-        ``for_registry_path`` reads the registry.  A plain ingest returns the
-        body's collection (possibly empty); ``_ingest_job`` then routes it
-        through the shared :class:`IngestCollection` resolver so the queue key is
-        the concrete table the job writes.
+        A web-fetch capture (``scrub``) writes there, resolved off the event loop
+        because ``for_registry_path`` reads the registry.
         """
-        if scrub:
-            captures = await run_in_threadpool(
-                CapturesCollection.for_registry_path,
-                self._str_field(body, "cwd", ""),
-                self.ctx.settings.registry_path,
-            )
-            return captures.name
-        return self._str_field(body, "collection", "")
+        captures = await run_in_threadpool(
+            CapturesCollection.for_registry_path,
+            self._str_field(body, "cwd", ""),
+            self.ctx.settings.registry_path,
+        )
+        return captures.name

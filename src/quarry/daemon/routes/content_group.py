@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, TypeIs, get_args
 
 from starlette.responses import JSONResponse
 
@@ -11,6 +11,8 @@ from quarry.content_guard import BinaryContent, UnindexableContentError
 from quarry.daemon.captured_body_ingest import IngestLabels
 from quarry.daemon.routes.base import RouteGroup
 from quarry.db.row_budget import RowBudget, RowBudgetError
+from quarry.ingestion.memory_type_guard import MemoryTypeGuard
+from quarry.ingestion.web_ingest import FormatHint
 
 if TYPE_CHECKING:
     from quarry.daemon.ingest_unit import IngestUnit
@@ -30,6 +32,7 @@ class ContentRouteGroup(RouteGroup):
 
     _GUARD: ClassVar[BinaryContent] = BinaryContent()
     _BUDGET: ClassVar[RowBudget] = RowBudget()
+    _FORMAT_HINTS: ClassVar[tuple[str, ...]] = get_args(FormatHint.__value__)
     _LABEL_FIELDS: ClassVar[tuple[str, ...]] = (
         "name",
         "document_name",
@@ -90,6 +93,32 @@ class ContentRouteGroup(RouteGroup):
             return job
         return self.submit(job, self.ctx.tasks.begin(kind))
 
+    @classmethod
+    def _require_format_hint(cls, body: dict[str, object]) -> FormatHint | JSONResponse:
+        """Return ``body``'s ``format_hint`` (default ``auto``), or a 400."""
+        raw = cls._str_field(body, "format_hint", "auto")
+        if not cls._is_format_hint(raw):
+            choices = ", ".join(cls._FORMAT_HINTS)
+            msg = f"unknown format_hint {raw!r}; expected one of {choices}"
+            return JSONResponse({"error": msg}, status_code=400)
+        return raw
+
+    @classmethod
+    def _is_format_hint(cls, raw: str) -> TypeIs[FormatHint]:
+        return raw in cls._FORMAT_HINTS
+
+    def _require_tags(
+        self, body: dict[str, object]
+    ) -> tuple[MemoryType, FormatHint] | JSONResponse:
+        """Return the validated ``(memory_type, format_hint)`` of *body*, or a 400."""
+        memory_type = self._require_memory_type(body)
+        if isinstance(memory_type, JSONResponse):
+            return memory_type
+        format_hint = self._require_format_hint(body)
+        if isinstance(format_hint, JSONResponse):
+            return format_hint
+        return memory_type, format_hint
+
     def _require_memory_type(
         self, body: dict[str, object]
     ) -> MemoryType | JSONResponse:
@@ -98,4 +127,26 @@ class ContentRouteGroup(RouteGroup):
         rejection = self.reject_invalid_memory_type(memory_type)
         if rejection is not None:
             return rejection
-        return IngestLabels.memory_type_of(memory_type)
+        return self._narrow(memory_type)
+
+    @staticmethod
+    def _narrow(raw: str) -> MemoryType:
+        """Return *raw* as a storage ``MemoryType`` (the single narrowing point)."""
+        return MemoryTypeGuard().require(raw)
+
+    def _labels(
+        self,
+        memory_type: MemoryType,
+        fields: dict[str, object],
+        *,
+        overwrite: bool,
+        collection: str,
+    ) -> IngestLabels:
+        """Return the :class:`IngestLabels` of a request: the tags and its target."""
+        return IngestLabels(
+            overwrite,
+            collection,
+            self._str_field(fields, "agent_handle", ""),
+            memory_type,
+            self._str_field(fields, "summary", ""),
+        )

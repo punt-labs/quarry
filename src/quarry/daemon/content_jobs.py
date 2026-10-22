@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from functools import partial
+from typing import TYPE_CHECKING
 
 from starlette.concurrency import run_in_threadpool
 
@@ -61,17 +62,18 @@ class ScrubbedIngestJob:
 
     name: str
     content: str
-    collection: str
-    format_hint: str
-    overwrite: bool
+    labels: IngestLabels
+    format_hint: FormatHint
     scrub_label: str
-    agent_handle: str
-    memory_type: str
-    summary: str
+
+    @property
+    def collection(self) -> str:
+        """Return the collection this job writes (the queue routing key)."""
+        return self.labels.collection
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Scrub then ingest the content in a background thread, tracking state."""
-        terminal = RefusalAwareTerminal(state, self.scrubbed_name)
+        terminal = RefusalAwareTerminal(state, partial(self._scrubbed, self.name))
         with terminal.record():
             terminal.complete(await run_in_threadpool(self.scrub_and_ingest, ctx))
 
@@ -101,7 +103,7 @@ class ScrubbedIngestJob:
         The pipeline redacts content AND metadata.  The existence check uses the
         scrubbed name because that is the name the pipeline stores.
         """
-        if not self.overwrite and self._already_stored(ctx):
+        if not self.labels.overwrite and self._already_stored(ctx):
             return {
                 "document_name": self.name,
                 "collection": self.collection,
@@ -118,14 +120,12 @@ class ScrubbedIngestJob:
             ingest_content(
                 InlineIngest(
                     self.content,
-                    # self.format_hint is a plain str from the CLI/HTTP boundary;
-                    # InlineIngest's field is the tightened FormatHint Literal.
-                    format_hint=cast("FormatHint", self.format_hint),
+                    format_hint=self.format_hint,
                     content_scrubber=self._scrubbed,
                 ),
                 self.name,
                 Progress(None),
-                IngestLabels.from_job(self).context(ctx),
+                self.labels.context(ctx),
             )
         )
 
@@ -217,5 +217,5 @@ class CaptureIngestJob:
             self.inline.scrubbed_name(),
         )
         return CapturedBodyIngest(
-            self.source_url, IngestLabels.from_job(self.inline), self.inline.name
+            self.source_url, self.inline.labels, self.inline.name
         ).run(ctx, require_text=True)
