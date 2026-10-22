@@ -1013,6 +1013,19 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/quarry/daemon/refusal_aware_terminal.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.5,
+    "max_complexity": 2.0,
+    "avg_complexity": 1.5,
+    "module_size": 37.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/quarry/daemon/registration_lifecycle.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
@@ -1293,19 +1306,6 @@
     "max_complexity": 3.0,
     "avg_complexity": 1.83,
     "module_size": 70.0,
-    "classes_per_module": 1.0,
-    "class_to_func_ratio": 1.0,
-    "init_violations": 0.0,
-    "public_attr_violations": 0.0,
-    "future_annotations": 1.0
-  },
-  "src/quarry/daemon/task_outcome.py": {
-    "method_ratio": 1.0,
-    "encapsulation_ratio": 1.0,
-    "avg_params": 0.5,
-    "max_complexity": 2.0,
-    "avg_complexity": 1.5,
-    "module_size": 35.0,
     "classes_per_module": 1.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,

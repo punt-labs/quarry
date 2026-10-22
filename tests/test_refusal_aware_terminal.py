@@ -1,4 +1,4 @@
-"""Tests for quarry.daemon.task_outcome: a refusal ends a task quietly."""
+"""Tests for quarry.daemon.refusal_aware_terminal: a refusal ends a task quietly."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from quarry.content_guard import UnindexableContentError
-from quarry.daemon.task_outcome import TaskOutcome
+from quarry.daemon.refusal_aware_terminal import RefusalAwareTerminal
 from quarry.daemon.tasks import TaskState
 
 if TYPE_CHECKING:
@@ -25,7 +25,7 @@ def test_a_refusal_fails_the_task_with_one_warning_and_no_traceback(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     state = _state()
-    with caplog.at_level(logging.WARNING), TaskOutcome(state).record():
+    with caplog.at_level(logging.WARNING), RefusalAwareTerminal(state).record():
         _raise(UnindexableContentError("binary content rejected: pdf header"))
 
     assert (state.status, state.error) == (
@@ -41,7 +41,7 @@ def test_any_other_error_is_still_logged_with_its_traceback(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     state = _state()
-    with caplog.at_level(logging.WARNING), TaskOutcome(state).record():
+    with caplog.at_level(logging.WARNING), RefusalAwareTerminal(state).record():
         _raise(RuntimeError("boom"))
 
     assert (state.status, state.error) == ("failed", "boom")
@@ -52,13 +52,13 @@ def test_any_other_error_is_still_logged_with_its_traceback(
 
 def test_a_body_that_sets_its_own_status_is_left_alone() -> None:
     state = _state()
-    with TaskOutcome(state).record():
+    with RefusalAwareTerminal(state).record():
         state.status = "completed"
     assert state.status == "completed"
 
 
 def test_a_body_that_sets_no_status_is_marked_failed() -> None:
     state = _state()
-    with TaskOutcome(state).record():
+    with RefusalAwareTerminal(state).record():
         pass
     assert state.status == "failed"

@@ -232,7 +232,8 @@ Format strategies & \modpath{ingestion/format\_strategies.py} &
 Funnel      & \modpath{ingestion/chunk\_store\_funnel.py} & The single
               convergence point for chunking, embedding, and storing pages
               (the DES-036 choke point every ingest path shares). \\
-Chunker     & \modpath{ingestion/chunker.py}     & Split page text into
+Chunker     & \modpath{ingestion/page\_chunker.py}     & \texttt{PageChunker}:
+              refuse binary documents, split pages to the row budget, and pack
               overlapping chunks; respects page and heading boundaries. \\
 Web ingest  & \modpath{ingestion/web\_ingest.py} & \texttt{WebIngest}:
               inline content (\texttt{ingest\_content}) and URL
@@ -1480,7 +1481,7 @@ already committed.
 
 Every module that performs I/O declares
 \texttt{logger = logging.getLogger(\_\_name\_\_)}.  Pure data modules
-(\texttt{models.py}, \texttt{types.py}, \texttt{chunker.py}) do not.
+(\texttt{models.py}, \texttt{types.py}, \texttt{page\_chunker.py}) do not.
 
 Logging is configured once at each application entry point --- the CLI,
 the MCP server, and the \texttt{quarryd} daemon (DES-048; the daemon writes
@@ -2024,7 +2025,7 @@ named are representative, not exhaustive:
 \textbf{Tier} & \textbf{Strategy} & \textbf{Files} \\
 \midrule
 Tier 1: Core logic & Real data, no mocks & \texttt{test\_database},
-  \texttt{test\_chunker}, \texttt{test\_embeddings},
+  \texttt{test\_page\_chunker}, \texttt{test\_embeddings},
   \texttt{test\_code\_processor}, \texttt{test\_html\_processor},
   \texttt{test\_text\_processor}, \texttt{test\_collections},
   \texttt{test\_config}, \texttt{test\_formatting},

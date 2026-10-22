@@ -18,13 +18,16 @@ logger = logging.getLogger(__name__)
 
 
 @final
-class TaskOutcome:
+class RefusalAwareTerminal:
     """Bind a task's state to the way its body is allowed to end.
 
     :func:`task_terminal` logs every exception with a traceback.  Content the
     chunker refuses (binary that slipped past the request sniff) is an expected
     answer, so it ends the task ``failed`` with the reason and one WARN, no
     traceback; any other exception still goes to :func:`task_terminal` unchanged.
+
+    ``CaptureIngestJob._refetch`` swallows refusals itself, because the inline
+    phase already stored the content: a refused re-fetch must not fail the task.
     """
 
     __slots__ = ("_state",)
