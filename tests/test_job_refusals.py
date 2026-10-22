@@ -1,0 +1,251 @@
+"""Every URL job ends a refused or failed fetch alike: failed, quiet, URL-free."""
+
+from __future__ import annotations
+
+import logging
+from http.client import HTTPMessage, HTTPResponse
+from typing import TYPE_CHECKING
+from unittest.mock import MagicMock, patch
+from urllib.error import HTTPError, URLError
+
+import pytest
+
+from quarry.daemon.content_jobs import CaptureIngestJob, ScrubbedIngestJob
+from quarry.daemon.ingest_jobs import IngestJob
+from quarry.daemon.tasks import TaskState
+from tests.inproc_daemon import InProcessDaemon
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+_URL = "http://u:p@example.com/doc?token=SECRET"
+_OPEN = "quarry.ingestion.web_fetch.GUARDED_OPENER.open"
+_DISCOVER = "quarry.sitemap.SitemapDiscovery.discover_pages"
+
+
+@pytest.fixture(autouse=True)
+def _public_dns(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "quarry.url_safety.socket_module.getaddrinfo",
+        lambda *a, **k: [(2, 1, 6, "", ("93.184.216.34", 0))],
+    )
+
+
+def _response(content_type: str, body: bytes = b"") -> MagicMock:
+    headers = HTTPMessage()
+    if content_type:
+        headers["Content-Type"] = content_type
+    resp = MagicMock(spec=HTTPResponse)
+    resp.headers = headers
+    resp.url = "https://example.com/doc"
+    resp.read.side_effect = [body, b""]
+    resp.__enter__ = lambda s: s
+    resp.__exit__ = MagicMock(return_value=False)
+    return resp
+
+
+def _ingest_job(*, scrub: bool) -> IngestJob:
+    return IngestJob(
+        source=_URL,
+        overwrite=False,
+        collection="repo-captures" if scrub else "example.com",
+        scrub=scrub,
+        agent_handle="",
+        memory_type="",
+        summary="",
+    )
+
+
+def _capture_job(content: str = "") -> CaptureIngestJob:
+    inline = ScrubbedIngestJob(
+        name="WebFetch page",
+        content=content,
+        collection="repo-captures",
+        format_hint="auto",
+        overwrite=True,
+        scrub_label="capture",
+        agent_handle="",
+        memory_type="",
+        summary="",
+    )
+    return CaptureIngestJob(inline=inline, source_url=_URL)
+
+
+def _assert_quiet_and_url_free(
+    state: TaskState,
+    caplog: pytest.LogCaptureFixture,
+    subject: str = "ingest http://example.com/doc (task ",
+) -> None:
+    assert state.status == "failed"
+    for leak in ("SECRET", "u:p", "token"):
+        assert leak not in state.error
+        assert leak not in caplog.text
+    refusals = [r for r in caplog.records if r.name.endswith("refusal_aware_terminal")]
+    assert [r.levelno for r in refusals] == [logging.WARNING]
+    assert refusals[0].exc_info is None
+    # the URL appears only in its redacted form, once, with the task id
+    assert subject in refusals[0].getMessage()
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+
+async def test_a_plain_url_ingest_of_a_pdf_fails_end_to_end(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    daemon = InProcessDaemon(tmp_path)
+    state = TaskState(task_id="t-plain", kind="ingest")
+    resp = _response("application/pdf", b"%PDF-1.5")
+
+    with (
+        caplog.at_level(logging.WARNING),
+        patch(_DISCOVER, return_value=[]),
+        patch(_OPEN, return_value=resp),
+    ):
+        await _ingest_job(scrub=False).run(daemon.ctx, state)
+
+    _assert_quiet_and_url_free(state, caplog)
+    assert state.error == "content rejected: unsupported media type application/pdf"
+    assert daemon.ctx.database.store.count() == 0
+    resp.read.assert_not_called()
+
+
+@pytest.mark.parametrize("scrub", [False, True])
+@pytest.mark.parametrize(
+    "failure",
+    [
+        URLError("Cannot reach http://u:p@h/?token=x"),
+        HTTPError(_URL, 500, "boom", HTTPMessage(), None),
+        TimeoutError("slow"),
+        ConnectionResetError("reset by http://u:p@h/?token=x"),
+    ],
+    ids=["unreachable", "http-500", "timeout", "reset"],
+)
+async def test_a_failed_fetch_fails_the_task_with_a_url_free_reason(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    failure: BaseException,
+    *,
+    scrub: bool,
+) -> None:
+    daemon = InProcessDaemon(tmp_path)
+    state = TaskState(task_id="t-fail", kind="ingest")
+
+    with (
+        caplog.at_level(logging.WARNING),
+        patch(_DISCOVER, return_value=[]),
+        patch(_OPEN, side_effect=failure),
+    ):
+        await _ingest_job(scrub=scrub).run(daemon.ctx, state)
+
+    _assert_quiet_and_url_free(state, caplog)
+    assert state.error.startswith("fetch failed: ")
+    assert daemon.ctx.database.store.count() == 0
+
+
+async def test_a_refused_capture_refetch_fails_the_task(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The inline phase stored nothing, so a refused re-fetch must not complete."""
+    daemon = InProcessDaemon(tmp_path)
+    state = TaskState(task_id="t-cap", kind="capture")
+
+    with (
+        caplog.at_level(logging.WARNING),
+        patch(_OPEN, return_value=_response("application/pdf", b"%PDF")),
+    ):
+        await _capture_job().run(daemon.ctx, state)
+
+    _assert_quiet_and_url_free(state, caplog, subject="capture WebFetch page (task ")
+    assert state.error == "content rejected: unsupported media type application/pdf"
+    assert daemon.ctx.database.store.count() == 0
+
+
+async def test_an_oversized_body_is_a_content_refusal(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    daemon = InProcessDaemon(tmp_path)
+    state = TaskState(task_id="t-cap2", kind="ingest")
+    big = _response("text/plain")
+    big.read.side_effect = [b"x" * (5 * 1024 * 1024), b""]
+
+    with caplog.at_level(logging.WARNING), patch(_OPEN, return_value=big):
+        await _ingest_job(scrub=True).run(daemon.ctx, state)
+
+    _assert_quiet_and_url_free(state, caplog)
+    assert state.error.startswith("content rejected: response exceeds ")
+
+
+async def test_an_unknown_charset_is_a_content_refusal(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    daemon = InProcessDaemon(tmp_path)
+    state = TaskState(task_id="t-cs", kind="ingest")
+    resp = _response("text/plain; charset=nonsense-9", b"hello")
+
+    with caplog.at_level(logging.WARNING), patch(_OPEN, return_value=resp):
+        await _ingest_job(scrub=True).run(daemon.ctx, state)
+
+    _assert_quiet_and_url_free(state, caplog)
+    assert state.error == "content rejected: unsupported charset nonsense-9"
+
+
+async def test_a_scrub_failure_while_naming_the_task_still_ends_it(
+    tmp_path: Path,
+) -> None:
+    """Building the log subject can never leave a task pending."""
+    daemon = InProcessDaemon(tmp_path)
+    state = TaskState(task_id="t-subj", kind="remember")
+    job = ScrubbedIngestJob(
+        name="n",
+        content="x",
+        collection="c",
+        format_hint="auto",
+        overwrite=True,
+        scrub_label="remember",
+        agent_handle="",
+        memory_type="",
+        summary="",
+    )
+    with patch.object(
+        ScrubbedIngestJob, "scrub_and_ingest", side_effect=ValueError("x")
+    ):
+        await job.run(daemon.ctx, state)
+    assert state.status == "failed"
+
+
+def test_a_sitemap_with_one_pdf_page_ingests_the_rest(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A refused page is one recorded failure; the crawl indexes the others."""
+    from quarry.ingestion.bulk_ingest import BulkOptions
+    from quarry.ingestion.ingest_context import IngestContext, Progress
+    from quarry.ingestion.sitemap_ingest import SitemapCrawl, SitemapIngest
+    from quarry.sitemap import SitemapEntry
+
+    daemon = InProcessDaemon(tmp_path)
+    entries = [
+        SitemapEntry("https://good.test/a", None),
+        SitemapEntry("https://u:pw@good.test/paper.pdf?token=SECRET", None),
+    ]
+
+    def opener(request: object, timeout: float | None = None) -> MagicMock:
+        if "paper.pdf" in getattr(request, "full_url", ""):
+            return _response("application/pdf", b"%PDF")
+        return _response(
+            "text/html", b"<html><body><h1>Hi</h1><p>text</p></body></html>"
+        )
+
+    context = IngestContext(daemon.ctx.database, daemon.ctx.settings, collection="docs")
+    with caplog.at_level(logging.WARNING), patch(_OPEN, side_effect=opener):
+        result = SitemapIngest._bulk_ingest_entries(
+            SitemapCrawl(entries=entries, source_url="https://good.test/sitemap.xml"),
+            Progress(None),
+            context,
+            BulkOptions(workers=1),
+        )
+
+    assert (result["ingested"], result["failed"]) == (1, 1)
+    pdf_reason = "content rejected: unsupported media type application/pdf"
+    assert result["errors"] == [f"https://good.test/paper.pdf: {pdf_reason}"]
+    for leak in ("SECRET", "pw@", "token"):
+        assert leak not in caplog.text
+        assert leak not in result["errors"][0]

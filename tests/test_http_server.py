@@ -18,6 +18,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
+from urllib.error import URLError
 
 import numpy as np
 import pytest
@@ -1947,16 +1948,15 @@ class TestCapture:
         scrub = cast("Callable[[str], str]", inline.content_scrubber)  # type: ignore[attr-defined]
         assert "[REDACTED:email]" in scrub("reach user@example.com")
 
-    def test_refetch_fetch_body_failure_returns_zero_chunks_no_traceback(
+    def test_refetch_network_failure_fails_the_task_quietly_and_url_free(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """G4/bug-class 2: a network failure during refetch is a clean skip.
+        """A network failure during the re-fetch fails the task: nothing was stored.
 
-        Any of OSError/ValueError/TimeoutError from fetch_body must surface as
-        a WARN + zero-chunks return, not a stack trace in the daemon log.  The
-        WARN must not leak the raw source_url (userinfo/query can carry
-        secrets — CWE-532); the exception's ``str`` is dropped in favour of
-        its class name for the same reason.
+        The inline phase extracted zero chunks, so reporting ``completed`` would
+        claim a capture that does not exist.  The failure is a WARN with no
+        traceback, and neither it nor the task error leaks the raw source_url
+        (userinfo/query can carry secrets, CWE-532).
         """
         settings = _mock_settings(tmp_path)
         ctx = DaemonContext(settings)
@@ -1968,8 +1968,12 @@ class TestCapture:
             TestClient(app, raise_server_exceptions=False) as tc,
             patch("quarry.ingestion.web_ingest.ingest_content", return_value=empty),
             patch(
-                "quarry.ingestion.web_fetch.WebFetcher.fetch_body",
-                side_effect=OSError(f"boom fetching {raw_url}"),
+                "quarry.url_safety.socket_module.getaddrinfo",
+                return_value=[(2, 1, 6, "", ("93.184.216.34", 0))],
+            ),
+            patch(
+                "quarry.ingestion.web_fetch.GUARDED_OPENER.open",
+                side_effect=URLError(f"boom fetching {raw_url}"),
             ),
             caplog.at_level(logging.WARNING),
         ):
@@ -1984,12 +1988,11 @@ class TestCapture:
             )
             data = _poll_task_done(tc, resp.json()["task_id"])
 
-        assert data["status"] == "completed"
-        assert data["results"] == {"chunks": 0, "sections": 0}
-        assert "refetch" in caplog.text
+        assert data["status"] == "failed"
+        assert data["error"] == "fetch failed: cannot reach the host"
         assert "secret123" not in caplog.text
         assert "user:pass" not in caplog.text
-        assert "OSError" in caplog.text
+        assert all(r.exc_info is None for r in caplog.records)
 
     def test_nonempty_extraction_does_not_refetch(self, tmp_path: Path) -> None:
         """A page that extracts to >=1 chunk stores inline and never re-fetches."""

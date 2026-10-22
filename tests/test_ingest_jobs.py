@@ -3,11 +3,8 @@
 from __future__ import annotations
 
 import logging
-from http.client import HTTPMessage, HTTPResponse
 from typing import TYPE_CHECKING
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import patch
 
 from quarry.daemon.ingest_jobs import IngestJob
 from quarry.daemon.tasks import TaskState
@@ -17,6 +14,8 @@ from tests.inproc_daemon import InProcessDaemon
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    import pytest
 
 
 def test_ingest_spool_record_carries_the_source_url() -> None:
@@ -61,71 +60,6 @@ def _plain_job() -> IngestJob:
         memory_type="",
         summary="",
     )
-
-
-def _pdf_response() -> MagicMock:
-    """Return an open-response mock for a PDF whose body must never be read."""
-    headers = HTTPMessage()
-    headers["Content-Type"] = "application/pdf"
-    resp = MagicMock(spec=HTTPResponse)
-    resp.headers = headers
-    resp.url = "https://example.com/paper.pdf"
-    resp.__enter__ = lambda s: s
-    resp.__exit__ = MagicMock(return_value=False)
-    return resp
-
-
-@pytest.fixture
-def _public_dns(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "quarry.url_safety.socket_module.getaddrinfo",
-        lambda *a, **k: [(2, 1, 6, "", ("93.184.216.34", 0))],
-    )
-
-
-@pytest.mark.usefixtures("_public_dns")
-async def test_pdf_capture_fails_the_task_and_stores_nothing(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    """A PDF behind a capture URL is refused, not stored as 800 chunks of binary."""
-    daemon = InProcessDaemon(tmp_path)
-    state = TaskState(task_id="t-1", kind="ingest")
-    resp = _pdf_response()
-
-    with (
-        caplog.at_level(logging.WARNING),
-        patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open", return_value=resp),
-    ):
-        await _scrubbed_job(_PDF_URL).run(daemon.ctx, state)
-
-    assert state.status == "failed"
-    assert state.error == "content rejected: unsupported media type application/pdf"
-    assert daemon.ctx.database.store.count() == 0
-    resp.read.assert_not_called()
-
-
-@pytest.mark.usefixtures("_public_dns")
-async def test_pdf_capture_logs_one_redacted_warning_without_a_traceback(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    daemon = InProcessDaemon(tmp_path)
-    state = TaskState(task_id="t-2", kind="ingest")
-
-    with (
-        caplog.at_level(logging.WARNING),
-        patch(
-            "quarry.ingestion.web_fetch.GUARDED_OPENER.open",
-            return_value=_pdf_response(),
-        ),
-    ):
-        await _scrubbed_job(_PDF_URL).run(daemon.ctx, state)
-
-    [record] = [r for r in caplog.records if r.levelno >= logging.WARNING]
-    assert record.levelno == logging.WARNING
-    assert record.exc_info is None
-    assert "secret" not in record.getMessage()
-    assert "token" not in record.getMessage()
-    assert "example.com/paper.pdf" in record.getMessage()
 
 
 async def test_plain_ingest_of_a_refused_url_fails_the_task_without_a_traceback(

@@ -1,4 +1,4 @@
-"""Tests for quarry.daemon.captured_body_ingest — fetch a URL, route its body."""
+"""Tests for quarry.daemon.captured_body_ingest: fetch a URL, route its body."""
 
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from quarry.daemon.captured_body_ingest import CapturedBodyIngest
-from quarry.ingestion.fetched_body import FetchedBody
-from quarry.ingestion.media_type_policy import UnsupportedContentError
+from quarry.daemon.captured_body_ingest import CapturedBodyIngest, IngestLabels
+from quarry.ingestion.fetched_body import FetchedBody, FetchRefusedError
+from quarry.ingestion.web_fetch import WebFetcher
 
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
@@ -19,18 +19,20 @@ if TYPE_CHECKING:
 _FETCH_BODY = "quarry.ingestion.web_fetch.WebFetcher.fetch_body"
 
 
-def _captured(
-    source: str = "https://x.test/page", name: str = ""
-) -> CapturedBodyIngest:
-    return CapturedBodyIngest(
-        source,
+def _labels() -> IngestLabels:
+    return IngestLabels.of(
         overwrite=True,
         collection="repo-captures",
         agent_handle="",
         memory_type="",
         summary="",
-        name_override=name,
     )
+
+
+def _captured(
+    source: str = "https://x.test/page", name: str = ""
+) -> CapturedBodyIngest:
+    return CapturedBodyIngest(source, _labels(), name)
 
 
 def _ctx() -> DaemonContext:
@@ -43,52 +45,27 @@ class TestFetch:
     def test_returns_the_fetched_body(self) -> None:
         body = FetchedBody(text="hi", media_type="text/plain")
         with patch(_FETCH_BODY, return_value=body):
-            assert _captured().fetch("ingest: fetch") == body
+            assert _captured().fetch() == body
 
-    def test_a_refused_media_type_propagates_with_its_reason(self) -> None:
-        refusal = UnsupportedContentError("content rejected: unsupported media type x")
-        with (
-            patch(
-                "quarry.ingestion.web_fetch.WebFetcher.fetch_body", side_effect=refusal
-            ),
-            pytest.raises(UnsupportedContentError, match="content rejected"),
-        ):
-            _captured().fetch("ingest: fetch")
+    def test_the_fetcher_is_injectable(self) -> None:
+        fetcher = MagicMock(spec=WebFetcher)
+        body = FetchedBody(text="hi", media_type="text/plain")
+        fetcher.fetch_body.return_value = body
+        captured = CapturedBodyIngest("https://x.test/a", _labels(), fetcher=fetcher)
+        assert captured.fetch() == body
+        fetcher.fetch_body.assert_called_once_with("https://x.test/a")
 
-    @pytest.mark.parametrize(
-        "failure",
-        [
-            OSError("Cannot reach https://u:secret@x.test/p: refused"),
-            ValueError("HTTP 500 fetching https://x.test/p?token=abc"),
-            TimeoutError("Timed out fetching https://x.test/p?token=abc"),
-        ],
-    )
-    def test_transient_failures_log_only_the_class(
-        self, failure: BaseException, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_a_refusal_propagates_untouched(self) -> None:
+        refusal = FetchRefusedError("fetch failed: HTTP 500")
         with (
-            caplog.at_level(logging.WARNING),
-            patch(
-                "quarry.ingestion.web_fetch.WebFetcher.fetch_body", side_effect=failure
-            ),
+            patch(_FETCH_BODY, side_effect=refusal),
+            pytest.raises(FetchRefusedError, match="HTTP 500"),
         ):
-            assert _captured().fetch("ingest: fetch") is None
-        assert "secret" not in caplog.text
-        assert "token" not in caplog.text
-        assert type(failure).__name__ in caplog.text
+            _captured().fetch()
 
-    def test_policy_rejections_append_their_rule(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        failure = ValueError("URL rejected: private address")
-        with (
-            caplog.at_level(logging.WARNING),
-            patch(
-                "quarry.ingestion.web_fetch.WebFetcher.fetch_body", side_effect=failure
-            ),
-        ):
-            assert _captured().fetch("ingest: fetch") is None
-        assert "URL rejected: private address" in caplog.text
+    def test_the_subject_is_redacted(self) -> None:
+        subject = CapturedBodyIngest.redacted("https://u:pw@x.test/p?token=abc#f")
+        assert subject == "https://x.test/p"
 
 
 class TestIngest:
@@ -121,6 +98,23 @@ class TestIngest:
             _captured("https://u:secret@x.test/p?token=abc").ingest(_ctx(), body)
         assert ingest_content.call_args.args[1] == "https://x.test/p"
 
+    def test_the_labels_reach_the_pipeline_context(self) -> None:
+        body = FetchedBody(text="raw", media_type="text/plain")
+        labels = IngestLabels.of(
+            overwrite=False,
+            collection="notes",
+            agent_handle="rmh",
+            memory_type="fact",
+            summary="s",
+        )
+        with patch(
+            "quarry.ingestion.web_ingest.ingest_content", return_value={"chunks": 1}
+        ) as ingest_content:
+            CapturedBodyIngest("https://x.test/p", labels).ingest(_ctx(), body)
+        context = ingest_content.call_args.args[3]
+        assert (context.overwrite, context.collection) == (False, "notes")
+        assert (context.agent_handle, context.memory_type) == ("rmh", "fact")
+
 
 class TestRun:
     def test_a_stored_body_returns_the_ingest_result(self) -> None:
@@ -132,21 +126,78 @@ class TestRun:
                 return_value={"chunks": 3},
             ),
         ):
-            assert _captured().run(_ctx(), "capture: refetch") == {"chunks": 3}
+            assert _captured().run(_ctx()) == {"chunks": 3}
 
-    def test_a_failed_fetch_is_an_empty_result(self) -> None:
-        with patch(_FETCH_BODY, side_effect=OSError("down")):
-            result = _captured().run(_ctx(), "capture: refetch")
-        assert result == {"chunks": 0, "sections": 0}
-
-    def test_a_refusal_is_an_empty_result_naming_the_reason(
+    def test_a_failed_fetch_raises_rather_than_returning_empty(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        refusal = UnsupportedContentError("content rejected: unsupported media type x")
-        with caplog.at_level(logging.WARNING), patch(_FETCH_BODY, side_effect=refusal):
-            result = _captured("https://u:secret@x.test/p?token=abc").run(
-                _ctx(), "capture: refetch"
-            )
-        assert result["rejected"] == "content rejected: unsupported media type x"
-        assert "secret" not in caplog.text
-        assert "token" not in caplog.text
+        refusal = FetchRefusedError("fetch failed: timed out")
+        with (
+            caplog.at_level(logging.DEBUG),
+            patch(_FETCH_BODY, side_effect=refusal),
+            pytest.raises(FetchRefusedError),
+        ):
+            _captured().run(_ctx())
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("application/json", "application/json"),
+        ("text/html; charset=utf-8", "text/html;charset=utf-8"),
+        ("application/vnd.api+json", "application/vnd.api+json"),
+    ],
+    ids=["json", "html-charset", "vendor-plus"],
+)
+def test_passes_well_formed_values(raw: str, expected: str) -> None:
+    """A well-formed RFC 6838 media type survives sanitization unchanged."""
+    assert CapturedBodyIngest.marker_media_type(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "application/json\n<!-- injection -->",
+        "text/plain\r\n<!-- xss -->",
+        "application/json; charset=utf-8\r\n\r\ninjected",
+        "text/html\n\r\t <script>alert(1)</script>",
+    ],
+    ids=["newline-comment", "crlf-comment", "crlf-header-smuggle", "html-tag"],
+)
+def test_strips_marker_escape_attempts(raw: str) -> None:
+    """Whitespace, control bytes, and comment-escape needles are stripped clean."""
+    cleaned = CapturedBodyIngest.marker_media_type(raw)
+    assert "<!--" not in cleaned, f"leaked <!-- opener from {raw!r} → {cleaned!r}"
+    assert "-->" not in cleaned, f"leaked --> closer from {raw!r} → {cleaned!r}"
+    assert "\n" not in cleaned and "\r" not in cleaned, (
+        f"newline survived from {raw!r} → {cleaned!r}"
+    )
+
+
+def test_caps_length_at_128() -> None:
+    """A pathological megabyte Content-Type header is bounded at 128 chars."""
+    assert CapturedBodyIngest.marker_media_type("a" * 500) == "a" * 128
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["", "   ", "\t\n\r", "!!!\x00\x01", "<>&{}"],
+    ids=["empty", "spaces", "control", "punctuation-and-null", "unsafe-only"],
+)
+def test_falls_back_when_input_degrades_to_nothing(
+    raw: str,
+) -> None:
+    """Input that cleans to empty resolves to the RFC 2046 default octet-stream."""
+    assert CapturedBodyIngest.marker_media_type(raw) == "application/octet-stream"
+
+
+class TestIngestLabels:
+    def test_an_unknown_memory_type_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="unknown memory_type 'facts'"):
+            IngestLabels.memory_type_of("facts")
+
+    @pytest.mark.parametrize(
+        "memory_type", ["", "fact", "observation", "opinion", "procedure", "lesson"]
+    )
+    def test_every_storage_memory_type_is_accepted(self, memory_type: str) -> None:
+        assert IngestLabels.memory_type_of(memory_type) == memory_type

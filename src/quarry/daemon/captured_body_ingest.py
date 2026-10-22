@@ -1,44 +1,107 @@
-"""Fetch a captured URL and route its body: HTML through the extractor, else text."""
+"""Fetch a captured URL and route its body; the labels a daemon ingest carries."""
 
 from __future__ import annotations
 
-import logging
+import re
 from dataclasses import dataclass
-from functools import partial
-from typing import TYPE_CHECKING, Final, cast, final
+from typing import TYPE_CHECKING, ClassVar, Protocol, Self, cast, final, get_args
 
 from quarry.capture_url import CaptureUrl
-from quarry.content_guard import UnindexableContentError
-from quarry.ingestion.media_type_policy import (
-    MediaTypePolicy,
-    UnsupportedContentError,
-)
+from quarry.ingestion import ingest_context, web_ingest
+from quarry.ingestion.ingest_context import IngestContext, MemoryType
 from quarry.ingestion.web_fetch import WebFetcher
+from quarry.scrub import scrub_and_log
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from quarry.daemon.context import DaemonContext
     from quarry.ingestion.fetched_body import FetchedBody
-    from quarry.ingestion.ingest_context import MemoryType
 
-logger = logging.getLogger(__name__)
 
-# ``fetch_body`` messages are of two shapes: policy rejections that describe a
-# rule (``"URL rejected: ..."``, ``"final URL rejected: ..."``, and the
-# media-type refusal ``"content rejected: ..."``) and network/HTTP failures that
-# quote the raw URL (``"Cannot reach {url}: ..."``).  Only the first shape is
-# safe to append to the log — the second would carry ``?token=``/``user:pass@``
-# secrets into the persistent quarry.log (CWE-532).
-_SAFE_FETCH_ERROR_PREFIXES: Final = (
-    "URL rejected:",
-    "final URL rejected:",
-    "content rejected:",
-)
+class LabelledJob(Protocol):
+    """A daemon job carrying the plain-string labels of an ingest."""
+
+    @property
+    def overwrite(self) -> bool: ...
+    @property
+    def collection(self) -> str: ...
+    @property
+    def agent_handle(self) -> str: ...
+    @property
+    def memory_type(self) -> str: ...
+    @property
+    def summary(self) -> str: ...
 
 
 @final
 @dataclass(frozen=True, slots=True)
+class IngestLabels:
+    """Where an ingest writes and how it is tagged.
+
+    The job dataclasses carry the daemon boundary's plain strings; this is the one
+    place those become the pipeline's :class:`IngestContext`, so the
+    ``memory_type`` narrowing to its storage vocabulary happens exactly once.
+    """
+
+    overwrite: bool
+    collection: str
+    agent_handle: str
+    memory_type: MemoryType
+    summary: str
+
+    _MEMORY_TYPES: ClassVar[tuple[str, ...]] = get_args(MemoryType.__value__)
+
+    @classmethod
+    def memory_type_of(cls, raw: str) -> MemoryType:
+        """Return *raw* as a storage ``memory_type``, or raise ``ValueError``."""
+        if raw not in cls._MEMORY_TYPES:
+            msg = f"unknown memory_type {raw!r}"
+            raise ValueError(msg)
+        return cast("MemoryType", raw)
+
+    @classmethod
+    def from_job(cls, job: LabelledJob) -> Self:
+        """Build labels from a job's plain-string fields."""
+        return cls.of(
+            overwrite=job.overwrite,
+            collection=job.collection,
+            agent_handle=job.agent_handle,
+            memory_type=job.memory_type,
+            summary=job.summary,
+        )
+
+    @classmethod
+    def of(
+        cls,
+        *,
+        overwrite: bool,
+        collection: str,
+        agent_handle: str,
+        memory_type: str,
+        summary: str,
+    ) -> Self:
+        """Build labels from the daemon boundary's plain strings."""
+        return cls(
+            overwrite,
+            collection,
+            agent_handle,
+            cls.memory_type_of(memory_type),
+            summary,
+        )
+
+    def context(self, ctx: DaemonContext) -> IngestContext:
+        """Return the pipeline context writing to *ctx*'s database with these labels."""
+        return IngestContext(
+            ctx.database,
+            ctx.settings,
+            overwrite=self.overwrite,
+            collection=self.collection,
+            agent_handle=self.agent_handle,
+            memory_type=self.memory_type,
+            summary=self.summary,
+        )
+
+
+@final
 class CapturedBodyIngest:
     """One scrubbed capture of a URL: fetch it, then store the body by media type.
 
@@ -49,79 +112,51 @@ class CapturedBodyIngest:
     :func:`ingest_content` with a leading ``<!-- media_type: X -->`` marker so a
     reader — and a downstream grep — knows the shape.
 
-    ``name_override`` is empty for the primary URL route (the URL is the natural
-    name); a capture re-fetch sets it to the inline capture's friendly name so a
-    non-HTML capture keeps that name instead of falling back to the raw URL.
+    A fetch that fails or is refused, or a body that cannot be indexed, raises
+    :class:`UnindexableContentError` with a URL-free reason; nothing is returned
+    for a failure, so no caller can report an empty success.  ``name_override`` is
+    empty for the primary URL route (the URL is the natural name); a capture
+    re-fetch sets it to the inline capture's friendly name so a non-HTML capture
+    keeps that name instead of falling back to the raw URL.
     """
 
-    source: str
-    overwrite: bool
-    collection: str
-    agent_handle: str
-    memory_type: str
-    summary: str
-    name_override: str = ""
+    __slots__ = ("_fetcher", "_labels", "_name_override", "_source")
 
-    def fetch(self, kind: str) -> FetchedBody | None:
-        """Fetch ``source``, or return ``None`` after logging the failure redacted.
+    _source: str
+    _labels: IngestLabels
+    _name_override: str
+    _fetcher: WebFetcher
 
-        ``fetch_body`` raises ``OSError``/``ValueError``/``TimeoutError`` with the
-        raw URL embedded in the message (``"Cannot reach {url}: ..."``); letting
-        that reach the log or ``task_terminal``'s traceback leaks ``?token=`` and
-        ``user:pass@`` secrets into the persistent quarry.log (CWE-532).  Redact
-        the URL through the normaliser writes use, render the failure through
-        :meth:`_classify_fetch_error`, and return ``None`` so the caller
-        short-circuits with an empty result instead of a traceback.
+    _MARKER_UNSAFE: ClassVar[re.Pattern[str]] = re.compile(r"[^a-zA-Z0-9/.+;=_-]")
+    _MARKER_MAX_LEN: ClassVar[int] = 128
+    _MARKER_FALLBACK: ClassVar[str] = "application/octet-stream"
 
-        A media-type refusal is not a transient failure: it carries a URL-free
-        reason, so it propagates for the caller to report.
+    def __new__(
+        cls,
+        source: str,
+        labels: IngestLabels,
+        name_override: str = "",
+        fetcher: WebFetcher | None = None,
+    ) -> Self:
+        self = super().__new__(cls)
+        self._source = source
+        self._labels = labels
+        self._name_override = name_override
+        self._fetcher = fetcher or WebFetcher()
+        return self
 
-        Raises:
-            UnsupportedContentError: The URL serves a media type that is not text.
-        """
-        try:
-            return WebFetcher().fetch_body(self.source)
-        except UnsupportedContentError:
-            raise
-        except (OSError, ValueError, TimeoutError) as exc:
-            logger.warning(
-                "%s of %s failed (%s); skipping",
-                kind,
-                CaptureUrl.for_web_fetch(self.source),
-                self._classify_fetch_error(exc),
-            )
-            return None
+    @staticmethod
+    def redacted(source: str) -> str:
+        """Return *source* with userinfo, query and fragment dropped, for a log line."""
+        return CaptureUrl.for_web_fetch(source)
 
-    def run(self, ctx: DaemonContext, kind: str) -> dict[str, object]:
-        """Fetch and store ``source``; a failure or rejection is a result, not a raise.
+    def fetch(self) -> FetchedBody:
+        """Fetch ``source``; every failure is a URL-free :class:`FetchRefusedError`."""
+        return self._fetcher.fetch_body(self._source)
 
-        A fetch failure is an empty result (logged by :meth:`fetch`); a refused
-        media type or binary body is :meth:`guarded`.
-        """
-        return self.guarded(kind, partial(self._fetch_and_ingest, ctx, kind))
-
-    def guarded(
-        self, kind: str, action: Callable[[], dict[str, object]]
-    ) -> dict[str, object]:
-        """Run *action*, reporting an unindexable body as an empty ``rejected`` result.
-
-        On success the result is *action*'s own.  On a refusal it is
-        ``{"chunks": 0, "sections": 0, "rejected": <reason>}``, with one redacted
-        WARN and no traceback: the reason is URL-free, the URL is redacted, and the
-        caller decides whether ``rejected`` fails a task.
-        """
-        try:
-            return action()
-        except UnindexableContentError as exc:
-            url = CaptureUrl.for_web_fetch(self.source)
-            logger.warning("%s of %s rejected: %s", kind, url, exc)
-            return {"chunks": 0, "sections": 0, "rejected": str(exc)}
-
-    def _fetch_and_ingest(self, ctx: DaemonContext, kind: str) -> dict[str, object]:
-        body = self.fetch(kind)
-        if body is None:
-            return {"chunks": 0, "sections": 0}
-        return self.ingest(ctx, body)
+    def run(self, ctx: DaemonContext) -> dict[str, object]:
+        """Fetch and store ``source``, returning the ingest result."""
+        return self.ingest(ctx, self.fetch())
 
     def ingest(self, ctx: DaemonContext, body: FetchedBody) -> dict[str, object]:
         """Route a fetched body: HTML via extractor, else text with a mime marker.
@@ -132,60 +167,40 @@ class CapturedBodyIngest:
         structure and leaves ``?email=``, ``?token=``, and ``user:pass@``
         components on the persisted ``document_name`` (CWE-532).  The HTML
         branch already routes through :func:`ingest_url`, which does the same
-        derivation internally, so the two branches now match.
+        derivation internally, so the two branches agree.
         """
-        from quarry.ingestion.ingest_context import (  # noqa: PLC0415
-            IngestContext,
-            Progress,
-        )
-        from quarry.ingestion.web_ingest import (  # noqa: PLC0415
-            InlineIngest,
-            UrlIngest,
-            ingest_content,
-            ingest_url,
-        )
-        from quarry.scrub import scrub_and_log  # noqa: PLC0415
 
         def scrub(text: str) -> str:
             return scrub_and_log(text, "web-fetch")
 
-        context = IngestContext(
-            ctx.database,
-            ctx.settings,
-            overwrite=self.overwrite,
-            collection=self.collection,
-            agent_handle=self.agent_handle,
-            memory_type=cast("MemoryType", self.memory_type),
-            summary=self.summary,
-        )
-
+        context = self._labels.context(ctx)
+        progress = ingest_context.Progress(None)
         if body.is_html:
-            request = UrlIngest(
-                self.source, content_scrubber=scrub, prefetched_html=body.text
+            request = web_ingest.UrlIngest(
+                self._source, content_scrubber=scrub, prefetched_html=body.text
             )
-            return dict(ingest_url(request, Progress(None), context))
+            return dict(web_ingest.ingest_url(request, progress, context))
 
-        media_type = MediaTypePolicy.sanitize(body.media_type)
+        media_type = self.marker_media_type(body.media_type)
         content = f"<!-- media_type: {media_type} -->\n{body.text}"
-        name = self.name_override or CaptureUrl(self.source).redacted(scrub)
-        inline = InlineIngest(content, format_hint="markdown", content_scrubber=scrub)
-        return dict(ingest_content(inline, name, Progress(None), context))
+        name = self._name_override or CaptureUrl(self._source).redacted(scrub)
+        inline = web_ingest.InlineIngest(
+            content, format_hint="markdown", content_scrubber=scrub
+        )
+        return dict(web_ingest.ingest_content(inline, name, progress, context))
 
-    @staticmethod
-    def _classify_fetch_error(exc: BaseException) -> str:
-        """Return the log-safe rendering of a ``fetch_body`` exception.
+    @classmethod
+    def marker_media_type(cls, raw: str) -> str:
+        """Return a marker-safe media type; fall back on empty/unsafe input.
 
-        Two message shapes are known-safe -- the url-safety rejections raised
-        by ``fetch_body`` and ``_check_final_url`` describe a policy rule and
-        do not embed the raw URL -- and their text is appended so an operator
-        sees WHY the URL was rejected (private IP, redirect to blocked host,
-        metadata hostname) without having to reproduce with debug logging.
-        Every other exception falls back to the class name alone, preserving
-        the CWE-532 guard for network/HTTP failures whose messages quote the
-        raw URL (``"Cannot reach {url}: ..."``, ``"HTTP N fetching {url}"``).
+        ``raw`` is the ``Content-Type`` primary token from the HTTP response and
+        is server-controlled.  Interpolating it verbatim into the
+        ``<!-- media_type: X -->`` capture marker would let a header carrying
+        whitespace, control bytes, or the ``-->`` needle break the single-line
+        HTML-comment contract or escape the marker entirely.  Strip to the
+        RFC 6838-like shape (alphanumerics plus ``/.+;=_-``), cap at 128 chars,
+        and substitute ``application/octet-stream`` when the input degrades to
+        nothing after cleaning — the marker survives; the injection does not.
         """
-        msg = str(exc)
-        cls = type(exc).__name__
-        if msg.startswith(_SAFE_FETCH_ERROR_PREFIXES):
-            return f"{cls}: {msg}"
-        return cls
+        cleaned = cls._MARKER_UNSAFE.sub("", raw)[: cls._MARKER_MAX_LEN]
+        return cleaned or cls._MARKER_FALLBACK

@@ -55,11 +55,10 @@ class TestMediaTypePolicy:
             == "content rejected: unsupported media type application/pdf"
         )
 
-    def test_hostile_media_type_is_sanitized_in_the_message(self) -> None:
+    def test_hostile_media_type_is_not_echoed_in_the_message(self) -> None:
         with pytest.raises(UnsupportedContentError) as info:
             MediaTypePolicy().require("image/x\n<!-- injected -->")
-        assert "\n" not in str(info.value)
-        assert "<!--" not in str(info.value)
+        assert str(info.value) == "content rejected: unsupported media type (invalid)"
 
     def test_unsupported_content_is_an_unindexable_value_error(self) -> None:
         assert issubclass(UnsupportedContentError, UnindexableContentError)
@@ -71,52 +70,36 @@ class TestMediaTypePolicy:
         assert policy.allows("text/plain")
 
 
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [
-        ("application/json", "application/json"),
-        ("text/html; charset=utf-8", "text/html;charset=utf-8"),
-        ("application/vnd.api+json", "application/vnd.api+json"),
-    ],
-    ids=["json", "html-charset", "vendor-plus"],
-)
-def test_sanitize_media_type_passes_well_formed_values(raw: str, expected: str) -> None:
-    """A well-formed RFC 6838 media type survives sanitization unchanged."""
-    assert MediaTypePolicy.sanitize(raw) == expected
-
-
-@pytest.mark.parametrize(
-    "raw",
-    [
-        "application/json\n<!-- injection -->",
-        "text/plain\r\n<!-- xss -->",
-        "application/json; charset=utf-8\r\n\r\ninjected",
-        "text/html\n\r\t <script>alert(1)</script>",
-    ],
-    ids=["newline-comment", "crlf-comment", "crlf-header-smuggle", "html-tag"],
-)
-def test_sanitize_media_type_strips_marker_escape_attempts(raw: str) -> None:
-    """Whitespace, control bytes, and comment-escape needles are stripped clean."""
-    cleaned = MediaTypePolicy.sanitize(raw)
-    assert "<!--" not in cleaned, f"leaked <!-- opener from {raw!r} → {cleaned!r}"
-    assert "-->" not in cleaned, f"leaked --> closer from {raw!r} → {cleaned!r}"
-    assert "\n" not in cleaned and "\r" not in cleaned, (
-        f"newline survived from {raw!r} → {cleaned!r}"
+class TestNormalization:
+    @pytest.mark.parametrize(
+        "header",
+        ["Application/JSON", "application/json; charset=utf-8", " TEXT/Plain "],
     )
+    def test_allows_normalizes_its_input(self, header: str) -> None:
+        assert MediaTypePolicy().allows(header)
+
+    def test_a_refused_header_is_still_refused_after_normalizing(self) -> None:
+        assert not MediaTypePolicy().allows("Application/PDF; x=y")
+
+    def test_exact_entries_must_be_lowercase(self) -> None:
+        with pytest.raises(ValueError, match="lowercase"):
+            MediaTypePolicy(exact=frozenset({"Application/JSON"}))
+
+    def test_prefixes_must_be_lowercase(self) -> None:
+        with pytest.raises(ValueError, match="lowercase"):
+            MediaTypePolicy(prefixes=("TEXT/",))
+
+    def test_suffixes_must_be_lowercase(self) -> None:
+        with pytest.raises(ValueError, match="lowercase"):
+            MediaTypePolicy(suffixes=("+JSON",))
 
 
-def test_sanitize_media_type_caps_length_at_128() -> None:
-    """A pathological megabyte Content-Type header is bounded at 128 chars."""
-    assert MediaTypePolicy.sanitize("a" * 500) == "a" * 128
+class TestLabel:
+    def test_a_well_formed_type_is_echoed(self) -> None:
+        assert MediaTypePolicy.label("Application/PDF; x=1") == "application/pdf"
 
-
-@pytest.mark.parametrize(
-    "raw",
-    ["", "   ", "\t\n\r", "!!!\x00\x01", "<>&{}"],
-    ids=["empty", "spaces", "control", "punctuation-and-null", "unsafe-only"],
-)
-def test_sanitize_media_type_falls_back_when_input_degrades_to_nothing(
-    raw: str,
-) -> None:
-    """Input that cleans to empty resolves to the RFC 2046 default octet-stream."""
-    assert MediaTypePolicy.sanitize(raw) == "application/octet-stream"
+    @pytest.mark.parametrize(
+        "raw", ["", "pdf", "a/b\n<!-- x -->", "x" * 500 + "/y", "a b/c"]
+    )
+    def test_anything_else_is_not_echoed(self, raw: str) -> None:
+        assert MediaTypePolicy.label(raw) == "(invalid)"

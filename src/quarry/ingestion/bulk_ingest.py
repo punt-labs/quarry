@@ -8,8 +8,8 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, final
 
-from quarry.capture_url import CaptureUrl
 from quarry.ingestion.ingest_context import Progress
+from quarry.ingestion.page_report import PageReport
 from quarry.ingestion.web_ingest import UrlIngest
 
 if TYPE_CHECKING:
@@ -181,7 +181,7 @@ class BulkIngestRunner:
                     # raw URL, since a userinfo/query secret on a program-
                     # discovered sitemap URL would otherwise leak into
                     # quarry.log or the progress stream (CWE-532).
-                    redacted_url = CaptureUrl(page_url).redacted(lambda text: text)
+                    redacted_url = PageReport(page_url).url
                     try:
                         future.result()
                         ingested += 1
@@ -195,17 +195,13 @@ class BulkIngestRunner:
                         # Broad except is correct here: this is the per-task
                         # outcome boundary for the parallel fan-out (PY-EH-6),
                         # not internal code -- one worker's failure must not
-                        # abort the others. But WebFetcher and its callees
-                        # also embed the raw URL verbatim in their exception
-                        # messages ("Cannot reach {url}: ..."), so str(exc) is
-                        # never safe to put in errors[], the progress stream,
-                        # or the log either -- report only the exception
-                        # CLASS, never its message.
+                        # abort the others.  PageReport renders the failure:
+                        # a refusal's URL-free reason, else the class name alone
+                        # (other messages quote the raw URL).
                         failed += 1
-                        errors.append(f"{redacted_url}: {type(exc).__name__}")
-                        logger.warning(
-                            "Failed to ingest %s (%s)", redacted_url, type(exc).__name__
-                        )
-                        progress("Failed %s: %s", redacted_url, type(exc).__name__)
+                        reason = PageReport.failure(exc)
+                        errors.append(f"{redacted_url}: {reason}")
+                        logger.warning("Failed to ingest %s (%s)", redacted_url, reason)
+                        progress("Failed %s: %s", redacted_url, reason)
 
         return ingested, failed, errors

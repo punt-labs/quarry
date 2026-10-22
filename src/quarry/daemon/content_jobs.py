@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, cast
 
 from starlette.concurrency import run_in_threadpool
 
-from quarry.daemon.captured_body_ingest import CapturedBodyIngest
+from quarry.daemon.captured_body_ingest import CapturedBodyIngest, IngestLabels
 from quarry.daemon.job_spool import SpoolRecord
 from quarry.daemon.refusal_aware_terminal import RefusalAwareTerminal
 
@@ -26,7 +26,6 @@ if TYPE_CHECKING:
 
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.tasks import TaskState
-    from quarry.ingestion.ingest_context import MemoryType
     from quarry.ingestion.web_ingest import FormatHint
 
 logger = logging.getLogger(__name__)
@@ -72,7 +71,7 @@ class ScrubbedIngestJob:
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Scrub then ingest the content in a background thread, tracking state."""
-        with RefusalAwareTerminal(state).record():
+        with RefusalAwareTerminal(state, self.scrubbed_name).record():
             result = await run_in_threadpool(self.scrub_and_ingest, ctx)
             state.status = "completed"
             state.results = dict(result)
@@ -110,10 +109,7 @@ class ScrubbedIngestJob:
                 "chunks": 0,
                 _SKIPPED: "exists",
             }
-        from quarry.ingestion.ingest_context import (  # noqa: PLC0415
-            IngestContext,
-            Progress,
-        )
+        from quarry.ingestion.ingest_context import Progress  # noqa: PLC0415
         from quarry.ingestion.web_ingest import (  # noqa: PLC0415
             InlineIngest,
             ingest_content,
@@ -130,20 +126,13 @@ class ScrubbedIngestJob:
                 ),
                 self.name,
                 Progress(None),
-                IngestContext(
-                    ctx.database,
-                    ctx.settings,
-                    overwrite=self.overwrite,
-                    collection=self.collection,
-                    agent_handle=self.agent_handle,
-                    # self.memory_type is a plain str carried from the daemon's
-                    # HTTP boundary (unvalidated beyond the reserved-value
-                    # reject); IngestContext's field is the tightened Literal.
-                    memory_type=cast("MemoryType", self.memory_type),
-                    summary=self.summary,
-                ),
+                IngestLabels.from_job(self).context(ctx),
             )
         )
+
+    def scrubbed_name(self) -> str:
+        """Return the document name as stored, safe to log."""
+        return self._scrubbed(self.name)
 
     def _already_stored(self, ctx: DaemonContext) -> bool:
         """Return whether the collection already holds a document of this name."""
@@ -196,7 +185,7 @@ class CaptureIngestJob:
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Ingest inline, re-fetching the source on empty, tracking task state."""
-        with RefusalAwareTerminal(state).record():
+        with RefusalAwareTerminal(state, self.inline.scrubbed_name).record():
             result = await run_in_threadpool(self._capture, ctx)
             state.status = "completed"
             state.results = dict(result)
@@ -217,23 +206,17 @@ class CaptureIngestJob:
     def _refetch(self, ctx: DaemonContext) -> dict[str, object]:
         """Re-fetch the source URL and store the body by its media type.
 
-        A safety/network failure, a refused media type, or a binary body logs
-        cleanly at WARN and returns an empty result — never a traceback —
-        because ``_capture`` already stored what the inline phase had.  A
-        successful fetch flows through the same HTML-vs-text routing the primary
-        URL path uses (:class:`CapturedBodyIngest`), so both agree on the
-        media-type contract instead of drifting.
+        Runs only when the inline phase stored nothing, so a refused media type,
+        a binary body, or a failed fetch raises its URL-free reason and the task
+        ends ``failed``: reporting ``completed`` would claim a capture that was
+        never stored.  A successful fetch flows through the same HTML-vs-text
+        routing the primary URL path uses (:class:`CapturedBodyIngest`), so both
+        agree on the media-type contract instead of drifting.
         """
         logger.info(
             "capture: %s inline extracted to zero chunks — re-fetching via daemon",
-            self.inline.name,
+            self.inline.scrubbed_name(),
         )
         return CapturedBodyIngest(
-            self.source_url,
-            self.inline.overwrite,
-            self.inline.collection,
-            self.inline.agent_handle,
-            self.inline.memory_type,
-            self.inline.summary,
-            self.inline.name,
-        ).run(ctx, "capture: refetch")
+            self.source_url, IngestLabels.from_job(self.inline), self.inline.name
+        ).run(ctx)

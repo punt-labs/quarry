@@ -19,6 +19,7 @@ from urllib.error import URLError
 import pytest
 from usp.web_client.abstract_client import WebClientErrorResponse
 
+from quarry.ingestion.fetched_body import FetchRefusedError
 from quarry.ingestion.pinned_connection import (
     PinnedHTTPConnection,
     PinnedHTTPSConnection,
@@ -151,7 +152,7 @@ class TestRebindingSimulation:
         resolver = _Resolver((_PUBLIC,), (_BLOCKED,))
         monkeypatch.setattr(_GETADDRINFO, resolver)
         targets = _forbid_create_connection(monkeypatch)
-        with pytest.raises(ValueError, match=r"blocked address|metadata"):
+        with pytest.raises(FetchRefusedError, match=r"blocked address|metadata"):
             WebFetcher().fetch("https://rebind.test/page")
         assert targets == []  # no socket ever opened to the blocked address
         assert resolver.calls >= 2  # admission gate, then the connect-time resolve

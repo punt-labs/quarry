@@ -24,7 +24,8 @@ class MediaTypePolicy:
 
     Anything else (a PDF, an image, an archive) is refused from the headers alone,
     before a single body byte is read.  An absent header is allowed: the content
-    classifier still judges the decoded body.
+    classifier still judges the decoded body.  Entries are lowercase and a media
+    type is normalized (parameters dropped, lowercased) before it is compared.
     """
 
     exact: frozenset[str] = frozenset(
@@ -39,41 +40,44 @@ class MediaTypePolicy:
     prefixes: tuple[str, ...] = ("text/",)
     suffixes: tuple[str, ...] = ("+json", "+xml")
 
-    _UNSAFE: ClassVar[re.Pattern[str]] = re.compile(r"[^a-zA-Z0-9/.+;=_-]")
-    _MAX_LEN: ClassVar[int] = 128
-    _FALLBACK: ClassVar[str] = "application/octet-stream"
+    _TOKEN: ClassVar[re.Pattern[str]] = re.compile(
+        r"[a-z0-9][a-z0-9.+_-]{0,126}/[a-z0-9.+_-]{1,127}"
+    )
+
+    def __post_init__(self) -> None:
+        for entry in (*self.exact, *self.prefixes, *self.suffixes):
+            if entry != entry.lower():
+                msg = f"media type policy entries must be lowercase, got {entry!r}"
+                raise ValueError(msg)
+
+    @staticmethod
+    def normalize(raw: str) -> str:
+        """Return the lower-cased primary token of a ``Content-Type`` header."""
+        return raw.split(";", 1)[0].strip().lower()
 
     def allows(self, media_type: str) -> bool:
-        """Return whether *media_type* (lower-cased, parameters removed) is allowed."""
+        """Return whether the (header-form) *media_type* is allowed."""
+        token = self.normalize(media_type)
         return (
-            not media_type
-            or media_type in self.exact
-            or media_type.startswith(self.prefixes)
-            or media_type.endswith(self.suffixes)
+            not token
+            or token in self.exact
+            or token.startswith(self.prefixes)
+            or token.endswith(self.suffixes)
         )
 
     def require(self, media_type: str) -> None:
         """Raise :class:`UnsupportedContentError` unless *media_type* is allowed."""
         if not self.allows(media_type):
-            msg = (
-                f"content rejected: unsupported media type {self.sanitize(media_type)}"
-            )
+            label = self.label(media_type)
+            msg = f"content rejected: unsupported media type {label}"
             raise UnsupportedContentError(msg)
 
-    @staticmethod
-    def sanitize(raw: str) -> str:
-        """Return a log- and marker-safe media type; fall back on unsafe input.
+    @classmethod
+    def label(cls, media_type: str) -> str:
+        """Return *media_type* for a message, or ``(invalid)`` if it is not a token.
 
-        ``raw`` is the ``Content-Type`` primary token from the HTTP response and
-        is server-controlled.  Interpolating it verbatim into the
-        ``<!-- media_type: X -->`` capture marker would let a header carrying
-        whitespace, control bytes, or the ``-->`` needle break the single-line
-        HTML-comment contract or escape the marker entirely.  Strip to the
-        RFC 6838 shape (alphanumerics plus ``/.+;=_-``), cap at 128 chars, and
-        substitute ``application/octet-stream`` when the input degrades to
-        nothing after cleaning — the marker survives; the injection does not.
+        The header is server-controlled, so only a well-formed ``type/subtype``
+        is echoed into a log line or an error.
         """
-        cleaned = MediaTypePolicy._UNSAFE.sub("", raw)[: MediaTypePolicy._MAX_LEN]
-        if not cleaned or "-->" in cleaned:
-            return MediaTypePolicy._FALLBACK
-        return cleaned
+        token = cls.normalize(media_type)
+        return token if cls._TOKEN.fullmatch(token) else "(invalid)"

@@ -62,3 +62,33 @@ def test_a_body_that_sets_no_status_is_marked_failed() -> None:
     with RefusalAwareTerminal(state).record():
         pass
     assert state.status == "failed"
+
+
+def test_the_warning_names_the_task_and_the_subject(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    state = TaskState(task_id="remember-abc", kind="remember")
+    with (
+        caplog.at_level(logging.WARNING),
+        RefusalAwareTerminal(state, lambda: "note.md").record(),
+    ):
+        _raise(UnindexableContentError("binary content rejected: pdf header"))
+
+    [record] = caplog.records
+    assert record.getMessage() == (
+        "Background remember note.md (task remember-abc) rejected: "
+        "binary content rejected: pdf header"
+    )
+
+
+def test_the_subject_is_built_only_when_a_refusal_is_logged() -> None:
+    calls: list[int] = []
+
+    def subject() -> str:
+        calls.append(1)
+        return "x"
+
+    state = _state()
+    with RefusalAwareTerminal(state, subject).record():
+        state.status = "completed"
+    assert calls == []

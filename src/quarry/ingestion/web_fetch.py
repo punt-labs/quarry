@@ -1,16 +1,19 @@
-"""Fetch a URL over HTTP(S) and return validated HTML or text."""
+"""Fetch a URL over HTTP(S) and return validated HTML or text.
+
+Every failure leaves this module as a :class:`FetchRefusedError` (or its content
+siblings) whose message never embeds the URL, so no caller has to redact it.
+"""
 
 from __future__ import annotations
 
-import contextlib
 import urllib.request
 from dataclasses import dataclass, field
 from functools import partial
+from http.client import HTTPException
 from time import monotonic
 from typing import TYPE_CHECKING, ClassVar, Self, final
-from urllib.error import HTTPError, URLError
 
-from quarry.ingestion.fetched_body import FetchedBody, FetchGate
+from quarry.ingestion.fetched_body import FetchedBody, FetchGate, FetchRefusedError
 from quarry.ingestion.ssrf_redirect import GUARDED_OPENER
 
 if TYPE_CHECKING:
@@ -47,15 +50,24 @@ class _OpenedResponse:
         """Return the final URL, after any redirects."""
         return self._resp.url
 
-    def media_type(self) -> str:
-        """Return the primary media type from the ``Content-Type`` header."""
+    def content_type(self) -> str:
+        """Return the raw ``Content-Type`` header ("" if absent)."""
         content_type: str = self._resp.headers.get("Content-Type", "")
-        return content_type.split(";", 1)[0].strip().lower()
+        return content_type
 
     def decode(self) -> str:
-        """Return the body decoded leniently, read under the cap and deadline."""
+        """Return the body decoded leniently, read under the cap and deadline.
+
+        Raises:
+            FetchRefusedError: The charset is unknown or the body is over the cap.
+        """
         charset = self._resp.headers.get_content_charset() or "utf-8"
-        return self._read().decode(charset, errors="replace")
+        try:
+            return self._read().decode(charset, errors="replace")
+        except LookupError as exc:
+            shown = "".join(c for c in charset if c.isalnum() or c in "-_.:")[:40]
+            msg = f"content rejected: unsupported charset {shown}"
+            raise FetchRefusedError(msg) from exc
 
     def _read(self) -> bytes:
         """Read the body in chunks under the size cap and wall-clock deadline.
@@ -66,15 +78,19 @@ class _OpenedResponse:
         """
         chunks: list[bytes] = []
         total = 0
-        for chunk in iter(partial(self._resp.read, _READ_CHUNK_BYTES), b""):
-            if monotonic() > self._deadline:
-                msg = "fetch exceeded its total time budget"
-                raise TimeoutError(msg)
-            total += len(chunk)
-            if total > _MAX_RESPONSE_BYTES:
-                msg = f"response exceeds {_MAX_RESPONSE_BYTES}-byte cap"
-                raise ValueError(msg)
-            chunks.append(chunk)
+        try:
+            for chunk in iter(partial(self._resp.read, _READ_CHUNK_BYTES), b""):
+                if monotonic() > self._deadline:
+                    msg = "fetch failed: exceeded its total time budget"
+                    raise FetchRefusedError(msg)
+                total += len(chunk)
+                if total > _MAX_RESPONSE_BYTES:
+                    cap = f"{_MAX_RESPONSE_BYTES}-byte cap"
+                    msg = f"content rejected: response exceeds {cap}"
+                    raise FetchRefusedError(msg)
+                chunks.append(chunk)
+        except (OSError, HTTPException) as exc:
+            raise FetchGate.translate(exc) from exc
         return b"".join(chunks)
 
 
@@ -106,20 +122,17 @@ class WebFetcher:
         """Fetch *url* and return the decoded HTML body.
 
         Preserved for callers that require HTML (a sitemap crawl,
-        ``ingest_url`` on a user-initiated URL).  The G4 capture path
-        uses :meth:`fetch_body` instead.
+        ``ingest_url`` on a user-initiated URL).  The capture path uses
+        :meth:`fetch_body` instead.
 
         Raises:
-            ValueError: If the URL is not HTTP(S), the response is not HTML, or
-                the body exceeds the size cap.
-            OSError: On network errors.
-            TimeoutError: Total-time deadline exceeded (propagated from
-                :meth:`fetch_body`).
+            FetchRefusedError: Anything :meth:`fetch_body` raises, or the response
+                is not HTML.
         """
         body = self.fetch_body(url)
         if not body.is_html:
-            msg = f"URL returned non-HTML content: {body.media_type or '(unknown)'}"
-            raise ValueError(msg)
+            msg = f"content rejected: non-HTML content {body.label}"
+            raise FetchRefusedError(msg)
         return body.text
 
     def fetch_body(self, url: str) -> FetchedBody:
@@ -133,10 +146,8 @@ class WebFetcher:
 
         Raises:
             UnsupportedContentError: The media type is not indexable text.
-            ValueError: URL is not HTTP(S), the final URL is unsafe, or
-                the body exceeds the size cap.
-            OSError: Network error.
-            TimeoutError: Total-time deadline exceeded.
+            FetchRefusedError: The URL, a redirect hop, or the transfer failed, or
+                the body is over the cap or in an unknown charset.
         """
         self.gate.check_url(url)
 
@@ -146,31 +157,19 @@ class WebFetcher:
         )
         deadline = monotonic() + self.timeout + self._DEADLINE_MARGIN_S
         try:
-            with GUARDED_OPENER.open(request, timeout=self.timeout) as resp:
-                return self._decode_body(_OpenedResponse(resp, deadline))
-        except HTTPError as exc:
-            # HTTPError IS an open response holding a socket fd; close it before
-            # re-raising or a failed fetch leaks an fd (EMFILE over a crawl).
-            msg = f"HTTP {exc.code} fetching {url}"
-            with contextlib.suppress(OSError, ValueError):
-                exc.close()
-            raise ValueError(msg) from exc
-        except URLError as exc:
-            msg = f"Cannot reach {url}: {exc.reason}"
-            raise OSError(msg) from exc
-        except TimeoutError as exc:
-            # Name the URL so concurrent fetches are distinguishable in logs; the
-            # size-cap ValueError already carries its own context and is left as is.
-            msg = f"Timed out fetching {url} (exceeded total time budget)"
-            raise TimeoutError(msg) from exc
+            response = GUARDED_OPENER.open(request, timeout=self.timeout)
+        except (OSError, ValueError) as exc:
+            raise self.gate.translate(exc) from exc
+        with response as resp:
+            return self._decode_body(_OpenedResponse(resp, deadline))
 
     def _decode_body(self, opened: _OpenedResponse) -> FetchedBody:
         """Validate the URL and media type, then decode the body.
 
-        The media type is checked before the body is read, so a rejected download
-        costs no bandwidth.
+        The media type is checked before the body is read, so a rejected body is
+        never read.
         """
         self.gate.check_final_url(opened.url)
-        media_type = opened.media_type()
-        self.gate.check_media_type(media_type)
-        return FetchedBody(text=opened.decode(), media_type=media_type)
+        content_type = opened.content_type()
+        self.gate.check_media_type(content_type)
+        return FetchedBody.from_header(opened.decode(), content_type)

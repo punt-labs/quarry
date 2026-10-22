@@ -7,13 +7,14 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from quarry.content_guard import UnindexableContentError
 from quarry.daemon.content_jobs import CaptureIngestJob, ScrubbedIngestJob
-from quarry.ingestion.fetched_body import FetchedBody
+from quarry.ingestion.fetched_body import FetchedBody, FetchRefusedError
 from quarry.ingestion.media_type_policy import UnsupportedContentError
 
 if TYPE_CHECKING:
-    import pytest
-
     from quarry.daemon.context import DaemonContext
 
 
@@ -233,49 +234,50 @@ def _refetch_job() -> CaptureIngestJob:
     )
 
 
-def test_refetch_of_a_refused_media_type_is_a_logged_empty_result(
-    caplog: pytest.LogCaptureFixture,
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        UnsupportedContentError("content rejected: unsupported media type x"),
+        FetchRefusedError("fetch failed: HTTP 500"),
+    ],
+    ids=["media-type", "http-500"],
+)
+def test_a_refused_refetch_raises_its_reason_and_stores_nothing(
+    refusal: UnindexableContentError,
 ) -> None:
-    """A PDF behind the source URL is reported, never raised, and never stored."""
+    """The inline phase stored nothing, so the refusal must reach the task."""
     ctx = cast(
         "DaemonContext", SimpleNamespace(database=MagicMock(), settings=MagicMock())
     )
-    refusal = UnsupportedContentError("content rejected: unsupported media type x")
-
     with (
-        caplog.at_level(logging.WARNING),
         patch("quarry.ingestion.web_fetch.WebFetcher.fetch_body", side_effect=refusal),
         patch("quarry.ingestion.web_ingest.ingest_content") as stored,
+        pytest.raises(type(refusal)) as info,
     ):
-        result = _refetch_job()._refetch(ctx)
-
-    assert result == {
-        "chunks": 0,
-        "sections": 0,
-        "rejected": "content rejected: unsupported media type x",
-    }
+        _refetch_job()._refetch(ctx)
+    assert info.value is refusal
     stored.assert_not_called()
-    [record] = [r for r in caplog.records if r.levelno >= logging.WARNING]
-    assert record.exc_info is None
-    assert "secret" not in record.getMessage()
-    assert "token" not in record.getMessage()
 
 
-def test_refetch_of_an_unreachable_url_is_a_class_only_warning(
+def test_the_refetch_log_names_the_scrubbed_inline_name(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A network failure quotes the raw URL, so only its class reaches the log."""
+    job = CaptureIngestJob(
+        inline=_remember("", collection="repo-captures"),
+        source_url="https://x.test/p",
+    )
     ctx = cast(
         "DaemonContext", SimpleNamespace(database=MagicMock(), settings=MagicMock())
     )
-    failure = OSError("Cannot reach https://user:secret@x.test/p: refused")
-
+    body = FetchedBody(
+        text="<html><body><p>hi</p></body></html>", media_type="text/html"
+    )
     with (
-        caplog.at_level(logging.WARNING),
-        patch("quarry.ingestion.web_fetch.WebFetcher.fetch_body", side_effect=failure),
+        caplog.at_level(logging.INFO),
+        patch("quarry.ingestion.web_fetch.WebFetcher.fetch_body", return_value=body),
+        patch("quarry.ingestion.web_ingest.ingest_url", return_value={"chunks": 1}),
+        patch.object(ScrubbedIngestJob, "_scrubbed", return_value="[scrubbed-name]"),
     ):
-        result = _refetch_job()._refetch(ctx)
-
-    assert result == {"chunks": 0, "sections": 0}
-    assert "secret" not in caplog.text
-    assert "OSError" in caplog.text
+        job._refetch(ctx)
+    assert "[scrubbed-name]" in caplog.text
+    assert "note" not in caplog.text

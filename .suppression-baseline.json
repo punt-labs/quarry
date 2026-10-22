@@ -1,7 +1,7 @@
 {
-  "total": 206,
+  "total": 203,
   "by_category": {
-    "noqa": 168,
+    "noqa": 165,
     "type_ignore": 7,
     "pylint_disable": 0,
     "pyright_ignore": 1,
@@ -35,9 +35,6 @@
     },
     "src/quarry/collections.py": {
       "type_ignore": 1
-    },
-    "src/quarry/daemon/captured_body_ingest.py": {
-      "noqa": 3
     },
     "src/quarry/daemon/content_jobs.py": {
       "noqa": 3
@@ -184,5 +181,5 @@
       "noqa": 2
     }
   },
-  "updated_at": "2026-10-22T09:40:23Z"
+  "updated_at": "2026-10-22T10:27:12Z"
 }

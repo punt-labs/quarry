@@ -10,7 +10,7 @@ from quarry.content_guard import UnindexableContentError
 from quarry.daemon.tasks import task_terminal
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Callable, Generator
 
     from quarry.daemon.tasks import TaskState
 
@@ -21,22 +21,30 @@ logger = logging.getLogger(__name__)
 class RefusalAwareTerminal:
     """Bind a task's state to the way its body is allowed to end.
 
-    :func:`task_terminal` logs every exception with a traceback.  Content the
-    chunker refuses (binary that slipped past the request sniff) is an expected
-    answer, so it ends the task ``failed`` with the reason and one WARN, no
-    traceback; any other exception still goes to :func:`task_terminal` unchanged.
+    :func:`task_terminal` logs every exception with a traceback.  A refusal
+    (:class:`UnindexableContentError`: binary content, a refused media type, a
+    failed or refused fetch) is an expected answer, so it ends the task
+    ``failed`` with the reason and one WARN naming the task, no traceback; any
+    other exception still goes to :func:`task_terminal` unchanged.  This class is
+    the single owner of that failure write.
 
-    ``CaptureIngestJob._refetch`` swallows refusals itself, because the inline
-    phase already stored the content: a refused re-fetch must not fail the task.
+    Every content job runs under it.  ``CaptureIngestJob._refetch`` does not
+    swallow a refusal: it runs only when the inline phase stored nothing, so a
+    refused re-fetch leaves the capture unstored and the task must say so.
+    ``subject`` names what was being ingested (a redacted URL or a scrubbed
+    name); it is called only when a refusal is logged, so building it can never
+    stop the task from reaching a terminal state, and it must be safe to log.
     """
 
-    __slots__ = ("_state",)
+    __slots__ = ("_state", "_subject")
 
     _state: TaskState
+    _subject: Callable[[], str]
 
-    def __new__(cls, state: TaskState) -> Self:
+    def __new__(cls, state: TaskState, subject: Callable[[], str] = lambda: "") -> Self:
         self = super().__new__(cls)
         self._state = state
+        self._subject = subject
         return self
 
     @contextmanager
@@ -46,6 +54,12 @@ class RefusalAwareTerminal:
             try:
                 yield
             except UnindexableContentError as exc:
-                logger.warning("Background %s rejected: %s", self._state.kind, exc)
+                logger.warning(
+                    "Background %s %s (task %s) rejected: %s",
+                    self._state.kind,
+                    self._subject(),
+                    self._state.task_id,
+                    exc,
+                )
                 self._state.status = "failed"
                 self._state.error = str(exc)

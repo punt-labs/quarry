@@ -20,14 +20,12 @@ media-type branch its sibling already has.
 
 from __future__ import annotations
 
-import logging
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from quarry.daemon.captured_body_ingest import CapturedBodyIngest
 from quarry.daemon.ingest_jobs import IngestJob
 from quarry.ingestion.fetched_body import FetchedBody
 
@@ -232,119 +230,3 @@ def test_captured_body_ingest_sanitizes_media_type_in_marker() -> None:
     assert "<!--" not in first_line[4:], (
         f"marker line contains a nested opener: {first_line!r}"
     )
-
-
-def test_ingest_fetch_failure_logs_redacted_url_and_returns_zero_chunks(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """A fetch failure on _ingest logs the URL redacted and returns empty.
-
-    Without the guard, the raw URL rides ``fetch_body``'s exception
-    message ("Cannot reach {url}: ...") into ``task_terminal``'s traceback
-    and the persisted ``state.error`` — leaking ``?token=`` and
-    ``user:pass@`` into the daemon log (CWE-532).  The guard mirrors
-    :meth:`CaptureIngestJob._refetch`: redact through ``CaptureUrl``,
-    log only the exception class, return an empty result.
-    """
-    url = "https://user:pass@example.test/reset?token=secretxyz"
-    boom = OSError(f"Cannot reach {url}: connection refused")
-    with (
-        patch(
-            "quarry.ingestion.web_fetch.WebFetcher.fetch_body",
-            side_effect=boom,
-        ),
-        caplog.at_level(logging.WARNING, logger="quarry.daemon.captured_body_ingest"),
-    ):
-        result = _job(url)._ingest(_ctx())
-
-    assert result == {"chunks": 0, "sections": 0}
-    log_text = caplog.text
-    assert "secretxyz" not in log_text, (
-        f"fetch-failure log leaked query token:\n{log_text}"
-    )
-    assert "user:pass" not in log_text, (
-        f"fetch-failure log leaked userinfo:\n{log_text}"
-    )
-    assert "OSError" in log_text, (
-        f"fetch-failure log missing exception class name:\n{log_text}"
-    )
-
-
-def _capture_ingest_failure_log(
-    caplog: pytest.LogCaptureFixture, exc: BaseException
-) -> str:
-    """Drive ``_ingest`` with ``exc`` from ``fetch_body`` and return the log text."""
-    url = "https://example.test/data"
-    with (
-        patch(
-            "quarry.ingestion.web_fetch.WebFetcher.fetch_body",
-            side_effect=exc,
-        ),
-        caplog.at_level(logging.WARNING, logger="quarry.daemon.captured_body_ingest"),
-    ):
-        _job(url)._ingest(_ctx())
-    return caplog.text
-
-
-def test_ingest_url_safety_rejection_appends_policy_message_to_log(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """A ``URL rejected:`` message is safe to append -- operators need the reason.
-
-    Class-only rendering hides the difference between "private IP", "metadata
-    hostname", and "unsupported scheme"; an operator diagnosing an SSRF/policy
-    rejection needs the specific reason without waiting on a repro with debug
-    logging.  The url-safety messages describe a rule and do not embed the raw
-    URL, so appending them keeps the CWE-532 guard intact.
-    """
-    log_text = _capture_ingest_failure_log(
-        caplog, ValueError("URL rejected: private IP 10.0.0.1")
-    )
-    assert "URL rejected: private IP 10.0.0.1" in log_text, (
-        f"URL-safety policy message missing from log:\n{log_text}"
-    )
-    assert "ValueError" in log_text, f"exception class missing from log:\n{log_text}"
-
-
-def test_ingest_final_url_rejection_appends_policy_message_to_log(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """A ``final URL rejected:`` (post-redirect) message is safe to append too.
-
-    ``WebFetcher._check_final_url`` raises this shape when a redirect lands on
-    an internal host; the operator needs to see WHICH policy tripped so an
-    SSRF-via-redirect regression is diagnosable from logs alone.
-    """
-    log_text = _capture_ingest_failure_log(
-        caplog, ValueError("final URL rejected: redirect to blocked host")
-    )
-    assert "final URL rejected: redirect to blocked host" in log_text, (
-        f"final-URL-safety policy message missing from log:\n{log_text}"
-    )
-    assert "ValueError" in log_text, f"exception class missing from log:\n{log_text}"
-
-
-def test_classify_fetch_error_appends_only_safe_prefixes() -> None:
-    """The classifier appends safe policy messages and no others (unit-level).
-
-    Complements the ``_ingest``-driven regression tests with a direct check on
-    :meth:`CapturedBodyIngest._classify_fetch_error` so a future edit to the prefix
-    allow-list fails a targeted test rather than surfacing as a leak.
-    """
-    safe = ValueError("URL rejected: metadata hostname")
-    assert CapturedBodyIngest._classify_fetch_error(safe) == (
-        "ValueError: URL rejected: metadata hostname"
-    )
-
-    refusal = ValueError("content rejected: unsupported media type application/pdf")
-    assert CapturedBodyIngest._classify_fetch_error(refusal) == (
-        "ValueError: content rejected: unsupported media type application/pdf"
-    )
-
-    unsafe = OSError("Cannot reach https://user:pw@host/?token=secretxyz")
-    rendered = CapturedBodyIngest._classify_fetch_error(unsafe)
-    assert rendered == "OSError", (
-        f"unsafe-message classifier must be class-only, got: {rendered!r}"
-    )
-    assert "secretxyz" not in rendered
-    assert "user:pw" not in rendered

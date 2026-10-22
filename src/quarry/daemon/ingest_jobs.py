@@ -4,25 +4,25 @@ The request is validated into an immutable *job* value object that owns its own
 background execution, so the validated fields travel together instead of as a
 ten-argument task function.  The URL route builds :class:`IngestJob`; the
 content front doors build the jobs in :mod:`quarry.daemon.content_jobs`, whose
-capture job re-fetches through this one.
+capture job re-fetches through :class:`CapturedBodyIngest`, as the scrubbed branch here
+does.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from starlette.concurrency import run_in_threadpool
 
-from quarry.daemon.captured_body_ingest import CapturedBodyIngest
+from quarry.daemon.captured_body_ingest import CapturedBodyIngest, IngestLabels
 from quarry.daemon.job_spool import SpoolRecord
-from quarry.daemon.tasks import task_terminal
+from quarry.daemon.refusal_aware_terminal import RefusalAwareTerminal
 
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.tasks import TaskState
-    from quarry.ingestion.ingest_context import MemoryType
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,9 +38,9 @@ class IngestJob:
     ingested document is stored byte-for-byte.  ``collection`` is the routing key
     the queue serializes on, so the route resolves it before the job is built.
 
-    A URL whose media type is not text, or whose body classifies as binary, is
-    refused: the task ends ``failed`` with the reason, a single redacted WARN,
-    and nothing stored.
+    A URL whose fetch fails or is refused, whose media type is not text, or whose
+    body classifies as binary ends the task ``failed`` with a URL-free reason and
+    one WARN naming the redacted URL; nothing is stored.
     """
 
     source: str
@@ -53,13 +53,9 @@ class IngestJob:
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Fetch and index the URL in a background thread, updating task state."""
-        with task_terminal(state):
+        subject = partial(CapturedBodyIngest.redacted, self.source)
+        with RefusalAwareTerminal(state, subject).record():
             result = await run_in_threadpool(self._ingest, ctx)
-            reason = result.get("rejected")
-            if reason:
-                state.status = "failed"
-                state.error = str(reason)
-                return
             state.status = "completed"
             state.results = dict(result)
 
@@ -77,55 +73,35 @@ class IngestJob:
             payload=self.source,
         )
 
+    def _captured(self) -> CapturedBodyIngest:
+        return CapturedBodyIngest(self.source, IngestLabels.from_job(self))
+
     def _ingest(self, ctx: DaemonContext) -> dict[str, object]:
         """Run the capture re-fetch (scrubbed, captures collection) or plain ingest.
 
         The scrubbed branch fetches via :meth:`WebFetcher.fetch_body` so a
         JSON/plain-text/XML URL (a REST endpoint, a raw log) is captured as text
-        rather than raising ``ValueError`` from the HTML-only :meth:`fetch`.
-        Both branches report a refused media type or binary body as a
-        ``rejected`` result, which :meth:`run` turns into a failed task; network
-        and safety failures are a redacted WARN + empty result — the exception
-        text quotes the raw URL and would carry ``?token=`` or ``user:pass@``
-        secrets into the persistent quarry.log (CWE-532).
+        rather than refused by the HTML-only :meth:`WebFetcher.fetch`.  Both
+        branches fail the same way: a fetch that fails or is refused, a refused
+        media type, or a binary body raises :class:`UnindexableContentError` with
+        a URL-free reason (the network libraries quote the raw URL, so the fetch
+        layer replaces their messages before they can reach a log or a task).
         """
-        captured = CapturedBodyIngest(
-            self.source,
-            self.overwrite,
-            self.collection,
-            self.agent_handle,
-            self.memory_type,
-            self.summary,
-        )
         if self.scrub:
-            return captured.run(ctx, "ingest: fetch")
-        return captured.guarded("ingest", partial(self._ingest_plain, ctx))
+            return self._captured().run(ctx)
+        return self._ingest_plain(ctx)
 
     def _ingest_plain(self, ctx: DaemonContext) -> dict[str, object]:
         """Run a plain, unscrubbed ``quarry ingest``: sitemap-aware, byte-for-byte."""
         from quarry.ingestion.bulk_ingest import BulkOptions  # noqa: PLC0415
-        from quarry.ingestion.ingest_context import (  # noqa: PLC0415
-            IngestContext,
-            Progress,
-        )
+        from quarry.ingestion.ingest_context import Progress  # noqa: PLC0415
         from quarry.ingestion.sitemap_ingest import ingest_auto  # noqa: PLC0415
 
         return dict(
             ingest_auto(
                 self.source,
                 Progress(None),
-                IngestContext(
-                    ctx.database,
-                    ctx.settings,
-                    overwrite=self.overwrite,
-                    collection=self.collection,
-                    agent_handle=self.agent_handle,
-                    # self.memory_type is a plain str carried from the daemon's
-                    # HTTP boundary (unvalidated beyond the reserved-value
-                    # reject); IngestContext's field is the tightened Literal.
-                    memory_type=cast("MemoryType", self.memory_type),
-                    summary=self.summary,
-                ),
+                IngestLabels.from_job(self).context(ctx),
                 BulkOptions(),
             )
         )
