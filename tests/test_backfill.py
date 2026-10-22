@@ -496,7 +496,7 @@ class TestBackfillSessions:
         stored: list[object] = []
 
         def _capture_build_chunks(
-            _self: DocumentStreamer, pages: list[object], **_kw: object
+            _self: DocumentStreamer, pages: list[object], _labels: object
         ) -> list[object]:
             stored.extend(pages)
             return []

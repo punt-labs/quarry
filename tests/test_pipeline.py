@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -67,14 +68,14 @@ def _capture_build_chunks(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, obj
     without patching a DES-036 internal. Returns zero chunks per call, which
     keeps the funnel on its fail-closed "no chunks" branch.
     """
-    from quarry.ingestion.streaming import DocumentStreamer
+    from quarry.ingestion.streaming import ChunkLabels, DocumentStreamer
 
     calls: list[dict[str, object]] = []
 
     def _capture(
-        _self: DocumentStreamer, pages: list[PageContent], **kwargs: object
+        _self: DocumentStreamer, pages: list[PageContent], labels: ChunkLabels
     ) -> list[Chunk]:
-        calls.append({"pages": pages, **kwargs})
+        calls.append({"pages": pages, **asdict(labels)})
         return []
 
     monkeypatch.setattr(DocumentStreamer, "build_chunks", _capture)

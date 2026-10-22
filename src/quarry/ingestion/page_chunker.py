@@ -13,6 +13,7 @@ from quarry.ingestion.sentence_chunker import SentenceChunker
 from quarry.models import Chunk
 
 if TYPE_CHECKING:
+    from quarry.ingestion.ingest_context import MemoryType
     from quarry.models import PageContent
 
 
@@ -23,14 +24,14 @@ class ChunkLabels:
 
     ``source_format`` is a file extension (``".pdf"``) or ``"inline"`` for
     programmatically supplied text.  ``agent_handle`` owns an agent memory (empty
-    for non-agent content) and ``memory_type`` is the free-text memory class the
-    daemon has already validated.
+    for non-agent content) and ``memory_type`` is a validated :data:`MemoryType`
+    (the daemon narrows it once; ``""`` is unset).
     """
 
     collection: str = "default"
     source_format: str = ""
     agent_handle: str = ""
-    memory_type: str = ""
+    memory_type: MemoryType = ""
     summary: str = ""
 
     def require_within(self, budget: RowBudget) -> None:
@@ -38,6 +39,11 @@ class ChunkLabels:
         budget.require_label("collection", self.collection)
         budget.require_label("agent_handle", self.agent_handle)
         budget.require_label("summary", self.summary)
+
+
+# Both are frozen, so one shared instance of each is a safe default argument.
+_NO_LABELS = ChunkLabels()
+_DEFAULT_BUDGET = RowBudget()
 
 
 @final
@@ -62,10 +68,9 @@ class PageChunker:
         cls,
         max_chars: int = 1800,
         overlap_chars: int = 200,
-        labels: ChunkLabels | None = None,
-        budget: RowBudget | None = None,
+        labels: ChunkLabels = _NO_LABELS,
+        budget: RowBudget = _DEFAULT_BUDGET,
     ) -> Self:
-        budget = budget or RowBudget()
         # A chunk takes up to four bytes a character.  The overlap a chunk opens
         # with is counted inside max_chars, so max_chars alone must fit the cap.
         if max_chars > budget.max_chunk_chars:
@@ -79,7 +84,7 @@ class PageChunker:
         self._guard = BinaryContent()
         self._splitter = PageSplitter(budget.max_page_bytes)
         self._sentences = SentenceChunker(max_chars, overlap_chars)
-        self._labels = labels or ChunkLabels()
+        self._labels = labels
         self._labels.require_within(budget)
         return self
 

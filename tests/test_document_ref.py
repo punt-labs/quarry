@@ -42,10 +42,21 @@ class TestInvariants:
         assert ref.min_chunk_index == 0
         assert "chunk_index" not in ref.predicate()
 
-    @pytest.mark.parametrize("watermark", [0, -1])
-    def test_a_tail_needs_a_positive_watermark(self, watermark: int) -> None:
+    def test_a_tail_needs_a_positive_watermark(self) -> None:
         with pytest.raises(ValueError, match="positive watermark"):
-            DocumentRef.tail("doc.txt", None, watermark)
+            DocumentRef.tail("doc.txt", None, 0)
+
+    def test_a_negative_watermark_is_refused_by_the_ref_itself(self) -> None:
+        with pytest.raises(ValueError, match=">= 0"):
+            DocumentRef.tail("doc.txt", None, -1)
+
+    def test_require_tail_refuses_a_whole_document_ref(self) -> None:
+        with pytest.raises(ValueError, match="positive watermark"):
+            DocumentRef("doc.txt", CollectionRef("col")).require_tail()
+
+    def test_require_tail_returns_a_tail_ref_unchanged(self) -> None:
+        ref = DocumentRef.tail("doc.txt", "col", 3)
+        assert ref.require_tail() is ref
 
     def test_a_tail_normalizes_an_empty_collection_to_unscoped(self) -> None:
         assert DocumentRef.tail("doc.txt", "", 5).collection is None

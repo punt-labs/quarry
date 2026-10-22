@@ -15,8 +15,8 @@ import logging
 import time
 from typing import TYPE_CHECKING, cast, final
 
-from quarry.capture_url import CaptureUrl
-from quarry.ingestion.streaming import DocumentStreamer
+from quarry.ingestion.display_name import DisplayName
+from quarry.ingestion.streaming import ChunkLabels, DocumentStreamer
 
 if TYPE_CHECKING:
     from quarry.ingestion.extracted_document import ExtractedDocument
@@ -48,21 +48,7 @@ class ChunkStoreFunnel:
         fires only when a replacement chunk set actually exists.
         """
         progress("Chunking")
-        t0 = time.perf_counter()
-        chunks = DocumentStreamer(context.settings).build_chunks(
-            extracted.pages,
-            collection=context.collection,
-            source_format=extracted.source_format,
-            agent_handle=context.agent_handle,
-            memory_type=context.memory_type,
-            summary=context.summary,
-        )
-        logger.info(
-            "pipeline: chunked %d pages → %d chunks in %.2fs",
-            len(extracted.pages),
-            len(chunks),
-            time.perf_counter() - t0,
-        )
+        chunks = ChunkStoreFunnel._chunk(extracted, context)
         progress("Created %d chunks", len(chunks))
 
         if chunks:
@@ -74,6 +60,32 @@ class ChunkStoreFunnel:
 
         return ChunkStoreFunnel._build_result(
             document_name, inserted, extracted.stats, context.collection
+        )
+
+    @staticmethod
+    def _chunk(extracted: ExtractedDocument, context: IngestContext) -> list[Chunk]:
+        """Chunk the extracted pages, labelled for this ingest."""
+        t0 = time.perf_counter()
+        chunks = DocumentStreamer(context.settings).build_chunks(
+            extracted.pages, ChunkStoreFunnel._labels(extracted, context)
+        )
+        logger.info(
+            "pipeline: chunked %d pages → %d chunks in %.2fs",
+            len(extracted.pages),
+            len(chunks),
+            time.perf_counter() - t0,
+        )
+        return chunks
+
+    @staticmethod
+    def _labels(extracted: ExtractedDocument, context: IngestContext) -> ChunkLabels:
+        """Return the metadata every chunk of this ingest carries."""
+        return ChunkLabels(
+            context.collection,
+            extracted.source_format,
+            context.agent_handle,
+            context.memory_type,
+            context.summary,
         )
 
     @staticmethod
@@ -101,7 +113,7 @@ class ChunkStoreFunnel:
         progress(
             "Done: %d chunks indexed from %s",
             inserted,
-            ChunkStoreFunnel._display_name(document_name),
+            DisplayName(document_name).redacted(),
         )
         return inserted
 
@@ -111,35 +123,10 @@ class ChunkStoreFunnel:
         logger.warning(
             "pipeline: %s produced zero chunks — keeping any prior document, "
             "storing nothing",
-            ChunkStoreFunnel._display_name(document_name),
+            DisplayName(document_name).redacted(),
         )
         progress("No text found — nothing to index")
         return 0
-
-    @staticmethod
-    def _display_name(document_name: str) -> str:
-        """Return *document_name* redacted for a log/progress line, never stored.
-
-        document_name IS the URL for a plain (unscrubbed) URL ingest, so a
-        userinfo/query secret would otherwise reach the log/progress stream
-        verbatim (CWE-532). But this funnel is also reached by ingest_content
-        with an arbitrary caller-supplied name that is never a URL -- and
-        CaptureUrl is unsafe on non-URL input: it silently truncates at the
-        first ``#``/``?`` (urlsplit treats them as fragment/query delimiters,
-        both valid characters in a plain document name), and some malformed
-        strings resembling a URL authority raise ``ValueError`` straight out
-        of ``urlsplit``. Gate on the same ``http(s)://`` prefix check
-        ``WebFetcher``/``cli_ingest`` already use to recognize a real URL, and
-        fall back to *document_name* verbatim -- untruncated, never raising --
-        for anything else or for a redaction that still fails despite the
-        prefix match.
-        """
-        if not document_name.lower().startswith(("http://", "https://")):
-            return document_name
-        try:
-            return CaptureUrl(document_name).redacted(lambda text: text)
-        except ValueError:
-            return document_name
 
     @staticmethod
     def _build_result(

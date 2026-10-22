@@ -130,3 +130,13 @@ class TestCollectionPredicates:
         assert store.count(collection_filter="o'brien") == 3
         assert store.delete_collection("o'brien") == 3
         assert store.count() == 2
+
+    def test_delete_collection_refuses_an_empty_name_and_deletes_nothing(
+        self, lance_db: LanceDB
+    ) -> None:
+        """An empty name must raise, never become a clause that matches every row."""
+        store = ChunkStore(lance_db)
+        _seed(store, 3)
+        with pytest.raises(ValueError, match="non-empty"):
+            store.delete_collection("")
+        assert store.count() == 3

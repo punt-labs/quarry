@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from quarry.ingestion.chunk_store_funnel import _chunk_embed_store
 from quarry.ingestion.format_strategies import SUPPORTED_EXTENSIONS, resolve_strategy
 from quarry.ingestion.ingest_context import IngestContext, Progress
-from quarry.ingestion.streaming import DocumentStreamer
+from quarry.ingestion.streaming import ChunkLabels, DocumentStreamer
 from quarry.models import PageType
 
 if TYPE_CHECKING:
@@ -91,9 +91,6 @@ def plan_file_chunks(
     *,
     collection: str = "default",
     document_name: str | None = None,
-    agent_handle: str = "",
-    memory_type: str = "",
-    summary: str = "",
 ) -> tuple[list[Chunk], bool]:
     """Extract and chunk a file for sync, reporting extraction determinism.
 
@@ -116,14 +113,8 @@ def plan_file_chunks(
     deterministic = _pages_are_deterministic(extracted.pages)
     if not extracted.pages:
         return [], deterministic
-    chunks = DocumentStreamer(settings).build_chunks(
-        extracted.pages,
-        collection=collection,
-        source_format=extracted.source_format,
-        agent_handle=agent_handle,
-        memory_type=memory_type,
-        summary=summary,
-    )
+    labels = ChunkLabels(collection, extracted.source_format)
+    chunks = DocumentStreamer(settings).build_chunks(extracted.pages, labels)
     return chunks, deterministic
 
 

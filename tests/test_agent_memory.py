@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -737,16 +738,16 @@ class TestIngestUrlThreadsAgentHandle:
         from unittest.mock import MagicMock
 
         from quarry.ingestion.ingest_context import IngestContext, Progress
-        from quarry.ingestion.streaming import DocumentStreamer
+        from quarry.ingestion.streaming import ChunkLabels, DocumentStreamer
         from quarry.ingestion.web_ingest import UrlIngest, ingest_url
 
         html = "<html><body>hi</body></html>"
         seen: dict[str, object] = {}
 
         def _capture_build_chunks(
-            _self: DocumentStreamer, pages: list[object], **kwargs: object
+            _self: DocumentStreamer, pages: list[object], labels: ChunkLabels
         ) -> list[object]:
-            seen.update(kwargs)
+            seen.update(asdict(labels))
             return []
 
         with (

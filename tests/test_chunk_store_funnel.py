@@ -314,7 +314,7 @@ class TestDocumentNameRedaction:
         raise ``ValueError`` from inside ``CaptureUrl.redacted`` -- after
         chunks are already stored, so the guard's http(s):// prefix check
         (which excludes this name; it has no scheme at all) and the
-        try/except fallback inside ``_display_name`` must both hold: this
+        try/except fallback inside ``DisplayName`` must both hold: this
         must never raise, and the display value is the name unchanged.
         """
         monkeypatch.setattr(

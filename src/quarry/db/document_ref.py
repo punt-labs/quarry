@@ -42,11 +42,11 @@ class DocumentRef:
     Owns the SQL predicate that selects the document's rows. ``min_chunk_index``
     of 0 selects the whole document; a positive watermark restricts to the resume
     tail ``chunk_index >= min_chunk_index`` (DES-034 §5.3), so a single value
-    object drives both full-document and tail deletes.  ``collection`` is
-    ``None`` for "any collection".
+    object drives both full-document and tail deletes.
     """
 
     document_name: str
+    # None is the selector's own meaning, "any collection", not a missing value.
     collection: CollectionRef | None = None
     min_chunk_index: int = 0
 
@@ -61,10 +61,20 @@ class DocumentRef:
     @classmethod
     def tail(cls, document_name: str, collection: str | None, watermark: int) -> Self:
         """Return the ref for the resume tail from *watermark* (which must be > 0)."""
-        if watermark <= 0:
-            msg = f"a tail needs a positive watermark, got {watermark}"
+        return cls(
+            document_name, CollectionRef.optional(collection), watermark
+        ).require_tail()
+
+    def require_tail(self) -> Self:
+        """Return this ref, or raise if it selects the whole document, not a tail.
+
+        A tail delete from watermark 0 would drop the whole document, so the one
+        check lives here for both :meth:`tail` and ``delete_document_tail``.
+        """
+        if self.min_chunk_index <= 0:
+            msg = f"a tail needs a positive watermark, got {self.min_chunk_index}"
             raise ValueError(msg)
-        return cls(document_name, CollectionRef.optional(collection), watermark)
+        return self
 
     def predicate(self) -> str:
         """Return the document/collection/watermark selection clause."""

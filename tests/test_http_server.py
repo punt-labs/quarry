@@ -15,6 +15,7 @@ import stat
 import sys
 import time
 from collections.abc import Callable, Iterator
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
@@ -2145,7 +2146,7 @@ class TestRemember:
         patches the store boundary and asserts the REAL scrub ran end-to-end —
         the chunker copies name+summary onto every chunk, so content-only
         scrubbing would leak."""
-        from quarry.ingestion.streaming import DocumentStreamer
+        from quarry.ingestion.streaming import ChunkLabels, DocumentStreamer
 
         settings = _mock_settings(tmp_path)
         ctx = DaemonContext(settings)
@@ -2154,9 +2155,9 @@ class TestRemember:
         seen: dict[str, object] = {}
 
         def _capture_build_chunks(
-            _self: DocumentStreamer, pages: list[object], **kwargs: object
+            _self: DocumentStreamer, pages: list[object], labels: ChunkLabels
         ) -> list[object]:
-            seen.update(kwargs)
+            seen.update(asdict(labels))
             return []
 
         with (

@@ -104,13 +104,11 @@ class ChunkStore:
         ``[0, w)``, making resume idempotent under repeated crashes. Returns the
         number of rows removed.
 
-        Raises ``ValueError`` if *ref* has no positive watermark — a tail delete
-        with ``min_chunk_index <= 0`` would drop the whole document; use
-        ``delete_document`` for that.
+        Raises ``ValueError`` if *ref* has no positive watermark (see
+        :meth:`DocumentRef.require_tail`); use ``delete_document`` to drop a whole
+        document.
         """
-        if ref.min_chunk_index <= 0:
-            msg = f"delete_document_tail needs a positive watermark, got {ref!r}"
-            raise ValueError(msg)
+        ref.require_tail()
         table = self._open()
         if table is None:
             return 0

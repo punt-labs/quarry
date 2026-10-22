@@ -21,6 +21,9 @@ if TYPE_CHECKING:
     from quarry.models import Chunk, PageContent
 
 
+__all__ = ["ChunkLabels", "DocumentStreamer"]
+
+
 class DocumentStreamer:
     """Chunk a document once, then embed it in bounded windows.
 
@@ -40,22 +43,14 @@ class DocumentStreamer:
         return self
 
     def build_chunks(
-        self,
-        pages: list[PageContent],
-        *,
-        collection: str = "default",
-        source_format: str = "",
-        agent_handle: str = "",
-        memory_type: str = "",
-        summary: str = "",
+        self, pages: list[PageContent], labels: ChunkLabels
     ) -> list[Chunk]:
         """Chunk *pages* into a document-global, contiguous ``chunk_index`` sequence."""
-        chunker = PageChunker(
+        return PageChunker(
             self._settings.chunk_max_chars,
             self._settings.chunk_overlap_chars,
-            ChunkLabels(collection, source_format, agent_handle, memory_type, summary),
-        )
-        return chunker.chunk(pages)
+            labels,
+        ).chunk(pages)
 
     def stream_batches(
         self,
