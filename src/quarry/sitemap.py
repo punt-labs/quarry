@@ -138,13 +138,9 @@ class SitemapDiscovery:
         for entry in entries:
             if not SitemapDiscovery._matches(entry, include, exclude):
                 continue
-            reason = UrlAdmission.reject_reason(entry.loc)
-            if reason is not None:
-                logger.warning(
-                    "Dropping unsafe sitemap URL %s: %s",
-                    SitemapReader.shown(entry.loc),
-                    reason,
-                )
+            refusal = UrlAdmission.refusal(entry.loc)
+            if refusal is not None:
+                logger.warning("Dropping unsafe sitemap URL %s", refusal)
                 continue
             safe.append(entry)
             if limit > 0 and len(safe) >= limit:

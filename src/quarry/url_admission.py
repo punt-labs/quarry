@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import final
 
+from quarry.http_url import HttpUrl
 from quarry.url_safety import UrlRejectedError, UrlSafetyCheck
 from quarry.url_syntax import UrlSyntax
 
@@ -38,3 +39,9 @@ class UrlAdmission:
         except UrlRejectedError as exc:
             return str(exc)
         return None
+
+    @staticmethod
+    def refusal(url: str) -> str | None:
+        """Return ``<log form>: <reason>`` when *url* is refused, else ``None``."""
+        reason = UrlAdmission.reject_reason(url)
+        return None if reason is None else f"{HttpUrl.shown(url)}: {reason}"

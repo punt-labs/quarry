@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import re
 from typing import ClassVar, Self, final
-from urllib.parse import urlunsplit
+from urllib.parse import urlsplit, urlunsplit
 
+from quarry.capture_url import CaptureUrl
 from quarry.remote import to_netloc
 from quarry.url_syntax import UrlSyntax
 
 _MALFORMED = "malformed URL"
+_UNPARSEABLE = "(unparseable URL)"
 
 
 @final
@@ -58,16 +60,37 @@ class HttpUrl:
         port = None if parts.port == cls._DEFAULT_PORTS[parts.scheme] else parts.port
         netloc = to_netloc(host, port)
         path = cls._PARAMS.sub("", parts.path)
-        segments = len([part for part in path.split("/") if part])
         self = super().__new__(cls)
         self._fetch_url = raw
         self._host = host
         self._path = path
         self._document_name = urlunsplit((parts.scheme, netloc, path or "/", "", ""))
-        self._log_form = (
-            f"{parts.scheme}://{netloc}/…({segments} segment{'s' * (segments != 1)})"
-        )
+        self._log_form = cls._form(parts.scheme, netloc, path)
         return self
+
+    @classmethod
+    def shown(cls, raw: str) -> str:
+        """Return *raw* as it may appear in a log: the one producer of that text.
+
+        An admitted URL shows its log form; one :class:`HttpUrl` refuses shows
+        the same shape through the tolerant :class:`CaptureUrl` reading.  Never
+        raises, and never any of the path.
+        """
+        try:
+            return str(cls(raw))
+        except ValueError:
+            pass
+        tolerant = urlsplit(CaptureUrl.display(raw))
+        host = tolerant.hostname or ""
+        if tolerant.scheme not in cls._DEFAULT_PORTS or not 0 < len(host) <= 253:
+            return _UNPARSEABLE
+        return cls._form(tolerant.scheme, tolerant.netloc, tolerant.path)
+
+    @staticmethod
+    def _form(scheme: str, netloc: str, path: str) -> str:
+        """Return ``scheme://netloc/…(N segments)``, the shape of a URL in a log."""
+        count = len([part for part in path.split("/") if part])
+        return f"{scheme}://{netloc}/…({count} segment{'s' * (count != 1)})"
 
     @property
     def fetch_url(self) -> str:

@@ -13,7 +13,6 @@ from usp.exceptions import (
 )
 from usp.objects.sitemap import InvalidSitemap
 
-from quarry.capture_url import CaptureUrl
 from quarry.ingestion.fetch_refused import FetchRefusedError
 from quarry.sitemap_web_client import GatedSitemapWebClient
 
@@ -60,11 +59,6 @@ class SitemapReader:
         self = super().__new__(cls)
         self._client = client or GatedSitemapWebClient()
         return self
-
-    @staticmethod
-    def shown(url: str) -> str:
-        """Return *url* as it may appear in a log line: redacted, never raising."""
-        return CaptureUrl.display(url)
 
     def discover(self, homepage: HttpUrl) -> list[SitemapPage]:
         """Return every page found by sitemap discovery for *homepage*.

@@ -42,8 +42,7 @@ class DisplayName:
 
     def redacted(self) -> str:
         """Return the log form: ``scheme://host[:port]/…(N segments)``, no path."""
-        stored = self.stored()
-        try:
-            return str(HttpUrl(stored))
-        except ValueError:
-            return stored
+        text = self.name.lstrip(self._LEADING)
+        if not text.lower().startswith(("http://", "https://")):
+            return self.name
+        return HttpUrl.shown(text)

@@ -71,3 +71,8 @@ def test_a_url_named_document_is_stored_as_a_url_ingest_of_it_would_be() -> None
     url = "https://x.test:443/docs/a;jsessionid=PSEC?t=1#f"
     assert DisplayName(url).stored() == HttpUrl(url).document_name
     assert "PSEC" not in DisplayName(url).stored()
+
+
+def test_a_url_that_cannot_be_admitted_never_shows_its_path() -> None:
+    name = "http://u:secret@h.test/reset/PSEC?t=1"
+    assert DisplayName(name).redacted() == "http://h.test/…(2 segments)"

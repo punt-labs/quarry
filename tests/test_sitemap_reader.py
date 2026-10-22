@@ -154,7 +154,3 @@ class TestDiscover:
         assert [r.getMessage() for r in caplog.records] == [
             "Discovering sitemaps for https://example.com/…(1 segment)"
         ]
-
-
-def test_shown_never_raises_on_a_bad_port() -> None:
-    assert SitemapReader.shown("http://u:s@h:99999/x?t=1") == "(unparseable URL)"

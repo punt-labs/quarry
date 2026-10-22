@@ -160,3 +160,35 @@ class TestConstructor:
         assert str(info.value) == "malformed URL"
         assert info.value.__cause__ is None
         assert info.value.__context__ is None or info.value.__suppress_context__
+
+
+class TestShown:
+    """``HttpUrl.shown`` is the one producer of a URL's log text."""
+
+    def test_an_admitted_url_shows_its_log_form(self) -> None:
+        assert HttpUrl.shown(_RAW) == str(HttpUrl(_RAW))
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("http://u:secret@h.test/a/b?t=1", "http://h.test/…(2 segments)"),
+            ("http://h.test/" + "a/" * 5000, "http://h.test/…(5000 segments)"),
+            ("http://h.test:8080/a\nb/c", "http://h.test:8080/…(2 segments)"),
+        ],
+    )
+    def test_a_refused_url_shows_the_same_shape_and_never_a_path(
+        self, raw: str, expected: str
+    ) -> None:
+        with pytest.raises(ValueError, match="malformed URL"):
+            HttpUrl(raw)
+        assert HttpUrl.shown(raw) == expected
+
+    @pytest.mark.parametrize(
+        "raw",
+        ["http://u:s@h:99999/x?t=1", "ftp://h/a", "not a url", "http:///a", ""],
+    )
+    def test_an_unreadable_url_shows_a_fixed_placeholder(self, raw: str) -> None:
+        assert HttpUrl.shown(raw) == "(unparseable URL)"
+
+    def test_a_host_too_long_to_be_a_host_is_not_shown(self) -> None:
+        assert HttpUrl.shown("http://" + "h" * 300 + "/a b") == "(unparseable URL)"

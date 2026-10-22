@@ -1267,7 +1267,7 @@ class TestSelectSafe:
             SitemapDiscovery.select_safe(entries)
         assert [r.getMessage() for r in caplog.records] == [
             (
-                "Dropping unsafe sitemap URL https://loops.example/x: "
+                "Dropping unsafe sitemap URL https://loops.example/…(1 segment): "
                 "host 'loops.example' resolves to blocked address 127.0.0.1"
             ),
             "Dropping unsafe sitemap URL (unparseable URL): malformed URL",
