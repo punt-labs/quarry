@@ -972,12 +972,19 @@
     "max_lcom": 0.0,
     "public_names": 1.0
   },
-  "src/quarry/extractors/spreadsheet_extractor.py": {
-    "avg_lcom": 0.0,
-    "circular_imports": 0.0,
+  "src/quarry/extractors/sheet_tables.py": {
     "efferent_coupling": 3.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
     "max_lcom": 0.0,
-    "public_names": 3.0
+    "avg_lcom": 0.0
+  },
+  "src/quarry/extractors/spreadsheet_extractor.py": {
+    "efferent_coupling": 3.0,
+    "public_names": 3.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
   },
   "src/quarry/extractors/text_extractor.py": {
     "efferent_coupling": 3.0,
