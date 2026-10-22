@@ -25,7 +25,7 @@ Two things break under a burst:
 
 - **Write contention / lost update.** `_chunk_embed_store` does
   `delete_document(...)` then `DocumentStreamer.insert(...)` against one shared write
-  connection (`src/quarry/ingestion/pipeline.py:975-988`). DES-034's module-global
+  connection (`src/quarry/ingestion/chunk_store_funnel.py`). DES-034's module-global
   `chunk_store._write_lock` (`chunk_store.py:27`) serializes each individual
   `table.add()`/`table.delete()`, so there is no torn write and no LanceDB
   optimistic-commit conflict — but the lock is released *between* the
@@ -59,7 +59,7 @@ A `POST /v1/capture` reaches embedding + write like this:
 | `accept` → **`asyncio.create_task(coro)`** + track, return 202 | `daemon/routes/base.py:116-127` |
 | `CaptureIngestJob.run` → `run_in_threadpool(self._capture, ctx)` | `daemon/ingest_jobs.py:174-186` |
 | `_capture` → `ScrubbedIngestJob.scrub_and_ingest` → `ingest_content` | `daemon/ingest_jobs.py:181-183`, `58-80` |
-| `ingest_content` → `_chunk_embed_store` (delete + `DocumentStreamer.insert`) | `ingestion/pipeline.py:449-455`, `975-988` |
+| `ingest_content` → `_chunk_embed_store` (delete + `DocumentStreamer.insert`) | `ingestion/chunk_store_funnel.py` (`ChunkStoreFunnel._chunk_embed_store`) |
 | `DocumentStreamer.insert` embeds via the **shared cached** write backend | `ingestion/streaming.py`; `ingestion/backends.py:36-43` |
 
 `POST /v1/remember` (`daemon/routes/ingestion.py:30-43`) and `POST /v1/ingest`
@@ -94,7 +94,7 @@ path:
   `sync_collection(...)` call (`sync.py:220`) and lives only for that sync's
   duration. This is the single consumer DES-034 §2 describes.
 - **Captures take a *different* writer.** `ingest_content` → `_chunk_embed_store`
-  (`pipeline.py:975-988`) → `DocumentStreamer.insert` (`ingestion/streaming.py`) constructs a
+  (`ingestion/chunk_store_funnel.py`) → `DocumentStreamer.insert` (`ingestion/streaming.py`) constructs a
   **fresh** `ProgressiveIndexer` with a `_PlainFlushTarget` (`ingestion/streaming.py`)
   per call, with **no consumer thread and no queue**. `ProgressiveIndexer`'s own
   docstring states its writes are performed "by exactly one caller (the sync
@@ -271,7 +271,7 @@ I-NOBLOCK and stalls the hook (the exact regression DES-041 removed).
 - **Later-wins for the same document**: two captures with the same stable
   `session-<id>` name (`routes/captures.py:98-113`), both `overwrite=True`, run
   strictly in order. The second's `_chunk_embed_store` deletes the first's
-  chunks then inserts its own (`pipeline.py:975-988`). No interleave, no lost
+  chunks then inserts its own (`ingestion/chunk_store_funnel.py`). No interleave, no lost
   update, no commit conflict — the serialization is what makes the chunk-gated
   delete correct under concurrency. This is exactly the §2.1 hazard, closed.
 - **No cross-collection starvation**: each collection has its own worker and
@@ -367,7 +367,7 @@ them**:
   (`sync_registry.py:83`). That bounded-wait guards the **registry** SQLite
   writes — sync's domain. Captures do **not** write the registry: their
   single-document `_PlainFlushTarget.on_flush` is a deliberate no-op
-  (`_PlainFlushTarget.on_flush`), so no watermark / registry row is touched. The capture
+  (`ingestion/streaming.py`), so no watermark / registry row is touched. The capture
   queue therefore governs a **different resource** (the chunks-table writes) from
   the busy_timeout guard, and the two do not overlap. Sync's registry writes and
   captures' chunk writes stay independently serialized — busy_timeout for the
@@ -404,7 +404,7 @@ batch producer/consumer coupled to the sync **registry**: its `FlushTarget.on_fl
 writes `files`-table watermarks and its `run(files: list[Path])` is a
 whole-collection sweep (`sync_ingest.py:44-137`, `265-298`). Captures are single
 inline documents that keep **no** resume watermark (`_PlainFlushTarget.on_flush`
-is a no-op, `_PlainFlushTarget.on_flush`). Forcing captures through `CollectionIngestor`
+is a no-op, `ingestion/streaming.py`). Forcing captures through `CollectionIngestor`
 would drag registry / resume machinery they do not use. And there is no persistent
 sync consumer to hang captures on — `CollectionIngestor` exists only for a sync's
 duration (`sync.py:220`), whereas captures arrive continuously *between* syncs and

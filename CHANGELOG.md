@@ -59,8 +59,8 @@ across `transform`, `index`, and `connector`).
   - A document-level binary classifier (`content_guard.py`) checks for magic
     bytes and the share of replacement and control characters. Prose that
     merely begins with `%PDF-` or `GIF8` still passes.
-  - A text or code page over the page cap (just under 1 MiB) is split at the best available
-    boundary, never truncated. An oversized PDF or other paginated page fails
+  - A text or code page over the page cap (just under 1 MiB) is split at the
+    best available boundary, never truncated. An oversized PDF or other paginated page fails
     its document instead, so page numbers always match the source.
   - Overlong unpunctuated runs are hard-wrapped so a chunk's stored text
     equals its embedded text.
@@ -76,18 +76,21 @@ across `transform`, `index`, and `connector`).
   - The hook never blocks the session.
   - MCP tools render a daemon refusal as `Error: <message>`, the same text as
     the CLI.
-- index: a failed fetch now fails its task. URL ingests and capture re-fetches
-  that hit an HTTP error, timeout, unreachable host, or over-cap body used to
-  end `completed` with zero chunks. They now end `failed` with a URL-free
-  reason and one redacted log line.
+- index: a failed fetch now fails its task with a URL-free reason and one
+  redacted log line. These cases used to end `completed` with zero chunks:
+  - Scrubbed URL ingests and capture re-fetches that hit an HTTP error,
+    timeout, unreachable host, or over-cap body.
+  - A sitemap URL that could not be fetched or parsed.
+  - A capture whose content extracted to no text.
 - security: network errors on a plain URL ingest no longer write the raw URL
   (including any credentials or tokens) to the daemon log or to the task
   error.
 - infra: `chunk_max_chars` is bounded in `Settings` (1 to 16,384), so every
   chunk fits the 64 KiB per-chunk row budget. `chunk_overlap_chars` must be
   non-negative. An out-of-range value is refused at load, with an error naming
-  the field. Previously an oversized `chunk_max_chars` made every ingest fail
-  with an error that never named the setting.
+  the field. Without this bound, an oversized `chunk_max_chars` would fail
+  every ingest against the new per-chunk budget with an error that never named
+  the setting.
 - tool: add the `missions_sync` tool to `scripts/mcpb-manifest.template.json`
   — it was never added when the tool shipped, so the Claude Desktop bundle's
   tool list silently omitted it.

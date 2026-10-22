@@ -3132,10 +3132,11 @@ other best-effort side effect in this codebase).
 **Date:** 2026-10-22
 **Status:** ACCEPTED. Delivery is four sequential PRs:
 
-1. Prevent (decisions 1 and 2, including the `Settings` bound). This one ships first.
+1. Prevent (decisions 1 and 2, including the `Settings` bound). Shipped first.
 2. Resilience (the finalize half of decision 4). Pending.
 3. Normalize (decision 3). Pending.
 4. Repair and visibility (the rest of decision 4). Pending.
+
 **Topic:** Keeping the chunks table compactable; rejecting content that is not text
 **Bead:** quarry-70zm
 
@@ -3168,7 +3169,8 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
    - A media-type allow-list is checked before a fetched body is read.
    - A document-level classifier in the neutral, stdlib-only `content_guard.py`
      looks for magic bytes after an optional media-type marker. Non-printable
-     signatures (PNG, ZIP, ELF, JPEG) reject outright. The printable ones
+     signatures (PNG, ZIP, ELF, JPEG, and a leading run of three U+FFFD)
+     reject outright. The printable ones
      (`%PDF-`, `GIF8`) also require non-text evidence, so prose that merely
      begins with them passes. The classifier also measures the aggregate share
      of U+FFFD and C0 control characters, with a threshold of 0.25. The measured
