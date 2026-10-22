@@ -172,6 +172,12 @@ class TestSoftSignatures:
         with pytest.raises(UnindexableContentError, match="pdf header"):
             BinaryContent().sniff(_PDF_EVIDENCE)
 
+    def test_a_printable_signature_needs_exactly_the_soft_evidence(self) -> None:
+        need = BinaryContent.SOFT_EVIDENCE
+        BinaryContent().sniff("%PDF-1.5\n" + _NONTEXT * (need - 1) + "x" * 500)
+        with pytest.raises(UnindexableContentError, match="pdf header"):
+            BinaryContent().sniff("%PDF-1.5\n" + _NONTEXT * need + "x" * 500)
+
     def test_magic_after_leading_whitespace_is_still_found(self) -> None:
         with pytest.raises(UnindexableContentError, match="zip archive header"):
             BinaryContent().sniff("  \n\tPK\x03\x04rest")
@@ -210,8 +216,19 @@ class TestSniffBoundaries:
         with pytest.raises(UnindexableContentError):
             BinaryContent().sniff(body)
 
-    def test_the_one_character_the_sample_skips_cannot_matter(self) -> None:
+    def test_a_character_between_the_windows_is_not_judged(self) -> None:
+        """Non-text exactly at the ratio passes; the skipped character goes unseen.
+
+        At 3w + 1 characters the sample is the head, middle and tail windows, and
+        the character at index 2w falls in none of them.  The head holds exactly
+        the sample's share (a quarter of 3w); judging the whole body would add the
+        skipped character and tip it over.
+        """
         w = SAMPLE_WINDOW
-        body = "a" * (2 * w) + _NONTEXT + "a" * w
+        share = 3 * w // 4
+        body = "a" * (w - share) + _NONTEXT * share + "a" * w + _NONTEXT + "a" * w
         assert len(body) == 3 * w + 1
+        assert body[2 * w] == _NONTEXT
         BinaryContent().sniff(body)
+        with pytest.raises(UnindexableContentError):
+            BinaryContent().require_document([body])

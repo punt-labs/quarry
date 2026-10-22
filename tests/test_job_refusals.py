@@ -15,6 +15,7 @@ from quarry.daemon.content_jobs import CaptureIngestJob, ScrubbedIngestJob
 from quarry.daemon.ingest_jobs import IngestJob
 from quarry.daemon.tasks import TaskState
 from quarry.ingestion.fetched_body import FetchedBody, FetchRefusedError
+from quarry.ingestion.ssrf_redirect import RedirectRejectedError
 from tests.inproc_daemon import InProcessDaemon
 
 if TYPE_CHECKING:
@@ -116,12 +117,18 @@ async def test_a_plain_url_ingest_of_a_pdf_fails_end_to_end(
 
 @pytest.mark.parametrize("scrub", [False, True])
 @pytest.mark.parametrize(
-    "failure",
+    ("failure", "reason"),
     [
-        URLError("Cannot reach http://u:p@h/?token=x"),
-        HTTPError(_URL, 500, "boom", HTTPMessage(), None),
-        TimeoutError("slow"),
-        ConnectionResetError("reset by http://u:p@h/?token=x"),
+        (
+            URLError("Cannot reach http://u:p@h/?token=x"),
+            "fetch failed: cannot reach the host (str)",
+        ),
+        (HTTPError(_URL, 500, "boom", HTTPMessage(), None), "fetch failed: HTTP 500"),
+        (TimeoutError("slow"), "fetch failed: timed out"),
+        (
+            ConnectionResetError("reset by http://u:p@h/?token=x"),
+            "fetch failed: ConnectionResetError",
+        ),
     ],
     ids=["unreachable", "http-500", "timeout", "reset"],
 )
@@ -129,6 +136,7 @@ async def test_a_failed_fetch_fails_the_task_with_a_url_free_reason(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
     failure: BaseException,
+    reason: str,
     *,
     scrub: bool,
 ) -> None:
@@ -143,8 +151,66 @@ async def test_a_failed_fetch_fails_the_task_with_a_url_free_reason(
         await _ingest_job(scrub=scrub).run(daemon.ctx, state)
 
     _assert_quiet_and_url_free(state, caplog)
-    assert state.error.startswith("fetch failed: ")
+    assert state.error == reason
     assert daemon.ctx.database.store.count() == 0
+
+
+async def test_a_capture_refetch_that_cannot_reach_the_host_fails_the_task(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    daemon = InProcessDaemon(tmp_path)
+    state = TaskState(task_id="t-cap3", kind="capture")
+    failure = URLError("Cannot reach http://u:p@h/?token=x")
+
+    with caplog.at_level(logging.WARNING), patch(_OPEN, side_effect=failure):
+        await _capture_job().run(daemon.ctx, state)
+
+    _assert_quiet_and_url_free(state, caplog, subject="capture WebFetch page (task ")
+    assert state.error == "fetch failed: cannot reach the host (str)"
+
+
+async def test_a_url_resolving_to_a_private_address_fails_the_task(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "quarry.url_safety.socket_module.getaddrinfo",
+        lambda *a, **k: [(2, 1, 6, "", ("10.0.0.5", 0))],
+    )
+    daemon = InProcessDaemon(tmp_path)
+    state = TaskState(task_id="t-ssrf", kind="ingest")
+
+    with (
+        caplog.at_level(logging.WARNING),
+        patch(_DISCOVER, return_value=[]),
+        patch(_OPEN) as opener,
+    ):
+        await _ingest_job(scrub=True).run(daemon.ctx, state)
+
+    _assert_quiet_and_url_free(state, caplog)
+    assert state.error == (
+        "URL rejected: host 'example.com' resolves to blocked address 10.0.0.5"
+    )
+    opener.assert_not_called()
+
+
+async def test_a_rejected_redirect_hop_fails_the_task(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    daemon = InProcessDaemon(tmp_path)
+    state = TaskState(task_id="t-redir", kind="ingest")
+    rejection = RedirectRejectedError("redirect target rejected: private address")
+
+    with (
+        caplog.at_level(logging.WARNING),
+        patch(_DISCOVER, return_value=[]),
+        patch(_OPEN, side_effect=rejection),
+    ):
+        await _ingest_job(scrub=True).run(daemon.ctx, state)
+
+    _assert_quiet_and_url_free(state, caplog)
+    assert state.error == "redirect target rejected: private address"
 
 
 async def test_a_refused_capture_refetch_fails_the_task(
@@ -177,7 +243,7 @@ async def test_an_oversized_body_is_a_content_refusal(
         await _ingest_job(scrub=True).run(daemon.ctx, state)
 
     _assert_quiet_and_url_free(state, caplog)
-    assert state.error.startswith("content rejected: response exceeds ")
+    assert state.error == "content rejected: response exceeds 4194304-byte cap"
 
 
 async def test_an_unknown_charset_is_a_content_refusal(

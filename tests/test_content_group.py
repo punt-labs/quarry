@@ -5,11 +5,12 @@ from __future__ import annotations
 import logging
 from types import SimpleNamespace
 from typing import cast
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from starlette.responses import JSONResponse
 
+from quarry.content_guard import BinaryContent
 from quarry.daemon.context import DaemonContext
 from quarry.daemon.routes.content_group import ContentRouteGroup
 
@@ -50,9 +51,14 @@ class TestRequireContent:
         )
         assert record.exc_info is None
 
-    def test_the_guard_is_built_once_for_the_class(self) -> None:
-        assert ContentRouteGroup._GUARD is ContentRouteGroup._GUARD
-        assert _group()._GUARD is ContentRouteGroup._GUARD
+    def test_the_guard_is_built_once_not_per_request(self) -> None:
+        with patch(
+            "quarry.daemon.routes.content_group.BinaryContent",
+            wraps=BinaryContent,
+        ) as constructor:
+            for _ in range(3):
+                _group()._require_content({"c": "text"}, "c", "remember")
+        constructor.assert_not_called()
 
 
 class TestRequireMemoryType:

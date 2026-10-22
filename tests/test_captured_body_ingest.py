@@ -131,9 +131,11 @@ class TestRun:
         with (
             caplog.at_level(logging.DEBUG),
             patch(_FETCH_BODY, side_effect=refusal),
-            pytest.raises(FetchRefusedError),
+            pytest.raises(FetchRefusedError) as info,
         ):
             _captured().run(_ctx())
+        assert info.value is refusal
+        assert caplog.records == []
 
 
 def test_the_subject_drops_userinfo_query_and_fragment() -> None:

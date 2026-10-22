@@ -191,16 +191,22 @@ class TestSurfacesAgree:
         reason: str,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        wire = http.post("/v1/remember", json={"name": "n.md", "content": payload})
+        refused = [f"remember refused: {reason}"]
         with caplog.at_level(logging.WARNING):
+            wire = http.post("/v1/remember", json={"name": "n.md", "content": payload})
+            assert _messages(caplog, _ROUTE_LOGGER) == refused
+            caplog.clear()
             mcp = McpTools(connect=lambda: client).remember(payload, "n.md")
-        with patch.object(TargetResolver, "connect", return_value=client):
-            cli = runner.invoke(app, ["remember", "--name", "n.md"], input=payload)
+            assert _messages(caplog, _ROUTE_LOGGER) == refused
+            assert _messages(caplog, _GUARD_LOGGER) == [f"Error in remember: {reason}"]
+            caplog.clear()
+            with patch.object(TargetResolver, "connect", return_value=client):
+                cli = runner.invoke(app, ["remember", "--name", "n.md"], input=payload)
 
         assert wire.json()["error"] == reason
         assert mcp == f"Error: {reason}"
         assert cli.exit_code == 1
-        assert f"Error: {reason}" in cli.output
+        assert cli.output.strip().splitlines()[-1] == f"Error: {reason}"
         assert not [r for r in caplog.records if r.exc_info]
 
     def test_learn(
@@ -211,16 +217,22 @@ class TestSurfacesAgree:
         reason: str,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        wire = http.post("/v1/learn", json={"lesson": payload})
+        refused = [f"learn refused: {reason}"]
         with caplog.at_level(logging.WARNING):
+            wire = http.post("/v1/learn", json={"lesson": payload})
+            assert _messages(caplog, _ROUTE_LOGGER) == refused
+            caplog.clear()
             mcp = McpTools(connect=lambda: client).learn(payload)
-        with patch.object(TargetResolver, "connect", return_value=client):
-            cli = runner.invoke(app, ["learn", payload])
+            assert _messages(caplog, _ROUTE_LOGGER) == refused
+            assert _messages(caplog, _GUARD_LOGGER) == [f"Error in learn: {reason}"]
+            caplog.clear()
+            with patch.object(TargetResolver, "connect", return_value=client):
+                cli = runner.invoke(app, ["learn", payload])
 
         assert wire.json()["error"] == reason
         assert mcp == f"Error: {reason}"
         assert cli.exit_code == 1
-        assert f"Error: {reason}" in cli.output
+        assert cli.output.strip().splitlines()[-1] == f"Error: {reason}"
         assert not [r for r in caplog.records if r.exc_info]
 
 
@@ -266,6 +278,20 @@ class TestIngestRoute:
         assert task["error"] == (
             "content rejected: unsupported media type application/pdf"
         )
+
+
+_GAP_REASON = "binary content rejected: page 1 non-text ratio 0.40 exceeds 0.25"
+_ROUTE_LOGGER = "quarry.daemon.routes.content_group"
+_GUARD_LOGGER = "quarry.mcp_guard"
+
+
+def _messages(caplog: pytest.LogCaptureFixture, name: str) -> list[str]:
+    """Return the WARNING-or-worse messages one logger emitted."""
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == name and r.levelno >= logging.WARNING
+    ]
 
 
 def _gap_binary() -> str:
@@ -318,10 +344,11 @@ class TestRefusedAfterTheSniff:
             task = _await_terminal(http, accepted.json()["task_id"])
 
         assert task["status"] == "failed"
-        assert str(task["error"]).startswith("binary content rejected: ")
+        assert task["error"] == _GAP_REASON
         [record] = [r for r in caplog.records if r.levelno >= logging.WARNING]
         assert record.levelno == logging.WARNING
         assert record.exc_info is None
+        assert record.getMessage().endswith(f"rejected: {_GAP_REASON}")
         assert daemon.ctx.database.store.count() == 0
 
 
@@ -348,7 +375,7 @@ async def test_a_capture_job_fails_quietly_on_gap_binary_inline_text(
         await CaptureIngestJob(inline=inline, source_url="").run(daemon.ctx, state)
 
     assert state.status == "failed"
-    assert state.error.startswith("binary content rejected: ")
+    assert state.error == _GAP_REASON
     [record] = [r for r in caplog.records if r.levelno >= logging.WARNING]
     assert record.exc_info is None
     assert daemon.ctx.database.store.count() == 0

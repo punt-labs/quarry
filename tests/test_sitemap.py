@@ -977,10 +977,9 @@ class TestIngestAuto:
         warning_records = [
             r.getMessage() for r in caplog.records if r.levelname == "WARNING"
         ]
-        assert (
-            "Sitemap discovery failed for https://example.com/page "
-            "(SitemapException)" in warning_records
-        )
+        assert warning_records == [
+            "Sitemap discovery failed for https://example.com/page (SitemapException)"
+        ]
 
     @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
     def test_discovering_progress_redacts_netloc_userinfo(

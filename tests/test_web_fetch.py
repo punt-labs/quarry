@@ -131,17 +131,18 @@ class TestWebFetcher:
             {},  # type: ignore[arg-type]
             None,
         )
-        with pytest.raises(FetchRefusedError, match="fetch failed: HTTP 404") as info:
+        with pytest.raises(FetchRefusedError) as info:
             WebFetcher().fetch("https://example.com/missing")
-        assert "example.com" not in str(info.value)
+        assert str(info.value) == "fetch failed: HTTP 404"
 
     @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
     def test_url_error_raises_oserror(self, mock_open: MagicMock) -> None:
         from urllib.error import URLError
 
         mock_open.side_effect = URLError("Name or service not known")
-        with pytest.raises(FetchRefusedError, match="fetch failed: cannot reach"):
+        with pytest.raises(FetchRefusedError) as info:
             WebFetcher().fetch("https://nonexistent.invalid")
+        assert str(info.value) == "fetch failed: cannot reach the host (str)"
 
     @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
     def test_custom_timeout_passed_through(self, mock_open: MagicMock) -> None:
@@ -155,8 +156,9 @@ class TestWebFetcher:
         """A body past the size cap fails cleanly instead of streaming forever."""
         oversize = b"x" * (wf._MAX_RESPONSE_BYTES + 1)
         mock_open.return_value = _mock_response(oversize, "text/html")
-        with pytest.raises(FetchRefusedError, match=r"content rejected: .*-byte cap"):
+        with pytest.raises(FetchRefusedError) as info:
             WebFetcher().fetch("https://example.com/huge")
+        assert str(info.value) == "content rejected: response exceeds 4194304-byte cap"
 
     @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
     def test_slow_drip_aborts_at_the_deadline(
@@ -174,9 +176,9 @@ class TestWebFetcher:
         clock = iter([0.0, 0.0, 1_000_000.0, 1_000_000.0, 1_000_000.0])
         monkeypatch.setattr(wf, "monotonic", lambda: next(clock))
         mock_open.return_value = drip
-        with pytest.raises(FetchRefusedError, match="time budget") as excinfo:
+        with pytest.raises(FetchRefusedError) as excinfo:
             WebFetcher().fetch("https://example.com/slow")
-        assert "example.com" not in str(excinfo.value)
+        assert str(excinfo.value) == "fetch failed: exceeded its total time budget"
 
 
 class TestFetchBody:
@@ -238,10 +240,9 @@ class TestMediaTypeBoundary:
         mock_open.return_value = _mock_response(b"%PDF", "application/pdf")
         with pytest.raises(UnsupportedContentError) as info:
             WebFetcher().fetch_body(url)
-        message = str(info.value)
-        assert message.startswith("content rejected:")
-        assert "secret" not in message
-        assert "token" not in message
+        assert str(info.value) == (
+            "content rejected: unsupported media type application/pdf"
+        )
 
     @pytest.mark.parametrize(
         "content_type",

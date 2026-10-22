@@ -222,6 +222,14 @@ class TestConstruction:
         assert max(len(c.text) for c in chunks) == 16_384
         RowBudget().require_chunk("😀" * 16_384)
 
+    def test_four_byte_characters_at_the_largest_chunk_size_fit_the_budget(
+        self,
+    ) -> None:
+        chunks = PageChunker(16_384, 0).chunk([_page("😀" * 40_000)])
+        assert max(len(c.text) for c in chunks) == 16_384
+        for chunk in chunks:
+            RowBudget().require_chunk(chunk.text)
+
     def test_a_non_positive_chunk_size_is_refused(self) -> None:
         with pytest.raises(ValueError, match="max_chars"):
             PageChunker(0, 0)

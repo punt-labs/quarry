@@ -59,9 +59,10 @@ class TestInvariant:
         assert RowBudget().max_chunk_chars == 16_384
         assert RowBudget(max_chunk_bytes=4097).max_chunk_chars == 1024
 
-    def test_a_larger_page_cap_is_refused(self) -> None:
+    def test_the_bound_admits_exactly_2_31_minus_1_and_no_more(self) -> None:
+        RowBudget(max_page_bytes=2**31 - 1, assumed_batch_rows=1, safety_factor=1)
         with pytest.raises(ValueError, match="2\\*\\*31"):
-            RowBudget(max_page_bytes=2**20)
+            RowBudget(max_page_bytes=2**31, assumed_batch_rows=1, safety_factor=1)
 
     def test_a_larger_chunk_cap_is_refused(self) -> None:
         with pytest.raises(ValueError, match="2\\*\\*31"):

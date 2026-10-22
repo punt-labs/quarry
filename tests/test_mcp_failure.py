@@ -17,25 +17,30 @@ class TestRender:
 
     def test_a_down_daemon_renders_the_recovery_hint(self) -> None:
         exc = QuarryConnectionError("refused", "http://127.0.0.1:8420")
-        assert "Restart it" in ToolFailure(exc).render()
+        assert ToolFailure(exc).render().startswith("Error: refused — Restart it: ")
 
     def test_a_remote_daemon_renders_the_remote_hint(self) -> None:
         exc = QuarryConnectionError("refused", "https://quarry.example.com")
-        assert "remote target" in ToolFailure(exc).render()
+        assert (
+            ToolFailure(exc)
+            .render()
+            .startswith("Error: refused — This is a remote target")
+        )
 
     def test_any_other_exception_names_its_class(self) -> None:
         assert ToolFailure(RuntimeError("boom")).render() == "Error: RuntimeError: boom"
 
 
 class TestLogging:
-    @pytest.mark.parametrize("status", [400, 404, 409])
+    @pytest.mark.parametrize("status", [400, 404, 409, 499])
     def test_a_4xx_is_a_quiet_warning(self, status: int) -> None:
         failure = ToolFailure(HttpError("no", status, ""))
         assert failure.level == logging.WARNING
         assert failure.exc_info is None
 
-    def test_a_5xx_is_an_error_with_its_traceback(self) -> None:
-        exc = HttpError("down", 503, "")
+    @pytest.mark.parametrize("status", [500, 503])
+    def test_a_5xx_is_an_error_with_its_traceback(self, status: int) -> None:
+        exc = HttpError("down", status, "")
         failure = ToolFailure(exc)
         assert failure.level == logging.ERROR
         assert failure.exc_info is exc
