@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar, Self, final
+from typing import TYPE_CHECKING, Self, final
 
+from quarry.capture_marker import CaptureMarker
 from quarry.capture_url import CaptureUrl
 from quarry.content_guard import UnindexableContentError
 from quarry.ingestion import ingest_context, web_ingest
@@ -16,6 +16,9 @@ from quarry.scrub import scrub_and_log
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
     from quarry.ingestion.fetched_body import FetchedBody
+
+# WebFetcher is frozen, so one shared instance carries the default policy.
+_DEFAULT_FETCHER = WebFetcher()
 
 
 @final
@@ -74,28 +77,23 @@ class CapturedBodyIngest:
     _name_override: str
     _fetcher: WebFetcher
 
-    _MARKER_UNSAFE: ClassVar[re.Pattern[str]] = re.compile(r"[^a-zA-Z0-9/.+;=_-]")
-    _MARKER_MAX_LEN: ClassVar[int] = 128
-    _MARKER_FALLBACK: ClassVar[str] = "application/octet-stream"
-
     def __new__(
         cls,
         source: str,
         labels: IngestLabels,
         name_override: str = "",
-        fetcher: WebFetcher | None = None,
+        fetcher: WebFetcher = _DEFAULT_FETCHER,
     ) -> Self:
         self = super().__new__(cls)
         self._source = source
         self._labels = labels
         self._name_override = name_override
-        self._fetcher = fetcher or WebFetcher()
+        self._fetcher = fetcher
         return self
 
-    @staticmethod
-    def redacted(source: str) -> str:
-        """Return *source* with userinfo, query and fragment dropped, for a log line."""
-        return CaptureUrl.for_web_fetch(source)
+    def subject(self) -> str:
+        """Return the source with userinfo, query and fragment dropped, for a log."""
+        return CaptureUrl.for_web_fetch(self._source)
 
     def fetch(self) -> FetchedBody:
         """Fetch ``source``; every failure is a URL-free :class:`FetchRefusedError`."""
@@ -138,26 +136,9 @@ class CapturedBodyIngest:
             )
             return dict(web_ingest.ingest_url(request, progress, context))
 
-        media_type = self.marker_media_type(body.media_type)
-        content = f"<!-- media_type: {media_type} -->\n{body.text}"
+        content = CaptureMarker(body.media_type).render() + body.text
         name = self._name_override or CaptureUrl(self._source).redacted(scrub)
         inline = web_ingest.InlineIngest(
             content, format_hint="markdown", content_scrubber=scrub
         )
         return dict(web_ingest.ingest_content(inline, name, progress, context))
-
-    @classmethod
-    def marker_media_type(cls, raw: str) -> str:
-        """Return a marker-safe media type; fall back on empty/unsafe input.
-
-        ``raw`` is the ``Content-Type`` primary token from the HTTP response and
-        is server-controlled.  Interpolating it verbatim into the
-        ``<!-- media_type: X -->`` capture marker would let a header carrying
-        whitespace, control bytes, or the ``-->`` needle break the single-line
-        HTML-comment contract or escape the marker entirely.  Strip to the
-        RFC 6838-like shape (alphanumerics plus ``/.+;=_-``), cap at 128 chars,
-        and substitute ``application/octet-stream`` when the input degrades to
-        nothing after cleaning — the marker survives; the injection does not.
-        """
-        cleaned = cls._MARKER_UNSAFE.sub("", raw)[: cls._MARKER_MAX_LEN]
-        return cleaned or cls._MARKER_FALLBACK

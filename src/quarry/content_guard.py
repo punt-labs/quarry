@@ -15,6 +15,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import ClassVar, final
 
+from quarry.capture_marker import CaptureMarker
+
 
 class UnindexableContentError(ValueError):
     """Raised when content cannot be indexed; the message is the stable reason.
@@ -55,9 +57,6 @@ class BinaryContent:
     SAMPLE_WINDOW_CHARS: ClassVar[int] = 32 * 1024
     SOFT_EVIDENCE: ClassVar[int] = 4
 
-    _MARKER: ClassVar[re.Pattern[str]] = re.compile(
-        r"\A<!-- media_type: [^\n]*? -->\n?"
-    )
     _NONTEXT: ClassVar[re.Pattern[str]] = re.compile("[\x00-\x08\x0b\x0e-\x1f\ufffd]")
     # Text-decoded forms of each signature: the raw bytes (latin-1) and the
     # U+FFFD form a lossy UTF-8 decode produces for the high bytes.
@@ -113,7 +112,7 @@ class BinaryContent:
 
     def _require_text_start(self, text: str) -> None:
         """Raise if *text* opens with a binary signature (soft ones need evidence)."""
-        head = self._MARKER.sub("", text[:512], count=1).lstrip()
+        head = CaptureMarker.without(text[:512]).lstrip()
         for prefix, label in self._HARD:
             if head.startswith(prefix):
                 raise UnindexableContentError(f"binary content rejected: {label}")

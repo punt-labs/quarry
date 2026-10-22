@@ -63,10 +63,6 @@ class TestFetch:
         ):
             _captured().fetch()
 
-    def test_the_subject_is_redacted(self) -> None:
-        subject = CapturedBodyIngest.redacted("https://u:pw@x.test/p?token=abc#f")
-        assert subject == "https://x.test/p"
-
 
 class TestIngest:
     def test_html_is_routed_through_the_extractor_with_the_fetched_text(self) -> None:
@@ -140,52 +136,6 @@ class TestRun:
             _captured().run(_ctx())
 
 
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [
-        ("application/json", "application/json"),
-        ("text/html; charset=utf-8", "text/html;charset=utf-8"),
-        ("application/vnd.api+json", "application/vnd.api+json"),
-    ],
-    ids=["json", "html-charset", "vendor-plus"],
-)
-def test_passes_well_formed_values(raw: str, expected: str) -> None:
-    """A well-formed RFC 6838 media type survives sanitization unchanged."""
-    assert CapturedBodyIngest.marker_media_type(raw) == expected
-
-
-@pytest.mark.parametrize(
-    "raw",
-    [
-        "application/json\n<!-- injection -->",
-        "text/plain\r\n<!-- xss -->",
-        "application/json; charset=utf-8\r\n\r\ninjected",
-        "text/html\n\r\t <script>alert(1)</script>",
-    ],
-    ids=["newline-comment", "crlf-comment", "crlf-header-smuggle", "html-tag"],
-)
-def test_strips_marker_escape_attempts(raw: str) -> None:
-    """Whitespace, control bytes, and comment-escape needles are stripped clean."""
-    cleaned = CapturedBodyIngest.marker_media_type(raw)
-    assert "<!--" not in cleaned, f"leaked <!-- opener from {raw!r} → {cleaned!r}"
-    assert "-->" not in cleaned, f"leaked --> closer from {raw!r} → {cleaned!r}"
-    assert "\n" not in cleaned and "\r" not in cleaned, (
-        f"newline survived from {raw!r} → {cleaned!r}"
-    )
-
-
-def test_caps_length_at_128() -> None:
-    """A pathological megabyte Content-Type header is bounded at 128 chars."""
-    assert CapturedBodyIngest.marker_media_type("a" * 500) == "a" * 128
-
-
-@pytest.mark.parametrize(
-    "raw",
-    ["", "   ", "\t\n\r", "!!!\x00\x01", "<>&{}"],
-    ids=["empty", "spaces", "control", "punctuation-and-null", "unsafe-only"],
-)
-def test_falls_back_when_input_degrades_to_nothing(
-    raw: str,
-) -> None:
-    """Input that cleans to empty resolves to the RFC 2046 default octet-stream."""
-    assert CapturedBodyIngest.marker_media_type(raw) == "application/octet-stream"
+def test_the_subject_drops_userinfo_query_and_fragment() -> None:
+    captured = _captured("https://u:pw@x.test/p?token=abc#f")
+    assert captured.subject() == "https://x.test/p"

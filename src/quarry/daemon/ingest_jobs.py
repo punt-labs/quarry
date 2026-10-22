@@ -11,7 +11,6 @@ does.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import partial
 from typing import TYPE_CHECKING
 
 from starlette.concurrency import run_in_threadpool
@@ -54,8 +53,7 @@ class IngestJob:
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Fetch and index the URL in a background thread, updating task state."""
-        subject = partial(CapturedBodyIngest.redacted, self.source)
-        terminal = RefusalAwareTerminal(state, subject)
+        terminal = RefusalAwareTerminal(state, self._captured().subject)
         with terminal.record():
             terminal.complete(await run_in_threadpool(self._ingest, ctx))
 
