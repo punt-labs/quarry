@@ -316,3 +316,40 @@ def test_an_archive_without_a_local_capture_promises_only_the_archive(
     message = str(result["systemMessage"])
     assert "The raw JSONL archive is saved" in message
     assert "scrubbed capture" not in message
+
+
+@pytest.mark.parametrize(
+    ("distillation", "expected"),
+    [
+        (SendOutcome(sent=True), "-> error:daemon-refused (distilled)"),
+        (
+            SendOutcome.unreachable("down"),
+            "-> error:daemon-refused (distill-daemon-unreachable)",
+        ),
+    ],
+    ids=["filed", "failed"],
+)
+def test_a_failed_raw_send_still_reports_the_distillation(
+    distillation: SendOutcome,
+    expected: str,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="quarry.hooks")
+    _vendor_identity(tmp_path, "rmh")
+    transcript = _make_dialogue(tmp_path / "sub.jsonl", "review", "Findings: none.")
+    payload: dict[str, object] = {
+        "cwd": str(tmp_path),
+        "session_id": "parent",
+        "agent_id": "a0f13948344b777d1",
+        "agent_type": "rmh",
+        "agent_transcript_path": str(transcript),
+    }
+    with (
+        patch("quarry.session_transcript.Path.home", return_value=tmp_path / "home"),
+        patch(_SEND, return_value=SendOutcome.rejected(400, "no")),
+        patch(_REMEMBER, return_value=distillation),
+    ):
+        HookAgent.subagent_stop(payload)
+    line = next(r for r in caplog.records if r.name == "quarry.hooks").getMessage()
+    assert expected in line

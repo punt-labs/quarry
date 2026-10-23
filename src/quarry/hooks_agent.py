@@ -89,15 +89,15 @@ class HookAgent:
         unreachable daemon must not read as ``capture``, and an empty
         transcript is a skip, not a send failure (parity with the
         ``handle_pre_compact`` branching in :mod:`quarry.hooks`). *detail*
-        rides the capture line — SubagentStop uses it to say whether the
-        distilled report was filed too.
+        rides the capture line, or follows the error label — SubagentStop uses it
+        to say whether the distilled report was filed too.
         """
         if not outcome.text_captured:
             trace.skip("empty-transcript")
         elif outcome.sent:
             trace.capture(detail)
         else:
-            trace.error(outcome.failure)
+            trace.error(f"{outcome.failure} ({detail})" if detail else outcome.failure)
 
     @staticmethod
     def post_web_search(payload: dict[str, object]) -> dict[str, object]:
