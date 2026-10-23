@@ -45,9 +45,12 @@ across `transform`, `index`, and `connector`).
   sibling classes (mirroring the existing `MissionTools` pattern). The stdio
   wire surface — tool names, behavior, `MCPServer` construction — is
   unchanged. `McpTools.main()` moves to a `McpTools.run_stdio` staticmethod.
-- index: a URL's stored document name is `scheme://host[:port]/path`. These
-  parts are removed:
-  - userinfo, query string, fragment, and `;params`;
+- index: a URL's stored document name is `scheme://host[:port]/path`,
+  followed by `?q=<digest>` when the URL has a query. The digest is the
+  first 16 hex digits of a SHA-256 of the sorted, encoded parameters, so a
+  secret in a query string is never stored while pages that differ by query
+  stay separate documents. These parts are removed:
+  - userinfo, fragment, and `;params`;
   - an explicit default port;
   - a trailing dot on the host.
 
@@ -55,10 +58,11 @@ across `transform`, `index`, and `connector`).
   upper-cased, so `…/café` and `…/caf%C3%A9` are one document and a
   non-ASCII URL is fetched rather than failing. This applies to `quarry
   ingest <url>`, sitemap pages, a `remember` whose name is a URL, and
-  captures. Equivalent URLs, including those that differ only in query or
-  fragment, now resolve to the same document. Re-ingesting a URL replaces
-  a document stored under its former spelling rather than leaving a
-  duplicate.
+  captures. URLs that differ only in fragment, `;params`, or parameter order
+  resolve to the same document. Ingesting a URL from the web replaces a
+  web-sourced document stored under the URL's former spelling (logged at
+  WARNING) rather than leaving a duplicate; documents named by `remember`
+  are never matched.
 - tool: a failed task's error shows its reason only when the task was
   refused (binary content, an over-budget row, a rejected or failed fetch,
   or a directory registration that is already covered, already registered,
@@ -83,9 +87,14 @@ across `transform`, `index`, and `connector`).
 - tool: hook traces tell a daemon refusal (`daemon-refused`) from an
   unreachable daemon (`daemon-unreachable`), a hook-side configuration error
   (`config-error`), and a server fault (`daemon-error`). The PreCompact
-  message states truthfully whether a local copy was saved and offers
-  `quarry backfill-sessions` for every recoverable failure. A SubagentStop trace reports the distillation result
-  (`distilled` or `distill-<label>`) whether or not the raw send succeeded.
+  message states truthfully whether a local copy was saved, and offers
+  `quarry backfill-sessions` for a recoverable failure only when the
+  directory is registered, since that is what backfill reads. A SubagentStop
+  trace reports the distillation result (`distilled` or `distill-<label>`)
+  whether or not the raw send succeeded, and a refused SessionStart
+  registration traces as a skip, not a capture.
+- tool: `quarry backfill-sessions` re-ingests a session whose transcript
+  has grown since it was last stored, instead of skipping it.
 - infra: log lines show a URL as `scheme://host[:port]/…(segments=N)`, never
   its path, whether quarry logs it or a library does. The full path is kept
   in the stored document name. Tracebacks in the log are indented, and a

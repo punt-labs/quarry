@@ -1436,8 +1436,9 @@ parameter on `ingest_url`.
    (`CaptureUrl._bracketed`). This is defence-in-depth distinct from body
    scrubbing, and it is the specific property `quarry-ow3k` relies on.
    *Superseded in part by DES-057 decision 6:* a capture's stored name is now
-   `HttpUrl.document_name` (via `WebFetchName`), and userinfo is refused at
-   admission rather than stripped. `CaptureUrl` remains only as the tolerant
+   `HttpUrl.document_name` (via `WebFetchName`), which keeps a digest of the
+   query rather than dropping it, and userinfo is refused at admission
+   rather than stripped. `CaptureUrl` remains only as the tolerant
    fallback behind `HttpUrl.shown` and `DisplayName.stored` for a URL that
    `HttpUrl` will not admit.
 
@@ -3277,16 +3278,32 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
      - `.fetch_url` is the only fetchable form.
      - `.document_name` is the stored form, `scheme://host[:port]/path`,
        with no default port, no `;params`, no trailing dot, and IDNA dot
-       variants folded, so equivalent URLs share one document.
+       variants folded, so equivalent URLs share one document. A query is
+       stored as `?q=<16 hex of SHA-256 of the sorted, encoded
+       parameters>`: pages that differ by query stay distinct documents,
+       and the raw query never reaches storage. Dropping the query
+       entirely was rejected because it merged distinct pages (`?page=1`
+       and `?page=2`) into one document. The digest is unsalted, so a
+       low-entropy query secret could be guessed back from a stored name;
+       a per-install salt was rejected because it would make the same URL
+       a different document on every install. The URL admission and
+       capture layers are what keep credentials out of URLs; the digest
+       only keeps them out of storage. `;params` are dropped because they
+       carry session IDs, so an overwrite of `/a/c` replaces a legacy
+       `/a;b/c`.
      - The path, query, and fragment are percent-encoded once as UTF-8 at
        construction (existing escapes kept and upper-cased, a lone `%`
        becomes `%25`). `fetch_url` and `document_name` share that form, so
        an IRI is fetchable and `café` and `caf%C3%A9` are one document.
      - Because this decision changes stored URL names, `LegacyUrlNames`
        canonicalizes the stored names under the same `scheme://host` prefix
-       at dedup and overwrite time. A re-ingest replaces a document stored
-       under a former spelling instead of leaving it orphaned; there is no
-       bulk rename migration.
+       (host matched case-insensitively, one row per document, listed once
+       per bulk run) at dedup and store time. When both the stored document
+       and the page being stored are web-sourced (`document_path` is an
+       `http(s)` URL), a store replaces the document under its former
+       spelling, overwriting or not, and logs the replacement at WARNING.
+       Names given by `remember` are labels and are never matched. There is
+       no bulk rename migration.
      - `str()` is the log form, `scheme://host[:port]/…(segments=N)`. It
        never carries the path. A heuristic cannot tell a slug from a
        secret, so the path stays only in the stored name, where diagnosis
@@ -3307,14 +3324,28 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
      included), and a host that is not a DNS name or bracketed IP literal
      prints as `[host]`. They drop third-party records below WARNING. This
      backstop catches what a library logs on its own.
-     - **Whitespace inside a URL.** urlsplit keeps unusual whitespace in
-       userinfo and drops tab, CR, and LF, so the redactor joins whitespace
-       inside a URL's scheme, `://` separator, and authority (where
-       credentials live) before masking; a credential split across any
-       whitespace is still masked. A break in the path ends the URL: the
-       log form drops the path anyway, and joining past it would swallow
-       the next log line's first word. Text after such a break is logged
-       as written.
+     - **A written contract and an oracle.** Five review rounds of
+       pattern patches each opened a neighbouring hole, so the redactor's
+       contract is now specified in `AuthorityMask` (`authority_mask.py`)
+       and enforced by a generated property test
+       (`tests/test_log_redactor_oracle.py`, hypothesis, derandomized).
+       The test checks three properties: no secret survives; every
+       non-URL line, including email and traceback lines, survives
+       unchanged; and a second redaction changes nothing. The contract
+       masks a URL's authority up to its last `@`. It joins whitespace
+       only into text that already has userinfo shape, never crosses a
+       newline except for one named continuation token, and keeps
+       everything else exactly.
+     - **Known limits of the backstop.** The types are the guarantee and
+       the redactor is a heuristic for third-party text, so these residual
+       cases are accepted and pinned in the contract:
+       - a colon-less user-only credential split so that it looks like a
+         host followed by an email address;
+       - a credential broken by two or more line breaks;
+       - a password holding both `@` and whitespace after it.
+
+       Masking them would break the preservation property for ordinary
+       log lines.
      - **Linear time.** A record is capped at 64 KiB. The redactor works
        one token at a time: a token over 2,048 characters becomes `[…]`,
        and each pattern runs only on a token that can match it, so a
@@ -3349,9 +3380,12 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
      `daemon-refused` (4xx), `daemon-unreachable`, `config-error`
      (hook-side), and `daemon-error` (5xx or malformed reply), from the
      single `SendOutcome` every send returns; the same outcome picks the
-     PreCompact message's advice. Every failure but a refusal offers
-     `quarry backfill-sessions`, which reads Claude Code's own transcripts;
-     the quarry archive is reported separately as saved or not.
+     PreCompact message's advice. A recoverable failure offers `quarry
+     backfill-sessions` only when the directory is one backfill walks (a
+     registered directory), because backfill reads Claude Code's own
+     transcripts for registered projects; backfill re-ingests a session
+     whose transcript grew since it was stored. The quarry archive is
+     reported separately as saved or not.
 
 ### Rejected alternatives
 
