@@ -884,7 +884,7 @@ Known issues (as of May 2026):
         tool-results/             # Tool output artifacts
 ```
 
-The encoded project dir replaces `/` with `-` and preserves the leading dash (e.g., `/Users/jm/code` → `-Users-jm-code`).
+The encoded project dir replaces every character outside `[A-Za-z0-9]` with `-` and preserves the leading dash (e.g., `/Users/jm/code` → `-Users-jm-code`, `/repo/.claude/worktrees` → `-repo--claude-worktrees`).
 
 ### Implications
 
@@ -3298,12 +3298,19 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
      - Because this decision changes stored URL names, `LegacyUrlNames`
        canonicalizes the stored names under the same `scheme://host` prefix
        (host matched case-insensitively, one row per document, listed once
-       per bulk run) at dedup and store time. When both the stored document
-       and the page being stored are web-sourced (`document_path` is an
-       `http(s)` URL), a store replaces the document under its former
+       per bulk run) at dedup and store time. Whether a store is URL-sourced
+       is a fact of the route, carried on the ingest context: a capture or
+       URL ingest is, `remember` and `learn` are not, whatever their format
+       hint. When both the stored document and the page being stored are
+       URL-sourced, a store replaces the document under its former
        spelling, overwriting or not, and logs the replacement at WARNING.
-       Names given by `remember` are labels and are never matched. There is
-       no bulk rename migration.
+       A name this build wrote is canonical and spells only itself, so a
+       copied digest cannot alias a different page; an older raw name is
+       matched under either reading of a `?q[sha256]=` it happens to
+       contain. Names given by `remember` and `learn` are labels: they are
+       never matched, and their typed marker is never read as a digest,
+       though a URL-shaped label is still cleaned of userinfo and query.
+       There is no bulk rename migration.
      - `str()` is the log form, `scheme://host[:port]/…(segments=N)`. It
        never carries the path. A heuristic cannot tell a slug from a
        secret, so the path stays only in the stored name, where diagnosis
@@ -3336,8 +3343,13 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
        only into text that already has userinfo shape, never crosses a
        newline except for one named continuation token, and keeps
        everything else exactly. The redactor repeats its passes until one
-       changes nothing (at most four), which makes the result a fixed
-       point.
+       changes nothing, which makes the result a fixed point. The bound is
+       eight passes, and the oracle fails if any generated case needs more
+       than seven. A record that has not settled at the bound fails
+       closed: the handler writes one fixed line built from the time,
+       level, logger, and call site, ending `message withheld: redaction
+       did not settle in 8 passes`. Redaction itself never logs, because a
+       log call from inside a handler can deadlock two handlers' locks.
      - **Known limits of the backstop.** The types are the guarantee and
        the redactor is a heuristic for third-party text, so these residual
        cases are accepted and pinned in the contract:
@@ -3347,14 +3359,19 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
        - a credential broken by two or more line breaks;
        - a password holding both `@` and whitespace after it;
        - `?`, `#`, or `\` inside a URL's password, which ends the
-         authority.
+         authority;
+       - a `/` inside a password whose `scheme://` opener is broken by a
+         gap, which reads as the start of a path.
 
        Masking them would break the preservation property for ordinary
        log lines.
      - **Linear time.** A record is capped at 64 KiB. The redactor works
        one token at a time: a token over 2,048 characters becomes `[…]`,
-       and each pattern runs only on a token that can match it, so a
-       crafted URL cannot stall the handler.
+       and each pattern runs only on a token that can match it. A scheme
+       is matched only where a run of scheme characters starts, so a long
+       run is not rescanned from every offset. Per-token backtracking is
+       bounded by the token cap, so a crafted record costs well under a
+       second and cannot stall the handler.
      - **No forged lines.** Newlines and bidi and direction marks in a
        message are escaped (`\xNN`, `\uNNNN`, `\UNNNNNNNN`). Every
        traceback and stack line is indented, so no continuation line can
@@ -3390,12 +3407,23 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
      that conditional is true for every session, so no reach check is made
      (an earlier reach check mis-encoded paths and was removed). Backfill
      re-ingests a session whose transcript grew since it was stored. The
-     quarry archive is reported separately as saved or not.
+     quarry archive is reported separately as saved or not. A fault on the
+     background-sync lock, or any failure to start the sync process, is
+     reported as a failed launch with a pointer to the log, never as
+     "already running".
    - **Model context (SessionStart and the WebFetch loop-closer).** Text a
      hook puts in the model's context carries no unquoted caller-derived
      value. Directory and collection names render through one quoted form
-     (`Shown`), and runnable commands are `shlex`-quoted. New collection
-     names are limited to `[A-Za-z0-9._-]`. The captures lookup returns
+     (`Shown`), and runnable commands are `shlex`-quoted. A name that is
+     not printable never appears in a command: the directory form becomes
+     "from that directory, run: quarry enable .", and the collection form
+     points to `quarry list collections`. The drift nudge's command is
+     `quarry deregister --keep-data -- <name>`, so pasting it keeps the
+     data it says it keeps. New collection names, including the default
+     the CLI and MCP pick from a directory's leaf, are limited to
+     `[A-Za-z0-9._-]` and cannot start with `-` or `.`; an existing
+     registration keeps its name when its directory is widened. The
+     captures lookup returns
      only the canonical name of the URL asked about plus a `legacy` flag,
      never a stored name, because a legacy name can hold a raw query.
 

@@ -61,8 +61,9 @@ across `transform`, `index`, and `connector`).
   captures. URLs that differ only in fragment, `;params`, or parameter order
   resolve to the same document. Ingesting a URL from the web replaces a
   web-sourced document stored under the URL's former spelling (logged at
-  WARNING) rather than leaving a duplicate; documents named by `remember`
-  are never matched.
+  WARNING) rather than leaving a duplicate. Documents named by `remember`
+  or `learn` are labels and are never matched or replaced, whatever their
+  format hint.
 - tool: a failed task's error shows its reason only when the task was
   refused (binary content, an over-budget row, a rejected or failed fetch,
   or a directory registration that is already covered, already registered,
@@ -93,21 +94,36 @@ across `transform`, `index`, and `connector`).
   distillation result (`distilled` or `distill-<label>`) whether or not the
   raw send succeeded. SessionStart traces a nudge, drift, or refused
   registration as a skip and a failed sync launch as an error, never as a
-  capture.
+  capture. A background sync that cannot take its lock or start its process
+  is reported as `Background sync failed to launch` with a pointer to the
+  log, instead of `already running`.
+- tool: the drift notice's command is `quarry deregister --keep-data --
+  <name>`, so it keeps the indexed data the notice says it keeps.
+- tool: `quarry register` and the MCP `register_directory` default the
+  collection name to the directory's leaf with characters outside
+  `A-Z a-z 0-9 . _ -` mapped to `-`, the same name automatic registration
+  picks.
 - security: SessionStart context quotes every directory and collection name
   on one line, and runnable commands are shell-quoted, so a hostile
-  directory name cannot inject instructions. New collection names use only
-  `A-Z a-z 0-9 . _ -`; a directory leaf with other characters is mapped to
-  `-`, and a user-supplied name with them is refused.
+  directory name cannot inject instructions. A name with unprintable
+  characters never appears in a command; the context says to run `quarry
+  enable .` from that directory, or to find the collection with `quarry
+  list collections`. New collection names use only `A-Z a-z 0-9 . _ -` and
+  cannot start with `-` or `.`; a directory leaf with other characters is
+  mapped to `-`, and a user-supplied name with them is refused.
 - security: the WebFetch loop-closer no longer prints a stored document name
   into the session. It shows the URL's log form and, when the page is
   indexed under an older spelling, says `quarry find` reaches it.
 - tool: `quarry backfill-sessions` re-ingests a session whose transcript
-  has grown since it was last stored, instead of skipping it.
+  has grown since it was last stored, instead of skipping it. It finds a
+  project's transcripts for paths containing dots, underscores, or spaces,
+  matching Claude Code's directory names.
 - infra: log lines show a URL as `scheme://host[:port]/…(segments=N)`, never
   its path, whether quarry logs it or a library does. The full path is kept
   in the stored document name. Tracebacks in the log are indented, and a
-  record is capped at 64 KiB.
+  record is capped at 64 KiB. A record the redactor cannot settle is
+  replaced by one line naming its time, level, logger, and call site, with
+  the message withheld.
 
 ### Fixed
 
