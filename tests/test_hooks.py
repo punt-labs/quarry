@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import os
+import shlex
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -2010,7 +2011,7 @@ class TestT15SessionStartChildUsesParentCollection:
         # Path A active flow, not Path C drift-surfacing: the marker lives at
         # the parent root, not the child cwd, and must still be honored.
         assert ctx.startswith("Quarry semantic search is active for this project.")
-        assert 'Collection: "proj"' in ctx
+        assert "Collection: 'proj'" in ctx
 
         # Verify no new registration was created.
         conn = SyncRegistry(settings.registry_path)
@@ -2202,7 +2203,7 @@ class TestSessionStartMarkerGate(_ReachableDaemonEmptyCatalog):
         assert isinstance(output, dict)
         ctx = str(output["additionalContext"])
         assert "not enabled" in ctx
-        assert f"quarry enable {str(project)!r}" in ctx
+        assert f"quarry enable {shlex.quote(str(project))}" in ctx
         assert "quarry deregister" not in ctx
 
         conn = SyncRegistry(settings.registry_path)
@@ -2237,7 +2238,7 @@ class TestSessionStartMarkerGate(_ReachableDaemonEmptyCatalog):
         output = result["hookSpecificOutput"]
         assert isinstance(output, dict)
         ctx = str(output["additionalContext"])
-        assert f"quarry enable {str(project)!r}" in ctx
+        assert f"quarry enable {shlex.quote(str(project))}" in ctx
         assert "quarry deregister drifted" in ctx
 
         conn = SyncRegistry(settings.registry_path)

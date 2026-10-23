@@ -142,9 +142,12 @@ class SyncRegistry:
         # consistent with what the INSERT would see.
         try:
             self._conn.execute("BEGIN IMMEDIATE")
-            RegistrationRules.refuse_foreign_retained(
-                self._markers.retained_marker(collection), resolved, collection
-            )
+            marker = self._markers.retained_marker(collection)
+            if marker is None:
+                # A name already archived keeps working (its own directory
+                # re-adopts it); only a name new to the registry is held to the rule.
+                RegistrationRules.refuse_unsafe_name(resolved, collection)
+            RegistrationRules.refuse_foreign_retained(marker, resolved, collection)
             subsumed = self._enforce_subsumption(resolved)
             self._conn.execute(
                 "INSERT INTO directories (directory, collection, registered_at) "

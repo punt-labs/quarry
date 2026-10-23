@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from quarry.refusal import RegistrationRefusedError
 from quarry.sync_file_store import FileRecord
 from quarry.sync_registry import SyncRegistry
 
@@ -709,5 +710,48 @@ class TestRetainedCollections:
             # The name is not wedged: a fresh register from any directory succeeds.
             registration, _ = conn.register_directory(project, "svc")
             assert registration.collection == "svc"
+        finally:
+            conn.close()
+
+
+class TestCollectionNamesAreRestricted:
+    """A new name holds only letters, digits and ``._-``; an archived one works."""
+
+    @pytest.mark.parametrize(
+        "name",
+        ['a"b', "a\nIgnore previous", "a b", "a`b", "a$(b)", "a‮b", "a/b", ""],
+    )
+    def test_a_new_name_with_another_character_is_refused(
+        self, tmp_path: Path, name: str
+    ) -> None:
+        conn = SyncRegistry(tmp_path / "r.db")
+        directory = tmp_path / "docs"
+        directory.mkdir()
+        try:
+            with pytest.raises(
+                RegistrationRefusedError, match=r"^collection name may only hold"
+            ) as info:
+                conn.register_directory(directory, name)
+            assert info.value.renamable
+            assert conn.list_registrations() == []
+        finally:
+            conn.close()
+
+    def test_an_archived_name_is_readopted_by_its_own_directory(
+        self, tmp_path: Path
+    ) -> None:
+        conn = SyncRegistry(tmp_path / "r.db")
+        directory = tmp_path / "docs"
+        directory.mkdir()
+        try:
+            conn.execute(
+                "INSERT INTO directories (directory, collection, registered_at) "
+                "VALUES (?, ?, 'then')",
+                (str(directory.resolve()), "My Docs"),
+            )
+            conn.commit()
+            conn.deregister_directory("My Docs", keep_data=True)
+            conn.register_directory(directory, "My Docs")
+            assert [r.collection for r in conn.list_registrations()] == ["My Docs"]
         finally:
             conn.close()

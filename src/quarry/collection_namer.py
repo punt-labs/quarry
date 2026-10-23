@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from itertools import count
 from typing import TYPE_CHECKING, Self, final
 
 if TYPE_CHECKING:
-    from collections.abc import Set as AbstractSet
+    from collections.abc import Iterator, Set as AbstractSet
     from pathlib import Path
 
 
@@ -35,32 +36,32 @@ class CollectionNamer:
         self._taken = taken
         return self
 
-    def unique(self) -> str:
-        """Return the leaf name, else a parent-, hash-, or counter-disambiguated name.
+    @classmethod
+    def safe(cls, text: str) -> str:
+        """Return *text* with every character a name may not hold turned into ``-``."""
+        return re.sub(r"[^A-Za-z0-9._-]", "-", text)
 
-        Prefers the directory's leaf name; on collision appends the parent
-        directory name (``leaf-parent``), then a lengthening path-hash suffix, and
-        finally a numeric counter on the full digest.  A filesystem-root directory
-        has an empty ``.name``, so the leaf falls back to ``"root"`` — a collection
-        is never named the empty string.  Because ``taken`` is finite and the
-        counter is unbounded, unique() can never return a taken name by
-        construction, even if the full digest itself is (impossibly) taken.
+    def unique(self) -> str:
+        """Return the first candidate name that is not taken."""
+        return next(n for n in self._names(self._directory) if n not in self._taken)
+
+    @classmethod
+    def _names(cls, directory: Path) -> Iterator[str]:
+        """Yield names in order of preference, forever.
+
+        ``taken`` is finite and the sequence ends in an unbounded counter, so a free
+        name always comes, and ``unique`` can never return a taken one.
+
+        The directory's leaf name; then ``leaf-parent``; then a lengthening
+        path-hash suffix; and finally a numeric counter on the full digest, for a
+        digest that is (cryptographically impossibly) taken too.  A filesystem-root
+        directory has an empty ``.name``, so the leaf falls back to ``"root"`` — a
+        collection is never named the empty string.
         """
-        leaf = self._directory.name or "root"
-        if leaf not in self._taken:
-            return leaf
-        candidate = f"{leaf}-{self._directory.parent.name or 'root'}"
-        if candidate not in self._taken:
-            return candidate
-        digest = hashlib.sha256(str(self._directory).encode()).hexdigest()
+        yield (leaf := cls.safe(directory.name) or "root")
+        yield f"{leaf}-{cls.safe(directory.parent.name) or 'root'}"
+        digest = hashlib.sha256(str(directory).encode()).hexdigest()
         for length in range(8, len(digest) + 1):
-            candidate = f"{leaf}-{digest[:length]}"
-            if candidate not in self._taken:
-                return candidate
-        # Full digest exhausted (a cryptographically impossible collision): count
-        # up until the name is free.  taken is finite, so next() always yields.
-        return next(
-            cand
-            for n in count(2)
-            if (cand := f"{leaf}-{digest}-{n}") not in self._taken
-        )
+            yield f"{leaf}-{digest[:length]}"
+        for n in count(2):
+            yield f"{leaf}-{digest}-{n}"

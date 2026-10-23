@@ -7,9 +7,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Self, final
 
 from quarry._hook_trace import HookTrace, Outcome
-from quarry.log_redactor import LogRedactor
 from quarry.refusal import RegistrationRefusedError
 from quarry.session_start_templates import SessionStartTemplates
+from quarry.shown_value import Shown
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -46,20 +46,22 @@ class SessionStartReply:
     @classmethod
     def nudge_enable(cls, directory: Path) -> Self:
         """Return the reply that nudges the operator to ``quarry enable`` here."""
-        return cls.of(SessionStartTemplates.nudge_enable(cls._shown(directory)))
+        return cls.of(SessionStartTemplates.nudge_enable(Shown.of(directory)))
 
     @classmethod
     def drift_surface(cls, directory: Path, collection: str) -> Self:
         """Return the reply that surfaces a registration with no opt-in marker."""
         return cls.of(
-            SessionStartTemplates.drift_surface(cls._shown(directory), collection)
+            SessionStartTemplates.drift_surface(
+                Shown.of(directory), Shown.of(collection)
+            )
         )
 
     @classmethod
     def subsumption(cls, directory: Path) -> Self:
         """Return the skip reply for a directory with child registrations under it."""
         return cls.of(
-            SessionStartTemplates.subsumption(cls._shown(directory)),
+            SessionStartTemplates.subsumption(Shown.of(directory)),
             "skip",
             "subsumption",
         )
@@ -68,15 +70,10 @@ class SessionStartReply:
     def daemon_unreachable(cls, directory: Path) -> Self:
         """Return the error reply for an auto-register deferred on a down daemon."""
         return cls.of(
-            SessionStartTemplates.daemon_unreachable(cls._shown(directory)),
+            SessionStartTemplates.daemon_unreachable(Shown.of(directory)),
             "error",
             "daemon-unreachable",
         )
-
-    @staticmethod
-    def _shown(directory: Path) -> str:
-        """Return *directory* quoted on one line, as every template shows it."""
-        return LogRedactor.quoted(str(directory))
 
     @classmethod
     def refusing(

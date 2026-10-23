@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Self, final
 
-from quarry.log_redactor import LogRedactor
 from quarry.session_start_templates import SessionStartTemplates
+from quarry.shown_value import Shown
 from quarry.sync_lock import SyncLock
 
 if TYPE_CHECKING:
@@ -59,9 +59,9 @@ class ActiveSessionContext:
             )
         header = (
             "Quarry semantic search is active for this project.\n"
-            f'Collection: "{self._collection}" '
-            f"({LogRedactor.quoted(str(self._directory))})\n"
-            f'Captures: "{self._collection}-captures"\n'
+            f"Collection: {Shown.of(self._collection).text} "
+            f"({Shown.of(self._directory).text})\n"
+            f"Captures: {Shown.of(self._collection + '-captures').text}\n"
             f"{coverage}"
         )
         return (

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, final
 
+from quarry.collection_namer import CollectionNamer
 from quarry.refusal import RegistrationRefusedError
 
 if TYPE_CHECKING:
@@ -49,6 +50,24 @@ class RegistrationRules:
                 raise RegistrationRefusedError(msg).about(
                     directory=reg.directory, collection=reg.collection
                 )
+
+    @staticmethod
+    def refuse_unsafe_name(resolved: Path, collection: str) -> None:
+        """Refuse a new collection name holding a character a name may not hold.
+
+        The name is shown to people and models and quoted into command lines, so
+        a quote, a line break or a shell metacharacter in it is refused here, once,
+        for every door a registration comes through.  The text is fixed.
+        """
+        if CollectionNamer.safe(collection) == collection and collection:
+            return
+        msg = (
+            "collection name may only hold letters, digits, '.', '_' and '-'; "
+            "choose another collection name"
+        )
+        raise RegistrationRefusedError(msg).about(
+            directory=str(resolved), collection=collection, renamable=True
+        )
 
     @staticmethod
     def refuse_foreign_retained(
