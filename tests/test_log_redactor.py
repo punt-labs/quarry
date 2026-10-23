@@ -328,6 +328,20 @@ class TestRecordCap:
 
 
 _WS = ("\n", "\t", "\r")
+# Every whitespace character urlsplit or a log reader may put inside a URL (djb's list).
+_ALL_WS = (
+    "\n",
+    "\t",
+    "\r",
+    " ",
+    "\x0b",
+    "\x0c",
+    "\x1c",
+    "\x85",
+    "\xa0",
+    "\u2028",
+    "\u2029",
+)
 _SPLITS = {
     "mid-scheme": "ht{w}tps://user:SECRETPW@host.example/SECRETPATH",
     "before-colon": "https{w}://user:SECRETPW@host.example/SECRETPATH",
@@ -336,33 +350,70 @@ _SPLITS = {
     "mid-user": "https://us{w}er:SECRETPW@host.example/SECRETPATH",
     "mid-password": "https://user:SEC{w}RETPW@host.example/SECRETPATH",
     "before-at": "https://user:SECRETPW{w}@host.example/SECRETPATH",
+    "after-at": "https://user:SECRETPW@{w}host.example/SECRETPATH",
     "mid-host": "https://user:SECRETPW@host.{w}example/SECRETPATH",
-    "mid-path": "https://host.example/SECRET{w}PATH",
-    "mid-query": "https://host.example/p?tok=SECR{w}ETQ",
 }
 
 
 class TestWhitespaceInsideAUrl:
-    """urlsplit deletes tab, CR and LF anywhere in a URL; so must the redactor."""
+    """Inside the scheme, the separator and the authority, whitespace is joined.
+
+    urlsplit deletes tab, CR and LF anywhere in a URL.  The redactor joins any
+    whitespace, but only up to the first ``/``, ``?`` or ``#`` after ``://``: that
+    is where credentials live.  A break in the path ends the URL, because a split
+    path cannot be told from the next log line, and eating that line is worse.
+    """
 
     @pytest.mark.parametrize("where", list(_SPLITS))
-    @pytest.mark.parametrize("white", _WS, ids=["lf", "tab", "cr"])
+    @pytest.mark.parametrize("white", _ALL_WS, ids=lambda w: f"U+{ord(w):04X}")
     def test_no_secret_survives(self, where: str, white: str) -> None:
         raw = _SPLITS[where].format(w=white)
         shown = LogRedactor.redact(f"see {raw} end")
-        for secret in ("SECRETPW", "SECRETPATH", "SECRETQ", "SECR", "ETQ", "RETPW"):
+        for secret in ("SECRETPW", "SECRETPATH", "SEC", "RETPW"):
             assert secret not in shown, f"{secret} survived: {shown!r}"
 
     @pytest.mark.parametrize("where", list(_SPLITS))
-    def test_redaction_is_idempotent(self, where: str) -> None:
-        once = LogRedactor.redact("see " + _SPLITS[where].format(w="\n") + " end")
+    @pytest.mark.parametrize("white", _ALL_WS, ids=lambda w: f"U+{ord(w):04X}")
+    def test_redaction_is_idempotent(self, where: str, white: str) -> None:
+        once = LogRedactor.redact("see " + _SPLITS[where].format(w=white) + " end")
         assert LogRedactor.redact(once) == once
+
+    @pytest.mark.parametrize(
+        "following",
+        [
+            "Traceback (most recent call last):",
+            "ERROR x failed",
+            '  File "/x.py", line 3, in f',
+            "\nThe above exception was the direct cause",
+            "quarry.fetch: next record",
+        ],
+        ids=["traceback", "error", "file", "blank-line", "logger"],
+    )
+    @pytest.mark.parametrize(
+        "url", ["https://h.example/a/b", "https://u:p@h.example/a"]
+    )
+    def test_a_url_ending_a_line_leaves_the_next_line_alone(
+        self, url: str, following: str
+    ) -> None:
+        shown = LogRedactor.redact(f"see {url}\n{following}")
+        assert shown.endswith(f"\n{following}")
+
+    def test_a_url_ending_a_line_with_credentials_and_no_path_survives_too(
+        self,
+    ) -> None:
+        shown = LogRedactor.redact("see https://u:SECRETPW@h.example\nTraceback (most")
+        assert "SECRETPW" not in shown
+        assert shown.endswith("\nTraceback (most")
+
+    def test_a_break_in_the_path_ends_the_url_and_the_rest_is_left_alone(self) -> None:
+        shown = LogRedactor.redact("https://h.example/a/b\nrest of line")
+        assert shown == "https://h.example/…(segments=2)\nrest of line"
 
     def test_text_that_is_not_a_url_keeps_its_line_breaks(self) -> None:
         assert LogRedactor.redact("a\tb\nc: d//e") == "a\tb\nc: d//e"
 
     def test_a_deterministic_sweep_finds_no_leak_and_stays_idempotent(self) -> None:
-        """djb's p13 fuzz as a fixed sweep: every combination, a break at each spot."""
+        """djb's p12/p13 fuzz as a fixed sweep, with every whitespace character."""
         schemes = ["http", "HtTp", "ftp", "a+b.c-d"]
         users = ["user", "", "us:er", "u@x"]
         passwords = ["SECRETPW", "S%40ECRET", "SEC.RET", "SECRETPW" * 20]
@@ -375,7 +426,7 @@ class TestWhitespaceInsideAUrl:
         for n, (scheme, user, password, host, tail, wrap) in enumerate(combos):
             userinfo = user + ":" + password
             at = n % (len(userinfo) + 1)
-            userinfo = userinfo[:at] + _WS[n % 3] + userinfo[at:]
+            userinfo = userinfo[:at] + _ALL_WS[n % len(_ALL_WS)] + userinfo[at:]
             text = wrap % f"{scheme}://{userinfo}@{host}{tail}"
             out = LogRedactor.redact(text)
             if "SECRET" in out or "SEC.RET" in out or "S%40" in out:

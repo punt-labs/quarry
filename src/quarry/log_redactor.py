@@ -44,17 +44,26 @@ class LogRedactor:
     _HOST: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:[A-Za-z0-9.\-]+|\[[0-9A-Fa-f:.%a-z]+\])(?::\d{1,5})?"
     )
-    # urlsplit deletes tab, CR and LF anywhere in a URL, so a URL may be broken by
-    # them in its scheme, its "://", its authority or its path.  One bounded,
-    # single-class span finds such a candidate and the breaks are deleted from it.
-    _BREAKS: ClassVar[re.Pattern[str]] = re.compile(r"[\t\r\n]+")
+    # urlsplit deletes tab, CR and LF anywhere in a URL, and a log reader may find
+    # any whitespace inside one.  Whitespace is joined only inside the scheme, the
+    # "://" and the authority, the span from the scheme up to the first "/", "?" or
+    # "#" after "://", and only when the authority holds a "@": that is where
+    # credentials live (the userinfo runs to the last "@", whatever it holds).  A
+    # single whitespace run is also joined inside the host
+    # that follows, when "/", "?" or "#" ends it right after.  A break in the PATH
+    # ends the URL: a split path cannot be told from the next log line, and joining
+    # the two would eat that line's first word.  The log form drops the path, so the
+    # trade-off is text left as it is after a path break.  Every class is bounded.
+    _SPACE: ClassVar[re.Pattern[str]] = re.compile(r"\s+")
+    # A scheme broken by whitespace is recognised only for the schemes a fetch uses
+    # (http, https, ftp, ftps, ws, wss): joining any letters around a break would
+    # eat the last word of the previous line.  Any other scheme is read unbroken.
     _BROKEN_URL: ClassVar[re.Pattern[str]] = re.compile(
-        r"[A-Za-z](?:[\t\r\n]*[A-Za-z0-9+.\-]){0,31}[\t\r\n]*:[\t\r\n]*/[\t\r\n]*/"
-        r"[\S\t\r\n]{0,2048}"
-    )
-    # urlsplit strips whitespace inside a URL, so "user:pw<space>@host" is one URL.
-    _SPLIT_AUTHORITY: ClassVar[re.Pattern[str]] = re.compile(
-        r"(?P<head>[A-Za-z][A-Za-z0-9+.\-]{0,31}://[^\s/\\?#]*)\s+(?=@)"
+        r"(?<![A-Za-z0-9+.\-])"
+        r"(?:(?i:h\s*t\s*t\s*p(?:\s*s)?|f\s*t\s*p(?:\s*s)?|w\s*s(?:\s*s)?)"
+        r"|[A-Za-z][A-Za-z0-9+.\-]{0,31})\s*:\s*/\s*/"
+        r"[^/\\?#]{0,2048}@"
+        r"(?:[^\s/\\?#'\"<>@]*\s+[^\s/\\?#'\"<>@]+(?=[/?#]))?"
     )
     _FORM: ClassVar[re.Pattern[str]] = re.compile(r"/…\(segments=\d+\)[).,;:\]}]*")
     # Scheme-less "user:password@": tried only where a run of user characters
@@ -78,10 +87,8 @@ class LogRedactor:
         if len(text) > cls.MAX_RECORD:
             dropped = len(text[cls.MAX_RECORD :].encode("utf-8", errors="replace"))
             text, marker = text[: cls.MAX_RECORD], f" […truncated {dropped} bytes]"
-        if ":" in text and cls._BREAKS.search(text):
+        if ":" in text and "@" in text:
             text = cls._BROKEN_URL.sub(cls._joined, text)
-        if "://" in text and "@" in text:
-            text = cls._SPLIT_AUTHORITY.sub(r"\g<head>", text)
         text = cls._TOKEN.sub(cls._token, text)
         return cls._CONTROL.sub(cls._escape, text) + marker
 
@@ -96,8 +103,8 @@ class LogRedactor:
 
     @classmethod
     def _joined(cls, match: re.Match[str]) -> str:
-        """Return a URL candidate without the tabs, CRs and LFs urlsplit deletes."""
-        return cls._BREAKS.sub("", match.group())
+        """Return a URL candidate without the whitespace inside its authority."""
+        return cls._SPACE.sub("", match.group())
 
     @classmethod
     def continuation(cls, block: str) -> str:
