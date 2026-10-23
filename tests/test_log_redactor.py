@@ -284,3 +284,32 @@ class TestUrlCorpus:
     def test_an_ipv6_host_is_kept(self) -> None:
         shown = LogRedactor.redact("https://u:p@[2001:db8::1]:8443/a/b")
         assert shown == "https://[2001:db8::1]:8443/…(segments=2)"
+
+
+class TestRecordCap:
+    """The whole record is bounded before any pattern runs (D8)."""
+
+    def test_a_record_over_the_cap_is_truncated_with_a_visible_marker(self) -> None:
+        cap = LogRedactor.MAX_RECORD
+        shown = LogRedactor.redact("a " * cap)
+        assert shown.endswith(f"[…truncated {2 * cap - cap} bytes]")
+        assert len(shown) < cap + 40
+
+    def test_a_record_at_the_cap_is_kept_whole(self) -> None:
+        text = "w" * 10 + (" x" * ((LogRedactor.MAX_RECORD - 10) // 2))
+        text = text[: LogRedactor.MAX_RECORD]
+        assert LogRedactor.redact(text) == text
+
+    def test_a_secret_beyond_the_cap_is_never_kept(self) -> None:
+        text = "x " * LogRedactor.MAX_RECORD + "https://u:SECRET@h/p"
+        assert "SECRET" not in LogRedactor.redact(text)
+
+    def test_cost_is_bounded_by_the_cap_not_the_record(self) -> None:
+        small = min(_seconds("w " * (LogRedactor.MAX_RECORD // 2)) for _ in range(3))
+        huge = min(_seconds("w " * (8 * LogRedactor.MAX_RECORD)) for _ in range(3))
+        assert huge < 4 * max(small, 1e-4)
+
+    def test_text_with_no_url_characters_costs_less_than_a_url_laden_line(self) -> None:
+        plain = min(_seconds("word " * 12_000) for _ in range(3))
+        urls = min(_seconds("https://u:p@h.test/a/b?q=1 " * 2_200) for _ in range(3))
+        assert plain < urls

@@ -20,13 +20,16 @@ class LogRedactor:
     control character is escaped so it cannot forge or hide a log line.
 
     It runs under the handler lock and holds the GIL, so its cost must be linear
-    in the line: every quantifier is bounded, and a whitespace-free token longer
-    than :attr:`MAX_TOKEN` is replaced before any pattern sees it.
+    in the line: the whole record is cut at :attr:`MAX_RECORD` (with a visible
+    marker), a whitespace-free token longer than :attr:`MAX_TOKEN` is replaced
+    before any pattern sees it, and a pattern runs only on a token that holds the
+    character it needs.
     """
 
     __slots__ = ()
 
     MAX_TOKEN: ClassVar[int] = 2048
+    MAX_RECORD: ClassVar[int] = 64 * 1024
 
     _TOKEN: ClassVar[re.Pattern[str]] = re.compile(r"\S+")
     # The authority's userinfo runs to its last "@" before the first "/", "?" or "#"
@@ -61,7 +64,11 @@ class LogRedactor:
     @classmethod
     def redact(cls, text: str) -> str:
         """Return *text* with URL userinfo, query and fragment masked."""
-        text = cls._SPLIT_AUTHORITY.sub(r"\g<head>", text)
+        if len(text) > cls.MAX_RECORD:
+            dropped = len(text[cls.MAX_RECORD :].encode("utf-8", errors="replace"))
+            text = f"{text[: cls.MAX_RECORD]}[…truncated {dropped} bytes]"
+        if "://" in text and "@" in text:
+            text = cls._SPLIT_AUTHORITY.sub(r"\g<head>", text)
         text = cls._TOKEN.sub(cls._token, text)
         return cls._CONTROL.sub(cls._escape, text)
 
@@ -97,9 +104,11 @@ class LogRedactor:
         token = match.group()
         if len(token) > cls.MAX_TOKEN:
             return "[…]"
-        token = cls._SCHEME_URL.sub(cls._bare_url, token)
-        token = cls._USERINFO.sub("[userinfo]@", token)
-        return cls._QUERY.sub("?[query]", token)
+        if "://" in token:
+            token = cls._SCHEME_URL.sub(cls._bare_url, token)
+        if "@" in token:
+            token = cls._USERINFO.sub("[userinfo]@", token)
+        return cls._QUERY.sub("?[query]", token) if "?" in token else token
 
     @staticmethod
     def _escape(match: re.Match[str]) -> str:
