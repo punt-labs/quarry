@@ -26,11 +26,11 @@ class TestFetchUrl:
 
 class TestRedactedForms:
     def test_str_is_the_log_form_with_no_path_at_all(self) -> None:
-        assert str(HttpUrl(_RAW)) == "https://example.com:8443/…(2 segments)"
+        assert str(HttpUrl(_RAW)) == "https://example.com:8443/…(segments=2)"
 
     def test_repr_names_the_type_and_shows_only_the_log_form(self) -> None:
         assert (
-            repr(HttpUrl(_RAW)) == "HttpUrl('https://example.com:8443/…(2 segments)')"
+            repr(HttpUrl(_RAW)) == "HttpUrl('https://example.com:8443/…(segments=2)')"
         )
 
     @pytest.mark.parametrize(
@@ -51,14 +51,16 @@ class TestRedactedForms:
     ) -> None:
         shown = str(HttpUrl(f"https://example.com/a/{segment}/b"))
         assert needle not in shown
-        assert shown == "https://example.com/…(3 segments)"
+        assert shown == "https://example.com/…(segments=3)"
 
     def test_a_bare_host_has_no_segments(self) -> None:
-        assert str(HttpUrl("http://example.com")) == "http://example.com/…(0 segments)"
-        assert str(HttpUrl("http://example.com/")) == "http://example.com/…(0 segments)"
+        assert str(HttpUrl("http://example.com")) == "http://example.com/…(segments=0)"
+        assert str(HttpUrl("http://example.com/")) == "http://example.com/…(segments=0)"
 
     def test_one_segment_is_singular(self) -> None:
-        assert str(HttpUrl("http://example.com/a")) == "http://example.com/…(1 segment)"
+        assert (
+            str(HttpUrl("http://example.com/a")) == "http://example.com/…(segments=1)"
+        )
 
     @pytest.mark.parametrize("raw", ["http://example.com", "http://example.com/"])
     def test_a_bare_host_has_one_stored_name(self, raw: str) -> None:
@@ -169,14 +171,14 @@ class TestPathParametersAndPorts:
         url = HttpUrl("https://example.com/a;x/b")
         assert url.path == "/a/b"
         assert url.document_name == "https://example.com/a/b"
-        assert str(url) == "https://example.com/…(2 segments)"
+        assert str(url) == "https://example.com/…(segments=2)"
 
     def test_the_log_form_drops_the_default_port(self) -> None:
         assert str(HttpUrl("https://example.com:443/a")) == (
-            "https://example.com/…(1 segment)"
+            "https://example.com/…(segments=1)"
         )
         assert str(HttpUrl("https://example.com:8443/a")) == (
-            "https://example.com:8443/…(1 segment)"
+            "https://example.com:8443/…(segments=1)"
         )
 
 
@@ -189,9 +191,9 @@ class TestShown:
     @pytest.mark.parametrize(
         ("raw", "expected"),
         [
-            ("http://u:secret@h.test/a/b?t=1", "http://h.test/…(2 segments)"),
-            ("http://h.test/" + "a/" * 5000, "http://h.test/…(5000 segments)"),
-            ("http://h.test:8080/a\nb/c", "http://h.test:8080/…(2 segments)"),
+            ("http://u:secret@h.test/a/b?t=1", "http://h.test/…(segments=2)"),
+            ("http://h.test/" + "a/" * 5000, "http://h.test/…(segments=5000)"),
+            ("http://h.test:8080/a\nb/c", "http://h.test:8080/…(segments=2)"),
         ],
     )
     def test_a_refused_url_shows_the_same_shape_and_never_a_path(

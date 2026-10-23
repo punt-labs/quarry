@@ -7,7 +7,7 @@ from typing import final
 
 @final
 class LogForm:
-    """Render ``scheme://host[:port]/…(N segments)``.
+    """Render ``scheme://host[:port]/…(segments=N)``.
 
     A secret can live in any path segment and no heuristic recognizes every token
     (a JWT, padded base64, a short code), so a log shows how many segments a path
@@ -20,4 +20,4 @@ class LogForm:
     def of(scheme: str, netloc: str, path: str) -> str:
         """Return the log form of a URL given its scheme, netloc and path."""
         count = len([part for part in path.split("/") if part])
-        return f"{scheme}://{netloc}/…({count} segment{'s' * (count != 1)})"
+        return f"{scheme}://{netloc}/…(segments={count})"

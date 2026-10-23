@@ -18,13 +18,13 @@ class TestRedact:
         [
             (
                 "GET https://u:SECRET@h.test/p?token=SECRET#f ok",
-                "GET https://h.test/…(1 segment) ok",
+                "GET https://h.test/…(segments=1) ok",
             ),
             (
                 "see http://h.test:8080/a/b?x=1&y=2",
-                "see http://h.test:8080/…(2 segments)",
+                "see http://h.test:8080/…(segments=2)",
             ),
-            ("at ftp://user@h.test/x", "at ftp://h.test/…(1 segment)"),
+            ("at ftp://user@h.test/x", "at ftp://h.test/…(segments=1)"),
             ("opened u:SECRET@h.test/p", "opened [userinfo]@h.test/p"),
             ("bare h.test/p?token=SECRET end", "bare h.test/p?[query] end"),
             ("a\x1b[31mred\x07 b", "a\\x1b[31mred\\x07 b"),
@@ -170,3 +170,35 @@ class TestEscapes:
             "quarry.x", logging.INFO, __file__, 1, "name %s", ("a\nb",), None
         )
         assert handler.format(record) == "name a\\nb"
+
+
+_FORMS = [
+    "see https://u:p@h.test/a/b?q=1#f ok",
+    "(http://h.test:8080/a/b)",
+    "x https://h.test/…(segments=3) y",
+    "ftp://user@h.test/x and bare u:pw@h.test/p?token=T",
+    "a\x1b[31mb https://h.test/ c",
+    "https://h.test/…(segments=2)/leftover",
+    "(https://h.test/…(segments=3)), done",
+]
+
+
+class TestIdempotence:
+    """A redacted line is a fixed point: the log form is not rewritten again."""
+
+    @pytest.mark.parametrize("text", _FORMS)
+    def test_redacting_twice_equals_redacting_once(self, text: str) -> None:
+        once = LogRedactor.redact(text)
+        assert LogRedactor.redact(once) == once
+
+    def test_the_log_form_of_a_url_is_one_token(self) -> None:
+        from quarry.log_form import LogForm
+
+        shown = LogForm.of("https", "h.test", "/a/b")
+        assert shown == "https://h.test/…(segments=2)"
+        assert len(shown.split()) == 1
+
+    def test_the_log_form_survives_the_redactor_unchanged(self) -> None:
+        assert LogRedactor.redact("on https://h.test/…(segments=4) now") == (
+            "on https://h.test/…(segments=4) now"
+        )

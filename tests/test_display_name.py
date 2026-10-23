@@ -45,10 +45,10 @@ def test_stored(name: str, stored: str) -> None:
 @pytest.mark.parametrize(
     ("name", "shown"),
     [
-        ("https://x.test/p?token=abc", "https://x.test/…(1 segment)"),
-        (f"https://x.test{_RESET_PATH}?t=1", "https://x.test/…(2 segments)"),
-        ("  https://x.test/p?t=1", "https://x.test/…(1 segment)"),
-        ("https://u:secret@x.test/p", "https://x.test/…(1 segment)"),
+        ("https://x.test/p?token=abc", "https://x.test/…(segments=1)"),
+        (f"https://x.test{_RESET_PATH}?t=1", "https://x.test/…(segments=2)"),
+        ("  https://x.test/p?t=1", "https://x.test/…(segments=1)"),
+        ("https://u:secret@x.test/p", "https://x.test/…(segments=1)"),
         ("notes #3 (draft)?.md", "notes #3 (draft)?.md"),
         ("http://u:secret@h:99999/a", "(unparseable URL)"),
     ],
@@ -75,4 +75,4 @@ def test_a_url_named_document_is_stored_as_a_url_ingest_of_it_would_be() -> None
 
 def test_a_url_that_cannot_be_admitted_never_shows_its_path() -> None:
     name = "http://u:secret@h.test/reset/PSEC?t=1"
-    assert DisplayName(name).redacted() == "http://h.test/…(2 segments)"
+    assert DisplayName(name).redacted() == "http://h.test/…(segments=2)"

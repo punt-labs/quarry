@@ -16,7 +16,7 @@ class LogRedactor:
     traceback alike) at the one place every record is written.  The types that
     carry a URL are the guarantee; this catches whatever a library quotes
     regardless: ``scheme://user:pw@host/path?query#fragment`` becomes
-    ``scheme://host/…(1 segment)``, a bare ``user:pw@`` or ``?query`` is masked, and a
+    ``scheme://host/…(segments=1)``, a bare ``user:pw@`` or ``?query`` is masked, and a
     control character is escaped so it cannot forge or hide a log line.
 
     It runs under the handler lock and holds the GIL, so its cost must be linear
@@ -33,6 +33,7 @@ class LogRedactor:
         r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\-]{0,31})://(?P<auth>[^\s/?#'\"<>]{0,256})"
         r"(?P<path>[^\s?#'\"<>]{0,2048})(?:[?#][^\s'\"<>]{0,2048})?"
     )
+    _FORM: ClassVar[re.Pattern[str]] = re.compile(r"/…\(segments=\d+\)[).,;:\]}]*")
     _USERINFO: ClassVar[re.Pattern[str]] = re.compile(
         r"[^\s/@:'\"<>]{1,128}:[^\s/@'\"<>]{0,128}@"
     )
@@ -84,8 +85,15 @@ class LogRedactor:
             return f"\\x{code:02x}"
         return f"\\u{code:04x}" if code <= 0xFFFF else f"\\U{code:08x}"
 
-    @staticmethod
-    def _bare_url(match: re.Match[str]) -> str:
-        """Return a URL match as ``scheme://host[:port]/…(N segments)``."""
+    @classmethod
+    def _bare_url(cls, match: re.Match[str]) -> str:
+        """Return a URL match as ``scheme://host[:port]/…(segments=N)``.
+
+        A URL already in that form is returned as it stands, so redacting twice
+        changes nothing.
+        """
         host = match.group("auth").rpartition("@")[2]
-        return LogForm.of(match.group("scheme"), host, match.group("path"))
+        path = match.group("path")
+        if cls._FORM.fullmatch(path):
+            return f"{match.group('scheme')}://{host}{path}"
+        return LogForm.of(match.group("scheme"), host, path)

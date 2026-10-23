@@ -28,7 +28,7 @@ class HttpUrl:
     * :attr:`document_name` is the storage form, ``scheme://host[:port]/path``:
       userinfo, query, fragment and ``;params`` are dropped, the path stays
       because it names the document.
-    * ``str`` and ``repr`` are the log form, ``scheme://host[:port]/…(N segments)``:
+    * ``str`` and ``repr`` are the log form, ``scheme://host[:port]/…(segments=N)``:
       never any of the path, because a secret can live in it and no heuristic
       recognizes every token (a JWT, padded base64, a short code).
 

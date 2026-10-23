@@ -152,8 +152,8 @@ class TestRead:
         with caplog.at_level(logging.INFO, logger="quarry.ingestion.sitemap_reader"):
             SitemapReader().read(HttpUrl(_URL))
         assert [r.getMessage() for r in caplog.records] == [
-            "Fetching sitemap: https://example.com/…(1 segment)",
-            "Parsed 1 pages from https://example.com/…(1 segment)",
+            "Fetching sitemap: https://example.com/…(segments=1)",
+            "Parsed 1 pages from https://example.com/…(segments=1)",
         ]
 
 
@@ -180,5 +180,5 @@ class TestDiscover:
         with caplog.at_level(logging.INFO, logger="quarry.ingestion.sitemap_reader"):
             SitemapReader().discover(HttpUrl(_URL))
         assert [r.getMessage() for r in caplog.records] == [
-            "Discovering sitemaps for https://example.com/…(1 segment)"
+            "Discovering sitemaps for https://example.com/…(segments=1)"
         ]

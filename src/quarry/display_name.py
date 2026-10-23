@@ -41,7 +41,7 @@ class DisplayName:
             return CaptureUrl.display(text)  # tolerant of userinfo; never shows it
 
     def redacted(self) -> str:
-        """Return the log form: ``scheme://host[:port]/…(N segments)``, no path."""
+        """Return the log form: ``scheme://host[:port]/…(segments=N)``, no path."""
         text = self.name.lstrip(self._LEADING)
         if not text.lower().startswith(("http://", "https://")):
             return self.name

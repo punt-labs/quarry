@@ -16,7 +16,7 @@ _URL = "https://example.com/p?token=SECRET#frag"
 
 
 def test_the_url_is_redacted() -> None:
-    assert PageReport(HttpUrl(_URL)).url == "https://example.com/…(1 segment)"
+    assert PageReport(HttpUrl(_URL)).url == "https://example.com/…(segments=1)"
 
 
 class TestFailure:
@@ -27,7 +27,7 @@ class TestFailure:
         with caplog.at_level(logging.WARNING):
             text = PageReport(HttpUrl(_URL)).failure(exc)
         assert text == (
-            "https://example.com/…(1 segment): "
+            "https://example.com/…(segments=1): "
             "content rejected: unsupported media type x"
         )
         [record] = caplog.records
@@ -40,7 +40,7 @@ class TestFailure:
         reason = "row budget exceeded: text 70,000 bytes > 65,536"
         with caplog.at_level(logging.WARNING):
             text = PageReport(HttpUrl(_URL)).failure(RowBudgetError(reason))
-        assert text == f"https://example.com/…(1 segment): {reason}"
+        assert text == f"https://example.com/…(segments=1): {reason}"
         assert caplog.records[0].levelno == logging.WARNING
 
     @pytest.mark.parametrize(
@@ -56,7 +56,7 @@ class TestFailure:
         with caplog.at_level(logging.WARNING):
             text = PageReport(HttpUrl(_URL)).failure(exc)
         assert text == (
-            f"https://example.com/…(1 segment): internal error: {type(exc).__name__}"
+            f"https://example.com/…(segments=1): internal error: {type(exc).__name__}"
         )
         assert caplog.records[0].levelno == logging.WARNING
         assert "token" not in caplog.text
@@ -70,7 +70,7 @@ class TestFailure:
         except KeyError as exc:
             with caplog.at_level(logging.WARNING):
                 text = PageReport(HttpUrl(_URL)).failure(exc)
-        assert text == "https://example.com/…(1 segment): internal error: KeyError"
+        assert text == "https://example.com/…(segments=1): internal error: KeyError"
         [record] = caplog.records
         assert record.levelno == logging.ERROR
         assert "test_page_report" in record.getMessage()

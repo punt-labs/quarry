@@ -92,7 +92,7 @@ class CapturedBodyIngest:
         return self
 
     def subject(self) -> str:
-        """Return the source's log form, ``scheme://host[:port]/…(N segments)``."""
+        """Return the source's log form, ``scheme://host[:port]/…(segments=N)``."""
         return str(self._source)
 
     def fetch(self) -> FetchedBody:

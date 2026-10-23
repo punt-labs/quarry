@@ -66,7 +66,7 @@ def test_a_refusal_line_carries_the_log_form_and_the_reason(
     _resolve_to(monkeypatch, "127.0.0.1")
     line = UrlAdmission.refusal("https://loops.example/reset/PSEC?t=1")
     assert line == (
-        "https://loops.example/…(2 segments): "
+        "https://loops.example/…(segments=2): "
         "host 'loops.example' resolves to blocked address 127.0.0.1"
     )
 

@@ -23,7 +23,7 @@ class TestHandlers:
         handler = RedactingStreamHandler()
         handler.setFormatter(logging.Formatter("%(message)s"))
         record = _record("quarry.x", logging.WARNING, "fetch %s", "http://u:S@h/p?t=1")
-        assert handler.format(record) == "fetch http://h/…(1 segment)"
+        assert handler.format(record) == "fetch http://h/…(segments=1)"
 
     def test_the_traceback_text_is_redacted_too(self) -> None:
         handler = RedactingStreamHandler()
@@ -72,7 +72,7 @@ class TestHandlers:
             handler.close()
         assert (
             log.read_text()
-            == "quarry.test_log_redaction fetching https://h.test/…(1 segment)\n"
+            == "quarry.test_log_redaction fetching https://h.test/…(segments=1)\n"
         )
 
 

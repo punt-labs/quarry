@@ -647,7 +647,7 @@ class TestIngestSitemapIntegration:
         # redacted message rather than a fragment that could also match an
         # unrelated look-alike string.
         fetching = [m for m in messages if m.startswith("Fetching sitemap:")]
-        assert fetching == ["Fetching sitemap: https://docs.python.org/…(1 segment)"]
+        assert fetching == ["Fetching sitemap: https://docs.python.org/…(segments=1)"]
 
     @patch("quarry.ingestion.sitemap_ingest.ingest_url")
     @patch("quarry.db.chunk_catalog.ChunkCatalog.list_documents")
@@ -985,7 +985,7 @@ class TestIngestAuto:
         ]
         assert warning_records == [
             (
-                "Sitemap discovery failed for https://example.com/…(1 segment): "
+                "Sitemap discovery failed for https://example.com/…(segments=1): "
                 "fetch failed: sitemap URL not accepted by the parser"
             )
         ]
@@ -1026,7 +1026,7 @@ class TestIngestAuto:
         # message rather than a fragment that could also match an
         # unrelated look-alike host.
         assert discovering == [
-            "Discovering sitemaps for https://example.com/…(0 segments)"
+            "Discovering sitemaps for https://example.com/…(segments=0)"
         ]
 
     @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
@@ -1267,7 +1267,7 @@ class TestSelectSafe:
             SitemapDiscovery.select_safe(entries)
         assert [r.getMessage() for r in caplog.records] == [
             (
-                "Dropping unsafe sitemap URL https://loops.example/…(1 segment): "
+                "Dropping unsafe sitemap URL https://loops.example/…(segments=1): "
                 "host 'loops.example' resolves to blocked address 127.0.0.1"
             ),
             "Dropping unsafe sitemap URL (unparseable URL): malformed URL",
@@ -1515,8 +1515,8 @@ class TestInvalidSitemapFailsTheFetch:
         with caplog.at_level(logging.INFO):
             SitemapDiscovery.discover_urls(HttpUrl(self._URL))
         assert [r.getMessage() for r in caplog.records] == [
-            "Fetching sitemap: https://example.com/…(1 segment)",
-            "Parsed 0 pages from https://example.com/…(1 segment)",
+            "Fetching sitemap: https://example.com/…(segments=1)",
+            "Parsed 0 pages from https://example.com/…(segments=1)",
         ]
 
 
