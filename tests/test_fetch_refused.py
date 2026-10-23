@@ -140,3 +140,23 @@ class TestFromTransferFailure:
 
     def test_refusals_are_unindexable_content(self) -> None:
         assert issubclass(FetchRefusedError, UnindexableContentError)
+
+
+class TestSubject:
+    def test_the_warning_names_the_redacted_subject_on_the_same_line(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING):
+            FetchRefusedError.from_transfer_failure(
+                URLError("dns"), subject="https://h.test/…(segments=2)"
+            )
+        [record] = caplog.records
+        assert "URLError" in record.getMessage()
+        assert "https://h.test/…(segments=2)" in record.getMessage()
+
+    def test_a_refusal_without_a_subject_still_logs_one_line(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING):
+            FetchRefusedError.from_transfer_failure(URLError("dns"))
+        assert len(caplog.records) == 1

@@ -34,7 +34,7 @@ class FetchRefusedError(UnindexableContentError):
     )
 
     @classmethod
-    def from_transfer_failure(cls, exc: Exception) -> Self:
+    def from_transfer_failure(cls, exc: Exception, *, subject: str = "") -> Self:
         """Return the URL-free refusal for a failure while opening or reading.
 
         The one classification of a fetch failure: only an instance of
@@ -47,14 +47,16 @@ class FetchRefusedError(UnindexableContentError):
         timeouts) and :class:`http.client.HTTPException` (``InvalidURL``,
         ``BadStatusLine``, ``IncompleteRead``, whose messages carry the URL path
         and query verbatim).  A transport failure reports only what kind it was.
-        Every refusal logs one WARNING with the class, and a transport failure
+        Every refusal logs one WARNING with the class and the caller's redacted
+        *subject* (``HttpUrl.shown``, never a path), and a transport failure
         adds its message-free frames, so a fault stays diagnosable.  An
         :class:`HTTPError` holds an open socket, so it is closed here, before the
         status is read out.
         """
         is_policy = isinstance(exc, UrlRejectedError | RedirectRejectedError)
         frames = "" if is_policy else f":\n{FailureReason.frames(exc)}"
-        logger.warning("fetch refused: %s%s", type(exc).__name__, frames)
+        on = f" [{subject}]" if subject else ""
+        logger.warning("fetch refused: %s%s%s", type(exc).__name__, on, frames)
         if isinstance(exc, HTTPError):
             return cls(f"fetch failed: HTTP {cls._close(exc)}")
         if isinstance(exc, RedirectRejectedError):

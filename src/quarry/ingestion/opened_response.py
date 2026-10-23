@@ -7,6 +7,7 @@ from functools import partial
 from time import monotonic
 from typing import TYPE_CHECKING, Self, final
 
+from quarry.http_url import HttpUrl
 from quarry.ingestion.fetch_refused import FetchRefusedError
 from quarry.ingestion.ssrf_redirect import GUARDED_OPENER
 
@@ -51,7 +52,9 @@ class OpenedResponse:
         try:
             resp = GUARDED_OPENER.open(request, timeout=timeout)
         except FetchRefusedError.REFUSABLE as exc:
-            raise FetchRefusedError.from_transfer_failure(exc) from None
+            raise FetchRefusedError.from_transfer_failure(
+                exc, subject=HttpUrl.shown(request.full_url)
+            ) from None
         return cls(resp, deadline)
 
     def __enter__(self) -> Self:
@@ -105,5 +108,7 @@ class OpenedResponse:
                     raise FetchRefusedError(msg)
                 chunks.append(chunk)
         except FetchRefusedError.REFUSABLE as exc:
-            raise FetchRefusedError.from_transfer_failure(exc) from None
+            raise FetchRefusedError.from_transfer_failure(
+                exc, subject=HttpUrl.shown(self._resp.url)
+            ) from None
         return b"".join(chunks)

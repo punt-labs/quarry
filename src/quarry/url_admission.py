@@ -41,6 +41,11 @@ class UrlAdmission:
         return None
 
     @staticmethod
+    def shown(url: str) -> str:
+        """Return *url* as it may appear in a log: the log form, never any path."""
+        return HttpUrl.shown(url)
+
+    @staticmethod
     def fetch_form(url: str) -> str:
         """Return the percent-encoded, ASCII form of an admitted *url* to fetch."""
         return HttpUrl(url).fetch_url

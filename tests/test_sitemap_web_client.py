@@ -16,7 +16,7 @@ from http.client import HTTPMessage
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 import pytest
 from usp.web_client.abstract_client import WebClientErrorResponse
@@ -325,7 +325,7 @@ class TestGatedClientGet:
         assert isinstance(resp, WebClientErrorResponse)
         # Readable with no "I/O operation on closed file" -- values were captured
         # before exc.close().
-        assert resp.message() == "HTTP 404"
+        assert resp.message() == "fetch failed: HTTP 404"
         assert resp.retryable() is False
 
     @pytest.mark.parametrize("code", [500, 503, 429])
@@ -619,7 +619,7 @@ class TestErrorMessagesAreUrlFree:
         monkeypatch.setattr(swc, "GUARDED_OPENER", _Opener())
         resp = GatedSitemapWebClient().get(self._URL)
         assert isinstance(resp, WebClientErrorResponse)
-        assert resp.message() == "unreachable: URLError"
+        assert resp.message() == "fetch failed: cannot reach the host (str)"
 
     def test_a_transport_failure_is_reported_by_class(
         self, monkeypatch: pytest.MonkeyPatch
@@ -669,6 +669,7 @@ class TestFailureClassification:
         assert isinstance(resp, WebClientErrorResponse)
         assert resp.message() == "fetch failed: ConnectionResetError"
         assert "ConnectionResetError" in caplog.text
+        assert "https://safe.example/…(segments=1)" in caplog.text
         assert "SECRET" not in caplog.text
 
     def test_a_policy_rejection_is_an_error_response(
@@ -700,3 +701,66 @@ class TestInternationalizedUrl:
         GatedSitemapWebClient().get("https://safe.example/caf\u00e9/\u65e5")
         assert seen == ["https://safe.example/caf%C3%A9/%E6%97%A5"]
         assert seen[0].isascii()
+
+
+class TestEveryBranchIsClassifiedOnce:
+    """HTTPError, timeout and unreachable go through FetchRefusedError too (S6-8)."""
+
+    _URL = "https://safe.example/sitemap.xml?token=SECRET"
+
+    @pytest.mark.parametrize(
+        ("failure", "message", "retryable"),
+        [
+            (
+                HTTPError("https://safe.example/x", 503, "boom", HTTPMessage(), None),
+                "fetch failed: HTTP 503",
+                True,
+            ),
+            (
+                HTTPError("https://safe.example/x", 429, "slow", HTTPMessage(), None),
+                "fetch failed: HTTP 429",
+                True,
+            ),
+            (
+                HTTPError("https://safe.example/x", 404, "gone", HTTPMessage(), None),
+                "fetch failed: HTTP 404",
+                False,
+            ),
+            (TimeoutError("slow"), "fetch failed: timed out", True),
+            (
+                URLError("dns"),
+                "fetch failed: cannot reach the host (str)",
+                True,
+            ),
+            (
+                ConnectionResetError("reset"),
+                "fetch failed: ConnectionResetError",
+                False,
+            ),
+        ],
+        ids=["503", "429", "404", "timeout", "unreachable", "reset"],
+    )
+    def test_message_retryability_and_one_warning(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        failure: BaseException,
+        message: str,
+        *,
+        retryable: bool,
+    ) -> None:
+        class _Opener:
+            def open(self, request: Any, timeout: float | None = None) -> Any:
+                raise failure
+
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _Opener())
+        with caplog.at_level("WARNING"):
+            resp = GatedSitemapWebClient().get(self._URL)
+        assert isinstance(resp, WebClientErrorResponse)
+        assert resp.message() == message
+        assert resp.retryable() is retryable
+        [record] = caplog.records
+        assert "fetch refused" in record.getMessage()
+        assert "https://safe.example/…(segments=1)" in record.getMessage()
+        assert "SECRET" not in caplog.text

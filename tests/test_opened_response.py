@@ -81,3 +81,20 @@ def test_a_policy_rejection_from_the_opener_is_still_a_refusal() -> None:
     with patch(_OPEN, side_effect=failure), pytest.raises(FetchRefusedError) as info:
         OpenedResponse.open(Request("https://example.com/p"), 5, 1e12)
     assert str(info.value) == "URL rejected: host resolves to a blocked address"
+
+
+def test_a_refusal_logs_the_redacted_subject_never_the_path(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    failure = URLError("refused")
+    with (
+        patch(_OPEN, side_effect=failure),
+        caplog.at_level("WARNING"),
+        pytest.raises(FetchRefusedError),
+    ):
+        OpenedResponse.open(
+            Request("https://u:pw@example.com/SECRETPATH?t=SECRETQ"), 5, 1e12
+        )
+    assert "https://example.com/…(segments=1)" in caplog.text
+    assert "SECRET" not in caplog.text
+    assert "pw@" not in caplog.text

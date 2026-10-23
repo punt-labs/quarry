@@ -18,7 +18,6 @@ and sub-sitemaps at every depth.
 
 from __future__ import annotations
 
-import contextlib
 import urllib.request
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Self, final
@@ -101,27 +100,18 @@ class GatedSitemapWebClient(AbstractWebClient):
             return self._error(f"SSRF-blocked URL: {reason}", retryable=False)
         try:
             return self._fetch(url)
-        except HTTPError as exc:
-            # Capture everything USP reads (status code + message) into plain
-            # locals and BUILD the response BEFORE closing: HTTPError IS an open
-            # response holding a socket fd, and USP later logs response.message()
-            # -- a response built from captured values never lazily reads the
-            # now-closed fd.  5xx and 429 are transient (retry); other 4xx are
-            # permanent.  Then close the fd (or it leaks -> EMFILE -> starvation).
-            retryable = self._retryable_http(exc.code)
-            error = self._error(f"HTTP {exc.code}", retryable=retryable)
-            with contextlib.suppress(OSError, ValueError):
-                # A close failure must not break get()'s never-raises contract;
-                # the kernel still frees the fd regardless.
-                exc.close()
-            return error
-        except (TimeoutError, URLError) as exc:
-            return self._error(f"unreachable: {type(exc).__name__}", retryable=True)
         except FetchRefusedError.REFUSABLE as exc:
-            # Classified once by FetchRefusedError, which logs it.  Any other
-            # exception is a bug and propagates, as on the URL ingest path.
-            refusal = FetchRefusedError.from_transfer_failure(exc)
-            return self._error(str(refusal), retryable=False)
+            # Classified once by FetchRefusedError, which logs it with the redacted
+            # subject and closes an HTTPError's socket (or it leaks -> EMFILE).  Only
+            # whether USP may retry differs: a 5xx, a 429, a timeout and an
+            # unreachable host are transient; a policy rejection, a 4xx and the
+            # rest are not.  Any other exception is a bug and propagates, as on the
+            # URL ingest path.
+            retryable = self._is_transient(exc)
+            refusal = FetchRefusedError.from_transfer_failure(
+                exc, subject=UrlAdmission.shown(url)
+            )
+            return self._error(str(refusal), retryable=retryable)
 
     def _fetch(self, url: str) -> AbstractWebClientResponse:
         """Open *url* through the guarded opener and gate the final URL."""
@@ -145,9 +135,11 @@ class GatedSitemapWebClient(AbstractWebClient):
         return resp.read(self._max_bytes)
 
     @staticmethod
-    def _retryable_http(code: int) -> bool:
-        """Return whether an HTTP status is transient: 5xx or 429 (rate limit)."""
-        return code >= 500 or code == 429
+    def _is_transient(exc: Exception) -> bool:
+        """Return whether USP may retry after *exc*: 5xx, 429, a timeout, no route."""
+        if isinstance(exc, HTTPError):
+            return exc.code >= 500 or exc.code == 429
+        return isinstance(exc, TimeoutError | URLError)
 
     @staticmethod
     def _error(message: str, *, retryable: bool) -> WebClientErrorResponse:
