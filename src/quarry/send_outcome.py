@@ -30,6 +30,14 @@ class SendOutcome:
     def __bool__(self) -> bool:
         return self.sent
 
+    def named(self, done: str, attempt: str) -> str:
+        """Return *done* when the send landed, else ``<attempt>-<label>``.
+
+        How a trace names a step that follows a send: ``distilled`` or
+        ``distill-daemon-refused``.
+        """
+        return done if self.sent else f"{attempt}-{self.label}"
+
     @classmethod
     def unreachable(cls, log: str) -> Self:
         """Return the outcome of a connection failure, with the caller's *log*."""

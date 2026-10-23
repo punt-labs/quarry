@@ -594,7 +594,9 @@ class TestHandleSubagentStop:
             ) as cap,
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_remember",
-                return_value=distilled,
+                return_value=SendOutcome(sent=True)
+                if distilled
+                else SendOutcome.unreachable("down"),
             ) as mem,
         ):
             result = HookAgent.subagent_stop(payload)
@@ -636,7 +638,7 @@ class TestHandleSubagentStop:
         line = next(r for r in caplog.records if r.name == "quarry.hooks").getMessage()
         assert "-> capture:distilled" in line
 
-    def test_trace_is_a_bare_capture_when_only_the_raw_row_landed(
+    def test_trace_names_the_failed_distillation_when_only_the_raw_row_landed(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         import logging as _logging
@@ -645,7 +647,7 @@ class TestHandleSubagentStop:
         _vendor_identity(tmp_path, "rmh")
         self._stop(tmp_path, "rmh", distilled=False)
         line = next(r for r in caplog.records if r.name == "quarry.hooks").getMessage()
-        assert line.endswith("-> capture")
+        assert line.endswith("-> capture:distill-daemon-unreachable")
 
     def test_config_off_returns_empty(self, tmp_path: Path) -> None:
         _write_config(tmp_path, "---\nauto_capture:\n  subagent_stop: false\n---\n")

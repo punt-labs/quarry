@@ -17,7 +17,12 @@ import pytest
 from quarry.hooks import handle_post_web_fetch, handle_pre_compact
 from quarry.hooks_agent import HookAgent
 from quarry.send_outcome import SendOutcome
-from tests.test_hooks_agent import _make_transcript, _write_config
+from tests.test_hooks_agent import (
+    _make_dialogue,
+    _make_transcript,
+    _vendor_identity,
+    _write_config,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -151,3 +156,66 @@ def test_a_delivered_send_is_traced_as_a_capture(
     line = next(r for r in caplog.records if r.name == "quarry.hooks").getMessage()
     assert "-> capture" in line
     assert "-> error" not in line
+
+
+_REMEMBER = "quarry.daemon_capture.DaemonCaptureSender.send_remember"
+_DISTILLATION = {
+    "filed": (SendOutcome(sent=True), "-> capture:distilled"),
+    "refused": (SendOutcome.rejected(400, "no"), "-> capture:distill-daemon-refused"),
+    "unreachable": (
+        SendOutcome.unreachable("down"),
+        "-> capture:distill-daemon-unreachable",
+    ),
+    "server-error": (
+        SendOutcome.rejected(503, "boom"),
+        "-> capture:distill-daemon-error",
+    ),
+}
+
+
+@pytest.mark.parametrize("name", list(_DISTILLATION))
+def test_the_distillation_has_its_own_label_when_the_raw_row_landed(
+    name: str, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    outcome, expected = _DISTILLATION[name]
+    caplog.set_level(logging.INFO, logger="quarry.hooks")
+    _vendor_identity(tmp_path, "rmh")
+    transcript = _make_dialogue(tmp_path / "sub.jsonl", "review", "Findings: none.")
+    payload: dict[str, object] = {
+        "cwd": str(tmp_path),
+        "session_id": "parent",
+        "agent_id": "a0f13948344b777d1",
+        "agent_type": "rmh",
+        "agent_transcript_path": str(transcript),
+    }
+    with (
+        patch("quarry.session_transcript.Path.home", return_value=tmp_path / "home"),
+        patch(_SEND, return_value=SendOutcome(sent=True)),
+        patch(_REMEMBER, return_value=outcome),
+    ):
+        HookAgent.subagent_stop(payload)
+    line = next(r for r in caplog.records if r.name == "quarry.hooks").getMessage()
+    assert expected in line
+
+
+def test_a_distillation_that_was_not_attempted_is_a_bare_capture(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="quarry.hooks")
+    transcript = _make_dialogue(tmp_path / "sub.jsonl", "review", "Findings: none.")
+    payload: dict[str, object] = {
+        "cwd": str(tmp_path),
+        "session_id": "parent",
+        "agent_id": "a0f13948344b777d1",
+        "agent_type": "general-purpose",  # no vendored identity: nothing to distill
+        "agent_transcript_path": str(transcript),
+    }
+    with (
+        patch("quarry.session_transcript.Path.home", return_value=tmp_path / "home"),
+        patch(_SEND, return_value=SendOutcome(sent=True)),
+        patch(_REMEMBER) as remember,
+    ):
+        HookAgent.subagent_stop(payload)
+    remember.assert_not_called()
+    line = next(r for r in caplog.records if r.name == "quarry.hooks").getMessage()
+    assert line.endswith("-> capture")

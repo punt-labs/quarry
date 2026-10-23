@@ -70,7 +70,7 @@ class TestRegisteredIdentity:
             outcome = capture.capture()
 
         assert outcome.handle == "rmh"
-        assert outcome.distilled is True
+        assert outcome.distillation == "distilled"
         assert outcome.raw.sent is True
         raw_req = raw.call_args[0][0]
         assert raw_req.agent_handle == "rmh"
@@ -80,7 +80,9 @@ class TestRegisteredIdentity:
         assert mem_req.name == "subagent-a0f13948-report"
         assert mem_req.agent_handle == "rmh"
 
-    def test_unreachable_daemon_leaves_distilled_false(self, project: Path) -> None:
+    def test_unreachable_daemon_names_the_failed_distillation(
+        self, project: Path
+    ) -> None:
         capture = _capture(project, _turn("assistant", "Done."))
         with (
             patch(
@@ -94,7 +96,7 @@ class TestRegisteredIdentity:
         ):
             outcome = capture.capture()
         assert outcome.raw.sent is True
-        assert outcome.distilled is False
+        assert outcome.distillation == "distill-daemon-unreachable"
 
     def test_no_assistant_turn_files_no_report(self, project: Path) -> None:
         capture = _capture(project, _turn("user", "only the user spoke"))
@@ -107,7 +109,7 @@ class TestRegisteredIdentity:
         ):
             outcome = capture.capture()
         assert outcome.raw.text_captured is True
-        assert outcome.distilled is False
+        assert outcome.distillation == ""
         memory.assert_not_called()
 
     def test_empty_transcript_files_nothing(self, project: Path) -> None:
@@ -118,7 +120,7 @@ class TestRegisteredIdentity:
         ):
             outcome = capture.capture()
         assert outcome.raw.text_captured is False
-        assert outcome.distilled is False
+        assert outcome.distillation == ""
         raw.assert_not_called()
         memory.assert_not_called()
 
@@ -142,7 +144,7 @@ class TestSingleParse:
         ):
             outcome = capture.capture()
         assert reader_cls.call_count == 1
-        assert outcome.distilled is True
+        assert outcome.distillation == "distilled"
         assert "Done." in raw.call_args[0][0].content
         assert "Done." in memory.call_args[0][0].content
 
@@ -163,7 +165,7 @@ class TestUnregisteredAgentType:
         ):
             outcome = capture.capture()
         assert outcome.handle == ""
-        assert outcome.distilled is False
+        assert outcome.distillation == ""
         assert raw.call_args[0][0].agent_handle == ""
         memory.assert_not_called()
 

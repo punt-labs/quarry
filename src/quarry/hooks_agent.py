@@ -267,7 +267,5 @@ class HookAgent:
             agent_type=HookPayload.as_str(payload.get("agent_type")),
             parent_session_id=HookPayload.as_str(payload.get("session_id")),
         ).capture()
-        HookAgent._trace_transcript_outcome(
-            trace, outcome.raw, "distilled" if outcome.distilled else ""
-        )
+        HookAgent._trace_transcript_outcome(trace, outcome.raw, outcome.distillation)
         return {}
