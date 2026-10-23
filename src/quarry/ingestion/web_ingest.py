@@ -147,7 +147,7 @@ class WebIngest:
         document_name = request.document_name or meta_url
         # Same choke point as ingest_content: a scrubbed URL ingest redacts the
         # metadata the chunker copies onto every chunk.  HttpUrl already
-        # stripped userinfo/query/fragment from meta_url; this second pass
+        # reduced meta_url to host, path and a query digest; this second pass
         # catches PII in an explicit document_name and in the summary, so no
         # caller has to scrub them itself.  Idempotent — a re-scrub of a redacted
         # value is a no-op.
@@ -217,11 +217,10 @@ class WebIngest:
 
     @staticmethod
     def _meta_url(request: UrlIngest) -> str:
-        """Return the stored name of the fetched URL: ``scheme://host[:port]/path``.
+        """Return the stored name of the fetched URL, ``scheme://host[:port]/path``.
 
-        Whatever the caller, the query, fragment and ``;params`` of the URL never
-        become document metadata; a scrubbed ingest also runs the name through the
-        PII scrubber.
+        With a query it ends ``?q[sha256]=<digest>``; the raw query, the fragment and
+        the ``;params`` never become metadata.  A scrubbed ingest also scrubs the name.
         """
         name = request.url.document_name
         scrub = request.content_scrubber

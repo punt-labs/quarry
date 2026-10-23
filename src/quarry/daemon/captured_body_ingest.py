@@ -132,8 +132,9 @@ class CapturedBodyIngest:
         :attr:`HttpUrl.document_name` rather than the raw URL: the pipeline's
         regex scrubber (``_scrub_metadata``) does not know URL structure and
         would leave ``?email=`` and ``?token=`` on the persisted name
-        (CWE-532).  Userinfo never gets this far (admission refuses it), and
-        query, fragment and ``;params`` are dropped.  The HTML branch routes
+        (CWE-532).  Userinfo never gets this far (admission refuses it); the
+        fragment and ``;params`` are dropped and the query is kept only as a
+        digest.  The HTML branch routes
         through :func:`ingest_url`, which names the document the same way, so the
         two branches agree.
         """
