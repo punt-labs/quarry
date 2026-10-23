@@ -97,3 +97,35 @@ class TestWirePayload:
         assert outcome.text_captured is False
         assert outcome.sent is False
         sender.assert_not_called()
+
+
+class TestUnreachableText:
+    """The unreachable log must not claim an archive that was not made."""
+
+    @staticmethod
+    def _log_for(tmp_path: Path, *, archive_ok: bool) -> str:
+        reader = MagicMock()
+        reader.text.return_value = "hello"
+        if not archive_ok:
+            reader.archive.side_effect = OSError
+        source = TranscriptSource("", "sid", tmp_path / "t.jsonl", "pre-compact")
+        with patch(
+            "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+            return_value=SendOutcome.unreachable("x"),
+        ) as send:
+            SessionTranscriptCapture(source, reader).capture()
+        return str(send.call_args.kwargs["unreachable_log"])
+
+    def test_an_archived_transcript_is_named_with_the_backfill_advice(
+        self, tmp_path: Path
+    ) -> None:
+        log = self._log_for(tmp_path, archive_ok=True)
+        assert "transcript archived" in log
+        assert "backfill-sessions" in log
+
+    def test_a_transcript_that_could_not_be_archived_says_so(
+        self, tmp_path: Path
+    ) -> None:
+        log = self._log_for(tmp_path, archive_ok=False)
+        assert "could not be archived" in log
+        assert "backfill" not in log

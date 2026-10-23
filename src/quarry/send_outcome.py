@@ -31,25 +31,32 @@ class SendOutcome:
         return self.sent
 
     @classmethod
-    def advice(cls, label: str) -> str:
+    def advice(cls, label: str, *, archived: bool, written: bool) -> str:
         """Return the warning for a capture whose send failed with *label*.
 
-        The one mapping from a failure to what the user is told: only an
-        unreachable daemon is told to backfill later; a daemon that said no, or
-        failed, is told where to look.
+        The one mapping from a failure to what the user is told, and it promises
+        only what landed: *archived* is whether the raw transcript was archived
+        and *written* whether the scrubbed capture file was.  Only an unreachable
+        daemon with an archive is told to backfill later; a daemon that said no,
+        or failed, is told where to look.
         """
         if label == _UNREACHABLE:
-            return (
-                "Warning: quarryd is not reachable, so this session was not indexed "
-                "now. The raw JSONL archive and scrubbed capture are saved; run "
-                "'quarry backfill-sessions' to index them later."
-            )
-        what = (
-            "the daemon refused the capture; see quarry.log"
-            if label == _REFUSED
-            else "the daemon failed; see quarry.log or quarry doctor"
+            what = "quarryd is not reachable, so this session was not indexed now"
+        elif label == _REFUSED:
+            what = "the daemon refused the capture; see quarry.log"
+        else:
+            what = "the daemon failed; see quarry.log or quarry doctor"
+        if not archived:
+            lost = "the session transcript could not be archived; see quarry.log"
+            kept = " The scrubbed capture is saved." if written else ""
+            return f"Warning: {what}, and {lost}.{kept}"
+        saved = "archive and scrubbed capture are" if written else "archive is"
+        backfill = (
+            "; run 'quarry backfill-sessions' to index them later"
+            if label == _UNREACHABLE
+            else ""
         )
-        return f"Warning: {what}. The raw JSONL archive and scrubbed capture are saved."
+        return f"Warning: {what}. The raw JSONL {saved} saved{backfill}."
 
     def named(self, done: str, attempt: str) -> str:
         """Return *done* when the send landed, else ``<attempt>-<label>``.

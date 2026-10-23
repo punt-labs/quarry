@@ -384,7 +384,11 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
 
     if not outcome.sent:
         trace.error(outcome.failure)
-        return {"systemMessage": SendOutcome.advice(outcome.failure)}
+        return {
+            "systemMessage": SendOutcome.advice(
+                outcome.failure, archived=outcome.archived, written=outcome.written
+            )
+        }
 
     trace.capture()
     return {

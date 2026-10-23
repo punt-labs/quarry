@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
+from contextlib import ExitStack
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
@@ -273,3 +274,41 @@ def test_only_an_unreachable_daemon_is_told_to_backfill(tmp_path: Path) -> None:
     assert not [
         n for n, m in messages.items() if n != "unreachable" and "backfill" in m
     ]
+
+
+def _pre_compact_with(
+    tmp_path: Path, *, archive_fails: bool, cwd: str
+) -> dict[str, object]:
+    transcript = _make_transcript(tmp_path, "work discussed today")
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch("quarry.session_transcript.Path.home", return_value=tmp_path / "home")
+        )
+        stack.enter_context(patch(_SEND, return_value=SendOutcome.unreachable("down")))
+        if archive_fails:
+            stack.enter_context(
+                patch(
+                    "quarry.transcript_reader.TranscriptReader.archive",
+                    side_effect=OSError,
+                )
+            )
+        return handle_pre_compact(
+            {"cwd": cwd, "transcript_path": str(transcript), "session_id": "abc12345"}
+        )
+
+
+def test_a_failed_archive_is_not_reported_as_saved(tmp_path: Path) -> None:
+    result = _pre_compact_with(tmp_path, archive_fails=True, cwd=str(tmp_path))
+    message = str(result["systemMessage"])
+    assert "the session transcript could not be archived; see quarry.log" in message
+    assert "backfill" not in message
+    assert "JSONL archive" not in message
+
+
+def test_an_archive_without_a_local_capture_promises_only_the_archive(
+    tmp_path: Path,
+) -> None:
+    result = _pre_compact_with(tmp_path, archive_fails=False, cwd="")
+    message = str(result["systemMessage"])
+    assert "The raw JSONL archive is saved" in message
+    assert "scrubbed capture" not in message
