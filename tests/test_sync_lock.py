@@ -102,70 +102,31 @@ class TestSyncLockLaunchBackgroundSync:
         assert lockfile.read_text() == "99999"
 
 
-class TestSyncLockIsHeld:
-    def test_no_pidfile_returns_false(self, tmp_path: Path) -> None:
-        """Probing creates the shared lockfile scaffold but never holds it."""
+class TestAcquireAsAProbe:
+    def test_an_unheld_lockfile_is_acquirable_and_created(self, tmp_path: Path) -> None:
         lockfile = tmp_path / "sync.pid"
-        lock = SyncLock(path=lockfile)
-        assert lock.is_held() is False
-        assert lockfile.exists()
-
-    def test_unheld_lockfile_with_stale_content_is_not_held(
-        self, tmp_path: Path
-    ) -> None:
-        """Leftover text content never gates the lock -- only flock does.
-
-        A pre-existing pidfile from a crashed prior run (no one currently
-        holds its flock, since the kernel released it when that process
-        died) must be freely acquirable, and its content is never inspected
-        or removed by this probe.
-        """
-        pidfile = tmp_path / "sync.pid"
-        pidfile.write_text("999999999")
-        lock = SyncLock(path=pidfile)
-        assert lock.is_held() is False
-        assert pidfile.exists()
-        assert pidfile.read_text() == "999999999"
-
-    def test_returns_true_while_another_instance_holds_the_lock(
-        self, tmp_path: Path
-    ) -> None:
-        pidfile = tmp_path / "sync.pid"
-        holder = SyncLock(path=pidfile)
-        held_fd = holder.acquire()
-        assert held_fd is not None
-        try:
-            probe = SyncLock(path=pidfile)
-            assert probe.is_held() is True
-        finally:
-            os.close(held_fd)
-
-    def test_transient_unlock_error_fails_open_not_raise(self, tmp_path: Path) -> None:
-        """A LOCK_UN OSError during the probe must not escape is_held().
-
-        Regression test: the explicit best-effort release after a successful
-        probe-acquire was unguarded -- a transient OSError from LOCK_UN would
-        propagate out of is_held() and make SessionStart raise, instead of
-        the intended fail-open (return False). The finally-close already
-        releases the flock regardless, so the explicit unlock is redundant
-        housekeeping and must never be allowed to raise.
-        """
-        pidfile = tmp_path / "sync.pid"
-        lock = SyncLock(path=pidfile)
-        real_flock = fcntl.flock
-
-        def fail_only_on_unlock(fd: int, operation: int) -> None:
-            if operation == fcntl.LOCK_UN:
-                raise OSError("transient unlock failure")
-            real_flock(fd, operation)
-
-        with patch("fcntl.flock", side_effect=fail_only_on_unlock):
-            assert lock.is_held() is False  # fails open, never raises
-        # The finally-close released the flock regardless of the failed
-        # explicit unlock -- a fresh acquire on the same path must succeed.
-        fd = lock.acquire()
+        fd = SyncLock(path=lockfile).acquire()
         assert fd is not None
         os.close(fd)
+        assert lockfile.exists()
+
+    def test_stale_content_never_gates_the_lock(self, tmp_path: Path) -> None:
+        """Only flock gates it: a crashed run's leftover PID text is not inspected."""
+        pidfile = tmp_path / "sync.pid"
+        pidfile.write_text("999999999")
+        fd = SyncLock(path=pidfile).acquire()
+        assert fd is not None
+        os.close(fd)
+        assert pidfile.read_text() == "999999999"
+
+    def test_a_held_lock_is_contention_not_a_fault(self, tmp_path: Path) -> None:
+        pidfile = tmp_path / "sync.pid"
+        held_fd = SyncLock(path=pidfile).acquire()
+        assert held_fd is not None
+        try:
+            assert SyncLock(path=pidfile).acquire() is None
+        finally:
+            os.close(held_fd)
 
 
 class TestSyncLockAcquire:
@@ -221,12 +182,11 @@ class TestSyncLockAcquire:
         # The symlink target was never opened, let alone truncated/written.
         assert target.read_text() == "do not touch"
 
-    def test_is_held_does_not_raise_on_a_symlinked_lock_path(
+    def test_a_symlinked_lock_path_is_a_fault_and_launch_says_failed(
         self, tmp_path: Path
     ) -> None:
-        """The probe and acquire both refuse the symlink as a fault, so
-        launch_background_sync() says "failed" -- never "running", never a raised
-        exception out of it, never a follow.
+        """acquire refuses the symlink as a fault, so launch_background_sync() says
+        "failed" -- never "running", never a follow.
         """
         target = tmp_path / "target.txt"
         target.write_text("do not touch")
@@ -235,11 +195,26 @@ class TestSyncLockAcquire:
 
         lock = SyncLock(path=lockfile)
         with pytest.raises(OSError):
-            lock.is_held()
-        with pytest.raises(OSError):
             lock.acquire()
         assert lock.launch_background_sync() == "failed"
         assert target.read_text() == "do not touch"
+
+
+class TestALaunchThatFails:
+    @pytest.mark.parametrize(
+        "error",
+        [OSError("ENOENT"), ValueError("embedded null"), _subprocess.SubprocessError()],
+        ids=["oserror", "valueerror", "subprocesserror"],
+    )
+    def test_any_popen_error_says_failed_and_releases_the_lock(
+        self, tmp_path: Path, error: Exception
+    ) -> None:
+        lock = SyncLock(path=tmp_path / "sync.pid")
+        with patch.object(_subprocess, "Popen", side_effect=error):
+            assert lock.launch_background_sync() == "failed"
+        fd = lock.acquire()
+        assert fd is not None  # our fd was closed, so nothing holds the flock
+        os.close(fd)
 
 
 class TestAFaultIsNotContention:
@@ -256,14 +231,6 @@ class TestAFaultIsNotContention:
 
         return patch("fcntl.flock", side_effect=flock)
 
-    def test_an_open_error_in_the_probe_is_a_fault(self, tmp_path: Path) -> None:
-        lock = SyncLock(path=tmp_path / "sync.pid")
-        with (
-            patch("os.open", side_effect=OSError("EACCES")),
-            pytest.raises(OSError),
-        ):
-            lock.is_held()
-
     def test_an_open_error_in_acquire_is_a_fault(self, tmp_path: Path) -> None:
         lock = SyncLock(path=tmp_path / "sync.pid")
         with (
@@ -271,11 +238,6 @@ class TestAFaultIsNotContention:
             pytest.raises(OSError),
         ):
             lock.acquire()
-
-    def test_a_flock_error_in_the_probe_is_a_fault(self, tmp_path: Path) -> None:
-        lock = SyncLock(path=tmp_path / "sync.pid")
-        with self._flock_fails(OSError("ENOLCK")), pytest.raises(OSError):
-            lock.is_held()
 
     def test_a_flock_error_in_acquire_is_a_fault(self, tmp_path: Path) -> None:
         lock = SyncLock(path=tmp_path / "sync.pid")
@@ -322,9 +284,9 @@ class TestSyncLockSingleFlight:
     ) -> None:
         """Two SyncLock instances racing on a pre-existing stale pidfile.
 
-        Both threads are released by the same barrier so their ``is_held()``
-        + ``acquire()`` sequence (the exact sequence ``launch_background_sync``
-        uses) races for real via the kernel, not via mocked interleaving.
+        Both threads are released by the same barrier so their ``acquire()``
+        (the call ``launch_background_sync`` makes) races for real via the
+        kernel, not via mocked interleaving.
         Neither fd is closed until both threads have reported a result, so
         the outcome depends only on the kernel's single-winner arbitration,
         never on which thread happens to finish first.
@@ -342,7 +304,7 @@ class TestSyncLockSingleFlight:
 
         def race(name: str, lock: SyncLock) -> None:
             barrier.wait()
-            outcome = None if lock.is_held() else lock.acquire()
+            outcome = lock.acquire()
             with results_lock:
                 results[name] = outcome
 
@@ -420,7 +382,9 @@ class TestSyncLockConstruction:
         fd = a.acquire()
         assert fd is not None
         try:
-            assert a.is_held() is True
-            assert b.is_held() is False
+            assert a.acquire() is None
+            fd_b = b.acquire()
+            assert fd_b is not None
+            os.close(fd_b)
         finally:
             os.close(fd)

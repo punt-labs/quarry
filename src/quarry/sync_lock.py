@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import fcntl
 import logging
 import os
@@ -89,28 +88,10 @@ class SyncLock:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         return os.open(str(self._path), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
 
-    def is_held(self) -> bool:
-        """Return whether another process currently holds the sync lock.
-
-        This is an ADVISORY, non-mutating probe — a momentary snapshot, not
-        a reservation.  A ``False`` here does not guarantee a subsequent
-        :meth:`acquire` will succeed (a concurrent acquirer could win
-        first), and a ``True`` here can go stale the instant the holder
-        exits.  The only trustworthy single-winner decision is
-        :meth:`acquire`'s own ``flock(LOCK_EX | LOCK_NB)`` attempt; this
-        method exists purely as a cheap fast-path skip.
-        """
-        fd = self.acquire()
-        if fd is None:
-            logger.debug("session-start: sync lock %s is held", self._path)
-            return True  # normal contention: another process holds it
-        # Best-effort release: closing the last fd on the open file description
-        # releases the flock anyway, so a transient OSError unlocking explicitly
-        # here must not escape and turn this advisory probe into a raise.
-        with contextlib.suppress(OSError):
-            fcntl.flock(fd, fcntl.LOCK_UN)
-        os.close(fd)
-        return False
+    @staticmethod
+    def _flags() -> int:
+        """Return the flock request: exclusive, and never wait for the holder."""
+        return fcntl.LOCK_EX | fcntl.LOCK_NB
 
     def acquire(self) -> int | None:
         """Attempt to take the sync lock; return the held fd, or ``None``.
@@ -130,7 +111,7 @@ class SyncLock:
             logger.error("session-start: failed to open %s: %s", self._path, exc)
             raise
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(fd, self._flags())
         except BlockingIOError:
             # Normal contention: another process holds it. Expected, not logged.
             os.close(fd)
@@ -166,7 +147,7 @@ class SyncLock:
         the lock could not be opened or taken, or the launch itself errored.
         """
         try:
-            fd = self.acquire()  # the one single-winner decision, see is_held()
+            fd = self.acquire()  # the one single-winner decision, see acquire()
         except OSError:
             return "failed"  # already logged; a fault is not "already running"
         if fd is None:
@@ -190,7 +171,7 @@ class SyncLock:
                 start_new_session=True,
                 pass_fds=(fd,),
             )
-        except OSError as exc:
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
             logger.error("session-start: failed to launch background sync: %s", exc)
             # No child inherited a copy — closing ours fully releases the lock.
             os.close(fd)

@@ -342,7 +342,7 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
         output = result["hookSpecificOutput"]
         assert isinstance(output, dict)
         ctx = str(output["additionalContext"])
-        assert "Background sync failed to launch." in ctx
+        assert "Background sync failed to launch; see the quarry log" in ctx
 
     def test_context_reflects_sync_already_running(self, tmp_path: Path) -> None:
         project = tmp_path / "runningproject"

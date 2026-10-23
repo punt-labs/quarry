@@ -92,7 +92,11 @@ class ActiveSessionContext:
         return {
             "launched": "Background sync in progress.",
             "running": "Background sync already running.",
-        }.get(status, "Background sync failed to launch.")
+        }.get(
+            status,
+            "Background sync failed to launch; see the quarry log or run "
+            "`quarry doctor`.",
+        )
 
     @staticmethod
     def _session_coverage(collection: str) -> CoverageCounts | None:

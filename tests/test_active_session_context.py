@@ -15,6 +15,11 @@ _SYNC = "quarry.active_session_context.SyncLock.launch_background_sync"
 _COVERAGE = "quarry.active_session_context.ActiveSessionContext._session_coverage"
 
 
+_FAILED_LINE = (
+    "Background sync failed to launch; see the quarry log or run `quarry doctor`."
+)
+
+
 def _text(context: ActiveSessionContext) -> str:
     output = context.reply().envelope["hookSpecificOutput"]
     assert isinstance(output, dict)
@@ -95,7 +100,7 @@ class TestExactOutput:
         [
             ("launched", "Background sync in progress."),
             ("running", "Background sync already running."),
-            ("failed", "Background sync failed to launch."),
+            ("failed", _FAILED_LINE),
         ],
     )
     def test_the_sync_line_follows_the_status(self, status: str, line: str) -> None:
