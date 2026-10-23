@@ -56,25 +56,44 @@ def _refusal_classes(trees: dict[Path, ast.Module]) -> set[str]:
                 if (
                     isinstance(node, ast.ClassDef)
                     and node.name not in names
-                    and any(
-                        isinstance(b, ast.Name) and b.id in names for b in node.bases
-                    )
+                    and any(_base_name(b) in names for b in node.bases)
                 ):
                     names.add(node.name)
                     grew = True
-            for node in tree.body:
-                base = node.value if isinstance(node, ast.Assign) else None
-                base_name = getattr(base, "id", getattr(base, "attr", None))
-                if (
-                    isinstance(node, ast.Assign)
-                    and base_name in names
-                    and len(node.targets) == 1
-                    and isinstance(node.targets[0], ast.Name)
-                    and node.targets[0].id not in names
-                ):
-                    names.add(node.targets[0].id)
+            for alias in _aliases(tree):
+                if alias[1] in names and alias[0] not in names:
+                    names.add(alias[0])
                     grew = True
     return names
+
+
+def _base_name(expr: ast.expr) -> str | None:
+    """Return the last name of ``Name`` or ``module.Name``, else ``None``."""
+    return getattr(expr, "id", getattr(expr, "attr", None))
+
+
+def _aliases(tree: ast.Module) -> list[tuple[str, str]]:
+    """Return ``(alias, original)`` for every way a class gets a second name.
+
+    ``E = Sub``, ``E: type[Sub] = Sub`` and ``from m import Sub as E``, at module
+    level or inside a function.
+    """
+    found: list[tuple[str, str]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom | ast.Import):
+            found.extend(
+                (a.asname, a.name.rsplit(".", 1)[-1]) for a in node.names if a.asname
+            )
+        target = original = None
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target, original = node.targets[0], node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            target, original = node.target, node.value
+        if isinstance(target, ast.Name) and original is not None:
+            source = _base_name(original)
+            if source is not None:
+                found.append((target.id, source))
+    return found
 
 
 def _is_constant(expr: ast.expr) -> bool:
@@ -137,6 +156,11 @@ def _is_super_or_cls(receiver: ast.expr) -> bool:
 def _forwarded_message(call: ast.Call) -> ast.expr | None:
     """Return the message handed to ``super().__init__`` / ``cls.__new__``, if any."""
     args = [a for a in call.args if not (isinstance(a, ast.Name) and a.id == "cls")]
+    fn = call.func
+    if isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name):
+        # ``Sub.__new__(Sub, msg)`` / ``Sub.__init__(e, msg)``: the first argument is
+        # the class or the instance, not the message.
+        args = call.args[1:]
     if args:
         return args[0]
     return next((k.value for k in call.keywords if k.arg in _MESSAGE_KEYWORDS), None)
@@ -168,7 +192,12 @@ def _to_check(call: ast.Call, classes: set[str], *, inside: bool) -> list[ast.ex
     call itself, which is never constant, so it is counted.
     """
     fn = call.func
-    forwards = (
+    on_class = (
+        isinstance(fn, ast.Attribute)
+        and fn.attr in {"__init__", "__new__"}
+        and _base_name(fn.value) in classes
+    )
+    forwards = on_class or (
         inside
         and isinstance(fn, ast.Attribute)
         and fn.attr in {"__init__", "__new__"}
@@ -186,6 +215,29 @@ def _to_check(call: ast.Call, classes: set[str], *, inside: bool) -> list[ast.ex
     if unnamed and any(_builds_text(a) for a in call.args):
         return [call]
     return []
+
+
+def _is_args(target: ast.expr) -> bool:
+    return isinstance(target, ast.Attribute) and target.attr == "args"
+
+
+def _rewrites_args(node: ast.AST) -> bool:
+    """Return whether *node* rewrites an exception's ``.args`` after construction.
+
+    ``e.args = ...``, ``e.args += ...`` and ``setattr(e, "args", ...)``.
+    """
+    if isinstance(node, ast.Assign):
+        return any(_is_args(t) for t in node.targets)
+    if isinstance(node, ast.AugAssign):
+        return _is_args(node.target)
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "setattr"
+        and len(node.args) >= 2
+        and isinstance(node.args[1], ast.Constant)
+        and node.args[1].value == "args"
+    )
 
 
 def _scan(tree: ast.Module, classes: set[str]) -> int:
@@ -210,11 +262,7 @@ def _scan(tree: ast.Module, classes: set[str]) -> int:
             and isinstance(node.targets[0], ast.Name)
         ]
 
-    count = sum(
-        isinstance(n, ast.Assign)
-        and any(isinstance(t, ast.Attribute) and t.attr == "args" for t in n.targets)
-        for n in ast.walk(tree)  # an exception's .args rewritten after construction
-    )
+    count = sum(_rewrites_args(n) for n in ast.walk(tree))
     for call in (n for n in ast.walk(tree) if isinstance(n, ast.Call)):
         owner = nearest(call, (ast.ClassDef,))
         inside = isinstance(owner, ast.ClassDef) and owner.name in classes
@@ -364,6 +412,76 @@ class TestTheSweepSeesTheHardShapes:
     def test_rewriting_args_is_counted(self) -> None:
         assert self._count("def f(e, x):\n    e.args = (x,)\n") == 1
         assert self._count("def f(e):\n    e.other = 1\n") == 0
+
+
+class TestTheSweepSeesTheRemainingShapes:
+    """Import aliases, attribute bases, annotated and local aliases, .args writes."""
+
+    @staticmethod
+    def _count(source: str) -> int:
+        return TestTheSweepSeesEveryShape._count(source)
+
+    def test_an_import_alias_is_followed(self) -> None:
+        src = (
+            "from quarry.refusal import RefusalError as Refused\n"
+            "def f(x):\n    raise Refused(f'bad {x}')\n"
+        )
+        assert self._count(src) == 1
+        assert self._count(src.replace("f'bad {x}'", "'fixed'")) == 0
+
+    def test_an_aliased_subclass_import_is_followed(self) -> None:
+        src = (
+            "class Sub(RefusalError):\n    pass\n"
+            "from elsewhere import Sub as Renamed\n"
+            "def f(x):\n    raise Renamed(f'bad {x}')\n"
+        )
+        assert self._count(src) == 1
+
+    def test_a_base_named_through_a_module_is_followed(self) -> None:
+        src = (
+            "class Sub(refusal.RefusalError):\n    pass\n"
+            "def f(x):\n    raise Sub(f'bad {x}')\n"
+        )
+        assert self._count(src) == 1
+        assert self._count(src.replace("f'bad {x}'", "'fixed'")) == 0
+
+    def test_an_annotated_alias_is_followed(self) -> None:
+        src = (
+            "class Sub(RefusalError):\n    pass\n"
+            "E: type[Sub] = Sub\n"
+            "def f(x):\n    raise E(f'bad {x}')\n"
+        )
+        assert self._count(src) == 1
+
+    def test_an_alias_made_inside_a_function_is_followed(self) -> None:
+        src = (
+            "class Sub(RefusalError):\n    pass\n"
+            "def f(x):\n    local = Sub\n    raise local(f'bad {x}')\n"
+        )
+        assert self._count(src) == 1
+        assert self._count(src.replace("f'bad {x}'", "'fixed'")) == 0
+
+    def test_new_called_on_the_class_outside_it_is_counted(self) -> None:
+        src = (
+            "class Sub(RefusalError):\n    pass\n"
+            "def f(x):\n    return Sub.__new__(Sub, f'bad {x}')\n"
+        )
+        assert self._count(src) == 1
+        assert self._count(src.replace("f'bad {x}'", "'fixed'")) == 0
+
+    def test_init_called_on_the_class_outside_it_is_counted(self) -> None:
+        src = (
+            "class Sub(RefusalError):\n    pass\n"
+            "def f(e, x):\n    Sub.__init__(e, f'bad {x}')\n"
+        )
+        assert self._count(src) == 1
+
+    def test_extending_args_in_place_is_counted(self) -> None:
+        assert self._count("def f(e, x):\n    e.args += (x,)\n") == 1
+
+    def test_setattr_of_args_is_counted(self) -> None:
+        assert self._count("def f(e, x):\n    setattr(e, 'args', (x,))\n") == 1
+        assert self._count("def f(e, x):\n    setattr(e, 'note', x)\n") == 0
 
 
 class TestPinnedHelpers:
