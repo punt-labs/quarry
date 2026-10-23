@@ -95,7 +95,7 @@ path:
   duration. This is the single consumer DES-034 §2 describes.
 - **Captures take a *different* writer.** `ingest_content` → `_chunk_embed_store`
   (`ingestion/chunk_store_funnel.py`) → `DocumentStreamer.insert` (`ingestion/streaming.py`) constructs a
-  **fresh** `ProgressiveIndexer` with a `_PlainFlushTarget` (`ingestion/streaming.py`)
+  **fresh** `ProgressiveIndexer` with a `PlainFlushTarget` (`ingestion/plain_flush_target.py`)
   per call, with **no consumer thread and no queue**. `ProgressiveIndexer`'s own
   docstring states its writes are performed "by exactly one caller (the sync
   consumer thread or the single-doc path), so no lock is needed here —
@@ -366,8 +366,8 @@ them**:
 - **`PRAGMA busy_timeout=5000` on every `SyncRegistry` connection**
   (`sync_registry.py:83`). That bounded-wait guards the **registry** SQLite
   writes — sync's domain. Captures do **not** write the registry: their
-  single-document `_PlainFlushTarget.on_flush` is a deliberate no-op
-  (`ingestion/streaming.py`), so no watermark / registry row is touched. The capture
+  single-document `PlainFlushTarget.on_flush` is a deliberate no-op
+  (`ingestion/plain_flush_target.py`), so no watermark / registry row is touched. The capture
   queue therefore governs a **different resource** (the chunks-table writes) from
   the busy_timeout guard, and the two do not overlap. Sync's registry writes and
   captures' chunk writes stay independently serialized — busy_timeout for the
@@ -403,8 +403,8 @@ composition is layered, not parallel:
 batch producer/consumer coupled to the sync **registry**: its `FlushTarget.on_flush`
 writes `files`-table watermarks and its `run(files: list[Path])` is a
 whole-collection sweep (`sync_ingest.py:44-137`, `265-298`). Captures are single
-inline documents that keep **no** resume watermark (`_PlainFlushTarget.on_flush`
-is a no-op, `ingestion/streaming.py`). Forcing captures through `CollectionIngestor`
+inline documents that keep **no** resume watermark (`PlainFlushTarget.on_flush`
+is a no-op, `ingestion/plain_flush_target.py`). Forcing captures through `CollectionIngestor`
 would drag registry / resume machinery they do not use. And there is no persistent
 sync consumer to hang captures on — `CollectionIngestor` exists only for a sync's
 duration (`sync.py:220`), whereas captures arrive continuously *between* syncs and
@@ -514,7 +514,7 @@ counts (no real ONNX needed for the concurrency assertions):
   (== 1 at the default), and all complete.
 - **DES-026 non-interference.** A capture burst in flight does not affect
   `POST /v1/sync`'s 409 concurrent-sync guard (a concurrent sync still 409s), and
-  captures issue **no** `SyncRegistry` writes — assert the `_PlainFlushTarget.on_flush`
+  captures issue **no** `SyncRegistry` writes — assert the `PlainFlushTarget.on_flush`
   no-op path so the busy_timeout guard is never engaged by a capture.
 - **Backpressure.** Fill to `MAX_QUEUE_DEPTH`; assert the next submit returns
   `503` with `status: rejected` and creates **no** task; assert a submit after

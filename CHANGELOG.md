@@ -55,12 +55,21 @@ across `transform`, `index`, and `connector`).
   name is a URL, and captures. Equivalent URLs, including those that differ
   only in query or fragment, now resolve to the same document.
 - tool: a failed task's error shows its reason only when the task was
-  refused (binary content, an over-budget row, a rejected or failed fetch).
-  Every other failure reads `internal error: <ExceptionClass>`, with the
-  detail in the redacted `quarry.log`. This also applies to directory
-  registration and to per-file errors from sync and watch.
+  refused (binary content, an over-budget row, a rejected or failed fetch,
+  or a directory registration that is already covered, already registered,
+  uses a taken collection name, or targets an archived collection). Every
+  other failure reads `internal error: <ExceptionClass>`, with the detail in
+  the redacted `quarry.log`. This also applies to per-file errors from sync,
+  watch, and sitemap crawls.
+- tool: a task that stores nothing now fails with `nothing was stored: the
+  content produced no indexable text` instead of ending `completed`. This
+  covers plain ingests, bulk crawls, captures, and `remember`/`learn`.
+- tool: hook traces tell a daemon refusal (`daemon-refused`) from an
+  unreachable daemon (`daemon-unreachable`) and a server or configuration
+  fault (`daemon-error`).
 - infra: log lines show a URL as `scheme://host[:port]/…(N segments)`, never
-  its path. The full path is kept in the stored document name.
+  its path, whether quarry logs it or a library does. The full path is kept
+  in the stored document name.
 
 ### Fixed
 
@@ -75,7 +84,7 @@ across `transform`, `index`, and `connector`).
   - A document-level binary classifier (`content_guard.py`) checks for magic
     bytes and the share of replacement and control characters. Prose that
     merely begins with `%PDF-` or `GIF8` still passes.
-  - A text or markdown section, code section, or spreadsheet row group over
+  - A text, markdown, or HTML section, code section, or spreadsheet row group over
     the page cap (just under 1 MiB) is split at the best available boundary,
     never truncated. An oversized PDF or other paginated page fails its
     document instead, so page numbers always match the source.
@@ -125,7 +134,8 @@ across `transform`, `index`, and `connector`).
     text, and drops third-party log records below WARNING.
 - index: a CSV with a single cell larger than 128 KiB no longer crashes
   extraction. Large cells are chunked within the row budget, and a cell
-  over the page cap fails its file with a reason.
+  over the page cap fails its file with a reason. A malformed CSV fails with
+  `not parseable CSV` rather than a misleading field-size message.
 - infra: `chunk_max_chars` is bounded in `Settings` (1 to 16,384), so every
   chunk fits the 64 KiB per-chunk row budget. `chunk_overlap_chars` must be
   non-negative. An out-of-range value is refused at load, with an error naming

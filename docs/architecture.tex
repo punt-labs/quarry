@@ -241,9 +241,10 @@ Chunker     & \modpath{ingestion/page\_chunker.py}     & \texttt{PageChunker}:
               \modpath{ingestion/sentence\_chunker.py}. \\
 Binary guard & \modpath{content\_guard.py} & \texttt{BinaryContent}
               classifies text that is really a binary payload (signature plus
-              non-text ratio) and \texttt{UnindexableContentError}, the single
-              refusal channel: a ``\texttt{ValueError}'' whose message is a
-              stable, URL-free reason.  Neutral and stdlib-only, so the HTTP
+              non-text ratio) and \texttt{UnindexableContentError}, the
+              content-refusal channel: a \texttt{RefusalError} (a
+              \texttt{ValueError}) whose message is a stable, URL-free
+              reason.  Neutral and stdlib-only, so the HTTP
               routes and the pipeline share it. \\
 Row budget  & \modpath{db/row\_budget.py} & \texttt{RowBudget}: caps a stored
               page, chunk and label so a Lance scan batch of 1,024 rows stays
@@ -384,8 +385,9 @@ Scrubber       & \modpath{scrub.py}         & \texttt{Scrubber} ---
 Scrub rules    & \modpath{scrub\_rules.py}  & Secret-detection regex
                  catalog applied by the scrubber. \\
 Capture URL    & \modpath{capture\_url.py}  & \texttt{CaptureUrl} ---
-                 strips userinfo/query/fragment from a captured URL's
-                 metadata form. \\
+                 tolerant redaction for a URL that \texttt{HttpUrl}
+                 refuses; the fallback behind \texttt{HttpUrl.shown} and
+                 \texttt{DisplayName.stored}. \\
 Web capture    & \modpath{web\_capture.py}  & Parse a PostToolUse
                  WebFetch payload into URL + fetched content. \\
 Transcript     & \modpath{transcript.py}    & The session transcript
@@ -1719,10 +1721,10 @@ text via an opt-in \texttt{content\_scrubber} on the
 The field defaults to \texttt{None}: user-initiated \texttt{quarry ingest <url>},
 sitemap crawls, and directory sync are \emph{not} scrubbed --- redaction
 is a captures concern, not a general-ingestion one.  The URL's persisted
-metadata form is redacted separately by \texttt{CaptureUrl}
-(\modpath{capture\_url.py}), which strips userinfo, query, and fragment
-(preserving IPv6 brackets) before the same text scrubber runs over the
-bare \texttt{scheme://host/path}.
+metadata form is its admitted \texttt{HttpUrl.document\_name}
+(\modpath{http\_url.py}), \texttt{scheme://host[:port]/path} with no
+userinfo, query, fragment, or \texttt{;params}, run through the same text
+scrubber (DES-057).
 
 % ===================================================================
 \section{Deployment}
@@ -1912,7 +1914,8 @@ Before sending, \texttt{WebFetchLoopCloser}
 (\modpath{web\_fetch\_loop\_closer.py}) checks \texttt{/v1/captures/lookup}
 for a prior capture of the URL and, when one exists, nudges the agent to
 \texttt{find} it instead of re-fetching.  The URL's persisted metadata form
-is redacted by \texttt{CaptureUrl} (DES-036).
+is derived by \texttt{WebFetchName} from the admitted \texttt{HttpUrl}
+(DES-036, DES-057).
 
 \subsection{Web Search and Read Capture}
 

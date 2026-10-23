@@ -1435,6 +1435,11 @@ parameter on `ingest_url`.
    IPv6 host literals keep their `[...]` brackets so the netloc stays valid
    (`CaptureUrl._bracketed`). This is defence-in-depth distinct from body
    scrubbing, and it is the specific property `quarry-ow3k` relies on.
+   *Superseded in part by DES-057 decision 6:* a capture's stored name is now
+   `HttpUrl.document_name` (via `WebFetchName`), and userinfo is refused at
+   admission rather than stripped. `CaptureUrl` remains only as the tolerant
+   fallback behind `HttpUrl.shown` and `DisplayName.stored` for a URL that
+   `HttpUrl` will not admit.
 
 ### Path pass scope
 
@@ -2755,7 +2760,9 @@ exactly: the daemon derives the target
 `<repo>-captures` collection server-side via
 `CapturesCollection.for_registry_path(cwd, registry_path)`. `CaptureUrl.for_web_fetch`
 also moved to run server-side, inside the route, rather than being computed by
-the caller and passed as an opaque pre-normalized string.
+the caller and passed as an opaque pre-normalized string. (DES-057 decision 6
+later replaced `CaptureUrl.for_web_fetch` with `WebFetchName`, which derives the
+name from the admitted `HttpUrl`; it still runs server-side in the route.)
 
 **Why.** `CapturesCollection.for_registry_path`'s own docstring states the
 constraint plainly: "the capture client cannot do this itself without
@@ -3182,13 +3189,20 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
    - A refused payload or a failed fetch fails with a URL-free reason on every
      surface (CLI, HTTP, MCP and task) and never logs a traceback. A refusal is
      always an exception; it is never an empty "completed" result.
+   - A job that stores nothing fails as well. `RefusalAwareTerminal` is the one
+     place that decides a task's terminal state: a plain ingest, bulk crawl,
+     capture, or remember that wrote no rows fails with the fixed reason
+     `nothing was stored: the content produced no indexable text`. A
+     table-driven test covers every job type against every outcome.
 2. **Bound every stored row; split, never truncate.**
    - A logical-section page over the page cap (2^20 − 1 bytes) is split at the
-     best boundary and renumbered. Logical sections are text, code, and
-     spreadsheet row groups, which the extractor already numbers sequentially.
+     best boundary. Logical sections are text, markdown and HTML sections,
+     code sections, and spreadsheet row groups.
    - A paginated page (PDF, OCR, slide) is never renumbered, so an oversized
      one fails its document with a reason. Real PDF pages never approach the
-     cap.
+     cap. In a document that mixes the two, the parts of a split section take
+     page numbers no paginated page holds, so splitting never moves a
+     paginated page.
    - Label columns (`summary`, `document_name`, `document_path`, `collection`,
      `agent_handle`) have their own 8 KiB budget. `summary` is copied onto
      every chunk, so an unbounded label could recreate the overflow. The
@@ -3241,9 +3255,12 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
      (`url_admission.py`) is the single gate for routes, captures, sitemap
      entries, and every redirect hop. Its decisions are made over one
      canonical reading (`UrlSyntax`). It rejects userinfo, `\` or `%` in the
-     netloc, whitespace or control characters anywhere, and a port that is
-     out of range or 0, and any URL longer than 8,192 characters. Its
-     reasons are fixed text. This supersedes
+     netloc, whitespace or control characters anywhere, a port that is out
+     of range or 0, and any URL longer than 8,192 characters. Its reasons
+     never quote userinfo, path, or query: syntax and scheme failures are
+     fixed text (`malformed URL`, `unsupported scheme`, `missing hostname`),
+     and an address-policy failure names only the host and the resolved
+     address. This supersedes
      `UrlSafetyCheck.reject_reason` as cited in DES-042 and DES-049;
      `UrlSafetyCheck` keeps the resolved-address checks.
    - **`HttpUrl`.** An admitted URL is carried as a value type:
@@ -3255,22 +3272,42 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
        never carries the path. A heuristic cannot tell a slug from a
        secret, so the path stays only in the stored name, where diagnosis
        needs it.
+     - `HttpUrl.shown(raw)` is the one producer of a URL's log text. A URL
+       `HttpUrl` refuses renders in the same shape through the tolerant
+       `CaptureUrl` fallback, or as `(unparseable URL)`.
+     - The value is immutable and hashable.
 
-     `WebFetchName.of` derives capture names from it, replacing
+     `WebFetchName` derives capture names from it, replacing
      `CaptureUrl.for_web_fetch`.
    - **Logging (layer B).** The configured file and stream handlers redact
      URLs and escape control characters in the finished text, tracebacks
-     included. They drop third-party records below WARNING. This backstop
-     catches what a library logs on its own.
-     - **Linear time.** Every pattern is bounded, and a token over 2,048
-       characters collapses to `[…]` before matching, so a crafted URL
-       cannot stall the handler.
+     included. Any URL left in a message is rewritten to the same log form,
+     so no path, userinfo, query, or fragment reaches the log. They drop
+     third-party records below WARNING. This backstop catches what a library
+     logs on its own.
+     - **Linear time.** The redactor works one whitespace-free token at a
+       time: a token over 2,048 characters becomes `[…]`, and the bounded
+       patterns run per token, so a crafted URL cannot stall the handler.
      - **No forged lines.** Newlines and bidi controls in a message are
-       escaped, so a message cannot add a log line.
-   - **Task errors (layer C).** Only a refusal (`UnindexableContentError`,
-     including `RowBudgetError`) keeps its message. Every other failure is
-     recorded as `internal error: <Class>`. Fetch refusals are raised
-     `from None`, so a traceback cannot chain the raw cause.
+       escaped (`\xNN`, `\uNNNN`, `\UNNNNNNNN`), so a message cannot add a
+       log line.
+     - **A failing handler leaks nothing.** `handleError` writes a fixed
+       line with the logger name, exception class, and message-free frames;
+       it never echoes the record.
+     - **Unclassified failures stay diagnosable.** Their message-free
+       frames are logged at WARNING, and a parser catch names only the
+       parser's own exceptions, so a programming error is never reported as
+       a refusal.
+   - **Task errors (layer C).** Only a refusal keeps its message. A refusal
+     is any `RefusalError`: `UnindexableContentError` (including
+     `RowBudgetError` and fetch refusals) and `RegistrationRefusedError`
+     (a directory already registered or covered by a parent, a collection
+     name in use, an archived collection). Every other failure is recorded
+     as `internal error: <Class>`, including a stray `ValueError`. Fetch
+     refusals are raised `from None`, so a traceback cannot chain the raw
+     cause. Hook traces distinguish `daemon-refused` (4xx),
+     `daemon-unreachable`, and `daemon-error` (5xx or configuration), from
+     the single `SendOutcome` every send returns.
 
 ### Rejected alternatives
 
