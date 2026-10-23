@@ -23,10 +23,9 @@ from typing import TYPE_CHECKING, Self, final
 
 from quarry._hook_trace import HookPayload, HookTrace
 from quarry._stdlib import load_hook_config
+from quarry.pre_compact_hook import PreCompactHook
 from quarry.registration_notice import RegistrationNotice
-from quarry.send_outcome import SendOutcome
 from quarry.session_start_templates import SessionStartTemplates
-from quarry.session_transcript import SessionTranscriptCapture, TranscriptSource
 from quarry.sync_lock import SyncLock
 
 if TYPE_CHECKING:
@@ -341,63 +340,9 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     return WebFetchHook(payload).run()
 
 
-def _precompact_target(payload: dict[str, object]) -> TranscriptSource | None:
-    """Return the transcript source for a capturable compaction.
-
-    ``None`` means the hook must no-op — the documented skip contract, not a
-    failure: disabled by config, a missing ``transcript_path``/``session_id``, or
-    a non-JSONL transcript suffix (defense-in-depth).  ``cwd`` may be empty (an
-    unregistered directory still archives and ingests); the other two are
-    required.
-    """
-    cwd = HookPayload.as_dir(payload.get("cwd"))
-    if cwd and not load_hook_config(cwd).compaction:
-        logger.debug("pre-compact: disabled by config")
-        return None
-    transcript_path = HookPayload.as_str(payload.get("transcript_path"))
-    session_id = HookPayload.as_str(payload.get("session_id"))
-    if not transcript_path or not session_id:
-        logger.debug("pre-compact: missing transcript_path or session_id")
-        return None
-    resolved = HookPayload.resolve_jsonl(transcript_path, label="pre-compact")
-    if resolved is None:
-        return None
-    return TranscriptSource(cwd, session_id, resolved, "pre-compact")
-
-
 def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
     """Handle PreCompact hook.
 
-    Archives the raw transcript and writes the scrubbed ``.md`` capture locally,
-    then sends the conversation text to the daemon to embed in the background.
-    Returns the systemMessage immediately so compaction is never blocked, and a
-    down daemon still leaves the durable local copies for ``backfill-sessions``.
+    See :class:`~quarry.pre_compact_hook.PreCompactHook`.
     """
-    trace = HookTrace("pre-compact")
-    target = _precompact_target(payload)
-    if target is None:
-        trace.skip("payload")
-        return {}
-    trace.mark_payload(ok=True)
-
-    outcome = SessionTranscriptCapture.for_session(target).capture()
-
-    if not outcome.text_captured:
-        trace.skip("empty-transcript")
-        return {}
-
-    if not outcome.sent:
-        trace.error(outcome.failure)
-        return {
-            "systemMessage": SendOutcome.advice(
-                outcome.failure, archived=outcome.archived, written=outcome.written
-            )
-        }
-
-    trace.capture()
-    return {
-        "systemMessage": (
-            "Capturing this session's conversation (background). "
-            "Search with /find or show to retrieve it."
-        ),
-    }
+    return PreCompactHook(payload).run()

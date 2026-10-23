@@ -33,6 +33,7 @@ from quarry.hooks import (
 from quarry.refusal import RegistrationRefusedError
 from quarry.send_outcome import SendOutcome
 from quarry.sync_registry import SyncRegistry
+from tests.test_backfill_reach import register_for_backfill
 
 
 def _opt_in(project: Path) -> Path:
@@ -1698,6 +1699,7 @@ class TestHandlePreCompact:
     def test_daemon_down_returns_backfill_warning(self, tmp_path: Path) -> None:
         """A down daemon leaves the durable archive and nudges backfill-sessions."""
         transcript = _make_transcript(tmp_path, "Will not be indexed now")
+        register_for_backfill(tmp_path)
 
         with (
             patch(
@@ -1710,6 +1712,7 @@ class TestHandlePreCompact:
         ):
             result = handle_pre_compact(
                 {
+                    "cwd": str(tmp_path),
                     "transcript_path": str(transcript),
                     "session_id": "abc12345-full-id",
                 }
@@ -2416,3 +2419,24 @@ class TestSessionCoverageFailure:
         assert record.levelno == logging.WARNING
         assert type(error).__name__ in record.getMessage()
         assert "SECRET" not in caplog.text
+
+
+def test_daemon_down_for_an_unregistered_cwd_does_not_offer_backfill(
+    tmp_path: Path,
+) -> None:
+    transcript = _make_transcript(tmp_path, "Will not be indexed now")
+    with (
+        patch("quarry.session_transcript.Path.home", return_value=tmp_path / "home"),
+        patch(
+            "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+            return_value=SendOutcome.unreachable("down"),
+        ),
+    ):
+        result = handle_pre_compact(
+            {
+                "cwd": str(tmp_path),
+                "transcript_path": str(transcript),
+                "session_id": "abc12345-full-id",
+            }
+        )
+    assert "backfill" not in str(result["systemMessage"])

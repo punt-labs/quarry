@@ -363,6 +363,19 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/quarry/backfill_reach.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.0,
+    "max_complexity": 5.0,
+    "avg_complexity": 5.0,
+    "module_size": 38.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/quarry/capture.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
@@ -2145,14 +2158,14 @@
     "future_annotations": 1.0
   },
   "src/quarry/hooks.py": {
-    "method_ratio": 0.765,
+    "method_ratio": 0.812,
     "encapsulation_ratio": 1.0,
     "avg_params": 0.88,
-    "max_complexity": 6.0,
-    "avg_complexity": 2.41,
-    "module_size": 346.0,
+    "max_complexity": 5.0,
+    "avg_complexity": 2.0,
+    "module_size": 298.0,
     "classes_per_module": 1.0,
-    "class_to_func_ratio": 0.2,
+    "class_to_func_ratio": 0.25,
     "init_violations": 0.0,
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
@@ -3158,6 +3171,19 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/quarry/pre_compact_hook.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.33,
+    "max_complexity": 6.0,
+    "avg_complexity": 3.67,
+    "module_size": 74.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/quarry/profanity_inflection.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
@@ -3512,10 +3538,10 @@
   "src/quarry/send_outcome.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 1.43,
-    "max_complexity": 2.0,
-    "avg_complexity": 1.14,
-    "module_size": 89.0,
+    "avg_params": 1.57,
+    "max_complexity": 4.0,
+    "avg_complexity": 1.43,
+    "module_size": 97.0,
     "classes_per_module": 1.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
