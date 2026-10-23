@@ -768,3 +768,35 @@ class TestANameThatIsAnOptionOrADotName:
                 conn.register_directory(directory, name)
         finally:
             conn.close()
+
+
+class TestWideningALiveRegistration:
+    def test_a_live_name_that_would_be_refused_as_new_still_widens(
+        self, tmp_path: Path
+    ) -> None:
+        conn = SyncRegistry(tmp_path / "r.db")
+        parent = tmp_path / "docs"
+        child = parent / "guide"
+        child.mkdir(parents=True)
+        try:
+            conn.execute(
+                "INSERT INTO directories (directory, collection, registered_at) "
+                "VALUES (?, ?, 'then')",
+                (str(child.resolve()), "My Guide"),
+            )
+            conn.commit()
+            registration, subsumed = conn.register_directory(parent, "My Guide")
+            assert registration.collection == "My Guide"
+            assert subsumed == ["My Guide"]
+        finally:
+            conn.close()
+
+    def test_a_different_hostile_name_is_still_refused(self, tmp_path: Path) -> None:
+        conn = SyncRegistry(tmp_path / "r.db")
+        parent = tmp_path / "docs"
+        parent.mkdir()
+        try:
+            with pytest.raises(RegistrationRefusedError, match="may only hold"):
+                conn.register_directory(parent, "My Guide")
+        finally:
+            conn.close()

@@ -3941,10 +3941,10 @@
   "src/quarry/sync_registry.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 0.82,
+    "avg_params": 0.83,
     "max_complexity": 5.0,
-    "avg_complexity": 1.82,
-    "module_size": 263.0,
+    "avg_complexity": 1.83,
+    "module_size": 270.0,
     "classes_per_module": 2.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,

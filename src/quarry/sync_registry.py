@@ -143,9 +143,10 @@ class SyncRegistry:
         try:
             self._conn.execute("BEGIN IMMEDIATE")
             marker = self._markers.retained_marker(collection)
-            if marker is None:
+            if self._is_new(collection):
                 # A name already archived keeps working (its own directory
-                # re-adopts it); only a name new to the registry is held to the rule.
+                # re-adopts it), and so does a live one (its directory is being
+                # widened); only a name new to the registry is held to the rule.
                 RegistrationRules.refuse_unsafe_name(resolved, collection)
             RegistrationRules.refuse_foreign_retained(marker, resolved, collection)
             subsumed = self._enforce_subsumption(resolved)
@@ -170,6 +171,13 @@ class SyncRegistry:
             registered_at=now,
         )
         return registration, subsumed
+
+    def _is_new(self, collection: str) -> bool:
+        """Return whether *collection* is neither archived nor a live registration."""
+        live = self._conn.execute(
+            "SELECT 1 FROM directories WHERE collection = ?", (collection,)
+        ).fetchone()
+        return live is None and self._markers.retained_marker(collection) is None
 
     def _enforce_subsumption(self, resolved: Path) -> list[str]:
         """Reject child-of-parent, evict children of new parent, return them."""
