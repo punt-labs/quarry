@@ -3193,9 +3193,11 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
      place that decides a task's terminal state: a plain ingest, bulk crawl,
      capture, or remember that wrote no rows fails with a fixed reason chosen
      by the result's shape: `nothing was stored: no pages were selected for
-     ingest` for a crawl, `nothing was stored: the content produced no
-     indexable text` for a single document. A table-driven test covers every
-     job type against every outcome.
+     ingest` for a crawl that selected no pages, `nothing was stored: the
+     content produced no indexable text` for a single document or a crawl
+     whose pages all stored nothing (a page counts as ingested only when it
+     stored chunks; the rest are reported as `empty`). A table-driven test
+     covers every job type against every outcome.
    - Only policy rejections (`UrlRejectedError`, `RedirectRejectedError`) and
      transport failures (`OSError`, `HTTPException`) are fetch refusals
      (`FetchRefusedError.REFUSABLE`, shared by the URL fetch and the sitemap
@@ -3276,6 +3278,10 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
      - `.document_name` is the stored form, `scheme://host[:port]/path`,
        with no default port, no `;params`, no trailing dot, and IDNA dot
        variants folded, so equivalent URLs share one document.
+     - The path, query, and fragment are percent-encoded once as UTF-8 at
+       construction (existing escapes kept and upper-cased, a lone `%`
+       becomes `%25`). `fetch_url` and `document_name` share that form, so
+       an IRI is fetchable and `café` and `caf%C3%A9` are one document.
      - `str()` is the log form, `scheme://host[:port]/…(segments=N)`. It
        never carries the path. A heuristic cannot tell a slug from a
        secret, so the path stays only in the stored name, where diagnosis
@@ -3296,6 +3302,9 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
      included), and a host that is not a DNS name or bracketed IP literal
      prints as `[host]`. They drop third-party records below WARNING. This
      backstop catches what a library logs on its own.
+     - **Whitespace inside a URL.** urlsplit drops tab, CR, and LF
+       anywhere in a URL, so the redactor first deletes them from every
+       URL candidate; a secret split across a line break is still masked.
      - **Linear time.** A record is capped at 64 KiB. The redactor works
        one token at a time: a token over 2,048 characters becomes `[…]`,
        and each pattern runs only on a token that can match it, so a
@@ -3319,16 +3328,18 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
      A refusal's message never embeds caller-supplied text: registration
      refusals are fixed (`directory already registered`, `directory covered
      by a parent registration`, `collection name already in use`,
-     `collection holds archived data from another directory`), and the
-     names ride structured fields that only the redacted log line shows. A
+     `collection holds archived data from another directory`), each with
+     a fixed remediation, and the names ride structured fields that only
+     the redacted log line shows. A
      test sweeps every `RefusalError` raise site and pins the few that
      interpolate (counts, sizes, sanitised labels, admission reasons). Every
      other failure is recorded as `internal error: <Class>`, including a
      stray `ValueError`. Fetch refusals are raised `from None`, so a
      traceback cannot chain the raw cause. Hook traces distinguish
-     `daemon-refused` (4xx), `daemon-unreachable`, and `daemon-error` (5xx
-     or configuration), from the single `SendOutcome` every send returns;
-     the same outcome picks the PreCompact message's advice.
+     `daemon-refused` (4xx), `daemon-unreachable`, `config-error`
+     (hook-side), and `daemon-error` (5xx or malformed reply), from the
+     single `SendOutcome` every send returns; the same outcome, plus what
+     was actually archived, picks the PreCompact message's advice.
 
 ### Rejected alternatives
 

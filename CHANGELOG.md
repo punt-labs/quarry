@@ -51,9 +51,12 @@ across `transform`, `index`, and `connector`).
   - an explicit default port;
   - a trailing dot on the host.
 
-  This applies to `quarry ingest <url>`, sitemap pages, a `remember` whose
-  name is a URL, and captures. Equivalent URLs, including those that differ
-  only in query or fragment, now resolve to the same document.
+  The path is percent-encoded once as UTF-8, with existing escapes kept and
+  upper-cased, so `…/café` and `…/caf%C3%A9` are one document and a
+  non-ASCII URL is fetched rather than failing. This applies to `quarry
+  ingest <url>`, sitemap pages, a `remember` whose name is a URL, and
+  captures. Equivalent URLs, including those that differ only in query or
+  fragment, now resolve to the same document.
 - tool: a failed task's error shows its reason only when the task was
   refused (binary content, an over-budget row, a rejected or failed fetch,
   or a directory registration that is already covered, already registered,
@@ -64,17 +67,21 @@ across `transform`, `index`, and `connector`).
 - tool: registration refusals are fixed text (`directory already
   registered`, `directory covered by a parent registration`, `collection
   name already in use`, `collection holds archived data from another
-  directory`). The directory and collection names appear only in the
-  redacted log line.
-- tool: a task that stores nothing now fails instead of ending `completed`:
-  a crawl with `nothing was stored: no pages were selected for ingest`, any
-  other ingest, capture, or `remember`/`learn` with `nothing was stored: the
-  content produced no indexable text`.
+  directory`), each followed by a fixed remediation. The directory and
+  collection names appear only in the redacted daemon log line.
+- tool: a task that stores nothing now fails instead of ending `completed`.
+  A crawl that selects no pages fails with `nothing was stored: no pages
+  were selected for ingest`. A crawl whose pages all produce no text, and
+  any other ingest, capture, or `remember`/`learn` that stores nothing,
+  fails with `nothing was stored: the content produced no indexable text`.
+  A crawl result now reports an `empty` count for pages that stored
+  nothing.
 - tool: hook traces tell a daemon refusal (`daemon-refused`) from an
-  unreachable daemon (`daemon-unreachable`) and a server or configuration
-  fault (`daemon-error`). The PreCompact message gives advice that matches
-  the failure, and a SubagentStop trace reads `capture:distill-<label>` when
-  the report could not be filed.
+  unreachable daemon (`daemon-unreachable`), a hook-side configuration error
+  (`config-error`), and a server fault (`daemon-error`). The PreCompact
+  message promises only what was actually saved and gives advice that
+  matches the failure. A SubagentStop trace reports the distillation result
+  (`distilled` or `distill-<label>`) whether or not the raw send succeeded.
 - infra: log lines show a URL as `scheme://host[:port]/…(segments=N)`, never
   its path, whether quarry logs it or a library does. The full path is kept
   in the stored document name. Tracebacks in the log are indented, and a
