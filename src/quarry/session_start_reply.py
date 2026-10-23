@@ -47,7 +47,7 @@ class SessionStartReply:
     def nudge_enable(cls, directory: Path) -> Self:
         """Return the reply that nudges the operator to ``quarry enable`` here."""
         return cls.of(
-            SessionStartTemplates.nudge_enable(Shown.of(directory)),
+            SessionStartTemplates.nudge_enable(Shown.of(directory, fallback=".")),
             "skip",
             "not-enabled",
         )
@@ -57,7 +57,7 @@ class SessionStartReply:
         """Return the reply that surfaces a registration with no opt-in marker."""
         return cls.of(
             SessionStartTemplates.drift_surface(
-                Shown.of(directory), Shown.of(collection)
+                Shown.of(directory, fallback="."), Shown.of(collection)
             ),
             "skip",
             "marker-drift",
@@ -67,7 +67,7 @@ class SessionStartReply:
     def subsumption(cls, directory: Path) -> Self:
         """Return the skip reply for a directory with child registrations under it."""
         return cls.of(
-            SessionStartTemplates.subsumption(Shown.of(directory)),
+            SessionStartTemplates.subsumption(Shown.of(directory, fallback=".")),
             "skip",
             "subsumption",
         )
@@ -76,7 +76,7 @@ class SessionStartReply:
     def daemon_unreachable(cls, directory: Path) -> Self:
         """Return the error reply for an auto-register deferred on a down daemon."""
         return cls.of(
-            SessionStartTemplates.daemon_unreachable(Shown.of(directory)),
+            SessionStartTemplates.daemon_unreachable(Shown.of(directory, fallback=".")),
             "error",
             "daemon-unreachable",
         )

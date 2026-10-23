@@ -209,3 +209,23 @@ def test_the_drift_deregister_keeps_the_data_and_ends_the_options() -> None:
     text = _context(SessionStartReply.drift_surface(Path("/repo"), "-rf"))
     [line] = [ln for ln in text.splitlines() if "quarry deregister" in ln]
     assert line.strip().startswith("quarry deregister --keep-data -- ")
+
+
+@pytest.mark.parametrize("char", ["\u2028", "\x85", "\x1b", "\u200b", "\U000e0041"])
+class TestAnUnprintableNameInACommand:
+    def test_every_template_has_no_raw_character_and_a_usable_command(
+        self, char: str
+    ) -> None:
+        directory = Path(f"/tmp/a{char}b")
+        replies = [
+            SessionStartReply.nudge_enable(directory),
+            SessionStartReply.subsumption(directory),
+            SessionStartReply.daemon_unreachable(directory),
+            SessionStartReply.drift_surface(directory, f"c{char}d"),
+        ]
+        for reply in replies:
+            assert char not in _context(reply)
+
+    def test_the_enable_command_runs_in_place(self, char: str) -> None:
+        text = _context(SessionStartReply.nudge_enable(Path(f"/tmp/a{char}b")))
+        assert "  quarry enable .\n" in text
