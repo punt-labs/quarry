@@ -10,6 +10,8 @@ import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from quarry.sync_lock import SyncLock
 
 
@@ -214,16 +216,17 @@ class TestSyncLockAcquire:
         lockfile.symlink_to(target)
 
         lock = SyncLock(path=lockfile)
-        assert lock.acquire() is None
+        with pytest.raises(OSError):
+            lock.acquire()
         # The symlink target was never opened, let alone truncated/written.
         assert target.read_text() == "do not touch"
 
     def test_is_held_does_not_raise_on_a_symlinked_lock_path(
         self, tmp_path: Path
     ) -> None:
-        """is_held()'s probe fails open (False); the authoritative acquire()
-        still refuses the symlink, so launch_background_sync() ends up
-        "running" either way -- never a raised exception, never a follow.
+        """The probe and acquire both refuse the symlink as a fault, so
+        launch_background_sync() says "failed" -- never "running", never a raised
+        exception out of it, never a follow.
         """
         target = tmp_path / "target.txt"
         target.write_text("do not touch")
@@ -231,9 +234,75 @@ class TestSyncLockAcquire:
         lockfile.symlink_to(target)
 
         lock = SyncLock(path=lockfile)
-        assert lock.is_held() is False
-        assert lock.acquire() is None
+        with pytest.raises(OSError):
+            lock.is_held()
+        with pytest.raises(OSError):
+            lock.acquire()
+        assert lock.launch_background_sync() == "failed"
         assert target.read_text() == "do not touch"
+
+
+class TestAFaultIsNotContention:
+    """A kernel or filesystem fault must read as a failure, never as "running"."""
+
+    @staticmethod
+    def _flock_fails(operation_error: OSError):
+        real = fcntl.flock
+
+        def flock(fd: int, operation: int) -> None:
+            if operation & fcntl.LOCK_NB:
+                raise operation_error
+            real(fd, operation)
+
+        return patch("fcntl.flock", side_effect=flock)
+
+    def test_an_open_error_in_the_probe_is_a_fault(self, tmp_path: Path) -> None:
+        lock = SyncLock(path=tmp_path / "sync.pid")
+        with (
+            patch("os.open", side_effect=OSError("EACCES")),
+            pytest.raises(OSError),
+        ):
+            lock.is_held()
+
+    def test_an_open_error_in_acquire_is_a_fault(self, tmp_path: Path) -> None:
+        lock = SyncLock(path=tmp_path / "sync.pid")
+        with (
+            patch("os.open", side_effect=OSError("EACCES")),
+            pytest.raises(OSError),
+        ):
+            lock.acquire()
+
+    def test_a_flock_error_in_the_probe_is_a_fault(self, tmp_path: Path) -> None:
+        lock = SyncLock(path=tmp_path / "sync.pid")
+        with self._flock_fails(OSError("ENOLCK")), pytest.raises(OSError):
+            lock.is_held()
+
+    def test_a_flock_error_in_acquire_is_a_fault(self, tmp_path: Path) -> None:
+        lock = SyncLock(path=tmp_path / "sync.pid")
+        with self._flock_fails(OSError("ENOLCK")), pytest.raises(OSError):
+            lock.acquire()
+
+    @pytest.mark.parametrize("where", ["open", "flock"])
+    def test_launch_says_failed_not_running(self, tmp_path: Path, where: str) -> None:
+        lock = SyncLock(path=tmp_path / "sync.pid")
+        if where == "open":
+            fault = patch("os.open", side_effect=OSError("EACCES"))
+        else:
+            fault = self._flock_fails(OSError("ENOLCK"))
+        with fault, patch.object(_subprocess, "Popen") as popen:
+            assert lock.launch_background_sync() == "failed"
+        popen.assert_not_called()
+
+    def test_contention_is_still_running(self, tmp_path: Path) -> None:
+        holder = SyncLock(path=tmp_path / "sync.pid")
+        fd = holder.acquire()
+        assert fd is not None
+        try:
+            assert SyncLock(path=tmp_path / "sync.pid").launch_background_sync() == (
+                "running"
+            )
+        finally:
+            os.close(fd)
 
 
 class TestSyncLockSingleFlight:

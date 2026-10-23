@@ -100,35 +100,23 @@ class SyncLock:
         :meth:`acquire`'s own ``flock(LOCK_EX | LOCK_NB)`` attempt; this
         method exists purely as a cheap fast-path skip.
         """
-        try:
-            fd = self._open_for_lock()
-        except OSError as exc:
-            logger.error("session-start: failed to open lock file for probe: %s", exc)
-            return False
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            # Normal contention: another process holds it. Expected, not logged.
-            return True
-        except OSError as exc:
-            # A genuine kernel error (e.g. ENOLCK, lock-table exhausted) --
-            # never conflate this with routine contention, or it silently
-            # masquerades as "someone else is syncing" forever with no trace.
-            logger.error("session-start: flock probe failed: %s", exc)
-            return True
-        else:
-            # Best-effort release: the finally-close below already releases
-            # the flock (closing the last fd on the open file description
-            # does), so a transient OSError unlocking explicitly here must
-            # not escape and turn this advisory probe into a raise.
-            with contextlib.suppress(OSError):
-                fcntl.flock(fd, fcntl.LOCK_UN)
-            return False
-        finally:
-            os.close(fd)
+        fd = self.acquire()
+        if fd is None:
+            logger.debug("session-start: sync lock %s is held", self._path)
+            return True  # normal contention: another process holds it
+        # Best-effort release: closing the last fd on the open file description
+        # releases the flock anyway, so a transient OSError unlocking explicitly
+        # here must not escape and turn this advisory probe into a raise.
+        with contextlib.suppress(OSError):
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+        return False
 
     def acquire(self) -> int | None:
         """Attempt to take the sync lock; return the held fd, or ``None``.
+
+        ``None`` is contention only.  A fault (the lockfile cannot be opened, or
+        the kernel refuses the lock for another reason) raises ``OSError``.
 
         ``flock(LOCK_EX | LOCK_NB)`` makes the kernel the single arbiter of
         "who won" — there is no check-then-act window for a second caller
@@ -139,8 +127,8 @@ class SyncLock:
         try:
             fd = self._open_for_lock()
         except OSError as exc:
-            logger.error("session-start: failed to open lock file: %s", exc)
-            return None
+            logger.error("session-start: failed to open %s: %s", self._path, exc)
+            raise
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
@@ -150,9 +138,9 @@ class SyncLock:
         except OSError as exc:
             # A genuine kernel error (e.g. ENOLCK) -- must be visible, not
             # silently treated as routine contention.
-            logger.error("session-start: flock acquire failed: %s", exc)
+            logger.error("session-start: flock of %s failed: %s", self._path, exc)
             os.close(fd)
-            return None
+            raise
         return fd
 
     def launch_background_sync(self) -> str:
@@ -174,18 +162,15 @@ class SyncLock:
         instant the child exits or dies, live or crashed alike.
 
         Returns ``"launched"`` if the subprocess was started, ``"running"``
-        if a sync is already in progress (or the lock is held), or
-        ``"failed"`` if the launch itself errored.
+        if a sync is already in progress (the lock is held), or ``"failed"`` if
+        the lock could not be opened or taken, or the launch itself errored.
         """
-        # Fast path: if a sync is already running, skip without trying the lock.
-        if self.is_held():
-            logger.debug("session-start: sync already running, skipping")
-            return "running"
-
-        # The one genuine single-winner decision — see is_held()'s docstring.
-        fd = self.acquire()
+        try:
+            fd = self.acquire()  # the one single-winner decision, see is_held()
+        except OSError:
+            return "failed"  # already logged; a fault is not "already running"
         if fd is None:
-            logger.debug("session-start: could not acquire sync lock, skipping")
+            logger.debug("session-start: sync lock %s held, skipping", self._path)
             return "running"
 
         # pass_fds=(fd,) is the ONLY inheritance mechanism used: CPython's
