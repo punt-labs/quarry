@@ -124,6 +124,7 @@ class ScrubbedIngestJob:
                     self.content,
                     format_hint=self.format_hint,
                     content_scrubber=self._scrubbed,
+                    url_sourced=self.url_sourced,
                 ),
                 self.name,
                 Progress(None),

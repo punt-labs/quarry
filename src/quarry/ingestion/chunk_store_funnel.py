@@ -85,14 +85,15 @@ class ChunkStoreFunnel:
         A copy an older build stored under a former spelling of the same URL goes
         too, overwriting or not, when this document was fetched from a URL, so a
         re-ingest leaves one document, not two.  Every chunk of a document carries
-        its name and the URL it was fetched from, if any.
+        its name.  Whether it was fetched from a URL is the caller's fact, carried on
+        the *context*, not read back from the document's path: a label that merely
+        looks like a URL is not a page.
         """
-        head = chunks[0]
         RunContext.legacy_names_of(context).replace_prior(
-            head.document_name,
+            chunks[0].document_name,
             context.collection,
             overwrite=context.overwrite,
-            url_sourced=head.document_path.startswith(("http://", "https://")),
+            url_sourced=context.url_sourced,
         )
 
     @staticmethod

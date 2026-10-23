@@ -66,3 +66,4 @@ class IngestContext:
     agent_handle: str = ""
     memory_type: MemoryType = ""
     summary: str = ""
+    url_sourced: bool = False  # a fetched URL's page, not a label or a file

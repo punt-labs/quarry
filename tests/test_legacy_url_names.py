@@ -8,6 +8,7 @@ the document an older build stored under the old spelling, not orphan it.
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
@@ -79,7 +80,9 @@ def _store(
         else "some indexable body text for the document"
     )
     ingest_content(
-        InlineIngest(body, format_hint="html" if url_sourced else "auto"),
+        InlineIngest(
+            body, format_hint="html" if url_sourced else "auto", url_sourced=url_sourced
+        ),
         name,
         Progress(None),
         IngestContext(db, Settings(), overwrite=overwrite, collection=_COLLECTION),
@@ -279,7 +282,11 @@ class TestANameUrlsplitCannotParse:
 
         for _ in range(2):
             ingest_content(
-                InlineIngest("indexable body of myhost.corp", content_scrubber=scrub),
+                InlineIngest(
+                    "indexable body of myhost.corp",
+                    content_scrubber=scrub,
+                    url_sourced=True,
+                ),
                 "https://myhost.corp/page",
                 Progress(None),
                 IngestContext(db, Settings(), overwrite=True, collection=_COLLECTION),
@@ -317,6 +324,7 @@ class TestOneListingPerHost:
                 InlineIngest(
                     "<html><body><p>indexable body text</p></body></html>",
                     format_hint="html",
+                    url_sourced=True,
                 ),
                 request.url.document_name,
                 progress,
@@ -437,6 +445,40 @@ class TestEveryDedupPathAgrees:
             result = job.scrub_and_ingest(ctx)
         assert result.get("skipped") is None
         assert result["chunks"]
+        assert db.catalog.document_exists("https://example.com/café", _COLLECTION)
+
+    def test_an_overwriting_remember_with_an_html_hint_keeps_the_legacy_page(
+        self, db: Database
+    ) -> None:
+        _store_as_stored_by_an_older_build(db, "https://example.com/café")
+        ctx = cast("DaemonContext", SimpleNamespace(database=db, settings=Settings()))
+        job = ScrubbedIngestJob(
+            name="https://example.com/caf%C3%A9",
+            content="<p>a note with an html hint</p>",
+            labels=replace(self._job("x").labels, overwrite=True),
+            format_hint="html",
+            scrub_label="remember",
+        )
+        with patched_embedder(FakeEmbeddingBackend(768)):
+            job.scrub_and_ingest(ctx)
+        assert db.catalog.document_exists("https://example.com/café", _COLLECTION)
+
+    def test_a_remembered_label_spelling_the_digest_marker_is_not_read_as_one(
+        self, db: Database
+    ) -> None:
+        label = "https://example.com/p?q[sha256]=0123456789abcdef"
+        ctx = cast("DaemonContext", SimpleNamespace(database=db, settings=Settings()))
+        job = ScrubbedIngestJob(
+            name=label,
+            content="a plain note",
+            labels=self._job("x").labels,
+            format_hint="plain",
+            scrub_label="remember",
+        )
+        with patched_embedder(FakeEmbeddingBackend(768)):
+            job.scrub_and_ingest(ctx)
+        assert db.catalog.document_exists(HttpUrl(label).document_name, _COLLECTION)
+        assert not db.catalog.document_exists(label, _COLLECTION)
 
     def test_a_create_if_absent_capture_of_a_new_page_stores_it(
         self, db: Database

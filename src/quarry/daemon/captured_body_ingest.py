@@ -154,6 +154,6 @@ class CapturedBodyIngest:
         content = CaptureMarker(body.media_type).render() + body.text
         name = self._name_override or scrub(self._source.document_name)
         inline = web_ingest.InlineIngest(
-            content, format_hint="markdown", content_scrubber=scrub
+            content, format_hint="markdown", content_scrubber=scrub, url_sourced=True
         )
         return dict(web_ingest.ingest_content(inline, name, progress, context))

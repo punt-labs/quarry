@@ -8,10 +8,10 @@ from typing import TYPE_CHECKING, Literal, final
 
 from quarry.display_name import DisplayName
 from quarry.extractors.html_extractor import HtmlExtractor
-from quarry.extractors.text_extractor import TextExtractor
 from quarry.ingestion.chunk_store_funnel import _chunk_embed_store
 from quarry.ingestion.extracted_document import ExtractedDocument
 from quarry.ingestion.ingest_stats import IngestStats
+from quarry.ingestion.inline_pages import InlinePages
 from quarry.ingestion.web_fetch import WebFetcher
 
 if TYPE_CHECKING:
@@ -19,11 +19,10 @@ if TYPE_CHECKING:
 
     from quarry.http_url import HttpUrl
     from quarry.ingestion.ingest_context import IngestContext, Progress
-    from quarry.models import PageContent
     from quarry.results import IngestResult
 
-# "auto" self-detects via TextExtractor; "html" is the one hint _extract_inline_pages
-# (below) intercepts before TextExtractor ever sees it, routing raw markup through
+# "auto" self-detects via TextExtractor; "html" is the one hint InlinePages
+# intercepts before TextExtractor ever sees it, routing raw markup through
 # HtmlExtractor instead. The rest pass straight through to
 # TextExtractor.extract_raw's own closed set.
 type FormatHint = Literal["auto", "plain", "markdown", "latex", "html"]
@@ -44,6 +43,7 @@ class InlineIngest:
     content: str
     format_hint: FormatHint = "auto"
     content_scrubber: Callable[[str], str] | None = None
+    url_sourced: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,16 +93,14 @@ class WebIngest:
         # forget it and no new surface can reintroduce the leak.  A plain ingest
         # (no scrubber) stores metadata byte-for-byte, unchanged.
         document_name, summary = WebIngest._scrub_metadata(
-            DisplayName(document_name).stored(),
+            DisplayName(document_name).stored(url_sourced=inline.url_sourced),
             context.summary,
             inline.content_scrubber,
         )
 
         progress("Processing: %s", DisplayName(document_name).redacted())
 
-        pages = WebIngest._extract_inline_pages(
-            inline.content, document_name, inline.format_hint
-        )
+        pages = InlinePages.of(inline.content, document_name, inline.format_hint)
         if inline.content_scrubber is not None:
             pages = [
                 replace(page, text=inline.content_scrubber(page.text)) for page in pages
@@ -118,7 +116,10 @@ class WebIngest:
         # only once a replacement chunk set exists, so an empty extraction or an
         # extraction that chunks to nothing keeps the prior good document.
         return _chunk_embed_store(
-            extracted, document_name, progress, replace(context, summary=summary)
+            extracted,
+            document_name,
+            progress,
+            replace(context, summary=summary, url_sourced=inline.url_sourced),
         )
 
     @staticmethod
@@ -191,28 +192,10 @@ class WebIngest:
         # only once a replacement chunk set exists, so an empty extraction — or an
         # extraction that chunks to nothing — keeps the prior good capture.
         return _chunk_embed_store(
-            extracted, document_name, progress, replace(context, summary=summary)
-        )
-
-    @staticmethod
-    def _extract_inline_pages(
-        content: str, document_name: str, format_hint: str
-    ) -> list[PageContent]:
-        """Split inline *content* into pages, routing ``html`` to the HTML extractor.
-
-        The inline path serves two callers: ``remember`` (text/markdown) and the
-        web-fetch ``capture`` (raw HTML).  ``TextExtractor`` handles the text
-        formats; a ``html`` hint hands the raw markup to ``HtmlExtractor`` so tags
-        become Markdown sections rather than being stored verbatim.  For a web-fetch
-        capture the document name IS the redacted source URL, so it doubles as the
-        stored ``document_path`` — keeping the page's source location on every chunk.
-        """
-        if format_hint == "html":
-            return HtmlExtractor().extract_from_html(
-                content, document_name, document_name
-            )
-        return TextExtractor().extract_raw(
-            content, document_name, format_hint=format_hint
+            extracted,
+            document_name,
+            progress,
+            replace(context, summary=summary, url_sourced=True),
         )
 
     @staticmethod
