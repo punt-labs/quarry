@@ -42,3 +42,22 @@ def test_an_unprintable_value_is_never_emitted_raw_in_the_argument(value: str) -
     assert shown.arg == "."
     assert value not in shown.arg
     assert value not in shown.text
+
+
+def test_a_printable_value_is_not_a_fallback() -> None:
+    assert not Shown.of("/repo/proj").is_fallback
+
+
+@pytest.mark.parametrize("value", _UNPRINTABLE)
+def test_an_unprintable_value_is_marked_as_standing_in_for_the_fallback(
+    value: str,
+) -> None:
+    assert Shown.of(value, fallback=".").is_fallback
+
+
+def test_either_picks_the_usual_text_for_a_printable_value() -> None:
+    assert Shown.of("ok").either(usual="u", instead="i") == "u"
+
+
+def test_either_picks_the_instead_text_for_a_fallback() -> None:
+    assert Shown.of("a\u2028b").either(usual="u", instead="i") == "i"

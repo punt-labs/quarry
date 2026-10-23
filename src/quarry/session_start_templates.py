@@ -50,7 +50,7 @@ class SessionStartTemplates:
         header = (
             f"Quarry: child registrations exist under {directory.text}. "
             "Auto-register skipped to prevent subsumption. "
-            f"To register the parent run: quarry enable {directory.arg}"
+            f"To register the parent {cls._enable(directory, lead='run: ')}"
         )
         return f"{header}\n{cls.trailer()}"
 
@@ -77,7 +77,7 @@ class SessionStartTemplates:
             "Quarry semantic search is available but not enabled for this project.\n"
             f"Directory: {directory.text}\n"
             "This directory is not registered for sync. To turn quarry on:\n"
-            f"  quarry enable {directory.arg}\n"
+            f"  {cls._enable(directory)}\n"
             "This runs once, commits an opt-in marker, deposits the agent guide,\n"
             "and registers this directory for background sync."
         )
@@ -88,9 +88,28 @@ class SessionStartTemplates:
         return (
             "Quarry: this project has an indexed collection but no opt-in marker\n"
             f"({directory.text}, collection {collection.text}). Two doors:\n"
-            f"  quarry enable {directory.arg}         re-adopt: marker + guide.\n"
-            f"  quarry deregister --keep-data -- {collection.arg}    "
+            f"  {cls._enable(directory)}         re-adopt: marker + guide.\n"
+            f"  {cls._deregister(collection)}    "
             "drop the registration (keep-data).\n"
             "Auto-register is refused (already registered); auto-deregister is\n"
             "refused (would delete indexed data on marker drift)."
+        )
+
+    @staticmethod
+    def _enable(directory: Shown, *, lead: str = "") -> str:
+        """Return the enable step: a command, or what to do when the path is hidden."""
+        return directory.either(
+            usual=f"{lead}quarry enable {directory.arg}",
+            instead="from that directory, run: quarry enable .",
+        )
+
+    @staticmethod
+    def _deregister(collection: Shown) -> str:
+        """Return the deregister step: a command, or how to find the name to give it."""
+        return collection.either(
+            usual=f"quarry deregister --keep-data -- {collection.arg}",
+            instead=(
+                "list the collections with `quarry list collections`, then run: "
+                "quarry deregister --keep-data -- <its name>"
+            ),
         )

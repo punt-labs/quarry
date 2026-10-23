@@ -21,15 +21,23 @@ class Shown:
     separator, an escape, a zero-width or tag character) is never emitted raw in
     ``arg``, however it is quoted: ``arg`` is the *fallback* instead, because a
     terminal or a model reads such characters as something other than the name.
-    A template takes a ``Shown`` and never the raw value.
+    ``is_fallback`` says ``arg`` stands in for the value, so a template must not
+    present it as a command to paste.  A template takes a ``Shown`` and never the
+    raw value.
     """
 
     text: str
     arg: str
+    is_fallback: bool = False
 
     @classmethod
     def of(cls, value: object, *, fallback: str = "<name>") -> Self:
         """Return the two forms of ``str(value)``; *fallback* if it is unprintable."""
         raw = str(value)
-        arg = shlex.quote(raw) if raw.isprintable() else shlex.quote(fallback)
-        return cls(LogRedactor.quoted(raw), arg)
+        is_fallback = not raw.isprintable()
+        arg = shlex.quote(fallback if is_fallback else raw)
+        return cls(LogRedactor.quoted(raw), arg, is_fallback)
+
+    def either(self, *, usual: str, instead: str) -> str:
+        """Return *instead* when ``arg`` only stands in for the value, else *usual*."""
+        return instead if self.is_fallback else usual

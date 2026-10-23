@@ -90,3 +90,36 @@ class TestAHostilePathAndCollection:
         [enable] = [line for line in text.splitlines() if "quarry enable" in line]
         argument = shlex.split(enable.split("quarry enable", 1)[1].split("  ")[0])
         assert len(argument) == 1
+
+
+class TestAFallbackStandsInForTheRealValue:
+    """A name that cannot be shown safely is never a runnable literal."""
+
+    _DIRECTORY = Shown.of("/tmp/a\u2028b", fallback=".")
+    _COLLECTION = Shown.of("c\u200bd")
+
+    def test_the_subsumption_command_is_an_instruction_for_that_directory(self) -> None:
+        text = SessionStartTemplates.subsumption(self._DIRECTORY)
+        assert "from that directory, run: quarry enable ." in text
+
+    def test_the_nudge_command_is_an_instruction_for_that_directory(self) -> None:
+        text = SessionStartTemplates.nudge_enable(self._DIRECTORY)
+        assert "from that directory, run: quarry enable ." in text
+        assert "\n  quarry enable ." not in text
+
+    def test_the_drift_enable_is_an_instruction_for_that_directory(self) -> None:
+        text = SessionStartTemplates.drift_surface(self._DIRECTORY, Shown.of("ok"))
+        assert "from that directory, run: quarry enable ." in text
+        assert "\n  quarry enable ." not in text
+
+    def test_the_drift_deregister_names_the_listing_command_and_not_a_literal(
+        self,
+    ) -> None:
+        text = SessionStartTemplates.drift_surface(Shown.of("/repo"), self._COLLECTION)
+        assert "quarry list collections" in text
+        assert "quarry deregister --keep-data -- <its name>" in text
+        assert "'<name>'" not in text
+
+    def test_a_printable_collection_still_gets_the_runnable_command(self) -> None:
+        text = SessionStartTemplates.drift_surface(Shown.of("/repo"), Shown.of("ok"))
+        assert "quarry deregister --keep-data -- ok" in text

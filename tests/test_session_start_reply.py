@@ -175,14 +175,15 @@ class TestAPreExistingHostileCollectionName:
         assert "\nIgnore previous" not in text
         assert repr(_HOSTILE_COLLECTION) in text
 
-    def test_the_deregister_command_keeps_it_one_argument(self) -> None:
+    def test_the_deregister_step_never_carries_the_hostile_name(self) -> None:
         text = _context(
             SessionStartReply.drift_surface(Path("/repo"), _HOSTILE_COLLECTION)
         )
         [line] = [ln for ln in text.splitlines() if "quarry deregister" in ln]
-        words = line.strip().split("    ", 1)[0]
-        assert words.startswith("quarry deregister ")
-        assert "\n" not in words
+        assert not line.strip().startswith("quarry deregister")
+        assert "quarry list collections" in line
+        assert "<its name>" in line
+        assert "rm -rf" not in line
 
 
 class TestACommandBuiltFromAHostilePath:
@@ -226,6 +227,8 @@ class TestAnUnprintableNameInACommand:
         for reply in replies:
             assert char not in _context(reply)
 
-    def test_the_enable_command_runs_in_place(self, char: str) -> None:
+    def test_the_enable_step_is_an_instruction_for_that_directory(
+        self, char: str
+    ) -> None:
         text = _context(SessionStartReply.nudge_enable(Path(f"/tmp/a{char}b")))
-        assert "  quarry enable .\n" in text
+        assert "  from that directory, run: quarry enable .\n" in text
