@@ -55,14 +55,21 @@ class _FirstPartyHandler(logging.Handler):
 
         The stdlib prints the raw message and arguments, which is where a URL
         secret lives, straight to stderr.  This writes a fixed line, the logger's
-        name, the exception's class and a redacted traceback with no message.
+        name, the exception's class, where the call was made, its message template
+        (code-authored, but redacted all the same) and message-free frames.  The
+        arguments stay out.
         """
         error = sys.exception()
         if not logging.raiseExceptions or error is None or sys.stderr is None:
             return
         frames = "".join(traceback.format_tb(error.__traceback__))
+        where = f"{record.pathname}:{record.lineno}"
+        template = (
+            record.msg if isinstance(record.msg, str) else type(record.msg).__name__
+        )
         report = (
-            f"--- Logging error ---\n{record.name}: {type(error).__name__}\n{frames}"
+            f"--- Logging error ---\n{record.name}: {type(error).__name__}\n"
+            f"at {where}: {template}\n{frames}"
         )
         sys.stderr.write(LogRedactor.redact(report))
 

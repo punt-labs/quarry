@@ -96,7 +96,27 @@ class TestHandleError:
         err = capsys.readouterr().err
         assert err.startswith("--- Logging error ---\n")
         assert "OSError" in err
-        for secret in ("PWSEC", "QSEC", "fetch", "disk gone"):
+        for secret in ("PWSEC", "QSEC", "disk gone"):
+            assert secret not in err
+
+    def test_a_broken_format_call_shows_where_and_the_template_not_the_arguments(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        handler = RedactingStreamHandler(io.StringIO())
+        record = logging.LogRecord(
+            "quarry.x",
+            logging.WARNING,
+            "/src/quarry/caller.py",
+            321,
+            "count %d for %s",
+            ("not-an-int", "https://u:PWSEC@h.test/p?t=QSEC"),
+            None,
+        )
+        handler.handle(record)
+        err = capsys.readouterr().err
+        assert "/src/quarry/caller.py:321" in err
+        assert "count %d for %s" in err
+        for secret in ("not-an-int", "PWSEC", "QSEC"):
             assert secret not in err
 
     def test_nothing_is_written_when_logging_errors_are_silenced(
