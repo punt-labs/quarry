@@ -41,6 +41,7 @@ class RefusalAwareTerminal:
 
     __slots__ = ("_state", "_subject")
 
+    NO_PAGES: ClassVar[str] = "nothing was stored: no pages were selected for ingest"
     NOTHING_STORED: ClassVar[str] = (
         "nothing was stored: the content produced no indexable text"
     )
@@ -69,10 +70,14 @@ class RefusalAwareTerminal:
 
         A job that wrote no rows did not do what was asked, so reporting
         ``completed`` would claim a store that never happened: it ends ``failed``
-        with a fixed reason, the same way a refused fetch does.
+        with a fixed reason that follows the result's shape (a crawl selected no
+        pages; a single document had no indexable text), the way a refused fetch
+        does.
         """
         if not self.is_stored(results):
-            self._fail(UnindexableContentError(self.NOTHING_STORED))
+            crawl = "ingested" in results
+            reason = self.NO_PAGES if crawl else self.NOTHING_STORED
+            self._fail(UnindexableContentError(reason))
             return
         self._state.status = "completed"
         self._state.results = dict(results)

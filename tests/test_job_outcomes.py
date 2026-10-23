@@ -25,7 +25,10 @@ from quarry.http_url import HttpUrl
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
 
-_NOTHING = "nothing was stored: the content produced no indexable text"
+_NOTHING = {
+    "single": "nothing was stored: the content produced no indexable text",
+    "crawl": "nothing was stored: no pages were selected for ingest",
+}
 _LABELS = IngestLabels(
     overwrite=True, collection="c", agent_handle="", memory_type="", summary=""
 )
@@ -111,7 +114,7 @@ class TestJobOutcomes:
     def test_nothing_stored_is_a_refusal(self, name: str) -> None:
         make, method, shape = _JOBS[name]
         state = _run(make(), method, _EMPTY[shape])
-        assert (state.status, state.error) == ("failed", _NOTHING)
+        assert (state.status, state.error) == ("failed", _NOTHING[shape])
 
     def test_a_refusal_keeps_its_reason(self, name: str) -> None:
         make, method, _ = _JOBS[name]
@@ -123,3 +126,18 @@ class TestJobOutcomes:
         make, method, _ = _JOBS[name]
         state = _run(make(), method, OSError("/home/me/secret/key.pem"))
         assert (state.status, state.error) == ("failed", "internal error: OSError")
+
+
+_CRAWL_NOTHING = {
+    "empty sitemap": {"total_discovered": 0, "after_filter": 0, "ingested": 0},
+    "filters match nothing": {"total_discovered": 9, "after_filter": 0, "ingested": 0},
+    "every entry failed": {"total_discovered": 4, "after_filter": 4, "ingested": 0},
+}
+
+
+@pytest.mark.parametrize("label", list(_CRAWL_NOTHING))
+def test_a_crawl_that_selected_no_pages_names_that_reason(label: str) -> None:
+    make, method, _ = _JOBS["bulk-crawl"]
+    results = {**_CRAWL_NOTHING[label], "skipped": 0, "failed": 0, "errors": []}
+    state = _run(make(), method, results)
+    assert (state.status, state.error) == ("failed", _NOTHING["crawl"])
