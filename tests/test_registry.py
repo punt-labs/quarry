@@ -4,6 +4,7 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -800,3 +801,35 @@ class TestWideningALiveRegistration:
                 conn.register_directory(parent, "My Guide")
         finally:
             conn.close()
+
+    def test_a_different_directory_reusing_a_live_name_is_still_refused(
+        self, tmp_path: Path
+    ) -> None:
+        conn = SyncRegistry(tmp_path / "r.db")
+        first, second = tmp_path / "a", tmp_path / "b"
+        first.mkdir()
+        second.mkdir()
+        try:
+            conn.register_directory(first, "shared")
+            with pytest.raises(RegistrationRefusedError):
+                conn.register_directory(second, "shared")
+        finally:
+            conn.close()
+
+    def test_a_register_reads_the_retained_marker_once(self, tmp_path: Path) -> None:
+        conn = SyncRegistry(tmp_path / "r.db")
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        reads: list[str] = []
+        real = conn.markers.retained_marker
+
+        def counted(collection: str) -> object:
+            reads.append(collection)
+            return real(collection)
+
+        try:
+            with patch.object(conn.markers, "retained_marker", counted):
+                conn.register_directory(docs, "docs")
+        finally:
+            conn.close()
+        assert reads == ["docs"]
