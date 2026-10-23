@@ -535,3 +535,36 @@ class TestQuoted:
         assert char not in shown
         assert shown.startswith("'a")
         assert shown.endswith("b'")
+
+
+class TestThePassCap:
+    def test_a_record_that_never_settles_is_replaced_and_warned_about(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        calls: list[str] = []
+
+        def never_settles(text: str) -> str:
+            # The warning itself is redacted by the same handler: let it settle.
+            if "settle" in text:
+                return text
+            calls.append(text)
+            return text + "x"
+
+        monkeypatch.setattr(LogRedactor, "_once", never_settles)
+        with caplog.at_level(logging.WARNING, logger="quarry.log_redactor"):
+            shown = LogRedactor.redact("https://u:SECRET@h/p")
+        assert shown == "[…]"
+        assert "SECRET" not in shown
+        assert len(calls) == LogRedactor.PASSES
+        assert [r.getMessage() for r in caplog.records] == [
+            f"log redaction did not settle in {LogRedactor.PASSES} passes"
+        ]
+
+    def test_a_truncated_record_keeps_its_marker_when_it_never_settles(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            LogRedactor, "_once", lambda text: text if "settle" in text else text + "x"
+        )
+        shown = LogRedactor.redact("a" * (LogRedactor.MAX_RECORD + 5))
+        assert shown == "[…] […truncated 5 bytes]"

@@ -189,6 +189,21 @@ def test_lines_around_a_split_url_survive(
     assert shown.startswith("\n".join(before)) or not before
 
 
+def _passes_needed(text: str) -> int:
+    count = 0
+    while (after := LogRedactor._once(text)) != text:
+        text, count = after, count + 1
+    return count
+
+
+@_PROFILE
+@given(_lines)
+def test_no_generated_case_comes_near_the_pass_cap(
+    lines: list[tuple[bool, str]],
+) -> None:
+    assert _passes_needed(_text(lines)) < LogRedactor.PASSES - 1
+
+
 @_PROFILE
 @given(_lines)
 def test_redaction_is_idempotent(lines: list[tuple[bool, str]]) -> None:

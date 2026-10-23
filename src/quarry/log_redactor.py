@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import ClassVar, final
 
 from quarry.authority_mask import AuthorityMask
 from quarry.log_form import LogForm
+
+logger = logging.getLogger(__name__)
 
 
 @final
@@ -35,7 +38,10 @@ class LogRedactor:
 
     Steps 2 to 4 repeat until a pass changes nothing (the mask one pass leaves can
     read differently to the next), so redacting a record twice gives the record
-    redacted once.  A line with no control character, no ``scheme://``, no
+    redacted once.  After :attr:`PASSES` passes without a fixed point the record is
+    replaced by ``[…]`` (and a warning is logged): it fails closed.
+
+    A line with no control character, no ``scheme://``, no
     ``user:password@``, no ``?query`` and no token over :attr:`MAX_TOKEN` comes back
     as it went in; both claims are checked against generated text in
     ``tests/test_log_redactor_oracle.py``.
@@ -49,7 +55,7 @@ class LogRedactor:
 
     MAX_TOKEN: ClassVar[int] = 2048
     MAX_RECORD: ClassVar[int] = 64 * 1024
-    _PASSES: ClassVar[int] = 4
+    PASSES: ClassVar[int] = 8
 
     _TOKEN: ClassVar[re.Pattern[str]] = re.compile(r"\S+")
     # The authority's userinfo runs to its last "@" before the first "/", "?" or "#"
@@ -86,12 +92,14 @@ class LogRedactor:
         # A mask can leave text the next pass reads differently (a placeholder
         # beside a ``:`` or a ``/``), so the passes repeat until one changes
         # nothing.  That is what makes redacting a second time a no-op.
-        for _ in range(cls._PASSES):
+        for _ in range(cls.PASSES):
             masked = cls._once(text)
             if masked == text:
-                break
+                return text + marker
             text = masked
-        return text + marker
+        # No fixed point: what is left may still hold what a pass would mask.
+        logger.warning("log redaction did not settle in %d passes", cls.PASSES)
+        return "[…]" + marker
 
     @classmethod
     def _once(cls, text: str) -> str:
