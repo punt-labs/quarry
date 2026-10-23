@@ -30,6 +30,7 @@ from quarry.hooks import (
     handle_pre_compact,
     handle_session_start,
 )
+from quarry.refusal import RegistrationRefusedError
 from quarry.send_outcome import SendOutcome
 from quarry.sync_registry import SyncRegistry
 
@@ -634,6 +635,48 @@ class TestSessionStartTriggerRules(_ReachableDaemonEmptyCatalog):
         ctx = str(output["additionalContext"])
         assert "child registrations exist" in ctx
         self._assert_trailer(ctx)
+
+
+class TestSessionStartAutoRegisterRefusal:
+    """A registration the registry refuses is stated, not a hook crash (F4)."""
+
+    def test_a_refusal_is_logged_with_its_detail_and_stated_in_the_envelope(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        project = tmp_path / "solo"
+        project.mkdir()
+        _opt_in(project)
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+        refusal = RegistrationRefusedError(
+            "collection name already in use; choose another collection name"
+        ).about(directory=str(project), collection="solo", detail="held by 'other'")
+        with (
+            patch(
+                "quarry.hooks._SessionStartContext._resolve_settings",
+                return_value=settings,
+            ),
+            patch(
+                "quarry.hooks._SessionStartContext._daemon_chunk_collections",
+                return_value=frozenset(),
+            ),
+            patch("quarry.hooks.SyncLock.launch_background_sync") as sync,
+            patch.object(SyncRegistry, "register_directory", side_effect=refusal),
+            caplog.at_level(logging.WARNING),
+        ):
+            result = handle_session_start({"cwd": str(project)})
+        sync.assert_not_called()
+        output = result["hookSpecificOutput"]
+        assert isinstance(output, dict)
+        ctx = str(output["additionalContext"])
+        assert "auto-register" in ctx
+        assert "refused" in ctx
+        assert "collection name already in use" in ctx
+        [record] = [r for r in caplog.records if "refused" in r.getMessage()]
+        assert record.levelno == logging.WARNING
+        assert record.exc_info is None
+        assert "held by 'other'" in record.getMessage()
 
 
 class TestSessionStartDaemonUnreachableCarriesTrailer:

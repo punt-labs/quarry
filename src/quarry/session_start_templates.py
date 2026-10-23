@@ -41,7 +41,7 @@ class SessionStartTemplates:
     )
 
     @classmethod
-    def _trailer(cls) -> str:
+    def trailer(cls) -> str:
         """Return the skill-pointer rules joined by newlines."""
         return "\n".join(_TRIGGER_RULES)
 
@@ -72,7 +72,7 @@ class SessionStartTemplates:
             f"{counts['memories_saved']} memories saved."
         )
         return (
-            f"{header}\n{cls._trailer()}\n"
+            f"{header}\n{cls.trailer()}\n"
             f"{cls._sync_line(sync_status)}\n{cls._SLASH_TAIL}"
         )
 
@@ -100,7 +100,7 @@ class SessionStartTemplates:
             "(quarryd unreachable or client not authorized)."
         )
         return (
-            f"{header}\n{cls._trailer()}\n"
+            f"{header}\n{cls.trailer()}\n"
             f"{cls._sync_line(sync_status)}\n{cls._SLASH_TAIL}"
         )
 
@@ -116,7 +116,7 @@ class SessionStartTemplates:
             "Auto-register skipped to prevent subsumption. "
             f"Run 'quarry enable {directory}' to register the parent."
         )
-        return f"{header}\n{cls._trailer()}"
+        return f"{header}\n{cls.trailer()}"
 
     @classmethod
     def daemon_unreachable(cls, directory: Path) -> str:
@@ -132,7 +132,7 @@ class SessionStartTemplates:
             "launchctl kickstart) the tools below become available.\n"
             f"Auto-registration of {directory} is deferred until quarryd returns."
         )
-        return f"{header}\n{cls._trailer()}"
+        return f"{header}\n{cls.trailer()}"
 
     @classmethod
     def nudge_enable(cls, directory: Path) -> str:

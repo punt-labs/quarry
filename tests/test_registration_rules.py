@@ -74,7 +74,7 @@ class TestRefuseForeignRetained:
         )
 
 
-_NOTE = "(the conflicting registration is named in quarryd.log)"
+_NOTE = "(the conflicting registration is named in the quarry logs)"
 _HOSTILE = "https://user:hunter2@evil.example/reset/TOKEN?t=abc\n[CRITICAL] FORGED"
 
 
@@ -134,6 +134,6 @@ def test_every_refusal_keeps_its_remediation_and_none_names_a_caller_value(
         ),
     ]
     for refusal in refusals:
-        assert "named in quarryd.log" in str(refusal)
+        assert "named in the quarry logs" in str(refusal)
         assert not [n for n in _NAMES if n in str(refusal)]
         assert hostile in refusal.detail or refusal.collection == hostile

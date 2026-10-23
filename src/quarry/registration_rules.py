@@ -44,7 +44,7 @@ class RegistrationRules:
                     "directory covered by a parent registration; the parent "
                     "registration already indexes it; deregister the parent to "
                     "register this directory on its own "
-                    "(the conflicting registration is named in quarryd.log)"
+                    "(the conflicting registration is named in the quarry logs)"
                 )
                 raise RegistrationRefusedError(msg).about(
                     directory=reg.directory, collection=reg.collection
@@ -73,7 +73,7 @@ class RegistrationRules:
         msg = (
             "collection holds archived data from another directory; choose "
             "another collection name, or re-register the directory that owns it "
-            "(the conflicting registration is named in quarryd.log)"
+            "(the conflicting registration is named in the quarry logs)"
         )
         origin = marker.original_directory or "an unknown directory"
         raise RegistrationRefusedError(msg).about(
@@ -91,7 +91,7 @@ class RegistrationRules:
         if existing and existing[0] == str(resolved):
             msg = (
                 "directory already registered; run quarry sync, or deregister it first "
-                "(the conflicting registration is named in quarryd.log)"
+                "(the conflicting registration is named in the quarry logs)"
             )
             held = f"held by collection {existing[1]!r}"
             return RegistrationRefusedError(msg).about(
@@ -99,7 +99,7 @@ class RegistrationRules:
             )
         msg = (
             "collection name already in use; choose another collection name "
-            "(the conflicting registration is named in quarryd.log)"
+            "(the conflicting registration is named in the quarry logs)"
         )
         return RegistrationRefusedError(msg).about(
             directory=str(resolved), collection=collection

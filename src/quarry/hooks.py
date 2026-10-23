@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Self, final
 
 from quarry._hook_trace import HookPayload, HookTrace
 from quarry._stdlib import load_hook_config
+from quarry.registration_notice import RegistrationNotice
 from quarry.send_outcome import SendOutcome
 from quarry.session_start_templates import SessionStartTemplates
 from quarry.session_transcript import SessionTranscriptCapture, TranscriptSource
@@ -185,7 +186,8 @@ class _SessionStartContext:
 
         Returns the collection ``str`` on success. Returns a response
         envelope (``dict``) when the flow must short-circuit — subsumption
-        refusal or daemon-unreachable defer.
+        refusal, a registration the registry refuses, or a daemon-unreachable
+        defer.
         """
         if self._conn.has_registrations_under(self._directory):
             logger.warning(
@@ -221,7 +223,9 @@ class _SessionStartContext:
             collection = self._resolver.unique_collection_name(
                 self._directory, chunk_collections
             )
-        self._conn.register_directory(self._directory, collection)
+        refused = RegistrationNotice.register(self._conn, self._directory, collection)
+        if refused is not None:
+            return self._envelope(refused)
         logger.info(
             "session-start: auto-registered %s as '%s'",
             self._directory,
