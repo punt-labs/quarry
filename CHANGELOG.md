@@ -56,7 +56,9 @@ across `transform`, `index`, and `connector`).
   non-ASCII URL is fetched rather than failing. This applies to `quarry
   ingest <url>`, sitemap pages, a `remember` whose name is a URL, and
   captures. Equivalent URLs, including those that differ only in query or
-  fragment, now resolve to the same document.
+  fragment, now resolve to the same document. Re-ingesting a URL replaces
+  a document stored under its former spelling rather than leaving a
+  duplicate.
 - tool: a failed task's error shows its reason only when the task was
   refused (binary content, an over-budget row, a rejected or failed fetch,
   or a directory registration that is already covered, already registered,
@@ -68,7 +70,9 @@ across `transform`, `index`, and `connector`).
   registered`, `directory covered by a parent registration`, `collection
   name already in use`, `collection holds archived data from another
   directory`), each followed by a fixed remediation. The directory and
-  collection names appear only in the redacted daemon log line.
+  collection names appear only in the redacted log line. A refused
+  automatic registration at session start is reported in the session
+  context instead of failing the hook.
 - tool: a task that stores nothing now fails instead of ending `completed`.
   A crawl that selects no pages fails with `nothing was stored: no pages
   were selected for ingest`. A crawl whose pages all produce no text, and
@@ -79,8 +83,8 @@ across `transform`, `index`, and `connector`).
 - tool: hook traces tell a daemon refusal (`daemon-refused`) from an
   unreachable daemon (`daemon-unreachable`), a hook-side configuration error
   (`config-error`), and a server fault (`daemon-error`). The PreCompact
-  message promises only what was actually saved and gives advice that
-  matches the failure. A SubagentStop trace reports the distillation result
+  message states truthfully whether a local copy was saved and offers
+  `quarry backfill-sessions` for every recoverable failure. A SubagentStop trace reports the distillation result
   (`distilled` or `distill-<label>`) whether or not the raw send succeeded.
 - infra: log lines show a URL as `scheme://host[:port]/…(segments=N)`, never
   its path, whether quarry logs it or a library does. The full path is kept

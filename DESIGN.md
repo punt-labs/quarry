@@ -3282,6 +3282,11 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
        construction (existing escapes kept and upper-cased, a lone `%`
        becomes `%25`). `fetch_url` and `document_name` share that form, so
        an IRI is fetchable and `café` and `caf%C3%A9` are one document.
+     - Because this decision changes stored URL names, `LegacyUrlNames`
+       canonicalizes the stored names under the same `scheme://host` prefix
+       at dedup and overwrite time. A re-ingest replaces a document stored
+       under a former spelling instead of leaving it orphaned; there is no
+       bulk rename migration.
      - `str()` is the log form, `scheme://host[:port]/…(segments=N)`. It
        never carries the path. A heuristic cannot tell a slug from a
        secret, so the path stays only in the stored name, where diagnosis
@@ -3302,9 +3307,14 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
      included), and a host that is not a DNS name or bracketed IP literal
      prints as `[host]`. They drop third-party records below WARNING. This
      backstop catches what a library logs on its own.
-     - **Whitespace inside a URL.** urlsplit drops tab, CR, and LF
-       anywhere in a URL, so the redactor first deletes them from every
-       URL candidate; a secret split across a line break is still masked.
+     - **Whitespace inside a URL.** urlsplit keeps unusual whitespace in
+       userinfo and drops tab, CR, and LF, so the redactor joins whitespace
+       inside a URL's scheme, `://` separator, and authority (where
+       credentials live) before masking; a credential split across any
+       whitespace is still masked. A break in the path ends the URL: the
+       log form drops the path anyway, and joining past it would swallow
+       the next log line's first word. Text after such a break is logged
+       as written.
      - **Linear time.** A record is capped at 64 KiB. The redactor works
        one token at a time: a token over 2,048 characters becomes `[…]`,
        and each pattern runs only on a token that can match it, so a
@@ -3338,8 +3348,10 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
      traceback cannot chain the raw cause. Hook traces distinguish
      `daemon-refused` (4xx), `daemon-unreachable`, `config-error`
      (hook-side), and `daemon-error` (5xx or malformed reply), from the
-     single `SendOutcome` every send returns; the same outcome, plus what
-     was actually archived, picks the PreCompact message's advice.
+     single `SendOutcome` every send returns; the same outcome picks the
+     PreCompact message's advice. Every failure but a refusal offers
+     `quarry backfill-sessions`, which reads Claude Code's own transcripts;
+     the quarry archive is reported separately as saved or not.
 
 ### Rejected alternatives
 
