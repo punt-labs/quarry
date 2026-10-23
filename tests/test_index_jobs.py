@@ -329,7 +329,8 @@ def test_a_registration_refusal_is_returned_to_the_client_and_logged(
     state = asyncio.run(_run())
     assert state.status == "failed"
     assert state.error is not None
-    assert state.error == "directory covered by a parent registration"
+    assert state.error.startswith("directory covered by a parent registration; ")
+    assert state.error.endswith("named in quarryd.log)")
     assert state.error in caplog.text
     assert "parent-col" in caplog.text
     assert not [r for r in caplog.records if r.exc_info]

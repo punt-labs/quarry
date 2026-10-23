@@ -95,7 +95,10 @@ class TestRegisterDirectory:
         d2 = tmp_path / "b"
         d2.mkdir()
         conn.register_directory(d1, "shared")
-        with pytest.raises(ValueError, match=r"^collection name already in use$"):
+        with pytest.raises(
+            ValueError,
+            match=r"^collection name already in use; choose another collection name",
+        ):
             conn.register_directory(d2, "shared")
         conn.close()
 
@@ -104,7 +107,10 @@ class TestRegisterDirectory:
         d = tmp_path / "course"
         d.mkdir()
         conn.register_directory(d, "first")
-        with pytest.raises(ValueError, match=r"^directory already registered$"):
+        with pytest.raises(
+            ValueError,
+            match=r"^directory already registered; run quarry sync",
+        ):
             conn.register_directory(d, "second")
         conn.close()
 
@@ -637,7 +643,7 @@ class TestRetainedCollections:
             assert conn.markers.list_retained() == ["backend"]
             with pytest.raises(
                 ValueError,
-                match=r"^collection holds archived data from another directory$",
+                match=r"^collection holds archived data from another",
             ):
                 conn.register_directory(dir_b, "backend")
             assert conn.markers.list_retained() == ["backend"]  # marker intact
