@@ -88,7 +88,7 @@ def test_index_one_missing_file_is_graceful(tmp_path: Path) -> None:
         conn.close()
     assert outcome.error is not None
     assert outcome.ingested == 0
-    assert "never_existed.md" in outcome.error
+    assert outcome.error == "never_existed.md: internal error: FileNotFoundError"
 
 
 def test_index_one_mid_stream_error_is_graceful(

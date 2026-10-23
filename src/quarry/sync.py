@@ -63,13 +63,13 @@ def _refresh_files(
     refreshed = 0
     errors: list[str] = []
     for fp, plan_hash in plan_to_refresh:
+        document_name = str(fp.relative_to(ctx.resolved))
         try:
             stat = fp.stat()
             current_hash = FileDiscovery.content_hash(fp)
             if current_hash != plan_hash:
                 logger.info("File changed since plan, skipping refresh: %s", fp)
                 continue
-            document_name = str(fp.relative_to(ctx.resolved))
             ctx.conn.files.upsert_file(
                 FileRecord(
                     path=str(fp),
@@ -85,7 +85,7 @@ def _refresh_files(
             refreshed += 1
             ctx.progress(f"[{ctx.collection}] Refreshed {document_name}")
         except OSError as exc:
-            errors.append(FailureReason.line(str(fp), exc))
+            errors.append(FailureReason.line(document_name, exc))
             logger.warning("Refresh failed for %s: %s", fp, exc)
     ctx.conn.commit()
     return refreshed, len(errors), errors
