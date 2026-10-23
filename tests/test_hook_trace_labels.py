@@ -18,7 +18,6 @@ import pytest
 from quarry.hooks import handle_post_web_fetch, handle_pre_compact
 from quarry.hooks_agent import HookAgent
 from quarry.send_outcome import SendOutcome
-from tests.test_backfill_reach import register_for_backfill
 from tests.test_hooks_agent import (
     _make_dialogue,
     _make_transcript,
@@ -239,7 +238,6 @@ def test_the_pre_compact_message_follows_the_failure(
 ) -> None:
     outcome, _label = _OUTCOMES[outcome_name]
     transcript = _make_transcript(tmp_path, "work discussed today")
-    register_for_backfill(tmp_path)
     with (
         patch("quarry.session_transcript.Path.home", return_value=tmp_path / "home"),
         patch(_SEND, return_value=outcome),
@@ -258,7 +256,6 @@ def test_the_pre_compact_message_follows_the_failure(
 
 def test_only_a_refused_capture_is_not_told_to_backfill(tmp_path: Path) -> None:
     transcript = _make_transcript(tmp_path, "work discussed today")
-    register_for_backfill(tmp_path)
     messages = {}
     for name, (outcome, _label) in _OUTCOMES.items():
         with (
@@ -287,8 +284,6 @@ def _pre_compact_with(
     tmp_path: Path, *, archive_fails: bool, cwd: str
 ) -> dict[str, object]:
     transcript = _make_transcript(tmp_path, "work discussed today")
-    if cwd:
-        register_for_backfill(tmp_path)
     with ExitStack() as stack:
         stack.enter_context(
             patch("quarry.session_transcript.Path.home", return_value=tmp_path / "home")
@@ -358,21 +353,3 @@ def test_a_failed_raw_send_still_reports_the_distillation(
         HookAgent.subagent_stop(payload)
     line = next(r for r in caplog.records if r.name == "quarry.hooks").getMessage()
     assert expected in line
-
-
-def test_an_unregistered_session_is_not_told_to_backfill(tmp_path: Path) -> None:
-    transcript = _make_transcript(tmp_path, "work discussed today")
-    with (
-        patch("quarry.session_transcript.Path.home", return_value=tmp_path / "home"),
-        patch(_SEND, return_value=SendOutcome.unreachable("down")),
-    ):
-        result = handle_pre_compact(
-            {
-                "cwd": str(tmp_path),
-                "transcript_path": str(transcript),
-                "session_id": "abc12345",
-            }
-        )
-    message = str(result["systemMessage"])
-    assert "quarryd is not reachable" in message
-    assert "backfill" not in message

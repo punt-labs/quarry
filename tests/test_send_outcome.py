@@ -30,7 +30,7 @@ def test_a_step_after_a_send_is_named_by_how_the_send_went() -> None:
     )
 
 
-_SAVED = {"archived": True, "written": True, "backfillable": True}
+_SAVED = {"archived": True, "written": True}
 
 
 def test_a_refused_capture_is_not_told_to_backfill() -> None:
@@ -76,23 +76,17 @@ class TestTheArchiveIsDescribedSeparately:
         )
 
     def test_only_the_archive_saved(self, label: str) -> None:
-        message = SendOutcome.advice(
-            label, archived=True, written=False, backfillable=True
-        )
+        message = SendOutcome.advice(label, archived=True, written=False)
         assert "A durable copy of the transcript was saved" in message
         assert "scrubbed capture" not in message
 
     def test_a_failed_archive_is_said_plainly(self, label: str) -> None:
-        message = SendOutcome.advice(
-            label, archived=False, written=True, backfillable=True
-        )
+        message = SendOutcome.advice(label, archived=False, written=True)
         assert "could not be archived; see quarry.log" in message
         assert "durable copy" not in message
 
     def test_nothing_saved(self, label: str) -> None:
-        message = SendOutcome.advice(
-            label, archived=False, written=False, backfillable=True
-        )
+        message = SendOutcome.advice(label, archived=False, written=False)
         assert "could not be archived; see quarry.log" in message
         assert "saved" not in message
 
@@ -102,38 +96,15 @@ class TestTheArchiveIsDescribedSeparately:
 def test_backfill_reads_claude_codes_transcripts_so_it_is_offered_either_way(
     label: str, *, archived: bool
 ) -> None:
-    message = SendOutcome.advice(
-        label, archived=archived, written=False, backfillable=True
-    )
+    message = SendOutcome.advice(label, archived=archived, written=False)
     assert "quarry backfill-sessions" in message
-    assert "to index this session" in message
+    assert "indexes missed sessions of registered directories" in message
 
 
 @pytest.mark.parametrize("archived", [True, False])
 def test_a_refused_capture_is_never_told_to_backfill(*, archived: bool) -> None:
-    message = SendOutcome.advice(
-        "daemon-refused", archived=archived, written=True, backfillable=True
-    )
+    message = SendOutcome.advice("daemon-refused", archived=archived, written=True)
     assert "backfill" not in message
-
-
-@pytest.mark.parametrize("label", _ALL)
-@pytest.mark.parametrize("archived", [True, False], ids=["archived", "not-archived"])
-def test_a_session_backfill_will_not_visit_is_never_told_to_backfill(
-    label: str, *, archived: bool
-) -> None:
-    message = SendOutcome.advice(
-        label, archived=archived, written=True, backfillable=False
-    )
-    assert "backfill" not in message
-    assert message.endswith(".")
-
-
-def test_the_config_fix_is_still_named_when_backfill_is_not_offered() -> None:
-    message = SendOutcome.advice(
-        "config-error", archived=True, written=True, backfillable=False
-    )
-    assert message.endswith("saved; check QUARRY_URL / quarry login.")
 
 
 def test_the_config_fix_comes_before_the_backfill() -> None:

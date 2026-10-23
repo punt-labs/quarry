@@ -7,7 +7,6 @@ from unittest.mock import patch
 
 from quarry.pre_compact_hook import PreCompactHook
 from quarry.send_outcome import SendOutcome
-from tests.test_backfill_reach import register_for_backfill
 from tests.test_hooks_agent import _make_transcript, _write_config
 
 if TYPE_CHECKING:
@@ -45,16 +44,8 @@ def test_a_disabled_compaction_capture_is_skipped(tmp_path: Path) -> None:
     assert _run(tmp_path, SendOutcome(sent=True)) == {}
 
 
-def test_a_failed_send_for_a_registered_directory_offers_backfill(
+def test_a_failed_send_offers_backfill(
     tmp_path: Path,
 ) -> None:
-    register_for_backfill(tmp_path)
     result = _run(tmp_path, SendOutcome.unreachable("down"))
     assert "quarry backfill-sessions" in str(result["systemMessage"])
-
-
-def test_a_failed_send_for_an_unregistered_directory_does_not(
-    tmp_path: Path,
-) -> None:
-    result = _run(tmp_path, SendOutcome.unreachable("down"))
-    assert "backfill" not in str(result["systemMessage"])

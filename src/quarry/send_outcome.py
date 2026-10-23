@@ -9,6 +9,10 @@ _UNREACHABLE = "daemon-unreachable"
 _REFUSED = "daemon-refused"
 _ERROR = "daemon-error"
 _CONFIG = "config-error"
+_BACKFILL = (
+    "run 'quarry backfill-sessions', "
+    "which indexes missed sessions of registered directories"
+)
 
 
 @final
@@ -29,24 +33,25 @@ class SendOutcome:
     log: str = ""
 
     # label -> (what went wrong and where to look, what to fix first, what
-    # recovers the session once it is fixed).  The last is told only to a session
-    # that backfill can reach.
+    # recovers the session once it is fixed).  The recovery is a conditional that
+    # is true for any session: backfill indexes the missed sessions of registered
+    # directories, and says nothing about whether this one is.
     _ADVICE: ClassVar[dict[str, tuple[str, str, str]]] = {
         _UNREACHABLE: (
             "quarryd is not reachable, so this session was not indexed now",
             "",
-            "run 'quarry backfill-sessions' to index this session",
+            _BACKFILL,
         ),
         _REFUSED: ("the daemon refused the capture; see quarry.log", "", ""),
         _CONFIG: (
             "the daemon target is misconfigured",
             "check QUARRY_URL / quarry login",
-            "run 'quarry backfill-sessions' to index this session",
+            _BACKFILL,
         ),
         _ERROR: (
             "the daemon failed; see quarryd.log or quarry doctor",
             "",
-            "run 'quarry backfill-sessions' to index this session once it recovers",
+            f"{_BACKFILL} once it recovers",
         ),
     }
 
@@ -54,9 +59,7 @@ class SendOutcome:
         return self.sent
 
     @classmethod
-    def advice(
-        cls, label: str, *, archived: bool, written: bool, backfillable: bool
-    ) -> str:
+    def advice(cls, label: str, *, archived: bool, written: bool) -> str:
         """Return the warning for a capture whose send failed with *label*.
 
         The one mapping from a failure to what the user is told.  The local copies
@@ -64,9 +67,7 @@ class SendOutcome:
         whether the raw transcript was archived and *written* whether the scrubbed
         capture file was.  Backfill reads Claude Code's own transcripts, not that
         archive, so it is offered for every failure it can recover, archived or
-        not, but only for a session it will visit: *backfillable* is whether the
-        session's directory is one it walks.  A daemon that refused the capture
-        will refuse a backfill too.
+        not.  A daemon that refused the capture will refuse a backfill too.
         """
         what, fix, recovery = cls._ADVICE.get(label, cls._ADVICE[_ERROR])
         if archived:
@@ -79,7 +80,7 @@ class SendOutcome:
         else:
             kept = "The session transcript could not be archived; see quarry.log"
             kept += ". The scrubbed capture was saved" if written else ""
-        steps = [fix, recovery if backfillable else ""]
+        steps = [fix, recovery]
         remedy = "; then ".join(step for step in steps if step)
         return f"Warning: {what}. {kept}{'; ' + remedy if remedy else ''}."
 

@@ -7,7 +7,6 @@ from typing import Self, final
 
 from quarry._hook_trace import HookPayload, HookTrace
 from quarry._stdlib import load_hook_config
-from quarry.backfill_reach import BackfillReach
 from quarry.send_outcome import SendOutcome
 from quarry.session_transcript import SessionTranscriptCapture, TranscriptSource
 
@@ -55,7 +54,6 @@ class PreCompactHook:
                     outcome.failure,
                     archived=outcome.archived,
                     written=outcome.written,
-                    backfillable=BackfillReach.includes(target.cwd),
                 )
             }
 
