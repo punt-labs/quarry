@@ -92,3 +92,22 @@ def test_a_url_one_character_over_the_cap_is_refused() -> None:
 def test_a_url_at_the_length_cap_is_admitted() -> None:
     url = "http://example.com/" + "a" * (8192 - len("http://example.com/"))
     assert UrlSyntax.parse(url).hostname == "example.com"
+
+
+@pytest.mark.parametrize(
+    "char",
+    ["\x00", "\x0b", "\x1b", "\x85", "\u2028", "\u2029", "\u202e", "\u2066",
+     "\u200e", "\u200f", "\u061c", "\u200d", "\u00ad", "\ufeff"],
+    ids=lambda c: f"U+{ord(c):04X}",
+)  # fmt: skip
+@pytest.mark.parametrize("where", ["host", "path", "query"])
+def test_a_control_format_or_separator_character_is_refused_anywhere(
+    char: str, where: str
+) -> None:
+    url = {
+        "host": f"http://exa{char}mple.com/p",
+        "path": f"http://example.com/a{char}b",
+        "query": f"http://example.com/p?x={char}",
+    }[where]
+    with pytest.raises(ValueError, match=r"^malformed URL$"):
+        UrlSyntax.parse(url)

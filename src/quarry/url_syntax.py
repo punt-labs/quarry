@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import unicodedata
 from typing import final
 from urllib.parse import SplitResult, urlsplit
 
 _MALFORMED = "malformed URL"
 _MAX_LENGTH = 8192
+_UNPRINTABLE = frozenset({"Cc", "Cf", "Zl", "Zp"})
 
 
 @final
@@ -18,7 +20,8 @@ class UrlSyntax:
     exception, a ``@`` in the netloc hides userinfo from one parser and not
     another, and a bad port parses lazily and fails far from the gate.  So the URL
     is admitted only if it is plain: no userinfo, no ``\\`` or ``%`` in the
-    netloc, no control, space or other whitespace character anywhere, and a port
+    netloc, no control, format, line- or paragraph-separator, space or other whitespace
+    character anywhere, and a port
     that is absent or in ``1..65535``, and a length of at most 8192 characters.
     After that, ``urlsplit``, ``urllib``, ``http.client`` and the sitemap parser
     all see the same ``[host][:port]``.
@@ -41,8 +44,12 @@ class UrlSyntax:
 
     @staticmethod
     def _is_unprintable(ch: str) -> bool:
-        """Return whether *ch* is a control, space or other whitespace character."""
-        return ch <= " " or "\x7f" <= ch <= "\x9f" or ch.isspace()
+        """Return whether *ch* is a control, format, separator or space character.
+
+        Unicode categories Cc, Cf, Zl and Zp are the characters that reorder,
+        hide or forge a line when they reach a log, plus every whitespace.
+        """
+        return ch <= " " or ch.isspace() or unicodedata.category(ch) in _UNPRINTABLE
 
     @staticmethod
     def _split(raw: str) -> SplitResult:
