@@ -3279,7 +3279,7 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
      - `.document_name` is the stored form, `scheme://host[:port]/path`,
        with no default port, no `;params`, no trailing dot, and IDNA dot
        variants folded, so equivalent URLs share one document. A query is
-       stored as `?q=<16 hex of SHA-256 of the sorted, encoded
+       stored as `?q[sha256]=<16 hex of SHA-256 of the sorted, encoded
        parameters>`: pages that differ by query stay distinct documents,
        and the raw query never reaches storage. Dropping the query
        entirely was rejected because it merged distinct pages (`?page=1`
@@ -3335,14 +3335,19 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
        masks a URL's authority up to its last `@`. It joins whitespace
        only into text that already has userinfo shape, never crosses a
        newline except for one named continuation token, and keeps
-       everything else exactly.
+       everything else exactly. The redactor repeats its passes until one
+       changes nothing (at most four), which makes the result a fixed
+       point.
      - **Known limits of the backstop.** The types are the guarantee and
        the redactor is a heuristic for third-party text, so these residual
        cases are accepted and pinned in the contract:
        - a colon-less user-only credential split so that it looks like a
-         host followed by an email address;
+         host followed by an email address, and `name:digits` followed by
+         a gap and a bare `@`;
        - a credential broken by two or more line breaks;
-       - a password holding both `@` and whitespace after it.
+       - a password holding both `@` and whitespace after it;
+       - `?`, `#`, or `\` inside a URL's password, which ends the
+         authority.
 
        Masking them would break the preservation property for ordinary
        log lines.
@@ -3380,12 +3385,19 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
      `daemon-refused` (4xx), `daemon-unreachable`, `config-error`
      (hook-side), and `daemon-error` (5xx or malformed reply), from the
      single `SendOutcome` every send returns; the same outcome picks the
-     PreCompact message's advice. A recoverable failure offers `quarry
-     backfill-sessions` only when the directory is one backfill walks (a
-     registered directory), because backfill reads Claude Code's own
-     transcripts for registered projects; backfill re-ingests a session
-     whose transcript grew since it was stored. The quarry archive is
-     reported separately as saved or not.
+     PreCompact message's advice. A recoverable failure notes that `quarry
+     backfill-sessions` indexes missed sessions of registered directories;
+     that conditional is true for every session, so no reach check is made
+     (an earlier reach check mis-encoded paths and was removed). Backfill
+     re-ingests a session whose transcript grew since it was stored. The
+     quarry archive is reported separately as saved or not.
+   - **Model context (SessionStart and the WebFetch loop-closer).** Text a
+     hook puts in the model's context carries no unquoted caller-derived
+     value. Directory and collection names render through one quoted form
+     (`Shown`), and runnable commands are `shlex`-quoted. New collection
+     names are limited to `[A-Za-z0-9._-]`. The captures lookup returns
+     only the canonical name of the URL asked about plus a `legacy` flag,
+     never a stored name, because a legacy name can hold a raw query.
 
 ### Rejected alternatives
 

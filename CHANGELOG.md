@@ -46,7 +46,7 @@ across `transform`, `index`, and `connector`).
   wire surface — tool names, behavior, `MCPServer` construction — is
   unchanged. `McpTools.main()` moves to a `McpTools.run_stdio` staticmethod.
 - index: a URL's stored document name is `scheme://host[:port]/path`,
-  followed by `?q=<digest>` when the URL has a query. The digest is the
+  followed by `?q[sha256]=<digest>` when the URL has a query. The digest is the
   first 16 hex digits of a SHA-256 of the sorted, encoded parameters, so a
   secret in a query string is never stored while pages that differ by query
   stay separate documents. These parts are removed:
@@ -87,12 +87,21 @@ across `transform`, `index`, and `connector`).
 - tool: hook traces tell a daemon refusal (`daemon-refused`) from an
   unreachable daemon (`daemon-unreachable`), a hook-side configuration error
   (`config-error`), and a server fault (`daemon-error`). The PreCompact
-  message states truthfully whether a local copy was saved, and offers
-  `quarry backfill-sessions` for a recoverable failure only when the
-  directory is registered, since that is what backfill reads. A SubagentStop
-  trace reports the distillation result (`distilled` or `distill-<label>`)
-  whether or not the raw send succeeded, and a refused SessionStart
-  registration traces as a skip, not a capture.
+  message states truthfully whether a local copy was saved, and for a
+  recoverable failure notes that `quarry backfill-sessions` indexes missed
+  sessions of registered directories. A SubagentStop trace reports the
+  distillation result (`distilled` or `distill-<label>`) whether or not the
+  raw send succeeded. SessionStart traces a nudge, drift, or refused
+  registration as a skip and a failed sync launch as an error, never as a
+  capture.
+- security: SessionStart context quotes every directory and collection name
+  on one line, and runnable commands are shell-quoted, so a hostile
+  directory name cannot inject instructions. New collection names use only
+  `A-Z a-z 0-9 . _ -`; a directory leaf with other characters is mapped to
+  `-`, and a user-supplied name with them is refused.
+- security: the WebFetch loop-closer no longer prints a stored document name
+  into the session. It shows the URL's log form and, when the page is
+  indexed under an older spelling, says `quarry find` reaches it.
 - tool: `quarry backfill-sessions` re-ingests a session whose transcript
   has grown since it was last stored, instead of skipping it.
 - infra: log lines show a URL as `scheme://host[:port]/…(segments=N)`, never
