@@ -11,6 +11,7 @@ import pytest
 
 from quarry.log_redaction import RedactingStreamHandler
 from quarry.log_redactor import LogRedactor
+from tests.redaction import redacted
 
 
 class TestRedact:
@@ -46,12 +47,12 @@ class TestRedact:
         ],
     )
     def test_redact(self, raw: str, shown: str) -> None:
-        assert LogRedactor.redact(raw) == shown
+        assert redacted(raw) == shown
 
 
 def _seconds(text: str) -> float:
     started = time.perf_counter()
-    LogRedactor.redact(text)
+    redacted(text)
     return time.perf_counter() - started
 
 
@@ -112,15 +113,15 @@ class TestLinearTime:
         assert min(_seconds(record) for _ in range(3)) < 0.1
 
     def test_a_token_over_two_kilobytes_is_truncated(self) -> None:
-        shown = LogRedactor.redact("before " + "q" * 5000 + " after")
+        shown = redacted("before " + "q" * 5000 + " after")
         assert shown == "before […] after"
 
     def test_a_token_of_exactly_the_cap_is_kept(self) -> None:
         token = "q" * LogRedactor.MAX_TOKEN
-        assert LogRedactor.redact(token) == token
+        assert redacted(token) == token
 
     def test_a_token_one_over_the_cap_is_truncated(self) -> None:
-        assert LogRedactor.redact("q" * (LogRedactor.MAX_TOKEN + 1)) == "[…]"
+        assert redacted("q" * (LogRedactor.MAX_TOKEN + 1)) == "[…]"
 
     def test_a_handler_format_of_a_long_colon_path_url_is_fast(self) -> None:
         handler = RedactingStreamHandler()
@@ -184,7 +185,7 @@ class TestEscapes:
     def test_a_control_character_is_escaped_unambiguously(
         self, char: str, shown: str
     ) -> None:
-        assert LogRedactor.redact(char) == shown
+        assert redacted(char) == shown
 
     @pytest.mark.parametrize(
         "char",
@@ -219,8 +220,8 @@ class TestIdempotence:
 
     @pytest.mark.parametrize("text", _FORMS)
     def test_redacting_twice_equals_redacting_once(self, text: str) -> None:
-        once = LogRedactor.redact(text)
-        assert LogRedactor.redact(once) == once
+        once = redacted(text)
+        assert redacted(once) == once
 
     def test_the_log_form_of_a_url_is_one_token(self) -> None:
         from quarry.log_form import LogForm
@@ -230,7 +231,7 @@ class TestIdempotence:
         assert len(shown.split()) == 1
 
     def test_the_log_form_survives_the_redactor_unchanged(self) -> None:
-        assert LogRedactor.redact("on https://h.test/…(segments=4) now") == (
+        assert redacted("on https://h.test/…(segments=4) now") == (
             "on https://h.test/…(segments=4) now"
         )
 
@@ -285,7 +286,7 @@ class TestUrlCorpus:
 
     @pytest.mark.parametrize("name", list(_URL_CORPUS))
     def test_no_secret_survives(self, name: str) -> None:
-        shown = LogRedactor.redact(f"see {_URL_CORPUS[name]} end")
+        shown = redacted(f"see {_URL_CORPUS[name]} end")
         # A line break ends the URL: the rest of the next line is kept as it is.
         secrets = (_USER, _PW) if name == "newline split" else _ALL
         leaked = [secret for secret in secrets if secret in shown]
@@ -293,8 +294,8 @@ class TestUrlCorpus:
 
     @pytest.mark.parametrize("name", list(_URL_CORPUS))
     def test_redaction_is_idempotent(self, name: str) -> None:
-        once = LogRedactor.redact(f"see {_URL_CORPUS[name]} end")
-        assert LogRedactor.redact(once) == once
+        once = redacted(f"see {_URL_CORPUS[name]} end")
+        assert redacted(once) == once
 
     @pytest.mark.parametrize(
         ("raw", "port_shown"),
@@ -304,18 +305,18 @@ class TestUrlCorpus:
         ],
     )
     def test_a_numeric_port_is_kept(self, raw: str, port_shown: str) -> None:
-        assert LogRedactor.redact(raw) == port_shown
+        assert redacted(raw) == port_shown
 
     def test_a_non_numeric_port_is_not_echoed(self) -> None:
-        shown = LogRedactor.redact(f"https://h.example:{_PW}/x")
+        shown = redacted(f"https://h.example:{_PW}/x")
         assert shown == "https://[host]/…(segments=1)"
 
     def test_a_host_outside_the_grammar_is_not_echoed(self) -> None:
-        shown = LogRedactor.redact(f"https://b\u00fccher{_USER}.example/x")
+        shown = redacted(f"https://b\u00fccher{_USER}.example/x")
         assert shown == "https://[host]/…(segments=1)"
 
     def test_an_ipv6_host_is_kept(self) -> None:
-        shown = LogRedactor.redact("https://u:p@[2001:db8::1]:8443/a/b")
+        shown = redacted("https://u:p@[2001:db8::1]:8443/a/b")
         assert shown == "https://[2001:db8::1]:8443/…(segments=2)"
 
 
@@ -324,18 +325,18 @@ class TestRecordCap:
 
     def test_a_record_over_the_cap_is_truncated_with_a_visible_marker(self) -> None:
         cap = LogRedactor.MAX_RECORD
-        shown = LogRedactor.redact("a " * cap)
+        shown = redacted("a " * cap)
         assert shown.endswith(f"[…truncated {2 * cap - cap} bytes]")
         assert len(shown) < cap + 40
 
     def test_a_record_at_the_cap_is_kept_whole(self) -> None:
         text = "w" * 10 + (" x" * ((LogRedactor.MAX_RECORD - 10) // 2))
         text = text[: LogRedactor.MAX_RECORD]
-        assert LogRedactor.redact(text) == text
+        assert redacted(text) == text
 
     def test_a_secret_beyond_the_cap_is_never_kept(self) -> None:
         text = "x " * LogRedactor.MAX_RECORD + "https://u:SECRET@h/p"
-        assert "SECRET" not in LogRedactor.redact(text)
+        assert "SECRET" not in redacted(text)
 
     def test_cost_is_bounded_by_the_cap_not_the_record(self) -> None:
         small = min(_seconds("w " * (LogRedactor.MAX_RECORD // 2)) for _ in range(3))
@@ -389,7 +390,7 @@ class TestWhitespaceInsideAUrl:
     @pytest.mark.parametrize("white", _ALL_WS, ids=lambda w: f"U+{ord(w):04X}")
     def test_no_secret_survives(self, where: str, white: str) -> None:
         raw = _SPLITS[where].format(w=white)
-        shown = LogRedactor.redact(f"see {raw} end")
+        shown = redacted(f"see {raw} end")
         # The path is not a credential.  It is dropped only while the URL is one
         # unbroken run: a line break ends the URL, and a break in the host leaves
         # the host and path as text of their own.
@@ -402,8 +403,8 @@ class TestWhitespaceInsideAUrl:
     @pytest.mark.parametrize("where", list(_SPLITS))
     @pytest.mark.parametrize("white", _ALL_WS, ids=lambda w: f"U+{ord(w):04X}")
     def test_redaction_is_idempotent(self, where: str, white: str) -> None:
-        once = LogRedactor.redact("see " + _SPLITS[where].format(w=white) + " end")
-        assert LogRedactor.redact(once) == once
+        once = redacted("see " + _SPLITS[where].format(w=white) + " end")
+        assert redacted(once) == once
 
     @pytest.mark.parametrize(
         "following",
@@ -422,22 +423,22 @@ class TestWhitespaceInsideAUrl:
     def test_a_url_ending_a_line_leaves_the_next_line_alone(
         self, url: str, following: str
     ) -> None:
-        shown = LogRedactor.redact(f"see {url}\n{following}")
+        shown = redacted(f"see {url}\n{following}")
         assert shown.endswith(f"\n{following}")
 
     def test_a_url_ending_a_line_with_credentials_and_no_path_survives_too(
         self,
     ) -> None:
-        shown = LogRedactor.redact("see https://u:SECRETPW@h.example\nTraceback (most")
+        shown = redacted("see https://u:SECRETPW@h.example\nTraceback (most")
         assert "SECRETPW" not in shown
         assert shown.endswith("\nTraceback (most")
 
     def test_a_break_in_the_path_ends_the_url_and_the_rest_is_left_alone(self) -> None:
-        shown = LogRedactor.redact("https://h.example/a/b\nrest of line")
+        shown = redacted("https://h.example/a/b\nrest of line")
         assert shown == "https://h.example/…(segments=2)\nrest of line"
 
     def test_text_that_is_not_a_url_keeps_its_line_breaks(self) -> None:
-        assert LogRedactor.redact("a\tb\nc: d//e") == "a\tb\nc: d//e"
+        assert redacted("a\tb\nc: d//e") == "a\tb\nc: d//e"
 
     def test_a_deterministic_sweep_finds_no_leak_and_stays_idempotent(self) -> None:
         """djb's p12/p13 fuzz as a fixed sweep, with every whitespace character."""
@@ -455,10 +456,10 @@ class TestWhitespaceInsideAUrl:
             at = n % (len(userinfo) + 1)
             userinfo = userinfo[:at] + _ALL_WS[n % len(_ALL_WS)] + userinfo[at:]
             text = wrap % f"{scheme}://{userinfo}@{host}{tail}"
-            out = LogRedactor.redact(text)
+            out = redacted(text)
             if "SECRET" in out or "SEC.RET" in out or "S%40" in out:
                 leaks.append(text)
-            if LogRedactor.redact(out) != out:
+            if redacted(out) != out:
                 unstable.append(text)
         assert leaks == []
         assert unstable == []
@@ -467,32 +468,32 @@ class TestWhitespaceInsideAUrl:
 class TestTruncationMarker:
     def test_a_single_run_over_the_record_cap_still_shows_the_marker(self) -> None:
         cap = LogRedactor.MAX_RECORD
-        shown = LogRedactor.redact("x" * (cap + 4_000))
+        shown = redacted("x" * (cap + 4_000))
         assert shown.endswith(" […truncated 4000 bytes]")
         assert shown.startswith("[…]")
 
     def test_the_marker_is_separate_from_the_kept_text(self) -> None:
         cap = LogRedactor.MAX_RECORD
-        shown = LogRedactor.redact("a " * cap)
+        shown = redacted("a " * cap)
         assert shown.endswith(" […truncated " + str(2 * cap - cap) + " bytes]")
         assert "bytes][…" not in shown
 
     def test_a_marker_survives_a_second_redaction_unchanged(self) -> None:
-        once = LogRedactor.redact("x" * (LogRedactor.MAX_RECORD + 10))
-        assert LogRedactor.redact(once) == once
+        once = redacted("x" * (LogRedactor.MAX_RECORD + 10))
+        assert redacted(once) == once
 
 
 class TestSchemelessUserinfo:
     def test_a_long_password_is_masked(self) -> None:
-        shown = LogRedactor.redact("user:" + "P" * 1500 + "@host.example")
+        shown = redacted("user:" + "P" * 1500 + "@host.example")
         assert shown == "[userinfo]@host.example"
 
     def test_a_long_user_is_masked(self) -> None:
-        shown = LogRedactor.redact("u" * 1500 + ":SECRETPW@host.example")
+        shown = redacted("u" * 1500 + ":SECRETPW@host.example")
         assert shown == "[userinfo]@host.example"
 
     def test_a_token_over_the_cap_is_replaced_whole(self) -> None:
-        assert LogRedactor.redact("user:" + "P" * 3000 + "@h") == "[…]"
+        assert redacted("user:" + "P" * 3000 + "@h") == "[…]"
 
     @pytest.mark.parametrize(
         "raw",
@@ -507,15 +508,13 @@ class TestSchemelessUserinfo:
     def test_a_password_holding_a_query_or_fragment_character_is_masked(
         self, raw: str
     ) -> None:
-        shown = LogRedactor.redact(raw)
+        shown = redacted(raw)
         assert "hunter" not in shown
         assert "pw" not in shown.replace("[userinfo]", "")
-        assert LogRedactor.redact(shown) == shown
+        assert redacted(shown) == shown
 
     def test_the_password_is_masked_whole_not_cut_at_the_question_mark(self) -> None:
-        assert LogRedactor.redact("admin:hunter?2@db.internal") == (
-            "[userinfo]@db.internal"
-        )
+        assert redacted("admin:hunter?2@db.internal") == ("[userinfo]@db.internal")
 
 
 class TestQuoted:
@@ -538,7 +537,7 @@ class TestQuoted:
 
 
 class TestThePassCap:
-    def test_a_record_that_never_settles_is_replaced_and_nothing_is_logged(
+    def test_a_record_that_never_settles_says_none_and_nothing_is_logged(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         calls: list[str] = []
@@ -549,27 +548,17 @@ class TestThePassCap:
 
         monkeypatch.setattr(LogRedactor, "_once", never_settles)
         with caplog.at_level(logging.DEBUG):
-            shown = LogRedactor.redact("https://u:SECRET@h/p")
-        assert shown == "[…]"
+            shown = LogRedactor.settle("https://u:SECRET@h/p")
+        assert shown is None
         assert len(calls) == LogRedactor.PASSES
         assert caplog.records == []
 
-    def test_settle_says_none_when_the_passes_do_not_settle(
+    def test_a_truncated_record_that_never_settles_says_none(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(LogRedactor, "_once", lambda text: text + "x")
-        assert LogRedactor.settle("a") is None
+        assert LogRedactor.settle("a" * (LogRedactor.MAX_RECORD + 5)) is None
 
-    def test_settle_returns_the_redacted_text_when_it_settles(self) -> None:
-        assert LogRedactor.settle("https://u:S@h/p") == LogRedactor.redact(
-            "https://u:S@h/p"
-        )
-
-    def test_a_truncated_record_keeps_its_marker_when_it_never_settles(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            LogRedactor, "_once", lambda text: text if "settle" in text else text + "x"
-        )
-        shown = LogRedactor.redact("a" * (LogRedactor.MAX_RECORD + 5))
-        assert shown == "[…] […truncated 5 bytes]"
+    def test_a_truncated_record_that_settles_keeps_its_marker(self) -> None:
+        shown = redacted("a" * (LogRedactor.MAX_RECORD + 5))
+        assert shown.endswith(" […truncated 5 bytes]")

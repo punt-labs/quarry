@@ -15,6 +15,7 @@ import pytest
 from hypothesis import given, settings, strategies as st
 
 from quarry.log_redactor import LogRedactor
+from tests.redaction import redacted
 
 _MARKER_CHARS = "QXZJ"
 # Every whitespace character urlsplit or a log reader may put inside a URL, except
@@ -162,7 +163,7 @@ def _text(lines: list[tuple[bool, str]]) -> str:
 @_PROFILE
 @given(_lines)
 def test_no_secret_survives(lines: list[tuple[bool, str]]) -> None:
-    shown = LogRedactor.redact(_text(lines))
+    shown = redacted(_text(lines))
     assert not set(shown) & set(_MARKER_CHARS), shown
 
 
@@ -170,13 +171,13 @@ def test_no_secret_survives(lines: list[tuple[bool, str]]) -> None:
 @given(st.lists(_prose, min_size=1, max_size=8))
 def test_every_non_url_line_survives_unchanged(lines: list[str]) -> None:
     text = "\n".join(lines)
-    assert LogRedactor.redact(text) == text
+    assert redacted(text) == text
 
 
 @_PROFILE
 @given(_host_only())
 def test_a_host_only_url_leaves_the_email_after_it_alone(text: str) -> None:
-    assert _EMAIL in LogRedactor.redact(text)
+    assert _EMAIL in redacted(text)
 
 
 @_PROFILE
@@ -184,7 +185,7 @@ def test_a_host_only_url_leaves_the_email_after_it_alone(text: str) -> None:
 def test_lines_around_a_split_url_survive(
     before: list[str], split: str, after: str
 ) -> None:
-    shown = LogRedactor.redact("\n".join([*before, split, after]))
+    shown = redacted("\n".join([*before, split, after]))
     assert shown.endswith("\n" + after)
     assert shown.startswith("\n".join(before)) or not before
 
@@ -207,15 +208,15 @@ def test_no_generated_case_comes_near_the_pass_cap(
 @_PROFILE
 @given(_lines)
 def test_redaction_is_idempotent(lines: list[tuple[bool, str]]) -> None:
-    once = LogRedactor.redact(_text(lines))
-    assert LogRedactor.redact(once) == once
+    once = redacted(_text(lines))
+    assert redacted(once) == once
 
 
 @_PROFILE
 @given(_FUZZ)
 def test_arbitrary_url_shaped_text_is_idempotent(text: str) -> None:
-    once = LogRedactor.redact(text)
-    assert LogRedactor.redact(once) == once
+    once = redacted(text)
+    assert redacted(once) == once
 
 
 # djb's proof inputs that once leaked, kept as explicit examples.  The corpus and
@@ -247,6 +248,6 @@ _PROOFS = (
 
 @pytest.mark.parametrize("text", _PROOFS)
 def test_the_proof_inputs_leave_no_secret(text: str) -> None:
-    shown = LogRedactor.redact(text)
+    shown = redacted(text)
     assert not set(shown) & set(_MARKER_CHARS)
     assert "SECRET" not in shown

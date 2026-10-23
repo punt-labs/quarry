@@ -44,19 +44,39 @@ class _FirstPartyHandler(logging.Handler):
         settled = LogRedactor.settle(super().format(single))
         return self._withheld(record) if settled is None else settled
 
-    @staticmethod
-    def _withheld(record: logging.LogRecord) -> str:
+    def _withheld(self, record: logging.LogRecord) -> str:
         """Return the one fixed line that stands for a record that did not settle.
 
-        Built only from what the code itself writes: the time, level, logger and
-        call site.  No message and no traceback text, and no log call.
+        Built from what the code itself writes: the time (in the handler's own
+        format), level, logger and call site, then the message template if it
+        settles on its own.  No arguments, no traceback text, and no log call.
+        The line goes through the redactor too, so a secret-shaped path or logger
+        name is masked; if even that does not settle, a line with no fields.
         """
-        when = logging.Formatter().formatTime(record)
+        formatter = self.formatter or logging.Formatter()
+        when = formatter.formatTime(record, formatter.datefmt)
         where = f"{record.name} {record.pathname}:{record.lineno}"
-        return LogRedactor.one_line(
+        line = (
             f"{when} {record.levelname} {where}: message withheld: "
             f"redaction did not settle in {LogRedactor.PASSES} passes"
         )
+        template = self._template(record)
+        if template is not None:
+            line = f"{line} [{template}]"
+        return self._fixed(line, "message withheld: redaction did not settle")
+
+    @staticmethod
+    def _template(record: logging.LogRecord) -> str | None:
+        """Return the record's message template if it settles on its own."""
+        if not isinstance(record.msg, str):
+            return None
+        return LogRedactor.settle(LogRedactor.one_line(record.msg))
+
+    @staticmethod
+    def _fixed(line: str, fallback: str) -> str:
+        """Return *line* one-line and redacted, or *fallback* if it will not settle."""
+        settled = LogRedactor.settle(LogRedactor.one_line(line))
+        return fallback if settled is None else settled
 
     def _traceback(self, record: logging.LogRecord) -> str | None:
         """Return the record's traceback with every line indented, or ``None``."""
@@ -90,8 +110,17 @@ class _FirstPartyHandler(logging.Handler):
             f"--- Logging error ---\n{LogRedactor.one_line(who)}\n"
             f"{LogRedactor.one_line(where)}\n{frames}"
         )
+        settled = LogRedactor.settle(report)
+        if settled is None:
+            settled = self._fixed(
+                f"--- Logging error --- {record.name} at "
+                f"{record.pathname}:{record.lineno}: report withheld: "
+                f"redaction did not settle in {LogRedactor.PASSES} passes",
+                "--- Logging error --- report withheld: redaction did not settle",
+            )
+            settled += "\n"
         with suppress(OSError, ValueError):  # a dead stderr must not break the caller
-            sys.stderr.write(LogRedactor.redact(report))
+            sys.stderr.write(settled)
 
 
 @final

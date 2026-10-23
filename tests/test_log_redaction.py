@@ -248,37 +248,41 @@ class TestContinuationLines:
         assert all(line.startswith("\t") for line in lines[1:])
 
 
+_POISON = "POISON"
+
+
+@pytest.fixture
+def poisoned(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make any text holding ``POISON`` fail to settle; all other text redacts."""
+    real = LogRedactor._once  # pyright: ignore[reportPrivateUsage]
+
+    def once(text: str) -> str:
+        return text + "x" if _POISON in text else real(text)
+
+    monkeypatch.setattr(LogRedactor, "_once", once)
+
+
+@pytest.mark.usefixtures("poisoned")
 class TestARecordThatDoesNotSettle:
     @staticmethod
-    def _never_settles(monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(LogRedactor, "_once", lambda text: text + "x")
-
-    def test_one_fixed_line_stands_for_it(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        self._never_settles(monkeypatch)
+    def _handler() -> RedactingStreamHandler:
         handler = RedactingStreamHandler()
         handler.setFormatter(logging.Formatter("%(message)s"))
-        record = _record("quarry.x", logging.ERROR, "fetch http://u:SECRET@h/p")
-        line = handler.format(record)
-        assert line.endswith(
-            f"message withheld: redaction did not settle in {LogRedactor.PASSES} passes"
-        )
+        return handler
 
-    def test_the_line_names_the_level_the_logger_and_the_call_site(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        self._never_settles(monkeypatch)
-        record = _record("quarry.x", logging.ERROR, "m")
-        line = RedactingStreamHandler().format(record)
+    def test_one_fixed_line_stands_for_it(self) -> None:
+        record = _record("quarry.x", logging.ERROR, "fetch %s", _POISON)
+        line = self._handler().format(record)
+        assert "message withheld: redaction did not settle in 8 passes" in line
+        assert "\n" not in line
+
+    def test_the_line_names_the_level_the_logger_and_the_call_site(self) -> None:
+        line = self._handler().format(_record("quarry.x", logging.ERROR, "%s", _POISON))
         assert all(part in line for part in ("ERROR", "quarry.x", f"{__file__}:1"))
 
-    def test_the_line_carries_no_message_or_traceback_text(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        self._never_settles(monkeypatch)
+    def test_the_line_carries_no_arguments_or_traceback_text(self) -> None:
         try:
-            msg = "boom SECRET2"
+            msg = f"boom SECRET2 {_POISON}"
             raise RuntimeError(msg)
         except RuntimeError:
             record = logging.LogRecord(
@@ -287,26 +291,92 @@ class TestARecordThatDoesNotSettle:
                 __file__,
                 1,
                 "SECRET1 %s",
-                ("SECRET3",),
+                (f"SECRET3 {_POISON}",),
                 sys.exc_info(),
             )
-        line = RedactingStreamHandler().format(record)
-        assert not any(s in line for s in ("SECRET1", "SECRET2", "SECRET3"))
+        line = self._handler().format(record)
+        assert not any(s in line for s in ("SECRET2", "SECRET3", _POISON))
+
+    def test_a_template_that_settles_is_kept_in_the_line(self) -> None:
+        line = self._handler().format(
+            _record("quarry.x", logging.ERROR, "fetch %s failed", _POISON)
+        )
+        assert "[fetch %s failed]" in line
+
+    def test_a_template_that_does_not_settle_is_left_out(self) -> None:
+        line = self._handler().format(
+            _record("quarry.x", logging.ERROR, f"{_POISON} %s", "a")
+        )
+        assert _POISON not in line
+        assert "message withheld" in line
+
+    def test_the_time_follows_the_handlers_own_format(self) -> None:
+        handler = RedactingStreamHandler()
+        handler.setFormatter(logging.Formatter("%(message)s", datefmt="DATE-HERE"))
+        line = handler.format(_record("quarry.x", logging.ERROR, "%s", _POISON))
+        assert line.startswith("DATE-HERE ERROR ")
+
+    def test_a_secret_shaped_call_site_is_masked(self) -> None:
+        record = logging.LogRecord(
+            "quarry.x",
+            logging.ERROR,
+            "https://u:PWSEC@h.test/p?q=QSEC",
+            1,
+            "%s",
+            (_POISON,),
+            None,
+        )
+        line = self._handler().format(record)
+        assert not any(s in line for s in ("PWSEC", "QSEC"))
+        assert "message withheld" in line
+
+    def test_a_line_that_will_not_settle_either_is_a_line_with_no_fields(self) -> None:
+        record = logging.LogRecord(
+            "quarry.x", logging.ERROR, f"/{_POISON}.py", 1, "%s", (_POISON,), None
+        )
+        line = self._handler().format(record)
+        assert line == "message withheld: redaction did not settle"
 
     def test_formatting_it_makes_no_log_record(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+        self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        self._never_settles(monkeypatch)
         with caplog.at_level(logging.DEBUG):
-            RedactingStreamHandler().format(_record("quarry.x", logging.ERROR, "m"))
+            self._handler().format(_record("quarry.x", logging.ERROR, "%s", _POISON))
         assert caplog.records == []
 
     def test_a_file_handler_writes_the_line_once_though_rollover_formats_it(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, tmp_path: Path
     ) -> None:
-        self._never_settles(monkeypatch)
         log = tmp_path / "x.log"
         handler = RedactingFileHandler(str(log), maxBytes=10_000, encoding="utf-8")
-        handler.emit(_record("quarry.x", logging.ERROR, "m"))
+        handler.emit(_record("quarry.x", logging.ERROR, "%s", _POISON))
         handler.close()
         assert log.read_text(encoding="utf-8").count("message withheld") == 1
+
+
+@pytest.mark.usefixtures("poisoned")
+class TestAReportThatDoesNotSettle:
+    @staticmethod
+    def _broken(pathname: str = "/src/quarry/caller.py") -> logging.LogRecord:
+        # %d with a string raises inside format, so handleError runs.
+        return logging.LogRecord(
+            "quarry.x", logging.WARNING, pathname, 321, f"n=%d {_POISON}", ("a",), None
+        )
+
+    def test_one_fixed_line_with_a_newline_is_written(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        RedactingStreamHandler(io.StringIO()).handle(self._broken())
+        err = capsys.readouterr().err
+        assert err == (
+            "--- Logging error --- quarry.x at /src/quarry/caller.py:321: "
+            "report withheld: redaction did not settle in 8 passes\n"
+        )
+
+    def test_a_call_site_that_will_not_settle_gives_a_line_with_no_fields(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        RedactingStreamHandler(io.StringIO()).handle(self._broken(f"/{_POISON}.py"))
+        assert capsys.readouterr().err == (
+            "--- Logging error --- report withheld: redaction did not settle\n"
+        )

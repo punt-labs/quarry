@@ -7,7 +7,7 @@ import time
 import pytest
 
 from quarry.authority_mask import AuthorityMask
-from quarry.log_redactor import LogRedactor
+from tests.redaction import redacted
 
 
 class TestOpener:
@@ -164,7 +164,7 @@ class TestAHostIsNeverJoinedToWhatFollowsIt:
     def test_the_host_is_kept_and_the_separate_credential_masked(
         self, text: str, kept: str
     ) -> None:
-        shown = LogRedactor.redact(text)
+        shown = redacted(text)
         assert kept in shown
         assert "[userinfo]@" in shown
         assert "foo:bar" not in shown
@@ -184,7 +184,7 @@ class TestADigitPasswordSplitAcrossAGap:
         ],
     )
     def test_the_rest_of_the_digits_do_not_survive(self, text: str) -> None:
-        assert "34" not in LogRedactor.redact(text)
+        assert "34" not in redacted(text)
 
     def test_a_host_with_a_port_is_still_not_joined_to_an_address(self) -> None:
         text = "see http://h.example:8080 mail alice@example.com now"
@@ -205,6 +205,6 @@ class TestTheOpenerBoundary:
         ["a" * 40, "a" * 33, "-http", "2http", "1.http", "+https", "x-y.z+1"],
     )
     def test_whatever_the_scheme_the_credential_is_masked(self, scheme: str) -> None:
-        shown = LogRedactor.redact(f"{scheme}://u:QQ RR@h/x")
+        shown = redacted(f"{scheme}://u:QQ RR@h/x")
         assert "QQ" not in shown
         assert "RR" not in shown
