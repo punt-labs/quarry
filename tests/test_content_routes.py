@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import pytest
+from starlette.responses import JSONResponse
 from starlette.testclient import TestClient
 from typer.testing import CliRunner
 
@@ -632,3 +633,48 @@ class TestUrlAdmission:
         assert resp.status_code == 400
         assert "SECRET" not in resp.text
         assert len(daemon.ctx.tasks) == 0
+
+
+class TestACaptureIsUrlSourcedOnlyWhenItIsAPageCapture:
+    """The route decides; the name alone never does (SF12-5, djb LOW-1)."""
+
+    _URL = "https://example.com/page"
+
+    @staticmethod
+    def _filed(http: TestClient, tmp_path: Path, **fields: str) -> CaptureIngestJob:
+        body = {"content": "x", "cwd": str(tmp_path), **fields}
+        with (
+            patch("quarry.url_admission.UrlAdmission.reject_reason", return_value=None),
+            patch(
+                "quarry.daemon.routes.captures.CaptureRoutes.submit",
+                autospec=True,
+                return_value=JSONResponse({}),
+            ) as submit,
+        ):
+            http.post("/v1/capture", json=body)
+        job = submit.call_args.args[1]
+        assert isinstance(job, CaptureIngestJob)
+        return job
+
+    def test_a_page_capture_named_for_its_source_is(
+        self, http: TestClient, tmp_path: Path
+    ) -> None:
+        job = self._filed(http, tmp_path, document_name=self._URL, source_url=self._URL)
+        assert job.inline.url_sourced
+
+    def test_a_transcript_with_a_url_shaped_name_is_not(
+        self, http: TestClient, tmp_path: Path
+    ) -> None:
+        job = self._filed(http, tmp_path, document_name=self._URL)
+        assert not job.inline.url_sourced
+
+    def test_a_source_url_with_a_different_url_shaped_name_is_not(
+        self, http: TestClient, tmp_path: Path
+    ) -> None:
+        job = self._filed(
+            http,
+            tmp_path,
+            document_name="https://example.com/other",
+            source_url=self._URL,
+        )
+        assert not job.inline.url_sourced

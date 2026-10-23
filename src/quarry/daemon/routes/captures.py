@@ -63,8 +63,11 @@ class CaptureRoutes(ContentRouteGroup):
         labels = self._labels(
             memory_type, body, overwrite=overwrite, collection=collection.name
         )
+        # A page capture is named for the URL it came from; a transcript, or a
+        # capture named for some other URL, is a label and never a page.
+        is_page = source is not None and name == WebFetchName.maybe(source_url)
         inline = ScrubbedIngestJob(
-            name, content, labels, format_hint, "capture", url_sourced=True
+            name, content, labels, format_hint, "capture", url_sourced=is_page
         )
         return CaptureIngestJob(inline=inline, source_url=source)
 
