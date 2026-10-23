@@ -216,6 +216,19 @@ class TestALaunchThatFails:
         assert fd is not None  # our fd was closed, so nothing holds the flock
         os.close(fd)
 
+    def test_an_unexpected_error_releases_the_lock_and_propagates(
+        self, tmp_path: Path
+    ) -> None:
+        lock = SyncLock(path=tmp_path / "sync.pid")
+        with (
+            patch.object(_subprocess, "Popen", side_effect=TypeError("bad arg")),
+            pytest.raises(TypeError),
+        ):
+            lock.launch_background_sync()
+        fd = lock.acquire()
+        assert fd is not None  # the fd was closed on the way out
+        os.close(fd)
+
 
 class TestAFaultIsNotContention:
     """A kernel or filesystem fault must read as a failure, never as "running"."""

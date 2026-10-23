@@ -88,11 +88,6 @@ class SyncLock:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         return os.open(str(self._path), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
 
-    @staticmethod
-    def _flags() -> int:
-        """Return the flock request: exclusive, and never wait for the holder."""
-        return fcntl.LOCK_EX | fcntl.LOCK_NB
-
     def acquire(self) -> int | None:
         """Attempt to take the sync lock; return the held fd, or ``None``.
 
@@ -111,7 +106,7 @@ class SyncLock:
             logger.error("session-start: failed to open %s: %s", self._path, exc)
             raise
         try:
-            fcntl.flock(fd, self._flags())
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             # Normal contention: another process holds it. Expected, not logged.
             os.close(fd)
@@ -154,46 +149,46 @@ class SyncLock:
             logger.debug("session-start: sync lock %s held, skipping", self._path)
             return "running"
 
-        # pass_fds=(fd,) is the ONLY inheritance mechanism used: CPython's
-        # _posixsubprocess clears CLOEXEC on each pass_fds descriptor in the
-        # CHILD, after fork and before exec.  Marking the fd inheritable on
-        # the PARENT first (a prior version of this code did) would open a
-        # window where an unrelated thread's own subprocess/fork could
-        # inherit the lock fd and keep the flock held after this sync exits
-        # -- relying on pass_fds alone keeps the parent's copy CLOEXEC and
-        # closes that window.
+        # Our copy of the fd is closed on every path out of here, whatever
+        # raises: the child's inherited copy of the SAME open file description
+        # (if one was spawned) keeps the flock held until it exits or dies.
         try:
-            proc = subprocess.Popen(
-                [sys.executable, "-m", "quarry", "sync"],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-                pass_fds=(fd,),
-            )
-        except (OSError, ValueError, subprocess.SubprocessError) as exc:
-            logger.error("session-start: failed to launch background sync: %s", exc)
-            # No child inherited a copy — closing ours fully releases the lock.
-            os.close(fd)
-            return "failed"
+            # pass_fds=(fd,) is the ONLY inheritance mechanism used: CPython's
+            # _posixsubprocess clears CLOEXEC on each pass_fds descriptor in the
+            # CHILD, after fork and before exec.  Marking the fd inheritable on
+            # the PARENT first (a prior version of this code did) would open a
+            # window where an unrelated thread's own subprocess/fork could
+            # inherit the lock fd and keep the flock held after this sync exits
+            # -- relying on pass_fds alone keeps the parent's copy CLOEXEC and
+            # closes that window.
+            try:
+                proc = subprocess.Popen(
+                    [sys.executable, "-m", "quarry", "sync"],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                    pass_fds=(fd,),
+                )
+            except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                logger.error("session-start: failed to launch background sync: %s", exc)
+                return "failed"
 
-        # Record the PID for observability only — the flock the child
-        # inherited, not this content, is now the actual lock.  A short
-        # write is retried until the full PID lands, so a later human
-        # inspecting the file never sees a truncated or stale value.
-        try:
-            os.ftruncate(fd, 0)
-            data = str(proc.pid).encode()
-            written = 0
-            while written < len(data):
-                written += os.write(fd, data[written:])
-        except OSError as exc:
-            logger.warning(
-                "session-start: sync launched but pidfile write failed: %s", exc
-            )
+            # Record the PID for observability only — the flock the child
+            # inherited, not this content, is now the actual lock.  A short
+            # write is retried until the full PID lands, so a later human
+            # inspecting the file never sees a truncated or stale value.
+            try:
+                os.ftruncate(fd, 0)
+                data = str(proc.pid).encode()
+                written = 0
+                while written < len(data):
+                    written += os.write(fd, data[written:])
+            except OSError as exc:
+                logger.warning(
+                    "session-start: sync launched but pidfile write failed: %s", exc
+                )
         finally:
-            # Close OUR copy — the child's inherited copy of the SAME open
-            # file description keeps the flock held until it exits or dies.
             os.close(fd)
 
         logger.info("session-start: background sync launched (pid=%d)", proc.pid)

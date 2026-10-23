@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import logging
+import sys
 from typing import TYPE_CHECKING
 
 import pytest
@@ -33,8 +34,6 @@ class TestHandlers:
             msg = "boom http://h/p?token=SECRET"
             raise RuntimeError(msg)
         except RuntimeError:
-            import sys
-
             record = logging.LogRecord(
                 "quarry.x", logging.ERROR, __file__, 1, "failed", (), sys.exc_info()
             )
@@ -282,8 +281,6 @@ class TestARecordThatDoesNotSettle:
             msg = "boom SECRET2"
             raise RuntimeError(msg)
         except RuntimeError:
-            import sys
-
             record = logging.LogRecord(
                 "quarry.x",
                 logging.ERROR,
