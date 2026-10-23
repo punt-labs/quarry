@@ -6,6 +6,7 @@ import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Self, final
 
+from quarry.display_name import DisplayName
 from quarry.transcript import Transcript
 
 if TYPE_CHECKING:
@@ -35,8 +36,9 @@ class StoredSessions:
     def __new__(cls, documents: Iterable[Mapping[str, object]]) -> Self:
         self = super().__new__(cls)
         self._stored = {
-            str(doc["document_name"]): cls._parsed(doc.get("ingestion_timestamp"))
+            name: cls._parsed(name, doc.get("ingestion_timestamp"))
             for doc in documents
+            if (name := str(doc["document_name"])).startswith("session-")
         }
         return self
 
@@ -55,7 +57,12 @@ class StoredSessions:
             return False
         try:
             modified = datetime.fromtimestamp(transcript.stat().st_mtime, tz=UTC)
-        except OSError:
+        except OSError as exc:
+            logger.warning(
+                "session %s: transcript could not be examined (%s); re-ingesting",
+                DisplayName(name).redacted(),
+                type(exc).__name__,
+            )
             return False
         return modified <= stored
 
@@ -64,11 +71,15 @@ class StoredSessions:
         self._stored[Transcript(transcript).document_name()] = datetime.now(tz=UTC)
 
     @staticmethod
-    def _parsed(raw: object) -> datetime | None:
+    def _parsed(name: str, raw: object) -> datetime | None:
         """Return the stored timestamp as an aware datetime, or ``None``."""
         try:
             when = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-        except ValueError:
-            logger.warning("unparseable stored ingestion_timestamp; re-ingesting")
+        except ValueError as exc:
+            logger.warning(
+                "session %s: stored ingestion_timestamp unreadable (%s); re-ingesting",
+                DisplayName(name).redacted(),
+                type(exc).__name__,
+            )
             return None
         return when if when.tzinfo else when.replace(tzinfo=UTC)

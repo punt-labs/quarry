@@ -85,7 +85,8 @@ class TestIsCurrent:
         with caplog.at_level(logging.WARNING):
             sessions = StoredSessions(_docs(stored="yesterday"))
         assert not sessions.is_current(transcript)
-        assert "unparseable stored ingestion_timestamp" in caplog.text
+        assert "ValueError" in caplog.text
+        assert "session-1e7aa08d" in caplog.text
 
     def test_a_transcript_that_cannot_be_examined_is_not_current(
         self, tmp_path: Path
@@ -101,3 +102,27 @@ class TestRecord:
         assert not sessions.is_current(transcript)
         sessions.record(transcript)
         assert sessions.is_current(transcript)
+
+
+class TestOnlySessionsAreRead:
+    def test_another_documents_timestamp_is_not_parsed_or_complained_about(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        docs = [{"document_name": "notes.md", "ingestion_timestamp": "garbage"}]
+        with caplog.at_level(logging.WARNING):
+            StoredSessions(docs)
+        assert caplog.text == ""
+
+
+class TestAnUnexaminableTranscript:
+    def test_it_logs_one_warning_with_the_class_and_the_name(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        missing = tmp_path / f"{_NAME}.jsonl"
+        sessions = StoredSessions(_docs(stored=_NOON.isoformat()))
+        with caplog.at_level(logging.WARNING):
+            assert not sessions.is_current(missing)
+        [record] = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert "FileNotFoundError" in record.getMessage()
+        assert "session-1e7aa08d" in record.getMessage()
+        assert str(tmp_path) not in caplog.text

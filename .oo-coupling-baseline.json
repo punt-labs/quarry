@@ -1925,7 +1925,7 @@
     "avg_lcom": 0.5
   },
   "src/quarry/stored_sessions.py": {
-    "efferent_coupling": 1.0,
+    "efferent_coupling": 2.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
