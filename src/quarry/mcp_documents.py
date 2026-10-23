@@ -22,6 +22,7 @@ from quarry.api import (
     ShowRequest,
 )
 from quarry.client import HttpError, TargetResolver
+from quarry.collection_namer import CollectionNamer
 from quarry.formatting import format_document_detail
 from quarry.mcp_guard import ToolGuard
 
@@ -153,8 +154,6 @@ class DocumentTools:
             directory: Absolute path to the directory.
             collection: Collection name. Uses the directory name, sanitized, if empty.
         """
-        from quarry.collection_namer import CollectionNamer  # noqa: PLC0415
-
         # An empty directory would resolve to the cwd and silently register it.
         if err := self._reject_blank(directory, "directory"):
             return err

@@ -24,7 +24,7 @@ def test_the_argument_is_one_word_on_one_line(value: str) -> None:
     if value.isprintable():
         assert shlex.split(shown.arg) == [value]
     else:
-        assert shown.arg == "'<name>'" or shown.arg == "<name>"
+        assert shown.arg == "'<name>'"
 
 
 def test_a_path_object_is_shown_by_its_string() -> None:

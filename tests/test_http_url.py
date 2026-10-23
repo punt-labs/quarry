@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import ast
 import logging
 import re
+from pathlib import Path
 
 import pytest
 
@@ -402,9 +404,6 @@ class TestStoredHasOnlyTheCallersItIsMeantFor:
     """``HttpUrl.stored`` recognises the digest marker, so a fetch must never use it."""
 
     def test_only_the_name_readers_call_it(self) -> None:
-        import ast
-        from pathlib import Path
-
         src = Path(__file__).resolve().parent.parent / "src" / "quarry"
         callers = {
             path.relative_to(src).as_posix()
