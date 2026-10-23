@@ -11,12 +11,16 @@ a lost send is only a lost *capture*, never a lost transcript on disk.
 from __future__ import annotations
 
 import logging
+from functools import partial
 from typing import TYPE_CHECKING, final
 
 from quarry.send_outcome import SendOutcome
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from quarry.api import CaptureIngestRequest, IngestRequest, RememberRequest
+    from quarry.client import QuarryClient
 
 logger = logging.getLogger(__name__)
 
@@ -25,13 +29,6 @@ logger = logging.getLogger(__name__)
 # must never make a compaction wait — the durable archive already holds the
 # transcript.
 _CAPTURE_SEND_TIMEOUT = 5.0
-
-# The client method that carries each request type to its daemon route.
-_DOORS = {
-    "CaptureIngestRequest": "capture",
-    "IngestRequest": "ingest_url",
-    "RememberRequest": "remember",
-}
 
 
 @final
@@ -57,23 +54,25 @@ class DaemonCaptureSender:
         self, request: CaptureIngestRequest, *, unreachable_log: str
     ) -> SendOutcome:
         """Send an inline capture (transcript or fetched page) to the daemon."""
-        return self._send(request, unreachable_log)
+        return self._send(lambda c: partial(c.capture, request), unreachable_log)
 
     def send_ingest_url(
         self, request: IngestRequest, *, unreachable_log: str
     ) -> SendOutcome:
         """Ask the daemon to re-fetch and index a URL (the web-fetch fallback)."""
-        return self._send(request, unreachable_log)
+        return self._send(lambda c: partial(c.ingest_url, request), unreachable_log)
 
     def send_remember(
         self, request: RememberRequest, *, unreachable_log: str
     ) -> SendOutcome:
         """File a distilled memory (a subagent's own report) via ``remember``."""
-        return self._send(request, unreachable_log)
+        return self._send(lambda c: partial(c.remember, request), unreachable_log)
 
     @staticmethod
-    def _send(request: object, unreachable_log: str) -> SendOutcome:
-        """Post *request* through the client door for its type; never raise.
+    def _send(
+        door: Callable[[QuarryClient], Callable[..., object]], unreachable_log: str
+    ) -> SendOutcome:
+        """Post through the bound client method *door* selects; never raise.
 
         The hook imports only the thin client — no engine.  A failed send is
         never fatal (fire-and-forget; the daemon 202s immediately), so this
@@ -95,8 +94,7 @@ class DaemonCaptureSender:
         )
 
         try:
-            door = getattr(TargetResolver.connect(), _DOORS[type(request).__name__])
-            door(request, timeout=_CAPTURE_SEND_TIMEOUT)
+            door(TargetResolver.connect())(timeout=_CAPTURE_SEND_TIMEOUT)
         except ClientConfigError as exc:
             outcome = SendOutcome.error(f"daemon target misconfigured: {exc.message}")
         except QuarryConnectionError:
