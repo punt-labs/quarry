@@ -1,7 +1,7 @@
 {
-  "total": 199,
+  "total": 198,
   "by_category": {
-    "noqa": 161,
+    "noqa": 160,
     "type_ignore": 7,
     "pylint_disable": 0,
     "pyright_ignore": 1,
@@ -143,9 +143,6 @@
     "src/quarry/lesson.py": {
       "noqa": 1
     },
-    "src/quarry/mcp_documents.py": {
-      "noqa": 1
-    },
     "src/quarry/onnx_session.py": {
       "noqa": 1
     },
@@ -190,5 +187,5 @@
       "noqa": 1
     }
   },
-  "updated_at": "2026-10-23T22:08:46Z"
+  "updated_at": "2026-10-23T22:55:12Z"
 }

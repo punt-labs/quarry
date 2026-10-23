@@ -90,11 +90,21 @@ class LegacyUrlNames:
             return []
         stored = self._under(f"{parts.scheme}://{parts.netloc}", collection)
         return [
-            other
-            for other in stored
-            if other != name
-            and name in {self.canonical(other), self._recanonical(other)}
+            other for other in stored if other != name and self._spells(other, name)
         ]
+
+    @classmethod
+    def _spells(cls, other: str, name: str) -> bool:
+        """Return whether the stored *other* is a former spelling of *name*.
+
+        A name this build writes is already canonical and spells only itself: its
+        marker is a digest, not a query, so reading it as a URL would make a
+        copied digest alias a different page.
+        """
+        canonical = cls.canonical(other)
+        return name == canonical or (
+            canonical != other and name == cls._recanonical(other)
+        )
 
     def stored(self, name: str, collection: str) -> None:
         """Note that *name* is now stored in *collection*, if its host is listed."""

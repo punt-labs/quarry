@@ -514,11 +514,22 @@ class TestARawNameThatLooksLikeTheDigestMarker:
     def test_a_real_query_that_spells_the_marker_is_a_legacy_name_of_its_page(
         self, db: Database
     ) -> None:
-        raw = "https://example.com/p?q[sha256]=0123456789abcdef"
+        raw = "https://example.com/p?q[sha256]=D1"
         _store_as_stored_by_an_older_build(db, raw)
         name = HttpUrl(raw).document_name
         assert name != raw
         assert LegacyUrlNames(db).aliases(name, _COLLECTION) == [raw]
+
+    def test_a_current_build_name_is_not_an_alias_of_another_page(
+        self, db: Database
+    ) -> None:
+        copied = "https://example.com/p?q[sha256]=0123456789abcdef"
+        _store_as_stored_by_an_older_build(db, copied)
+        other_page = HttpUrl(copied).document_name
+        names = LegacyUrlNames(db)
+        assert other_page != copied
+        assert names.aliases(other_page, _COLLECTION) == []
+        assert names.stored_as(other_page, _COLLECTION) is None
 
     def test_a_marker_name_in_an_old_host_spelling_is_a_legacy_name_too(
         self, db: Database
