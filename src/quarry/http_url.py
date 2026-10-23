@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import ClassVar, Self, final
 from urllib.parse import urlsplit, urlunsplit
@@ -10,6 +11,8 @@ from quarry.capture_url import CaptureUrl
 from quarry.log_form import LogForm
 from quarry.remote import to_netloc
 from quarry.url_syntax import UrlSyntax
+
+logger = logging.getLogger(__name__)
 
 _MALFORMED = "malformed URL"
 _UNPARSEABLE = "(unparseable URL)"
@@ -103,8 +106,8 @@ class HttpUrl:
         """
         try:
             return str(cls(raw))
-        except ValueError:
-            pass
+        except ValueError as exc:
+            logger.debug("HttpUrl refused a URL: %s", type(exc).__name__)
         tolerant = urlsplit(CaptureUrl.display(raw))
         host = tolerant.hostname or ""
         if tolerant.scheme not in cls._DEFAULT_PORTS or not 0 < len(host) <= 253:

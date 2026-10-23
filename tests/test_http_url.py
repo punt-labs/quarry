@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from quarry.http_url import HttpUrl
@@ -241,3 +243,24 @@ class TestImmutability:
     def test_an_attribute_cannot_be_deleted(self, name: str) -> None:
         with pytest.raises(AttributeError, match="immutable"):
             delattr(HttpUrl(_RAW), name)
+
+
+class TestShownLogsTheRefusal:
+    def test_a_refused_url_leaves_a_debug_line_with_the_class_only(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        raw = "http://u:SECRETPW@h.test/SECRETPATH?t=QSEC"
+        with caplog.at_level(logging.DEBUG, logger="quarry.http_url"):
+            HttpUrl.shown(raw)
+        [record] = caplog.records
+        assert record.levelno == logging.DEBUG
+        assert "ValueError" in record.getMessage()
+        for secret in ("SECRETPW", "SECRETPATH", "QSEC"):
+            assert secret not in caplog.text
+
+    def test_an_admitted_url_logs_nothing(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.DEBUG, logger="quarry.http_url"):
+            HttpUrl.shown("https://h.test/a")
+        assert caplog.records == []
