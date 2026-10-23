@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Self, final
 
+from quarry.log_redactor import LogRedactor
 from quarry.session_start_templates import SessionStartTemplates
 from quarry.sync_lock import SyncLock
 
@@ -27,6 +28,11 @@ class ActiveSessionContext:
 
     __slots__ = ("_collection", "_directory")
 
+    _SLASH_TAIL = (
+        "Slash commands: /find, /ingest, /remember, /explain, /source, /quarry. "
+        "For deep research across local docs and the web, use the researcher agent."
+    )
+
     _directory: Path
     _collection: str
 
@@ -38,16 +44,38 @@ class ActiveSessionContext:
 
     def text(self) -> str:
         """Return the active-mode context, launching the background sync."""
-        captures_collection = f"{self._collection}-captures"
         sync_status = SyncLock().launch_background_sync()
         counts = self._session_coverage(self._collection)
         if counts is None:
-            return SessionStartTemplates.active_unreachable_coverage(
-                self._directory, self._collection, captures_collection, sync_status
+            coverage = (
+                "Coverage counts unavailable "
+                "(quarryd unreachable or client not authorized)."
             )
-        return SessionStartTemplates.active(
-            self._directory, self._collection, captures_collection, counts, sync_status
+        else:
+            coverage = (
+                f"{counts['documents_indexed']} documents indexed, "
+                f"{counts['transcripts_captured']} transcripts captured, "
+                f"{counts['memories_saved']} memories saved."
+            )
+        header = (
+            "Quarry semantic search is active for this project.\n"
+            f'Collection: "{self._collection}" '
+            f"({LogRedactor.quoted(str(self._directory))})\n"
+            f'Captures: "{self._collection}-captures"\n'
+            f"{coverage}"
         )
+        return (
+            f"{header}\n{SessionStartTemplates.trailer()}\n"
+            f"{self._sync_line(sync_status)}\n{self._SLASH_TAIL}"
+        )
+
+    @classmethod
+    def _sync_line(cls, status: str) -> str:
+        """Render the launched/running/failed background-sync status line."""
+        return {
+            "launched": "Background sync in progress.",
+            "running": "Background sync already running.",
+        }.get(status, "Background sync failed to launch.")
 
     @staticmethod
     def _session_coverage(collection: str) -> CoverageCounts | None:

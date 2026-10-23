@@ -2204,7 +2204,7 @@ class TestSessionStartMarkerGate(_ReachableDaemonEmptyCatalog):
         assert isinstance(output, dict)
         ctx = str(output["additionalContext"])
         assert "not enabled" in ctx
-        assert f"quarry enable {project}" in ctx
+        assert f"quarry enable {str(project)!r}" in ctx
         assert "quarry deregister" not in ctx
 
         conn = SyncRegistry(settings.registry_path)
@@ -2239,7 +2239,7 @@ class TestSessionStartMarkerGate(_ReachableDaemonEmptyCatalog):
         output = result["hookSpecificOutput"]
         assert isinstance(output, dict)
         ctx = str(output["additionalContext"])
-        assert f"quarry enable {project}" in ctx
+        assert f"quarry enable {str(project)!r}" in ctx
         assert "quarry deregister drifted" in ctx
 
         conn = SyncRegistry(settings.registry_path)

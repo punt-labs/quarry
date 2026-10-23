@@ -96,6 +96,17 @@ class LogRedactor:
         return cls._LINE_BREAKS.sub(cls._escape, message)
 
     @classmethod
+    def quoted(cls, value: str) -> str:
+        """Return *value* as one quoted line: ``repr`` with line breaks escaped.
+
+        For text that is shown to a reader, human or model, but that an outside
+        party chose (a directory name, say): quoting marks where it begins and
+        ends, and no character in it can start a new line or hide the rest of
+        this one.
+        """
+        return cls.one_line(repr(value))
+
+    @classmethod
     def continuation(cls, block: str) -> str:
         """Return a multi-line *block* with every line indented by a tab.
 

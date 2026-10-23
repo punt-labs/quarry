@@ -26,7 +26,6 @@ from quarry._stdlib import load_hook_config
 from quarry.active_session_context import ActiveSessionContext
 from quarry.pre_compact_hook import PreCompactHook
 from quarry.session_start_reply import SessionStartReply
-from quarry.session_start_templates import SessionStartTemplates
 
 if TYPE_CHECKING:
     from quarry.collection_resolver import CollectionResolver
@@ -160,7 +159,7 @@ class _SessionStartContext:
         registration is written, no guide is deposited. § 2.3 reserves both
         mutations to the explicit ``enable`` verb.
         """
-        return SessionStartReply.of(SessionStartTemplates.nudge_enable(self._directory))
+        return SessionStartReply.nudge_enable(self._directory)
 
     def _path_c(self, collection: str) -> SessionStartReply:
         """Marker absent + coverage exists: surface the drift; two doors, no auto-fix.
@@ -175,9 +174,7 @@ class _SessionStartContext:
             collection,
             self._directory,
         )
-        return SessionStartReply.of(
-            SessionStartTemplates.drift_surface(self._directory, collection)
-        )
+        return SessionStartReply.drift_surface(self._directory, collection)
 
     def _auto_register(self) -> str | SessionStartReply:
         """Register the covering row and return its collection name.
@@ -195,11 +192,7 @@ class _SessionStartContext:
                 self._directory,
                 self._directory,
             )
-            return SessionStartReply.of(
-                SessionStartTemplates.subsumption(self._directory),
-                "skip",
-                "subsumption",
-            )
+            return SessionStartReply.subsumption(self._directory)
         # A same-directory re-adopt reuses this cwd's own keep-data archive
         # before consulting the daemon — so a re-open of an archived repo
         # works even when quarryd is down.
@@ -219,11 +212,7 @@ class _SessionStartContext:
                     "auto-registration of %s to avoid a cross-project merge",
                     self._directory,
                 )
-                return SessionStartReply.of(
-                    SessionStartTemplates.daemon_unreachable(self._directory),
-                    "error",
-                    "daemon-unreachable",
-                )
+                return SessionStartReply.daemon_unreachable(self._directory)
             collection = self._resolver.unique_collection_name(
                 self._directory, chunk_collections
             )

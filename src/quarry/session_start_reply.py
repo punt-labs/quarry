@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Self, final
 
 from quarry._hook_trace import HookTrace, Outcome
+from quarry.log_redactor import LogRedactor
 from quarry.refusal import RegistrationRefusedError
 from quarry.session_start_templates import SessionStartTemplates
 
@@ -43,14 +44,50 @@ class SessionStartReply:
         return cls(envelope, kind, detail)
 
     @classmethod
+    def nudge_enable(cls, directory: Path) -> Self:
+        """Return the reply that nudges the operator to ``quarry enable`` here."""
+        return cls.of(SessionStartTemplates.nudge_enable(cls._shown(directory)))
+
+    @classmethod
+    def drift_surface(cls, directory: Path, collection: str) -> Self:
+        """Return the reply that surfaces a registration with no opt-in marker."""
+        return cls.of(
+            SessionStartTemplates.drift_surface(cls._shown(directory), collection)
+        )
+
+    @classmethod
+    def subsumption(cls, directory: Path) -> Self:
+        """Return the skip reply for a directory with child registrations under it."""
+        return cls.of(
+            SessionStartTemplates.subsumption(cls._shown(directory)),
+            "skip",
+            "subsumption",
+        )
+
+    @classmethod
+    def daemon_unreachable(cls, directory: Path) -> Self:
+        """Return the error reply for an auto-register deferred on a down daemon."""
+        return cls.of(
+            SessionStartTemplates.daemon_unreachable(cls._shown(directory)),
+            "error",
+            "daemon-unreachable",
+        )
+
+    @staticmethod
+    def _shown(directory: Path) -> str:
+        """Return *directory* quoted on one line, as every template shows it."""
+        return LogRedactor.quoted(str(directory))
+
+    @classmethod
     def refusing(
         cls, registry: SyncRegistry, directory: Path, collection: str
     ) -> Self | None:
         """Register *directory*; return the reply that states a refusal, else ``None``.
 
-        The refusal's text is fixed and name-free, so it is safe to show; its detail
-        (which collection, which directory) goes to the redacted log line.  A refusal
-        says nothing about the daemon, so the trailer still applies.
+        The refusal's text is fixed and names no path or collection, so it is safe
+        to show; its detail (which collection, which directory) goes to the redacted
+        log line.  A refusal says nothing about the daemon, so the trailer still
+        applies.
         """
         try:
             registry.register_directory(directory, collection)
@@ -62,7 +99,7 @@ class SessionStartReply:
                 exc.detail,
             )
             header = (
-                f"Quarry: auto-register of {directory} was refused: {exc}.\n"
+                f"Quarry: auto-register of this directory was refused: {exc}.\n"
                 "Nothing was registered; run 'quarry enable' after resolving it."
             )
             context = f"{header}\n{SessionStartTemplates.trailer()}"
