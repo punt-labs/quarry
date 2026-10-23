@@ -105,6 +105,16 @@ class TestOverwriteReplacesTheLegacyName:
         _store(db, "https://example.com/page")
         assert _names(db) == {"https://example.com/page"}
 
+    @pytest.mark.parametrize(
+        "legacy", ["https://Example.com/page", "https://EXAMPLE.COM:443/page"]
+    )
+    def test_a_legacy_upper_case_host_is_replaced(
+        self, db: Database, legacy: str
+    ) -> None:
+        _store_as_stored_by_an_older_build(db, legacy)
+        _store(db, "https://example.com/page")
+        assert _names(db) == {"https://example.com/page"}
+
     def test_a_different_host_is_untouched(self, db: Database) -> None:
         _store_as_stored_by_an_older_build(db, "https://other.example/café")
         _store(db, "https://example.com/caf%C3%A9")
