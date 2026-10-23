@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Self, final
 
 from quarry._hook_trace import HookPayload, HookTrace
 from quarry._stdlib import load_hook_config
+from quarry.send_outcome import SendOutcome
 from quarry.session_start_templates import SessionStartTemplates
 from quarry.session_transcript import SessionTranscriptCapture, TranscriptSource
 from quarry.sync_lock import SyncLock
@@ -381,13 +382,7 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
 
     if not outcome.sent:
         trace.error(outcome.failure)
-        return {
-            "systemMessage": (
-                "Warning: quarryd is not reachable, so this session was not "
-                "indexed now. The raw JSONL archive and scrubbed capture are "
-                "saved; run 'quarry backfill-sessions' to index them later."
-            ),
-        }
+        return {"systemMessage": SendOutcome.advice(outcome.failure)}
 
     trace.capture()
     return {

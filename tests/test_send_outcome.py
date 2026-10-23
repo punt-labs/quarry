@@ -27,3 +27,18 @@ def test_a_step_after_a_send_is_named_by_how_the_send_went() -> None:
     assert SendOutcome.rejected(400, "no").named("distilled", "distill") == (
         "distill-daemon-refused"
     )
+
+
+def test_only_an_unreachable_daemon_is_told_to_backfill() -> None:
+    assert "backfill-sessions" in SendOutcome.advice("daemon-unreachable")
+    for label in ("daemon-refused", "daemon-error"):
+        assert "backfill" not in SendOutcome.advice(label)
+
+
+def test_a_refusal_and_a_fault_are_told_where_to_look() -> None:
+    assert "the daemon refused the capture; see quarry.log" in SendOutcome.advice(
+        "daemon-refused"
+    )
+    assert "the daemon failed; see quarry.log or quarry doctor" in SendOutcome.advice(
+        "daemon-error"
+    )

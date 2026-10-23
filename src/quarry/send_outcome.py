@@ -30,6 +30,27 @@ class SendOutcome:
     def __bool__(self) -> bool:
         return self.sent
 
+    @classmethod
+    def advice(cls, label: str) -> str:
+        """Return the warning for a capture whose send failed with *label*.
+
+        The one mapping from a failure to what the user is told: only an
+        unreachable daemon is told to backfill later; a daemon that said no, or
+        failed, is told where to look.
+        """
+        if label == _UNREACHABLE:
+            return (
+                "Warning: quarryd is not reachable, so this session was not indexed "
+                "now. The raw JSONL archive and scrubbed capture are saved; run "
+                "'quarry backfill-sessions' to index them later."
+            )
+        what = (
+            "the daemon refused the capture; see quarry.log"
+            if label == _REFUSED
+            else "the daemon failed; see quarry.log or quarry doctor"
+        )
+        return f"Warning: {what}. The raw JSONL archive and scrubbed capture are saved."
+
     def named(self, done: str, attempt: str) -> str:
         """Return *done* when the send landed, else ``<attempt>-<label>``.
 

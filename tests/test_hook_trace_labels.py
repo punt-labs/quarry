@@ -219,3 +219,57 @@ def test_a_distillation_that_was_not_attempted_is_a_bare_capture(
     remember.assert_not_called()
     line = next(r for r in caplog.records if r.name == "quarry.hooks").getMessage()
     assert line.endswith("-> capture")
+
+
+_ADVICE = {
+    "refused": "the daemon refused the capture; see quarry.log",
+    "unreachable": "quarryd is not reachable",
+    "server-error": "the daemon failed; see quarry.log or quarry doctor",
+    "config-error": "the daemon failed; see quarry.log or quarry doctor",
+}
+
+
+@pytest.mark.parametrize("outcome_name", list(_ADVICE))
+def test_the_pre_compact_message_follows_the_failure(
+    outcome_name: str, tmp_path: Path
+) -> None:
+    outcome, _label = _OUTCOMES[outcome_name]
+    transcript = _make_transcript(tmp_path, "work discussed today")
+    with (
+        patch("quarry.session_transcript.Path.home", return_value=tmp_path / "home"),
+        patch(_SEND, return_value=outcome),
+    ):
+        result = handle_pre_compact(
+            {
+                "cwd": str(tmp_path),
+                "transcript_path": str(transcript),
+                "session_id": "abc12345",
+            }
+        )
+    message = str(result["systemMessage"])
+    assert _ADVICE[outcome_name] in message
+    assert "saved" in message
+
+
+def test_only_an_unreachable_daemon_is_told_to_backfill(tmp_path: Path) -> None:
+    transcript = _make_transcript(tmp_path, "work discussed today")
+    messages = {}
+    for name, (outcome, _label) in _OUTCOMES.items():
+        with (
+            patch(
+                "quarry.session_transcript.Path.home", return_value=tmp_path / "home"
+            ),
+            patch(_SEND, return_value=outcome),
+        ):
+            result = handle_pre_compact(
+                {
+                    "cwd": str(tmp_path),
+                    "transcript_path": str(transcript),
+                    "session_id": "abc12345",
+                }
+            )
+        messages[name] = str(result["systemMessage"])
+    assert "backfill-sessions" in messages["unreachable"]
+    assert not [
+        n for n, m in messages.items() if n != "unreachable" and "backfill" in m
+    ]
