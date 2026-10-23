@@ -162,6 +162,24 @@ class TestConstructor:
         assert info.value.__context__ is None or info.value.__suppress_context__
 
 
+class TestPathParametersAndPorts:
+    def test_path_parameters_are_dropped_and_the_segments_counted_without_them(
+        self,
+    ) -> None:
+        url = HttpUrl("https://example.com/a;x/b")
+        assert url.path == "/a/b"
+        assert url.document_name == "https://example.com/a/b"
+        assert str(url) == "https://example.com/…(2 segments)"
+
+    def test_the_log_form_drops_the_default_port(self) -> None:
+        assert str(HttpUrl("https://example.com:443/a")) == (
+            "https://example.com/…(1 segment)"
+        )
+        assert str(HttpUrl("https://example.com:8443/a")) == (
+            "https://example.com:8443/…(1 segment)"
+        )
+
+
 class TestShown:
     """``HttpUrl.shown`` is the one producer of a URL's log text."""
 

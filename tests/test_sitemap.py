@@ -1547,3 +1547,60 @@ class TestMalformedEntriesDoNotAbortTheCrawl:
         unparsed_under_globs = globs and bad.startswith("http://[")
         assert len(caplog.records) == (0 if unparsed_under_globs else 1)
         assert "S@" not in caplog.text
+
+
+class TestIngestSitemapAllRejected:
+    """A crawl of only unsafe URLs fails; an empty glob selection does not."""
+
+    _ENTRIES = (
+        SitemapEntry(loc="https://example.com/page1", lastmod=None),
+        SitemapEntry(loc="https://example.com/page2?token=QSEC", lastmod=None),
+    )
+
+    @patch("quarry.ingestion.sitemap_ingest.ingest_url")
+    @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
+    def test_every_url_resolving_to_a_private_address_is_refused(
+        self,
+        mock_discover: MagicMock,
+        mock_ingest: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from quarry.ingestion.sitemap_ingest import ingest_sitemap
+
+        monkeypatch.setattr(_GETADDRINFO, lambda *a, **k: _addrinfo("10.0.0.9"))
+        mock_discover.return_value = list(self._ENTRIES)
+        with pytest.raises(FetchRefusedError) as info:
+            ingest_sitemap(
+                HttpUrl("https://example.com/sitemap.xml"),
+                Progress(None),
+                IngestContext(Database(MagicMock()), MagicMock(), collection="test"),
+                BulkOptions(),
+            )
+        assert (
+            str(info.value) == "fetch failed: every URL the sitemap lists was rejected"
+        )
+        mock_ingest.assert_not_called()
+
+    @patch("quarry.ingestion.sitemap_ingest.ingest_url")
+    @patch("quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[])
+    @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
+    def test_an_include_glob_that_matches_nothing_is_not_an_error(
+        self,
+        mock_discover: MagicMock,
+        _list_docs: MagicMock,
+        mock_ingest: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from quarry.ingestion.sitemap_ingest import ingest_sitemap
+
+        monkeypatch.setattr(_GETADDRINFO, lambda *a, **k: _addrinfo("10.0.0.9"))
+        mock_discover.return_value = list(self._ENTRIES)
+        result = ingest_sitemap(
+            HttpUrl("https://example.com/sitemap.xml"),
+            Progress(None),
+            IngestContext(Database(MagicMock()), MagicMock(), collection="test"),
+            BulkOptions(include=["/docs/*"]),
+        )
+        assert result["after_filter"] == 0
+        assert result["ingested"] == 0
+        mock_ingest.assert_not_called()

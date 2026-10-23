@@ -74,3 +74,19 @@ def test_a_refusal_line_carries_the_log_form_and_the_reason(
 def test_an_admitted_url_has_no_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
     _resolve_to(monkeypatch, _PUBLIC)
     assert UrlAdmission.refusal("https://ok.example/a") is None
+
+
+def test_a_url_one_character_over_the_cap_is_refused_before_any_dns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lookups: list[object] = []
+
+    def resolve(*args: object, **_kwargs: object) -> list[tuple[Any, ...]]:
+        lookups.append(args)
+        return _addrinfo(_PUBLIC)
+
+    monkeypatch.setattr(_GETADDRINFO, resolve)
+    url = "http://example.com/" + "a" * (8193 - len("http://example.com/"))
+    assert len(url) == 8193
+    assert UrlAdmission.reject_reason(url) == "malformed URL"
+    assert lookups == []

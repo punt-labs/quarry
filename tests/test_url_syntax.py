@@ -82,6 +82,13 @@ def test_a_url_over_the_length_cap_is_refused() -> None:
         UrlSyntax.parse(long)
 
 
+def test_a_url_one_character_over_the_cap_is_refused() -> None:
+    url = "http://example.com/" + "a" * (8193 - len("http://example.com/"))
+    assert len(url) == 8193
+    with pytest.raises(ValueError, match="malformed URL"):
+        UrlSyntax.parse(url)
+
+
 def test_a_url_at_the_length_cap_is_admitted() -> None:
     url = "http://example.com/" + "a" * (8192 - len("http://example.com/"))
     assert UrlSyntax.parse(url).hostname == "example.com"

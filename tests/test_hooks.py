@@ -918,6 +918,8 @@ class TestHandlePostWebFetch:
         assert result == {}
         cap.assert_not_called()
         ing.assert_not_called()
+        # Only the hook's own trace lines; nothing else logs, and none names the URL.
+        assert {r.name for r in caplog.records} <= {"quarry.hooks"}
         assert "SECRET" not in caplog.text
 
     def test_falls_back_to_ingest_url_without_content(self) -> None:

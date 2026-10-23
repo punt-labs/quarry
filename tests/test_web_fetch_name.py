@@ -28,7 +28,7 @@ def test_a_trailing_slash_stays_a_distinct_document() -> None:
 
 def test_an_email_in_the_path_is_scrubbed() -> None:
     name = WebFetchName.of("https://x.test/u/user@example.com/profile")
-    assert "user@example.com" not in name
+    assert name == "https://x.test/u/[REDACTED:email]/profile"
 
 
 @pytest.mark.parametrize(

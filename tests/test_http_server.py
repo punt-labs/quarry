@@ -1517,11 +1517,15 @@ class TestCapturesLookup:
     def test_an_unstorable_url_is_no_match_not_a_500(
         self, client: TestClient, caplog: pytest.LogCaptureFixture, url: str
     ) -> None:
-        with caplog.at_level(logging.DEBUG):
+        with (
+            caplog.at_level(logging.DEBUG),
+            patch("quarry.db.chunk_catalog.ChunkCatalog.document_exists") as exists,
+        ):
             resp = client.post("/v1/captures/lookup", json={"url": url, "cwd": ""})
 
         assert resp.status_code == 200
         assert resp.json() == {"matched": False, "document_name": None}
+        exists.assert_not_called()
         assert "SECRET" not in caplog.text
 
     def test_no_match_returns_false_and_no_document_name(

@@ -232,14 +232,27 @@ def test_ingest_never_leaks_a_url_secret(
     first_party = [
         r.getMessage() for r in caplog.records if r.name.startswith("quarry")
     ]
+    written = logfile.read_text()
+    # The sinks must be able to show a leak, so each must hold something real.
+    assert first_party
+    assert "127.0.0.1" in written
     sinks = {
         "surfaces": "\n".join(surfaces),
         "first-party records": "\n".join(first_party),
-        "written log": logfile.read_text(),
+        "written log": written,
     }
     for sink, text in sinks.items():
         for marker in _MARKERS:
             assert marker not in text, f"{marker} reached {sink}"
+
+
+def test_the_written_log_shows_a_bare_marker_when_one_is_logged(
+    logfile: Path,
+) -> None:
+    """Self-check of the file sink: only a URL-shaped marker is redacted."""
+    logging.getLogger("quarry.selfcheck").warning("bare token USEC here")
+    _flush()
+    assert "USEC" in logfile.read_text()
 
 
 def test_capture_and_remember_and_lookup_never_leak_a_url_secret(
@@ -290,6 +303,17 @@ def test_capture_and_remember_and_lookup_never_leak_a_url_secret(
     runs.extend(
         _post(http, "/v1/captures/lookup", {"url": url, "cwd": ""}) for url in lookups
     )
+    outcomes = [(r.status, r.task["status"] if r.task else "") for r in runs[:5]]
+    assert outcomes == [
+        (202, "completed"),  # c1: redirect, re-fetched and stored
+        (202, "failed"),  # c2: server error
+        (400, ""),  # c3: bad port refused at the route
+        (400, ""),  # c4: userinfo refused at the route
+        (202, "completed"),  # remember
+    ]
+    for lookup in runs[5:]:
+        assert lookup.status == 200
+        assert lookup.body == {"matched": False, "document_name": None}
     _flush()
 
     sinks = {
@@ -375,9 +399,12 @@ def test_a_real_sitemap_parser_failure_is_the_exact_refusal_and_leaves_no_secret
             raise URLError(f"refused {url}")
 
     monkeypatch.setattr(swc, "GUARDED_OPENER", _Opener())
+    monkeypatch.setattr("time.sleep", lambda _seconds: None)  # USP's retry back-off
     with pytest.raises(FetchRefusedError) as info:
         SitemapDiscovery.discover_urls(HttpUrl(url))
     _flush()
 
     assert str(info.value) == "fetch failed: sitemap could not be fetched or parsed"
-    assert "QSEC" not in logfile.read_text()
+    written = logfile.read_text()
+    assert "safe.example" in written
+    assert "QSEC" not in written
