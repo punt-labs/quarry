@@ -109,9 +109,11 @@ class HttpUrl:
     def _encoded(part: str) -> str:
         """Return a path, query or fragment percent-encoded as RFC 3986 asks.
 
-        Non-ASCII text becomes UTF-8 escapes, a stray ``%`` becomes ``%25``, and an
-        existing escape is kept with its hex digits upper-cased, so ``café`` and
-        ``caf%c3%a9`` are one document and nothing non-ASCII reaches the request.
+        Non-ASCII text becomes UTF-8 escapes; so do the ASCII characters RFC 3986
+        does not allow in a path or query (space-free here, but ``[ ] | " < > { } ^``
+        and the backtick); a stray ``%`` becomes ``%25``; and an existing escape is
+        kept with its hex digits upper-cased.  So ``café`` and ``caf%c3%a9`` are one
+        document and nothing non-ASCII reaches the request.
         """
         text = re.sub(r"%(?![0-9A-Fa-f]{2})", "%25", part)
         escaped = quote(text, safe="/?:@!$&'()*+,;=-._~%")

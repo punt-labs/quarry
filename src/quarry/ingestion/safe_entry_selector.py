@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, final
 
 from quarry.http_url import HttpUrl
+from quarry.ingestion.legacy_url_names import LegacyUrlNames
 
 if TYPE_CHECKING:
     from quarry.ingestion.ingest_context import IngestContext
@@ -45,7 +46,8 @@ class SafeEntrySelector:
             collection_filter=context.collection
         )
         existing_timestamps = {
-            doc["document_name"]: doc["ingestion_timestamp"] for doc in existing
+            LegacyUrlNames.canonical(doc["document_name"]): doc["ingestion_timestamp"]
+            for doc in existing
         }
         to_ingest: list[tuple[HttpUrl, str | None]] = []
         skipped = 0

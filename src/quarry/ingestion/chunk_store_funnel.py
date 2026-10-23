@@ -16,6 +16,7 @@ import time
 from typing import TYPE_CHECKING, cast, final
 
 from quarry.display_name import DisplayName
+from quarry.ingestion.legacy_url_names import LegacyUrlNames
 from quarry.ingestion.streaming import DocumentStreamer
 
 if TYPE_CHECKING:
@@ -79,11 +80,20 @@ class ChunkStoreFunnel:
 
     @staticmethod
     def _replace_prior(document_name: str, context: IngestContext) -> None:
-        """Delete the document's earlier chunks when this ingest overwrites."""
+        """Delete the document's earlier chunks when this ingest overwrites.
+
+        A copy an older build stored under a former spelling of the same URL goes
+        in the same replace, so a re-ingest leaves one document, not two.
+        """
         if context.overwrite:
-            context.database.store.delete_document(
-                document_name, collection=context.collection, count=False
-            )
+            legacy = LegacyUrlNames(context.database)
+            for name in [
+                document_name,
+                *legacy.replaced(document_name, context.collection),
+            ]:
+                context.database.store.delete_document(
+                    name, collection=context.collection, count=False
+                )
 
     @staticmethod
     def _embed_and_store(

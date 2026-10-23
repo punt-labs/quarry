@@ -13,6 +13,7 @@ from quarry.captures_collection import CapturesCollection
 from quarry.daemon.content_jobs import CaptureIngestJob, ScrubbedIngestJob
 from quarry.daemon.routes.content_group import ContentRouteGroup
 from quarry.http_guards import RequestGuards
+from quarry.ingestion.legacy_url_names import LegacyUrlNames
 from quarry.web_fetch_name import WebFetchName
 
 if TYPE_CHECKING:
@@ -119,7 +120,9 @@ class CaptureRoutes(ContentRouteGroup):
         collection = await self._collection_for_cwd(self._str_field(body, "cwd"))
         document_name = WebFetchName.maybe(url)
         matched = document_name is not None and await run_in_threadpool(
-            self.ctx.database.catalog.document_exists, document_name, collection.name
+            LegacyUrlNames(self.ctx.database).exists,
+            document_name,
+            collection.name,
         )
         return JSONResponse(
             {"matched": matched, "document_name": document_name if matched else None}

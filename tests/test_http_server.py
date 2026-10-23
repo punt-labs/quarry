@@ -1504,6 +1504,30 @@ class TestCapturesLookup:
             "document_name": "https://example.com/docs",
         }
 
+    def test_a_legacy_named_document_matches_its_canonical_url(
+        self, client: TestClient
+    ) -> None:
+        with (
+            patch(
+                "quarry.captures_collection.CapturesCollection.for_registry_path",
+                return_value=CapturesCollection.for_repo("quarry"),
+            ),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.document_exists",
+                return_value=False,
+            ),
+            patch(
+                "quarry.db.name_prefix.NamePrefix.names",
+                return_value=["https://example.com/docs?utm=1"],
+            ),
+        ):
+            data = client.post(
+                "/v1/captures/lookup",
+                json={"url": "https://example.com/docs", "cwd": "/repo"},
+            ).json()
+
+        assert data == {"matched": True, "document_name": "https://example.com/docs"}
+
     @pytest.mark.parametrize(
         "url",
         [

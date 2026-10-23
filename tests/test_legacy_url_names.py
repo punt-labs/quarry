@@ -1,0 +1,159 @@
+"""Tests for quarry.ingestion.legacy_url_names: an old-named document is replaced.
+
+Earlier rounds changed what a stored URL name is (query, fragment and ``;params``
+dropped, default ports removed, path percent-encoded).  A re-ingest must replace
+the document an older build stored under the old spelling, not orphan it.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
+
+import pytest
+
+from quarry.config import Settings
+from quarry.db import Database
+from quarry.ingestion.ingest_context import IngestContext, Progress
+from quarry.ingestion.legacy_url_names import LegacyUrlNames
+from quarry.ingestion.web_ingest import InlineIngest, ingest_content
+from quarry.models import Chunk
+from tests.fakes import FakeEmbeddingBackend, patched_embedder
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from pathlib import Path
+
+_COLLECTION = "c"
+
+
+@pytest.fixture
+def db(tmp_path: Path) -> Iterator[Database]:
+    path = tmp_path / "lancedb"
+    path.mkdir()
+    with patched_embedder(FakeEmbeddingBackend(768)):
+        yield Database.connect(path)
+
+
+def _store_as_stored_by_an_older_build(db: Database, name: str) -> None:
+    """Write a row under *name* exactly, as a build that spelled it differently did."""
+    chunk = Chunk(
+        document_name=name,
+        document_path="",
+        collection=_COLLECTION,
+        page_number=1,
+        total_pages=1,
+        chunk_index=0,
+        text="old body",
+        page_raw_text="old body",
+        page_type="text",
+        source_format="inline",
+        ingestion_timestamp=datetime.now(tz=UTC),
+    )
+    vector = FakeEmbeddingBackend(768).embed_texts(["old body"])
+    db.store.insert([chunk], vector)
+
+
+def _store(db: Database, name: str, *, overwrite: bool = True) -> None:
+    ingest_content(
+        InlineIngest("some indexable body text for the document"),
+        name,
+        Progress(None),
+        IngestContext(db, Settings(), overwrite=overwrite, collection=_COLLECTION),
+    )
+
+
+def _names(db: Database) -> set[str]:
+    return {d["document_name"] for d in db.catalog.list_documents(_COLLECTION)}
+
+
+class TestOverwriteReplacesTheLegacyName:
+    def test_a_legacy_iri_is_replaced_by_its_encoded_form(self, db: Database) -> None:
+        _store_as_stored_by_an_older_build(db, "https://example.com/café")
+        _store(db, "https://example.com/caf%C3%A9")
+        assert _names(db) == {"https://example.com/caf%C3%A9"}
+
+    def test_a_legacy_query_form_is_replaced(self, db: Database) -> None:
+        _store_as_stored_by_an_older_build(db, "https://example.com/page?utm=1")
+        _store(db, "https://example.com/page")
+        assert _names(db) == {"https://example.com/page"}
+
+    def test_a_legacy_default_port_form_is_replaced(self, db: Database) -> None:
+        _store_as_stored_by_an_older_build(db, "https://example.com:443/page")
+        _store(db, "https://example.com/page")
+        assert _names(db) == {"https://example.com/page"}
+
+    def test_a_different_host_is_untouched(self, db: Database) -> None:
+        _store_as_stored_by_an_older_build(db, "https://other.example/café")
+        _store(db, "https://example.com/caf%C3%A9")
+        assert _names(db) == {
+            "https://other.example/café",
+            "https://example.com/caf%C3%A9",
+        }
+
+    def test_a_different_path_is_untouched(self, db: Database) -> None:
+        _store_as_stored_by_an_older_build(db, "https://example.com/other?utm=1")
+        _store(db, "https://example.com/page")
+        assert _names(db) == {
+            "https://example.com/other?utm=1",
+            "https://example.com/page",
+        }
+
+    def test_a_non_url_name_is_untouched(self, db: Database) -> None:
+        _store_as_stored_by_an_older_build(db, "notes.txt")
+        _store(db, "https://example.com/page")
+        assert _names(db) == {"notes.txt", "https://example.com/page"}
+
+    def test_the_replacement_is_logged_with_the_redacted_legacy_form(
+        self, db: Database, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        _store_as_stored_by_an_older_build(db, "https://example.com/page?token=SECRET")
+        with caplog.at_level(logging.INFO):
+            _store(db, "https://example.com/page")
+        replaced = [
+            r.getMessage() for r in caplog.records if "legacy" in r.getMessage()
+        ]
+        assert len(replaced) == 1
+        assert "https://example.com/…(segments=1)" in replaced[0]
+        assert "SECRET" not in caplog.text
+
+    def test_a_non_overwriting_ingest_deletes_nothing(self, db: Database) -> None:
+        _store_as_stored_by_an_older_build(db, "https://example.com/page?utm=1")
+        _store(db, "https://example.com/page", overwrite=False)
+        assert _names(db) == {
+            "https://example.com/page?utm=1",
+            "https://example.com/page",
+        }
+
+
+class TestTheLegacyNameIsTheSameDocument:
+    def test_aliases_lists_only_names_that_canonicalize_to_it(
+        self, db: Database
+    ) -> None:
+        _store_as_stored_by_an_older_build(db, "https://example.com/café")
+        _store_as_stored_by_an_older_build(db, "https://example.com/caf%C3%A9?x=1")
+        _store_as_stored_by_an_older_build(db, "https://example.com/other")
+        names = LegacyUrlNames(db)
+        assert sorted(names.aliases("https://example.com/caf%C3%A9", _COLLECTION)) == [
+            "https://example.com/caf%C3%A9?x=1",
+            "https://example.com/café",
+        ]
+
+    def test_exists_sees_the_legacy_spelling(self, db: Database) -> None:
+        _store_as_stored_by_an_older_build(db, "https://example.com/café")
+        names = LegacyUrlNames(db)
+        assert names.exists("https://example.com/caf%C3%A9", _COLLECTION)
+        assert not names.exists("https://example.com/missing", _COLLECTION)
+
+    def test_a_name_in_another_collection_does_not_count(self, db: Database) -> None:
+        _store_as_stored_by_an_older_build(db, "https://example.com/café")
+        assert not LegacyUrlNames(db).exists(
+            "https://example.com/caf%C3%A9", "elsewhere"
+        )
+
+    def test_canonical_form_of_a_url_and_of_a_plain_name(self) -> None:
+        assert LegacyUrlNames.canonical("https://Example.com:443/café?x=1") == (
+            "https://example.com/caf%C3%A9"
+        )
+        assert LegacyUrlNames.canonical("notes.txt") == "notes.txt"

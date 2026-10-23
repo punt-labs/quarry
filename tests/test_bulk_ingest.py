@@ -566,3 +566,25 @@ def test_a_sitemap_page_with_an_iri_is_fetched_and_named_in_its_encoded_form() -
     [(url, _name)] = to_ingest
     assert url.fetch_url == "https://example.com/caf%C3%A9"
     assert url.document_name == "https://example.com/caf%C3%A9"
+
+
+def test_dedup_treats_a_legacy_named_document_as_the_existing_one() -> None:
+    from datetime import UTC, datetime
+    from unittest.mock import patch
+
+    from quarry.sitemap import SitemapEntry
+
+    entry = SitemapEntry(
+        loc="https://example.com/caf\u00e9", lastmod=datetime(2025, 1, 1, tzinfo=UTC)
+    )
+    legacy = [
+        {
+            "document_name": "https://example.com/caf\u00e9?utm=1",
+            "ingestion_timestamp": "2025-06-01T00:00:00+00:00",
+        }
+    ]
+    with patch(
+        "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=legacy
+    ):
+        to_ingest, skipped = SafeEntrySelector().partition([entry], _context())
+    assert (to_ingest, skipped) == ([], 1)
