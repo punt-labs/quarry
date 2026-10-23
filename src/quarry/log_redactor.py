@@ -29,9 +29,21 @@ class LogRedactor:
     MAX_TOKEN: ClassVar[int] = 2048
 
     _TOKEN: ClassVar[re.Pattern[str]] = re.compile(r"\S+")
+    # The authority's userinfo runs to its last "@" before the first "/", "?" or "#"
+    # whatever it holds (a quote or an angle bracket included), so a password never
+    # ends a match early.  The host is the rest of the authority, and is shown only
+    # if it is a plain host name or bracketed IP literal with a numeric port.
     _SCHEME_URL: ClassVar[re.Pattern[str]] = re.compile(
-        r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\-]{0,31})://(?P<auth>[^\s/?#'\"<>]{0,256})"
-        r"(?P<path>[^\s?#'\"<>]{0,2048})(?:[?#][^\s'\"<>]{0,2048})?"
+        r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\-]{0,31})://"
+        r"(?:[^\s/\\?#]*@)?(?P<host>[^\s/\\?#'\"<>@]*)"
+        r"(?P<path>[^\s?#'\"<>]*)(?:[?#][^\s'\"<>]*)?"
+    )
+    _HOST: ClassVar[re.Pattern[str]] = re.compile(
+        r"(?:[A-Za-z0-9.\-]+|\[[0-9A-Fa-f:.%a-z]+\])(?::\d{1,5})?"
+    )
+    # urlsplit strips whitespace inside a URL, so "user:pw<space>@host" is one URL.
+    _SPLIT_AUTHORITY: ClassVar[re.Pattern[str]] = re.compile(
+        r"(?P<head>[A-Za-z][A-Za-z0-9+.\-]{0,31}://[^\s/\\?#]*)\s+(?=@)"
     )
     _FORM: ClassVar[re.Pattern[str]] = re.compile(r"/…\(segments=\d+\)[).,;:\]}]*")
     _USERINFO: ClassVar[re.Pattern[str]] = re.compile(
@@ -48,6 +60,7 @@ class LogRedactor:
     @classmethod
     def redact(cls, text: str) -> str:
         """Return *text* with URL userinfo, query and fragment masked."""
+        text = cls._SPLIT_AUTHORITY.sub(r"\g<head>", text)
         text = cls._TOKEN.sub(cls._token, text)
         return cls._CONTROL.sub(cls._escape, text)
 
@@ -92,7 +105,9 @@ class LogRedactor:
         A URL already in that form is returned as it stands, so redacting twice
         changes nothing.
         """
-        host = match.group("auth").rpartition("@")[2]
+        host = match.group("host")
+        if not cls._HOST.fullmatch(host):
+            host = "[host]"
         path = match.group("path")
         if cls._FORM.fullmatch(path):
             return f"{match.group('scheme')}://{host}{path}"

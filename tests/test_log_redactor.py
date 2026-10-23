@@ -202,3 +202,85 @@ class TestIdempotence:
         assert LogRedactor.redact("on https://h.test/…(segments=4) now") == (
             "on https://h.test/…(segments=4) now"
         )
+
+
+_USER, _PW, _PATH, _QUERY, _FRAG = (
+    "SECRETUSER",
+    "SECRETPW",
+    "SECRETPATH",
+    "SECRETQ",
+    "SECRETFRAG",
+)
+_ALL = (_USER, _PW, _PATH, _QUERY, _FRAG)
+# A secret in these positions of a scheme URL must never survive redaction.
+_URL_CORPUS = {
+    "plain": f"https://{_USER}:{_PW}@h.example/{_PATH}/x?k={_QUERY}#{_FRAG}",
+    "paren": f"(https://{_USER}:{_PW}@h.example/{_PATH}/x?k={_QUERY})",
+    "angle": f"<https://{_USER}:{_PW}@h.example/{_PATH}>",
+    "squote": f"'https://{_USER}:{_PW}@h.example/{_PATH}'",
+    "dquote": f'"https://{_USER}:{_PW}@h.example/{_PATH}"',
+    "json": f'{{"url":"https://{_USER}:{_PW}@h.example/{_PATH}?a={_QUERY}"}}',
+    "kv": f"url=https://{_USER}:{_PW}@h.example/{_PATH}",
+    "trail": f"https://{_USER}:{_PW}@h.example/{_PATH}.",
+    "repr": f"URL('https://{_USER}:{_PW}@h.example:8443/{_PATH}')",
+    "ipv6": f"https://{_USER}:{_PW}@[2001:db8::1]:8443/{_PATH}?x={_QUERY}",
+    "pct userinfo": f"https://{_USER}%40x:{_PW}%2F@h.example/{_PATH}",
+    "idna": f"https://{_USER}:{_PW}@b\u00fccher.example/{_PATH}",
+    "multi at": f"https://{_USER}:{_PW}@a@h.example/{_PATH}",
+    "user only": f"https://{_USER}@h.example/{_PATH}",
+    "ftp": f"ftp://{_USER}:{_PW}@h.example/{_PATH}",
+    "wss": f"wss://{_USER}:{_PW}@h.example/{_PATH}",
+    "nbsp split": f"https://{_USER}:{_PW}\u00a0@h.example/{_PATH}",
+    "newline split": f"https://{_USER}:{_PW}\n@h.example/{_PATH}",
+    "tab split": f"https://{_USER}:{_PW}\t@h.example/{_PATH}",
+    "uppercase": f"HTTPS://{_USER}:{_PW}@H.EXAMPLE/{_PATH}",
+    "backslash": f"https://h.example\\@{_USER}/{_PATH}",
+    "userinfo 300": f"https://{_USER * 30}:x@h.example/{_PATH}",
+    "password 300": f"https://u:{_PW * 40}@h.example/{_PATH}",
+    "query only": f"https://h.example?{_QUERY}=1",
+    "fragment only": f"https://h.example#{_FRAG}",
+    "glued urls": f"https://a.example/{_PATH},https://{_USER}:{_PW}@b.example/{_PATH}",
+    "colon after host": f"https://h.example:{_PW}/x/{_PATH}",
+    "long authority": f"https://{'a' * 300}:{_PW}@h.example/{_PATH}",
+    "long jwt user": f"https://eyJ{'A' * 300}@h.example/{_PATH}",
+    "quote in password": f'GET https://{_USER}:p"{_PW}@h.example/{_PATH}?x=1',
+    "apostrophe in password": f"GET https://{_USER}:p'{_PW}@h.example/{_PATH}",
+    "angle in password": f"GET https://{_USER}:p<{_PW}@h.example/{_PATH}",
+}
+
+
+class TestUrlCorpus:
+    """Every position a URL can hold a secret, from the djb audit (D1, D2)."""
+
+    @pytest.mark.parametrize("name", list(_URL_CORPUS))
+    def test_no_secret_survives(self, name: str) -> None:
+        shown = LogRedactor.redact(f"see {_URL_CORPUS[name]} end")
+        leaked = [secret for secret in _ALL if secret in shown]
+        assert not leaked, f"{leaked} survived in {shown!r}"
+
+    @pytest.mark.parametrize("name", list(_URL_CORPUS))
+    def test_redaction_is_idempotent(self, name: str) -> None:
+        once = LogRedactor.redact(f"see {_URL_CORPUS[name]} end")
+        assert LogRedactor.redact(once) == once
+
+    @pytest.mark.parametrize(
+        ("raw", "port_shown"),
+        [
+            ("https://h.example:8443/a", "https://h.example:8443/…(segments=1)"),
+            ("https://h.example:99999/a", "https://h.example:99999/…(segments=1)"),
+        ],
+    )
+    def test_a_numeric_port_is_kept(self, raw: str, port_shown: str) -> None:
+        assert LogRedactor.redact(raw) == port_shown
+
+    def test_a_non_numeric_port_is_not_echoed(self) -> None:
+        shown = LogRedactor.redact(f"https://h.example:{_PW}/x")
+        assert shown == "https://[host]/…(segments=1)"
+
+    def test_a_host_outside_the_grammar_is_not_echoed(self) -> None:
+        shown = LogRedactor.redact(f"https://b\u00fccher{_USER}.example/x")
+        assert shown == "https://[host]/…(segments=1)"
+
+    def test_an_ipv6_host_is_kept(self) -> None:
+        shown = LogRedactor.redact("https://u:p@[2001:db8::1]:8443/a/b")
+        assert shown == "https://[2001:db8::1]:8443/…(segments=2)"
