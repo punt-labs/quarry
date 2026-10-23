@@ -15,9 +15,9 @@ class WebFetchLoopCloser:
 
     Owns both halves of the loop-closer feature: the daemon round-trip (fail-
     open on any client error) and the ``additionalContext`` wording an agent
-    can act on — the URL, a suggested ``find`` query, and the stored document
-    name when the daemon supplies one.  Called from
-    :func:`quarry.hooks.handle_post_web_fetch` BEFORE the capture send: a
+    can act on — the URL in its log form, a suggested ``find`` query, and a note if
+    the page is indexed under an older spelling; no stored name is printed.  Called
+    from :func:`quarry.hooks.handle_post_web_fetch` BEFORE the capture send: a
     lookup run after would always match, since the send that follows would
     have just created it.
     """

@@ -25,8 +25,10 @@ class LegacyUrlNames:
     raw query or fragment, its default port, or its path unencoded.  Re-ingesting the
     URL must replace that document, not leave it orphaned beside the new one, and
     a dedup or lookup must see it as existing.  A stored name is *legacy* when it
-    differs from the canonical name but canonicalizes to it through
-    :attr:`HttpUrl.document_name`.  The search is bounded by the name's
+    differs from the canonical name but reads as it, either
+    as a stored name (:meth:`HttpUrl.stored`, which keeps a digest marker) or as a
+    real URL (:attr:`HttpUrl.document_name`, where a query that spells the marker
+    is just a query).  The search is bounded by the name's
     ``scheme://host`` prefix, so it reads only that host's documents.
 
     Only a document fetched from a URL has a legacy spelling: a stored candidate
@@ -65,6 +67,14 @@ class LegacyUrlNames:
         except ValueError:
             return name
 
+    @staticmethod
+    def _recanonical(name: str) -> str:
+        """Return *name* read as a real URL (a query that spells the marker is one)."""
+        try:
+            return HttpUrl(name).document_name
+        except ValueError:
+            return name
+
     def aliases(self, name: str, collection: str) -> list[str]:
         """Return the stored names in *collection* that spell *name* the old way."""
         try:
@@ -80,7 +90,10 @@ class LegacyUrlNames:
             return []
         stored = self._under(f"{parts.scheme}://{parts.netloc}", collection)
         return [
-            other for other in stored if other != name and self.canonical(other) == name
+            other
+            for other in stored
+            if other != name
+            and name in {self.canonical(other), self._recanonical(other)}
         ]
 
     def stored(self, name: str, collection: str) -> None:

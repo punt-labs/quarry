@@ -18,6 +18,7 @@ from quarry.config import Settings
 from quarry.daemon.captured_body_ingest import IngestLabels
 from quarry.daemon.content_jobs import ScrubbedIngestJob
 from quarry.db import Database
+from quarry.http_url import HttpUrl
 from quarry.ingestion.ingest_context import IngestContext, Progress
 from quarry.ingestion.legacy_url_names import LegacyUrlNames
 from quarry.ingestion.web_ingest import InlineIngest, UrlIngest, ingest_content
@@ -444,3 +445,24 @@ class TestEveryDedupPathAgrees:
         assert (
             LegacyUrlNames(db).stored_as("https://example.com/x", _COLLECTION) is None
         )
+
+
+class TestARawNameThatLooksLikeTheDigestMarker:
+    """Either reading of a stored candidate may be the one that names a page."""
+
+    def test_a_real_query_that_spells_the_marker_is_a_legacy_name_of_its_page(
+        self, db: Database
+    ) -> None:
+        raw = "https://example.com/p?q[sha256]=0123456789abcdef"
+        _store_as_stored_by_an_older_build(db, raw)
+        name = HttpUrl(raw).document_name
+        assert name != raw
+        assert LegacyUrlNames(db).aliases(name, _COLLECTION) == [raw]
+
+    def test_a_marker_name_in_an_old_host_spelling_is_a_legacy_name_too(
+        self, db: Database
+    ) -> None:
+        name = with_query("https://example.com/p", "page=1")
+        legacy = name.replace("example.com", "Example.COM:443")
+        _store_as_stored_by_an_older_build(db, legacy)
+        assert LegacyUrlNames(db).aliases(name, _COLLECTION) == [legacy]
