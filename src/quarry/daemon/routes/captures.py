@@ -63,7 +63,9 @@ class CaptureRoutes(ContentRouteGroup):
         labels = self._labels(
             memory_type, body, overwrite=overwrite, collection=collection.name
         )
-        inline = ScrubbedIngestJob(name, content, labels, format_hint, "capture")
+        inline = ScrubbedIngestJob(
+            name, content, labels, format_hint, "capture", url_sourced=True
+        )
         return CaptureIngestJob(inline=inline, source_url=source)
 
     async def _collection_for_cwd(self, cwd: str) -> CapturesCollection:

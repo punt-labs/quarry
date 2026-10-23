@@ -64,6 +64,9 @@ class ScrubbedIngestJob:
     labels: IngestLabels
     format_hint: FormatHint
     scrub_label: str
+    # True only for a capture, whose name is a fetched URL's storage name; a
+    # ``remember`` or ``learn`` name is a label, whatever its format hint.
+    url_sourced: bool = False
 
     @property
     def collection(self) -> str:
@@ -135,7 +138,7 @@ class ScrubbedIngestJob:
     def _already_stored(self, ctx: DaemonContext) -> bool:
         """Return whether the collection already holds a document of this name."""
         return self.labels.holds(
-            ctx, self._scrubbed(self.name), url_sourced=self.format_hint == "html"
+            ctx, self._scrubbed(self.name), url_sourced=self.url_sourced
         )
 
 
