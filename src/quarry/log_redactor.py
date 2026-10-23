@@ -53,9 +53,10 @@ class LogRedactor:
     _CONTROL: ClassVar[re.Pattern[str]] = re.compile(
         "[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u2028\u2029]"
     )
-    _LINE_BREAKS: ClassVar[re.Pattern[str]] = re.compile(
-        "[\r\n\u202a-\u202e\u2066-\u2069]"
-    )
+    # Line breaks and the bidi marks that reorder or hide what follows.
+    _MARKS = "\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069"
+    _LINE_BREAKS: ClassVar[re.Pattern[str]] = re.compile(f"[\r\n{_MARKS}]")
+    _BIDI: ClassVar[re.Pattern[str]] = re.compile(f"[\r{_MARKS}]")
 
     @classmethod
     def redact(cls, text: str) -> str:
@@ -72,6 +73,18 @@ class LogRedactor:
         cannot forge a log line, while a traceback keeps its own.
         """
         return cls._LINE_BREAKS.sub(cls._escape, message)
+
+    @classmethod
+    def continuation(cls, block: str) -> str:
+        """Return a multi-line *block* with every line indented by a tab.
+
+        For a traceback or a stack, whose own newlines are kept but must never
+        let a line begin a record: an exception message can hold anything,
+        including a forged timestamp.  Carriage returns and bidi marks are
+        escaped.
+        """
+        escaped = cls._BIDI.sub(cls._escape, block.rstrip("\n"))
+        return "\t" + escaped.replace("\n", "\n\t")
 
     @classmethod
     def _token(cls, match: re.Match[str]) -> str:

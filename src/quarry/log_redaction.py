@@ -31,11 +31,23 @@ class _FirstPartyHandler(logging.Handler):
 
         The message is made one line first, on a copy of the record (the other
         handler formats the same one), so a forged line cannot start inside it;
-        the traceback the formatter appends keeps its own newlines.
+        the traceback and stack keep their own newlines but every line is indented,
+        so none can begin a record.
         """
         single = copy.copy(record)
         single.msg, single.args = LogRedactor.one_line(record.getMessage()), ()
+        single.exc_text = self._traceback(record)
+        single.exc_info = None
+        if record.stack_info:
+            single.stack_info = LogRedactor.continuation(record.stack_info)
         return LogRedactor.redact(super().format(single))
+
+    def _traceback(self, record: logging.LogRecord) -> str | None:
+        """Return the record's traceback with every line indented, or ``None``."""
+        if record.exc_info:
+            formatter = self.formatter or logging.Formatter()
+            return LogRedactor.continuation(formatter.formatException(record.exc_info))
+        return LogRedactor.continuation(record.exc_text) if record.exc_text else None
 
     @override
     def handleError(self, record: logging.LogRecord) -> None:

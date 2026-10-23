@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from quarry.log_redaction import RedactingFileHandler, RedactingStreamHandler
+from quarry.log_redactor import LogRedactor
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -109,3 +110,74 @@ class TestHandleError:
 
         RedactingStreamHandler(_Broken()).handle(_record("quarry.x", logging.INFO, "m"))
         assert capsys.readouterr().err == ""
+
+
+class TestContinuationLines:
+    """No line of a traceback or stack may begin a record (D4)."""
+
+    @staticmethod
+    def _emit(**kwargs: object) -> str:
+        buf = io.StringIO()
+        handler = RedactingStreamHandler(buf)
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+        )
+        logger = logging.getLogger("quarry.continuation")
+        logger.propagate = False
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(handler)
+        try:
+            try:
+                msg = str(kwargs["exc_message"])
+                raise ValueError(msg)
+            except ValueError:
+                logger.exception("failed")
+        finally:
+            logger.removeHandler(handler)
+        return buf.getvalue()
+
+    def test_a_newline_in_an_exception_message_cannot_forge_a_record(self) -> None:
+        out = self._emit(
+            exc_message="boom\n2026-01-01 00:00:00 [CRITICAL] quarry.auth: FORGED"
+        )
+        lines = out.splitlines()
+        assert lines[0].endswith("[ERROR] failed")
+        assert all(line.startswith("\t") for line in lines[1:])
+        assert not [line for line in lines if line.startswith("2026-01-01")]
+
+    def test_a_carriage_return_in_an_exception_message_is_escaped(self) -> None:
+        out = self._emit(exc_message="a\rb")
+        assert "\r" not in out
+        assert "a\\rb" in out
+
+    @pytest.mark.parametrize(
+        ("char", "escaped"),
+        [
+            ("\u202e", "\\u202e"),
+            ("\u2066", "\\u2066"),
+            ("\u200e", "\\u200e"),
+            ("\u200f", "\\u200f"),
+            ("\u061c", "\\u061c"),
+        ],
+    )
+    def test_bidi_marks_are_escaped_in_a_traceback_and_a_message(
+        self, char: str, escaped: str
+    ) -> None:
+        assert escaped in self._emit(exc_message=f"a{char}b")
+        shown = LogRedactor.one_line(f"a{char}b")
+        assert shown == f"a{escaped}b"
+
+    def test_stack_info_continuation_lines_are_indented(self) -> None:
+        buf = io.StringIO()
+        handler = RedactingStreamHandler(buf)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        record = logging.LogRecord(
+            "quarry.x", logging.INFO, __file__, 1, "stack", (), None
+        )
+        record.stack_info = (
+            "Stack (most recent call last):\n  File x\n2026-01-01 FORGED"
+        )
+        handler.handle(record)
+        lines = buf.getvalue().splitlines()
+        assert lines[0] == "stack"
+        assert all(line.startswith("\t") for line in lines[1:])
