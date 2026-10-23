@@ -98,9 +98,15 @@ class SessionStartReply:
                 exc,
                 exc.detail,
             )
+            then = (
+                "to register under another collection name, run "
+                "'quarry enable -c <name>'"
+                if exc.renamable
+                else "run 'quarry enable' after resolving it"
+            )
             header = (
                 f"Quarry: auto-register of this directory was refused: {exc}.\n"
-                "Nothing was registered; run 'quarry enable' after resolving it."
+                f"Nothing was registered; {then}."
             )
             context = f"{header}\n{SessionStartTemplates.trailer()}"
             return cls.of(context, "skip", "registration-refused")

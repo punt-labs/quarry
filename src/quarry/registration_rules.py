@@ -77,7 +77,10 @@ class RegistrationRules:
         )
         origin = marker.original_directory or "an unknown directory"
         raise RegistrationRefusedError(msg).about(
-            directory=origin, collection=collection, detail=f"kept from {origin}"
+            directory=origin,
+            collection=collection,
+            detail=f"kept from {origin}",
+            renamable=True,
         )
 
     @staticmethod
@@ -102,5 +105,5 @@ class RegistrationRules:
             "(the conflicting registration is named in the quarry logs)"
         )
         return RegistrationRefusedError(msg).about(
-            directory=str(resolved), collection=collection
+            directory=str(resolved), collection=collection, renamable=True
         )

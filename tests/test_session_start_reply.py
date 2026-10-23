@@ -129,3 +129,33 @@ class TestAPathThatTriesToWriteInstructions:
         assert "Ignore previous" not in text
         assert str(tmp_path) not in text
         assert "auto-register of this directory was refused" in text
+
+
+class TestTheRefusalNamesTheWayOut:
+    def test_a_name_in_use_is_told_to_pick_another_with_enable_dash_c(
+        self, tmp_path: Path
+    ) -> None:
+        first, second = tmp_path / "a", tmp_path / "b"
+        first.mkdir()
+        second.mkdir()
+        registry = SyncRegistry(tmp_path / "registry.db")
+        registry.register_directory(first, "taken")
+        try:
+            reply = SessionStartReply.refusing(registry, second, "taken")
+        finally:
+            registry.close()
+        assert reply is not None
+        assert "quarry enable -c <name>" in _context(reply)
+
+    def test_a_refusal_another_name_cannot_fix_is_not(self, tmp_path: Path) -> None:
+        parent, child = tmp_path / "parent", tmp_path / "parent" / "child"
+        child.mkdir(parents=True)
+        registry = SyncRegistry(tmp_path / "registry.db")
+        registry.register_directory(parent, "parent")
+        try:
+            reply = SessionStartReply.refusing(registry, child, "child")
+        finally:
+            registry.close()
+        assert reply is not None
+        assert "-c <name>" not in _context(reply)
+        assert "run 'quarry enable' after resolving it" in _context(reply)

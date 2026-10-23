@@ -42,11 +42,24 @@ class RegistrationRefusedError(RefusalError):
 
     _directory: str = ""
     _collection: str = ""
+    _renamable: bool = False
 
-    def about(self, *, directory: str, collection: str, detail: str = "") -> Self:
-        """Record the directory and collection involved, and return the refusal."""
+    def about(
+        self,
+        *,
+        directory: str,
+        collection: str,
+        detail: str = "",
+        renamable: bool = False,
+    ) -> Self:
+        """Record the directory and collection involved, and return the refusal.
+
+        *renamable* is whether registering under another collection name would
+        get past it.
+        """
         self._directory = directory
         self._collection = collection
+        self._renamable = renamable
         return self.noting(
             f"directory={directory!r} collection={collection!r} {detail}"
         )
@@ -60,3 +73,8 @@ class RegistrationRefusedError(RefusalError):
     def collection(self) -> str:
         """Return the collection the refusal concerns (for the log, not the client)."""
         return self._collection
+
+    @property
+    def renamable(self) -> bool:
+        """Return whether another collection name would get past this refusal."""
+        return self._renamable

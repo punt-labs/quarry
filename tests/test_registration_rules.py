@@ -137,3 +137,34 @@ def test_every_refusal_keeps_its_remediation_and_none_names_a_caller_value(
         assert "named in the quarry logs" in str(refusal)
         assert not [n for n in _NAMES if n in str(refusal)]
         assert hostile in refusal.detail or refusal.collection == hostile
+
+
+class TestRenamable:
+    """Only a refusal about the collection name can be got past by choosing another."""
+
+    def test_a_name_held_by_archived_data_is_renamable(self, tmp_path: Path) -> None:
+        marker = RetainedMarker("docs", "/somewhere/else")
+        with pytest.raises(RegistrationRefusedError) as info:
+            RegistrationRules.refuse_foreign_retained(marker, tmp_path, "docs")
+        assert info.value.renamable
+
+    def test_a_name_already_in_use_is_renamable(self, tmp_path: Path) -> None:
+        refusal = RegistrationRules.integrity_refusal(
+            ("/elsewhere", "docs"), tmp_path, "docs"
+        )
+        assert refusal.renamable
+
+    def test_a_directory_already_registered_is_not(self, tmp_path: Path) -> None:
+        refusal = RegistrationRules.integrity_refusal(
+            (str(tmp_path), "docs"), tmp_path, "docs"
+        )
+        assert not refusal.renamable
+
+    def test_a_directory_covered_by_a_parent_is_not(self, tmp_path: Path) -> None:
+        child = tmp_path / "sub"
+        child.mkdir()
+        with pytest.raises(RegistrationRefusedError) as info:
+            RegistrationRules.refuse_if_covered(
+                [_reg(str(tmp_path), "parent")], child.resolve()
+            )
+        assert not info.value.renamable
