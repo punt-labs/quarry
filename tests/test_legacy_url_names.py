@@ -17,7 +17,7 @@ from quarry.config import Settings
 from quarry.db import Database
 from quarry.ingestion.ingest_context import IngestContext, Progress
 from quarry.ingestion.legacy_url_names import LegacyUrlNames
-from quarry.ingestion.web_ingest import InlineIngest, ingest_content
+from quarry.ingestion.web_ingest import InlineIngest, UrlIngest, ingest_content
 from quarry.models import Chunk
 from tests.fakes import FakeEmbeddingBackend, patched_embedder
 from tests.url_names import with_query
@@ -25,6 +25,8 @@ from tests.url_names import with_query
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
+
+    from quarry.results import IngestResult
 
 _COLLECTION = "c"
 
@@ -232,3 +234,79 @@ class TestANameUrlsplitCannotParse:
             LegacyUrlNames(db).aliases(self._SCRUBBED, _COLLECTION)
         assert any("ValueError" in r.getMessage() for r in caplog.records)
         assert "REDACTED" not in caplog.text
+
+
+class TestOneListingPerHost:
+    """A bulk run lists a host's stored names once, not once per page."""
+
+    def test_a_crawl_of_many_pages_from_one_host_lists_it_once(
+        self, db: Database
+    ) -> None:
+        from unittest.mock import patch
+
+        from quarry.db.name_prefix import NamePrefix
+        from quarry.http_url import HttpUrl
+        from quarry.ingestion.bulk_ingest import BulkIngestRunner, BulkOptions
+
+        real = NamePrefix.names
+        context = IngestContext(db, Settings(), collection=_COLLECTION)
+
+        def ingest_one(
+            request: UrlIngest, progress: Progress, ctx: IngestContext
+        ) -> IngestResult:
+            return ingest_content(
+                InlineIngest("indexable body text for a crawled page"),
+                request.url.document_name,
+                progress,
+                ctx,
+            )
+
+        pages: list[tuple[HttpUrl, str | None]] = [
+            (HttpUrl(f"https://example.com/p{n}"), None) for n in range(8)
+        ]
+        with patch.object(NamePrefix, "names", autospec=True, side_effect=real) as spy:
+            BulkIngestRunner(ingest_one=ingest_one, workers=4).run(
+                pages, Progress(None), context, BulkOptions(workers=4)
+            )
+        assert spy.call_count == 1
+        assert len(_names(db)) == 8
+
+    def test_a_single_ingest_lists_its_host_once_too(self, db: Database) -> None:
+        from unittest.mock import patch
+
+        from quarry.db.name_prefix import NamePrefix
+
+        real = NamePrefix.names
+        with patch.object(NamePrefix, "names", autospec=True, side_effect=real) as spy:
+            _store(db, "https://example.com/page")
+        assert spy.call_count == 1
+
+    def test_a_listing_is_not_shared_between_collections_or_hosts(
+        self, db: Database
+    ) -> None:
+        from unittest.mock import patch
+
+        from quarry.db.name_prefix import NamePrefix
+
+        real = NamePrefix.names
+        names = LegacyUrlNames(db)
+        with patch.object(NamePrefix, "names", autospec=True, side_effect=real) as spy:
+            names.aliases("https://example.com/a", _COLLECTION)
+            names.aliases("https://example.com/b", _COLLECTION)
+            names.aliases("https://example.com/a", "elsewhere")
+            names.aliases("https://other.test/a", _COLLECTION)
+        assert spy.call_count == 3
+
+    def test_a_replaced_legacy_name_is_forgotten_by_the_listing(
+        self, db: Database
+    ) -> None:
+        _store_as_stored_by_an_older_build(db, "https://example.com/café")
+        names = LegacyUrlNames(db)
+        assert names.aliases("https://example.com/caf%C3%A9", _COLLECTION)
+        names.dropped(["https://example.com/café"], _COLLECTION)
+        assert names.aliases("https://example.com/caf%C3%A9", _COLLECTION) == []
+
+    def test_a_stored_name_is_added_to_a_listed_host_only(self, db: Database) -> None:
+        names = LegacyUrlNames(db)
+        names.stored("https://example.com/new", _COLLECTION)
+        assert names.aliases("https://example.com/new", _COLLECTION) == []

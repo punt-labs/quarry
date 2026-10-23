@@ -16,7 +16,7 @@ import time
 from typing import TYPE_CHECKING, cast, final
 
 from quarry.display_name import DisplayName
-from quarry.ingestion.legacy_url_names import LegacyUrlNames
+from quarry.ingestion.run_context import RunContext
 from quarry.ingestion.streaming import DocumentStreamer
 
 if TYPE_CHECKING:
@@ -86,14 +86,13 @@ class ChunkStoreFunnel:
         in the same replace, so a re-ingest leaves one document, not two.
         """
         if context.overwrite:
-            legacy = LegacyUrlNames(context.database)
-            for name in [
-                document_name,
-                *legacy.replaced(document_name, context.collection),
-            ]:
+            legacy = RunContext.legacy_names_of(context)
+            twins = legacy.replaced(document_name, context.collection)
+            for name in [document_name, *twins]:
                 context.database.store.delete_document(
                     name, collection=context.collection, count=False
                 )
+            legacy.dropped(twins, context.collection)
 
     @staticmethod
     def _embed_and_store(
@@ -109,6 +108,7 @@ class ChunkStoreFunnel:
         inserted = DocumentStreamer(context.settings).insert(
             chunks, context.database.store, document_name
         )
+        RunContext.note_stored(context, document_name)
         logger.info(
             "pipeline: embedded + stored %d chunks in %.2fs",
             inserted,

@@ -5,13 +5,14 @@ from __future__ import annotations
 import logging
 from collections import Counter
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, final
 
 from quarry.failure_reason import FailureReason
 from quarry.http_url import HttpUrl
 from quarry.ingestion.ingest_context import Progress
 from quarry.ingestion.page_report import PageReport
+from quarry.ingestion.run_context import RunContext
 from quarry.ingestion.web_ingest import UrlIngest
 
 if TYPE_CHECKING:
@@ -79,7 +80,7 @@ class BulkIngestRunner:
             # Always replace existing chunks for URLs that passed dedup — the
             # dedup already skipped unchanged URLs, so every submitted entry is
             # a genuine (re)ingest.
-            bulk_context = replace(context, overwrite=True)
+            bulk_context = RunContext.for_run(context, overwrite=True)
             # Workers report through a callback-less Progress: the parallel ingest_url
             # calls never forward progress_callback (only this method's own
             # aggregation messages below use the caller's callback), and
