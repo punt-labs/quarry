@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import logging
 import sys
 import time
@@ -313,3 +314,62 @@ class TestRecordCap:
         plain = min(_seconds("word " * 12_000) for _ in range(3))
         urls = min(_seconds("https://u:p@h.test/a/b?q=1 " * 2_200) for _ in range(3))
         assert plain < urls
+
+
+_WS = ("\n", "\t", "\r")
+_SPLITS = {
+    "mid-scheme": "ht{w}tps://user:SECRETPW@host.example/SECRETPATH",
+    "before-colon": "https{w}://user:SECRETPW@host.example/SECRETPATH",
+    "mid-separator": "https:/{w}/user:SECRETPW@host.example/SECRETPATH",
+    "after-colon": "https:{w}//user:SECRETPW@host.example/SECRETPATH",
+    "mid-user": "https://us{w}er:SECRETPW@host.example/SECRETPATH",
+    "mid-password": "https://user:SEC{w}RETPW@host.example/SECRETPATH",
+    "before-at": "https://user:SECRETPW{w}@host.example/SECRETPATH",
+    "mid-host": "https://user:SECRETPW@host.{w}example/SECRETPATH",
+    "mid-path": "https://host.example/SECRET{w}PATH",
+    "mid-query": "https://host.example/p?tok=SECR{w}ETQ",
+}
+
+
+class TestWhitespaceInsideAUrl:
+    """urlsplit deletes tab, CR and LF anywhere in a URL; so must the redactor."""
+
+    @pytest.mark.parametrize("where", list(_SPLITS))
+    @pytest.mark.parametrize("white", _WS, ids=["lf", "tab", "cr"])
+    def test_no_secret_survives(self, where: str, white: str) -> None:
+        raw = _SPLITS[where].format(w=white)
+        shown = LogRedactor.redact(f"see {raw} end")
+        for secret in ("SECRETPW", "SECRETPATH", "SECRETQ", "SECR", "ETQ", "RETPW"):
+            assert secret not in shown, f"{secret} survived: {shown!r}"
+
+    @pytest.mark.parametrize("where", list(_SPLITS))
+    def test_redaction_is_idempotent(self, where: str) -> None:
+        once = LogRedactor.redact("see " + _SPLITS[where].format(w="\n") + " end")
+        assert LogRedactor.redact(once) == once
+
+    def test_text_that_is_not_a_url_keeps_its_line_breaks(self) -> None:
+        assert LogRedactor.redact("a\tb\nc: d//e") == "a\tb\nc: d//e"
+
+    def test_a_deterministic_sweep_finds_no_leak_and_stays_idempotent(self) -> None:
+        """djb's p13 fuzz as a fixed sweep: every combination, a break at each spot."""
+        schemes = ["http", "HtTp", "ftp", "a+b.c-d"]
+        users = ["user", "", "us:er", "u@x"]
+        passwords = ["SECRETPW", "S%40ECRET", "SEC.RET", "SECRETPW" * 20]
+        hosts = ["h.example", "[::1]:80", "h:80", "h@h"]
+        tails = ["", "/p/q?x=1", "#f", "/p@q"]
+        wraps = ["%s", "(%s)", "<%s>", "'%s'", 'x="%s"', "%s,"]
+        leaks: list[str] = []
+        unstable: list[str] = []
+        combos = itertools.product(schemes, users, passwords, hosts, tails, wraps)
+        for n, (scheme, user, password, host, tail, wrap) in enumerate(combos):
+            userinfo = user + ":" + password
+            at = n % (len(userinfo) + 1)
+            userinfo = userinfo[:at] + _WS[n % 3] + userinfo[at:]
+            text = wrap % f"{scheme}://{userinfo}@{host}{tail}"
+            out = LogRedactor.redact(text)
+            if "SECRET" in out or "SEC.RET" in out or "S%40" in out:
+                leaks.append(text)
+            if LogRedactor.redact(out) != out:
+                unstable.append(text)
+        assert leaks == []
+        assert unstable == []

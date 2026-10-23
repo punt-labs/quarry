@@ -44,6 +44,14 @@ class LogRedactor:
     _HOST: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:[A-Za-z0-9.\-]+|\[[0-9A-Fa-f:.%a-z]+\])(?::\d{1,5})?"
     )
+    # urlsplit deletes tab, CR and LF anywhere in a URL, so a URL may be broken by
+    # them in its scheme, its "://", its authority or its path.  One bounded,
+    # single-class span finds such a candidate and the breaks are deleted from it.
+    _BREAKS: ClassVar[re.Pattern[str]] = re.compile(r"[\t\r\n]+")
+    _BROKEN_URL: ClassVar[re.Pattern[str]] = re.compile(
+        r"[A-Za-z](?:[\t\r\n]*[A-Za-z0-9+.\-]){0,31}[\t\r\n]*:[\t\r\n]*/[\t\r\n]*/"
+        r"[\S\t\r\n]{0,2048}"
+    )
     # urlsplit strips whitespace inside a URL, so "user:pw<space>@host" is one URL.
     _SPLIT_AUTHORITY: ClassVar[re.Pattern[str]] = re.compile(
         r"(?P<head>[A-Za-z][A-Za-z0-9+.\-]{0,31}://[^\s/\\?#]*)\s+(?=@)"
@@ -67,6 +75,8 @@ class LogRedactor:
         if len(text) > cls.MAX_RECORD:
             dropped = len(text[cls.MAX_RECORD :].encode("utf-8", errors="replace"))
             text = f"{text[: cls.MAX_RECORD]}[…truncated {dropped} bytes]"
+        if ":" in text and cls._BREAKS.search(text):
+            text = cls._BROKEN_URL.sub(cls._joined, text)
         if "://" in text and "@" in text:
             text = cls._SPLIT_AUTHORITY.sub(r"\g<head>", text)
         text = cls._TOKEN.sub(cls._token, text)
@@ -80,6 +90,11 @@ class LogRedactor:
         cannot forge a log line, while a traceback keeps its own.
         """
         return cls._LINE_BREAKS.sub(cls._escape, message)
+
+    @classmethod
+    def _joined(cls, match: re.Match[str]) -> str:
+        """Return a URL candidate without the tabs, CRs and LFs urlsplit deletes."""
+        return cls._BREAKS.sub("", match.group())
 
     @classmethod
     def continuation(cls, block: str) -> str:
