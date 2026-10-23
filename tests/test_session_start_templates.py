@@ -66,7 +66,8 @@ class TestDriftSurface:
             "Quarry: this project has an indexed collection but no opt-in marker\n"
             "('/repo/drifted', collection 'drifted'). Two doors:\n"
             "  quarry enable /repo/drifted         re-adopt: marker + guide.\n"
-            "  quarry deregister drifted    drop the registration (keep-data).\n"
+            "  quarry deregister --keep-data -- drifted    "
+            "drop the registration (keep-data).\n"
             "Auto-register is refused (already registered); auto-deregister is\n"
             "refused (would delete indexed data on marker drift)."
         )

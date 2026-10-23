@@ -38,8 +38,8 @@ class CollectionNamer:
 
     @classmethod
     def safe(cls, text: str) -> str:
-        """Return *text* with every character a name may not hold turned into ``-``."""
-        return re.sub(r"[^A-Za-z0-9._-]", "-", text)
+        """Return *text* with other characters as ``-`` and no leading ``-``/``.``."""
+        return re.sub(r"[^A-Za-z0-9._-]", "-", text).lstrip("-.")
 
     def unique(self) -> str:
         """Return the first candidate name that is not taken."""

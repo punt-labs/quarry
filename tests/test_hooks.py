@@ -2257,7 +2257,7 @@ class TestSessionStartMarkerGate(_ReachableDaemonEmptyCatalog):
         assert isinstance(output, dict)
         ctx = str(output["additionalContext"])
         assert f"quarry enable {shlex.quote(str(project))}" in ctx
-        assert "quarry deregister drifted" in ctx
+        assert "quarry deregister --keep-data -- drifted" in ctx
 
         conn = SyncRegistry(settings.registry_path)
         regs = conn.list_registrations()

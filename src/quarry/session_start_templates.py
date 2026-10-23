@@ -89,7 +89,7 @@ class SessionStartTemplates:
             "Quarry: this project has an indexed collection but no opt-in marker\n"
             f"({directory.text}, collection {collection.text}). Two doors:\n"
             f"  quarry enable {directory.arg}         re-adopt: marker + guide.\n"
-            f"  quarry deregister {collection.arg}    "
+            f"  quarry deregister --keep-data -- {collection.arg}    "
             "drop the registration (keep-data).\n"
             "Auto-register is refused (already registered); auto-deregister is\n"
             "refused (would delete indexed data on marker drift)."

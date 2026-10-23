@@ -203,3 +203,9 @@ class TestTheNudgeAndTheDriftAreSkips:
     def test_the_drift_traces_as_marker_drift(self) -> None:
         reply = SessionStartReply.drift_surface(Path("/repo"), "repo")
         assert (reply.kind, reply.detail) == ("skip", "marker-drift")
+
+
+def test_the_drift_deregister_keeps_the_data_and_ends_the_options() -> None:
+    text = _context(SessionStartReply.drift_surface(Path("/repo"), "-rf"))
+    [line] = [ln for ln in text.splitlines() if "quarry deregister" in ln]
+    assert line.strip().startswith("quarry deregister --keep-data -- ")

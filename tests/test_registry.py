@@ -755,3 +755,16 @@ class TestCollectionNamesAreRestricted:
             assert [r.collection for r in conn.list_registrations()] == ["My Docs"]
         finally:
             conn.close()
+
+
+class TestANameThatIsAnOptionOrADotName:
+    @pytest.mark.parametrize("name", ["-rf", "--help", ".hidden", "..", "."])
+    def test_it_is_refused(self, tmp_path: Path, name: str) -> None:
+        conn = SyncRegistry(tmp_path / "r.db")
+        directory = tmp_path / "docs"
+        directory.mkdir()
+        try:
+            with pytest.raises(RegistrationRefusedError, match="may only hold"):
+                conn.register_directory(directory, name)
+        finally:
+            conn.close()

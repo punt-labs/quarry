@@ -6,6 +6,8 @@ import hashlib
 import re
 from pathlib import Path
 
+import pytest
+
 from quarry.collection_namer import CollectionNamer
 
 
@@ -84,3 +86,9 @@ def test_a_clean_leaf_is_unchanged() -> None:
     assert CollectionNamer(Path("/work/my.proj_2-x"), frozenset()).unique() == (
         "my.proj_2-x"
     )
+
+
+@pytest.mark.parametrize("leaf", ["-rf", "--help", ".hidden", "..", ".", "-.-x"])
+def test_a_leaf_that_would_be_an_option_or_a_dot_name_is_not_one(leaf: str) -> None:
+    name = CollectionNamer(Path("/work") / leaf, frozenset()).unique()
+    assert re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9._-]*", name)
