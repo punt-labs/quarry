@@ -7,6 +7,7 @@ import logging
 import logging.handlers
 import sys
 import traceback
+from contextlib import suppress
 from typing import TextIO, final, override
 
 from quarry.log_redactor import LogRedactor
@@ -71,7 +72,8 @@ class _FirstPartyHandler(logging.Handler):
             f"--- Logging error ---\n{record.name}: {type(error).__name__}\n"
             f"at {where}: {template}\n{frames}"
         )
-        sys.stderr.write(LogRedactor.redact(report))
+        with suppress(OSError, ValueError):  # a dead stderr must not break the caller
+            sys.stderr.write(LogRedactor.redact(report))
 
 
 @final

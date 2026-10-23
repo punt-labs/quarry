@@ -119,6 +119,23 @@ class TestHandleError:
         for secret in ("not-an-int", "PWSEC", "QSEC"):
             assert secret not in err
 
+    @pytest.mark.parametrize("failure", [OSError("closed"), ValueError("closed file")])
+    def test_a_broken_stderr_cannot_raise_into_the_caller(
+        self, monkeypatch: pytest.MonkeyPatch, failure: Exception
+    ) -> None:
+        class _Broken(io.StringIO):
+            def write(self, _text: str) -> int:
+                raise OSError
+
+        class _DeadStderr:
+            def write(self, _text: str) -> int:
+                raise failure
+
+        monkeypatch.setattr("sys.stderr", _DeadStderr())
+        RedactingStreamHandler(_Broken()).handle(
+            _record("quarry.x", logging.WARNING, "m")
+        )
+
     def test_nothing_is_written_when_logging_errors_are_silenced(
         self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
