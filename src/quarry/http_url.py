@@ -150,6 +150,11 @@ class HttpUrl:
         ends in the digest marker keeps its digest and has the rest canonicalized
         again, so reading a stored name back gives the same name.
 
+        Only for names read back from the store, or built by this class: a URL a
+        user or a page supplied goes through ``HttpUrl(raw)``, which never
+        recognises the marker.  ``DisplayName.stored`` and ``LegacyUrlNames`` are
+        the only callers; a test pins that.
+
         Raises:
             ValueError: *name* is not an admissible HTTP(S) URL.
         """

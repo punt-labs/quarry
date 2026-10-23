@@ -396,3 +396,23 @@ class TestInternationalizedPaths:
     def test_a_percent_in_the_host_is_still_refused(self) -> None:
         with pytest.raises(ValueError, match=r"^malformed URL$"):
             HttpUrl("https://exa%6Dple.com/p")
+
+
+class TestStoredHasOnlyTheCallersItIsMeantFor:
+    """``HttpUrl.stored`` recognises the digest marker, so a fetch must never use it."""
+
+    def test_only_the_name_readers_call_it(self) -> None:
+        import ast
+        from pathlib import Path
+
+        src = Path(__file__).resolve().parent.parent / "src" / "quarry"
+        callers = {
+            path.relative_to(src).as_posix()
+            for path in src.rglob("*.py")
+            for node in ast.walk(ast.parse(path.read_text()))
+            if isinstance(node, ast.Attribute)
+            and node.attr == "stored"
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "HttpUrl"
+        }
+        assert callers == {"display_name.py", "ingestion/legacy_url_names.py"}
