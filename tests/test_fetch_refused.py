@@ -53,13 +53,47 @@ class TestFromTransferFailure:
         )
 
     @pytest.mark.parametrize(
-        "exc", [OSError("Cannot reach http://u:p@h/?t=1"), ValueError("bad http://h")]
+        "exc",
+        [OSError("Cannot reach http://u:p@h/?t=1"), BadStatusLine("token=1")],
+        ids=["oserror", "httpexception"],
     )
-    def test_any_other_failure_is_reported_by_class_alone(self, exc: Exception) -> None:
+    def test_any_other_transport_failure_is_reported_by_class_alone(
+        self, exc: Exception
+    ) -> None:
         assert (
             str(FetchRefusedError.from_transfer_failure(exc))
             == f"fetch failed: {type(exc).__name__}"
         )
+
+    def test_a_plain_value_error_is_not_refusable(self) -> None:
+        assert not isinstance(ValueError("bad http://h"), FetchRefusedError.REFUSABLE)
+
+    @pytest.mark.parametrize(
+        "exc",
+        [UrlRejectedError("blocked"), RedirectRejectedError("redirect target")],
+    )
+    def test_policy_rejections_are_refusable(self, exc: Exception) -> None:
+        assert isinstance(exc, FetchRefusedError.REFUSABLE)
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            URLError("dns http://h/?t=SECRET"),
+            TimeoutError("slow http://h/?t=SECRET"),
+            OSError("reset http://h/?t=SECRET"),
+            UrlRejectedError("blocked"),
+        ],
+        ids=["urlerror", "timeout", "oserror", "policy"],
+    )
+    def test_every_refusal_logs_one_warning_without_the_message(
+        self, exc: Exception, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING):
+            FetchRefusedError.from_transfer_failure(exc)
+        [record] = caplog.records
+        assert record.levelno == logging.WARNING
+        assert type(exc).__name__ in record.getMessage()
+        assert "SECRET" not in caplog.text
 
     def test_the_unreachable_reason_class_is_named(self) -> None:
         exc = URLError(socket.gaierror("Name or service not known"))

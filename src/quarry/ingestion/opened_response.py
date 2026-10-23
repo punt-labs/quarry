@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import urllib.request
 from functools import partial
-from http.client import HTTPException
 from time import monotonic
 from typing import TYPE_CHECKING, Self, final
 
@@ -44,13 +43,14 @@ class OpenedResponse:
         """Open *request* through the guarded opener, or raise a URL-free refusal.
 
         Raises:
-            FetchRefusedError: Any transport, protocol or policy failure.  The
+            FetchRefusedError: A transport or policy failure (any other exception
+                is a bug and propagates).  The
                 library's own message quotes the URL, so it is replaced, never
                 chained.
         """
         try:
             resp = GUARDED_OPENER.open(request, timeout=timeout)
-        except (OSError, ValueError, HTTPException) as exc:
+        except FetchRefusedError.REFUSABLE as exc:
             raise FetchRefusedError.from_transfer_failure(exc) from None
         return cls(resp, deadline)
 
@@ -104,6 +104,6 @@ class OpenedResponse:
                     msg = f"content rejected: response exceeds {cap}"
                     raise FetchRefusedError(msg)
                 chunks.append(chunk)
-        except (OSError, HTTPException) as exc:
+        except FetchRefusedError.REFUSABLE as exc:
             raise FetchRefusedError.from_transfer_failure(exc) from None
         return b"".join(chunks)

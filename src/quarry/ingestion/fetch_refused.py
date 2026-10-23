@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from typing import Self
+from http.client import HTTPException
+from typing import ClassVar, Self
 from urllib.error import HTTPError, URLError
 
 from quarry.content_guard import UnindexableContentError
@@ -25,22 +26,35 @@ class FetchRefusedError(UnindexableContentError):
     error, and to return to a client verbatim.
     """
 
+    REFUSABLE: ClassVar[tuple[type[Exception], ...]] = (
+        UrlRejectedError,
+        RedirectRejectedError,
+        OSError,
+        HTTPException,
+    )
+
     @classmethod
     def from_transfer_failure(cls, exc: Exception) -> Self:
         """Return the URL-free refusal for a failure while opening or reading.
 
-        *exc* is an :class:`OSError` (including :class:`URLError` and
-        :class:`HTTPError`), a :class:`ValueError`, or an
-        :class:`http.client.HTTPException` (``InvalidURL``, ``BadStatusLine``,
-        ``IncompleteRead``): the last carries the URL path and query verbatim.
-        The SSRF policy's own rejections (a redirect hop, or the connect-time
-        re-check after admission passed) name a rule, which an operator needs;
-        every other exception reports only what kind of failure it was, and its
-        message-free traceback is logged at WARNING, because a programming error
-        must stay diagnosable and a DEBUG record is never written.  An
+        The one classification of a fetch failure: only an instance of
+        :attr:`REFUSABLE` is a refusal, so every fetch path catches exactly that
+        and any other exception (a ``ValueError`` from a bug, say) propagates to
+        the task terminal as ``internal error: <Class>``.  The members are the
+        SSRF policy's rejections (:class:`UrlRejectedError`, a refused redirect
+        hop), which name a rule an operator needs, and transport failures:
+        :class:`OSError` (including :class:`URLError`, :class:`HTTPError` and
+        timeouts) and :class:`http.client.HTTPException` (``InvalidURL``,
+        ``BadStatusLine``, ``IncompleteRead``, whose messages carry the URL path
+        and query verbatim).  A transport failure reports only what kind it was.
+        Every refusal logs one WARNING with the class, and a transport failure
+        adds its message-free frames, so a fault stays diagnosable.  An
         :class:`HTTPError` holds an open socket, so it is closed here, before the
         status is read out.
         """
+        is_policy = isinstance(exc, UrlRejectedError | RedirectRejectedError)
+        frames = "" if is_policy else f":\n{FailureReason.frames(exc)}"
+        logger.warning("fetch refused: %s%s", type(exc).__name__, frames)
         if isinstance(exc, HTTPError):
             return cls(f"fetch failed: HTTP {cls._close(exc)}")
         if isinstance(exc, RedirectRejectedError):
@@ -65,9 +79,4 @@ class FetchRefusedError(UnindexableContentError):
             return "fetch failed: timed out"
         if isinstance(exc, URLError):
             return f"fetch failed: cannot reach the host ({type(reason).__name__})"
-        logger.warning(
-            "unclassified fetch failure %s:\n%s",
-            type(exc).__name__,
-            FailureReason.frames(exc),
-        )
         return f"fetch failed: {type(exc).__name__}"

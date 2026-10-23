@@ -62,3 +62,22 @@ def test_a_deadline_already_past_aborts_the_read(response: MagicMock) -> None:
     with pytest.raises(FetchRefusedError) as info:
         opened.decode()
     assert str(info.value) == "fetch failed: exceeded its total time budget"
+
+
+def test_a_value_error_from_the_opener_is_not_a_refusal() -> None:
+    bug = ValueError("a bug quoting https://example.com/p?token=SECRET")
+    with (
+        patch(_OPEN, side_effect=bug),
+        pytest.raises(ValueError, match="a bug") as info,
+    ):
+        OpenedResponse.open(Request("https://example.com/p"), 5, 1e12)
+    assert not isinstance(info.value, FetchRefusedError)
+
+
+def test_a_policy_rejection_from_the_opener_is_still_a_refusal() -> None:
+    from quarry.url_safety import UrlRejectedError
+
+    failure = UrlRejectedError("host resolves to a blocked address")
+    with patch(_OPEN, side_effect=failure), pytest.raises(FetchRefusedError) as info:
+        OpenedResponse.open(Request("https://example.com/p"), 5, 1e12)
+    assert str(info.value) == "URL rejected: host resolves to a blocked address"

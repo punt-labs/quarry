@@ -633,3 +633,52 @@ class TestErrorMessagesAreUrlFree:
         resp = GatedSitemapWebClient().get(self._URL)
         assert isinstance(resp, WebClientErrorResponse)
         assert resp.message() == "fetch failed: IncompleteRead"
+
+
+class TestFailureClassification:
+    """Only the fetch refusals are answered; any other exception is a bug."""
+
+    _URL = "https://safe.example/sitemap.xml?token=SECRET"
+
+    def _client_with_opener_raising(
+        self, monkeypatch: pytest.MonkeyPatch, failure: BaseException
+    ) -> GatedSitemapWebClient:
+        class _Opener:
+            def open(self, request: Any, timeout: float | None = None) -> Any:
+                raise failure
+
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _Opener())
+        return GatedSitemapWebClient()
+
+    def test_a_value_error_from_the_opener_propagates(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client_with_opener_raising(monkeypatch, ValueError("a bug"))
+        with pytest.raises(ValueError, match="a bug"):
+            client.get(self._URL)
+
+    def test_an_os_error_is_an_error_response_and_a_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        client = self._client_with_opener_raising(
+            monkeypatch, ConnectionResetError(f"reset {self._URL}")
+        )
+        with caplog.at_level("WARNING"):
+            resp = client.get(self._URL)
+        assert isinstance(resp, WebClientErrorResponse)
+        assert resp.message() == "fetch failed: ConnectionResetError"
+        assert "ConnectionResetError" in caplog.text
+        assert "SECRET" not in caplog.text
+
+    def test_a_policy_rejection_is_an_error_response(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from quarry.url_safety import UrlRejectedError
+
+        client = self._client_with_opener_raising(
+            monkeypatch, UrlRejectedError("host resolves to a blocked address")
+        )
+        resp = client.get(self._URL)
+        assert isinstance(resp, WebClientErrorResponse)
+        assert resp.message() == "URL rejected: host resolves to a blocked address"

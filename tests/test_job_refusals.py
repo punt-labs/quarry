@@ -156,6 +156,28 @@ async def test_a_failed_fetch_fails_the_task_with_a_url_free_reason(
     assert daemon.ctx.database.store.count() == 0
 
 
+@pytest.mark.parametrize("scrub", [False, True])
+async def test_a_value_error_inside_the_opener_is_a_fault_not_a_refusal(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, *, scrub: bool
+) -> None:
+    daemon = InProcessDaemon(tmp_path)
+    state = TaskState(task_id="t-bug", kind="ingest")
+    bug = ValueError("bug quoting http://u:p@example.com/doc?token=SECRET")
+
+    with (
+        caplog.at_level(logging.WARNING),
+        patch(_DISCOVER, return_value=[]),
+        patch(_OPEN, side_effect=bug),
+    ):
+        await _ingest_job(scrub=scrub).run(daemon.ctx, state)
+
+    assert state.status == "failed"
+    assert state.error == "internal error: ValueError"
+    faults = [r for r in caplog.records if r.levelno >= logging.WARNING and r.exc_info]
+    assert faults
+    assert daemon.ctx.database.store.count() == 0
+
+
 async def test_a_capture_refetch_that_cannot_reach_the_host_fails_the_task(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:

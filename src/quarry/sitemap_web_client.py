@@ -21,7 +21,6 @@ from __future__ import annotations
 import contextlib
 import urllib.request
 from dataclasses import dataclass
-from http.client import HTTPException
 from typing import TYPE_CHECKING, Self, final
 from urllib.error import HTTPError, URLError
 
@@ -32,7 +31,8 @@ from usp.web_client.abstract_client import (
     WebClientErrorResponse,
 )
 
-from quarry.ingestion.ssrf_redirect import GUARDED_OPENER, RedirectRejectedError
+from quarry.ingestion.fetch_refused import FetchRefusedError
+from quarry.ingestion.ssrf_redirect import GUARDED_OPENER
 from quarry.url_admission import UrlAdmission
 
 if TYPE_CHECKING:
@@ -91,8 +91,8 @@ class GatedSitemapWebClient(AbstractWebClient):
     def get(self, url: str) -> AbstractWebClientResponse:
         """Fetch *url* only if it passes the SSRF gate at every hop.
 
-        Never raises: a blocked target, a blocked redirect hop, or a network
-        error is reported as a ``WebClientErrorResponse`` (the USP contract), so
+        Never raises a fetch failure: a blocked target, a blocked redirect hop, or a
+        network error is reported as a ``WebClientErrorResponse`` (the USP contract), so
         USP skips the URL instead of fetching it.  SSRF blocks are non-retryable
         so an attacker-listed URL is never retried.
         """
@@ -101,8 +101,6 @@ class GatedSitemapWebClient(AbstractWebClient):
             return self._error(f"SSRF-blocked URL: {reason}", retryable=False)
         try:
             return self._fetch(url)
-        except RedirectRejectedError as exc:
-            return self._error(str(exc), retryable=False)
         except HTTPError as exc:
             # Capture everything USP reads (status code + message) into plain
             # locals and BUILD the response BEFORE closing: HTTPError IS an open
@@ -119,12 +117,11 @@ class GatedSitemapWebClient(AbstractWebClient):
             return error
         except (TimeoutError, URLError) as exc:
             return self._error(f"unreachable: {type(exc).__name__}", retryable=True)
-        except (OSError, HTTPException, ValueError) as exc:
-            # A body-read/transport failure (e.g. IncompleteRead) or a decode
-            # error must not escape: USP catches it in nested recursion, but the
-            # top-level discover_* path would propagate it. Fail closed — no
-            # connection to an internal address happens on this path either way.
-            return self._error(f"fetch failed: {type(exc).__name__}", retryable=False)
+        except FetchRefusedError.REFUSABLE as exc:
+            # Classified once by FetchRefusedError, which logs it.  Any other
+            # exception is a bug and propagates, as on the URL ingest path.
+            refusal = FetchRefusedError.from_transfer_failure(exc)
+            return self._error(str(refusal), retryable=False)
 
     def _fetch(self, url: str) -> AbstractWebClientResponse:
         """Open *url* through the guarded opener and gate the final URL."""
