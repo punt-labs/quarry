@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, final
@@ -42,10 +43,10 @@ class ProjectMappingResolver:
     def encode(project_path: str) -> str:
         """Encode a project path the same way Claude Code does.
 
-        Replace ``/`` with ``-``.  The leading ``-`` is preserved — Claude
-        Code keeps it (e.g. ``/Users/jm`` → ``-Users-jm``).
+        Every character but an ASCII letter or digit becomes ``-``, as Claude Code
+        names ``~/.claude/projects`` directories: ``/r/.claude/w`` → ``-r--claude-w``.
         """
-        return project_path.replace("/", "-")
+        return re.sub(r"[^A-Za-z0-9]", "-", project_path)
 
     @staticmethod
     def resolve_all(
@@ -57,19 +58,17 @@ class ProjectMappingResolver:
         matching subdirectory exists under ``~/.claude/projects/``. This avoids
         the ambiguous reverse-decode problem (hyphens in directory names).
         """
-        mappings: list[ProjectMapping] = []
         existing_dirs = ProjectMappingResolver._project_dir_names()
-        for reg in registrations:
-            encoded = ProjectMappingResolver.encode(reg.directory)
-            if encoded in existing_dirs:
-                mappings.append(
-                    ProjectMapping(
-                        encoded_dir=encoded,
-                        project_path=reg.directory,
-                        collection=reg.collection,
-                    )
-                )
-        return mappings
+        return [
+            ProjectMapping(
+                encoded_dir=encoded,
+                project_path=reg.directory,
+                collection=reg.collection,
+            )
+            for reg in registrations
+            if (encoded := ProjectMappingResolver.encode(reg.directory))
+            in existing_dirs
+        ]
 
     @staticmethod
     def filter_by_project(

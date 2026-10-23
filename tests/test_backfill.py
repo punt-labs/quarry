@@ -79,6 +79,25 @@ class TestEncodeProjectPath:
     def test_single_component(self) -> None:
         assert ProjectMappingResolver.encode("/home") == "-home"
 
+    @pytest.mark.parametrize(
+        ("path", "encoded"),
+        [
+            (
+                "/home/u/Coding/punt-labs/beadle/.claude/worktrees/mcp-serve",
+                "-home-u-Coding-punt-labs-beadle--claude-worktrees-mcp-serve",
+            ),
+            ("/home/u/my.project", "-home-u-my-project"),
+            ("/home/u/my_project", "-home-u-my-project"),
+            ("/home/u/My Project", "-home-u-My-Project"),
+            ("/home/u/caf\u00e9", "-home-u-caf-"),
+        ],
+        ids=["dot-dir", "dotted", "underscored", "spaced", "non-ascii"],
+    )
+    def test_every_character_but_a_letter_or_digit_becomes_a_dash(
+        self, path: str, encoded: str
+    ) -> None:
+        assert ProjectMappingResolver.encode(path) == encoded
+
 
 # ---------------------------------------------------------------------------
 # build_project_mappings
