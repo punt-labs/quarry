@@ -64,13 +64,16 @@ class _FirstPartyHandler(logging.Handler):
         if not logging.raiseExceptions or error is None or sys.stderr is None:
             return
         frames = "".join(traceback.format_tb(error.__traceback__))
-        where = f"{record.pathname}:{record.lineno}"
         template = (
             record.msg if isinstance(record.msg, str) else type(record.msg).__name__
         )
+        who = f"{record.name}: {type(error).__name__}"
+        where = f"at {record.pathname}:{record.lineno}: {template}"
+        # Code-authored, but a path or template may hold a line break or a bidi
+        # mark; the frames keep their own newlines.
         report = (
-            f"--- Logging error ---\n{record.name}: {type(error).__name__}\n"
-            f"at {where}: {template}\n{frames}"
+            f"--- Logging error ---\n{LogRedactor.one_line(who)}\n"
+            f"{LogRedactor.one_line(where)}\n{frames}"
         )
         with suppress(OSError, ValueError):  # a dead stderr must not break the caller
             sys.stderr.write(LogRedactor.redact(report))

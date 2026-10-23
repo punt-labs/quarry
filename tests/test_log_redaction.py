@@ -119,6 +119,35 @@ class TestHandleError:
         for secret in ("not-an-int", "PWSEC", "QSEC"):
             assert secret not in err
 
+    @pytest.mark.parametrize(
+        "template",
+        ["a\nb", "a\rb", "a\u202eb", "a\u200fb", "a\n2026-01-01 [CRITICAL] FORGED"],
+        ids=["lf", "cr", "rlo", "rlm", "forged"],
+    )
+    def test_the_template_and_location_are_one_line(
+        self, template: str, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        record = logging.LogRecord(
+            "quarry.x",
+            logging.WARNING,
+            "/src/a\nb.py",
+            7,
+            template + " %d",
+            ("x",),
+            None,
+        )
+        RedactingStreamHandler(io.StringIO()).handle(record)
+        err = capsys.readouterr().err
+        lines = err.splitlines()
+        assert lines[0] == "--- Logging error ---"
+        assert lines[1] == "quarry.x: TypeError"
+        assert lines[2].startswith("at /src/a")
+        assert not [line for line in lines if line.startswith("2026-01-01")]
+        assert "\r" not in err
+        assert "\u202e" not in err
+        assert "\u200f" not in err
+        assert "a\\nb.py:7" in err
+
     @pytest.mark.parametrize("failure", [OSError("closed"), ValueError("closed file")])
     def test_a_broken_stderr_cannot_raise_into_the_caller(
         self, monkeypatch: pytest.MonkeyPatch, failure: Exception
