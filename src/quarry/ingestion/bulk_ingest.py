@@ -185,7 +185,7 @@ class BulkIngestRunner:
                 for future in as_completed(futures):
                     page_url = futures[future]
                     # PageReport names the page by the URL's log form, so no sink
-                    # below sees a query, fragment or token-like path (CWE-532).
+                    # below sees a path, query or fragment (CWE-532).
                     report = PageReport(page_url)
                     try:
                         future.result()

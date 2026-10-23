@@ -138,7 +138,10 @@ class WebIngest:
             Dict with ingestion results.
 
         Raises:
-            ValueError: If URL is invalid, unreachable, or returns non-HTML.
+            FetchRefusedError: The fetch failed or was refused.
+            UnsupportedContentError: The media type is not text.
+            RowBudgetError: A row exceeds the budget.
+            (All three are ``UnindexableContentError``.)
         """
         meta_url = WebIngest._meta_url(request)
         document_name = request.document_name or meta_url
@@ -165,8 +168,8 @@ class WebIngest:
                 jitter = time.monotonic_ns() % 1_000_000_000 / 1_000_000_000
                 time.sleep(request.delay + jitter)
 
-            # str(request.url) is the log form: no query, fragment or token-like
-            # path segment reaches quarry.log (CWE-532).
+            # str(request.url) is the log form: no path, query or fragment reaches
+            # quarry.log (CWE-532).
             progress("Fetching: %s", request.url)
             html = WebFetcher(request.timeout).fetch(request.url)
             progress("Fetched %d characters", len(html))
@@ -217,7 +220,8 @@ class WebIngest:
         """Return the stored name of the fetched URL: ``scheme://host[:port]/path``.
 
         Whatever the caller, the query, fragment and ``;params`` of the URL never
-        become document metadata; a scrubbed ingest also redacts the path.
+        become document metadata; a scrubbed ingest also runs the name through the
+        PII scrubber.
         """
         name = request.url.document_name
         scrub = request.content_scrubber

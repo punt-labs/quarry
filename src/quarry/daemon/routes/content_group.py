@@ -93,7 +93,8 @@ class ContentRouteGroup(RouteGroup):
     ) -> str | JSONResponse:
         """Return non-empty text ``body[key]`` that is not binary, or a 400.
 
-        The name and summary fields are checked against the label cap first.
+        Every label field (``_LABEL_FIELDS``) is checked against the label cap
+        first.
         """
         text = self._require_text(body, key)
         if isinstance(text, JSONResponse):

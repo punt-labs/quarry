@@ -24,7 +24,8 @@ class RowBudgetError(UnindexableContentError):
     A refusal like any other unindexable content: the message names the column
     and sizes only, never a value, so a task ends ``failed`` with it and one
     quiet WARN.  Callers that wrap it (a sync log line) may add a document name,
-    which is a raw URL for a plain ingest, so the wrapped text is not URL-free.
+    which is a file path or a URL's stored form, so the wrapped text is not
+    path-free.
     """
 
 

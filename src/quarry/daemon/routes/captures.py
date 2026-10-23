@@ -101,12 +101,14 @@ class CaptureRoutes(ContentRouteGroup):
         ``POST /capture``'s ``cwd``-derived collection contract
         (:meth:`_capture_job`), so this thin client never opens the sync
         registry itself or spells the ``<repo>-captures`` naming rule.  The
-        stored ``document_name`` for a WebFetch capture is the URL with
-        userinfo/query/fragment stripped (``WebFetchName.of``), so this
-        recomputes the identical normalization before comparing: two URLs
-        differing only by query string or fragment collapse to the SAME
-        document and match; a trailing-slash difference does NOT normalize and
-        will not match.
+        stored ``document_name`` for a WebFetch capture is
+        ``HttpUrl.document_name`` (``WebFetchName.maybe``), so this recomputes the
+        identical normalization before comparing: query, fragment and
+        ``;params`` are dropped, the host is lower-cased with its trailing dot
+        and default port removed, and an empty path becomes ``/``, so URLs that
+        differ only in those parts collapse to the SAME document and match.  A
+        trailing-slash difference on a non-empty path does NOT normalize and
+        will not match, and a URL that cannot be stored matches nothing.
         """
         body = await self._authorized_body(request, MAX_CAPTURES_BODY_BYTES)
         if isinstance(body, JSONResponse):

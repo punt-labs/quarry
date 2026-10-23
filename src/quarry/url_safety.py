@@ -1,14 +1,14 @@
-"""SSRF policy: validate a URL or host against the block policy.
+"""SSRF policy: validate a host and its resolved addresses against the block policy.
 
 ``POST /ingest`` and every server-side fetch take a caller-supplied URL, so an
 unguarded resolve-and-connect is an SSRF primitive.  This module owns the single
-block policy — non-``http(s)`` schemes, a metadata/``.local`` hostname denylist,
-and the private/loopback/link-local/reserved/multicast/CGNAT address classes —
-and exposes it as :meth:`UrlSafetyCheck.validated_addresses` — the fail-closed
+host and address block policy — a metadata/``.local`` hostname denylist and the
+private/loopback/link-local/reserved/multicast/CGNAT address classes — and
+exposes it as :meth:`UrlSafetyCheck.validated_addresses` — the fail-closed
 resolver the pinned connection calls *inside* ``connect`` so the socket targets an
 address drawn from the same resolution that was validated (no independent
 re-resolve).  The ``None``-means-safe admission gate callers use is
-:class:`quarry.url_admission.UrlAdmission`, which adds the syntax rules.
+:class:`quarry.url_admission.UrlAdmission`, which owns the scheme and syntax rules.
 """
 
 from __future__ import annotations
@@ -20,7 +20,9 @@ type IpAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
 
 class UrlRejectedError(ValueError):
-    """A URL, host, or resolved address failed the SSRF policy.
+    """A host or resolved address failed the SSRF policy.
+
+    Host and address only: scheme and syntax belong to ``UrlAdmission``.
 
     A ``ValueError`` so the existing ``ValueError`` handling on both fetch paths
     (``WebFetcher.fetch``, ``GatedSitemapWebClient.get``) surfaces it as a URL

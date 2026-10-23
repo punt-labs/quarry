@@ -1,4 +1,4 @@
-"""PII-safe metadata form of a WebFetch-captured URL."""
+"""The tolerant fallback for a URL HttpUrl refuses, used via HttpUrl.shown."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ _PARAMS = re.compile(r";[^/]*")  # path parameters: ";jsessionid=..." on any seg
 
 @dataclass(frozen=True, slots=True)
 class CaptureUrl:
-    """A fetched URL whose persisted-metadata form carries no structural PII.
+    """A URL HttpUrl refuses, read tolerantly; its form carries no structural PII.
 
     A WebFetch capture stores its source URL as the document name and path.  A
     raw URL leaks anything in its userinfo, query, or fragment — the tokens and
@@ -36,7 +36,7 @@ class CaptureUrl:
 
     @classmethod
     def display(cls, raw: str) -> str:
-        """Return *raw* redacted for a log or progress line; never raises.
+        """Return *raw*'s stored fallback form (via DisplayName.stored); never raises.
 
         A URL that cannot be parsed (an out-of-range port, a malformed netloc)
         shows as a fixed placeholder rather than as its raw text.

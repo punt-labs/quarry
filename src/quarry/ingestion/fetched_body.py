@@ -11,7 +11,7 @@ from quarry.url_admission import UrlAdmission
 
 
 class UrlChecker(Protocol):
-    """The SSRF policy a gate delegates to."""
+    """The URL admission gate (syntax, scheme, address) a fetch gate delegates to."""
 
     def reject_reason(self, url: str) -> str | None:
         """Return ``None`` if *url* is safe to fetch, else why not."""
@@ -49,8 +49,9 @@ class FetchGate:
     def check_final_url(self, url: str) -> None:
         """Raise if the final URL (post-redirect) is unsafe/internal.
 
-        The scheme is not re-checked: the opener only follows HTTP(S) hops, so
-        the address policy is the only thing a redirect can newly violate.
+        Admission re-checks syntax, scheme and address, but only the address
+        policy can newly fail after a redirect: the opener only follows HTTP(S)
+        hops, and the syntax was admitted on the initial URL.
         """
         reason = self.urls.reject_reason(url)
         if reason is not None:

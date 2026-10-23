@@ -30,7 +30,8 @@ class ToolFailure:
     content): its message is the whole story, so the guard logs it as a WARNING
     without a traceback and it renders as ``Error: <message>``, the message being the
     same text the CLI and HTTP surfaces carry.  Anything else is a fault and keeps
-    its traceback.
+    its traceback; a 5xx ``HttpError`` renders the same way but logs at ERROR
+    with its traceback.
     """
 
     __slots__ = ("_exc",)
@@ -61,7 +62,8 @@ class ToolFailure:
         of a bare exception string — an agent reading the tool result can act
         on it without a separate ``quarry doctor`` round trip. A daemon
         rejection (``HttpError`` — e.g. a 400 on binary content) renders
-        ``Error: <message>``; any other exception renders ``Error: <class>: <message>``.
+        ``Error: <message>`` (a 5xx renders the same way but logs at ERROR with its
+        traceback); any other exception renders ``Error: <class>: <message>``.
         One line, not two: a registered tool's result is a pydantic-repr'd
         ``TextContent``, which escapes an embedded newline — a two-line
         message would fail the direct-call/registered-call string-identity

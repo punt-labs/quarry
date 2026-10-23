@@ -67,7 +67,7 @@ class CapturedBodyIngest:
     for a failure, so no caller can report an empty success.  ``name_override`` is
     empty for the primary URL route (the URL is the natural name); a capture
     re-fetch sets it to the inline capture's friendly name so a non-HTML capture
-    keeps that name instead of falling back to the raw URL.
+    keeps that name instead of falling back to the URL's stored name.
     """
 
     __slots__ = ("_fetcher", "_labels", "_name_override", "_source")
@@ -92,7 +92,7 @@ class CapturedBodyIngest:
         return self
 
     def subject(self) -> str:
-        """Return the source with userinfo, query and fragment dropped, for a log."""
+        """Return the source's log form, ``scheme://host[:port]/…(N segments)``."""
         return str(self._source)
 
     def fetch(self) -> FetchedBody:
@@ -115,13 +115,14 @@ class CapturedBodyIngest:
     def ingest(self, ctx: DaemonContext, body: FetchedBody) -> dict[str, object]:
         """Route a fetched body: HTML via extractor, else text with a mime marker.
 
-        The non-HTML branch derives its ``document_name`` from
-        :meth:`CaptureUrl.redacted` rather than passing the raw URL: the
-        pipeline's regex scrubber (``_scrub_metadata``) does not know URL
-        structure and leaves ``?email=``, ``?token=``, and ``user:pass@``
-        components on the persisted ``document_name`` (CWE-532).  The HTML
-        branch already routes through :func:`ingest_url`, which does the same
-        derivation internally, so the two branches agree.
+        The non-HTML branch names the document with
+        :attr:`HttpUrl.document_name` rather than the raw URL: the pipeline's
+        regex scrubber (``_scrub_metadata``) does not know URL structure and
+        would leave ``?email=`` and ``?token=`` on the persisted name
+        (CWE-532).  Userinfo never gets this far (admission refuses it), and
+        query, fragment and ``;params`` are dropped.  The HTML branch routes
+        through :func:`ingest_url`, which names the document the same way, so the
+        two branches agree.
         """
 
         def scrub(text: str) -> str:
