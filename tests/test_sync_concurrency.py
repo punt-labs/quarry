@@ -196,7 +196,9 @@ class TestRegistrationSubsumption:
 
         conn.register_directory(parent, "parent-col")
 
-        with pytest.raises(ValueError, match="already covered by parent"):
+        with pytest.raises(
+            ValueError, match=r"^directory covered by a parent registration$"
+        ):
             conn.register_directory(child, "child-col")
         conn.close()
 
@@ -222,7 +224,7 @@ class TestRegistrationSubsumption:
 
         conn.register_directory(d, "first")
 
-        with pytest.raises(ValueError, match="already registered"):
+        with pytest.raises(ValueError, match=r"^directory already registered$"):
             conn.register_directory(d, "second")
         conn.close()
 
@@ -255,7 +257,9 @@ class TestRegistrationSubsumption:
 
         conn.register_directory(ancestor, "ancestor")
 
-        with pytest.raises(ValueError, match="already covered by parent"):
+        with pytest.raises(
+            ValueError, match=r"^directory covered by a parent registration$"
+        ):
             conn.register_directory(deep, "deep")
         conn.close()
 
@@ -294,7 +298,7 @@ class TestRegistrationSubsumption:
         other.mkdir()
         conn.register_directory(other, "taken-name")
 
-        with pytest.raises(ValueError, match="already in use"):
+        with pytest.raises(ValueError, match=r"^collection name already in use$"):
             conn.register_directory(parent, "taken-name")
 
         # Child must still be registered — rollback preserved it.

@@ -107,5 +107,5 @@ class RefusalAwareTerminal:
             self._state.kind,
             subject,
             self._state.task_id,
-            exc,
+            f"{exc} [{exc.detail}]" if exc.detail else exc,
         )

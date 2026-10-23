@@ -95,7 +95,7 @@ class TestRegisterDirectory:
         d2 = tmp_path / "b"
         d2.mkdir()
         conn.register_directory(d1, "shared")
-        with pytest.raises(ValueError, match="Collection name already in use"):
+        with pytest.raises(ValueError, match=r"^collection name already in use$"):
             conn.register_directory(d2, "shared")
         conn.close()
 
@@ -104,7 +104,7 @@ class TestRegisterDirectory:
         d = tmp_path / "course"
         d.mkdir()
         conn.register_directory(d, "first")
-        with pytest.raises(ValueError, match="Directory already registered"):
+        with pytest.raises(ValueError, match=r"^directory already registered$"):
             conn.register_directory(d, "second")
         conn.close()
 
@@ -635,7 +635,10 @@ class TestRetainedCollections:
             conn.register_directory(dir_a, "backend")
             conn.deregister_directory("backend", keep_data=True)
             assert conn.markers.list_retained() == ["backend"]
-            with pytest.raises(ValueError, match="archived"):
+            with pytest.raises(
+                ValueError,
+                match=r"^collection holds archived data from another directory$",
+            ):
                 conn.register_directory(dir_b, "backend")
             assert conn.markers.list_retained() == ["backend"]  # marker intact
             assert conn.get_registration("backend") is None  # dir_b did NOT adopt

@@ -22,10 +22,13 @@ class TestRefuseIfCovered:
     def test_a_child_of_a_registered_parent_is_refused(self, tmp_path: Path) -> None:
         child = tmp_path / "sub"
         child.mkdir()
-        with pytest.raises(RegistrationRefusedError, match="covered by parent"):
+        with pytest.raises(RegistrationRefusedError) as info:
             RegistrationRules.refuse_if_covered(
                 [_reg(str(tmp_path), "parent")], child.resolve()
             )
+        assert str(info.value) == "directory covered by a parent registration"
+        assert info.value.collection == "parent"
+        assert info.value.directory == str(tmp_path)
 
     def test_the_same_directory_is_not_covered_by_itself(self, tmp_path: Path) -> None:
         RegistrationRules.refuse_if_covered(
@@ -41,28 +44,63 @@ class TestRefuseForeignRetained:
         marker = RetainedMarker("docs", str(tmp_path))
         RegistrationRules.refuse_foreign_retained(marker, tmp_path, "docs")
 
-    def test_a_different_directory_is_refused(self, tmp_path: Path) -> None:
+    def test_a_different_directory_is_refused_with_fixed_text(
+        self, tmp_path: Path
+    ) -> None:
         marker = RetainedMarker("docs", "/elsewhere")
-        with pytest.raises(RegistrationRefusedError, match="archived"):
+        with pytest.raises(RegistrationRefusedError) as info:
             RegistrationRules.refuse_foreign_retained(marker, tmp_path, "docs")
+        assert str(info.value) == (
+            "collection holds archived data from another directory"
+        )
+        assert info.value.collection == "docs"
+        assert "/elsewhere" in info.value.detail
 
     def test_a_legacy_marker_without_an_origin_is_refused(self, tmp_path: Path) -> None:
-        with pytest.raises(RegistrationRefusedError, match="an unknown directory"):
+        with pytest.raises(RegistrationRefusedError) as info:
             RegistrationRules.refuse_foreign_retained(
                 RetainedMarker("docs", ""), tmp_path, "docs"
             )
+        assert str(info.value) == (
+            "collection holds archived data from another directory"
+        )
+
+
+_HOSTILE = "https://user:hunter2@evil.example/reset/TOKEN?t=abc\n[CRITICAL] FORGED"
 
 
 class TestIntegrityRefusal:
-    def test_a_registered_directory_names_its_collection(self, tmp_path: Path) -> None:
+    def test_a_registered_directory_has_fixed_text(self, tmp_path: Path) -> None:
         refusal = RegistrationRules.integrity_refusal(
             (str(tmp_path), "docs"), tmp_path, "other"
         )
-        assert "already registered" in str(refusal)
-        assert "'docs'" in str(refusal)
+        assert str(refusal) == "directory already registered"
+        assert refusal.collection == "other"
 
-    def test_a_taken_name_is_reported_as_in_use(self, tmp_path: Path) -> None:
+    def test_a_taken_name_has_fixed_text(self, tmp_path: Path) -> None:
         refusal = RegistrationRules.integrity_refusal(
             ("/elsewhere", "docs"), tmp_path, "docs"
         )
-        assert str(refusal) == "Collection name already in use: 'docs'"
+        assert str(refusal) == "collection name already in use"
+
+    def test_caller_supplied_text_never_reaches_a_message(self, tmp_path: Path) -> None:
+        refusals = [
+            RegistrationRules.integrity_refusal(None, tmp_path, _HOSTILE),
+            RegistrationRules.integrity_refusal(
+                (str(tmp_path), _HOSTILE), tmp_path, _HOSTILE
+            ),
+        ]
+        for refusal in refusals:
+            assert "hunter2" not in str(refusal)
+            assert "FORGED" not in str(refusal)
+        with pytest.raises(RegistrationRefusedError) as info:
+            RegistrationRules.refuse_foreign_retained(
+                RetainedMarker(_HOSTILE, _HOSTILE), tmp_path, _HOSTILE
+            )
+        assert "hunter2" not in str(info.value)
+        assert len(str(info.value)) < 100
+        with pytest.raises(RegistrationRefusedError) as info:
+            RegistrationRules.refuse_if_covered(
+                [_reg(str(tmp_path), _HOSTILE)], (tmp_path / "x").resolve()
+            )
+        assert "hunter2" not in str(info.value)

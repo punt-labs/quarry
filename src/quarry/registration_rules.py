@@ -40,11 +40,10 @@ class RegistrationRules:
         """Refuse *resolved* when an existing registration already covers it."""
         for reg in registrations:
             if cls.is_ancestor_of(Path(reg.directory).resolve(), resolved):
-                msg = (
-                    f"directory already covered by parent registration "
-                    f"'{reg.collection}' ({reg.directory})"
+                msg = "directory covered by a parent registration"
+                raise RegistrationRefusedError(msg).about(
+                    directory=reg.directory, collection=reg.collection
                 )
-                raise RegistrationRefusedError(msg)
 
     @staticmethod
     def refuse_foreign_retained(
@@ -61,16 +60,16 @@ class RegistrationRules:
         A legacy marker with no recorded origin (``original_directory`` NULL,
         written before the column existed) matches no directory and is refused for
         every directory: without a verifiable origin the safe default is to never
-        merge.  Delete the archived collection, or choose another name, to proceed.
+        merge.  The refusal's text is fixed; the names ride its structured fields,
+        for the redacted log line.
         """
         if marker is None or marker.original_directory == str(resolved):
             return
+        msg = "collection holds archived data from another directory"
         origin = marker.original_directory or "an unknown directory"
-        msg = (
-            f"collection {collection!r} holds archived (keep-data) chunks from "
-            f"{origin}; choose a different name or delete that collection first"
+        raise RegistrationRefusedError(msg).about(
+            directory=origin, collection=collection, detail=f"kept from {origin}"
         )
-        raise RegistrationRefusedError(msg)
 
     @staticmethod
     def integrity_refusal(
@@ -81,9 +80,12 @@ class RegistrationRules:
         *existing* is the ``(directory, collection)`` row that collided, if any.
         """
         if existing and existing[0] == str(resolved):
-            msg = (
-                f"Directory already registered: {resolved} (collection '{existing[1]}')"
+            msg = "directory already registered"
+            held = f"held by collection {existing[1]!r}"
+            return RegistrationRefusedError(msg).about(
+                directory=str(resolved), collection=collection, detail=held
             )
-        else:
-            msg = f"Collection name already in use: '{collection}'"
-        return RegistrationRefusedError(msg)
+        msg = "collection name already in use"
+        return RegistrationRefusedError(msg).about(
+            directory=str(resolved), collection=collection
+        )
