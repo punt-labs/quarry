@@ -48,7 +48,15 @@ class LegacyUrlNames:
 
     def aliases(self, name: str, collection: str) -> list[str]:
         """Return the stored names in *collection* that spell *name* the old way."""
-        parts = urlsplit(name)
+        try:
+            parts = urlsplit(name)
+        except ValueError as exc:
+            # A scrubbed host (``[REDACTED:hostname]``) reads as a broken IPv6
+            # bracket: no build stored such a name under another spelling.
+            logger.debug(
+                "no legacy spelling for an unparseable name: %s", type(exc).__name__
+            )
+            return []
         if parts.scheme not in {"http", "https"} or not parts.netloc:
             return []
         prefix = f"{parts.scheme}://{parts.netloc}"

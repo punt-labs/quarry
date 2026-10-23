@@ -157,3 +157,43 @@ class TestTheLegacyNameIsTheSameDocument:
             "https://example.com/caf%C3%A9"
         )
         assert LegacyUrlNames.canonical("notes.txt") == "notes.txt"
+
+
+class TestANameUrlsplitCannotParse:
+    """A scrubbed host (``[REDACTED:hostname]``) reads as a broken IPv6 bracket."""
+
+    _SCRUBBED = "https://[REDACTED:hostname]/page"
+
+    def test_it_has_no_legacy_spelling(self, db: Database) -> None:
+        assert LegacyUrlNames(db).aliases(self._SCRUBBED, _COLLECTION) == []
+
+    def test_it_exists_only_if_stored_under_exactly_that_name(
+        self, db: Database
+    ) -> None:
+        names = LegacyUrlNames(db)
+        assert not names.exists(self._SCRUBBED, _COLLECTION)
+        _store_as_stored_by_an_older_build(db, self._SCRUBBED)
+        assert names.exists(self._SCRUBBED, _COLLECTION)
+
+    def test_a_scrubbed_capture_of_the_operators_own_host_overwrites_in_place(
+        self, db: Database
+    ) -> None:
+        def scrub(text: str) -> str:
+            return text.replace("myhost.corp", "[REDACTED:hostname]")
+
+        for _ in range(2):
+            ingest_content(
+                InlineIngest("indexable body of myhost.corp", content_scrubber=scrub),
+                "https://myhost.corp/page",
+                Progress(None),
+                IngestContext(db, Settings(), overwrite=True, collection=_COLLECTION),
+            )
+        assert _names(db) == {self._SCRUBBED}
+
+    def test_the_skip_is_logged_at_debug_with_the_error_class(
+        self, db: Database, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.DEBUG, logger="quarry.ingestion.legacy_url_names"):
+            LegacyUrlNames(db).aliases(self._SCRUBBED, _COLLECTION)
+        assert any("ValueError" in r.getMessage() for r in caplog.records)
+        assert "REDACTED" not in caplog.text
