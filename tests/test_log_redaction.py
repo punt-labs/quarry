@@ -247,3 +247,69 @@ class TestContinuationLines:
         lines = buf.getvalue().splitlines()
         assert lines[0] == "stack"
         assert all(line.startswith("\t") for line in lines[1:])
+
+
+class TestARecordThatDoesNotSettle:
+    @staticmethod
+    def _never_settles(monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(LogRedactor, "_once", lambda text: text + "x")
+
+    def test_one_fixed_line_stands_for_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._never_settles(monkeypatch)
+        handler = RedactingStreamHandler()
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        record = _record("quarry.x", logging.ERROR, "fetch http://u:SECRET@h/p")
+        line = handler.format(record)
+        assert line.endswith(
+            f"message withheld: redaction did not settle in {LogRedactor.PASSES} passes"
+        )
+
+    def test_the_line_names_the_level_the_logger_and_the_call_site(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._never_settles(monkeypatch)
+        record = _record("quarry.x", logging.ERROR, "m")
+        line = RedactingStreamHandler().format(record)
+        assert all(part in line for part in ("ERROR", "quarry.x", f"{__file__}:1"))
+
+    def test_the_line_carries_no_message_or_traceback_text(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._never_settles(monkeypatch)
+        try:
+            msg = "boom SECRET2"
+            raise RuntimeError(msg)
+        except RuntimeError:
+            import sys
+
+            record = logging.LogRecord(
+                "quarry.x",
+                logging.ERROR,
+                __file__,
+                1,
+                "SECRET1 %s",
+                ("SECRET3",),
+                sys.exc_info(),
+            )
+        line = RedactingStreamHandler().format(record)
+        assert not any(s in line for s in ("SECRET1", "SECRET2", "SECRET3"))
+
+    def test_formatting_it_makes_no_log_record(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        self._never_settles(monkeypatch)
+        with caplog.at_level(logging.DEBUG):
+            RedactingStreamHandler().format(_record("quarry.x", logging.ERROR, "m"))
+        assert caplog.records == []
+
+    def test_a_file_handler_writes_the_line_once_though_rollover_formats_it(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._never_settles(monkeypatch)
+        log = tmp_path / "x.log"
+        handler = RedactingFileHandler(str(log), maxBytes=10_000, encoding="utf-8")
+        handler.emit(_record("quarry.x", logging.ERROR, "m"))
+        handler.close()
+        assert log.read_text(encoding="utf-8").count("message withheld") == 1

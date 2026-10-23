@@ -1506,7 +1506,7 @@
   },
   "src/quarry/log_redactor.py": {
     "efferent_coupling": 2.0,
-    "public_names": 2.0,
+    "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0

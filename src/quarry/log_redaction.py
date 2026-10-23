@@ -41,7 +41,22 @@ class _FirstPartyHandler(logging.Handler):
         single.exc_info = None
         if record.stack_info:
             single.stack_info = LogRedactor.continuation(record.stack_info)
-        return LogRedactor.redact(super().format(single))
+        settled = LogRedactor.settle(super().format(single))
+        return self._withheld(record) if settled is None else settled
+
+    @staticmethod
+    def _withheld(record: logging.LogRecord) -> str:
+        """Return the one fixed line that stands for a record that did not settle.
+
+        Built only from what the code itself writes: the time, level, logger and
+        call site.  No message and no traceback text, and no log call.
+        """
+        when = logging.Formatter().formatTime(record)
+        where = f"{record.name} {record.pathname}:{record.lineno}"
+        return LogRedactor.one_line(
+            f"{when} {record.levelname} {where}: message withheld: "
+            f"redaction did not settle in {LogRedactor.PASSES} passes"
+        )
 
     def _traceback(self, record: logging.LogRecord) -> str | None:
         """Return the record's traceback with every line indented, or ``None``."""

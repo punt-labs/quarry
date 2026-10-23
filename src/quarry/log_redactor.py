@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import logging
 import re
 from typing import ClassVar, final
 
 from quarry.authority_mask import AuthorityMask
 from quarry.log_form import LogForm
-
-logger = logging.getLogger(__name__)
 
 
 @final
@@ -39,7 +36,8 @@ class LogRedactor:
     Steps 2 to 4 repeat until a pass changes nothing (the mask one pass leaves can
     read differently to the next), so redacting a record twice gives the record
     redacted once.  After :attr:`PASSES` passes without a fixed point the record is
-    replaced by ``[…]`` (and a warning is logged): it fails closed.
+    replaced by ``[…]``: it fails closed.  :meth:`settle` says so with ``None``,
+    for a caller that has the record and can say more; redaction never logs.
 
     A line with no control character, no ``scheme://``, no
     ``user:password@``, no ``?query`` and no token over :attr:`MAX_TOKEN` comes back
@@ -85,10 +83,17 @@ class LogRedactor:
     @classmethod
     def redact(cls, text: str) -> str:
         """Return *text* with URL userinfo, query and fragment masked."""
-        marker = ""
-        if len(text) > cls.MAX_RECORD:
-            dropped = len(text[cls.MAX_RECORD :].encode("utf-8", errors="replace"))
-            text, marker = text[: cls.MAX_RECORD], f" […truncated {dropped} bytes]"
+        settled = cls.settle(text)
+        return "[…]" + cls._bounded(text)[1] if settled is None else settled
+
+    @classmethod
+    def settle(cls, text: str) -> str | None:
+        """Return *text* redacted, or ``None`` if the passes did not settle.
+
+        It logs nothing: a log call from inside a handler's ``format`` would
+        reach that same handler.
+        """
+        text, marker = cls._bounded(text)
         # A mask can leave text the next pass reads differently (a placeholder
         # beside a ``:`` or a ``/``), so the passes repeat until one changes
         # nothing.  That is what makes redacting a second time a no-op.
@@ -98,8 +103,15 @@ class LogRedactor:
                 return text + marker
             text = masked
         # No fixed point: what is left may still hold what a pass would mask.
-        logger.warning("log redaction did not settle in %d passes", cls.PASSES)
-        return "[…]" + marker
+        return None
+
+    @classmethod
+    def _bounded(cls, text: str) -> tuple[str, str]:
+        """Return *text* cut to :attr:`MAX_RECORD`, and the marker saying so."""
+        if len(text) <= cls.MAX_RECORD:
+            return text, ""
+        dropped = len(text[cls.MAX_RECORD :].encode("utf-8", errors="replace"))
+        return text[: cls.MAX_RECORD], f" […truncated {dropped} bytes]"
 
     @classmethod
     def _once(cls, text: str) -> str:
