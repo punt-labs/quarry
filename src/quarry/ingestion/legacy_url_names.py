@@ -29,6 +29,14 @@ class LegacyUrlNames:
     :attr:`HttpUrl.document_name`.  The search is bounded by the name's
     ``scheme://host`` prefix, so it reads only that host's documents.
 
+    Only a document fetched from a URL has a legacy spelling: a stored candidate
+    must itself be URL-sourced, and the page being stored must be too.  A document
+    that someone named with a URL (``remember``, ``learn``) is a label and is never
+    matched.  The bounds of the match: a host that differs only in case matches;
+    a name with userinfo, or with the ideographic full stops IDNA reads as ``.``
+    in its host, does not: any build that kept URL names refused the first and
+    never stored the second.
+
     An instance remembers each host's listing, so one made for a bulk run lists a
     host once however many of its pages the run stores; one made for a single
     call lists it once too.  Pages the run replaces are dropped from the listing
@@ -123,13 +131,26 @@ class LegacyUrlNames:
         """Return whether *name*, or a legacy spelling of it, is stored."""
         return self.stored_as(name, collection) is not None
 
-    def replaced(self, name: str, collection: str) -> list[str]:
-        """Return the legacy spellings of *name* an overwrite replaces, logging each."""
-        found = self.aliases(name, collection)
-        for legacy in found:
-            logger.info(
+    def replace_prior(
+        self, name: str, collection: str, *, overwrite: bool, url_sourced: bool
+    ) -> None:
+        """Delete what storing *name* in *collection* replaces.
+
+        A legacy spelling of a URL goes whenever the page being stored was
+        fetched from a URL (*url_sourced*), overwriting or not: it is the same
+        page under a name this build no longer writes, and the new document must
+        not sit beside it.  *name* itself goes only when *overwrite*.  A document
+        that someone named with a URL is a label and is never touched.
+        """
+        twins = self.aliases(name, collection) if url_sourced else []
+        for legacy in twins:
+            logger.warning(
                 "replacing legacy-named document %s with %s",
                 DisplayName(legacy).redacted(),
                 DisplayName(name).redacted(),
             )
-        return found
+        for stale in [name, *twins] if overwrite else twins:
+            self._database.store.delete_document(
+                stale, collection=collection, count=False
+            )
+        self.dropped(twins, collection)

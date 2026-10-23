@@ -43,11 +43,17 @@ def db(tmp_path: Path) -> Iterator[Database]:
         yield Database.connect(path)
 
 
-def _store_as_stored_by_an_older_build(db: Database, name: str) -> None:
-    """Write a row under *name* exactly, as a build that spelled it differently did."""
+def _store_as_stored_by_an_older_build(
+    db: Database, name: str, *, url_sourced: bool = True
+) -> None:
+    """Write a row under *name* exactly, as a build that spelled it differently did.
+
+    A page fetched from a URL records that URL as its path; a document someone
+    named with a URL (``remember``) records none.
+    """
     chunk = Chunk(
         document_name=name,
-        document_path="",
+        document_path=name if url_sourced else "",
         collection=_COLLECTION,
         page_number=1,
         total_pages=1,
@@ -62,9 +68,17 @@ def _store_as_stored_by_an_older_build(db: Database, name: str) -> None:
     db.store.insert([chunk], vector)
 
 
-def _store(db: Database, name: str, *, overwrite: bool = True) -> None:
+def _store(
+    db: Database, name: str, *, overwrite: bool = True, url_sourced: bool = True
+) -> None:
+    """Ingest a page fetched from *name*, or a document merely labelled with it."""
+    body = (
+        "<html><body><p>some indexable body text for the document</p></body></html>"
+        if url_sourced
+        else "some indexable body text for the document"
+    )
     ingest_content(
-        InlineIngest("some indexable body text for the document"),
+        InlineIngest(body, format_hint="html" if url_sourced else "auto"),
         name,
         Progress(None),
         IngestContext(db, Settings(), overwrite=overwrite, collection=_COLLECTION),
@@ -155,13 +169,53 @@ class TestOverwriteReplacesTheLegacyName:
         assert "https://example.com/…(segments=1)" in replaced[0]
         assert "SECRET" not in caplog.text
 
-    def test_a_non_overwriting_ingest_deletes_nothing(self, db: Database) -> None:
-        _store_as_stored_by_an_older_build(db, "https://example.com/page?utm=1")
+    def test_a_non_overwriting_ingest_deletes_only_the_legacy_twin(
+        self, db: Database
+    ) -> None:
+        _store_as_stored_by_an_older_build(db, "https://example.com/café")
+        _store(db, "https://example.com/caf%C3%A9", overwrite=False)
+        assert _names(db) == {"https://example.com/caf%C3%A9"}
+
+    def test_a_non_overwriting_ingest_keeps_the_document_already_there(
+        self, db: Database
+    ) -> None:
+        _store_as_stored_by_an_older_build(db, "https://example.com/page")
         _store(db, "https://example.com/page", overwrite=False)
+        assert _names(db) == {"https://example.com/page"}
+
+    def test_a_label_that_looks_like_a_url_is_never_replaced(
+        self, db: Database
+    ) -> None:
+        _store_as_stored_by_an_older_build(
+            db, "https://example.com/café", url_sourced=False
+        )
+        _store(db, "https://example.com/caf%C3%A9", overwrite=True)
         assert _names(db) == {
-            "https://example.com/page?utm=1",
-            "https://example.com/page",
+            "https://example.com/café",
+            "https://example.com/caf%C3%A9",
         }
+
+    def test_a_label_is_not_allowed_to_replace_a_fetched_page(
+        self, db: Database
+    ) -> None:
+        _store_as_stored_by_an_older_build(db, "https://example.com/café")
+        _store(db, "https://example.com/caf%C3%A9", overwrite=True, url_sourced=False)
+        assert _names(db) == {
+            "https://example.com/café",
+            "https://example.com/caf%C3%A9",
+        }
+
+    def test_each_replaced_twin_is_logged_at_warning(
+        self, db: Database, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        _store_as_stored_by_an_older_build(db, "https://example.com/page?token=SECRET")
+        with caplog.at_level(
+            logging.WARNING, logger="quarry.ingestion.legacy_url_names"
+        ):
+            _store(db, "https://example.com/page?token=SECRET", overwrite=False)
+        [record] = [r for r in caplog.records if "legacy" in r.getMessage()]
+        assert record.levelno == logging.WARNING
+        assert "SECRET" not in caplog.text
 
 
 class TestTheLegacyNameIsTheSameDocument:
@@ -259,7 +313,10 @@ class TestOneListingPerHost:
             request: UrlIngest, progress: Progress, ctx: IngestContext
         ) -> IngestResult:
             return ingest_content(
-                InlineIngest("indexable body text for a crawled page"),
+                InlineIngest(
+                    "<html><body><p>indexable body text</p></body></html>",
+                    format_hint="html",
+                ),
                 request.url.document_name,
                 progress,
                 ctx,

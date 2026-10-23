@@ -15,7 +15,7 @@ import stat
 import sys
 import time
 from collections.abc import Callable, Iterator
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
@@ -1682,10 +1682,11 @@ class TestCapturesLookup:
         _inject_mocks(ctx)
         db = get_db(settings.lancedb_path)
         legacy = "https://example.com/guide?ref=old"
-        ChunkStore(db).insert(
-            [_make_chunk(document_name=legacy, collection="default-captures")],
-            _random_vectors(1),
+        fetched = replace(
+            _make_chunk(document_name=legacy, collection="default-captures"),
+            document_path=legacy,
         )
+        ChunkStore(db).insert([fetched], _random_vectors(1))
         app = build_app(ctx)
 
         with TestClient(app, raise_server_exceptions=False) as tc:

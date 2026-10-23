@@ -1,4 +1,4 @@
-"""List the stored document names that start with a prefix, bounded by it."""
+"""List the stored URL-sourced document names that start with a prefix."""
 
 from __future__ import annotations
 
@@ -18,9 +18,12 @@ _SCAN_LIMIT = 1_000_000
 
 @final
 class NamePrefix:
-    """Query the document names in a collection that begin with a given prefix.
+    """Query the URL-sourced document names in a collection under a given prefix.
 
-    One row is read per document, not one per chunk: the ingest funnel numbers a
+    A document is URL-sourced when it was fetched from a URL, so its
+    ``document_path`` is that URL; a document someone named with a URL
+    (``remember``, ``learn``) has no such path and is a label, not a page.  One row
+    is read per document, not one per chunk: the ingest funnel numbers a
     document's chunks as one contiguous sequence from zero, so every stored
     document has a chunk 0.  The match ignores case; the caller decides what a
     case difference means.
@@ -36,7 +39,7 @@ class NamePrefix:
         return self
 
     def names(self, prefix: str, collection: str) -> list[str]:
-        """Return the distinct names in *collection* starting with *prefix*.
+        """Return the distinct URL-sourced names in *collection* under *prefix*.
 
         The SQL ``LIKE`` has its wildcards in *prefix* escaped, so it matches the
         prefix literally; the exact test is made here as well, because SQL and
@@ -49,6 +52,7 @@ class NamePrefix:
             f"lower(document_name) LIKE '{self._pattern(prefix.lower())}%' ESCAPE '\\'"
             f" AND collection = '{escape_sql(collection)}'"
             " AND chunk_index = 0"
+            " AND (document_path LIKE 'http://%' OR document_path LIKE 'https://%')"
         )
         query = self._db.open_table(TABLE_NAME).search().where(predicate)
         rows = query.limit(_SCAN_LIMIT).select(["document_name"]).to_list()

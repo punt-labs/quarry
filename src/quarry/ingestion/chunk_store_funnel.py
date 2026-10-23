@@ -79,20 +79,21 @@ class ChunkStoreFunnel:
         return chunks
 
     @staticmethod
-    def _replace_prior(document_name: str, context: IngestContext) -> None:
-        """Delete the document's earlier chunks when this ingest overwrites.
+    def _replace_prior(chunks: list[Chunk], context: IngestContext) -> None:
+        """Delete what the document replaces: its earlier chunks, if overwriting.
 
         A copy an older build stored under a former spelling of the same URL goes
-        in the same replace, so a re-ingest leaves one document, not two.
+        too, overwriting or not, when this document was fetched from a URL, so a
+        re-ingest leaves one document, not two.  Every chunk of a document carries
+        its name and the URL it was fetched from, if any.
         """
-        if context.overwrite:
-            legacy = RunContext.legacy_names_of(context)
-            twins = legacy.replaced(document_name, context.collection)
-            for name in [document_name, *twins]:
-                context.database.store.delete_document(
-                    name, collection=context.collection, count=False
-                )
-            legacy.dropped(twins, context.collection)
+        head = chunks[0]
+        RunContext.legacy_names_of(context).replace_prior(
+            head.document_name,
+            context.collection,
+            overwrite=context.overwrite,
+            url_sourced=head.document_path.startswith(("http://", "https://")),
+        )
 
     @staticmethod
     def _embed_and_store(
@@ -102,7 +103,7 @@ class ChunkStoreFunnel:
         context: IngestContext,
     ) -> int:
         """Delete the prior document (if overwriting), then embed and store."""
-        ChunkStoreFunnel._replace_prior(document_name, context)
+        ChunkStoreFunnel._replace_prior(chunks, context)
         progress("Embedding + storing in bounded windows")
         t0 = time.perf_counter()
         inserted = DocumentStreamer(context.settings).insert(

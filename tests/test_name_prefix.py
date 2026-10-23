@@ -29,13 +29,22 @@ def db(tmp_path: Path) -> Iterator[Database]:
 
 
 def _store(
-    db: Database, name: str, *, chunks: int = 1, collection: str = _COLLECTION
+    db: Database,
+    name: str,
+    *,
+    chunks: int = 1,
+    collection: str = _COLLECTION,
+    url_sourced: bool = True,
 ) -> None:
-    """Write *chunks* chunks under *name*, numbered from zero as the funnel does."""
+    """Write *chunks* chunks under *name*, numbered from zero as the funnel does.
+
+    A page fetched from a URL records the URL as its path; a document that was
+    only labelled with one records none.
+    """
     rows = [
         Chunk(
             document_name=name,
-            document_path="",
+            document_path=name if url_sourced else "",
             collection=collection,
             page_number=1,
             total_pages=1,
@@ -73,6 +82,13 @@ class TestNames:
 
     def test_an_empty_store_lists_nothing(self, db: Database) -> None:
         assert _names(db, "https://h.test") == []
+
+    def test_a_document_only_labelled_with_a_url_is_not_listed(
+        self, db: Database
+    ) -> None:
+        _store(db, "https://h.test/a", url_sourced=False)
+        _store(db, "https://h.test/b")
+        assert _names(db, "https://h.test") == ["https://h.test/b"]
 
     def test_the_match_ignores_case(self, db: Database) -> None:
         _store(db, "https://Example.com/x")
