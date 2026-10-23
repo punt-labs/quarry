@@ -100,7 +100,12 @@ class WebIngest:
 
         progress("Processing: %s", DisplayName(document_name).redacted())
 
-        pages = InlinePages.of(inline.content, document_name, inline.format_hint)
+        pages = InlinePages.of(
+            inline.content,
+            document_name,
+            inline.format_hint,
+            url_sourced=inline.url_sourced,
+        )
         if inline.content_scrubber is not None:
             pages = [
                 replace(page, text=inline.content_scrubber(page.text)) for page in pages

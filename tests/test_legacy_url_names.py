@@ -19,6 +19,7 @@ from quarry.config import Settings
 from quarry.daemon.captured_body_ingest import IngestLabels
 from quarry.daemon.content_jobs import ScrubbedIngestJob
 from quarry.db import Database
+from quarry.db.name_prefix import NamePrefix
 from quarry.http_url import HttpUrl
 from quarry.ingestion.ingest_context import IngestContext, Progress
 from quarry.ingestion.legacy_url_names import LegacyUrlNames
@@ -310,7 +311,6 @@ class TestOneListingPerHost:
     ) -> None:
         from unittest.mock import patch
 
-        from quarry.db.name_prefix import NamePrefix
         from quarry.http_url import HttpUrl
         from quarry.ingestion.bulk_ingest import BulkIngestRunner, BulkOptions
 
@@ -344,8 +344,6 @@ class TestOneListingPerHost:
     def test_a_single_ingest_lists_its_host_once_too(self, db: Database) -> None:
         from unittest.mock import patch
 
-        from quarry.db.name_prefix import NamePrefix
-
         real = NamePrefix.names
         with patch.object(NamePrefix, "names", autospec=True, side_effect=real) as spy:
             _store(db, "https://example.com/page")
@@ -355,8 +353,6 @@ class TestOneListingPerHost:
         self, db: Database
     ) -> None:
         from unittest.mock import patch
-
-        from quarry.db.name_prefix import NamePrefix
 
         real = NamePrefix.names
         names = LegacyUrlNames(db)
@@ -538,3 +534,35 @@ class TestARawNameThatLooksLikeTheDigestMarker:
         legacy = name.replace("example.com", "Example.COM:443")
         _store_as_stored_by_an_older_build(db, legacy)
         assert LegacyUrlNames(db).aliases(name, _COLLECTION) == [legacy]
+
+
+class TestAnHtmlHintedLabelIsNeverAPage:
+    def test_it_is_stored_without_a_source_path(self, db: Database) -> None:
+        label = "https://example.com/notes"
+        ctx = cast("DaemonContext", SimpleNamespace(database=db, settings=Settings()))
+        job = ScrubbedIngestJob(
+            name=label,
+            content="<p>a note with an html hint</p>",
+            labels=TestEveryDedupPathAgrees._job("x").labels,
+            format_hint="html",
+            scrub_label="remember",
+        )
+        with patched_embedder(FakeEmbeddingBackend(768)):
+            job.scrub_and_ingest(ctx)
+        rows = db.db.open_table("chunks").search().where("chunk_index = 0").to_list()
+        assert {row["document_path"] for row in rows} == {""}
+
+    def test_it_is_not_a_candidate_for_a_page_with_the_same_host(
+        self, db: Database
+    ) -> None:
+        ctx = cast("DaemonContext", SimpleNamespace(database=db, settings=Settings()))
+        job = ScrubbedIngestJob(
+            name="https://example.com/notes",
+            content="<p>a note with an html hint</p>",
+            labels=TestEveryDedupPathAgrees._job("x").labels,
+            format_hint="html",
+            scrub_label="remember",
+        )
+        with patched_embedder(FakeEmbeddingBackend(768)):
+            job.scrub_and_ingest(ctx)
+        assert NamePrefix(db.db).names("https://example.com", _COLLECTION) == []
