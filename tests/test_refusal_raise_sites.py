@@ -46,6 +46,7 @@ _ALLOWED: dict[str, int] = {
 
 
 def _refusal_classes(trees: dict[Path, ast.Module]) -> set[str]:
+    """Return every ``RefusalError`` subclass name, and every module-level alias."""
     names = {"RefusalError"}
     grew = True
     while grew:
@@ -60,6 +61,18 @@ def _refusal_classes(trees: dict[Path, ast.Module]) -> set[str]:
                     )
                 ):
                     names.add(node.name)
+                    grew = True
+            for node in tree.body:
+                base = node.value if isinstance(node, ast.Assign) else None
+                base_name = getattr(base, "id", getattr(base, "attr", None))
+                if (
+                    isinstance(node, ast.Assign)
+                    and base_name in names
+                    and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and node.targets[0].id not in names
+                ):
+                    names.add(node.targets[0].id)
                     grew = True
     return names
 
@@ -112,6 +125,69 @@ def _resolved(expr: ast.expr, assigns: list[tuple[int, str, ast.expr]], line: in
     return [expr]
 
 
+def _is_super_or_cls(receiver: ast.expr) -> bool:
+    is_super = (
+        isinstance(receiver, ast.Call)
+        and isinstance(receiver.func, ast.Name)
+        and receiver.func.id == "super"
+    )
+    return is_super or (isinstance(receiver, ast.Name) and receiver.id == "cls")
+
+
+def _forwarded_message(call: ast.Call) -> ast.expr | None:
+    """Return the message handed to ``super().__init__`` / ``cls.__new__``, if any."""
+    args = [a for a in call.args if not (isinstance(a, ast.Name) and a.id == "cls")]
+    if args:
+        return args[0]
+    return next((k.value for k in call.keywords if k.arg in _MESSAGE_KEYWORDS), None)
+
+
+def _splats(call: ast.Call) -> bool:
+    """Return whether *call* forwards ``*args`` / ``**kwargs`` the sweep can't read."""
+    return any(isinstance(a, ast.Starred) for a in call.args) or any(
+        k.arg is None for k in call.keywords
+    )
+
+
+def _builds_text(expr: ast.expr) -> bool:
+    """Return whether *expr* assembles a string: an f-string, ``%``, ``+``, format."""
+    if isinstance(expr, ast.JoinedStr | ast.BinOp):
+        return not _is_constant(expr)
+    return (
+        isinstance(expr, ast.Call)
+        and isinstance(expr.func, ast.Attribute)
+        and expr.func.attr == "format"
+    )
+
+
+def _to_check(call: ast.Call, classes: set[str], *, inside: bool) -> list[ast.expr]:
+    """Return the expressions a refusal message may come from, for *call*.
+
+    Empty when *call* is not a construction.  A splat or a callee the sweep cannot
+    name (a call result, a subscript) that is handed built text is returned as the
+    call itself, which is never constant, so it is counted.
+    """
+    fn = call.func
+    forwards = (
+        inside
+        and isinstance(fn, ast.Attribute)
+        and fn.attr in {"__init__", "__new__"}
+        and _is_super_or_cls(fn.value)
+    )
+    builds = _constructs_refusal(call, classes, inside=inside)
+    if (builds or forwards) and _splats(call):
+        return [call]
+    message = (
+        _forwarded_message(call) if forwards else _message(call) if builds else None
+    )
+    if message is not None:
+        return [message]
+    unnamed = not isinstance(fn, ast.Name | ast.Attribute)
+    if unnamed and any(_builds_text(a) for a in call.args):
+        return [call]
+    return []
+
+
 def _scan(tree: ast.Module, classes: set[str]) -> int:
     """Count the constructions in *tree* whose message is not a safe constant."""
     parents = {
@@ -125,32 +201,28 @@ def _scan(tree: ast.Module, classes: set[str]) -> int:
                 return node
         return None
 
-    count = 0
-    for call in (n for n in ast.walk(tree) if isinstance(n, ast.Call)):
-        owner = nearest(call, (ast.ClassDef,))
-        inside = isinstance(owner, ast.ClassDef) and owner.name in classes
-        if not _constructs_refusal(call, classes, inside=inside):
-            continue
-        message = _message(call)
-        if message is None:
-            continue
-        func = nearest(call, (ast.FunctionDef, ast.AsyncFunctionDef))
-        assigns = [
+    def assignments(scope: ast.AST) -> list[tuple[int, str, ast.expr]]:
+        return [
             (0 if node in tree.body else node.lineno, node.targets[0].id, node.value)
-            for node in ast.walk(func or tree)
-            if isinstance(node, ast.Assign)
-            and len(node.targets) == 1
-            and isinstance(node.targets[0], ast.Name)
-        ] + [
-            (0, node.targets[0].id, node.value)
-            for node in tree.body
+            for node in [*ast.walk(scope), *tree.body]
             if isinstance(node, ast.Assign)
             and len(node.targets) == 1
             and isinstance(node.targets[0], ast.Name)
         ]
-        for value in _resolved(message, assigns, call.lineno):
-            if not (_is_constant(value) or _is_pinned_helper(value)):
-                count += 1
+
+    count = sum(
+        isinstance(n, ast.Assign)
+        and any(isinstance(t, ast.Attribute) and t.attr == "args" for t in n.targets)
+        for n in ast.walk(tree)  # an exception's .args rewritten after construction
+    )
+    for call in (n for n in ast.walk(tree) if isinstance(n, ast.Call)):
+        owner = nearest(call, (ast.ClassDef,))
+        inside = isinstance(owner, ast.ClassDef) and owner.name in classes
+        func = nearest(call, (ast.FunctionDef, ast.AsyncFunctionDef))
+        for message in _to_check(call, classes, inside=inside):
+            for value in _resolved(message, assignments(func or tree), call.lineno):
+                if not (_is_constant(value) or _is_pinned_helper(value)):
+                    count += 1
     return count
 
 
@@ -177,7 +249,8 @@ class TestTheSweepSeesEveryShape:
     @staticmethod
     def _count(source: str) -> int:
         tree = ast.parse(source)
-        return _scan(tree, {"RefusalError", "SomeRefusal"})
+        classes = _refusal_classes({Path("snippet.py"): tree}) | {"SomeRefusal"}
+        return _scan(tree, classes)
 
     def test_a_constant_passes(self) -> None:
         assert self._count("def f():\n    raise RefusalError('fixed')\n") == 0
@@ -226,6 +299,71 @@ class TestTheSweepSeesEveryShape:
         assert (
             self._count("def f(x):\n    raise RefusalError('a' if x else 'b')\n") == 0
         )
+
+
+class TestTheSweepSeesTheHardShapes:
+    """The shapes djb found: splats, aliases, unnamed callees, forwarding, .args."""
+
+    @staticmethod
+    def _count(source: str) -> int:
+        return TestTheSweepSeesEveryShape._count(source)
+
+    def test_a_double_star_message_is_counted(self) -> None:
+        assert self._count("def f(kw):\n    raise RefusalError(**kw)\n") == 1
+
+    def test_a_star_args_message_is_counted(self) -> None:
+        assert self._count("def f(a):\n    raise RefusalError(*a)\n") == 1
+
+    def test_a_module_level_alias_is_followed(self) -> None:
+        src = (
+            "class Sub(RefusalError):\n    pass\n"
+            "E = Sub\n"
+            "def f(x):\n    raise E(f'bad {x}')\n"
+        )
+        assert self._count(src) == 1
+        assert self._count(src.replace("f'bad {x}'", "'fixed'")) == 0
+
+    def test_an_attribute_alias_is_followed(self) -> None:
+        src = (
+            "class Sub(RefusalError):\n    pass\n"
+            "E = mod.Sub\n"
+            "def f(x):\n    raise E(f'bad {x}')\n"
+        )
+        assert self._count(src) == 1
+        assert self._count(src.replace("mod.Sub", "Sub")) == 1
+
+    def test_a_callee_that_cannot_be_named_is_suspect_with_built_text(self) -> None:
+        assert self._count("def f(g, x):\n    g()(f'{x}')\n") == 1
+        assert self._count("def f(g, x):\n    g[0]('a' + x)\n") == 1
+        assert self._count("def f(g, x):\n    g()('fixed')\n") == 0
+        assert self._count("def f(g, x):\n    g()(x)\n") == 0
+
+    def test_an_ordinary_method_call_is_not_suspect(self) -> None:
+        assert self._count("def f(g, x):\n    g.run(f'{x}')\n") == 0
+
+    def test_super_init_and_new_forwarding_a_built_message_are_counted(self) -> None:
+        src = (
+            "class SomeRefusal(RefusalError):\n"
+            "    def __init__(self, x):\n        super().__init__(f'{x}')\n"
+        )
+        assert self._count(src) == 1
+        assert self._count(src.replace("f'{x}'", "'fixed'")) == 0
+        new = (
+            "class SomeRefusal(RefusalError):\n"
+            "    def __new__(cls, x):\n        return cls.__new__(cls, f'{x}')\n"
+        )
+        assert self._count(new) == 1
+
+    def test_a_forward_with_a_keyword_message_is_counted(self) -> None:
+        src = (
+            "class SomeRefusal(RefusalError):\n"
+            "    def __init__(self, x):\n        super().__init__(msg=f'{x}')\n"
+        )
+        assert self._count(src) == 1
+
+    def test_rewriting_args_is_counted(self) -> None:
+        assert self._count("def f(e, x):\n    e.args = (x,)\n") == 1
+        assert self._count("def f(e):\n    e.other = 1\n") == 0
 
 
 class TestPinnedHelpers:
