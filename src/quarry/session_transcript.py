@@ -21,6 +21,7 @@ from quarry.ethos_handle import EthosConfig
 
 if TYPE_CHECKING:
     from quarry.artifacts import SessionArtifacts
+    from quarry.send_outcome import SendOutcome
     from quarry.transcript_reader import TranscriptReader
 
 logger = logging.getLogger(__name__)
@@ -48,15 +49,17 @@ class TranscriptSource:
 class TranscriptCaptureOutcome:
     """Report what a transcript capture attempted.
 
-    ``sent`` is whether the daemon accepted the wire payload; ``archived`` is
-    whether the raw JSONL is now durable on disk.  Callers rely on the split:
-    an unreachable daemon leaves ``archived=True, sent=False`` so
-    ``backfill-sessions`` can recover the transcript later.
+    ``sent`` is whether the daemon accepted the wire payload (``failure`` is the
+    trace label of a send that failed); ``archived`` is whether the raw JSONL is
+    now durable on disk.  Callers rely on the split: an unreachable daemon leaves
+    ``archived=True, sent=False`` so ``backfill-sessions`` can recover the
+    transcript later.
     """
 
     archived: bool
     sent: bool
     text_captured: bool
+    failure: str = ""
 
 
 @final
@@ -134,16 +137,15 @@ class SessionTranscriptCapture:
         wire_text = f"{header}\n\n{raw_text}" if header else raw_text
 
         if self._source.cwd:
-            iso_timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
             self._write_local_capture(
                 project_dir=Path(self._source.cwd),
-                timestamp=iso_timestamp,
                 artifacts=artifacts,
                 text=raw_text,
             )
 
+        send = self._send(wire_text)
         return TranscriptCaptureOutcome(
-            archived=archived, sent=self._send(wire_text), text_captured=True
+            archived=archived, sent=bool(send), text_captured=True, failure=send.label
         )
 
     def _archive(self) -> bool:
@@ -162,7 +164,6 @@ class SessionTranscriptCapture:
         self,
         *,
         project_dir: Path,
-        timestamp: str,
         artifacts: SessionArtifacts,
         text: str,
     ) -> None:
@@ -173,15 +174,15 @@ class SessionTranscriptCapture:
             CaptureRequest(
                 project_dir=project_dir,
                 session_id=self._source.session_id,
-                timestamp=timestamp,
+                timestamp=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 artifacts=artifacts,
                 text=text,
                 label=self._source.label,
             )
         )
 
-    def _send(self, wire_text: str) -> bool:
-        """Post the wire text to the daemon; return whether the send succeeded."""
+    def _send(self, wire_text: str) -> SendOutcome:
+        """Post the wire text to the daemon; return the send's outcome."""
         from quarry.api import CaptureIngestRequest  # noqa: PLC0415
 
         request = CaptureIngestRequest(
@@ -196,5 +197,4 @@ class SessionTranscriptCapture:
             f"{self._source.label}: daemon unreachable; transcript archived, "
             "run backfill-sessions to index it"
         )
-        outcome = DaemonCaptureSender().send_capture(request, unreachable_log=down)
-        return bool(outcome)
+        return DaemonCaptureSender().send_capture(request, unreachable_log=down)

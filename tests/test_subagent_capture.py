@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
+from quarry.send_outcome import SendOutcome
 from quarry.session_transcript import TranscriptSource
 from quarry.subagent_capture import SubagentCapture
 from quarry.transcript_reader import TranscriptReader
@@ -59,11 +60,11 @@ class TestRegisteredIdentity:
         with (
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as raw,
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_remember",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as memory,
         ):
             outcome = capture.capture()
@@ -84,11 +85,11 @@ class TestRegisteredIdentity:
         with (
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_remember",
-                return_value=False,
+                return_value=SendOutcome.unreachable("down"),
             ),
         ):
             outcome = capture.capture()
@@ -100,7 +101,7 @@ class TestRegisteredIdentity:
         with (
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ),
             patch("quarry.daemon_capture.DaemonCaptureSender.send_remember") as memory,
         ):
@@ -132,11 +133,11 @@ class TestSingleParse:
             ) as reader_cls,
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as raw,
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_remember",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as memory,
         ):
             outcome = capture.capture()
@@ -156,7 +157,7 @@ class TestUnregisteredAgentType:
         with (
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as raw,
             patch("quarry.daemon_capture.DaemonCaptureSender.send_remember") as memory,
         ):
@@ -175,7 +176,7 @@ class TestUnregisteredAgentType:
         with (
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as raw,
             patch("quarry.daemon_capture.DaemonCaptureSender.send_remember"),
         ):

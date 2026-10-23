@@ -65,9 +65,11 @@ class DaemonCaptureSender:
         """Ask the daemon to re-fetch and index a URL (the web-fetch fallback)."""
         return self._send(request, unreachable_log)
 
-    def send_remember(self, request: RememberRequest, *, unreachable_log: str) -> bool:
+    def send_remember(
+        self, request: RememberRequest, *, unreachable_log: str
+    ) -> SendOutcome:
         """File a distilled memory (a subagent's own report) via ``remember``."""
-        return self._send(request, unreachable_log).sent
+        return self._send(request, unreachable_log)
 
     @staticmethod
     def _send(request: object, unreachable_log: str) -> SendOutcome:

@@ -380,7 +380,7 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
         return {}
 
     if not outcome.sent:
-        trace.error("daemon-unreachable")
+        trace.error(outcome.failure)
         return {
             "systemMessage": (
                 "Warning: quarryd is not reachable, so this session was not "

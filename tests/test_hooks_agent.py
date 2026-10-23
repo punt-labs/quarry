@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 from quarry._hook_trace import HookPayload, HookTrace, ReadAdmission
 from quarry.hooks_agent import HookAgent
+from quarry.send_outcome import SendOutcome
 
 if TYPE_CHECKING:
     import pytest
@@ -164,7 +165,7 @@ class TestHandleSessionEnd:
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as cap,
         ):
             result = HookAgent.session_end(
@@ -261,7 +262,7 @@ class TestHandleSessionEnd:
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=False,
+                return_value=SendOutcome.unreachable("down"),
             ),
         ):
             HookAgent.session_end(
@@ -296,7 +297,7 @@ class TestHandlePostWebSearch:
     def test_happy_path_captures_digest(self, tmp_path: Path) -> None:
         with patch(
             "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-            return_value=True,
+            return_value=SendOutcome(sent=True),
         ) as cap:
             result = HookAgent.post_web_search(self._mk_payload(cwd=str(tmp_path)))
         assert result == {}
@@ -337,7 +338,7 @@ class TestHandlePostWebSearch:
         caplog.set_level(_logging.INFO, logger="quarry.hooks")
         with patch(
             "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-            return_value=False,
+            return_value=SendOutcome.unreachable("down"),
         ):
             HookAgent.post_web_search(self._mk_payload(cwd=str(tmp_path)))
         line = next(r for r in caplog.records if r.name == "quarry.hooks").getMessage()
@@ -426,7 +427,7 @@ class TestHandlePostReadFilterBranches:
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as cap,
         ):
             result = HookAgent.post_read(payload)
@@ -478,7 +479,7 @@ class TestHandlePostRead:
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=False,
+                return_value=SendOutcome.unreachable("down"),
             ),
         ):
             HookAgent.post_read(payload)
@@ -522,7 +523,7 @@ class TestHandleSubagentStop:
         for payload in crafted:
             with patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ):
                 result = HookAgent.subagent_stop(payload)
             assert "decision" not in result, (
@@ -555,7 +556,7 @@ class TestHandleSubagentStop:
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as cap,
         ):
             result = HookAgent.subagent_stop(payload)
@@ -589,7 +590,7 @@ class TestHandleSubagentStop:
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as cap,
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_remember",
@@ -710,7 +711,7 @@ class TestHandleSubagentStop:
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=False,
+                return_value=SendOutcome.unreachable("down"),
             ),
         ):
             HookAgent.subagent_stop(payload)

@@ -23,6 +23,7 @@ from quarry.hooks import (
     handle_pre_compact,
     handle_session_start,
 )
+from quarry.send_outcome import SendOutcome
 from quarry.sync_registry import SyncRegistry
 
 
@@ -877,7 +878,7 @@ class TestHandlePostWebFetch:
         with (
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as cap,
             patch("quarry.daemon_capture.DaemonCaptureSender.send_ingest_url") as ing,
         ):
@@ -932,7 +933,7 @@ class TestHandlePostWebFetch:
             patch("quarry.daemon_capture.DaemonCaptureSender.send_capture") as cap,
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_ingest_url",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as ing,
         ):
             result = handle_post_web_fetch(payload)
@@ -957,11 +958,11 @@ class TestHandlePostWebFetch:
         with (
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as cap,
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_ingest_url",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as ing,
         ):
             handle_post_web_fetch(content_payload)
@@ -1070,7 +1071,7 @@ class TestHandlePostWebFetch:
         with (
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ),
             caplog.at_level(logging.INFO, logger="quarry.hooks"),
         ):
@@ -1098,7 +1099,7 @@ class TestHandlePostWebFetch:
         with (
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_ingest_url",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ),
             caplog.at_level(logging.INFO, logger="quarry.hooks"),
         ):
@@ -1251,7 +1252,7 @@ class TestHookImportsNoEngine:
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as pre_cap,
         ):
             handle_pre_compact(
@@ -1262,11 +1263,11 @@ class TestHookImportsNoEngine:
         with (
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as web_cap,
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_ingest_url",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ),
         ):
             handle_post_web_fetch(
@@ -1380,7 +1381,7 @@ class TestHandlePreCompact:
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as cap,
         ):
             result = handle_pre_compact(
@@ -1410,7 +1411,7 @@ class TestHandlePreCompact:
             patch("quarry.capture.CaptureWriter.write"),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as cap,
         ):
             handle_pre_compact(
@@ -1459,7 +1460,7 @@ class TestHandlePreCompact:
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ),
         ):
             handle_pre_compact(
@@ -1499,7 +1500,7 @@ class TestHandlePreCompact:
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ),
         ):
             handle_pre_compact(
@@ -1530,7 +1531,7 @@ class TestHandlePreCompact:
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as cap,
         ):
             handle_pre_compact(
@@ -1566,7 +1567,7 @@ class TestHandlePreCompact:
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ),
         ):
             handle_pre_compact(
@@ -1603,7 +1604,7 @@ class TestHandlePreCompact:
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ),
         ):
             handle_pre_compact(
@@ -1627,7 +1628,7 @@ class TestHandlePreCompact:
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ),
         ):
             result = handle_pre_compact(
@@ -1654,7 +1655,7 @@ class TestHandlePreCompact:
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=False,
+                return_value=SendOutcome.unreachable("down"),
             ),
         ):
             result = handle_pre_compact(
@@ -1683,7 +1684,7 @@ class TestHandlePreCompact:
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ),
         ):
             result = handle_pre_compact(
@@ -2261,7 +2262,8 @@ class TestCwdHardeningPostWebFetch:
             "tool_response": json.dumps({"result": "<p>Some docs</p>"}),
         }
         with patch(
-            "quarry.daemon_capture.DaemonCaptureSender.send_capture", return_value=True
+            "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+            return_value=SendOutcome(sent=True),
         ) as cap:
             handle_post_web_fetch(payload)
         # cwd is blanked, so the daemon files into default-captures, not a
@@ -2275,7 +2277,8 @@ class TestCwdHardeningPostWebFetch:
             "tool_response": json.dumps({"result": "<p>Some docs</p>"}),
         }
         with patch(
-            "quarry.daemon_capture.DaemonCaptureSender.send_capture", return_value=True
+            "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+            return_value=SendOutcome(sent=True),
         ) as cap:
             handle_post_web_fetch(payload)
         assert cap.call_args[0][0].cwd == ""
@@ -2294,7 +2297,7 @@ class TestCwdHardeningPreCompact:
             patch("quarry.ethos_handle.EthosConfig.agent_handle_at") as ethos,
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as cap,
         ):
             handle_pre_compact(
@@ -2321,7 +2324,7 @@ class TestCwdHardeningPreCompact:
             patch("quarry.ethos_handle.EthosConfig.agent_handle_at") as ethos,
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as cap,
         ):
             handle_pre_compact(

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 from quarry.client import HttpError, QuarryConnectionError
+from quarry.send_outcome import SendOutcome
 from quarry.web_fetch_hook import WebFetchHook
 
 if TYPE_CHECKING:
@@ -39,7 +40,7 @@ def test_a_url_that_could_never_be_stored_is_skipped() -> None:
 
 
 def test_fetched_content_is_sent_under_the_storage_name() -> None:
-    with patch(_SEND_CAPTURE, return_value=True) as cap:
+    with patch(_SEND_CAPTURE, return_value=SendOutcome(sent=True)) as cap:
         WebFetchHook(_payload("https://h.test/p?token=S#f", "<html>x</html>")).run()
     request = cap.call_args[0][0]
     assert request.document_name == "https://h.test/p"
@@ -76,7 +77,10 @@ def test_an_unreachable_daemon_is_traced_as_unreachable(
 
 
 def test_without_content_the_daemon_is_asked_to_refetch() -> None:
-    with patch(_SEND_CAPTURE) as cap, patch(_SEND_INGEST, return_value=True) as ing:
+    with (
+        patch(_SEND_CAPTURE) as cap,
+        patch(_SEND_INGEST, return_value=SendOutcome(sent=True)) as ing,
+    ):
         WebFetchHook(_payload("https://h.test/p")).run()
     cap.assert_not_called()
     assert ing.call_args[0][0].source == "https://h.test/p"

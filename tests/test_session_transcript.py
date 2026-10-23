@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from quarry.send_outcome import SendOutcome
 from quarry.session_transcript import SessionTranscriptCapture, TranscriptSource
 from quarry.transcript_reader import TranscriptReader
 
@@ -75,7 +76,8 @@ class TestWirePayload:
             summary="one line",
         )
         with patch(
-            "quarry.daemon_capture.DaemonCaptureSender.send_capture", return_value=True
+            "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+            return_value=SendOutcome(sent=True),
         ) as sender:
             outcome = capture.capture()
         assert outcome.text_captured is True

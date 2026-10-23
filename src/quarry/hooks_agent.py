@@ -31,6 +31,7 @@ from quarry.web_search_capture import WebSearchPayload
 
 logger = logging.getLogger(__name__)
 
+
 _WEB_SEARCH_UNREACHABLE = (
     "web-search: daemon unreachable; digest not indexed (re-run to retry)"
 )
@@ -96,7 +97,7 @@ class HookAgent:
         elif outcome.sent:
             trace.capture(detail)
         else:
-            trace.error("daemon-unreachable")
+            trace.error(outcome.failure)
 
     @staticmethod
     def post_web_search(payload: dict[str, object]) -> dict[str, object]:
@@ -141,7 +142,7 @@ class HookAgent:
         if sent:
             trace.capture()
         else:
-            trace.error("daemon-unreachable")
+            trace.error(sent.label)
         return {}
 
     @staticmethod
@@ -175,8 +176,8 @@ class HookAgent:
         trace.mark_payload(ok=outcome != "payload")
         if outcome == "captured":
             trace.capture()
-        elif outcome == "unreachable":
-            trace.error("daemon-unreachable")
+        elif outcome.startswith("daemon-"):
+            trace.error(outcome)
         else:
             trace.skip(outcome)
         return {}
@@ -185,11 +186,10 @@ class HookAgent:
     def _filter_and_send_read(payload: dict[str, object]) -> str:
         """Apply the four admission checks and send on pass; return the outcome.
 
-        Return values classify the outcome for the trace: ``"captured"``,
-        ``"unreachable"`` (send attempted but the daemon rejected or was
-        down), ``"payload"`` (missing/empty inputs), ``"filter"`` (rejected
-        by an admission check), ``"size"`` (byte cap exceeded), or
-        ``"secret"`` (client-side secret pattern hit).
+        Return values classify the outcome for the trace: ``"captured"``, a skip
+        reason (``"payload"``, ``"filter"``, ``"size"`` or ``"secret"``), or, when
+        the send failed, its ``SendOutcome`` label (``daemon-refused``,
+        ``daemon-unreachable`` or ``daemon-error``).
         """
         cwd = HookPayload.as_dir(payload.get("cwd"))
         parsed = ReadPayload(payload)
@@ -220,7 +220,7 @@ class HookAgent:
             ),
             unreachable_log=_READ_UNREACHABLE,
         )
-        return "captured" if sent else "unreachable"
+        return "captured" if sent else sent.label
 
     @staticmethod
     def subagent_stop(payload: dict[str, object]) -> dict[str, object]:

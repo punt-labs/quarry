@@ -23,6 +23,7 @@ from quarry.models import Chunk
 from quarry.results import SearchFilter, SearchResult
 from quarry.retrieval import HybridRetriever, RetrievalConfig
 from quarry.retrieval.fusion import RrfFusion
+from quarry.send_outcome import SendOutcome
 
 
 def _hybrid(
@@ -687,7 +688,7 @@ class TestPreCompactEthosTagging:
             patch("quarry.capture.CaptureWriter.write"),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as cap,
         ):
             handle_pre_compact(
@@ -716,7 +717,7 @@ class TestPreCompactEthosTagging:
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as cap,
         ):
             handle_pre_compact(
