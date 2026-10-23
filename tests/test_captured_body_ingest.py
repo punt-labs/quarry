@@ -14,6 +14,7 @@ from quarry.http_url import HttpUrl
 from quarry.ingestion.fetch_refused import FetchRefusedError
 from quarry.ingestion.fetched_body import FetchedBody
 from quarry.ingestion.web_fetch import WebFetcher
+from tests.url_names import with_query
 
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
@@ -96,7 +97,9 @@ class TestIngest:
             "quarry.ingestion.web_ingest.ingest_content", return_value={"chunks": 1}
         ) as ingest_content:
             _captured("https://x.test/p?token=abc").ingest(_ctx(), body)
-        assert ingest_content.call_args.args[1] == "https://x.test/p"
+        assert ingest_content.call_args.args[1] == with_query(
+            "https://x.test/p", "token=abc"
+        )
 
     def test_the_labels_reach_the_pipeline_context(self) -> None:
         body = FetchedBody(text="raw", media_type="text/plain")

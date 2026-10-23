@@ -20,6 +20,7 @@ from quarry.ingestion.legacy_url_names import LegacyUrlNames
 from quarry.ingestion.web_ingest import InlineIngest, ingest_content
 from quarry.models import Chunk
 from tests.fakes import FakeEmbeddingBackend, patched_embedder
+from tests.url_names import with_query
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -74,10 +75,30 @@ class TestOverwriteReplacesTheLegacyName:
         _store(db, "https://example.com/caf%C3%A9")
         assert _names(db) == {"https://example.com/caf%C3%A9"}
 
-    def test_a_legacy_query_form_is_replaced(self, db: Database) -> None:
+    def test_a_legacy_raw_query_form_is_replaced_by_its_digest_form(
+        self, db: Database
+    ) -> None:
+        _store_as_stored_by_an_older_build(db, "https://example.com/page?utm=1")
+        _store(db, "https://example.com/page?utm=1")
+        assert _names(db) == {with_query("https://example.com/page", "utm=1")}
+
+    def test_a_page_with_another_query_is_another_document(self, db: Database) -> None:
+        _store_as_stored_by_an_older_build(db, "https://example.com/page?page=1")
+        _store(db, "https://example.com/page?page=2")
+        assert _names(db) == {
+            "https://example.com/page?page=1",
+            with_query("https://example.com/page", "page=2"),
+        }
+
+    def test_a_page_without_a_query_does_not_replace_one_with_a_query(
+        self, db: Database
+    ) -> None:
         _store_as_stored_by_an_older_build(db, "https://example.com/page?utm=1")
         _store(db, "https://example.com/page")
-        assert _names(db) == {"https://example.com/page"}
+        assert _names(db) == {
+            "https://example.com/page?utm=1",
+            "https://example.com/page",
+        }
 
     def test_a_legacy_default_port_form_is_replaced(self, db: Database) -> None:
         _store_as_stored_by_an_older_build(db, "https://example.com:443/page")
@@ -110,7 +131,7 @@ class TestOverwriteReplacesTheLegacyName:
     ) -> None:
         _store_as_stored_by_an_older_build(db, "https://example.com/page?token=SECRET")
         with caplog.at_level(logging.INFO):
-            _store(db, "https://example.com/page")
+            _store(db, "https://example.com/page?token=SECRET")
         replaced = [
             r.getMessage() for r in caplog.records if "legacy" in r.getMessage()
         ]
@@ -135,10 +156,14 @@ class TestTheLegacyNameIsTheSameDocument:
         _store_as_stored_by_an_older_build(db, "https://example.com/caf%C3%A9?x=1")
         _store_as_stored_by_an_older_build(db, "https://example.com/other")
         names = LegacyUrlNames(db)
-        assert sorted(names.aliases("https://example.com/caf%C3%A9", _COLLECTION)) == [
-            "https://example.com/caf%C3%A9?x=1",
-            "https://example.com/café",
+        assert names.aliases("https://example.com/caf%C3%A9", _COLLECTION) == [
+            "https://example.com/café"
         ]
+        assert sorted(
+            names.aliases(
+                with_query("https://example.com/caf%C3%A9", "x=1"), _COLLECTION
+            )
+        ) == ["https://example.com/caf%C3%A9?x=1"]
 
     def test_exists_sees_the_legacy_spelling(self, db: Database) -> None:
         _store_as_stored_by_an_older_build(db, "https://example.com/café")
@@ -154,7 +179,7 @@ class TestTheLegacyNameIsTheSameDocument:
 
     def test_canonical_form_of_a_url_and_of_a_plain_name(self) -> None:
         assert LegacyUrlNames.canonical("https://Example.com:443/café?x=1") == (
-            "https://example.com/caf%C3%A9"
+            with_query("https://example.com/caf%C3%A9", "x=1")
         )
         assert LegacyUrlNames.canonical("notes.txt") == "notes.txt"
 

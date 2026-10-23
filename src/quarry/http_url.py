@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from typing import ClassVar, Self, final
@@ -28,9 +29,12 @@ class HttpUrl:
 
     * :attr:`fetch_url` is the one accessor that yields the fetchable form, and
       only a fetch or a third-party parser should ever call it.
-    * :attr:`document_name` is the storage form, ``scheme://host[:port]/path``:
-      userinfo, query, fragment and ``;params`` are dropped, the path stays
-      because it names the document.
+    * :attr:`document_name` is the storage form, ``scheme://host[:port]/path``,
+      with ``?q=<digest>`` after it when there is a query: userinfo, fragment and
+      ``;params`` are dropped, the path stays because it names the document, and
+      the query is kept only as a digest of its sorted, encoded parameters, so
+      ``?page=1`` and ``?page=2`` stay two documents while a secret in a query
+      never reaches the store.
     * ``str`` and ``repr`` are the log form, ``scheme://host[:port]/…(segments=N)``:
       never any of the path, because a secret can live in it and no heuristic
       recognizes every token (a JWT, padded base64, a short code).
@@ -63,6 +67,9 @@ class HttpUrl:
     # "example.com" would be two documents.
     _STOPS: ClassVar[dict[int, str]] = dict.fromkeys((0x3002, 0xFF0E, 0xFF61), ".")
     _DEFAULT_PORTS: ClassVar[dict[str, int]] = {"http": 80, "https": 443}
+    # The query as a stored name keeps it: re-reading a stored name must give the
+    # same name back, so a query that is already one digest is left as it is.
+    _DIGEST: ClassVar[re.Pattern[str]] = re.compile(r"q=[0-9a-f]{16}")
 
     def __new__(cls, raw: str) -> Self:
         parts = UrlSyntax.parse(raw)
@@ -89,7 +96,9 @@ class HttpUrl:
             "_fetch_url": fetch,
             "_host": host,
             "_path": path,
-            "_document_name": urlunsplit((parts.scheme, netloc, path or "/", "", "")),
+            "_document_name": urlunsplit(
+                (parts.scheme, netloc, path or "/", cls._query_key(encoded[1]), "")
+            ),
             "_log_form": LogForm.of(parts.scheme, netloc, path),
         }
         for name, value in fields.items():
@@ -118,6 +127,21 @@ class HttpUrl:
         text = re.sub(r"%(?![0-9A-Fa-f]{2})", "%25", part)
         escaped = quote(text, safe="/?:@!$&'()*+,;=-._~%")
         return re.sub(r"%[0-9a-f]{2}", lambda m: m.group().upper(), escaped)
+
+    @classmethod
+    def _query_key(cls, query: str) -> str:
+        """Return the stored form of an encoded *query*: ``q=<digest>``, or ``""``.
+
+        The digest is the first 16 hex digits of the SHA-256 of the query's
+        non-empty parameters, sorted, so parameter order does not make a second
+        document.
+        """
+        if cls._DIGEST.fullmatch(query):
+            return query
+        normalized = "&".join(sorted(part for part in query.split("&") if part))
+        if not normalized:
+            return ""
+        return f"q={hashlib.sha256(normalized.encode()).hexdigest()[:16]}"
 
     @classmethod
     def shown(cls, raw: str) -> str:
@@ -154,7 +178,7 @@ class HttpUrl:
 
     @property
     def document_name(self) -> str:
-        """Return the storage form: ``scheme://host[:port]/path``."""
+        """Return the storage form: ``scheme://host[:port]/path[?q=<digest>]``."""
         return self._document_name
 
     @property

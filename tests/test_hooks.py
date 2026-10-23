@@ -34,6 +34,7 @@ from quarry.refusal import RegistrationRefusedError
 from quarry.send_outcome import SendOutcome
 from quarry.sync_registry import SyncRegistry
 from tests.test_backfill_reach import register_for_backfill
+from tests.url_names import with_query
 
 
 def _opt_in(project: Path) -> Path:
@@ -1253,10 +1254,11 @@ class TestWebFetchLoopCloser:
         assert isinstance(output, dict)
         context = str(output["additionalContext"])
         assert "secret123" not in context
-        assert "?" not in context
+        assert "api_key" not in context
         assert "#" not in context
         assert "@" not in context
-        assert "https://example.com/reset" in context
+        # The query is only ever a digest of itself.
+        assert with_query("https://example.com/reset", "api_key=secret123") in context
 
     def test_suggested_query_falls_back_to_host_for_bare_path(self) -> None:
         from quarry.api import CapturesLookupResponse

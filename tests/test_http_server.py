@@ -37,6 +37,7 @@ from quarry.fd_headroom import FdHeadroom
 from quarry.http_url import HttpUrl
 from quarry.ingestion.fetched_body import FetchedBody
 from quarry.results import SearchResult
+from tests.url_names import with_query
 
 # Bound on how long fixture teardown waits for a background job to finish for
 # real before giving up and force-cancelling it (see the ``client`` fixture).
@@ -1523,10 +1524,13 @@ class TestCapturesLookup:
         ):
             data = client.post(
                 "/v1/captures/lookup",
-                json={"url": "https://example.com/docs", "cwd": "/repo"},
+                json={"url": "https://example.com/docs?utm=1", "cwd": "/repo"},
             ).json()
 
-        assert data == {"matched": True, "document_name": "https://example.com/docs"}
+        assert data == {
+            "matched": True,
+            "document_name": with_query("https://example.com/docs", "utm=1"),
+        }
 
     @pytest.mark.parametrize(
         "url",
@@ -1587,11 +1591,12 @@ class TestCapturesLookup:
         assert for_path.call_args[0][0] == "/projects/myproj"
         assert exists.call_args[0][1] == "myproj-captures"
 
-    def test_query_string_and_fragment_ignored_by_normalization(
+    def test_the_query_is_a_digest_and_the_fragment_is_dropped(
         self, client: TestClient
     ) -> None:
-        """A lookup URL with a query string still reaches the redacted document
-        name — the SAME normalization the write path applies."""
+        """A lookup URL reaches the redacted document name — the SAME
+        normalization the write path applies: the fragment is gone and the query
+        is only a digest of itself."""
         with (
             patch(
                 "quarry.captures_collection.CapturesCollection.for_registry_path",
@@ -1607,8 +1612,9 @@ class TestCapturesLookup:
                 json={"url": "https://x.test/guide?utm=1#frag"},
             ).json()
 
-        assert data["document_name"] == "https://x.test/guide"
-        assert exists.call_args[0][0] == "https://x.test/guide"
+        expected = with_query("https://x.test/guide", "utm=1")
+        assert data["document_name"] == expected
+        assert exists.call_args[0][0] == expected
 
     def test_trailing_slash_produces_a_different_document_name(
         self, client: TestClient
@@ -1630,7 +1636,8 @@ class TestCapturesLookup:
 
     def test_end_to_end_matches_a_real_stored_capture(self, tmp_path: Path) -> None:
         """No mocks on the catalog: a real chunk written under the derived
-        captures collection is found by a lookup with a differing query string."""
+        captures collection is found by a lookup with a differing fragment, and a
+        page that differs by query is a different document."""
         from quarry.db import ChunkStore
         from quarry.db.storage import get_db
         from quarry.web_fetch_name import WebFetchName
@@ -1650,10 +1657,15 @@ class TestCapturesLookup:
         with TestClient(app, raise_server_exceptions=False) as tc:
             data = tc.post(
                 "/v1/captures/lookup",
+                json={"url": "https://example.com/guide#nav"},
+            ).json()
+            other = tc.post(
+                "/v1/captures/lookup",
                 json={"url": "https://example.com/guide?ref=nav"},
             ).json()
 
         assert data == {"matched": True, "document_name": stored_name}
+        assert other == {"matched": False, "document_name": None}
 
 
 class TestDeleteDocuments:

@@ -5,19 +5,32 @@ from __future__ import annotations
 import pytest
 
 from quarry.web_fetch_name import WebFetchName
+from tests.url_names import with_query
 
 
 def test_the_name_is_the_storage_form_of_the_url() -> None:
     url = "https://x.test:8443/reset?email=user@example.com#frag"
-    assert WebFetchName.of(url) == "https://x.test:8443/reset"
+    assert WebFetchName.of(url) == with_query(
+        "https://x.test:8443/reset", "email=user@example.com"
+    )
 
 
-def test_query_and_fragment_collapse_to_same_name() -> None:
-    """Two URLs differing only by query string or fragment share one document."""
+def test_a_fragment_does_not_make_a_second_document() -> None:
     base = WebFetchName.of("https://x.test/docs/guide")
-    with_query = WebFetchName.of("https://x.test/docs/guide?utm=1")
-    with_fragment = WebFetchName.of("https://x.test/docs/guide#section")
-    assert base == with_query == with_fragment
+    assert base == WebFetchName.of("https://x.test/docs/guide#section")
+
+
+def test_pages_that_differ_only_by_query_are_two_documents() -> None:
+    first = WebFetchName.of("https://x.test/docs/guide?page=1")
+    second = WebFetchName.of("https://x.test/docs/guide?page=2")
+    assert first != second
+    assert first == with_query("https://x.test/docs/guide", "page=1")
+
+
+def test_reordered_query_parameters_are_one_document() -> None:
+    assert WebFetchName.of("https://x.test/g?a=1&b=2") == WebFetchName.of(
+        "https://x.test/g?b=2&a=1"
+    )
 
 
 def test_a_trailing_slash_stays_a_distinct_document() -> None:

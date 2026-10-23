@@ -575,7 +575,8 @@ def test_dedup_treats_a_legacy_named_document_as_the_existing_one() -> None:
     from quarry.sitemap import SitemapEntry
 
     entry = SitemapEntry(
-        loc="https://example.com/caf\u00e9", lastmod=datetime(2025, 1, 1, tzinfo=UTC)
+        loc="https://example.com/caf\u00e9?utm=1",
+        lastmod=datetime(2025, 1, 1, tzinfo=UTC),
     )
     legacy = [
         {

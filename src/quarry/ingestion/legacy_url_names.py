@@ -21,7 +21,7 @@ class LegacyUrlNames:
     """Treat a document stored under an old URL spelling as the same document.
 
     Earlier builds stored a URL under names this one no longer produces: with its
-    query or fragment, its default port, or its path unencoded.  Re-ingesting the
+    raw query or fragment, its default port, or its path unencoded.  Re-ingesting the
     URL must replace that document, not leave it orphaned beside the new one, and
     a dedup or lookup must see it as existing.  A stored name is *legacy* when it
     differs from the canonical name but canonicalizes to it through

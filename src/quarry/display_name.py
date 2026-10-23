@@ -31,7 +31,8 @@ class DisplayName:
     _LEADING: ClassVar[str] = "".join(chr(code) for code in range(0x21))
 
     def stored(self) -> str:
-        """Return the storage form: a URL's userinfo, query and fragment dropped."""
+        """Return the storage form of a URL: no userinfo or fragment, and the query
+        only as the digest :class:`HttpUrl` keeps."""
         text = self.name.lstrip(self._LEADING)
         if not text.lower().startswith(("http://", "https://")):
             return self.name

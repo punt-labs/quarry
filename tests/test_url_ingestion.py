@@ -14,6 +14,7 @@ from quarry.db import Database
 from quarry.extractors.html_extractor import HtmlExtractor
 from quarry.http_url import HttpUrl
 from quarry.models import PageType
+from tests.url_names import with_query
 
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
@@ -152,8 +153,11 @@ class TestIngestUrl:
 
         name = result["document_name"]
         path = recorded["document_path"]
-        assert name == "https://x.test/reset"
-        assert path == "https://x.test/reset"
+        expected = with_query(
+            "https://x.test/reset", "email=user@example.com&token=abc123secret"
+        )
+        assert name == expected
+        assert path == expected
         for leaked in ("user@example.com", "token=abc123secret", "abc123secret"):
             assert leaked not in name
             assert leaked not in path
@@ -181,7 +185,9 @@ class TestIngestUrl:
                 UrlIngest(HttpUrl(url)), Progress(None), IngestContext(db, settings)
             )
 
-        assert result["document_name"] == "https://x.test/reset"
+        assert result["document_name"] == with_query(
+            "https://x.test/reset", "email=user@example.com&token=abc123secret"
+        )
 
     @patch(_FETCH)
     def test_plain_ingest_progress_redacts_fetch_url(self, mock_fetch: MagicMock):
@@ -209,7 +215,9 @@ class TestIngestUrl:
                 IngestContext(db, settings),
             )
 
-        assert result["document_name"] == "https://x.test/reset"
+        assert result["document_name"] == with_query(
+            "https://x.test/reset", "email=user@example.com&token=abc123secret"
+        )
         fetching = [m for m in messages if m.startswith("Fetching:")]
         assert fetching
         assert "token=abc123secret" not in fetching[0]

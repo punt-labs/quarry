@@ -104,10 +104,11 @@ class CaptureRoutes(ContentRouteGroup):
         registry itself or spells the ``<repo>-captures`` naming rule.  The
         stored ``document_name`` for a WebFetch capture is
         ``HttpUrl.document_name`` (``WebFetchName.maybe``), so this recomputes the
-        identical normalization before comparing: query, fragment and
-        ``;params`` are dropped, the host is lower-cased with its trailing dot
-        and default port removed, and an empty path becomes ``/``, so URLs that
-        differ only in those parts collapse to the SAME document and match.  A
+        identical normalization before comparing: the fragment and ``;params`` are
+        dropped, the query becomes a digest of its sorted parameters, the host is
+        lower-cased with its trailing dot and default port removed, and an empty
+        path becomes ``/``, so URLs that differ only in those parts collapse to the
+        SAME document and match, while pages that differ by query stay apart.  A
         trailing-slash difference on a non-empty path does NOT normalize and
         will not match, and a URL that cannot be stored matches nothing.
         """

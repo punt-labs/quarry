@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+import re
 
 import pytest
 
 from quarry.http_url import HttpUrl
+from tests.url_names import with_query
 
 _RAW = "HTTPS://Example.COM:8443/docs/guide;sess=PSEC?token=QSEC#FSEC"
 
@@ -70,18 +72,22 @@ class TestRedactedForms:
 
     def test_the_stored_name_keeps_the_path_but_not_secrets(self) -> None:
         url = HttpUrl("https://example.com/reset/9f8e7d6c5b4a39281706f5e4d3c2b1a0?t=Q")
-        assert url.document_name == (
-            "https://example.com/reset/9f8e7d6c5b4a39281706f5e4d3c2b1a0"
+        assert url.document_name == with_query(
+            "https://example.com/reset/9f8e7d6c5b4a39281706f5e4d3c2b1a0", "t=Q"
         )
+        assert "t=Q" not in url.document_name
 
 
 class TestDocumentName:
     @pytest.mark.parametrize(
         ("raw", "name"),
         [
-            (_RAW, "https://example.com:8443/docs/guide"),
+            (_RAW, with_query("https://example.com:8443/docs/guide", "token=QSEC")),
             ("http://example.com", "http://example.com/"),
-            ("http://[2606:4700::1111]:8080/a?x=1", "http://[2606:4700::1111]:8080/a"),
+            (
+                "http://[2606:4700::1111]:8080/a?x=1",
+                with_query("http://[2606:4700::1111]:8080/a", "x=1"),
+            ),
             ("http://Example.com./a#f", "http://example.com/a"),
             ("http://example.com:80/a", "http://example.com/a"),
             ("https://example.com:443/a", "https://example.com/a"),
@@ -108,16 +114,69 @@ class TestDocumentName:
     def test_scheme_host_port_and_path_only(self, raw: str, name: str) -> None:
         assert HttpUrl(raw).document_name == name
 
-    def test_urls_differing_only_in_query_or_fragment_share_a_name(self) -> None:
+    def test_urls_differing_only_in_fragment_or_params_share_a_name(self) -> None:
         names = {
             HttpUrl(u).document_name
             for u in (
                 "https://x.test/a",
-                "https://x.test/a?utm=1",
                 "https://x.test/a#top",
+                "https://x.test/a;sess=1",
+                "https://x.test/a?#top",
             )
         }
-        assert len(names) == 1
+        assert names == {"https://x.test/a"}
+
+
+class TestQueryDigest:
+    """A query is part of a document's identity but never part of its name."""
+
+    def test_pages_differing_only_by_query_are_two_documents(self) -> None:
+        first = HttpUrl("https://x.test/list?page=1").document_name
+        second = HttpUrl("https://x.test/list?page=2").document_name
+        assert first != second
+
+    def test_reordered_parameters_are_one_document(self) -> None:
+        a = HttpUrl("https://x.test/list?b=2&a=1").document_name
+        b = HttpUrl("https://x.test/list?a=1&b=2").document_name
+        assert a == b
+
+    def test_empty_parameters_do_not_change_the_document(self) -> None:
+        a = HttpUrl("https://x.test/list?a=1&&b=2&").document_name
+        assert a == HttpUrl("https://x.test/list?a=1&b=2").document_name
+
+    def test_the_stored_name_never_holds_the_raw_query(self) -> None:
+        name = HttpUrl(
+            "https://x.test/p?token=SECRET&user=jane@example.com"
+        ).document_name
+        assert "SECRET" not in name
+        assert "jane" not in name
+        assert name == with_query(
+            "https://x.test/p", "token=SECRET&user=jane@example.com"
+        )
+
+    def test_the_digest_is_sixteen_hex_digits_of_the_sorted_query(self) -> None:
+        name = HttpUrl("https://x.test/p?z=1&a=2").document_name
+        assert re.fullmatch(r"https://x\.test/p\?q=[0-9a-f]{16}", name)
+
+    def test_the_encoding_of_a_parameter_does_not_make_a_second_document(
+        self,
+    ) -> None:
+        raw = HttpUrl("https://x.test/p?q=caf\u00e9").document_name
+        assert raw == HttpUrl("https://x.test/p?q=caf%c3%a9").document_name
+
+    def test_a_stored_name_reads_back_as_itself(self) -> None:
+        name = HttpUrl("https://x.test/p?page=3").document_name
+        assert HttpUrl(name).document_name == name
+
+    def test_the_fetch_url_keeps_the_whole_query(self) -> None:
+        assert HttpUrl("https://x.test/p?b=2&a=1#f").fetch_url == (
+            "https://x.test/p?b=2&a=1#f"
+        )
+
+    def test_the_log_form_shows_no_query(self) -> None:
+        assert str(HttpUrl("https://x.test/p?token=SECRET")) == (
+            "https://x.test/…(segments=1)"
+        )
 
 
 class TestParts:
@@ -286,7 +345,9 @@ class TestInternationalizedPaths:
     def test_lowercase_escapes_are_normalized_to_uppercase(self) -> None:
         url = HttpUrl("https://example.com/caf%c3%a9?q=%c3%bc")
         assert url.fetch_url == "https://example.com/caf%C3%A9?q=%C3%BC"
-        assert url.document_name == "https://example.com/caf%C3%A9"
+        assert url.document_name == with_query(
+            "https://example.com/caf%C3%A9", "q=%C3%BC"
+        )
 
     def test_a_lone_percent_is_escaped_not_dropped(self) -> None:
         assert HttpUrl("https://example.com/100%").document_name == (

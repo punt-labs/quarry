@@ -12,6 +12,7 @@ from __future__ import annotations
 import _socket
 import json
 import logging
+import re
 import socket
 import threading
 import time
@@ -368,15 +369,18 @@ def test_every_stored_url_name_is_scheme_host_port_and_path(
     )
 
     names = _stored_names(daemon)
-    assert f"{origin}/page" in names
-    assert f"{origin}/page1" in names
-    assert f"{origin}/page3" in names
-    assert "https://example.com/notes" in names
-    assert f"{origin}/captured" in names
+    # A query is kept as a digest only: ``?q=`` and 16 hex digits.
+    digest = re.compile(r"\?q=[0-9a-f]{16}$")
+    bare = {digest.sub("", name) for name in names}
+    assert f"{origin}/page" in bare
+    assert f"{origin}/page1" in bare
+    assert f"{origin}/page3" in bare
+    assert "https://example.com/notes" in bare
+    assert f"{origin}/captured" in bare
     for name in names:
         for marker in _MARKERS:
             assert marker not in name
-        assert "?" not in name
+        assert "?" not in digest.sub("", name)
         assert "#" not in name
         assert ";" not in name
 

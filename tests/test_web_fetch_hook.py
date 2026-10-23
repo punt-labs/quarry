@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 from quarry.client import HttpError, QuarryConnectionError
 from quarry.send_outcome import SendOutcome
 from quarry.web_fetch_hook import WebFetchHook
+from tests.url_names import with_query
 
 if TYPE_CHECKING:
     import pytest
@@ -43,7 +44,7 @@ def test_fetched_content_is_sent_under_the_storage_name() -> None:
     with patch(_SEND_CAPTURE, return_value=SendOutcome(sent=True)) as cap:
         WebFetchHook(_payload("https://h.test/p?token=S#f", "<html>x</html>")).run()
     request = cap.call_args[0][0]
-    assert request.document_name == "https://h.test/p"
+    assert request.document_name == with_query("https://h.test/p", "token=S")
     assert request.source_url == "https://h.test/p?token=S#f"
 
 
