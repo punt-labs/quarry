@@ -11,12 +11,9 @@ import pytest
 from typer.testing import CliRunner
 
 from quarry.__main__ import app
-from quarry.backfill import (
-    BackfillConfig,
-    document_name_for_transcript,
-    is_already_ingested,
-)
+from quarry.backfill import BackfillConfig
 from quarry.backfill_mapping import ProjectMapping, ProjectMappingResolver
+from quarry.backfill_session import BackfillSession
 from quarry.config import Settings
 from quarry.sync_registry import DirectoryRegistration
 
@@ -47,6 +44,15 @@ class TestBackfillConfig:
         assert cfg.collection_override == "captures"
         assert cfg.project_filter == "/Users/me/proj"
         assert cfg.limit == 50
+
+    @pytest.mark.parametrize(
+        ("limit", "processed", "reached"),
+        [(None, 99, False), (0, 99, False), (3, 2, False), (3, 3, True), (3, 4, True)],
+    )
+    def test_the_limit_is_reached_by_that_many_transcripts(
+        self, limit: int | None, processed: int, *, reached: bool
+    ) -> None:
+        assert BackfillConfig(limit=limit).reached_by(processed) is reached
 
     def test_frozen(self) -> None:
         cfg = BackfillConfig()
@@ -167,11 +173,11 @@ class TestListTranscriptFiles:
 
 
 # ---------------------------------------------------------------------------
-# document_name_for_transcript
+# BackfillSession.name
 # ---------------------------------------------------------------------------
 
 
-class TestDocumentNameForTranscript:
+class TestBackfillSessionName:
     def test_uses_stable_session_prefix(self, tmp_path: Path) -> None:
         """The document name is the stable ``session-<id[:8]>`` — no mtime — so
         it matches the compaction hook's name and one document exists per
@@ -180,7 +186,7 @@ class TestDocumentNameForTranscript:
         transcript = tmp_path / name
         transcript.write_text("{}")
 
-        result = document_name_for_transcript(transcript)
+        result = BackfillSession(transcript, "", "").name
 
         assert result == "session-1e7aa08d"
 
@@ -195,42 +201,11 @@ class TestDocumentNameForTranscript:
         transcript = tmp_path / f"{session_id}.jsonl"
         transcript.write_text("{}")
 
-        backfill_name = document_name_for_transcript(transcript)
+        backfill_name = BackfillSession(transcript, "", "").name
         # The capture route (compaction hook path) files under session-<id[:8]>.
         hook_name = f"session-{session_id[:8]}"
 
         assert backfill_name == hook_name
-        assert is_already_ingested(session_id[:8], {backfill_name}) is True
-
-
-# ---------------------------------------------------------------------------
-# is_already_ingested
-# ---------------------------------------------------------------------------
-
-
-class TestIsAlreadyIngested:
-    def test_found(self) -> None:
-        existing = {"session-1e7aa08d", "session-abcd1234"}
-        assert is_already_ingested("1e7aa08d", existing) is True
-
-    def test_not_found(self) -> None:
-        existing = {"session-abcd1234"}
-        assert is_already_ingested("1e7aa08d", existing) is False
-
-    def test_empty_set(self) -> None:
-        assert is_already_ingested("1e7aa08d", set()) is False
-
-    def test_recognizes_stable_name_from_either_writer(self) -> None:
-        """Hook and backfill file under the same stable ``session-<id>`` name, so
-        a session captured by either — in either order — is recognized and not
-        re-ingested as a second document."""
-        existing = {"session-1e7aa08d"}
-        assert is_already_ingested("1e7aa08d", existing) is True
-
-    def test_stable_prefix_not_a_false_match(self) -> None:
-        """A different session sharing a name-prefix is not treated as present."""
-        existing = {"session-1e7aa08dXY"}
-        assert is_already_ingested("1e7aa08d", existing) is False
 
 
 # ---------------------------------------------------------------------------
@@ -386,7 +361,7 @@ class TestBackfillSessions:
             "total_pages": 1,
             "chunk_count": 5,
             "indexed_pages": 1,
-            "ingestion_timestamp": "2025-01-01T00:00:00",
+            "ingestion_timestamp": "2999-01-01T00:00:00",
         }
         with (
             patch(
@@ -404,6 +379,43 @@ class TestBackfillSessions:
         mock_ingest.assert_not_called()
         assert stats.ingested == 0
         assert stats.skipped_existing == 1
+
+    def test_a_session_that_grew_after_it_was_stored_is_ingested_again(
+        self, tmp_path: Path
+    ) -> None:
+        """The compaction hook stores the session up to that moment; the rest of
+        the conversation reaches the transcript afterwards, and backfill must file
+        it over the partial document instead of skipping on its mere existence."""
+        from quarry.backfill import backfill_sessions
+
+        env = _make_env(tmp_path)
+        settings = _make_settings(env["db_path"], env["registry_path"])
+        _setup_registry(env["registry_path"], str(env["real_project"]), "myproject")
+
+        partial = {
+            "document_name": "session-abcd1234",
+            "document_path": "",
+            "collection": "myproject-captures",
+            "total_pages": 1,
+            "chunk_count": 5,
+            "indexed_pages": 1,
+            "ingestion_timestamp": "2000-01-01T00:00:00",
+        }
+        with (
+            patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", env["projects_dir"]),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
+                return_value=[partial],
+            ),
+            patch("quarry.backfill.ingest_content") as mock_ingest,
+        ):
+            stats = backfill_sessions(settings)
+
+        mock_ingest.assert_called_once()
+        assert mock_ingest.call_args.args[1] == "session-abcd1234"
+        assert mock_ingest.call_args.args[3].overwrite is True
+        assert stats.ingested == 1
+        assert stats.skipped_existing == 0
 
     def test_an_ingest_failure_reports_the_class_not_the_message(
         self, tmp_path: Path
@@ -576,27 +588,13 @@ class TestBackfillCaptureRedaction:
     """The backfill producer writes a PII-clean capture file (bug class 3)."""
 
     def _write(self, tmp_path: Path, text: str) -> Path:
-        from quarry.artifacts import SessionArtifacts
-        from quarry.backfill import _write_backfill_capture_file
-
         transcript = tmp_path / "sess1234abcd.jsonl"
         transcript.write_text("{}\n", encoding="utf-8")
         # Pin the mtime: the capture frontmatter timestamp falls back to the
         # transcript's mtime, so rewriting the file on a rerun must not let a
         # straddled clock tick change the bytes this test asserts are identical.
         os.utime(transcript, (1_700_000_000, 1_700_000_000))
-        _write_backfill_capture_file(
-            project_path=str(tmp_path),
-            session_id="sess1234abcd",
-            transcript=transcript,
-            artifacts=SessionArtifacts(
-                commit_shas=(),
-                pr_numbers=(),
-                branch_names=(),
-                bead_ids=(),
-            ),
-            text=text,
-        )
+        BackfillSession(transcript, str(tmp_path), text).write_capture_file()
         return tmp_path / ".punt-labs" / "quarry" / "captures" / "session-sess1234.md"
 
     def test_capture_file_has_zero_pii(self, tmp_path: Path) -> None:
@@ -623,25 +621,29 @@ class TestBackfillCaptureRedaction:
         ``stat()`` on a vanished file raises ``OSError``; the writer falls back
         to ``now()`` and still produces the capture rather than propagating.
         """
-        from quarry.artifacts import SessionArtifacts
-        from quarry.backfill import _write_backfill_capture_file
+        missing = tmp_path / "sess1234abcd.jsonl"  # never created — stat() will raise
 
-        missing = tmp_path / "gone.jsonl"  # never created — stat() will raise
-
-        _write_backfill_capture_file(
-            project_path=str(tmp_path),
-            session_id="sess1234abcd",
-            transcript=missing,
-            artifacts=SessionArtifacts(
-                commit_shas=(),
-                pr_numbers=(),
-                branch_names=(),
-                bead_ids=(),
-            ),
-            text="ran /Users/jdoe/x here",
-        )
+        BackfillSession(
+            missing, str(tmp_path), "ran /Users/jdoe/x here"
+        ).write_capture_file()
 
         captures = tmp_path / ".punt-labs" / "quarry" / "captures"
         content = (captures / "session-sess1234.md").read_text(encoding="utf-8")
         assert "~/x" in content
         assert "/Users/" not in content
+
+
+class TestBackfillSessionBody:
+    def test_the_body_is_the_text_when_there_are_no_artifacts(
+        self, tmp_path: Path
+    ) -> None:
+        session = BackfillSession(tmp_path / "abcd1234.jsonl", "", "plain talk")
+        assert session.body == "plain talk"
+
+    def test_the_artifact_header_precedes_the_conversation(
+        self, tmp_path: Path
+    ) -> None:
+        text = "opened PR #123 for the fix"
+        session = BackfillSession(tmp_path / "abcd1234.jsonl", "", text)
+        assert session.body.endswith(f"\n\n{text}")
+        assert "123" in session.body.split("\n\n")[0]

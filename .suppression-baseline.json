@@ -18,7 +18,7 @@
     "src/quarry/_hook_trace.py": {
       "noqa": 3
     },
-    "src/quarry/backfill.py": {
+    "src/quarry/backfill_session.py": {
       "noqa": 1
     },
     "src/quarry/captures_collection.py": {
@@ -187,5 +187,5 @@
       "noqa": 1
     }
   },
-  "updated_at": "2026-10-23T06:10:43Z"
+  "updated_at": "2026-10-23T06:34:45Z"
 }
