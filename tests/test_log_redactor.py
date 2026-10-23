@@ -75,6 +75,8 @@ class TestLinearTime:
             "a" * 2049 + " ",
             "a" * 2000 + "@ ",
             ("a" * 700 + ":") * 2 + "b" * 600 + "@ ",
+            "://" + "a" * 2045 + " ",
+            "a" * 2044 + "://" + "a" * 2 + " ",
         ],
         ids=[
             "colons",
@@ -85,12 +87,29 @@ class TestLinearTime:
             "over-cap",
             "long-user-run",
             "colon-separated-runs",
+            "slashes-then-long-run",
+            "long-scheme-run",
         ],
     )
     def test_the_cost_scales_linearly(self, unit: str) -> None:
         small = min(_seconds(unit * 25) for _ in range(3))
         large = min(_seconds(unit * 100) for _ in range(3))
         assert large < 8 * max(small, 1e-4)
+
+    @pytest.mark.parametrize(
+        "token",
+        ["://" + "a" * 2045, "://" + "a" * 2040 + ":/x", "a" * 2000 + "://" + "b" * 40],
+        ids=["slashes-then-run", "run-with-colon-slash", "run-then-slashes"],
+    )
+    def test_a_token_of_scheme_characters_is_not_quadratic(self, token: str) -> None:
+        """Each token is under the cap, so the cost per token is the cost per byte.
+
+        A scheme pattern that is retried at every offset of a 2 KB run costs
+        milliseconds per token (about 0.3 s for a 64 KiB record); anchored at the
+        start of the run it costs microseconds.
+        """
+        record = " ".join([token] * (LogRedactor.MAX_RECORD // len(token)))
+        assert min(_seconds(record) for _ in range(3)) < 0.1
 
     def test_a_token_over_two_kilobytes_is_truncated(self) -> None:
         shown = LogRedactor.redact("before " + "q" * 5000 + " after")

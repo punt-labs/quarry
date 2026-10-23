@@ -57,7 +57,7 @@ class LogRedactor:
     # ends a match early.  The host is the rest of the authority, and is shown only
     # if it is a plain host name or bracketed IP literal with a numeric port.
     _SCHEME_URL: ClassVar[re.Pattern[str]] = re.compile(
-        r"(?P<scheme>[A-Za-z0-9+.\-]{1,2047})://"
+        r"(?<![A-Za-z0-9+.\-])(?P<scheme>[A-Za-z0-9+.\-]{1,2047})://"
         r"(?:[^\s/\\?#]*@)?(?P<host>[^\s/\\?#'\"<>@]*)"
         r"(?P<path>[^\s?#'\"<>]*)(?:[?#][^\s'\"<>]*)?"
     )
