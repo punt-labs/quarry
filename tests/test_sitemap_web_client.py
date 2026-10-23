@@ -682,3 +682,21 @@ class TestFailureClassification:
         resp = client.get(self._URL)
         assert isinstance(resp, WebClientErrorResponse)
         assert resp.message() == "URL rejected: host resolves to a blocked address"
+
+
+class TestInternationalizedUrl:
+    def test_an_iri_reaches_the_opener_as_ascii(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: list[str] = []
+
+        class _Opener:
+            def open(self, request: Any, timeout: float | None = None) -> Any:
+                seen.append(request.full_url)
+                raise OSError
+
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _Opener())
+        GatedSitemapWebClient().get("https://safe.example/caf\u00e9/\u65e5")
+        assert seen == ["https://safe.example/caf%C3%A9/%E6%97%A5"]
+        assert seen[0].isascii()

@@ -90,3 +90,9 @@ def test_a_url_one_character_over_the_cap_is_refused_before_any_dns(
     assert len(url) == 8193
     assert UrlAdmission.reject_reason(url) == "malformed URL"
     assert lookups == []
+
+
+def test_the_fetch_form_of_an_admitted_iri_is_ascii() -> None:
+    assert UrlAdmission.fetch_form("https://h.test/caf\u00e9?q=\u00fc") == (
+        "https://h.test/caf%C3%A9?q=%C3%BC"
+    )

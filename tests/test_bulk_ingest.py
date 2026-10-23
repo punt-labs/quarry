@@ -555,3 +555,14 @@ class TestBulkIngestRunnerRun:
 
         assert (ingested, failed, errors, empty) == (0, 0, [], 0)
         assert calls == []
+
+
+def test_a_sitemap_page_with_an_iri_is_fetched_and_named_in_its_encoded_form() -> None:
+    from quarry.sitemap import SitemapEntry
+
+    selector = SafeEntrySelector()
+    entries = [SitemapEntry(loc="https://example.com/caf\u00e9", lastmod=None)]
+    to_ingest, _skipped = selector.partition(entries, _context())
+    [(url, _name)] = to_ingest
+    assert url.fetch_url == "https://example.com/caf%C3%A9"
+    assert url.document_name == "https://example.com/caf%C3%A9"

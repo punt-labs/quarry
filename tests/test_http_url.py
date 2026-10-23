@@ -264,3 +264,50 @@ class TestShownLogsTheRefusal:
         with caplog.at_level(logging.DEBUG, logger="quarry.http_url"):
             HttpUrl.shown("https://h.test/a")
         assert caplog.records == []
+
+
+class TestInternationalizedPaths:
+    """An IRI is legitimate input: it is percent-encoded once, at construction."""
+
+    def test_the_fetchable_form_is_ascii(self) -> None:
+        url = HttpUrl("https://example.com/café/日本?q=ü#fräg")
+        assert url.fetch_url.isascii()
+        assert url.fetch_url == (
+            "https://example.com/caf%C3%A9/%E6%97%A5%E6%9C%AC?q=%C3%BC#fr%C3%A4g"
+        )
+
+    def test_the_two_spellings_are_one_document(self) -> None:
+        iri = HttpUrl("https://example.com/café")
+        encoded = HttpUrl("https://example.com/caf%C3%A9")
+        assert iri.document_name == encoded.document_name
+        assert iri.document_name == "https://example.com/caf%C3%A9"
+        assert iri.fetch_url == encoded.fetch_url
+
+    def test_lowercase_escapes_are_normalized_to_uppercase(self) -> None:
+        url = HttpUrl("https://example.com/caf%c3%a9?q=%c3%bc")
+        assert url.fetch_url == "https://example.com/caf%C3%A9?q=%C3%BC"
+        assert url.document_name == "https://example.com/caf%C3%A9"
+
+    def test_a_lone_percent_is_escaped_not_dropped(self) -> None:
+        assert HttpUrl("https://example.com/100%").document_name == (
+            "https://example.com/100%25"
+        )
+
+    def test_an_ascii_url_is_unchanged(self) -> None:
+        raw = "https://example.com/a/b;p=1?x=1&y=2#f"
+        assert HttpUrl(raw).fetch_url == raw
+
+    def test_the_log_form_is_unaffected(self) -> None:
+        assert str(HttpUrl("https://example.com/café/x")) == (
+            "https://example.com/…(segments=2)"
+        )
+
+    def test_no_encode_error_can_reach_the_request_line(self) -> None:
+        from http.client import HTTPConnection
+
+        fetch = HttpUrl("https://example.com/ü?x=é#è").fetch_url
+        HTTPConnection("example.com").putrequest("GET", fetch)
+
+    def test_a_percent_in_the_host_is_still_refused(self) -> None:
+        with pytest.raises(ValueError, match=r"^malformed URL$"):
+            HttpUrl("https://exa%6Dple.com/p")

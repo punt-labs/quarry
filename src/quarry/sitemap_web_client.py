@@ -126,7 +126,7 @@ class GatedSitemapWebClient(AbstractWebClient):
     def _fetch(self, url: str) -> AbstractWebClientResponse:
         """Open *url* through the guarded opener and gate the final URL."""
         request = urllib.request.Request(  # noqa: S310 — scheme + SSRF gated
-            url, headers={"User-Agent": _USER_AGENT}
+            UrlAdmission.fetch_form(url), headers={"User-Agent": _USER_AGENT}
         )
         with GUARDED_OPENER.open(request, timeout=self._timeout) as resp:
             final = UrlAdmission.reject_reason(resp.url)

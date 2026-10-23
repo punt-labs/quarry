@@ -52,6 +52,16 @@ class TestWebFetcher:
         assert "Hello" in WebFetcher().fetch(HttpUrl("https://example.com"))
 
     @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
+    def test_an_iri_is_requested_as_percent_encoded_ascii(
+        self, mock_open: MagicMock
+    ) -> None:
+        mock_open.return_value = _mock_response(b"<p>x</p>", "text/html")
+        WebFetcher().fetch(HttpUrl("https://example.com/caf\u00e9?q=\u00fc"))
+        requested = mock_open.call_args[0][0].full_url
+        assert requested == "https://example.com/caf%C3%A9?q=%C3%BC"
+        assert requested.isascii()
+
+    @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
     def test_uppercase_scheme_accepted(self, mock_open: MagicMock) -> None:
         """An uppercase scheme is accepted, consistent with UrlSafetyCheck."""
         body = b"<html><body><p>OK</p></body></html>"

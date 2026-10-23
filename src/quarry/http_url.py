@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from typing import ClassVar, Self, final
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from quarry.capture_url import CaptureUrl
 from quarry.log_form import LogForm
@@ -71,13 +71,22 @@ class HttpUrl:
             raise ValueError(_MALFORMED)
         port = None if parts.port == cls._DEFAULT_PORTS[parts.scheme] else parts.port
         netloc = to_netloc(host, port)
-        path = cls._PARAMS.sub("", parts.path)
+        encoded = tuple(
+            cls._encoded(part) for part in (parts.path, parts.query, parts.fragment)
+        )
+        path = cls._PARAMS.sub("", encoded[0])
+        # An ASCII URL is fetched exactly as given; otherwise the encoded form.
+        fetch = (
+            raw
+            if encoded == (parts.path, parts.query, parts.fragment)
+            else (urlunsplit((parts.scheme, parts.netloc, *encoded)))
+        )
         root = urlunsplit(
             (parts.scheme, to_netloc(parts.hostname or "", parts.port), "/", "", "")
         )
         self = super().__new__(cls)
         fields = {
-            "_fetch_url": raw,
+            "_fetch_url": fetch,
             "_host": host,
             "_path": path,
             "_document_name": urlunsplit((parts.scheme, netloc, path or "/", "", "")),
@@ -85,7 +94,7 @@ class HttpUrl:
         }
         for name, value in fields.items():
             object.__setattr__(self, name, value)
-        object.__setattr__(self, "_homepage", self if root == raw else cls(root))
+        object.__setattr__(self, "_homepage", self if root == fetch else cls(root))
         return self
 
     def __setattr__(self, name: str, value: object) -> None:
@@ -95,6 +104,18 @@ class HttpUrl:
     def __delattr__(self, name: str) -> None:
         msg = "HttpUrl is immutable"
         raise AttributeError(msg)
+
+    @staticmethod
+    def _encoded(part: str) -> str:
+        """Return a path, query or fragment percent-encoded as RFC 3986 asks.
+
+        Non-ASCII text becomes UTF-8 escapes, a stray ``%`` becomes ``%25``, and an
+        existing escape is kept with its hex digits upper-cased, so ``café`` and
+        ``caf%c3%a9`` are one document and nothing non-ASCII reaches the request.
+        """
+        text = re.sub(r"%(?![0-9A-Fa-f]{2})", "%25", part)
+        escaped = quote(text, safe="/?:@!$&'()*+,;=-._~%")
+        return re.sub(r"%[0-9a-f]{2}", lambda m: m.group().upper(), escaped)
 
     @classmethod
     def shown(cls, raw: str) -> str:

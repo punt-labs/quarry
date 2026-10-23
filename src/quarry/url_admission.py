@@ -41,6 +41,11 @@ class UrlAdmission:
         return None
 
     @staticmethod
+    def fetch_form(url: str) -> str:
+        """Return the percent-encoded, ASCII form of an admitted *url* to fetch."""
+        return HttpUrl(url).fetch_url
+
+    @staticmethod
     def refusal(url: str) -> str | None:
         """Return ``<log form>: <reason>`` when *url* is refused, else ``None``."""
         reason = UrlAdmission.reject_reason(url)
