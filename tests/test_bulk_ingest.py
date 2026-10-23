@@ -21,9 +21,9 @@ from quarry.http_url import HttpUrl
 from quarry.ingestion.bulk_ingest import (
     BulkIngestRunner,
     BulkOptions,
-    SafeEntrySelector,
 )
 from quarry.ingestion.ingest_context import IngestContext, Progress
+from quarry.ingestion.safe_entry_selector import SafeEntrySelector
 from quarry.sitemap import SitemapEntry
 
 if TYPE_CHECKING:
@@ -290,11 +290,11 @@ class TestBulkIngestRunnerRun:
             (HttpUrl("https://b.example"), None),
         ]
 
-        ingested, failed, errors = runner.run(
+        ingested, failed, errors, empty = runner.run(
             to_ingest, Progress(None), _context(), BulkOptions()
         )
 
-        assert (ingested, failed, errors) == (2, 0, [])
+        assert (ingested, failed, errors, empty) == (2, 0, [], 0)
 
     def test_success_progress_redacts_url_secrets(self) -> None:
         """The success-path progress line must never leak URL secrets either
@@ -317,7 +317,7 @@ class TestBulkIngestRunnerRun:
         to_ingest: list[tuple[HttpUrl, str | None]] = [(credentialed_url, None)]
         messages: list[str] = []
 
-        ingested, failed, _errors = runner.run(
+        ingested, failed, _errors, _empty = runner.run(
             to_ingest, Progress(messages.append), _context(), BulkOptions()
         )
 
@@ -350,7 +350,7 @@ class TestBulkIngestRunnerRun:
             (HttpUrl("https://bad.example"), None),
         ]
 
-        ingested, failed, errors = runner.run(
+        ingested, failed, errors, _empty = runner.run(
             to_ingest, Progress(None), _context(), BulkOptions()
         )
 
@@ -459,7 +459,7 @@ class TestBulkIngestRunnerRun:
         messages: list[str] = []
 
         with caplog.at_level(logging.WARNING):
-            ingested, failed, errors = runner.run(
+            ingested, failed, errors, _empty = runner.run(
                 to_ingest, Progress(messages.append), _context(), BulkOptions()
             )
 
@@ -492,6 +492,48 @@ class TestBulkIngestRunnerRun:
             "crawl ingested nothing: 1 pages failed (first: internal error: OSError)"
         )
 
+    def test_a_page_that_stored_nothing_is_empty_not_ingested(self) -> None:
+        def _stub(
+            request: UrlIngest, _progress: Progress, _context: IngestContext
+        ) -> IngestResult:
+            chunks = 0 if "empty" in request.url.document_name else 2
+            return {
+                "document_name": request.url.document_name,
+                "collection": "c",
+                "chunks": chunks,
+            }
+
+        runner = BulkIngestRunner(ingest_one=_stub, workers=2)
+        pages: list[tuple[HttpUrl, str | None]] = [
+            (HttpUrl("https://a.example/empty-1"), None),
+            (HttpUrl("https://a.example/empty-2"), None),
+            (HttpUrl("https://a.example/full"), None),
+        ]
+        result = runner.run(pages, Progress(None), _context(), BulkOptions())
+        assert result == (1, 0, [], 2)
+
+    def test_a_crawl_of_only_empty_pages_reports_them_all_as_empty(self) -> None:
+        def _stub(
+            request: UrlIngest, _progress: Progress, _context: IngestContext
+        ) -> IngestResult:
+            return {
+                "document_name": request.url.document_name,
+                "collection": "c",
+                "chunks": 0,
+            }
+
+        runner = BulkIngestRunner(ingest_one=_stub)
+        pages: list[tuple[HttpUrl, str | None]] = [
+            (HttpUrl("https://a.example/1"), None),
+            (HttpUrl("https://a.example/2"), None),
+        ]
+        assert runner.run(pages, Progress(None), _context(), BulkOptions()) == (
+            0,
+            0,
+            [],
+            2,
+        )
+
     def test_empty_to_ingest_short_circuits_without_calling_ingest_one(self) -> None:
         calls: list[UrlIngest] = []
 
@@ -507,9 +549,9 @@ class TestBulkIngestRunnerRun:
 
         runner = BulkIngestRunner(ingest_one=_stub)
 
-        ingested, failed, errors = runner.run(
+        ingested, failed, errors, empty = runner.run(
             [], Progress(None), _context(), BulkOptions()
         )
 
-        assert (ingested, failed, errors) == (0, 0, [])
+        assert (ingested, failed, errors, empty) == (0, 0, [], 0)
         assert calls == []

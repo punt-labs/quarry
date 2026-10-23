@@ -4,18 +4,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, final
+from typing import TYPE_CHECKING, TypedDict, final
 
 from quarry.ingest_collection import IngestCollection
-from quarry.ingestion.bulk_ingest import (
-    BulkIngestRunner,
-    BulkOptions,
-    SafeEntrySelector,
-)
+from quarry.ingestion.bulk_ingest import BulkIngestRunner, BulkOptions
 from quarry.ingestion.crawl_guard import CrawlGuard
 from quarry.ingestion.fetch_refused import FetchRefusedError
+from quarry.ingestion.safe_entry_selector import SafeEntrySelector
 from quarry.ingestion.web_ingest import UrlIngest, ingest_url
-from quarry.results import SitemapResult
 
 if TYPE_CHECKING:
     from quarry.http_url import HttpUrl
@@ -33,6 +29,20 @@ class SitemapCrawl:
 
     entries: list[SitemapEntry]
     source_url: HttpUrl
+
+
+class SitemapResult(TypedDict):
+    """Result of sitemap crawl and bulk URL ingestion."""
+
+    sitemap_url: str
+    collection: str
+    total_discovered: int
+    after_filter: int
+    ingested: int
+    empty: int
+    skipped: int
+    failed: int
+    errors: list[str]
 
 
 @final
@@ -61,10 +71,16 @@ class SitemapIngest:
         progress("Selected %d safe URLs to ingest", len(filtered))
         to_ingest, skipped = selector.partition(filtered, context)
         progress("%d to ingest, %d up-to-date", len(to_ingest), skipped)
-        ingested, failed, errors = BulkIngestRunner(
+        ingested, failed, errors, empty = BulkIngestRunner(
             ingest_one=ingest_url, workers=options.workers
         ).run(to_ingest, progress, context, options)
-        progress("Done: %d ingested, %d skipped, %d failed", ingested, skipped, failed)
+        progress(
+            "Done: %d ingested, %d empty, %d skipped, %d failed",
+            ingested,
+            empty,
+            skipped,
+            failed,
+        )
 
         return SitemapResult(
             sitemap_url=crawl.source_url.document_name,
@@ -72,6 +88,7 @@ class SitemapIngest:
             total_discovered=len(crawl.entries),
             after_filter=len(filtered),
             ingested=ingested,
+            empty=empty,
             skipped=skipped,
             failed=failed,
             errors=errors,

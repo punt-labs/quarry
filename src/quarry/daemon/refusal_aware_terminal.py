@@ -75,8 +75,8 @@ class RefusalAwareTerminal:
         does.
         """
         if not self.is_stored(results):
-            crawl = "ingested" in results
-            reason = self.NO_PAGES if crawl else self.NOTHING_STORED
+            is_blank_crawl = "ingested" not in results or results.get("empty")
+            reason = self.NOTHING_STORED if is_blank_crawl else self.NO_PAGES
             self._fail(UnindexableContentError(reason))
             return
         self._state.status = "completed"

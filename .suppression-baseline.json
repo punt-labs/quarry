@@ -108,7 +108,7 @@
       "noqa": 3
     },
     "src/quarry/ingestion/bulk_ingest.py": {
-      "noqa": 2
+      "noqa": 1
     },
     "src/quarry/ingestion/chunk_store_funnel.py": {
       "pyright_ignore": 1
@@ -123,6 +123,9 @@
       "noqa": 1
     },
     "src/quarry/ingestion/provider.py": {
+      "noqa": 1
+    },
+    "src/quarry/ingestion/safe_entry_selector.py": {
       "noqa": 1
     },
     "src/quarry/ingestion/sitemap_ingest.py": {
@@ -184,5 +187,5 @@
       "noqa": 1
     }
   },
-  "updated_at": "2026-10-23T03:06:34Z"
+  "updated_at": "2026-10-23T03:22:12Z"
 }

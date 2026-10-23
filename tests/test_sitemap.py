@@ -1604,3 +1604,35 @@ class TestIngestSitemapAllRejected:
         assert result["after_filter"] == 0
         assert result["ingested"] == 0
         mock_ingest.assert_not_called()
+
+
+class TestIngestSitemapEmptyPages:
+    @patch("quarry.ingestion.sitemap_ingest.ingest_url")
+    @patch("quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[])
+    @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
+    def test_pages_that_stored_nothing_are_reported_as_empty(
+        self,
+        mock_discover: MagicMock,
+        _list_docs: MagicMock,
+        mock_ingest: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from quarry.ingestion.sitemap_ingest import ingest_sitemap
+
+        monkeypatch.setattr(_GETADDRINFO, lambda *a, **k: _addrinfo("93.184.216.34"))
+        mock_discover.return_value = [
+            SitemapEntry(loc="https://example.com/a", lastmod=None),
+            SitemapEntry(loc="https://example.com/b", lastmod=None),
+        ]
+        mock_ingest.return_value = {
+            "document_name": "x",
+            "collection": "test",
+            "chunks": 0,
+        }
+        result = ingest_sitemap(
+            HttpUrl("https://example.com/sitemap.xml"),
+            Progress(None),
+            IngestContext(Database(MagicMock()), MagicMock(), collection="test"),
+            BulkOptions(),
+        )
+        assert (result["ingested"], result["empty"], result["failed"]) == (0, 2, 0)

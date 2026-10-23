@@ -128,6 +128,15 @@ class TestJobOutcomes:
         assert (state.status, state.error) == ("failed", "internal error: OSError")
 
 
+_CRAWL_ALL_EMPTY = {
+    "total_discovered": 3,
+    "after_filter": 3,
+    "ingested": 0,
+    "empty": 3,
+    "skipped": 0,
+    "failed": 0,
+    "errors": [],
+}
 _CRAWL_NOTHING = {
     "empty sitemap": {"total_discovered": 0, "after_filter": 0, "ingested": 0},
     "filters match nothing": {"total_discovered": 9, "after_filter": 0, "ingested": 0},
@@ -141,3 +150,17 @@ def test_a_crawl_that_selected_no_pages_names_that_reason(label: str) -> None:
     results = {**_CRAWL_NOTHING[label], "skipped": 0, "failed": 0, "errors": []}
     state = _run(make(), method, results)
     assert (state.status, state.error) == ("failed", _NOTHING["crawl"])
+
+
+def test_a_crawl_whose_pages_were_all_empty_says_the_content_had_no_text() -> None:
+    make, method, _ = _JOBS["bulk-crawl"]
+    state = _run(make(), method, _CRAWL_ALL_EMPTY)
+    assert (state.status, state.error) == ("failed", _NOTHING["single"])
+
+
+def test_a_mixed_crawl_completes_and_reports_its_empty_pages() -> None:
+    make, method, _ = _JOBS["bulk-crawl"]
+    mixed = {**_CRAWL_ALL_EMPTY, "ingested": 1, "empty": 2}
+    state = _run(make(), method, mixed)
+    assert (state.status, state.error) == ("completed", "")
+    assert state.results["empty"] == 2

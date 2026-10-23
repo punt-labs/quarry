@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import Counter
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, final
 
 from quarry.failure_reason import FailureReason
@@ -19,7 +19,6 @@ if TYPE_CHECKING:
 
     from quarry.ingestion.ingest_context import IngestContext
     from quarry.results import IngestResult
-    from quarry.sitemap import SitemapEntry
 
 logger = logging.getLogger(__name__)
 
@@ -50,86 +49,6 @@ class BulkOptions:
 
 @final
 @dataclass(frozen=True, slots=True)
-class SafeEntrySelector:
-    """Filters sitemap entries to a safe, capped, deduped-against-existing set."""
-
-    include: list[str] | None = None
-    exclude: list[str] | None = None
-    limit: int = 0
-
-    def select_safe(self, entries: list[SitemapEntry]) -> list[SitemapEntry]:
-        """Glob-filter -> SSRF-gate -> cap at ``limit`` SAFE entries (one lazy pass)."""
-        from quarry.sitemap import SitemapDiscovery  # noqa: PLC0415
-
-        return SitemapDiscovery.select_safe(
-            entries, include=self.include, exclude=self.exclude, limit=self.limit
-        )
-
-    def partition(
-        self, filtered: list[SitemapEntry], context: IngestContext
-    ) -> tuple[list[tuple[HttpUrl, str | None]], int]:
-        """Split filtered entries into ``(to_ingest, skipped_count)`` via dedup.
-
-        Dedup compares each entry's ``<lastmod>`` against the stored ingestion
-        timestamp of the same document in *context*'s collection.
-        """
-        existing = context.database.catalog.list_documents(
-            collection_filter=context.collection
-        )
-        existing_timestamps = {
-            doc["document_name"]: doc["ingestion_timestamp"] for doc in existing
-        }
-        to_ingest: list[tuple[HttpUrl, str | None]] = []
-        skipped = 0
-        for entry in filtered:
-            url = HttpUrl(entry.loc)
-            existing_ts = existing_timestamps.get(url.document_name)
-            if (
-                existing_ts
-                and not context.overwrite
-                and entry.lastmod is not None
-                and self._entry_is_current(existing_ts, entry.lastmod)
-            ):
-                skipped += 1
-                continue
-            to_ingest.append((url, None))
-        return to_ingest, skipped
-
-    @staticmethod
-    def _entry_is_current(existing_ts: str, lastmod: datetime) -> bool:
-        """Return True if *lastmod* is not newer than the stored *existing_ts*.
-
-        An unparseable stored timestamp returns False so the URL is re-ingested
-        rather than silently skipped.
-        """
-        try:
-            existing_dt = datetime.fromisoformat(
-                str(existing_ts).replace("Z", "+00:00")
-            )
-        except (ValueError, TypeError):
-            logger.warning(
-                "sitemap dedup: unparseable stored ingestion_timestamp %r — "
-                "forcing re-ingest",
-                existing_ts,
-            )
-            return False
-        if existing_dt.tzinfo is None:
-            existing_dt = existing_dt.replace(tzinfo=UTC)
-        # <lastmod> may omit its UTC offset -- a bare "2026-01-01T00:00:00" is
-        # valid sitemap XML -- so lastmod can be timezone-naive even though
-        # existing_dt (normalized above) never is. Comparing naive against
-        # aware raises TypeError; left uncaught here, that would hit the
-        # SAME except above as an unparseable stored timestamp and silently
-        # fail-open, forcing re-ingest of every current entry and defeating
-        # dedup outright. Assume UTC for a naive lastmod instead, so both
-        # sides are always aware before the comparison runs.
-        if lastmod.tzinfo is None:
-            lastmod = lastmod.replace(tzinfo=UTC)
-        return lastmod <= existing_dt
-
-
-@final
-@dataclass(frozen=True, slots=True)
 class BulkIngestRunner:
     """Fans out ``ingest_one`` over a thread pool and aggregates outcomes."""
 
@@ -142,15 +61,17 @@ class BulkIngestRunner:
         progress: Progress,
         context: IngestContext,
         options: BulkOptions,
-    ) -> tuple[int, int, list[str]]:
-        """Return ``(ingested_count, failed_count, error_messages)``.
+    ) -> tuple[int, int, list[str], int]:
+        """Return ``(ingested, failed, error_messages, empty)``.
+
+        A page counts as ingested only if it stored chunks; one that extracted to
+        nothing is *empty*, so a crawl of blank pages cannot read as a success.
 
         Raises:
             UnindexableContentError: Every page failed, so the crawl indexed
                 nothing; the reason names no URL.
         """
-        ingested = 0
-        failed = 0
+        counts: Counter[str] = Counter()
         errors: list[str] = []
         reasons: list[str] = []
 
@@ -188,12 +109,13 @@ class BulkIngestRunner:
                     # below sees a path, query or fragment (CWE-532).
                     report = PageReport(page_url)
                     try:
-                        future.result()
-                        ingested += 1
+                        outcome = self._outcome(future)
+                        counts[outcome] += 1
                         progress(
-                            "Ingested %s (%d/%d)",
+                            "%s %s (%d/%d)",
+                            outcome.capitalize(),
                             report.url,
-                            ingested,
+                            counts["ingested"] + counts["empty"],
                             len(to_ingest),
                         )
                     except Exception as exc:  # noqa: BLE001
@@ -202,10 +124,15 @@ class BulkIngestRunner:
                         # not internal code -- one worker's failure must not
                         # abort the others.  PageReport logs the redacted URL
                         # (a programming error loudly) and renders a URL-free line.
-                        failed += 1
+                        counts["failed"] += 1
                         reasons.append(FailureReason.of(exc))
                         errors.append(report.failure(exc))
                         progress("Failed %s", errors[-1])
-            PageReport.require_progress(ingested, failed, reasons)
+            PageReport.require_progress(counts["ingested"], counts["failed"], reasons)
 
-        return ingested, failed, errors
+        return counts["ingested"], counts["failed"], errors, counts["empty"]
+
+    @staticmethod
+    def _outcome(future: Future[IngestResult]) -> str:
+        """Return ``"ingested"`` if the page stored chunks, else ``"empty"``."""
+        return "ingested" if future.result().get("chunks") else "empty"
