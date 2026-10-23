@@ -61,15 +61,24 @@ across `transform`, `index`, and `connector`).
   other failure reads `internal error: <ExceptionClass>`, with the detail in
   the redacted `quarry.log`. This also applies to per-file errors from sync,
   watch, and sitemap crawls.
-- tool: a task that stores nothing now fails with `nothing was stored: the
-  content produced no indexable text` instead of ending `completed`. This
-  covers plain ingests, bulk crawls, captures, and `remember`/`learn`.
+- tool: registration refusals are fixed text (`directory already
+  registered`, `directory covered by a parent registration`, `collection
+  name already in use`, `collection holds archived data from another
+  directory`). The directory and collection names appear only in the
+  redacted log line.
+- tool: a task that stores nothing now fails instead of ending `completed`:
+  a crawl with `nothing was stored: no pages were selected for ingest`, any
+  other ingest, capture, or `remember`/`learn` with `nothing was stored: the
+  content produced no indexable text`.
 - tool: hook traces tell a daemon refusal (`daemon-refused`) from an
   unreachable daemon (`daemon-unreachable`) and a server or configuration
-  fault (`daemon-error`).
-- infra: log lines show a URL as `scheme://host[:port]/…(N segments)`, never
+  fault (`daemon-error`). The PreCompact message gives advice that matches
+  the failure, and a SubagentStop trace reads `capture:distill-<label>` when
+  the report could not be filed.
+- infra: log lines show a URL as `scheme://host[:port]/…(segments=N)`, never
   its path, whether quarry logs it or a library does. The full path is kept
-  in the stored document name.
+  in the stored document name. Tracebacks in the log are indented, and a
+  record is capped at 64 KiB.
 
 ### Fixed
 

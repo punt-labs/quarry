@@ -3191,9 +3191,16 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
      always an exception; it is never an empty "completed" result.
    - A job that stores nothing fails as well. `RefusalAwareTerminal` is the one
      place that decides a task's terminal state: a plain ingest, bulk crawl,
-     capture, or remember that wrote no rows fails with the fixed reason
-     `nothing was stored: the content produced no indexable text`. A
-     table-driven test covers every job type against every outcome.
+     capture, or remember that wrote no rows fails with a fixed reason chosen
+     by the result's shape: `nothing was stored: no pages were selected for
+     ingest` for a crawl, `nothing was stored: the content produced no
+     indexable text` for a single document. A table-driven test covers every
+     job type against every outcome.
+   - Only policy rejections (`UrlRejectedError`, `RedirectRejectedError`) and
+     transport failures (`OSError`, `HTTPException`) are fetch refusals
+     (`FetchRefusedError.REFUSABLE`, shared by the URL fetch and the sitemap
+     client). Any other exception from a fetch, a `ValueError` from a bug
+     included, is a fault and ends the task as `internal error: <Class>`.
 2. **Bound every stored row; split, never truncate.**
    - A logical-section page over the page cap (2^20 − 1 bytes) is split at the
      best boundary. Logical sections are text, markdown and HTML sections,
@@ -3255,8 +3262,9 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
      (`url_admission.py`) is the single gate for routes, captures, sitemap
      entries, and every redirect hop. Its decisions are made over one
      canonical reading (`UrlSyntax`). It rejects userinfo, `\` or `%` in the
-     netloc, whitespace or control characters anywhere, a port that is out
-     of range or 0, and any URL longer than 8,192 characters. Its reasons
+     netloc, whitespace or any Cc, Cf, Zl, or Zp character anywhere (bidi
+     controls included), a port that is out of range or 0, and any URL
+     longer than 8,192 characters. Its reasons
      never quote userinfo, path, or query: syntax and scheme failures are
      fixed text (`malformed URL`, `unsupported scheme`, `missing hostname`),
      and an address-policy failure names only the host and the resolved
@@ -3268,10 +3276,11 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
      - `.document_name` is the stored form, `scheme://host[:port]/path`,
        with no default port, no `;params`, no trailing dot, and IDNA dot
        variants folded, so equivalent URLs share one document.
-     - `str()` is the log form, `scheme://host[:port]/…(N segments)`. It
+     - `str()` is the log form, `scheme://host[:port]/…(segments=N)`. It
        never carries the path. A heuristic cannot tell a slug from a
        secret, so the path stays only in the stored name, where diagnosis
-       needs it.
+       needs it. The form is one whitespace-free token, so redacting
+       already-redacted text leaves it unchanged.
      - `HttpUrl.shown(raw)` is the one producer of a URL's log text. A URL
        `HttpUrl` refuses renders in the same shape through the tolerant
        `CaptureUrl` fallback, or as `(unparseable URL)`.
@@ -3282,32 +3291,44 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
    - **Logging (layer B).** The configured file and stream handlers redact
      URLs and escape control characters in the finished text, tracebacks
      included. Any URL left in a message is rewritten to the same log form,
-     so no path, userinfo, query, or fragment reaches the log. They drop
-     third-party records below WARNING. This backstop catches what a library
-     logs on its own.
-     - **Linear time.** The redactor works one whitespace-free token at a
-       time: a token over 2,048 characters becomes `[…]`, and the bounded
-       patterns run per token, so a crafted URL cannot stall the handler.
-     - **No forged lines.** Newlines and bidi controls in a message are
-       escaped (`\xNN`, `\uNNNN`, `\UNNNNNNNN`), so a message cannot add a
-       log line.
+     so no path, userinfo, query, or fragment reaches the log. The
+     authority is read whole (userinfo is everything to the last `@`, quotes
+     included), and a host that is not a DNS name or bracketed IP literal
+     prints as `[host]`. They drop third-party records below WARNING. This
+     backstop catches what a library logs on its own.
+     - **Linear time.** A record is capped at 64 KiB. The redactor works
+       one token at a time: a token over 2,048 characters becomes `[…]`,
+       and each pattern runs only on a token that can match it, so a
+       crafted URL cannot stall the handler.
+     - **No forged lines.** Newlines and bidi and direction marks in a
+       message are escaped (`\xNN`, `\uNNNN`, `\UNNNNNNNN`). Every
+       traceback and stack line is indented, so no continuation line can
+       begin a record.
      - **A failing handler leaks nothing.** `handleError` writes a fixed
-       line with the logger name, exception class, and message-free frames;
-       it never echoes the record.
+       line with the logger name, the call site, the redacted message
+       template, the exception class, and message-free frames. It never
+       echoes the record's arguments, and a broken stderr cannot raise out
+       of it.
      - **Unclassified failures stay diagnosable.** Their message-free
        frames are logged at WARNING, and a parser catch names only the
        parser's own exceptions, so a programming error is never reported as
        a refusal.
    - **Task errors (layer C).** Only a refusal keeps its message. A refusal
      is any `RefusalError`: `UnindexableContentError` (including
-     `RowBudgetError` and fetch refusals) and `RegistrationRefusedError`
-     (a directory already registered or covered by a parent, a collection
-     name in use, an archived collection). Every other failure is recorded
-     as `internal error: <Class>`, including a stray `ValueError`. Fetch
-     refusals are raised `from None`, so a traceback cannot chain the raw
-     cause. Hook traces distinguish `daemon-refused` (4xx),
-     `daemon-unreachable`, and `daemon-error` (5xx or configuration), from
-     the single `SendOutcome` every send returns.
+     `RowBudgetError` and fetch refusals) and `RegistrationRefusedError`.
+     A refusal's message never embeds caller-supplied text: registration
+     refusals are fixed (`directory already registered`, `directory covered
+     by a parent registration`, `collection name already in use`,
+     `collection holds archived data from another directory`), and the
+     names ride structured fields that only the redacted log line shows. A
+     test sweeps every `RefusalError` raise site and pins the few that
+     interpolate (counts, sizes, sanitised labels, admission reasons). Every
+     other failure is recorded as `internal error: <Class>`, including a
+     stray `ValueError`. Fetch refusals are raised `from None`, so a
+     traceback cannot chain the raw cause. Hook traces distinguish
+     `daemon-refused` (4xx), `daemon-unreachable`, and `daemon-error` (5xx
+     or configuration), from the single `SendOutcome` every send returns;
+     the same outcome picks the PreCompact message's advice.
 
 ### Rejected alternatives
 
