@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Self, final
+from typing import ClassVar, Self, final
 
 _UNREACHABLE = "daemon-unreachable"
 _REFUSED = "daemon-refused"
 _ERROR = "daemon-error"
+_CONFIG = "config-error"
 
 
 @final
@@ -27,6 +28,26 @@ class SendOutcome:
     label: str = ""
     log: str = ""
 
+    # label -> (what went wrong and where to look, what recovers it).
+    _ADVICE: ClassVar[dict[str, tuple[str, str]]] = {
+        _UNREACHABLE: (
+            "quarryd is not reachable, so this session was not indexed now",
+            "; run 'quarry backfill-sessions' to index them later",
+        ),
+        _REFUSED: ("the daemon refused the capture; see quarry.log", ""),
+        _CONFIG: (
+            "the daemon target is misconfigured",
+            (
+                "; check QUARRY_URL / quarry login; then run "
+                "'quarry backfill-sessions' to index them"
+            ),
+        ),
+        _ERROR: (
+            "the daemon failed; see quarryd.log or quarry doctor",
+            "; run 'quarry backfill-sessions' to index them once it recovers",
+        ),
+    }
+
     def __bool__(self) -> bool:
         return self.sent
 
@@ -36,27 +57,17 @@ class SendOutcome:
 
         The one mapping from a failure to what the user is told, and it promises
         only what landed: *archived* is whether the raw transcript was archived
-        and *written* whether the scrubbed capture file was.  Only an unreachable
-        daemon with an archive is told to backfill later; a daemon that said no,
-        or failed, is told where to look.
+        and *written* whether the scrubbed capture file was.  Each failure names
+        where to look, and every one that a later backfill can recover says so
+        (a daemon that refused the capture will refuse a backfill too).
         """
-        if label == _UNREACHABLE:
-            what = "quarryd is not reachable, so this session was not indexed now"
-        elif label == _REFUSED:
-            what = "the daemon refused the capture; see quarry.log"
-        else:
-            what = "the daemon failed; see quarry.log or quarry doctor"
+        what, remedy = cls._ADVICE.get(label, cls._ADVICE[_ERROR])
         if not archived:
             lost = "the session transcript could not be archived; see quarry.log"
             kept = " The scrubbed capture is saved." if written else ""
             return f"Warning: {what}, and {lost}.{kept}"
         saved = "archive and scrubbed capture are" if written else "archive is"
-        backfill = (
-            "; run 'quarry backfill-sessions' to index them later"
-            if label == _UNREACHABLE
-            else ""
-        )
-        return f"Warning: {what}. The raw JSONL {saved} saved{backfill}."
+        return f"Warning: {what}. The raw JSONL {saved} saved{remedy}."
 
     def named(self, done: str, attempt: str) -> str:
         """Return *done* when the send landed, else ``<attempt>-<label>``.
@@ -70,6 +81,11 @@ class SendOutcome:
     def unreachable(cls, log: str) -> Self:
         """Return the outcome of a connection failure, with the caller's *log*."""
         return cls(sent=False, label=_UNREACHABLE, log=log)
+
+    @classmethod
+    def config(cls, log: str) -> Self:
+        """Return the outcome of a hook-side misconfiguration (QUARRY_URL, login)."""
+        return cls(sent=False, label=_CONFIG, log=log)
 
     @classmethod
     def error(cls, log: str) -> Self:

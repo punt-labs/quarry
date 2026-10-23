@@ -33,7 +33,8 @@ _OUTCOMES = {
     "refused": (SendOutcome.rejected(400, "no"), "daemon-refused"),
     "unreachable": (SendOutcome.unreachable("down"), "daemon-unreachable"),
     "server-error": (SendOutcome.rejected(503, "boom"), "daemon-error"),
-    "config-error": (SendOutcome.error("misconfigured"), "daemon-error"),
+    "config-error": (SendOutcome.config("misconfigured"), "config-error"),
+    "malformed-reply": (SendOutcome.error("bad reply"), "daemon-error"),
 }
 
 
@@ -225,8 +226,9 @@ def test_a_distillation_that_was_not_attempted_is_a_bare_capture(
 _ADVICE = {
     "refused": "the daemon refused the capture; see quarry.log",
     "unreachable": "quarryd is not reachable",
-    "server-error": "the daemon failed; see quarry.log or quarry doctor",
-    "config-error": "the daemon failed; see quarry.log or quarry doctor",
+    "server-error": "the daemon failed; see quarryd.log or quarry doctor",
+    "config-error": "check QUARRY_URL / quarry login",
+    "malformed-reply": "the daemon failed; see quarryd.log or quarry doctor",
 }
 
 
@@ -252,7 +254,7 @@ def test_the_pre_compact_message_follows_the_failure(
     assert "saved" in message
 
 
-def test_only_an_unreachable_daemon_is_told_to_backfill(tmp_path: Path) -> None:
+def test_only_a_refused_capture_is_not_told_to_backfill(tmp_path: Path) -> None:
     transcript = _make_transcript(tmp_path, "work discussed today")
     messages = {}
     for name, (outcome, _label) in _OUTCOMES.items():
@@ -270,10 +272,12 @@ def test_only_an_unreachable_daemon_is_told_to_backfill(tmp_path: Path) -> None:
                 }
             )
         messages[name] = str(result["systemMessage"])
-    assert "backfill-sessions" in messages["unreachable"]
-    assert not [
-        n for n, m in messages.items() if n != "unreachable" and "backfill" in m
-    ]
+    # A daemon that refused the capture will refuse a backfill too; every other
+    # failure is recoverable, so each of those says to backfill.
+    assert "backfill" not in messages["refused"]
+    assert all(
+        "backfill-sessions" in m for name, m in messages.items() if name != "refused"
+    )
 
 
 def _pre_compact_with(

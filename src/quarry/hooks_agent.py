@@ -176,8 +176,8 @@ class HookAgent:
         trace.mark_payload(ok=outcome != "payload")
         if outcome == "captured":
             trace.capture()
-        elif outcome.startswith("daemon-"):
-            trace.error(outcome)
+        elif outcome.startswith("error:"):
+            trace.error(outcome.removeprefix("error:"))
         else:
             trace.skip(outcome)
         return {}
@@ -188,8 +188,7 @@ class HookAgent:
 
         Return values classify the outcome for the trace: ``"captured"``, a skip
         reason (``"payload"``, ``"filter"``, ``"size"`` or ``"secret"``), or, when
-        the send failed, its ``SendOutcome`` label (``daemon-refused``,
-        ``daemon-unreachable`` or ``daemon-error``).
+        the send failed, ``error:`` and its ``SendOutcome`` label.
         """
         cwd = HookPayload.as_dir(payload.get("cwd"))
         parsed = ReadPayload(payload)
@@ -220,7 +219,7 @@ class HookAgent:
             ),
             unreachable_log=_READ_UNREACHABLE,
         )
-        return "captured" if sent else sent.label
+        return "captured" if sent else f"error:{sent.label}"
 
     @staticmethod
     def subagent_stop(payload: dict[str, object]) -> dict[str, object]:

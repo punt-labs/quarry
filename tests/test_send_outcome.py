@@ -14,7 +14,8 @@ from quarry.send_outcome import SendOutcome
         (SendOutcome.rejected(400, "no"), "daemon-refused"),
         (SendOutcome.rejected(422, "no"), "daemon-refused"),
         (SendOutcome.rejected(500, "boom"), "daemon-error"),
-        (SendOutcome.error("misconfigured"), "daemon-error"),
+        (SendOutcome.config("misconfigured"), "config-error"),
+        (SendOutcome.error("bad reply"), "daemon-error"),
     ],
 )
 def test_each_failure_has_its_label(outcome: SendOutcome, label: str) -> None:
@@ -32,21 +33,37 @@ def test_a_step_after_a_send_is_named_by_how_the_send_went() -> None:
 _SAVED = {"archived": True, "written": True}
 
 
-def test_only_an_unreachable_daemon_is_told_to_backfill() -> None:
-    assert "backfill-sessions" in SendOutcome.advice("daemon-unreachable", **_SAVED)
-    for label in ("daemon-refused", "daemon-error"):
-        assert "backfill" not in SendOutcome.advice(label, **_SAVED)
-
-
-def test_a_refusal_and_a_fault_are_told_where_to_look() -> None:
-    refused = SendOutcome.advice("daemon-refused", **_SAVED)
-    assert "the daemon refused the capture; see quarry.log" in refused
-    failed = SendOutcome.advice("daemon-error", **_SAVED)
-    assert "the daemon failed; see quarry.log or quarry doctor" in failed
+def test_a_refused_capture_is_not_told_to_backfill() -> None:
+    assert "backfill" not in SendOutcome.advice("daemon-refused", **_SAVED)
 
 
 @pytest.mark.parametrize(
-    "label", ["daemon-unreachable", "daemon-refused", "daemon-error"]
+    "label", ["daemon-unreachable", "config-error", "daemon-error"]
+)
+def test_a_recoverable_failure_is_told_to_backfill(label: str) -> None:
+    assert "quarry backfill-sessions" in SendOutcome.advice(label, **_SAVED)
+
+
+def test_each_failure_is_told_where_to_look() -> None:
+    assert "the daemon refused the capture; see quarry.log" in SendOutcome.advice(
+        "daemon-refused", **_SAVED
+    )
+    assert "check QUARRY_URL / quarry login; then run" in SendOutcome.advice(
+        "config-error", **_SAVED
+    )
+    failed = SendOutcome.advice("daemon-error", **_SAVED)
+    assert "the daemon failed; see quarryd.log or quarry doctor" in failed
+    assert "once it recovers" in failed
+
+
+def test_a_hook_side_config_failure_has_its_own_label() -> None:
+    outcome = SendOutcome.config("daemon target misconfigured")
+    assert not outcome
+    assert outcome.label == "config-error"
+
+
+@pytest.mark.parametrize(
+    "label", ["daemon-unreachable", "daemon-refused", "config-error", "daemon-error"]
 )
 class TestOnlyWhatWasSavedIsPromised:
     def test_both_saved(self, label: str) -> None:

@@ -74,7 +74,7 @@ class TestSendRemember:
     @pytest.mark.parametrize(
         ("error", "label"),
         [
-            (ClientConfigError("bad QUARRY_URL"), "daemon-error"),
+            (ClientConfigError("bad QUARRY_URL"), "config-error"),
             (
                 QuarryConnectionError("refused", "http://127.0.0.1:8420"),
                 "daemon-unreachable",

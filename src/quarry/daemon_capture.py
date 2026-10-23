@@ -96,7 +96,7 @@ class DaemonCaptureSender:
         try:
             door(TargetResolver.connect())(timeout=_CAPTURE_SEND_TIMEOUT)
         except ClientConfigError as exc:
-            outcome = SendOutcome.error(f"daemon target misconfigured: {exc.message}")
+            outcome = SendOutcome.config(f"daemon target misconfigured: {exc.message}")
         except QuarryConnectionError:
             outcome = SendOutcome.unreachable(unreachable_log)
         except HttpError as exc:
