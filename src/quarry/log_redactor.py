@@ -33,9 +33,12 @@ class LogRedactor:
        :attr:`MAX_TOKEN` is replaced; a URL becomes its log form; a bare
        ``user:password@`` and a ``?query`` are masked.
 
-    Redacting a record twice gives the record redacted once, and a line holding
-    no URL, no ``user:password@`` and no ``?query`` comes back as it went in
-    (``tests/test_log_redactor_oracle.py`` checks both against generated text).
+    Steps 2 to 4 repeat until a pass changes nothing (the mask one pass leaves can
+    read differently to the next), so redacting a record twice gives the record
+    redacted once.  A line with no control character, no ``scheme://``, no
+    ``user:password@``, no ``?query`` and no token over :attr:`MAX_TOKEN` comes back
+    as it went in; both claims are checked against generated text in
+    ``tests/test_log_redactor_oracle.py``.
 
     It runs under the handler lock and holds the GIL, so its cost must be linear
     in the record: every pattern is bounded, a token is worked once, and a
@@ -46,6 +49,7 @@ class LogRedactor:
 
     MAX_TOKEN: ClassVar[int] = 2048
     MAX_RECORD: ClassVar[int] = 64 * 1024
+    _PASSES: ClassVar[int] = 4
 
     _TOKEN: ClassVar[re.Pattern[str]] = re.compile(r"\S+")
     # The authority's userinfo runs to its last "@" before the first "/", "?" or "#"
@@ -53,7 +57,7 @@ class LogRedactor:
     # ends a match early.  The host is the rest of the authority, and is shown only
     # if it is a plain host name or bracketed IP literal with a numeric port.
     _SCHEME_URL: ClassVar[re.Pattern[str]] = re.compile(
-        r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\-]{0,31})://"
+        r"(?P<scheme>[A-Za-z0-9+.\-]{1,2047})://"
         r"(?:[^\s/\\?#]*@)?(?P<host>[^\s/\\?#'\"<>@]*)"
         r"(?P<path>[^\s?#'\"<>]*)(?:[?#][^\s'\"<>]*)?"
     )
@@ -79,12 +83,25 @@ class LogRedactor:
         if len(text) > cls.MAX_RECORD:
             dropped = len(text[cls.MAX_RECORD :].encode("utf-8", errors="replace"))
             text, marker = text[: cls.MAX_RECORD], f" […truncated {dropped} bytes]"
-        # Escaped first, so the text every pass sees is the text that is written:
-        # a second redaction then finds nothing new.
+        # A mask can leave text the next pass reads differently (a placeholder
+        # beside a ``:`` or a ``/``), so the passes repeat until one changes
+        # nothing.  That is what makes redacting a second time a no-op.
+        for _ in range(cls._PASSES):
+            masked = cls._once(text)
+            if masked == text:
+                break
+            text = masked
+        return text + marker
+
+    @classmethod
+    def _once(cls, text: str) -> str:
+        """Return *text* through one pass: escapes, authorities, then each token."""
+        # Escaped first, so the text every later step sees is the text that is
+        # written.
         text = cls._CONTROL.sub(cls._escape, text)
         if ":" in text and "@" in text:
             text = AuthorityMask.mask(text)
-        return cls._TOKEN.sub(cls._token, text) + marker
+        return cls._TOKEN.sub(cls._token, text)
 
     @classmethod
     def one_line(cls, message: str) -> str:
@@ -131,16 +148,10 @@ class LogRedactor:
             return "[…]"
         if "://" in token:
             token = cls._SCHEME_URL.sub(cls._bare_url, token)
-        # A password may hold "?" and "#", so userinfo goes before the query.  The
-        # query mask can leave a new "user:…@" behind ("?[query]#@"), so userinfo
-        # goes once more after it: a second redaction then finds nothing.
+        # A password may hold "?" and "#", so userinfo goes before the query.
         if "@" in token:
             token = cls._USERINFO.sub("[userinfo]@", token)
-        if "?" in token:
-            token = cls._QUERY.sub("?[query]", token)
-            if "@" in token:
-                token = cls._USERINFO.sub("[userinfo]@", token)
-        return token
+        return cls._QUERY.sub("?[query]", token) if "?" in token else token
 
     @staticmethod
     def _escape(match: re.Match[str]) -> str:

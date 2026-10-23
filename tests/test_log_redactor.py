@@ -374,7 +374,7 @@ class TestWhitespaceInsideAUrl:
         # The path is not a credential.  It is dropped only while the URL is one
         # unbroken run: a line break ends the URL, and a break in the host leaves
         # the host and path as text of their own.
-        keeps_path = white in "\n\r" or where in ("after-at", "mid-host")
+        keeps_path = white in "\n\r" or where in ("after-at", "mid-host", "mid-user")
         secrets = ("SECRETPW", "SEC", "RETPW") + (() if keeps_path else ("SECRETPATH",))
         checked = shown.replace("SECRETPATH", "") if keeps_path else shown
         for secret in secrets:

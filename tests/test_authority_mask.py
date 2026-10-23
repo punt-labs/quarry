@@ -7,6 +7,7 @@ import time
 import pytest
 
 from quarry.authority_mask import AuthorityMask
+from quarry.log_redactor import LogRedactor
 
 
 class TestOpener:
@@ -134,3 +135,76 @@ class TestLinearTime:
         small = min(seconds(1000) for _ in range(3))
         large = min(seconds(4000) for _ in range(3))
         assert large < 8 * max(small, 1e-4)
+
+
+class TestAHostIsNeverJoinedToWhatFollowsIt:
+    """Nothing has userinfo shape yet, so a gap ends the authority (contract 4)."""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "x https://host.com foo:bar@baz.com",
+            "GET https://api.io a:b@c.io/x",
+            "see http://h.example mail alice@example.com now",
+            "https://us er:pw@host.example/p",
+        ],
+    )
+    def test_the_text_after_the_gap_is_left_to_the_scheme_less_pass(
+        self, text: str
+    ) -> None:
+        assert AuthorityMask.mask(text) == text
+
+    @pytest.mark.parametrize(
+        ("text", "kept"),
+        [
+            ("x https://host.com foo:bar@baz.com", "https://host.com/…(segments=0)"),
+            ("GET https://api.io a:b@c.io/x", "https://api.io/…(segments=0)"),
+        ],
+    )
+    def test_the_host_is_kept_and_the_separate_credential_masked(
+        self, text: str, kept: str
+    ) -> None:
+        shown = LogRedactor.redact(text)
+        assert kept in shown
+        assert "[userinfo]@" in shown
+        assert "foo:bar" not in shown
+        assert "a:b@" not in shown
+
+
+class TestADigitPasswordSplitAcrossAGap:
+    """``name:digits`` reads as host:port until a gap shows it is a password."""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "https://admin:12 34@h.example/x",
+            "https://admin:12\n34@h.example",
+            "https://admin:12\n34@h.example/x",
+            "https://admin:12\t34@h.example",
+        ],
+    )
+    def test_the_rest_of_the_digits_do_not_survive(self, text: str) -> None:
+        assert "34" not in LogRedactor.redact(text)
+
+    def test_a_host_with_a_port_is_still_not_joined_to_an_address(self) -> None:
+        text = "see http://h.example:8080 mail alice@example.com now"
+        assert AuthorityMask.mask(text) == text
+
+    def test_a_host_with_a_port_is_not_joined_to_a_digit_address_on_the_next_line(
+        self,
+    ) -> None:
+        text = "see http://h.example:8080\nalice@example.com wrote"
+        assert AuthorityMask.mask(text) == text
+
+
+class TestTheOpenerBoundary:
+    """The scheme is the run of scheme characters before ``:``, of any length."""
+
+    @pytest.mark.parametrize(
+        "scheme",
+        ["a" * 40, "a" * 33, "-http", "2http", "1.http", "+https", "x-y.z+1"],
+    )
+    def test_whatever_the_scheme_the_credential_is_masked(self, scheme: str) -> None:
+        shown = LogRedactor.redact(f"{scheme}://u:QQ RR@h/x")
+        assert "QQ" not in shown
+        assert "RR" not in shown

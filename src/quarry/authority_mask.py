@@ -5,8 +5,6 @@ from __future__ import annotations
 import re
 from typing import ClassVar, final
 
-_MASKED = "[userinfo]"
-
 
 @final
 class AuthorityMask:
@@ -16,28 +14,38 @@ class AuthorityMask:
     generated grammar:
 
     1. **Opener.**  A ``scheme:`` followed by two or more slashes opens an
-       authority.  Whitespace may sit between the scheme and the colon, and
-       between any two of those characters; a scheme of ``http``, ``https``,
+       authority; whitespace may sit between the slashes.  The scheme is the run
+       of scheme characters (letters, digits, ``+``, ``.``, ``-``) before the
+       colon, of any length up to the token cap, and starts where the character
+       before it is not a scheme character.  A scheme of ``http``, ``https``,
        ``ftp``, ``ftps``, ``ws`` or ``wss`` may also be broken by whitespace
-       between its letters.  Any other scheme is read unbroken, because joining
-       arbitrary letters would eat the last word of the previous line.
+       between its letters and before the colon; any other scheme is read
+       unbroken, because joining arbitrary letters would eat the last word of the
+       previous line.
     2. **Authority.**  The text after the slashes up to the next ``/``, ``\\``,
        ``?`` or ``#``, and never across a line break (``\\n`` or ``\\r``).
     3. **Mask.**  When the authority holds an ``@``, everything from the scheme
        up to the last ``@`` of the authority is replaced.  The host, path and
        the rest of the line are not touched here.
-    4. **Joining within a line.**  Whitespace is part of the userinfo only when
-       the text since the slashes has *userinfo shape* (it is not a plain host,
-       optionally with a numeric port) and holds no ``@`` yet.  A host-only URL
-       followed by a space and text containing an ``@`` is therefore not joined.
-       The authority ends at the first ``@`` of a whitespace-free run, so a
-       password holding both ``@`` and whitespace after the ``@`` is masked only
-       to the last ``@`` of that run.
+    4. **Joining within a line.**  A gap (whitespace) is crossed only when the text
+       since the slashes already has *userinfo shape*: it is not a plain host,
+       optionally with a numeric port.  Nothing else is ever joined, so a
+       host-only URL followed by a space and text containing an ``@`` keeps its
+       host, and the scheme-less pass masks a separate ``name:password@``.  One
+       exception: ``name:12`` followed by a gap and digits and ``@`` is one
+       password split in two.  The authority ends at the first ``@`` of a
+       whitespace-free run, so a password holding both ``@`` and whitespace after
+       the ``@`` is masked only to the last ``@`` of that run.
     5. **Across a line break.**  A line that ends inside an authority of
        userinfo shape (no ``/``, ``?``, ``#`` or ``@`` yet) is masked to its last
        authority character, and marks the next line's first whitespace-free
        token as its continuation: that token alone is masked, up to its last
-       ``@`` before a ``/``, ``?`` or ``#``.
+       ``@`` before a ``/``, ``?`` or ``#``.  A line that ends inside a plain
+       host (or ``name:12``) is only a candidate: it is masked, too, if the next
+       line's first token is not an address (or is digits and ``@`` after
+       ``name:12``).  A gap the contract does not cross is a limit: a user with no
+       ``:`` cut by a gap, a credential cut by two line breaks, and a ``?``,
+       ``#`` or ``\\`` in a URL's password (each ends the authority).
     6. **Preservation.**  Every character outside a masked span is kept exactly.
        No line is deleted or merged, and no host is re-attributed.
 
@@ -47,9 +55,9 @@ class AuthorityMask:
 
     __slots__ = ()
 
-    # Nothing but this very mask (and its @ separators), left by an earlier pass.
-    _TRAIL: ClassVar[re.Pattern[str]] = re.compile(rf"(?:{re.escape(_MASKED)}@+)+\Z")
-    _DONE: ClassVar[re.Pattern[str]] = re.compile(rf"(?:{re.escape(_MASKED)}@*)+")
+    # ``name:12``, which a gap may show is the start of a password, not host:port.
+    _PORTLIKE: ClassVar[re.Pattern[str]] = re.compile(r"[^:@]+:\d{1,5}")
+    _DIGITS_AT: ClassVar[re.Pattern[str]] = re.compile(r"\d+@")
     _EOL: ClassVar[int] = -1
     _STOPPED: ClassVar[int] = -2
 
@@ -84,9 +92,9 @@ class AuthorityMask:
     _LINE: ClassVar[re.Pattern[str]] = re.compile(r"[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+")
     _OPENER: ClassVar[re.Pattern[str]] = re.compile(
         rf"{_BOUNDARY}(?P<scheme>"
-        rf"(?i:h{_SP}t{_SP}t{_SP}p(?:{_SP}s)?|f{_SP}t{_SP}p(?:{_SP}s)?|w{_SP}s(?:{_SP}s)?)"
-        r"|[A-Za-z][A-Za-z0-9+.\-]{0,31})"
-        rf"{_SP}:{_SP}(?:/{_SP}){{2,}}"
+        rf"(?:(?i:h{_SP}t{_SP}t{_SP}p(?:{_SP}s)?|f{_SP}t{_SP}p(?:{_SP}s)?"
+        rf"|w{_SP}s(?:{_SP}s)?){_SP}|[A-Za-z0-9+.\-]{{1,2047}})"
+        rf"):{_SP}(?:/{_SP}){{2,}}"
     )
     _ATOM: ClassVar[re.Pattern[str]] = re.compile(
         rf"(?:(?!{_WS_ESC})\\(?:x[0-9a-f]{{2}}|u[0-9a-f]{{4}})|[^\s/\\?#])*"
@@ -106,10 +114,10 @@ class AuthorityMask:
         open_as, span = "", (0, 0)
         for line in cls._LINE.finditer(text):
             cont = cls._continuation(line.group(), open_as) if open_as else (0, 0)
-            if cont[1] and open_as == "host":
+            if cont[1] and open_as != "userinfo":
                 # The line before was only a candidate; now it is known to hold
                 # the start of the userinfo.
-                out[-1] = out[-1][: span[0]] + _MASKED + out[-1][span[1] :]
+                out[-1] = out[-1][: span[0]] + "[userinfo]" + out[-1][span[1] :]
             masked, open_as, span = cls._mask_line(line.group(), cont)
             out.append(masked)
         return "".join(out)
@@ -121,22 +129,24 @@ class AuthorityMask:
         """Return *line* masked, how it ends, and the span of an open host.
 
         It ends ``""`` (closed), ``"userinfo"`` (inside an authority that already
-        has userinfo shape, masked to its end) or ``"host"`` (inside one that has
-        not, left as it is, with its span in the returned text).
+        has userinfo shape, masked to its end), or ``"host"`` or ``"port"`` (inside
+        one that has not, left as it is, with its span in the returned text).
         """
         parts: list[str] = []
         kept = search = 0
         if cont[1]:
-            parts.append(line[: cont[0]] + f"{_MASKED}@")
+            parts.append(line[: cont[0]] + "[userinfo]@")
             kept = search = cont[1]
         ends, span = "", (0, 0)
         while opener := cls._OPENER.search(line, search):
             end, ends = cls._scan(line, opener.end())
+            if end == opener.end() and ends and cls._GAP.search(opener.group()):
+                ends = "host"  # ``w: //`` then nothing: prose, not a bare authority
             span = (opener.end(), end)
-            if end and ends != "host":
+            if end and ends not in {"host", "port"}:
                 scheme = cls._WHITESPACE.sub("", opener.group("scheme"))
                 at = "" if ends else "@"
-                parts.append(line[kept : opener.start()] + f"{scheme}://{_MASKED}{at}")
+                parts.append(line[kept : opener.start()] + f"{scheme}://[userinfo]{at}")
                 kept = search = end
             else:
                 search = opener.end()
@@ -159,7 +169,9 @@ class AuthorityMask:
         if "@" not in text:
             return 0, 0
         at = text.rindex("@")
-        if open_as == "host" and cls._is_email(text, at, line, start):
+        if open_as == "port" and cls._DIGITS_AT.match(text):
+            return start, start + at + 1
+        if open_as != "userinfo" and cls._is_email(text, at, line, start):
             return 0, 0
         return start, start + at + 1
 
@@ -192,7 +204,7 @@ class AuthorityMask:
         scan goes on to a later ``@`` in the same run of text.
         """
         pos, best = start, 0
-        shaped, seen = False, False
+        shaped = False
         while True:
             atom = cls._atom(line, pos)
             text = atom.group()
@@ -204,13 +216,16 @@ class AuthorityMask:
                 if ends:
                     return best, ""
             else:
-                seen = seen or bool(text)
                 shaped = shaped or cls._is_userinfo(text)
             nxt = cls._next(line, atom.end())
             if nxt == cls._EOL:
-                # An authority with nothing in it yet has no host to be only a host.
-                return atom.end(), ("userinfo" if shaped or not seen else "host")
+                return atom.end(), cls._open_as(text, shaped=shaped)
             if nxt == cls._STOPPED:
+                return best, ""
+            # Contract 4: no gap is crossed until the text is shaped, unless the next
+            # run finishes a password that began as ``name:12``.
+            shaped = shaped or cls._splits_port(text, cls._atom(line, nxt).group())
+            if not shaped:
                 return best, ""
             pos = nxt
 
@@ -223,17 +238,25 @@ class AuthorityMask:
         The second value is true when the authority ends there.  A part after the
         ``@`` that is not a host is still userinfo (``u@x: pw@host``).
         """
-        text = cls._TRAIL.sub("", text)  # masks an earlier pass left on the end
-        if "@" not in text:
-            return 0, True
         at = text.rindex("@")
-        if cls._DONE.fullmatch(text[:at]):
-            return 0, True  # this very mask, left by an earlier pass
         tail = text[at + 1 :]
         ends = not tail or bool(cls.HOST.fullmatch(tail))
         if ends and not shaped and cls._is_email(text, at, line, pos):
             return 0, True
         return pos + at + 1, ends
+
+    @classmethod
+    def _open_as(cls, text: str, *, shaped: bool) -> str:
+        """Return how a line ends inside an authority whose last run is *text*."""
+        # An authority with nothing in it yet has no host to be only a host.
+        if shaped or not text:
+            return "userinfo"
+        return "port" if cls._PORTLIKE.fullmatch(text) else "host"
+
+    @classmethod
+    def _splits_port(cls, text: str, following: str) -> bool:
+        """Return whether ``name:12`` and ``34@`` are one password split by a gap."""
+        return bool(cls._PORTLIKE.fullmatch(text) and cls._DIGITS_AT.match(following))
 
     @classmethod
     def _is_userinfo(cls, text: str) -> bool:

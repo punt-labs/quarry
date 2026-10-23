@@ -20,9 +20,24 @@ _MARKER_CHARS = "QXZJ"
 # Every whitespace character urlsplit or a log reader may put inside a URL, except
 # the newlines, which the grammar places explicitly.
 _HSPACE = (" ", "\t", "\x0b", "\x0c", "\x1c", "\x85", "\xa0", "\u2003", "\u2028")
-_SCHEMES = ("http", "https", "ftp", "ws", "wss", "s3", "git+ssh")
+_SCHEMES = (
+    "http",
+    "https",
+    "ftp",
+    "ws",
+    "wss",
+    "s3",
+    "git+ssh",
+    "2http",
+    "-x",
+    "a" * 40,
+)
 _SEPARATORS = ("://", ":///", ":/ /", ": //", ":\t//", ":// ", ":\xa0//\xa0")
 _HOSTS = ("h.example", "h.example:8080", "[::1]:80", "h")
+_any_host = st.one_of(
+    st.sampled_from(_HOSTS),
+    st.text(alphabet="abcdefghij0123456789.-", min_size=1, max_size=12),
+)
 _TAILS = ("", "/", "/p/q", "/p?x=1#f", "?x=1", "#f")
 _PREFIXES = ("", "GET ", "see ", "(", "url=", '"')
 _SUFFIXES = ("", " ok", ")", ",", ".", '"')
@@ -37,9 +52,14 @@ _PROSE_LINES = (
 )
 
 _word = st.text(alphabet="abcdefghijklmnopqrstuvwxyz0123456789", min_size=1, max_size=8)
+# Words and the punctuation that is not yet a URL when it stands alone.
+_prose_token = st.one_of(
+    _word, st.sampled_from([":", "@", "?", "://", "\\", "(", ")", "w:"])
+)
 _prose = st.one_of(
     st.sampled_from(_PROSE_LINES),
     st.lists(_word, min_size=1, max_size=6).map(" ".join),
+    st.lists(_prose_token, min_size=1, max_size=8).map(" ".join),
 )
 _hspace = st.sampled_from(_HSPACE)
 _secret = st.text(alphabet=_MARKER_CHARS, min_size=1, max_size=6)
@@ -51,10 +71,27 @@ _long = st.tuples(
 _password = st.one_of(_spaced, _long)
 
 
+# What the contract does not promise, so the generator never draws it:
+#   (a) a user with no ``:`` broken by a gap, which cannot be told from a host-only
+#       URL followed by an address;
+#   (b) a credential broken by two line breaks (a continuation is a single hop);
+#   (c) a password with ``@`` and then whitespace;
+#   (d) ``?``, ``#`` or a backslash in a URL's password: each ends the authority,
+#       so what precedes it is the host, and a quote after it ends the URL.
+_punctuated = st.text(alphabet=_MARKER_CHARS + "@:'[]%", min_size=1, max_size=8).filter(
+    lambda text: any(c in _MARKER_CHARS for c in text)
+)
+
+
+_plain_user = st.sampled_from(["bob", "u", "a.b", "admin", "x%40y"])
+
+
 @st.composite
 def _userinfo(draw: st.DrawFn) -> str:
-    """Return ``user:password`` whose user already has a non-host character."""
-    return "Q_" + draw(_spaced) + ":" + draw(_password)
+    """Return ``user:password``: shaped by a ``_``, or by the ``:`` after a name."""
+    if draw(st.booleans()):
+        return "Q_" + draw(_spaced) + ":" + draw(_password)
+    return draw(_plain_user) + ":" + draw(_punctuated)
 
 
 @st.composite
@@ -62,7 +99,7 @@ def _secret_url(draw: st.DrawFn) -> str:
     sep = draw(st.sampled_from(_SEPARATORS))
     url = (
         f"{draw(st.sampled_from(_SCHEMES))}{sep}{draw(_userinfo())}"
-        f"@{draw(st.sampled_from(_HOSTS))}{draw(st.sampled_from(_TAILS))}"
+        f"@{draw(_any_host)}{draw(st.sampled_from(_TAILS))}"
     )
     return draw(st.sampled_from(_PREFIXES)) + url + draw(st.sampled_from(_SUFFIXES))
 
@@ -72,8 +109,19 @@ def _split_url(draw: st.DrawFn) -> str:
     """Return two lines: a URL cut inside its userinfo, then the rest of it."""
     scheme = draw(st.sampled_from(_SCHEMES))
     head = f"{draw(st.sampled_from(_PREFIXES))}{scheme}://Q_{draw(_spaced)}:{draw(_secret)}"
-    tail = f"{draw(st.sampled_from(('', ' ', '\t')))}{draw(_secret)}@h.example/p rest"
-    return head + "\n" + tail
+    lead = draw(st.sampled_from(("", " ", "\t", "  ")))
+    tail = f"{lead}{draw(_secret)}@h.example/p rest"
+    return head + draw(st.sampled_from(("\n", "\r\n", "\r"))) + tail
+
+
+@st.composite
+def _two_urls(draw: st.DrawFn) -> str:
+    """Return two credentialed URLs on one line."""
+    return (
+        draw(_secret_url())
+        + draw(st.sampled_from((" ", ", ", " and ")))
+        + draw(_secret_url())
+    )
 
 
 @st.composite
@@ -87,8 +135,8 @@ def _host_only(draw: st.DrawFn) -> str:
 @st.composite
 def _bare_userinfo(draw: st.DrawFn) -> str:
     """Return ``user:password@host`` with no scheme; the password may hold ``?#``."""
-    password = draw(st.text(alphabet=_MARKER_CHARS + "?#", min_size=1, max_size=8))
-    return f"{draw(_word)}:{password}@{draw(st.sampled_from(_HOSTS))}"
+    password = draw(st.text(alphabet=_MARKER_CHARS + "?#\\", min_size=1, max_size=8))
+    return f"{draw(_word)}:{password}@{draw(_any_host)}"
 
 
 _lines = st.lists(
@@ -96,6 +144,7 @@ _lines = st.lists(
         _prose.map(lambda s: (False, s)),
         _secret_url().map(lambda s: (True, s)),
         _split_url().map(lambda s: (True, s)),
+        _two_urls().map(lambda s: (True, s)),
         _bare_userinfo().map(lambda s: (True, s)),
         _host_only().map(lambda s: (False, s)),
     ),
@@ -168,6 +217,16 @@ _PROOFS = (
     "https://u:Q\n@h.example/p",
     "https://u:Q\r\nX@h.example/p",
     "https://\nu:Q@h.example/p",
+    "https://admin:Q X@h.example/x",
+    "-http://u:Q Q@h/x",
+    "2http://u:Q Q@h/x",
+    "1.http://u:Q Q@h/x",
+    "+https://u:Q Q@h/x",
+    "a" * 40 + "://u:Q Q@h/x",
+    "x https://host.com foo:Q@baz.com",
+    "GET https://api.io a:Q@c.io/x",
+    "admin:Q?X@db.internal",
+    "admin:Q#X@db",
 )
 
 
