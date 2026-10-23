@@ -51,14 +51,17 @@ class IngestLabels:
             summary=self.summary,
         )
 
-    def holds(self, ctx: DaemonContext, name: str) -> bool:
+    def holds(self, ctx: DaemonContext, name: str, *, url_sourced: bool) -> bool:
         """Return whether the target collection holds a document called *name*.
 
-        A document an older build stored under a former spelling of the same URL
-        counts, so every "already stored" decision agrees with the one the funnel
-        makes when it replaces.
+        For a page fetched from a URL, a document an older build stored under a
+        former spelling of the same URL counts, so the decision agrees with the one
+        the funnel makes when it replaces.  A name someone chose (``remember``,
+        ``learn``) is a label: only that exact name counts.
         """
-        return LegacyUrlNames(ctx.database).exists(name, self.collection)
+        if url_sourced:
+            return LegacyUrlNames(ctx.database).exists(name, self.collection)
+        return ctx.database.catalog.document_exists(name, self.collection)
 
 
 @final

@@ -401,6 +401,23 @@ class TestEveryDedupPathAgrees:
         assert result["skipped"] == "exists"
         assert _names(db) == {"https://example.com/café"}
 
+    def test_a_remembered_label_is_not_skipped_for_a_legacy_named_page(
+        self, db: Database
+    ) -> None:
+        _store_as_stored_by_an_older_build(db, "https://example.com/café")
+        ctx = cast("DaemonContext", SimpleNamespace(database=db, settings=Settings()))
+        job = ScrubbedIngestJob(
+            name="https://example.com/caf%C3%A9",
+            content="a note that happens to be named with a url",
+            labels=self._job("x").labels,
+            format_hint="auto",
+            scrub_label="remember",
+        )
+        with patched_embedder(FakeEmbeddingBackend(768)):
+            result = job.scrub_and_ingest(ctx)
+        assert result.get("skipped") is None
+        assert result["chunks"]
+
     def test_a_create_if_absent_capture_of_a_new_page_stores_it(
         self, db: Database
     ) -> None:
