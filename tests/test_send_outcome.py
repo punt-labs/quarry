@@ -62,29 +62,46 @@ def test_a_hook_side_config_failure_has_its_own_label() -> None:
     assert outcome.label == "config-error"
 
 
-@pytest.mark.parametrize(
-    "label", ["daemon-unreachable", "daemon-refused", "config-error", "daemon-error"]
-)
-class TestOnlyWhatWasSavedIsPromised:
+_ALL = ["daemon-unreachable", "daemon-refused", "config-error", "daemon-error"]
+_RECOVERABLE = [label for label in _ALL if label != "daemon-refused"]
+
+
+@pytest.mark.parametrize("label", _ALL)
+class TestTheArchiveIsDescribedSeparately:
     def test_both_saved(self, label: str) -> None:
         message = SendOutcome.advice(label, archived=True, written=True)
-        assert "The raw JSONL archive and scrubbed capture are saved" in message
+        assert (
+            "A durable copy of the transcript and the scrubbed capture were saved"
+            in message
+        )
 
     def test_only_the_archive_saved(self, label: str) -> None:
         message = SendOutcome.advice(label, archived=True, written=False)
-        assert "The raw JSONL archive is saved" in message
+        assert "A durable copy of the transcript was saved" in message
         assert "scrubbed capture" not in message
 
-    def test_a_failed_archive_is_said_plainly_and_backfill_is_not_suggested(
-        self, label: str
-    ) -> None:
+    def test_a_failed_archive_is_said_plainly(self, label: str) -> None:
         message = SendOutcome.advice(label, archived=False, written=True)
-        assert "the session transcript could not be archived; see quarry.log" in message
-        assert "backfill" not in message
-        assert "archive and" not in message
+        assert "could not be archived; see quarry.log" in message
+        assert "durable copy" not in message
 
     def test_nothing_saved(self, label: str) -> None:
         message = SendOutcome.advice(label, archived=False, written=False)
-        assert "the session transcript could not be archived; see quarry.log" in message
-        assert "saved" not in message.replace("could not be archived", "")
-        assert "backfill" not in message
+        assert "could not be archived; see quarry.log" in message
+        assert "saved" not in message
+
+
+@pytest.mark.parametrize("label", _RECOVERABLE)
+@pytest.mark.parametrize("archived", [True, False], ids=["archived", "not-archived"])
+def test_backfill_reads_claude_codes_transcripts_so_it_is_offered_either_way(
+    label: str, *, archived: bool
+) -> None:
+    message = SendOutcome.advice(label, archived=archived, written=False)
+    assert "quarry backfill-sessions" in message
+    assert "to index this session" in message
+
+
+@pytest.mark.parametrize("archived", [True, False])
+def test_a_refused_capture_is_never_told_to_backfill(*, archived: bool) -> None:
+    message = SendOutcome.advice("daemon-refused", archived=archived, written=True)
+    assert "backfill" not in message

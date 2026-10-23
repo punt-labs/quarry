@@ -32,19 +32,19 @@ class SendOutcome:
     _ADVICE: ClassVar[dict[str, tuple[str, str]]] = {
         _UNREACHABLE: (
             "quarryd is not reachable, so this session was not indexed now",
-            "; run 'quarry backfill-sessions' to index them later",
+            "; run 'quarry backfill-sessions' to index this session",
         ),
         _REFUSED: ("the daemon refused the capture; see quarry.log", ""),
         _CONFIG: (
             "the daemon target is misconfigured",
             (
                 "; check QUARRY_URL / quarry login; then run "
-                "'quarry backfill-sessions' to index them"
+                "'quarry backfill-sessions' to index this session"
             ),
         ),
         _ERROR: (
             "the daemon failed; see quarryd.log or quarry doctor",
-            "; run 'quarry backfill-sessions' to index them once it recovers",
+            "; run 'quarry backfill-sessions' to index this session once it recovers",
         ),
     }
 
@@ -55,19 +55,25 @@ class SendOutcome:
     def advice(cls, label: str, *, archived: bool, written: bool) -> str:
         """Return the warning for a capture whose send failed with *label*.
 
-        The one mapping from a failure to what the user is told, and it promises
-        only what landed: *archived* is whether the raw transcript was archived
-        and *written* whether the scrubbed capture file was.  Each failure names
-        where to look, and every one that a later backfill can recover says so
-        (a daemon that refused the capture will refuse a backfill too).
+        The one mapping from a failure to what the user is told.  The local copies
+        are described on their own and promise only what landed: *archived* is
+        whether the raw transcript was archived and *written* whether the scrubbed
+        capture file was.  Backfill reads Claude Code's own transcripts, not that
+        archive, so it is offered for every failure it can recover, archived or
+        not; a daemon that refused the capture will refuse a backfill too.
         """
         what, remedy = cls._ADVICE.get(label, cls._ADVICE[_ERROR])
-        if not archived:
-            lost = "the session transcript could not be archived; see quarry.log"
-            kept = " The scrubbed capture is saved." if written else ""
-            return f"Warning: {what}, and {lost}.{kept}"
-        saved = "archive and scrubbed capture are" if written else "archive is"
-        return f"Warning: {what}. The raw JSONL {saved} saved{remedy}."
+        if archived:
+            copies = (
+                "the transcript and the scrubbed capture were"
+                if written
+                else ("the transcript was")
+            )
+            kept = f"A durable copy of {copies} saved"
+        else:
+            kept = "The session transcript could not be archived; see quarry.log"
+            kept += ". The scrubbed capture was saved" if written else ""
+        return f"Warning: {what}. {kept}{remedy}."
 
     def named(self, done: str, attempt: str) -> str:
         """Return *done* when the send landed, else ``<attempt>-<label>``.

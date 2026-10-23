@@ -304,9 +304,9 @@ def _pre_compact_with(
 def test_a_failed_archive_is_not_reported_as_saved(tmp_path: Path) -> None:
     result = _pre_compact_with(tmp_path, archive_fails=True, cwd=str(tmp_path))
     message = str(result["systemMessage"])
-    assert "the session transcript could not be archived; see quarry.log" in message
-    assert "backfill" not in message
-    assert "JSONL archive" not in message
+    assert "could not be archived; see quarry.log" in message
+    assert "quarry backfill-sessions" in message  # backfill reads Claude Code's files
+    assert "durable copy" not in message
 
 
 def test_an_archive_without_a_local_capture_promises_only_the_archive(
@@ -314,7 +314,7 @@ def test_an_archive_without_a_local_capture_promises_only_the_archive(
 ) -> None:
     result = _pre_compact_with(tmp_path, archive_fails=False, cwd="")
     message = str(result["systemMessage"])
-    assert "The raw JSONL archive is saved" in message
+    assert "A durable copy of the transcript was saved" in message
     assert "scrubbed capture" not in message
 
 
