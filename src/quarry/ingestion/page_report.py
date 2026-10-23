@@ -27,8 +27,9 @@ class PageReport:
     fetch) and otherwise ``internal error: <Class>``, because other messages quote
     the raw URL.  An expected failure (a refusal, a transport or protocol error, a
     row-budget violation) is a WARNING; anything else is a programming error and
-    is logged at ERROR with a message-free traceback so it stays diagnosable
-    without the URL.
+    is logged at ERROR.  A refusal is one line; any other failure also logs its
+    message-free frames, and an ``OSError`` its errno and strerror (never its
+    filename), so a fault stays diagnosable without the URL.
     """
 
     __slots__ = ("_url",)
@@ -48,16 +49,30 @@ class PageReport:
     def failure(self, exc: Exception) -> str:
         """Log *exc* for this page and return its ``"<url>: <reason>"`` line."""
         reason = FailureReason.of(exc)
-        if isinstance(exc, RefusalError | OSError | HTTPException):
+        if isinstance(exc, RefusalError):
             logger.warning("Failed to ingest %s (%s)", self._url, reason)
         else:
-            logger.error(
-                "Failed to ingest %s (%s):\n%s",
+            level = (
+                logging.WARNING
+                if isinstance(exc, OSError | HTTPException)
+                else logging.ERROR
+            )
+            logger.log(
+                level,
+                "Failed to ingest %s (%s)%s:\n%s",
                 self._url,
                 reason,
+                self._os_detail(exc),
                 FailureReason.frames(exc),
             )
         return f"{self._url}: {reason}"
+
+    @staticmethod
+    def _os_detail(exc: Exception) -> str:
+        """Return an :class:`OSError`'s errno and strerror, never its filename."""
+        if isinstance(exc, OSError):
+            return f" [errno={exc.errno} {exc.strerror}]"
+        return ""
 
     @staticmethod
     def require_progress(ingested: int, failed: int, reasons: list[str]) -> None:

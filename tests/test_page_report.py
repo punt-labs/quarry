@@ -33,6 +33,7 @@ class TestFailure:
         [record] = caplog.records
         assert record.levelno == logging.WARNING
         assert record.exc_info is None
+        assert "File " not in record.getMessage()
 
     def test_a_row_budget_violation_is_a_refusal_with_its_reason(
         self, caplog: pytest.LogCaptureFixture
@@ -42,6 +43,36 @@ class TestFailure:
             text = PageReport(HttpUrl(_URL)).failure(RowBudgetError(reason))
         assert text == f"https://example.com/…(segments=1): {reason}"
         assert caplog.records[0].levelno == logging.WARNING
+
+    def test_an_os_error_logs_its_errno_strerror_and_frames_but_not_the_filename(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        args = (2, "No such file or directory", "/home/me/key.pem")
+        try:
+            raise FileNotFoundError(*args)
+        except FileNotFoundError as exc:
+            with caplog.at_level(logging.WARNING):
+                PageReport(HttpUrl(_URL)).failure(exc)
+        [record] = caplog.records
+        assert record.levelno == logging.WARNING
+        message = record.getMessage()
+        assert "errno=2" in message
+        assert "No such file or directory" in message
+        assert "test_page_report" in message
+        assert "/home/me/key.pem" not in caplog.text
+
+    def test_a_transport_error_logs_its_frames(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        line = "token=1"
+        try:
+            raise BadStatusLine(line)
+        except BadStatusLine as exc:
+            with caplog.at_level(logging.WARNING):
+                PageReport(HttpUrl(_URL)).failure(exc)
+        [record] = caplog.records
+        assert "test_page_report" in record.getMessage()
+        assert "token" not in caplog.text
 
     @pytest.mark.parametrize(
         "exc",
