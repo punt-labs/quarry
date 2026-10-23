@@ -9,6 +9,7 @@ from quarry.capture_marker import CaptureMarker
 from quarry.content_guard import UnindexableContentError
 from quarry.ingestion import ingest_context, web_ingest
 from quarry.ingestion.ingest_context import IngestContext, MemoryType
+from quarry.ingestion.legacy_url_names import LegacyUrlNames
 from quarry.ingestion.web_fetch import WebFetcher
 from quarry.scrub import scrub_and_log
 
@@ -49,6 +50,15 @@ class IngestLabels:
             memory_type=self.memory_type,
             summary=self.summary,
         )
+
+    def holds(self, ctx: DaemonContext, name: str) -> bool:
+        """Return whether the target collection holds a document called *name*.
+
+        A document an older build stored under a former spelling of the same URL
+        counts, so every "already stored" decision agrees with the one the funnel
+        makes when it replaces.
+        """
+        return LegacyUrlNames(ctx.database).exists(name, self.collection)
 
 
 @final

@@ -107,11 +107,21 @@ class LegacyUrlNames:
             return collection, ""
         return collection, f"{parts.scheme}://{parts.netloc}".lower()
 
+    def stored_as(self, name: str, collection: str) -> str | None:
+        """Return the name *name* is stored under in *collection*, or ``None``.
+
+        That is *name* itself when it is stored, else the first legacy spelling of
+        it.  A caller that hands the name on (for ``show``, say) must hand on this
+        one: the legacy spelling is the only name the store knows.
+        """
+        if self._database.catalog.document_exists(name, collection):
+            return name
+        legacy = self.aliases(name, collection)
+        return legacy[0] if legacy else None
+
     def exists(self, name: str, collection: str) -> bool:
         """Return whether *name*, or a legacy spelling of it, is stored."""
-        return self._database.catalog.document_exists(name, collection) or bool(
-            self.aliases(name, collection)
-        )
+        return self.stored_as(name, collection) is not None
 
     def replaced(self, name: str, collection: str) -> list[str]:
         """Return the legacy spellings of *name* an overwrite replaces, logging each."""

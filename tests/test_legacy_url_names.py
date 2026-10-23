@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
 from quarry.config import Settings
+from quarry.daemon.captured_body_ingest import IngestLabels
+from quarry.daemon.content_jobs import ScrubbedIngestJob
 from quarry.db import Database
 from quarry.ingestion.ingest_context import IngestContext, Progress
 from quarry.ingestion.legacy_url_names import LegacyUrlNames
@@ -26,6 +29,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
 
+    from quarry.daemon.context import DaemonContext
     from quarry.results import IngestResult
 
 _COLLECTION = "c"
@@ -310,3 +314,59 @@ class TestOneListingPerHost:
         names = LegacyUrlNames(db)
         names.stored("https://example.com/new", _COLLECTION)
         assert names.aliases("https://example.com/new", _COLLECTION) == []
+
+
+class TestEveryDedupPathAgrees:
+    """What "already stored" means is decided in one place: the legacy-aware one."""
+
+    @staticmethod
+    def _job(name: str) -> ScrubbedIngestJob:
+        return ScrubbedIngestJob(
+            name=name,
+            content="<html><body><p>captured text</p></body></html>",
+            labels=IngestLabels(
+                overwrite=False,
+                collection=_COLLECTION,
+                agent_handle="",
+                memory_type="",
+                summary="",
+            ),
+            format_hint="html",
+            scrub_label="web-fetch",
+        )
+
+    def test_a_create_if_absent_capture_skips_a_legacy_named_document(
+        self, db: Database
+    ) -> None:
+        _store_as_stored_by_an_older_build(db, "https://example.com/café")
+        ctx = cast("DaemonContext", SimpleNamespace(database=db, settings=Settings()))
+        result = self._job("https://example.com/caf%C3%A9").scrub_and_ingest(ctx)
+        assert result["skipped"] == "exists"
+        assert _names(db) == {"https://example.com/café"}
+
+    def test_a_create_if_absent_capture_of_a_new_page_stores_it(
+        self, db: Database
+    ) -> None:
+        ctx = cast("DaemonContext", SimpleNamespace(database=db, settings=Settings()))
+        with patched_embedder(FakeEmbeddingBackend(768)):
+            result = self._job("https://example.com/new").scrub_and_ingest(ctx)
+        assert result["chunks"]
+
+    def test_the_lookup_names_the_document_as_it_is_stored(self, db: Database) -> None:
+        _store_as_stored_by_an_older_build(db, "https://example.com/café")
+        names = LegacyUrlNames(db)
+        stored = names.stored_as("https://example.com/caf%C3%A9", _COLLECTION)
+        assert stored == "https://example.com/café"
+        assert db.catalog.document_exists(stored, _COLLECTION)
+
+    def test_a_name_stored_as_itself_is_returned_as_it_is(self, db: Database) -> None:
+        _store_as_stored_by_an_older_build(db, "https://example.com/page")
+        names = LegacyUrlNames(db)
+        assert names.stored_as("https://example.com/page", _COLLECTION) == (
+            "https://example.com/page"
+        )
+
+    def test_a_name_that_is_not_stored_is_none(self, db: Database) -> None:
+        assert (
+            LegacyUrlNames(db).stored_as("https://example.com/x", _COLLECTION) is None
+        )

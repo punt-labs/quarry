@@ -1527,9 +1527,11 @@ class TestCapturesLookup:
                 json={"url": "https://example.com/docs?utm=1", "cwd": "/repo"},
             ).json()
 
+        # The document is named as it is stored: the legacy spelling is the only
+        # name ``show`` can find it under.
         assert data == {
             "matched": True,
-            "document_name": with_query("https://example.com/docs", "utm=1"),
+            "document_name": "https://example.com/docs?utm=1",
         }
 
     @pytest.mark.parametrize(
@@ -1666,6 +1668,36 @@ class TestCapturesLookup:
 
         assert data == {"matched": True, "document_name": stored_name}
         assert other == {"matched": False, "document_name": None}
+
+    def test_end_to_end_names_a_legacy_document_as_it_is_stored(
+        self, tmp_path: Path
+    ) -> None:
+        """The name the lookup returns is one ``show`` can find in the store."""
+        from quarry.db import ChunkStore
+        from quarry.db.storage import get_db
+        from tests.test_database import _make_chunk, _random_vectors
+
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        db = get_db(settings.lancedb_path)
+        legacy = "https://example.com/guide?ref=old"
+        ChunkStore(db).insert(
+            [_make_chunk(document_name=legacy, collection="default-captures")],
+            _random_vectors(1),
+        )
+        app = build_app(ctx)
+
+        with TestClient(app, raise_server_exceptions=False) as tc:
+            data = tc.post(
+                "/v1/captures/lookup",
+                json={"url": "https://example.com/guide?ref=old"},
+            ).json()
+
+        assert data == {"matched": True, "document_name": legacy}
+        assert ctx.database.catalog.document_exists(
+            data["document_name"], "default-captures"
+        )
 
 
 class TestDeleteDocuments:

@@ -134,9 +134,7 @@ class ScrubbedIngestJob:
 
     def _already_stored(self, ctx: DaemonContext) -> bool:
         """Return whether the collection already holds a document of this name."""
-        return ctx.database.catalog.document_exists(
-            self._scrubbed(self.name), self.collection
-        )
+        return self.labels.holds(ctx, self._scrubbed(self.name))
 
 
 @dataclass(frozen=True, slots=True)
