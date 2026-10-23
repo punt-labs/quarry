@@ -17,8 +17,15 @@ from typer.testing import CliRunner
 from quarry.__main__ import app
 from quarry._hook_trace import HookPayload
 from quarry._stdlib import HookConfig, load_hook_config, read_hook_stdin
+from quarry.client import (
+    ClientConfigError,
+    HttpError,
+    QuarryConnectionError,
+    QuarryError,
+)
 from quarry.enabled_marker import EnabledMarker
 from quarry.hooks import (
+    _SessionStartContext,
     handle_post_web_fetch,
     handle_pre_compact,
     handle_session_start,
@@ -2337,3 +2344,32 @@ class TestCwdHardeningPreCompact:
         write_local.assert_not_called()
         ethos.assert_not_called()
         assert cap.call_args[0][0].cwd == ""
+
+
+class TestSessionCoverageFailure:
+    """A coverage lookup that fails is logged by class and falls back to None (X1)."""
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            QuarryConnectionError("refused https://u:SECRET@h:1/", "http://h:1"),
+            HttpError("unauthorized https://u:SECRET@h/", 401, ""),
+            ClientConfigError("bad QUARRY_URL https://u:SECRET@h/"),
+        ],
+        ids=["connection", "http", "config"],
+    )
+    def test_the_failure_is_logged_with_its_class_and_none_is_returned(
+        self, error: QuarryError, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        client = MagicMock()
+        client.coverage.side_effect = error
+        with (
+            patch("quarry.client.TargetResolver.connect", return_value=client),
+            caplog.at_level(logging.WARNING, logger="quarry.hooks"),
+        ):
+            counts = _SessionStartContext._session_coverage("repo", "repo-captures")
+        assert counts is None
+        [record] = caplog.records
+        assert record.levelno == logging.WARNING
+        assert type(error).__name__ in record.getMessage()
+        assert "SECRET" not in caplog.text

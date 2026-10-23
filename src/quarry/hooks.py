@@ -294,8 +294,9 @@ class _SessionStartContext:
         exceptions become a single ``None`` signal, so the SessionStart template
         can fall back to a coverage-unavailable message without importing the
         client exception hierarchy.  ``None`` is the documented "unavailable"
-        contract here — the caller distinguishes it from the empty-catalog case
-        where the daemon answered with zeros.
+        contract here (the failure's class is logged at WARNING) — the caller
+        distinguishes it from the empty-catalog case where the daemon answered
+        with zeros.
         """
         del captures_collection  # daemon derives the sibling name server-side
         from quarry.client import (  # noqa: PLC0415
@@ -306,7 +307,8 @@ class _SessionStartContext:
 
         try:
             resp = TargetResolver.connect().coverage(collection)
-        except (ClientConfigError, QuarryError):
+        except (ClientConfigError, QuarryError) as exc:
+            logger.warning("session coverage unavailable: %s", type(exc).__name__)
             return None
         return {
             "documents_indexed": resp.documents_indexed,
