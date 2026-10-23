@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, replace
+from itertools import count
 from typing import ClassVar, final
 
 from quarry.content_guard import UnindexableContentError
@@ -52,13 +53,28 @@ class PageSplitter:
     def expand(self, pages: list[PageContent]) -> list[PageContent]:
         """Return *pages* unchanged, or split and renumbered if a section is oversized.
 
-        Sections are renumbered sequentially for the whole document, and only when
-        a split happened, so every other document keeps its extractor's numbering.
+        Section parts are renumbered sequentially, and only when a split happened,
+        so every other document keeps its extractor's numbering.  A paginated page
+        keeps its physical number whatever else splits, and a part never takes a
+        number a paginated page holds.
 
         Raises:
             UnindexableContentError: A paginated page exceeds the budget.
         """
         parts = [(page, self.split(page.text)) for page in pages]
+        self._refuse_split_physical(parts)
+        if all(len(texts) == 1 for _, texts in parts):
+            return pages
+        flat = [(page, text) for page, texts in parts for text in texts]
+        logger.info(
+            "split oversized pages: %d pages into %d parts", len(pages), len(flat)
+        )
+        return self._renumbered(pages, flat)
+
+    def _refuse_split_physical(
+        self, parts: list[tuple[PageContent, list[str]]]
+    ) -> None:
+        """Raise when a paginated page would have to be split."""
         for page, texts in parts:
             if len(texts) > 1 and page.page_type not in self._LOGICAL:
                 msg = (
@@ -66,16 +82,25 @@ class PageSplitter:
                     f"budget of {self.max_bytes:,} bytes"
                 )
                 raise UnindexableContentError(msg)
-        if all(len(texts) == 1 for _, texts in parts):
-            return pages
-        flat = [(page, text) for page, texts in parts for text in texts]
-        logger.info(
-            "split oversized pages: %d pages into %d parts", len(pages), len(flat)
-        )
+
+    def _renumbered(
+        self, pages: list[PageContent], flat: list[tuple[PageContent, str]]
+    ) -> list[PageContent]:
+        """Number the section parts in order, leaving paginated pages as they are."""
+        claimed = self._claimed(pages)
+        free = (n for n in count(1) if n not in claimed)
         return [
-            replace(page, page_number=number, total_pages=len(flat), text=text)
-            for number, (page, text) in enumerate(flat, start=1)
+            replace(page, page_number=next(free), total_pages=len(flat), text=text)
+            if page.page_type in self._LOGICAL
+            else page
+            for page, text in flat
         ]
+
+    def _claimed(self, pages: list[PageContent]) -> frozenset[int]:
+        """Return the numbers physical pages hold, which no section part may take."""
+        return frozenset(
+            page.page_number for page in pages if page.page_type not in self._LOGICAL
+        )
 
     def split(self, text: str) -> list[str]:
         """Return *text* as consecutive parts of at most ``max_bytes`` UTF-8 bytes."""

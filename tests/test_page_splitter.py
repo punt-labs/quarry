@@ -120,6 +120,37 @@ class TestPaginatedFormats:
         assert "".join(p.text for p in result) == text
 
 
+class TestMixedDocument:
+    """A split of a logical section never renumbers a paginated page."""
+
+    def test_paginated_numbers_are_untouched_and_never_reused(self) -> None:
+        text = "w " * 100
+        pages = [
+            _page("slide", 1, 3, PageType.PRESENTATION),
+            _page(text, 2, 3, PageType.SECTION),
+            _page("slide two", 3, 3, PageType.PRESENTATION),
+        ]
+        result = PageSplitter(100).expand(pages)
+        paginated = [p for p in result if p.page_type is PageType.PRESENTATION]
+        sections = [p for p in result if p.page_type is PageType.SECTION]
+        assert [(p.page_number, p.total_pages, p.text) for p in paginated] == [
+            (1, 3, "slide"),
+            (3, 3, "slide two"),
+        ]
+        assert "".join(p.text for p in sections) == text
+        assert len(sections) > 1
+        numbers = [p.page_number for p in sections]
+        assert 1 not in numbers
+        assert 3 not in numbers
+        assert len(set(numbers)) == len(numbers)
+        assert numbers == sorted(numbers)
+
+    def test_a_document_of_only_logical_sections_is_numbered_from_one(self) -> None:
+        pages = [_page("intro", 4, 9), _page("w " * 100, 6, 9)]
+        result = PageSplitter(100).expand(pages)
+        assert [p.page_number for p in result] == list(range(1, len(result) + 1))
+
+
 class TestConstruction:
     def test_a_budget_below_one_character_is_refused(self) -> None:
         with pytest.raises(ValueError, match="max_bytes"):
