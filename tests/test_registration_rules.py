@@ -56,7 +56,8 @@ class TestRefuseForeignRetained:
             RegistrationRules.refuse_foreign_retained(marker, tmp_path, "docs")
         assert str(info.value) == (
             "collection holds archived data from another directory; choose "
-            "another collection name or delete the archived collection " + _NOTE
+            "another collection name, or re-register the directory that owns it "
+            + _NOTE
         )
         assert info.value.collection == "docs"
         assert "/elsewhere" in info.value.detail
@@ -68,7 +69,8 @@ class TestRefuseForeignRetained:
             )
         assert str(info.value) == (
             "collection holds archived data from another directory; choose "
-            "another collection name or delete the archived collection " + _NOTE
+            "another collection name, or re-register the directory that owns it "
+            + _NOTE
         )
 
 

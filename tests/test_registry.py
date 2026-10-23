@@ -651,6 +651,28 @@ class TestRetainedCollections:
         finally:
             conn.close()
 
+    def test_the_refusal_advice_can_be_followed(self, tmp_path: Path):
+        """Re-register the owner, then register the new directory under another name."""
+        conn = SyncRegistry(tmp_path / "r.db")
+        dir_a = tmp_path / "work" / "backend"
+        dir_a.mkdir(parents=True)
+        dir_b = tmp_path / "other" / "backend"
+        dir_b.mkdir(parents=True)
+        try:
+            conn.register_directory(dir_a, "backend")
+            conn.deregister_directory("backend", keep_data=True)
+            with pytest.raises(ValueError, match="re-register the directory") as info:
+                conn.register_directory(dir_b, "backend")
+            assert "delete the archived collection" not in str(info.value)
+            conn.register_directory(dir_a, "backend")  # the owner takes it back
+            conn.register_directory(dir_b, "backend-other")  # the new one, renamed
+            assert {r.collection for r in conn.list_registrations()} == {
+                "backend",
+                "backend-other",
+            }
+        finally:
+            conn.close()
+
     def test_deregister_never_registered_marks_nothing(self, tmp_path: Path):
         """Deregistering a collection with no directory row marks nothing pending.
 

@@ -72,7 +72,7 @@ class RegistrationRules:
             return
         msg = (
             "collection holds archived data from another directory; choose "
-            "another collection name or delete the archived collection "
+            "another collection name, or re-register the directory that owns it "
             "(the conflicting registration is named in quarryd.log)"
         )
         origin = marker.original_directory or "an unknown directory"
