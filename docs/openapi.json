@@ -21,7 +21,7 @@
         "type": "object"
       },
       "CapturesLookupResponse": {
-        "description": "Whether a URL is already indexed under a project's captures collection.\n\n``document_name`` names the stored capture when ``matched`` is true; it is\nabsent (``None``) on a miss \u2014 there is nothing to name, not a lookup\nfailure.",
+        "description": "Whether a URL is already indexed under a project's captures collection.\n\n``document_name`` is the URL's canonical name when ``matched`` (``None`` on a\nmiss, not a failure).  ``legacy``: stored under an older spelling, never returned.",
         "properties": {
           "document_name": {
             "anyOf": [
@@ -33,6 +33,11 @@
               }
             ],
             "title": "Document Name"
+          },
+          "legacy": {
+            "default": false,
+            "title": "Legacy",
+            "type": "boolean"
           },
           "matched": {
             "title": "Matched",
@@ -982,7 +987,7 @@
     },
     "/v1/captures/lookup": {
       "post": {
-        "description": "Answer whether a URL is already indexed under the caller's captures.\n\nBody: {url, cwd} \u2014 POST, not a ``?url=`` query string: a query-string\ntoken (an API key, a session id) rides the URL itself and can leak into\nproxy/WAF/browser logs even on a loopback hop (CWE-598).  Shares\n``POST /capture``'s ``cwd``-derived collection contract\n(:meth:`_capture_job`), so this thin client never opens the sync\nregistry itself or spells the ``<repo>-captures`` naming rule.  The\nstored ``document_name`` for a WebFetch capture is\n``HttpUrl.document_name`` (``WebFetchName.maybe``), so this recomputes the\nidentical normalization before comparing: the fragment and ``;params`` are\ndropped, the query becomes a digest of its sorted parameters, the host is\nlower-cased with its trailing dot and default port removed, and an empty\npath becomes ``/``, so URLs that differ only in those parts collapse to the\nSAME document and match, while pages that differ by query stay apart.  The\n``document_name`` returned is the name the document is stored under: a\ndocument an older build stored under a former spelling of the URL matches,\nand comes back under that spelling, the only one ``show`` can find.  A\ntrailing-slash difference on a non-empty path does NOT normalize and\nwill not match, and a URL that cannot be stored matches nothing.",
+        "description": "Answer whether a URL is already indexed under the caller's captures.\n\nBody: {url, cwd} \u2014 POST, not a ``?url=`` query string: a query-string\ntoken (an API key, a session id) rides the URL itself and can leak into\nproxy/WAF/browser logs even on a loopback hop (CWE-598).  Shares\n``POST /capture``'s ``cwd``-derived collection contract\n(:meth:`_capture_job`), so this thin client never opens the sync\nregistry itself or spells the ``<repo>-captures`` naming rule.  The\nstored ``document_name`` for a WebFetch capture is\n``HttpUrl.document_name`` (``WebFetchName.maybe``), so this recomputes the\nidentical normalization before comparing: the fragment and ``;params`` are\ndropped, the query becomes a digest of its sorted parameters, the host is\nlower-cased with its trailing dot and default port removed, and an empty\npath becomes ``/``, so URLs that differ only in those parts collapse to the\nSAME document and match, while pages that differ by query stay apart.  A\ndocument an older build stored under a former spelling of the URL matches\ntoo; ``legacy`` says so, and the older name is never returned.  A\ntrailing-slash difference on a non-empty path does NOT normalize and\nwill not match, and a URL that cannot be stored matches nothing.",
         "operationId": "lookup_v1_captures_lookup_post",
         "requestBody": {
           "content": {

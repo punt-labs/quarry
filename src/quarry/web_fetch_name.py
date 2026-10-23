@@ -37,6 +37,11 @@ class WebFetchName:
 
         return scrub_and_log(HttpUrl(url).document_name, cls._LABEL)
 
+    @staticmethod
+    def shown(url: str) -> str:
+        """Return *url* as it may appear in context or a log: host and segments only."""
+        return HttpUrl.shown(url)
+
     @classmethod
     def maybe(cls, url: str) -> str | None:
         """Return :meth:`of`, or ``None`` for a URL that could never be stored."""

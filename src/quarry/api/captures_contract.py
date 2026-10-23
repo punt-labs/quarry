@@ -1,4 +1,4 @@
-"""The capture-push contract: push redacted capture shadows."""
+"""The captures wire contract: push redacted shadows, look up a URL."""
 
 from __future__ import annotations
 
@@ -33,10 +33,10 @@ class CapturesLookupRequest(BaseModel):
 class CapturesLookupResponse(BaseModel):
     """Whether a URL is already indexed under a project's captures collection.
 
-    ``document_name`` names the stored capture when ``matched`` is true; it is
-    absent (``None``) on a miss — there is nothing to name, not a lookup
-    failure.
+    ``document_name`` is the URL's canonical name when ``matched`` (``None`` on a
+    miss, not a failure).  ``legacy``: stored under an older spelling, never returned.
     """
 
     matched: bool
     document_name: str | None = None
+    legacy: bool = False

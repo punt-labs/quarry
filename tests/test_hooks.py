@@ -34,7 +34,6 @@ from quarry.hooks import (
 from quarry.refusal import RegistrationRefusedError
 from quarry.send_outcome import SendOutcome
 from quarry.sync_registry import SyncRegistry
-from tests.url_names import with_query
 
 
 def _opt_in(project: Path) -> Path:
@@ -1201,9 +1200,27 @@ class TestWebFetchLoopCloser:
         assert isinstance(output, dict)
         assert output["hookEventName"] == "PostToolUse"
         context = str(output["additionalContext"])
-        assert "https://example.com/docs/guide" in context
+        assert "https://example.com/…(segments=2)" in context
         assert "'guide'" in context
-        assert "https://example.com/docs/guide" in context.split("Indexed as ")[1]
+        assert "Indexed as" not in context
+
+    def test_a_legacy_spelling_is_said_to_be_older_and_never_named(self) -> None:
+        from quarry.api import CapturesLookupResponse
+
+        client = MagicMock()
+        client.captures_lookup.return_value = CapturesLookupResponse(
+            matched=True, document_name="https://example.com/p", legacy=True
+        )
+        raw = "https://example.com/p?token=SECRETQ"
+        with patch("quarry.client.TargetResolver.connect", return_value=client):
+            result = handle_post_web_fetch({"tool_input": {"url": raw}})
+        output = result["hookSpecificOutput"]
+        assert isinstance(output, dict)
+        context = str(output["additionalContext"])
+        assert "SECRETQ" not in context
+        assert "token" not in context
+        assert "older spelling" in context
+        assert "quarry find" in context
 
     def test_matched_true_without_document_name_still_nudges(self) -> None:
         from quarry.api import CapturesLookupResponse
@@ -1275,8 +1292,9 @@ class TestWebFetchLoopCloser:
         assert "api_key" not in context
         assert "#" not in context
         assert "@" not in context
-        # The query is only ever a digest of itself.
-        assert with_query("https://example.com/reset", "api_key=secret123") in context
+        # Only the log form is shown: no path, no query, not even its digest.
+        assert "https://example.com/…(segments=1)" in context
+        assert "?q=" not in context
 
     def test_suggested_query_falls_back_to_host_for_bare_path(self) -> None:
         from quarry.api import CapturesLookupResponse

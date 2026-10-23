@@ -108,10 +108,9 @@ class CaptureRoutes(ContentRouteGroup):
         dropped, the query becomes a digest of its sorted parameters, the host is
         lower-cased with its trailing dot and default port removed, and an empty
         path becomes ``/``, so URLs that differ only in those parts collapse to the
-        SAME document and match, while pages that differ by query stay apart.  The
-        ``document_name`` returned is the name the document is stored under: a
-        document an older build stored under a former spelling of the URL matches,
-        and comes back under that spelling, the only one ``show`` can find.  A
+        SAME document and match, while pages that differ by query stay apart.  A
+        document an older build stored under a former spelling of the URL matches
+        too; ``legacy`` says so, and the older name is never returned.  A
         trailing-slash difference on a non-empty path does NOT normalize and
         will not match, and a URL that cannot be stored matches nothing.
         """
@@ -132,8 +131,13 @@ class CaptureRoutes(ContentRouteGroup):
             if document_name is not None
             else None
         )
+        matched = stored_as is not None
         return JSONResponse(
-            {"matched": stored_as is not None, "document_name": stored_as}
+            {
+                "matched": matched,
+                "document_name": document_name if matched else None,
+                "legacy": matched and stored_as != document_name,
+            }
         )
 
     async def push(self, request: Request) -> JSONResponse:

@@ -59,3 +59,10 @@ def test_an_unstorable_url_has_no_name(url: str) -> None:
     assert WebFetchName.maybe(url) is None
     with pytest.raises(ValueError, match="malformed URL"):
         WebFetchName.of(url)
+
+
+def test_shown_is_the_log_form_and_never_raises() -> None:
+    assert WebFetchName.shown("https://x.test/a/b?token=S") == (
+        "https://x.test/…(segments=2)"
+    )
+    assert WebFetchName.shown("not a url") == "(unparseable URL)"

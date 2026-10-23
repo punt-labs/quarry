@@ -314,7 +314,11 @@ def test_capture_and_remember_and_lookup_never_leak_a_url_secret(
     ]
     for lookup in runs[5:]:
         assert lookup.status == 200
-        assert lookup.body == {"matched": False, "document_name": None}
+        assert lookup.body == {
+            "matched": False,
+            "document_name": None,
+            "legacy": False,
+        }
     _flush()
 
     sinks = {

@@ -129,7 +129,7 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
-  "src/quarry/api/captures.py": {
+  "src/quarry/api/captures_contract.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
     "avg_params": 0.0,
@@ -1148,8 +1148,8 @@
     "encapsulation_ratio": 1.0,
     "avg_params": 1.0,
     "max_complexity": 5.0,
-    "avg_complexity": 2.71,
-    "module_size": 135.0,
+    "avg_complexity": 2.86,
+    "module_size": 139.0,
     "classes_per_module": 1.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
@@ -4151,8 +4151,8 @@
     "encapsulation_ratio": 1.0,
     "avg_params": 1.0,
     "max_complexity": 2.0,
-    "avg_complexity": 1.5,
-    "module_size": 34.0,
+    "avg_complexity": 1.33,
+    "module_size": 38.0,
     "classes_per_module": 1.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,

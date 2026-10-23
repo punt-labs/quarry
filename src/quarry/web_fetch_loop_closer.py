@@ -52,30 +52,30 @@ class WebFetchLoopCloser:
             return {}
         if not resp.matched:
             return {}
-        return self._output(resp.document_name)
+        return self._output(legacy=resp.legacy)
 
-    def _output(self, document_name: str | None) -> dict[str, object]:
+    def _output(self, *, legacy: bool) -> dict[str, object]:
         """Build the hookSpecificOutput envelope naming the URL and a find query.
 
-        Uses the redacted (query/fragment/userinfo-stripped) form of the URL,
-        never ``self._url`` raw — this text lands in the session transcript via
-        ``additionalContext``, so any secret token in the query string must not
+        Shows the log form of the URL, never ``self._url`` raw and never a stored
+        name — this text lands in the session transcript via ``additionalContext``,
+        so a token in the query, or in a name an older build stored, must not
         survive into it.
         """
         from quarry.web_fetch_name import WebFetchName  # noqa: PLC0415
 
-        redacted_url = WebFetchName.of(self._url)
+        query = self._suggested_query(WebFetchName.of(self._url))
+        shown = WebFetchName.shown(self._url)
         lines = [
             (
-                f"You already fetched {redacted_url} earlier — use find with a "
-                f"query like {self._suggested_query(redacted_url)!r} instead of "
-                "re-fetching next time."
+                f"You already fetched {shown} earlier — use find "
+                f"with a query like {query!r} instead of re-fetching next time."
             )
         ]
-        if document_name:
+        if legacy:
             lines.append(
-                f"Indexed as {document_name!r} — "
-                f"'quarry show {document_name}' shows it directly."
+                "It is indexed under an older spelling of that URL; "
+                "'quarry find' reaches it."
             )
         return {
             "hookSpecificOutput": {

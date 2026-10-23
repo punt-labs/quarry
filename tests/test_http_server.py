@@ -1503,6 +1503,7 @@ class TestCapturesLookup:
         assert data == {
             "matched": True,
             "document_name": "https://example.com/docs",
+            "legacy": False,
         }
 
     def test_a_legacy_named_document_matches_its_canonical_url(
@@ -1527,11 +1528,12 @@ class TestCapturesLookup:
                 json={"url": "https://example.com/docs?utm=1", "cwd": "/repo"},
             ).json()
 
-        # The document is named as it is stored: the legacy spelling is the only
-        # name ``show`` can find it under.
+        # The canonical name of the URL asked about; the older stored name is
+        # never returned.
         assert data == {
             "matched": True,
-            "document_name": "https://example.com/docs?utm=1",
+            "document_name": with_query("https://example.com/docs", "utm=1"),
+            "legacy": True,
         }
 
     @pytest.mark.parametrize(
@@ -1554,7 +1556,7 @@ class TestCapturesLookup:
             resp = client.post("/v1/captures/lookup", json={"url": url, "cwd": ""})
 
         assert resp.status_code == 200
-        assert resp.json() == {"matched": False, "document_name": None}
+        assert resp.json() == {"matched": False, "document_name": None, "legacy": False}
         exists.assert_not_called()
         assert "SECRET" not in caplog.text
 
@@ -1569,7 +1571,7 @@ class TestCapturesLookup:
                 "/v1/captures/lookup", json={"url": "https://example.com/x"}
             ).json()
 
-        assert data == {"matched": False, "document_name": None}
+        assert data == {"matched": False, "document_name": None, "legacy": False}
 
     def test_reads_url_and_cwd_and_derives_collection(self, client: TestClient) -> None:
         """The daemon derives ``<repo>-captures`` from ``cwd`` — same contract
@@ -1666,10 +1668,14 @@ class TestCapturesLookup:
                 json={"url": "https://example.com/guide?ref=nav"},
             ).json()
 
-        assert data == {"matched": True, "document_name": stored_name}
-        assert other == {"matched": False, "document_name": None}
+        assert data == {
+            "matched": True,
+            "document_name": stored_name,
+            "legacy": False,
+        }
+        assert other == {"matched": False, "document_name": None, "legacy": False}
 
-    def test_end_to_end_names_a_legacy_document_as_it_is_stored(
+    def test_end_to_end_flags_a_legacy_document_without_naming_it(
         self, tmp_path: Path
     ) -> None:
         """The name the lookup returns is one ``show`` can find in the store."""
@@ -1695,10 +1701,13 @@ class TestCapturesLookup:
                 json={"url": "https://example.com/guide?ref=old"},
             ).json()
 
-        assert data == {"matched": True, "document_name": legacy}
-        assert ctx.database.catalog.document_exists(
-            data["document_name"], "default-captures"
+        assert data["matched"] is True
+        assert data["legacy"] is True
+        assert data["document_name"] == with_query(
+            "https://example.com/guide", "ref=old"
         )
+        assert legacy not in str(data)
+        assert ctx.database.catalog.document_exists(legacy, "default-captures")
 
 
 class TestDeleteDocuments:
