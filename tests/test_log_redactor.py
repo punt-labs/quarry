@@ -73,8 +73,19 @@ class TestLinearTime:
             "http://h/" + "a:" * 1000 + " ",
             "q" * 2048 + " ",
             "a" * 2049 + " ",
+            "a" * 2000 + "@ ",
+            ("a" * 700 + ":") * 2 + "b" * 600 + "@ ",
         ],
-        ids=["colons", "ats", "userinfo-runs", "colon-path", "at-cap", "over-cap"],
+        ids=[
+            "colons",
+            "ats",
+            "userinfo-runs",
+            "colon-path",
+            "at-cap",
+            "over-cap",
+            "long-user-run",
+            "colon-separated-runs",
+        ],
     )
     def test_the_cost_scales_linearly(self, unit: str) -> None:
         small = min(_seconds(unit * 25) for _ in range(3))
@@ -373,3 +384,34 @@ class TestWhitespaceInsideAUrl:
                 unstable.append(text)
         assert leaks == []
         assert unstable == []
+
+
+class TestTruncationMarker:
+    def test_a_single_run_over_the_record_cap_still_shows_the_marker(self) -> None:
+        cap = LogRedactor.MAX_RECORD
+        shown = LogRedactor.redact("x" * (cap + 4_000))
+        assert shown.endswith(" […truncated 4000 bytes]")
+        assert shown.startswith("[…]")
+
+    def test_the_marker_is_separate_from_the_kept_text(self) -> None:
+        cap = LogRedactor.MAX_RECORD
+        shown = LogRedactor.redact("a " * cap)
+        assert shown.endswith(" […truncated " + str(2 * cap - cap) + " bytes]")
+        assert "bytes][…" not in shown
+
+    def test_a_marker_survives_a_second_redaction_unchanged(self) -> None:
+        once = LogRedactor.redact("x" * (LogRedactor.MAX_RECORD + 10))
+        assert LogRedactor.redact(once) == once
+
+
+class TestSchemelessUserinfo:
+    def test_a_long_password_is_masked(self) -> None:
+        shown = LogRedactor.redact("user:" + "P" * 1500 + "@host.example")
+        assert shown == "[userinfo]@host.example"
+
+    def test_a_long_user_is_masked(self) -> None:
+        shown = LogRedactor.redact("u" * 1500 + ":SECRETPW@host.example")
+        assert shown == "[userinfo]@host.example"
+
+    def test_a_token_over_the_cap_is_replaced_whole(self) -> None:
+        assert LogRedactor.redact("user:" + "P" * 3000 + "@h") == "[…]"

@@ -57,8 +57,10 @@ class LogRedactor:
         r"(?P<head>[A-Za-z][A-Za-z0-9+.\-]{0,31}://[^\s/\\?#]*)\s+(?=@)"
     )
     _FORM: ClassVar[re.Pattern[str]] = re.compile(r"/…\(segments=\d+\)[).,;:\]}]*")
+    # Scheme-less "user:password@": tried only where a run of user characters
+    # begins, so each run is scanned once however long the token is.
     _USERINFO: ClassVar[re.Pattern[str]] = re.compile(
-        r"[^\s/@:'\"<>]{1,128}:[^\s/@'\"<>]{0,128}@"
+        r"(?<![^\s/@:'\"<>])[^\s/@:'\"<>]{1,2048}:[^\s/@'\"<>]{0,2048}@"
     )
     _QUERY: ClassVar[re.Pattern[str]] = re.compile(r"\?[^\s'\"<>#]{1,2048}")
     _CONTROL: ClassVar[re.Pattern[str]] = re.compile(
@@ -72,15 +74,16 @@ class LogRedactor:
     @classmethod
     def redact(cls, text: str) -> str:
         """Return *text* with URL userinfo, query and fragment masked."""
+        marker = ""
         if len(text) > cls.MAX_RECORD:
             dropped = len(text[cls.MAX_RECORD :].encode("utf-8", errors="replace"))
-            text = f"{text[: cls.MAX_RECORD]}[…truncated {dropped} bytes]"
+            text, marker = text[: cls.MAX_RECORD], f" […truncated {dropped} bytes]"
         if ":" in text and cls._BREAKS.search(text):
             text = cls._BROKEN_URL.sub(cls._joined, text)
         if "://" in text and "@" in text:
             text = cls._SPLIT_AUTHORITY.sub(r"\g<head>", text)
         text = cls._TOKEN.sub(cls._token, text)
-        return cls._CONTROL.sub(cls._escape, text)
+        return cls._CONTROL.sub(cls._escape, text) + marker
 
     @classmethod
     def one_line(cls, message: str) -> str:
