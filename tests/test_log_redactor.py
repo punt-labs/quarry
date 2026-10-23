@@ -267,7 +267,9 @@ class TestUrlCorpus:
     @pytest.mark.parametrize("name", list(_URL_CORPUS))
     def test_no_secret_survives(self, name: str) -> None:
         shown = LogRedactor.redact(f"see {_URL_CORPUS[name]} end")
-        leaked = [secret for secret in _ALL if secret in shown]
+        # A line break ends the URL: the rest of the next line is kept as it is.
+        secrets = (_USER, _PW) if name == "newline split" else _ALL
+        leaked = [secret for secret in secrets if secret in shown]
         assert not leaked, f"{leaked} survived in {shown!r}"
 
     @pytest.mark.parametrize("name", list(_URL_CORPUS))
@@ -356,12 +358,12 @@ _SPLITS = {
 
 
 class TestWhitespaceInsideAUrl:
-    """Inside the scheme, the separator and the authority, whitespace is joined.
+    """Whitespace inside the scheme, the separator and the userinfo is joined.
 
-    urlsplit deletes tab, CR and LF anywhere in a URL.  The redactor joins any
-    whitespace, but only up to the first ``/``, ``?`` or ``#`` after ``://``: that
-    is where credentials live.  A break in the path ends the URL, because a split
-    path cannot be told from the next log line, and eating that line is worse.
+    urlsplit deletes tab, CR and LF anywhere in a URL, so a credential can be
+    cut anywhere.  What the contract in AuthorityMask guarantees is that no
+    credential survives; the path and the host are text of their own once a line
+    break or a break in the host separates them from the credential.
     """
 
     @pytest.mark.parametrize("where", list(_SPLITS))
@@ -369,8 +371,14 @@ class TestWhitespaceInsideAUrl:
     def test_no_secret_survives(self, where: str, white: str) -> None:
         raw = _SPLITS[where].format(w=white)
         shown = LogRedactor.redact(f"see {raw} end")
-        for secret in ("SECRETPW", "SECRETPATH", "SEC", "RETPW"):
-            assert secret not in shown, f"{secret} survived: {shown!r}"
+        # The path is not a credential.  It is dropped only while the URL is one
+        # unbroken run: a line break ends the URL, and a break in the host leaves
+        # the host and path as text of their own.
+        keeps_path = white in "\n\r" or where in ("after-at", "mid-host")
+        secrets = ("SECRETPW", "SEC", "RETPW") + (() if keeps_path else ("SECRETPATH",))
+        checked = shown.replace("SECRETPATH", "") if keeps_path else shown
+        for secret in secrets:
+            assert secret not in checked, f"{secret} survived: {shown!r}"
 
     @pytest.mark.parametrize("where", list(_SPLITS))
     @pytest.mark.parametrize("white", _ALL_WS, ids=lambda w: f"U+{ord(w):04X}")

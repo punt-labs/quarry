@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import ClassVar, final
 
+from quarry.authority_mask import AuthorityMask
 from quarry.log_form import LogForm
 
 
@@ -19,11 +20,26 @@ class LogRedactor:
     ``scheme://host/…(segments=1)``, a bare ``user:pw@`` or ``?query`` is masked, and a
     control character is escaped so it cannot forge or hide a log line.
 
+    The contract, in the order it is applied:
+
+    1. The record is cut at :attr:`MAX_RECORD` bytes of text, with a visible marker.
+    2. Control characters are escaped (``\\x1b``), so every later step reads the
+       text that is written.  Newlines are kept; :meth:`one_line` escapes them.
+    3. The userinfo of every ``scheme://`` authority is masked as
+       :class:`~quarry.authority_mask.AuthorityMask` specifies: to the last ``@``,
+       never across a line break except for the one continuation it names, and
+       with everything outside the masked span kept exactly.
+    4. Each whitespace-free token is then worked alone.  A token longer than
+       :attr:`MAX_TOKEN` is replaced; a URL becomes its log form; a bare
+       ``user:password@`` and a ``?query`` are masked.
+
+    Redacting a record twice gives the record redacted once, and a line holding
+    no URL, no ``user:password@`` and no ``?query`` comes back as it went in
+    (``tests/test_log_redactor_oracle.py`` checks both against generated text).
+
     It runs under the handler lock and holds the GIL, so its cost must be linear
-    in the line: the whole record is cut at :attr:`MAX_RECORD` (with a visible
-    marker), a whitespace-free token longer than :attr:`MAX_TOKEN` is replaced
-    before any pattern sees it, and a pattern runs only on a token that holds the
-    character it needs.
+    in the record: every pattern is bounded, a token is worked once, and a
+    pattern runs only on a token that holds the character it needs.
     """
 
     __slots__ = ()
@@ -41,35 +57,11 @@ class LogRedactor:
         r"(?:[^\s/\\?#]*@)?(?P<host>[^\s/\\?#'\"<>@]*)"
         r"(?P<path>[^\s?#'\"<>]*)(?:[?#][^\s'\"<>]*)?"
     )
-    _HOST: ClassVar[re.Pattern[str]] = re.compile(
-        r"(?:[A-Za-z0-9.\-]+|\[[0-9A-Fa-f:.%a-z]+\])(?::\d{1,5})?"
-    )
-    # urlsplit deletes tab, CR and LF anywhere in a URL, and a log reader may find
-    # any whitespace inside one.  Whitespace is joined only inside the scheme, the
-    # "://" and the authority, the span from the scheme up to the first "/", "?" or
-    # "#" after "://", and only when the authority holds a "@": that is where
-    # credentials live (the userinfo runs to the last "@", whatever it holds).  A
-    # single whitespace run is also joined inside the host
-    # that follows, when "/", "?" or "#" ends it right after.  A break in the PATH
-    # ends the URL: a split path cannot be told from the next log line, and joining
-    # the two would eat that line's first word.  The log form drops the path, so the
-    # trade-off is text left as it is after a path break.  Every class is bounded.
-    _SPACE: ClassVar[re.Pattern[str]] = re.compile(r"\s+")
-    # A scheme broken by whitespace is recognised only for the schemes a fetch uses
-    # (http, https, ftp, ftps, ws, wss): joining any letters around a break would
-    # eat the last word of the previous line.  Any other scheme is read unbroken.
-    _BROKEN_URL: ClassVar[re.Pattern[str]] = re.compile(
-        r"(?<![A-Za-z0-9+.\-])"
-        r"(?:(?i:h\s*t\s*t\s*p(?:\s*s)?|f\s*t\s*p(?:\s*s)?|w\s*s(?:\s*s)?)"
-        r"|[A-Za-z][A-Za-z0-9+.\-]{0,31})\s*:\s*/\s*/"
-        r"[^/\\?#]{0,2048}@"
-        r"(?:[^\s/\\?#'\"<>@]*\s+[^\s/\\?#'\"<>@]+(?=[/?#]))?"
-    )
     _FORM: ClassVar[re.Pattern[str]] = re.compile(r"/…\(segments=\d+\)[).,;:\]}]*")
     # Scheme-less "user:password@": tried only where a run of user characters
     # begins, so each run is scanned once however long the token is.
     _USERINFO: ClassVar[re.Pattern[str]] = re.compile(
-        r"(?<![^\s/@:'\"<>])[^\s/@:'\"<>]{1,2048}:[^\s/@'\"<>]{0,2048}@"
+        r"(?<![^\s/@:'\"<>?#])[^\s/@:'\"<>?#]{0,2048}:[^\s/@'\"<>?#]{0,2048}@"
     )
     _QUERY: ClassVar[re.Pattern[str]] = re.compile(r"\?[^\s'\"<>#]{1,2048}")
     _CONTROL: ClassVar[re.Pattern[str]] = re.compile(
@@ -87,10 +79,12 @@ class LogRedactor:
         if len(text) > cls.MAX_RECORD:
             dropped = len(text[cls.MAX_RECORD :].encode("utf-8", errors="replace"))
             text, marker = text[: cls.MAX_RECORD], f" […truncated {dropped} bytes]"
+        # Escaped first, so the text every pass sees is the text that is written:
+        # a second redaction then finds nothing new.
+        text = cls._CONTROL.sub(cls._escape, text)
         if ":" in text and "@" in text:
-            text = cls._BROKEN_URL.sub(cls._joined, text)
-        text = cls._TOKEN.sub(cls._token, text)
-        return cls._CONTROL.sub(cls._escape, text) + marker
+            text = AuthorityMask.mask(text)
+        return cls._TOKEN.sub(cls._token, text) + marker
 
     @classmethod
     def one_line(cls, message: str) -> str:
@@ -100,11 +94,6 @@ class LogRedactor:
         cannot forge a log line, while a traceback keeps its own.
         """
         return cls._LINE_BREAKS.sub(cls._escape, message)
-
-    @classmethod
-    def _joined(cls, match: re.Match[str]) -> str:
-        """Return a URL candidate without the whitespace inside its authority."""
-        return cls._SPACE.sub("", match.group())
 
     @classmethod
     def continuation(cls, block: str) -> str:
@@ -131,9 +120,9 @@ class LogRedactor:
             return "[…]"
         if "://" in token:
             token = cls._SCHEME_URL.sub(cls._bare_url, token)
-        if "@" in token:
-            token = cls._USERINFO.sub("[userinfo]@", token)
-        return cls._QUERY.sub("?[query]", token) if "?" in token else token
+        if "?" in token:
+            token = cls._QUERY.sub("?[query]", token)
+        return cls._USERINFO.sub("[userinfo]@", token) if "@" in token else token
 
     @staticmethod
     def _escape(match: re.Match[str]) -> str:
@@ -153,7 +142,7 @@ class LogRedactor:
         changes nothing.
         """
         host = match.group("host")
-        if not cls._HOST.fullmatch(host):
+        if not AuthorityMask.HOST.fullmatch(host):
             host = "[host]"
         path = match.group("path")
         if cls._FORM.fullmatch(path):
