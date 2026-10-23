@@ -379,6 +379,15 @@ class TestSyncRegisterDeregister:
         body = transport.body_for("POST", "/v1/registrations")
         assert body["collection"] == "root"
 
+    def test_register_default_name_is_the_sanitized_leaf(
+        self, transport: RecordingTransport, tmp_path: Path
+    ) -> None:
+        directory = tmp_path / "My Notes"
+        directory.mkdir()
+        _run(["register", str(directory)])
+        body = transport.body_for("POST", "/v1/registrations")
+        assert body["collection"] == "My-Notes"
+
     def test_deregister_encodes_params_and_dispatches(
         self, transport: RecordingTransport
     ) -> None:

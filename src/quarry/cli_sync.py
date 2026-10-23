@@ -81,12 +81,13 @@ class SyncCli:
         The path is resolved against $HOME and re-guarded by the daemon on its own
         filesystem (traversal + $HOME allowlist); the registry write is deferred.
         """
+        from quarry.collection_namer import CollectionNamer  # noqa: PLC0415
+
         resolved_path = directory.expanduser().resolve()
         resolved = str(resolved_path)
-        # A filesystem-root path has an empty leaf; fall back to "root" so
-        # register never dispatches an empty collection name (matches the
-        # leaf rule in Registrations.unique_collection_name).
-        col = collection or resolved_path.name or "root"
+        # The leaf, sanitized as CollectionNamer does for every auto-picked name
+        # (the daemon refuses any other); "root" for a leaf with nothing left.
+        col = collection or CollectionNamer.safe(resolved_path.name) or "root"
         accepted = self._p.client().register(
             RegisterRequest(directory=resolved, collection=col)
         )
