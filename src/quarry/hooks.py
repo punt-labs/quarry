@@ -147,9 +147,7 @@ class _SessionStartContext:
             if isinstance(registered_or_short_circuit, SessionStartReply):
                 return registered_or_short_circuit
             collection = registered_or_short_circuit
-        return SessionStartReply.of(
-            ActiveSessionContext(self._directory, collection).text()
-        )
+        return ActiveSessionContext(self._directory, collection).reply()
 
     def _path_b(self) -> SessionStartReply:
         """No marker, no coverage: nudge the operator to run ``quarry enable``.

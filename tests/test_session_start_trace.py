@@ -53,7 +53,11 @@ def _run(
             ),
             patch(
                 "quarry.active_session_context.ActiveSessionContext._session_coverage",
-                return_value=None,
+                return_value={
+                    "documents_indexed": 1,
+                    "transcripts_captured": 2,
+                    "memories_saved": 3,
+                },
             ),
             *extra,
         ):

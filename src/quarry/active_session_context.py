@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Self, final
 
+from quarry.session_start_reply import SessionStartReply
 from quarry.session_start_templates import SessionStartTemplates
 from quarry.shown_value import Shown
 from quarry.sync_lock import SyncLock
@@ -28,6 +29,7 @@ class ActiveSessionContext:
 
     __slots__ = ("_collection", "_directory")
 
+    _SYNC_OK = ("launched", "running")
     _SLASH_TAIL = (
         "Slash commands: /find, /ingest, /remember, /explain, /source, /quarry. "
         "For deep research across local docs and the web, use the researcher agent."
@@ -42,8 +44,12 @@ class ActiveSessionContext:
         self._collection = collection
         return self
 
-    def text(self) -> str:
-        """Return the active-mode context, launching the background sync."""
+    def reply(self) -> SessionStartReply:
+        """Return the active-mode reply, launching the background sync.
+
+        It traces as a capture only if the sync launched (or was running) and the
+        daemon gave the counts; otherwise it is an error that names which failed.
+        """
         sync_status = SyncLock().launch_background_sync()
         counts = self._session_coverage(self._collection)
         if counts is None:
@@ -64,10 +70,21 @@ class ActiveSessionContext:
             f"Captures: {Shown.of(self._collection + '-captures').text}\n"
             f"{coverage}"
         )
-        return (
+        context = (
             f"{header}\n{SessionStartTemplates.trailer()}\n"
             f"{self._sync_line(sync_status)}\n{self._SLASH_TAIL}"
         )
+        failed = [
+            label
+            for label, bad in (
+                ("sync-launch-failed", sync_status not in self._SYNC_OK),
+                ("coverage-unavailable", counts is None),
+            )
+            if bad
+        ]
+        if failed:
+            return SessionStartReply.of(context, "error", "+".join(failed))
+        return SessionStartReply.of(context)
 
     @classmethod
     def _sync_line(cls, status: str) -> str:

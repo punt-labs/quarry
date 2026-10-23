@@ -46,7 +46,11 @@ class SessionStartReply:
     @classmethod
     def nudge_enable(cls, directory: Path) -> Self:
         """Return the reply that nudges the operator to ``quarry enable`` here."""
-        return cls.of(SessionStartTemplates.nudge_enable(Shown.of(directory)))
+        return cls.of(
+            SessionStartTemplates.nudge_enable(Shown.of(directory)),
+            "skip",
+            "not-enabled",
+        )
 
     @classmethod
     def drift_surface(cls, directory: Path, collection: str) -> Self:
@@ -54,7 +58,9 @@ class SessionStartReply:
         return cls.of(
             SessionStartTemplates.drift_surface(
                 Shown.of(directory), Shown.of(collection)
-            )
+            ),
+            "skip",
+            "marker-drift",
         )
 
     @classmethod

@@ -193,3 +193,13 @@ class TestACommandBuiltFromAHostilePath:
         text = _context(SessionStartReply.nudge_enable(Path(path)))
         [line] = [ln for ln in text.splitlines() if ln.startswith("  quarry enable")]
         assert shlex.split(line) == ["quarry", "enable", path]
+
+
+class TestTheNudgeAndTheDriftAreSkips:
+    def test_the_nudge_traces_as_not_enabled(self) -> None:
+        reply = SessionStartReply.nudge_enable(Path("/repo"))
+        assert (reply.kind, reply.detail) == ("skip", "not-enabled")
+
+    def test_the_drift_traces_as_marker_drift(self) -> None:
+        reply = SessionStartReply.drift_surface(Path("/repo"), "repo")
+        assert (reply.kind, reply.detail) == ("skip", "marker-drift")
