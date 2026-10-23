@@ -14,8 +14,8 @@ class WebFetchName:
     Both the capture write path (``hooks.handle_post_web_fetch``) and the lookup
     read path (``CaptureRoutes.lookup``) call it, so a URL always maps to the
     same document name regardless of which side computes it: the storage form of
-    the admitted URL, ``scheme://host[:port]/path[?q=<digest>]``, run through the
-    scrubber.
+    the admitted URL, ``scheme://host[:port]/path[?q[sha256]=<digest>]``, run
+    through the scrubber.
     The scrub-log label is stamped on both sides for the same reason: one
     constant keeps the two derivations from drifting into different names for
     what should be the same stored capture.

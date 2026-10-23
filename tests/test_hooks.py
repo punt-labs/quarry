@@ -1294,7 +1294,7 @@ class TestWebFetchLoopCloser:
         assert "@" not in context
         # Only the log form is shown: no path, no query, not even its digest.
         assert "https://example.com/…(segments=1)" in context
-        assert "?q=" not in context
+        assert "?q" not in context
 
     def test_suggested_query_falls_back_to_host_for_bare_path(self) -> None:
         from quarry.api import CapturesLookupResponse

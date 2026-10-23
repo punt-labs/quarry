@@ -61,7 +61,7 @@ class LegacyUrlNames:
     def canonical(name: str) -> str:
         """Return *name* as this build would store it; a non-URL name is as it is."""
         try:
-            return HttpUrl(name).document_name
+            return HttpUrl.stored(name)
         except ValueError:
             return name
 

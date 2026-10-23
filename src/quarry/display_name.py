@@ -37,7 +37,7 @@ class DisplayName:
         if not text.lower().startswith(("http://", "https://")):
             return self.name
         try:
-            return HttpUrl(text).document_name
+            return HttpUrl.stored(text)
         except ValueError:
             return CaptureUrl.display(text)  # tolerant of userinfo; never shows it
 

@@ -13,4 +13,4 @@ import hashlib
 def with_query(base: str, query: str) -> str:
     """Return the stored name of *base* (a name without a query) plus *query*."""
     normalized = "&".join(sorted(part for part in query.split("&") if part))
-    return f"{base}?q={hashlib.sha256(normalized.encode()).hexdigest()[:16]}"
+    return f"{base}?q[sha256]={hashlib.sha256(normalized.encode()).hexdigest()[:16]}"

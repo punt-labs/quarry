@@ -156,7 +156,7 @@ class TestQueryDigest:
 
     def test_the_digest_is_sixteen_hex_digits_of_the_sorted_query(self) -> None:
         name = HttpUrl("https://x.test/p?z=1&a=2").document_name
-        assert re.fullmatch(r"https://x\.test/p\?q=[0-9a-f]{16}", name)
+        assert re.fullmatch(r"https://x\.test/p\?q\[sha256\]=[0-9a-f]{16}", name)
 
     def test_the_encoding_of_a_parameter_does_not_make_a_second_document(
         self,
@@ -166,7 +166,31 @@ class TestQueryDigest:
 
     def test_a_stored_name_reads_back_as_itself(self) -> None:
         name = HttpUrl("https://x.test/p?page=3").document_name
-        assert HttpUrl(name).document_name == name
+        assert HttpUrl.stored(name) == name
+
+    def test_stored_canonicalizes_what_is_not_yet_a_stored_name(self) -> None:
+        assert HttpUrl.stored("https://X.test:443/p?b=2&a=1#f") == (
+            HttpUrl("https://x.test/p?a=1&b=2").document_name
+        )
+
+    def test_a_stored_name_with_an_old_host_spelling_is_canonicalized(self) -> None:
+        name = HttpUrl("https://x.test/p?page=3").document_name
+        assert HttpUrl.stored(name.replace("x.test", "X.TEST:443")) == name
+
+    def test_a_real_query_that_looks_like_a_digest_is_digested_like_any_other(
+        self,
+    ) -> None:
+        for forged, encoded in (
+            ("q=0123456789abcdef", "q=0123456789abcdef"),
+            ("q[sha256]=0123456789abcdef", "q%5Bsha256%5D=0123456789abcdef"),
+        ):
+            name = HttpUrl(f"https://x.test/p?{forged}").document_name
+            assert name == with_query("https://x.test/p", encoded)
+
+    def test_the_marker_cannot_come_out_of_a_real_query(self) -> None:
+        # [ and ] are percent-encoded in a real query, so no input yields the marker.
+        name = HttpUrl("https://x.test/p?a[sha256]=b").document_name
+        assert name == with_query("https://x.test/p", "a%5Bsha256%5D=b")
 
     def test_the_fetch_url_keeps_the_whole_query(self) -> None:
         assert HttpUrl("https://x.test/p?b=2&a=1#f").fetch_url == (

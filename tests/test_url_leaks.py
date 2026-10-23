@@ -373,8 +373,8 @@ def test_every_stored_url_name_is_scheme_host_port_and_path(
     )
 
     names = _stored_names(daemon)
-    # A query is kept as a digest only: ``?q=`` and 16 hex digits.
-    digest = re.compile(r"\?q=[0-9a-f]{16}$")
+    # A query is kept as a digest only: ``?q[sha256]=`` and 16 hex digits.
+    digest = re.compile(r"\?q\[sha256\]=[0-9a-f]{16}$")
     bare = {digest.sub("", name) for name in names}
     assert f"{origin}/page" in bare
     assert f"{origin}/page1" in bare
