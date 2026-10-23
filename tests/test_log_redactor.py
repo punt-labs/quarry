@@ -475,6 +475,29 @@ class TestSchemelessUserinfo:
     def test_a_token_over_the_cap_is_replaced_whole(self) -> None:
         assert LogRedactor.redact("user:" + "P" * 3000 + "@h") == "[…]"
 
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "admin:hunter?2@db.internal",
+            "admin:pw#x@db",
+            "admin:pw?x#y@db",
+            "ssh admin:hunter?2@db.internal now",
+            ":?/#@",
+        ],
+    )
+    def test_a_password_holding_a_query_or_fragment_character_is_masked(
+        self, raw: str
+    ) -> None:
+        shown = LogRedactor.redact(raw)
+        assert "hunter" not in shown
+        assert "pw" not in shown.replace("[userinfo]", "")
+        assert LogRedactor.redact(shown) == shown
+
+    def test_the_password_is_masked_whole_not_cut_at_the_question_mark(self) -> None:
+        assert LogRedactor.redact("admin:hunter?2@db.internal") == (
+            "[userinfo]@db.internal"
+        )
+
 
 class TestQuoted:
     """A value an outside party chose, shown as one quoted line."""

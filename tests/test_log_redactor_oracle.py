@@ -84,11 +84,19 @@ def _host_only(draw: st.DrawFn) -> str:
     return f"see {url}{glue}{_EMAIL}"
 
 
+@st.composite
+def _bare_userinfo(draw: st.DrawFn) -> str:
+    """Return ``user:password@host`` with no scheme; the password may hold ``?#``."""
+    password = draw(st.text(alphabet=_MARKER_CHARS + "?#", min_size=1, max_size=8))
+    return f"{draw(_word)}:{password}@{draw(st.sampled_from(_HOSTS))}"
+
+
 _lines = st.lists(
     st.one_of(
         _prose.map(lambda s: (False, s)),
         _secret_url().map(lambda s: (True, s)),
         _split_url().map(lambda s: (True, s)),
+        _bare_userinfo().map(lambda s: (True, s)),
         _host_only().map(lambda s: (False, s)),
     ),
     min_size=1,

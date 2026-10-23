@@ -61,7 +61,7 @@ class LogRedactor:
     # Scheme-less "user:password@": tried only where a run of user characters
     # begins, so each run is scanned once however long the token is.
     _USERINFO: ClassVar[re.Pattern[str]] = re.compile(
-        r"(?<![^\s/@:'\"<>?#])[^\s/@:'\"<>?#]{0,2048}:[^\s/@'\"<>?#]{0,2048}@"
+        r"(?<![^\s/@:'\"<>])[^\s/@:'\"<>]{0,2048}:[^\s/@'\"<>]{0,2048}@"
     )
     _QUERY: ClassVar[re.Pattern[str]] = re.compile(r"\?[^\s'\"<>#]{1,2048}")
     _CONTROL: ClassVar[re.Pattern[str]] = re.compile(
@@ -131,9 +131,16 @@ class LogRedactor:
             return "[…]"
         if "://" in token:
             token = cls._SCHEME_URL.sub(cls._bare_url, token)
+        # A password may hold "?" and "#", so userinfo goes before the query.  The
+        # query mask can leave a new "user:…@" behind ("?[query]#@"), so userinfo
+        # goes once more after it: a second redaction then finds nothing.
+        if "@" in token:
+            token = cls._USERINFO.sub("[userinfo]@", token)
         if "?" in token:
             token = cls._QUERY.sub("?[query]", token)
-        return cls._USERINFO.sub("[userinfo]@", token) if "@" in token else token
+            if "@" in token:
+                token = cls._USERINFO.sub("[userinfo]@", token)
+        return token
 
     @staticmethod
     def _escape(match: re.Match[str]) -> str:

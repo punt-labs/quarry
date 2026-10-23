@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import ClassVar, final
 
+_MASKED = "[userinfo]"
+
 
 @final
 class AuthorityMask:
@@ -45,6 +47,9 @@ class AuthorityMask:
 
     __slots__ = ()
 
+    # Nothing but this very mask (and its @ separators), left by an earlier pass.
+    _TRAIL: ClassVar[re.Pattern[str]] = re.compile(rf"(?:{re.escape(_MASKED)}@+)+\Z")
+    _DONE: ClassVar[re.Pattern[str]] = re.compile(rf"(?:{re.escape(_MASKED)}@*)+")
     _EOL: ClassVar[int] = -1
     _STOPPED: ClassVar[int] = -2
 
@@ -104,7 +109,7 @@ class AuthorityMask:
             if cont[1] and open_as == "host":
                 # The line before was only a candidate; now it is known to hold
                 # the start of the userinfo.
-                out[-1] = out[-1][: span[0]] + "[userinfo]" + out[-1][span[1] :]
+                out[-1] = out[-1][: span[0]] + _MASKED + out[-1][span[1] :]
             masked, open_as, span = cls._mask_line(line.group(), cont)
             out.append(masked)
         return "".join(out)
@@ -122,7 +127,7 @@ class AuthorityMask:
         parts: list[str] = []
         kept = search = 0
         if cont[1]:
-            parts.append(line[: cont[0]] + "[userinfo]@")
+            parts.append(line[: cont[0]] + f"{_MASKED}@")
             kept = search = cont[1]
         ends, span = "", (0, 0)
         while opener := cls._OPENER.search(line, search):
@@ -131,7 +136,7 @@ class AuthorityMask:
             if end and ends != "host":
                 scheme = cls._WHITESPACE.sub("", opener.group("scheme"))
                 at = "" if ends else "@"
-                parts.append(line[kept : opener.start()] + f"{scheme}://[userinfo]{at}")
+                parts.append(line[kept : opener.start()] + f"{scheme}://{_MASKED}{at}")
                 kept = search = end
             else:
                 search = opener.end()
@@ -218,7 +223,12 @@ class AuthorityMask:
         The second value is true when the authority ends there.  A part after the
         ``@`` that is not a host is still userinfo (``u@x: pw@host``).
         """
+        text = cls._TRAIL.sub("", text)  # masks an earlier pass left on the end
+        if "@" not in text:
+            return 0, True
         at = text.rindex("@")
+        if cls._DONE.fullmatch(text[:at]):
+            return 0, True  # this very mask, left by an earlier pass
         tail = text[at + 1 :]
         ends = not tail or bool(cls.HOST.fullmatch(tail))
         if ends and not shaped and cls._is_email(text, at, line, pos):
