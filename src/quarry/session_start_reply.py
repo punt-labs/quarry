@@ -1,0 +1,80 @@
+"""What a SessionStart hook answers with, and how its trace names it."""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Self, final
+
+from quarry._hook_trace import HookTrace, Outcome
+from quarry.refusal import RegistrationRefusedError
+from quarry.session_start_templates import SessionStartTemplates
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from quarry.sync_registry import SyncRegistry
+
+logger = logging.getLogger(__name__)
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class SessionStartReply:
+    """A SessionStart envelope, and how the hook's trace names what produced it.
+
+    ``kind`` is the trace outcome: a refusal or a deferral is not a capture, so
+    the line in ``quarry.log`` says so.
+    """
+
+    envelope: dict[str, object]
+    kind: Outcome = "capture"
+    detail: str = ""
+
+    @classmethod
+    def of(cls, context: str, kind: Outcome = "capture", detail: str = "") -> Self:
+        """Return the reply that wraps *context* in the hook-response envelope."""
+        envelope: dict[str, object] = {
+            "hookSpecificOutput": {
+                "hookEventName": "SessionStart",
+                "additionalContext": context,
+            },
+        }
+        return cls(envelope, kind, detail)
+
+    @classmethod
+    def refusing(
+        cls, registry: SyncRegistry, directory: Path, collection: str
+    ) -> Self | None:
+        """Register *directory*; return the reply that states a refusal, else ``None``.
+
+        The refusal's text is fixed and name-free, so it is safe to show; its detail
+        (which collection, which directory) goes to the redacted log line.  A refusal
+        says nothing about the daemon, so the trailer still applies.
+        """
+        try:
+            registry.register_directory(directory, collection)
+        except RegistrationRefusedError as exc:
+            logger.warning(
+                "session-start: auto-register of %s refused: %s [%s]",
+                directory,
+                exc,
+                exc.detail,
+            )
+            header = (
+                f"Quarry: auto-register of {directory} was refused: {exc}.\n"
+                "Nothing was registered; run 'quarry enable' after resolving it."
+            )
+            context = f"{header}\n{SessionStartTemplates.trailer()}"
+            return cls.of(context, "skip", "registration-refused")
+        return None
+
+    def traced(self, trace: HookTrace) -> dict[str, object]:
+        """Emit the trace line for this reply and return the envelope."""
+        if self.kind == "skip":
+            trace.skip(self.detail)
+        elif self.kind == "error":
+            trace.error(self.detail)
+        else:
+            trace.capture(self.detail)
+        return self.envelope

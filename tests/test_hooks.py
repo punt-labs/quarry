@@ -17,6 +17,7 @@ from typer.testing import CliRunner
 from quarry.__main__ import app
 from quarry._hook_trace import HookPayload
 from quarry._stdlib import HookConfig, load_hook_config, read_hook_stdin
+from quarry.active_session_context import ActiveSessionContext
 from quarry.client import (
     ClientConfigError,
     HttpError,
@@ -25,7 +26,6 @@ from quarry.client import (
 )
 from quarry.enabled_marker import EnabledMarker
 from quarry.hooks import (
-    _SessionStartContext,
     handle_post_web_fetch,
     handle_pre_compact,
     handle_session_start,
@@ -296,7 +296,7 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
                 return_value=settings,
             ),
             patch(
-                "quarry.hooks.SyncLock.launch_background_sync",
+                "quarry.active_session_context.SyncLock.launch_background_sync",
                 return_value="launched",
             ) as mock_sync,
         ):
@@ -334,7 +334,8 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
                 return_value=settings,
             ),
             patch(
-                "quarry.hooks.SyncLock.launch_background_sync", return_value="failed"
+                "quarry.active_session_context.SyncLock.launch_background_sync",
+                return_value="failed",
             ),
         ):
             result = handle_session_start({"cwd": str(project)})
@@ -359,7 +360,8 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
                 return_value=settings,
             ),
             patch(
-                "quarry.hooks.SyncLock.launch_background_sync", return_value="running"
+                "quarry.active_session_context.SyncLock.launch_background_sync",
+                return_value="running",
             ),
         ):
             result = handle_session_start({"cwd": str(project)})
@@ -388,7 +390,9 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
                 "quarry.hooks._SessionStartContext._resolve_settings",
                 return_value=settings,
             ),
-            patch("quarry.hooks.SyncLock.launch_background_sync") as mock_sync,
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync"
+            ) as mock_sync,
         ):
             result = handle_session_start({"cwd": str(project)})
 
@@ -416,9 +420,9 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
                 "quarry.hooks._SessionStartContext._resolve_settings",
                 return_value=settings,
             ),
-            patch("quarry.hooks.SyncLock.launch_background_sync"),
+            patch("quarry.active_session_context.SyncLock.launch_background_sync"),
             patch(
-                "quarry.hooks._SessionStartContext._session_coverage",
+                "quarry.active_session_context.ActiveSessionContext._session_coverage",
                 return_value={
                     "documents_indexed": 0,
                     "transcripts_captured": 0,
@@ -468,7 +472,7 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
                 "quarry.hooks._SessionStartContext._resolve_settings",
                 return_value=settings,
             ),
-            patch("quarry.hooks.SyncLock.launch_background_sync"),
+            patch("quarry.active_session_context.SyncLock.launch_background_sync"),
         ):
             result = handle_session_start({"cwd": str(project)})
 
@@ -503,10 +507,11 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
                 return_value=settings,
             ),
             patch(
-                "quarry.hooks.SyncLock.launch_background_sync", return_value="launched"
+                "quarry.active_session_context.SyncLock.launch_background_sync",
+                return_value="launched",
             ),
             patch(
-                "quarry.hooks._SessionStartContext._session_coverage",
+                "quarry.active_session_context.ActiveSessionContext._session_coverage",
                 return_value={
                     "documents_indexed": 0,
                     "transcripts_captured": 0,
@@ -565,10 +570,11 @@ class TestSessionStartTriggerRules(_ReachableDaemonEmptyCatalog):
                 return_value=self._settings(tmp_path),
             ),
             patch(
-                "quarry.hooks.SyncLock.launch_background_sync", return_value="launched"
+                "quarry.active_session_context.SyncLock.launch_background_sync",
+                return_value="launched",
             ),
             patch(
-                "quarry.hooks._SessionStartContext._session_coverage",
+                "quarry.active_session_context.ActiveSessionContext._session_coverage",
                 return_value={
                     "documents_indexed": 42,
                     "transcripts_captured": 7,
@@ -599,10 +605,12 @@ class TestSessionStartTriggerRules(_ReachableDaemonEmptyCatalog):
                 return_value=self._settings(tmp_path),
             ),
             patch(
-                "quarry.hooks.SyncLock.launch_background_sync", return_value="launched"
+                "quarry.active_session_context.SyncLock.launch_background_sync",
+                return_value="launched",
             ),
             patch(
-                "quarry.hooks._SessionStartContext._session_coverage", return_value=None
+                "quarry.active_session_context.ActiveSessionContext._session_coverage",
+                return_value=None,
             ),
         ):
             result = handle_session_start({"cwd": str(project)})
@@ -628,7 +636,9 @@ class TestSessionStartTriggerRules(_ReachableDaemonEmptyCatalog):
                 "quarry.hooks._SessionStartContext._resolve_settings",
                 return_value=settings,
             ),
-            patch("quarry.hooks.SyncLock.launch_background_sync") as sync,
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync"
+            ) as sync,
         ):
             result = handle_session_start({"cwd": str(parent)})
         sync.assert_not_called()
@@ -663,7 +673,9 @@ class TestSessionStartAutoRegisterRefusal:
                 "quarry.hooks._SessionStartContext._daemon_chunk_collections",
                 return_value=frozenset(),
             ),
-            patch("quarry.hooks.SyncLock.launch_background_sync") as sync,
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync"
+            ) as sync,
             patch.object(SyncRegistry, "register_directory", side_effect=refusal),
             caplog.at_level(logging.WARNING),
         ):
@@ -712,7 +724,7 @@ class TestSessionStartDaemonUnreachableCarriesTrailer:
                 "quarry.hooks._SessionStartContext._resolve_settings",
                 return_value=settings,
             ),
-            patch("quarry.hooks.SyncLock.launch_background_sync"),
+            patch("quarry.active_session_context.SyncLock.launch_background_sync"),
             patch(
                 "quarry.client.TargetResolver.connect",
                 side_effect=QuarryConnectionError("down", "url"),
@@ -754,7 +766,7 @@ class TestSessionStartReadopt:
                 "quarry.hooks._SessionStartContext._resolve_settings",
                 return_value=settings,
             ),
-            patch("quarry.hooks.SyncLock.launch_background_sync"),
+            patch("quarry.active_session_context.SyncLock.launch_background_sync"),
         ):
             result = handle_session_start({"cwd": str(project)})
 
@@ -806,7 +818,9 @@ class TestSessionStartFailsClosedWhenDaemonUnreachable:
                 "quarry.hooks._SessionStartContext._resolve_settings",
                 return_value=settings,
             ),
-            patch("quarry.hooks.SyncLock.launch_background_sync") as mock_sync,
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync"
+            ) as mock_sync,
             patch(
                 "quarry.client.TargetResolver.connect",
                 side_effect=QuarryConnectionError("down", "url"),
@@ -851,7 +865,9 @@ class TestSessionStartFailsClosedWhenDaemonUnreachable:
                 "quarry.hooks._SessionStartContext._resolve_settings",
                 return_value=settings,
             ),
-            patch("quarry.hooks.SyncLock.launch_background_sync") as mock_sync,
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync"
+            ) as mock_sync,
             patch(
                 "quarry.client.TargetResolver.connect",
                 side_effect=QuarryConnectionError("down", "url"),
@@ -886,7 +902,9 @@ class TestSessionStartFailsClosedWhenDaemonUnreachable:
                 "quarry.hooks._SessionStartContext._resolve_settings",
                 return_value=settings,
             ),
-            patch("quarry.hooks.SyncLock.launch_background_sync") as mock_sync,
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync"
+            ) as mock_sync,
             patch("quarry.client.TargetResolver.connect", return_value=client),
         ):
             handle_session_start({"cwd": str(project)})
@@ -1980,7 +1998,8 @@ class TestT15SessionStartChildUsesParentCollection:
                 return_value=settings,
             ),
             patch(
-                "quarry.hooks.SyncLock.launch_background_sync", return_value="launched"
+                "quarry.active_session_context.SyncLock.launch_background_sync",
+                return_value="launched",
             ),
         ):
             result = handle_session_start({"cwd": str(child)})
@@ -2025,7 +2044,8 @@ class TestT16SessionStartAutoRegisters(_ReachableDaemonEmptyCatalog):
                 return_value=settings,
             ),
             patch(
-                "quarry.hooks.SyncLock.launch_background_sync", return_value="launched"
+                "quarry.active_session_context.SyncLock.launch_background_sync",
+                return_value="launched",
             ),
         ):
             result = handle_session_start({"cwd": str(project)})
@@ -2074,7 +2094,8 @@ class TestT16bSessionStartParentOfChildrenSkipsAutoRegister:
                 return_value=settings,
             ),
             patch(
-                "quarry.hooks.SyncLock.launch_background_sync", return_value="launched"
+                "quarry.active_session_context.SyncLock.launch_background_sync",
+                return_value="launched",
             ),
             caplog.at_level(logging.WARNING, logger="quarry.hooks"),
         ):
@@ -2139,7 +2160,8 @@ class TestSessionStartMarkerGate(_ReachableDaemonEmptyCatalog):
                 return_value=settings,
             ),
             patch(
-                "quarry.hooks.SyncLock.launch_background_sync", return_value="launched"
+                "quarry.active_session_context.SyncLock.launch_background_sync",
+                return_value="launched",
             ) as sync,
         ):
             result = handle_session_start({"cwd": str(project)})
@@ -2169,7 +2191,9 @@ class TestSessionStartMarkerGate(_ReachableDaemonEmptyCatalog):
                 "quarry.hooks._SessionStartContext._resolve_settings",
                 return_value=settings,
             ),
-            patch("quarry.hooks.SyncLock.launch_background_sync") as sync,
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync"
+            ) as sync,
             patch(
                 "quarry.hooks._SessionStartContext._daemon_chunk_collections"
             ) as daemon,
@@ -2205,7 +2229,9 @@ class TestSessionStartMarkerGate(_ReachableDaemonEmptyCatalog):
                 "quarry.hooks._SessionStartContext._resolve_settings",
                 return_value=settings,
             ),
-            patch("quarry.hooks.SyncLock.launch_background_sync") as sync,
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync"
+            ) as sync,
             caplog.at_level(logging.WARNING, logger="quarry.hooks"),
         ):
             result = handle_session_start({"cwd": str(project)})
@@ -2289,7 +2315,9 @@ class TestCwdHardeningSessionStart:
     def test_relative_cwd_does_not_register(self, tmp_path: Path) -> None:
         with (
             patch("quarry.hooks._SessionStartContext._resolve_settings") as settings,
-            patch("quarry.hooks.SyncLock.launch_background_sync") as sync,
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync"
+            ) as sync,
         ):
             result = handle_session_start({"cwd": "src"})
         assert result == {}
@@ -2299,7 +2327,9 @@ class TestCwdHardeningSessionStart:
     def test_non_string_cwd_does_not_register(self, tmp_path: Path) -> None:
         with (
             patch("quarry.hooks._SessionStartContext._resolve_settings") as settings,
-            patch("quarry.hooks.SyncLock.launch_background_sync") as sync,
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync"
+            ) as sync,
         ):
             result = handle_session_start({"cwd": 123})
         assert result == {}
@@ -2415,7 +2445,7 @@ class TestSessionCoverageFailure:
             patch("quarry.client.TargetResolver.connect", return_value=client),
             caplog.at_level(logging.WARNING, logger="quarry.hooks"),
         ):
-            counts = _SessionStartContext._session_coverage("repo", "repo-captures")
+            counts = ActiveSessionContext._session_coverage("repo")
         assert counts is None
         [record] = caplog.records
         assert record.levelno == logging.WARNING

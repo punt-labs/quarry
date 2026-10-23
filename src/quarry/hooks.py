@@ -23,15 +23,14 @@ from typing import TYPE_CHECKING, Self, final
 
 from quarry._hook_trace import HookPayload, HookTrace
 from quarry._stdlib import load_hook_config
+from quarry.active_session_context import ActiveSessionContext
 from quarry.pre_compact_hook import PreCompactHook
-from quarry.registration_notice import RegistrationNotice
+from quarry.session_start_reply import SessionStartReply
 from quarry.session_start_templates import SessionStartTemplates
-from quarry.sync_lock import SyncLock
 
 if TYPE_CHECKING:
     from quarry.collection_resolver import CollectionResolver
     from quarry.config import Settings
-    from quarry.results import CoverageCounts
     from quarry.sync_registry import DirectoryRegistration, SyncRegistry
 
 logger = logging.getLogger(__name__)
@@ -76,9 +75,7 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
         trace.skip("not-a-dir")
         return {}
     trace.mark_payload(ok=True)
-    result = _SessionStartContext.open(directory).dispatch()
-    trace.capture()
-    return result
+    return _SessionStartContext.open(directory).dispatch().traced(trace)
 
 
 @final
@@ -115,7 +112,7 @@ class _SessionStartContext:
         conn = SyncRegistry(settings.registry_path)
         return cls(directory, conn, CollectionResolver(conn))
 
-    def dispatch(self) -> dict[str, object]:
+    def dispatch(self) -> SessionStartReply:
         """Route to Path A / B / C by (marker, covering) and close the registry."""
         try:
             registration = self._resolver.covering_registration(str(self._directory))
@@ -144,16 +141,18 @@ class _SessionStartContext:
             and EnabledMarker(Path(registration.directory)).is_present()
         )
 
-    def _path_a(self, collection: str | None) -> dict[str, object]:
+    def _path_a(self, collection: str | None) -> SessionStartReply:
         """Marker present: run the active flow (auto-register if needed, sync)."""
         if collection is None:
             registered_or_short_circuit = self._auto_register()
-            if isinstance(registered_or_short_circuit, dict):
+            if isinstance(registered_or_short_circuit, SessionStartReply):
                 return registered_or_short_circuit
             collection = registered_or_short_circuit
-        return self._envelope(self._active_context(collection))
+        return SessionStartReply.of(
+            ActiveSessionContext(self._directory, collection).text()
+        )
 
-    def _path_b(self) -> dict[str, object]:
+    def _path_b(self) -> SessionStartReply:
         """No marker, no coverage: nudge the operator to run ``quarry enable``.
 
         Read-only: the covering registration was already checked to reach
@@ -161,9 +160,9 @@ class _SessionStartContext:
         registration is written, no guide is deposited. § 2.3 reserves both
         mutations to the explicit ``enable`` verb.
         """
-        return self._envelope(SessionStartTemplates.nudge_enable(self._directory))
+        return SessionStartReply.of(SessionStartTemplates.nudge_enable(self._directory))
 
-    def _path_c(self, collection: str) -> dict[str, object]:
+    def _path_c(self, collection: str) -> SessionStartReply:
         """Marker absent + coverage exists: surface the drift; two doors, no auto-fix.
 
         Auto-register is refused (already registered); auto-deregister is
@@ -176,17 +175,17 @@ class _SessionStartContext:
             collection,
             self._directory,
         )
-        return self._envelope(
+        return SessionStartReply.of(
             SessionStartTemplates.drift_surface(self._directory, collection)
         )
 
-    def _auto_register(self) -> str | dict[str, object]:
+    def _auto_register(self) -> str | SessionStartReply:
         """Register the covering row and return its collection name.
 
-        Returns the collection ``str`` on success. Returns a response
-        envelope (``dict``) when the flow must short-circuit — subsumption
-        refusal, a registration the registry refuses, or a daemon-unreachable
-        defer.
+        Returns the collection ``str`` on success. Returns the reply when the
+        flow must short-circuit — subsumption refusal, a registration the
+        registry refuses, or a daemon-unreachable defer — each traced as what it
+        is, never as a capture.
         """
         if self._conn.has_registrations_under(self._directory):
             logger.warning(
@@ -196,7 +195,11 @@ class _SessionStartContext:
                 self._directory,
                 self._directory,
             )
-            return self._envelope(SessionStartTemplates.subsumption(self._directory))
+            return SessionStartReply.of(
+                SessionStartTemplates.subsumption(self._directory),
+                "skip",
+                "subsumption",
+            )
         # A same-directory re-adopt reuses this cwd's own keep-data archive
         # before consulting the daemon — so a re-open of an archived repo
         # works even when quarryd is down.
@@ -216,38 +219,23 @@ class _SessionStartContext:
                     "auto-registration of %s to avoid a cross-project merge",
                     self._directory,
                 )
-                return self._envelope(
-                    SessionStartTemplates.daemon_unreachable(self._directory)
+                return SessionStartReply.of(
+                    SessionStartTemplates.daemon_unreachable(self._directory),
+                    "error",
+                    "daemon-unreachable",
                 )
             collection = self._resolver.unique_collection_name(
                 self._directory, chunk_collections
             )
-        refused = RegistrationNotice.register(self._conn, self._directory, collection)
+        refused = SessionStartReply.refusing(self._conn, self._directory, collection)
         if refused is not None:
-            return self._envelope(refused)
+            return refused
         logger.info(
             "session-start: auto-registered %s as '%s'",
             self._directory,
             collection,
         )
         return collection
-
-    def _active_context(self, collection: str) -> str:
-        """Build the active-mode ``additionalContext`` string."""
-        captures_collection = f"{collection}-captures"
-        sync_status = SyncLock().launch_background_sync()
-        counts = self._session_coverage(collection, captures_collection)
-        if counts is None:
-            return SessionStartTemplates.active_unreachable_coverage(
-                self._directory, collection, captures_collection, sync_status
-            )
-        return SessionStartTemplates.active(
-            self._directory,
-            collection,
-            captures_collection,
-            counts,
-            sync_status,
-        )
 
     @staticmethod
     def _resolve_settings() -> Settings:
@@ -280,54 +268,6 @@ class _SessionStartContext:
             msg = "quarryd unreachable; chunk-collection set unverifiable"
             raise ConnectionError(msg) from exc
         return frozenset(listing.chunk_collections)
-
-    @staticmethod
-    def _session_coverage(
-        collection: str, captures_collection: str
-    ) -> CoverageCounts | None:
-        """Fetch per-repo coverage counts from the daemon.
-
-        Returns ``None`` whenever the client cannot obtain counts — daemon
-        unreachable, HTTP error (including 401 not-authorized), malformed
-        response, or client misconfiguration.  ``ClientConfigError`` is a
-        ``QuarryError`` subclass, so a single ``except QuarryError`` catches
-        every failure mode the client hierarchy names.
-
-        Mirrors ``_daemon_chunk_collections`` at the boundary: client-specific
-        exceptions become a single ``None`` signal, so the SessionStart template
-        can fall back to a coverage-unavailable message without importing the
-        client exception hierarchy.  ``None`` is the documented "unavailable"
-        contract here (the failure's class is logged at WARNING) — the caller
-        distinguishes it from the empty-catalog case where the daemon answered
-        with zeros.
-        """
-        del captures_collection  # daemon derives the sibling name server-side
-        from quarry.client import (  # noqa: PLC0415
-            ClientConfigError,
-            QuarryError,
-            TargetResolver,
-        )
-
-        try:
-            resp = TargetResolver.connect().coverage(collection)
-        except (ClientConfigError, QuarryError) as exc:
-            logger.warning("session coverage unavailable: %s", type(exc).__name__)
-            return None
-        return {
-            "documents_indexed": resp.documents_indexed,
-            "transcripts_captured": resp.transcripts_captured,
-            "memories_saved": resp.memories_saved,
-        }
-
-    @staticmethod
-    def _envelope(context: str) -> dict[str, object]:
-        """Wrap *context* in the SessionStart hook-response envelope."""
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "SessionStart",
-                "additionalContext": context,
-            },
-        }
 
 
 def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
