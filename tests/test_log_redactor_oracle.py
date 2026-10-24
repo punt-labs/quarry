@@ -190,6 +190,38 @@ def test_lines_around_a_split_url_survive(
     assert shown.startswith("\n".join(before)) or not before
 
 
+_DELIMITERS = ")].,:;>'\""
+
+
+@st.composite
+def _url_then_delimiters(draw: st.DrawFn) -> tuple[str, str]:
+    """Return a URL, with or without credentials, and a run of trailing delimiters."""
+    userinfo = draw(st.one_of(st.just(""), _userinfo().map(lambda u: u + "@")))
+    url = (
+        f"{draw(st.sampled_from(_SCHEMES))}://{userinfo}{draw(_any_host)}"
+        f"{draw(st.sampled_from(_TAILS))}"
+    )
+    # A ``:`` after credentials may be a password about to continue, so it is masked.
+    alphabet = _DELIMITERS if not userinfo else _DELIMITERS.replace(":", "")
+    return url, draw(st.text(alphabet=alphabet, min_size=1, max_size=4))
+
+
+@_PROFILE
+@given(_url_then_delimiters())
+def test_the_delimiters_after_a_url_survive_exactly(case: tuple[str, str]) -> None:
+    url, delimiters = case
+    shown = redacted(f"see {url}{delimiters}")
+    assert shown.endswith(delimiters), shown
+    assert not set(shown) & set(_MARKER_CHARS), shown
+
+
+@_PROFILE
+@given(_url_then_delimiters())
+def test_a_url_with_trailing_delimiters_is_idempotent(case: tuple[str, str]) -> None:
+    once = redacted("see " + "".join(case))
+    assert redacted(once) == once
+
+
 def _passes_needed(text: str) -> int:
     count = 0
     while (after := LogRedactor._once(text)) != text:

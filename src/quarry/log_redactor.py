@@ -183,9 +183,36 @@ class LogRedactor:
     def _bare_url(cls, match: re.Match[str]) -> str:
         """Return a URL match as ``scheme://host[:port]/…(segments=N)``.
 
-        A URL already in that form is returned as it stands, so redacting twice
-        changes nothing.
+        Delimiters that end the match but are no part of a URL's meaning stay
+        outside it and follow the log form unchanged.  A URL already in that form
+        is returned as it stands, so redacting twice changes nothing.
         """
+        core, tail = cls._split_tail(match.group())
+        inner = cls._SCHEME_URL.fullmatch(core)
+        return cls._log_form(inner or match) + (tail if inner else "")
+
+    @staticmethod
+    def _split_tail(url: str) -> tuple[str, str]:
+        """Return *url* without its trailing delimiters, and those delimiters.
+
+        The usual linkify rule: a run of ``, . : ; ' " >`` at the end is prose, and
+        so is a ``)`` or ``]`` that closes nothing opened inside the URL.
+        """
+        end = len(url)
+        while end:
+            last = url[end - 1]
+            opener = {")": "(", "]": "["}.get(last)
+            closes_nothing = opener is not None and url.count(last, 0, end) > url.count(
+                opener, 0, end
+            )
+            if last not in ".,:;'\">" and not closes_nothing:
+                break
+            end -= 1
+        return url[:end], url[end:]
+
+    @classmethod
+    def _log_form(cls, match: re.Match[str]) -> str:
+        """Return the log form of a URL match."""
         host = match.group("host")
         if not AuthorityMask.HOST.fullmatch(host):
             host = "[host]"

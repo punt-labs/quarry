@@ -562,3 +562,42 @@ class TestThePassCap:
     def test_a_truncated_record_that_settles_keeps_its_marker(self) -> None:
         shown = redacted("a" * (LogRedactor.MAX_RECORD + 5))
         assert shown.endswith(" […truncated 5 bytes]")
+
+
+class TestPunctuationAfterAUrlStaysOutsideIt:
+    @pytest.mark.parametrize(
+        ("raw", "shown"),
+        [
+            ("see (https://h/x/y).", "see (https://h/…(segments=2))."),
+            (
+                "fetch refused: HTTPError [https://example.com/x]: boom",
+                "fetch refused: HTTPError [https://example.com/…(segments=1)]: boom",
+            ),
+            ("go to https://h/a/b, then", "go to https://h/…(segments=2), then"),
+            ("<https://h/a>", "<https://h/…(segments=1)>"),
+            ("said 'https://h/a'.", "said 'https://h/…(segments=1)'."),
+            ("https://h/a;", "https://h/…(segments=1);"),
+            ("https://h/p?x=1).", "https://h/…(segments=1))."),
+            ("https://h:8080.", "https://h:8080/…(segments=0)."),
+        ],
+        ids=[
+            "paren-period",
+            "bracket-colon",
+            "comma",
+            "angle",
+            "quotes",
+            "semicolon",
+            "query-then-paren",
+            "host-period",
+        ],
+    )
+    def test_the_delimiters_follow_the_log_form(self, raw: str, shown: str) -> None:
+        assert redacted(raw) == shown
+
+    def test_a_balanced_pair_inside_the_url_is_part_of_it(self) -> None:
+        assert redacted("https://h/a_(b)/c.") == "https://h/…(segments=2)."
+
+    def test_a_delimiter_run_cannot_hide_userinfo(self) -> None:
+        shown = redacted("https://u:SECRET@h/p).")
+        assert "SECRET" not in shown
+        assert shown == "https://h/…(segments=1))."
