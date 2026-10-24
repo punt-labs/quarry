@@ -111,10 +111,13 @@ class SitemapReader:
             if isinstance(node, InvalidSitemap)
         ]
         if invalid and not pages:
+            cause = self._cause(sitemap, url.fetch_url)
             logger.warning(
-                "sitemap unreadable: %d of its nodes failed: %s", len(invalid), url
+                "sitemap unreadable: %s: %s",
+                url,
+                cause or f"{len(invalid)} of its nodes failed",
             )
-            raise FetchRefusedError(_UNREADABLE)
+            raise FetchRefusedError(f"{_UNREADABLE}: {cause}" if cause else _UNREADABLE)
         if invalid:
             logger.warning(
                 "%d sub-sitemap(s) of %s could not be read; %d pages kept",
@@ -122,5 +125,23 @@ class SitemapReader:
                 url,
                 len(pages),
             )
+        if not pages:
+            logger.warning("sitemap lists no pages: %s", url)
         logger.info("Parsed %d pages from %s", len(pages), url)
         return pages
+
+    @staticmethod
+    def _cause(sitemap: object, fetch_url: str) -> str | None:
+        """Return why the root sitemap could not be fetched, or ``None``.
+
+        USP words that failure as ``Unable to fetch sitemap from <url>: <message>``,
+        and the message is one our fetch layer wrote, with no URL in it.  Only that
+        exact prefix is trusted: any other reason (a parse failure, say) embeds the
+        URL, so it is not used.
+        """
+        if not isinstance(sitemap, InvalidSitemap):
+            return None
+        prefix = f"Unable to fetch sitemap from {fetch_url}: "
+        if not sitemap.reason.startswith(prefix):
+            return None
+        return sitemap.reason[len(prefix) :] or None

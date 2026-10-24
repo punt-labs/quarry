@@ -413,7 +413,10 @@ def test_a_real_sitemap_parser_failure_is_the_exact_refusal_and_leaves_no_secret
         SitemapDiscovery.discover_urls(HttpUrl(url))
     _flush()
 
-    assert str(info.value) == "fetch failed: sitemap could not be fetched or parsed"
+    assert str(info.value) == (
+        "fetch failed: sitemap could not be fetched or parsed: "
+        "fetch failed: cannot reach the host (str)"
+    )
     written = logfile.read_text()
     assert "safe.example" in written
     assert "QSEC" not in written

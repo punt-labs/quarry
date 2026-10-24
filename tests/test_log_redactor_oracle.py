@@ -227,6 +227,50 @@ def test_a_secret_query_or_fragment_never_shows_the_delimiters_after_it(
     assert not shown.endswith(tuple(delimiters)), shown
 
 
+_value_with_quotes = (
+    st.lists(
+        st.one_of(_secret, st.sampled_from(("'", '"', "<", ">"))),
+        min_size=1,
+        max_size=6,
+    )
+    .map("".join)
+    .filter(lambda text: any(c in _MARKER_CHARS for c in text))
+)
+
+
+@_PROFILE
+@given(
+    st.sampled_from(_SCHEMES),
+    _any_host,
+    _value_with_quotes,
+    st.sampled_from(("?t=", "#")),
+)
+def test_a_query_or_fragment_secret_holding_quotes_never_survives(
+    scheme: str, host: str, value: str, opener: str
+) -> None:
+    shown = redacted(f"see {scheme}://{host}/p{opener}{value} end")
+    assert not set(shown) & set(_MARKER_CHARS), shown
+    assert redacted(shown) == shown
+
+
+@_PROFILE
+@given(
+    st.sampled_from(_SCHEMES),
+    _any_host,
+    _secret,
+    st.text(alphabet=")]", min_size=1, max_size=4),
+    st.sampled_from(("?t=", "#")),
+)
+def test_a_secret_ending_in_closers_with_no_opener_never_shows_them(
+    scheme: str, host: str, secret: str, closers: str, opener: str
+) -> None:
+    shown = redacted(f"see {scheme}://{host}/p{opener}{secret}{closers}")
+    assert not set(shown) & set(_MARKER_CHARS), shown
+    # The log form carries its own balanced ``(segments=N)``; nothing else closes.
+    assert shown.count(")") <= shown.count("("), shown
+    assert shown.count("]") <= shown.count("["), shown
+
+
 @_PROFILE
 @given(st.sampled_from(_SCHEMES), _secret)
 def test_a_bare_label_before_a_colon_is_never_shown(scheme: str, label: str) -> None:
@@ -270,8 +314,8 @@ def test_arbitrary_url_shaped_text_is_idempotent(text: str) -> None:
     assert redacted(once) == once
 
 
-# djb's proof inputs that once leaked, kept as explicit examples.  The corpus and
-# whitespace tests in test_log_redactor.py hold the rest of p1-p22.
+# Inputs that once leaked, kept as explicit examples.  The corpus and
+# whitespace tests in test_log_redactor.py hold the rest of the proof inputs.
 _PROOFS = (
     "see https://u:SECRET@h.example/p?x=1 end",
     "https://u:" + "Q" * 2049 + " X@h.example/p",

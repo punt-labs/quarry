@@ -242,3 +242,15 @@ class TestLogFileIsABareFilename:
         for name in (LoggingConfig.CLIENT_LOG, LoggingConfig.DAEMON_LOG):
             with patch("quarry.logging_config.logging.config.dictConfig"):
                 LoggingConfig.configure(log_file=name)
+
+
+@pytest.mark.parametrize("name", ["usp", "usp.helpers"])
+def test_the_parser_librarys_warnings_are_never_capped_above_warning(
+    name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """USP reports the failures that matter at WARNING; no level may hide them."""
+    monkeypatch.delenv("QUARRY_LOG_LEVEL", raising=False)
+    with patch("quarry.logging_config.logging.config.dictConfig") as mock_dc:
+        LoggingConfig.configure()
+    level = mock_dc.call_args[0][0]["loggers"].get(name, {}).get("level", "NOTSET")
+    assert logging.getLevelNamesMapping()[level] <= logging.WARNING

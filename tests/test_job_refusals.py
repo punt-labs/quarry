@@ -385,6 +385,25 @@ async def test_an_unreadable_sitemap_fails_the_task(
     assert state.error == "fetch failed: sitemap could not be fetched or parsed"
 
 
+async def test_a_sitemap_listing_no_pages_fails_the_task(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    from usp.objects.sitemap import PagesXMLSitemap
+
+    daemon = InProcessDaemon(tmp_path)
+    state = TaskState(task_id="t-empty", kind="ingest")
+    sitemap = PagesXMLSitemap(url=_SITEMAP_URL, pages=[])
+
+    with caplog.at_level(logging.WARNING), patch(_FETCHER) as fetcher:
+        fetcher.return_value.sitemap.return_value = sitemap
+        await _sitemap_job().run(daemon.ctx, state)
+
+    assert state.status == "failed"
+    assert "sitemap lists no pages" in caplog.text
+    assert "SECRET" not in caplog.text
+    assert state.error == "nothing was stored: no pages were selected for ingest"
+
+
 async def test_a_sitemap_listing_only_unsafe_urls_fails_the_task(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,

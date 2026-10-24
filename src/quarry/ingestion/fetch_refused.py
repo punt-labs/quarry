@@ -98,8 +98,10 @@ class FetchRefusedError(UnindexableContentError):
     def policy(cls, reason: str, *, subject: str) -> Self:
         """Return the refusal for a fetch a policy blocked, and log it once.
 
-        *reason* names a rule and quotes nothing of the URL, so it is safe to log
-        and to hand back as the failure message; *subject* is the redacted URL.
+        *reason* names a rule and at most the host, so it is safe to log and to
+        hand back as the failure message; *subject* is the redacted URL.  Our layer
+        logs it once; a caller whose library also reports the failed request (USP
+        does) logs it again, and that is its own line.
         """
         logger.warning("fetch refused: %s [%s]", reason, subject)
         return cls(reason)

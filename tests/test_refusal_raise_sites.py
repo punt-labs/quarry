@@ -28,8 +28,9 @@ _PINNED_HELPERS = frozenset({"_ratio_message"})
 
 # file (relative to src/quarry) -> how many constructions interpolate, and why each is
 # safe.  Only counts and sizes, a column name, a page number, a sniffed-format or
-# media-type label that its owner sanitises, an UrlAdmission reason (a rule or a host
-# name), a rule text from the SSRF policy, a status code, or a FailureReason.
+# media-type label that its owner sanitises, a status message our fetch layer wrote,
+# an UrlAdmission reason (a rule or a host name), a rule text from the SSRF policy, a
+# status code, or a FailureReason.
 # Never a caller-supplied name, URL, path or credential.
 _ALLOWED: dict[str, int] = {
     "content_guard.py": 2,
@@ -40,6 +41,7 @@ _ALLOWED: dict[str, int] = {
     "ingestion/media_type_policy.py": 1,
     "ingestion/fetched_body.py": 3,
     "ingestion/fetch_refused.py": 5,
+    "ingestion/sitemap_reader.py": 1,
     "daemon/refusal_aware_terminal.py": 1,
     "extractors/sheet_tables.py": 0,
 }

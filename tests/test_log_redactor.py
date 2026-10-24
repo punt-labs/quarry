@@ -282,7 +282,7 @@ _URL_CORPUS = {
 
 
 class TestUrlCorpus:
-    """Every position a URL can hold a secret, from the djb audit (D1, D2)."""
+    """Every position a URL can hold a secret."""
 
     @pytest.mark.parametrize("name", list(_URL_CORPUS))
     def test_no_secret_survives(self, name: str) -> None:
@@ -350,7 +350,7 @@ class TestRecordCap:
 
 
 _WS = ("\n", "\t", "\r")
-# Every whitespace character urlsplit or a log reader may put inside a URL (djb's list).
+# Every whitespace character urlsplit or a log reader may put inside a URL.
 _ALL_WS = (
     "\n",
     "\t",
@@ -441,7 +441,7 @@ class TestWhitespaceInsideAUrl:
         assert redacted("a\tb\nc: d//e") == "a\tb\nc: d//e"
 
     def test_a_deterministic_sweep_finds_no_leak_and_stays_idempotent(self) -> None:
-        """djb's p12/p13 fuzz as a fixed sweep, with every whitespace character."""
+        """A fixed sweep of the fuzz cases, with every whitespace character."""
         schemes = ["http", "HtTp", "ftp", "a+b.c-d"]
         users = ["user", "", "us:er", "u@x"]
         passwords = ["SECRETPW", "S%40ECRET", "SEC.RET", "SECRETPW" * 20]
@@ -577,7 +577,7 @@ class TestPunctuationAfterAUrlStaysOutsideIt:
             ("<https://h/a>", "<https://h/…(segments=1)>"),
             ("said 'https://h/a'.", "said 'https://h/…(segments=1)'."),
             ("https://h/a;", "https://h/…(segments=1);"),
-            ("https://h/p?x=1).", "https://h/…(segments=1))"),
+            ("https://h/p?x=1).", "https://h/…(segments=1)"),
             ("https://h:8080.", "https://h:8080/…(segments=0)."),
         ],
         ids=[
@@ -607,14 +607,41 @@ class TestTheTailNeverRevealsAQueryOrAHostPosition:
     def test_delimiters_after_a_query_are_dropped(self) -> None:
         assert redacted("http://h/p?t=ab;;;;") == "http://h/…(segments=1)"
 
+    @pytest.mark.parametrize("char", ["'", '"', "<", ">"])
+    @pytest.mark.parametrize("opener", ["?t=", "#"])
+    def test_a_quote_or_angle_bracket_inside_a_query_does_not_end_the_match(
+        self, char: str, opener: str
+    ) -> None:
+        shown = redacted(f"http://h/p{opener}AB{char}CDSECRET")
+        assert shown == "http://h/…(segments=1)"
+
+    def test_a_quote_still_ends_the_url_in_the_path(self) -> None:
+        assert redacted("say 'http://h/a' now") == "say 'http://h/…(segments=1)' now"
+
     def test_delimiters_after_a_fragment_are_dropped(self) -> None:
         assert redacted("http://h/p#ab.,;") == "http://h/…(segments=1)"
 
-    def test_a_closer_that_closes_a_bracket_outside_the_match_is_kept(self) -> None:
-        assert redacted("(see http://h/p?t=ab)") == "(see http://h/…(segments=1))"
+    def test_a_closer_that_closes_a_bracket_opened_in_the_token_is_kept(self) -> None:
+        assert redacted("(http://h/p?t=ab)") == "(http://h/…(segments=1))"
 
     def test_a_closer_is_kept_after_dropped_delimiters(self) -> None:
-        assert redacted("(see http://h/p?t=ab;.)") == "(see http://h/…(segments=1))"
+        assert redacted("(http://h/p?t=ab;.)") == "(http://h/…(segments=1))"
+
+    @pytest.mark.parametrize(
+        ("text", "shown"),
+        [
+            ("http://h/p?t=ab)", "http://h/…(segments=1)"),
+            ("(http://h/p?t=ab))", "(http://h/…(segments=1))"),
+            ("[http://h/p#f])", "[http://h/…(segments=1)]"),
+            ("http://h/p?t=ab])", "http://h/…(segments=1)"),
+            ("(see http://h/p?t=ab)", "(see http://h/…(segments=1)"),
+        ],
+        ids=["none-open", "one-open-two-close", "bracket", "mixed", "other-token"],
+    )
+    def test_no_more_closers_are_kept_than_openers_precede_the_url(
+        self, text: str, shown: str
+    ) -> None:
+        assert redacted(text) == shown
 
     @pytest.mark.parametrize(
         "text", ["https://X:", "see https://X: ok", "https://abc:def:"]

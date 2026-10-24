@@ -149,6 +149,9 @@ class GatedSitemapWebClient(AbstractWebClient):
 
     @staticmethod
     def _blocked(reason: str, url: str) -> WebClientErrorResponse:
-        """Refuse *url* for a policy *reason*: logged once, never retried."""
+        """Refuse *url* for a policy *reason*: never retried.
+
+        Our layer logs it once; USP also reports the failed request.
+        """
         refusal = FetchRefusedError.policy(reason, subject=UrlAdmission.shown(url))
         return WebClientErrorResponse(str(refusal), retryable=False)

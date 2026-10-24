@@ -66,7 +66,7 @@ class LogRedactor:
     _SCHEME_URL: ClassVar[re.Pattern[str]] = re.compile(
         r"(?<![A-Za-z0-9+.\-])(?P<scheme>[A-Za-z0-9+.\-]{1,2047})://"
         r"(?:[^\s/\\?#]*@)?(?P<host>[^\s/\\?#'\"<>@]*)"
-        r"(?P<path>[^\s?#'\"<>]*)(?:[?#][^\s'\"<>]*)?"
+        r"(?P<path>[^\s?#'\"<>]*)(?:[?#]\S*)?"
     )
     _FORM: ClassVar[re.Pattern[str]] = re.compile(r"/…\(segments=\d+\)[).,;:\]}]*")
     # Scheme-less "user:password@": tried only where a run of user characters
@@ -190,16 +190,18 @@ class LogRedactor:
         outside it and follow the log form unchanged.  A URL already in that form
         is returned as it stands, so redacting twice changes nothing.
         """
-        core, tail = cls._split_tail(match.group())
+        core, tail = cls._split_tail(match.group(), match.string[: match.start()])
         inner = cls._SCHEME_URL.fullmatch(core)
         return cls._log_form(inner or match) + (tail if inner else "")
 
     @classmethod
-    def _split_tail(cls, url: str) -> tuple[str, str]:
+    def _split_tail(cls, url: str, outside: str) -> tuple[str, str]:
         """Return *url* without its trailing delimiters, and what is kept of them.
 
-        Prose after a query or a fragment is not kept as it stands, since it may be
-        the end of a secret: only the closers survive.  A ``:`` after a bare host
+        *outside* is the text of the token before the URL.  Prose after a query or
+        a fragment is not kept as it stands, since it may be the end of a secret:
+        only as many closers survive as *outside* has unmatched openers.  A ``:``
+        after a bare host
         stays in the URL, where the host position is masked.
         """
         core, tail = cls._peel(url)
@@ -207,8 +209,22 @@ class LogRedactor:
         if ":" in tail and not any(char in rest for char in "/?#"):
             return url, ""
         if "?" in core or "#" in core:
-            return core, "".join(char for char in tail if char in cls._OPENERS)
+            return core, cls._closers(tail, outside)
         return core, tail
+
+    @classmethod
+    def _closers(cls, tail: str, outside: str) -> str:
+        """Return the closers of *tail* that close an opener left open in *outside*."""
+        open_count = {
+            closer: outside.count(opener) - outside.count(closer)
+            for closer, opener in cls._OPENERS.items()
+        }
+        kept = []
+        for char in tail:
+            if open_count.get(char, 0) > 0:
+                open_count[char] -= 1
+                kept.append(char)
+        return "".join(kept)
 
     @classmethod
     def _peel(cls, url: str) -> tuple[str, str]:

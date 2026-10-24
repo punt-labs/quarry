@@ -852,3 +852,27 @@ class TestAnSsrfBlockIsLoggedByOurLayer:
         ours = [r for r in caplog.records if r.name.endswith("fetch_refused")]
         assert [r.levelno for r in ours] == [logging.WARNING]
         assert "SSRF-blocked final URL" in ours[0].getMessage()
+
+
+class TestUspsGunzipWarningReachesTheLog:
+    def test_a_gz_url_with_a_plain_body_warns_from_usp_helpers(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from quarry.http_url import HttpUrl
+        from quarry.ingestion.sitemap_reader import SitemapReader
+
+        url = "https://safe.example/s.xml.gz"
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(
+            swc,
+            "GUARDED_OPENER",
+            _FakeOpener({url: _urlset_xml("https://safe.example/a")}),
+        )
+        with caplog.at_level(logging.DEBUG):
+            SitemapReader().read(HttpUrl(url))
+        gunzip = [
+            r
+            for r in caplog.records
+            if r.name == "usp.helpers" and "Unable to gunzip" in r.getMessage()
+        ]
+        assert [r.levelno for r in gunzip] == [logging.WARNING]

@@ -1516,6 +1516,7 @@ class TestInvalidSitemapFailsTheFetch:
             SitemapDiscovery.discover_urls(HttpUrl(self._URL))
         assert [r.getMessage() for r in caplog.records] == [
             "Fetching sitemap: https://example.com/…(segments=1)",
+            "sitemap lists no pages: https://example.com/…(segments=1)",
             "Parsed 0 pages from https://example.com/…(segments=1)",
         ]
 
