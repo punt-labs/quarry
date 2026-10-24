@@ -67,6 +67,6 @@ class IngestContext:
     agent_handle: str = ""
     memory_type: MemoryType = ""
     summary: str = ""
-    url_sourced: bool = False
+    url_sourced: bool = False  # a fetched URL's page, not a label or a file
     # The instant to record as ingestion time; ``None`` is the time of chunking.
-    ingested_at: datetime | None = None  # a fetched URL's page, not a label or a file
+    ingested_at: datetime | None = None

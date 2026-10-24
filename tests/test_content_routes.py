@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from datetime import UTC, datetime
 from http.client import HTTPMessage, HTTPResponse
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
@@ -808,7 +809,9 @@ class TestTheRoutesCheckTheNamesThatAreStored:
 
 class TestACaptureSnapshotTime:
     @staticmethod
-    def _filed(http: TestClient, tmp_path: Path, **fields: str) -> tuple[int, object]:
+    def _filed(
+        http: TestClient, tmp_path: Path, **fields: object
+    ) -> tuple[int, object]:
         body = {"content": "x", "session_id": "abcd1234ef", "cwd": str(tmp_path)}
         with patch(
             "quarry.daemon.routes.captures.CaptureRoutes.submit",
@@ -835,8 +838,38 @@ class TestACaptureSnapshotTime:
         assert isinstance(job, CaptureIngestJob)
         assert job.inline.captured_at is None
 
+    def test_a_future_instant_is_clamped_to_now_not_refused(
+        self, http: TestClient, tmp_path: Path
+    ) -> None:
+        status, job = self._filed(http, tmp_path, captured_at="2999-01-01T00:00:00Z")
+        assert status == 200
+        assert isinstance(job, CaptureIngestJob)
+        assert job.inline.captured_at is not None
+        assert abs((datetime.now(UTC) - job.inline.captured_at).total_seconds()) < 60
+
     @pytest.mark.parametrize(
-        "raw", ["yesterday", "2999-01-01T00:00:00Z", "1999-01-01T00:00:00Z"]
+        "body",
+        [
+            {"captured_at": 123},
+            {"captured_at": ["2026-01-01T00:00:00Z"]},
+            {"session_id": 5},
+        ],
+    )
+    def test_a_non_string_captured_at_or_session_id_is_a_400(
+        self, body: dict[str, object], http: TestClient, tmp_path: Path
+    ) -> None:
+        status, job = self._filed(http, tmp_path, **body)
+        assert status == 400
+        assert job is None
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "yesterday",
+            "1999-01-01T00:00:00Z",
+            "0001-01-01T00:00:00+05:00",
+            "9999-12-31T23:59:59-05:00",
+        ],
     )
     def test_a_bad_or_out_of_bounds_instant_is_a_400(
         self, raw: str, http: TestClient, tmp_path: Path

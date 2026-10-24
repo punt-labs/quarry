@@ -84,6 +84,15 @@ class CaptureRoutes(ContentRouteGroup):
         )
         return CaptureIngestJob(inline=inline, source_url=source if is_page else None)
 
+    @staticmethod
+    def _require_strings(body: dict[str, object], keys: tuple[str, ...]) -> None:
+        """Raise ``ValueError`` naming the first of *keys* present but not a string."""
+        for key in keys:
+            value = body.get(key)
+            if value is not None and not isinstance(value, str):
+                msg = f"{key} must be a string"
+                raise ValueError(msg)
+
     def _require_identity(
         self, body: dict[str, object]
     ) -> tuple[str, datetime | None] | JSONResponse:
@@ -92,6 +101,7 @@ class CaptureRoutes(ContentRouteGroup):
         The snapshot is ``None`` when ``captured_at`` is absent (queue time).
         """
         try:
+            self._require_strings(body, ("session_id", "captured_at"))
             name = CaptureNaming.name(
                 self._str_field(body, "document_name"),
                 self._str_field(body, "session_id"),

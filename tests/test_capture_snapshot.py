@@ -7,6 +7,7 @@ written after that read is newer than its document and backfill ingests it again
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -53,13 +54,25 @@ class TestParse:
         with pytest.raises(ValueError, match="captured_at"):
             CaptureSnapshot.parse(raw, now=_NOW)
 
-    def test_the_future_is_refused(self) -> None:
-        with pytest.raises(ValueError, match="future"):
-            CaptureSnapshot.parse("2026-10-24T12:10:00Z", now=_NOW)
+    def test_the_future_is_clamped_to_now(self) -> None:
+        raw = "2026-10-24T13:00:00Z"
+        assert CaptureSnapshot.parse(raw, now=_NOW) == _NOW
 
-    def test_a_few_seconds_of_clock_skew_is_allowed(self) -> None:
-        raw = "2026-10-24T12:00:03Z"
-        assert CaptureSnapshot.parse(raw, now=_NOW) == _NOW + timedelta(seconds=3)
+    def test_a_clamp_is_logged_at_debug(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level(logging.DEBUG, logger="quarry.capture_snapshot"):
+            CaptureSnapshot.parse("2026-10-24T13:00:00Z", now=_NOW)
+        assert [r.levelno for r in caplog.records] == [logging.DEBUG]
+
+    @pytest.mark.parametrize(
+        "raw",
+        ["0001-01-01T00:00:00+05:00", "9999-12-31T23:59:59-05:00"],
+        ids=["lower-edge", "upper-edge"],
+    )
+    def test_a_value_at_the_edge_of_the_calendar_is_a_value_error(
+        self, raw: str
+    ) -> None:
+        with pytest.raises(ValueError, match="captured_at"):
+            CaptureSnapshot.parse(raw, now=_NOW)
 
     def test_an_implausibly_old_instant_is_refused(self) -> None:
         with pytest.raises(ValueError, match="too old"):
