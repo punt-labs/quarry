@@ -169,8 +169,10 @@ class LogRedactor:
             token = cls._SCHEME_URL.sub(cls._bare_url, token)
         elif cls._is_host_query(token):
             # ``host:port?...``: the query starts here, so an ``@`` inside it is no
-            # userinfo boundary and none of it may show.
-            return token.partition("?")[0] + "?[query]"
+            # userinfo boundary and none of it may show.  If one follows, the text
+            # may instead be ``user:digits?...@host``, so the head is masked too.
+            head, _, query = token.partition("?")
+            return ("[userinfo]" if "@" in query else head) + "?[query]"
         # A password may hold "?" and "#", so userinfo goes before the query.
         if "@" in token:
             token = cls._USERINFO.sub("[userinfo]@", token)

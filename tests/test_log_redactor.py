@@ -642,6 +642,21 @@ class TestTheTailNeverRevealsAQueryOrAHostPosition:
         assert "CRET" not in shown
         assert "?[query]" in shown
 
+    @pytest.mark.parametrize(
+        "text", ["user:80?rest@host", "GET user:12345?Q@h.example end", "u:1?x@h"]
+    )
+    def test_both_readings_are_masked_when_an_at_sign_follows_the_query(
+        self, text: str
+    ) -> None:
+        shown = redacted(text)
+        assert "[userinfo]?[query]" in shown
+        assert not any(char.isdigit() for char in shown)
+
+    def test_a_host_and_port_with_a_plain_query_keeps_its_host(self) -> None:
+        assert (
+            redacted("GET h.example:8080?x=1 end") == "GET h.example:8080?[query] end"
+        )
+
     def test_a_password_that_holds_a_question_mark_is_still_userinfo(self) -> None:
         assert redacted("admin:Q?X@db.internal") == "[userinfo]@db.internal"
 

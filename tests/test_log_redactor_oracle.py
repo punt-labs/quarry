@@ -299,6 +299,21 @@ def test_a_scheme_less_host_port_query_holding_an_at_sign_never_survives(
 
 
 @_PROFILE
+@given(
+    st.sampled_from(("user", "u", "admin")),
+    st.text(alphabet="0123456789", min_size=1, max_size=5),
+    _secret,
+    st.sampled_from(("h", "h.example", "[::1]")),
+)
+def test_digits_that_may_be_a_password_never_show_before_a_query_with_an_at_sign(
+    name: str, digits: str, rest: str, host: str
+) -> None:
+    shown = redacted(f"{name}:{digits}?{rest}@{host} end")
+    assert not set(shown) & set(_MARKER_CHARS), shown
+    assert not any(char.isdigit() for char in shown), shown
+
+
+@_PROFILE
 @given(st.sampled_from(_SCHEMES), _secret)
 def test_a_bare_label_before_a_colon_is_never_shown(scheme: str, label: str) -> None:
     shown = redacted(f"see {scheme}://{label}: and more")
