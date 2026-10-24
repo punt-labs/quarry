@@ -103,44 +103,38 @@ class ScrubbedIngestJob:
         """Ingest with a scrubber, or skip an existing document when not overwriting.
 
         The pipeline redacts content AND metadata.  The existence check uses the
-        scrubbed name because that is the name the pipeline stores.
+        name the pipeline stores (:meth:`InlineIngest.stored_name`), computed once,
+        and a skip reports it, never the name as sent.
         """
-        if not self.labels.overwrite and self._already_stored(ctx):
-            return {
-                "document_name": self.name,
-                "collection": self.collection,
-                "chunks": 0,
-                _SKIPPED: "exists",
-            }
         from quarry.ingestion.ingest_context import Progress  # noqa: PLC0415
         from quarry.ingestion.web_ingest import (  # noqa: PLC0415
             InlineIngest,
             ingest_content,
         )
 
+        inline = InlineIngest(
+            self.content,
+            format_hint=self.format_hint,
+            content_scrubber=self._scrubbed,
+            url_sourced=self.url_sourced,
+        )
+        stored = inline.stored_name(self.name)
+        if not self.labels.overwrite and self.labels.holds(
+            ctx, stored, url_sourced=self.url_sourced
+        ):
+            return {
+                "document_name": stored,
+                "collection": self.collection,
+                "chunks": 0,
+                _SKIPPED: "exists",
+            }
         return dict(
-            ingest_content(
-                InlineIngest(
-                    self.content,
-                    format_hint=self.format_hint,
-                    content_scrubber=self._scrubbed,
-                    url_sourced=self.url_sourced,
-                ),
-                self.name,
-                Progress(None),
-                self.labels.context(ctx),
-            )
+            ingest_content(inline, self.name, Progress(None), self.labels.context(ctx))
         )
 
     def scrubbed_name(self) -> str:
         """Return the document name as stored, safe to log."""
         return self._scrubbed(self.name)
-
-    def _already_stored(self, ctx: DaemonContext) -> bool:
-        """Return whether the collection already holds a document of this name."""
-        return self.labels.holds(
-            ctx, self._scrubbed(self.name), url_sourced=self.url_sourced
-        )
 
 
 @dataclass(frozen=True, slots=True)

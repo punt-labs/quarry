@@ -45,6 +45,17 @@ class InlineIngest:
     content_scrubber: Callable[[str], str] | None = None
     url_sourced: bool = False
 
+    def stored_name(self, name: str) -> str:
+        """Return the name this ingest stores *name* under: cleaned, then scrubbed.
+
+        The one derivation, shared by the store and by a create-if-absent check, so
+        the check asks about the name that would be written.
+        """
+        cleaned = DisplayName(name).stored(url_sourced=self.url_sourced)
+        return (
+            cleaned if self.content_scrubber is None else self.content_scrubber(cleaned)
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class UrlIngest:
@@ -92,10 +103,9 @@ class WebIngest:
         # caller (daemon capture/remember, stdio MCP, backfill).  No caller can
         # forget it and no new surface can reintroduce the leak.  A plain ingest
         # (no scrubber) stores metadata byte-for-byte, unchanged.
-        document_name, summary = WebIngest._scrub_metadata(
-            DisplayName(document_name).stored(url_sourced=inline.url_sourced),
-            context.summary,
-            inline.content_scrubber,
+        document_name = inline.stored_name(document_name)
+        _, summary = WebIngest._scrub_metadata(
+            document_name, context.summary, inline.content_scrubber
         )
 
         progress("Processing: %s", DisplayName(document_name).redacted())

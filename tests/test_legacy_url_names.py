@@ -566,3 +566,36 @@ class TestAnHtmlHintedLabelIsNeverAPage:
         with patched_embedder(FakeEmbeddingBackend(768)):
             job.scrub_and_ingest(ctx)
         assert NamePrefix(db.db).names("https://example.com", _COLLECTION) == []
+
+
+class TestACreateIfAbsentLabelChecksTheNameItStores:
+    @staticmethod
+    def _remember(name: str) -> ScrubbedIngestJob:
+        return ScrubbedIngestJob(
+            name=name,
+            content="a plain note",
+            labels=TestEveryDedupPathAgrees._job("x").labels,
+            format_hint="plain",
+            scrub_label="remember",
+        )
+
+    def test_a_name_with_a_fragment_is_stored_once_and_then_skipped(
+        self, db: Database
+    ) -> None:
+        ctx = cast("DaemonContext", SimpleNamespace(database=db, settings=Settings()))
+        job = self._remember("https://x.test/p#frag")
+        with patched_embedder(FakeEmbeddingBackend(768)):
+            first = job.scrub_and_ingest(ctx)
+            second = job.scrub_and_ingest(ctx)
+        assert first["chunks"]
+        assert second["skipped"] == "exists"
+        assert _names(db) == {"https://x.test/p"}
+
+    def test_a_query_name_is_stored_once_and_then_skipped(self, db: Database) -> None:
+        ctx = cast("DaemonContext", SimpleNamespace(database=db, settings=Settings()))
+        job = self._remember("https://x.test/p?token=SECRET")
+        with patched_embedder(FakeEmbeddingBackend(768)):
+            job.scrub_and_ingest(ctx)
+            second = job.scrub_and_ingest(ctx)
+        assert second["skipped"] == "exists"
+        assert len(_names(db)) == 1
