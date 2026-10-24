@@ -109,7 +109,7 @@ class GatedSitemapWebClient(AbstractWebClient):
             # URL ingest path.
             retryable = self._is_transient(exc)
             refusal = FetchRefusedError.from_transfer_failure(
-                exc, subject=UrlAdmission.shown(url)
+                exc, subject=UrlAdmission.shown(url), is_probe=True
             )
             return self._error(str(refusal), retryable=retryable)
 

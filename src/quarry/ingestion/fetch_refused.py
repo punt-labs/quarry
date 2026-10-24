@@ -34,7 +34,9 @@ class FetchRefusedError(UnindexableContentError):
     )
 
     @classmethod
-    def from_transfer_failure(cls, exc: Exception, *, subject: str = "") -> Self:
+    def from_transfer_failure(
+        cls, exc: Exception, *, subject: str = "", is_probe: bool = False
+    ) -> Self:
         """Return the URL-free refusal for a failure while opening or reading.
 
         The one classification of a fetch failure: only an instance of
@@ -47,23 +49,40 @@ class FetchRefusedError(UnindexableContentError):
         timeouts) and :class:`http.client.HTTPException` (``InvalidURL``,
         ``BadStatusLine``, ``IncompleteRead``, whose messages carry the URL path
         and query verbatim).  A transport failure reports only what kind it was.
-        Every refusal logs one WARNING with the class and the caller's redacted
+        Every refusal logs one line with the class and the caller's redacted
         *subject* (``HttpUrl.shown``, never a path), and a transport failure
-        adds its message-free frames, so a fault stays diagnosable.  An
-        :class:`HTTPError` holds an open socket, so it is closed here, before the
-        status is read out.
+        adds its message-free frames, so a fault stays diagnosable.  An HTTP status
+        is an answer, not a fault: one line, no frames, INFO for a 4xx and WARNING
+        for a 5xx, and DEBUG for a 4xx on a *is_probe* fetch, where a miss is the
+        expected outcome.  An :class:`HTTPError` holds an open socket, so it is
+        closed here, before the status is read out.
         """
+        if isinstance(exc, HTTPError):
+            code = cls._close(exc)
+            on = f" on {subject}" if subject else ""
+            logger.log(
+                cls._status_level(code, is_probe=is_probe),
+                "fetch refused: HTTP %d%s",
+                code,
+                on,
+            )
+            return cls(f"fetch failed: HTTP {code}")
         is_policy = isinstance(exc, UrlRejectedError | RedirectRejectedError)
         frames = "" if is_policy else f":\n{FailureReason.frames(exc)}"
         on = f" [{subject}]" if subject else ""
         logger.warning("fetch refused: %s%s%s", type(exc).__name__, on, frames)
-        if isinstance(exc, HTTPError):
-            return cls(f"fetch failed: HTTP {cls._close(exc)}")
         if isinstance(exc, RedirectRejectedError):
             return cls(str(exc))
         if isinstance(exc, UrlRejectedError):
             return cls(f"URL rejected: {exc}")
         return cls(cls._describe(exc))
+
+    @staticmethod
+    def _status_level(code: int, *, is_probe: bool) -> int:
+        """Return the log level of an HTTP status: WARNING for a 5xx, else INFO."""
+        if code >= 500:
+            return logging.WARNING
+        return logging.DEBUG if is_probe else logging.INFO
 
     @staticmethod
     def _close(exc: HTTPError) -> int:

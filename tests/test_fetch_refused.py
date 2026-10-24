@@ -160,3 +160,71 @@ class TestSubject:
         with caplog.at_level(logging.WARNING):
             FetchRefusedError.from_transfer_failure(URLError("dns"))
         assert len(caplog.records) == 1
+
+
+class TestAStatusIsAnAnswerNotAFault:
+    @staticmethod
+    def _status(code: int) -> HTTPError:
+        return HTTPError(
+            "http://u:p@h/?t=SECRET", code, "x", HTTPMessage(), io.BytesIO()
+        )
+
+    def test_a_404_logs_one_info_line_without_frames(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.DEBUG):
+            FetchRefusedError.from_transfer_failure(
+                self._status(404), subject="https://h.test/…(segments=1)"
+            )
+        [record] = caplog.records
+        assert record.levelno == logging.INFO
+        assert record.getMessage() == (
+            "fetch refused: HTTP 404 on https://h.test/…(segments=1)"
+        )
+        assert 'File "' not in caplog.text
+
+    def test_a_503_logs_one_warning_without_frames(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.DEBUG):
+            FetchRefusedError.from_transfer_failure(
+                self._status(503), subject="https://h.test/…(segments=1)"
+            )
+        [record] = caplog.records
+        assert record.levelno == logging.WARNING
+        assert 'File "' not in caplog.text
+
+    def test_a_status_with_no_subject_still_logs_one_line(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.DEBUG):
+            FetchRefusedError.from_transfer_failure(self._status(404))
+        assert [r.getMessage() for r in caplog.records] == ["fetch refused: HTTP 404"]
+
+    def test_an_expected_probe_miss_is_debug(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.DEBUG):
+            FetchRefusedError.from_transfer_failure(
+                self._status(404), subject="s", is_probe=True
+            )
+        assert [r.levelno for r in caplog.records] == [logging.DEBUG]
+
+    def test_a_probe_that_hits_a_server_error_is_still_a_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.DEBUG):
+            FetchRefusedError.from_transfer_failure(
+                self._status(500), subject="s", is_probe=True
+            )
+        assert [r.levelno for r in caplog.records] == [logging.WARNING]
+
+    def test_a_connection_reset_still_logs_its_frames(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        try:
+            raise ConnectionResetError("reset")
+        except ConnectionResetError as exc:
+            with caplog.at_level(logging.DEBUG):
+                FetchRefusedError.from_transfer_failure(exc, subject="s")
+        assert 'File "' in caplog.text

@@ -755,12 +755,12 @@ class TestEveryBranchIsClassifiedOnce:
 
         monkeypatch.setattr(_GETADDRINFO, _resolver({}))
         monkeypatch.setattr(swc, "GUARDED_OPENER", _Opener())
-        with caplog.at_level("WARNING"):
+        with caplog.at_level("DEBUG"):
             resp = GatedSitemapWebClient().get(self._URL)
         assert isinstance(resp, WebClientErrorResponse)
         assert resp.message() == message
         assert resp.retryable() is retryable
-        [record] = caplog.records
+        [record] = [r for r in caplog.records if r.name.endswith("fetch_refused")]
         assert "fetch refused" in record.getMessage()
         assert "https://safe.example/…(segments=1)" in record.getMessage()
         assert "SECRET" not in caplog.text

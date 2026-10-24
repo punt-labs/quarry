@@ -147,6 +147,9 @@ class LoggingConfig:
                     "lancedb": {"level": "WARNING"},
                     "onnxruntime": {"level": "WARNING"},
                     "httpx": {"level": "WARNING"},
+                    # Our fetch layer logs each refusal once; USP's own warning
+                    # repeats it, with the URL, for every probe it makes.
+                    "usp.helpers": {"level": "ERROR"},
                 },
                 "root": {
                     "level": "DEBUG",
