@@ -84,7 +84,8 @@ def _store(
         InlineIngest(
             body, format_hint="html" if url_sourced else "auto", url_sourced=url_sourced
         ),
-        name,
+        # A page's caller derives its stored name once; a label is stored as typed.
+        HttpUrl(name).document_name if url_sourced else name,
         Progress(None),
         IngestContext(db, Settings(), overwrite=overwrite, collection=_COLLECTION),
     )
@@ -516,6 +517,19 @@ class TestARawNameThatLooksLikeTheDigestMarker:
         assert name != raw
         assert LegacyUrlNames(db).aliases(name, _COLLECTION) == [raw]
 
+    def test_a_legacy_literal_sixteen_hex_query_is_the_accepted_residual(
+        self, db: Database
+    ) -> None:
+        # An older build stored this raw query literally.  A current-build name
+        # spells only itself, and this one is already in the current form, so the
+        # page's digest name does not find it: the one ambiguity that is accepted
+        # (a copied digest must not alias a different page).
+        raw = "https://example.com/p?q[sha256]=0123456789abcdef"
+        _store_as_stored_by_an_older_build(db, raw)
+        digest_name = HttpUrl(raw).document_name
+        assert digest_name != raw
+        assert LegacyUrlNames(db).aliases(digest_name, _COLLECTION) == []
+
     def test_a_current_build_name_is_not_an_alias_of_another_page(
         self, db: Database
     ) -> None:
@@ -664,3 +678,57 @@ class TestAFailedInsertLeavesTheLegacyTwin:
         _store_as_stored_by_an_older_build(db, "https://example.com/café")
         _store(db, "https://example.com/caf%C3%A9", overwrite=True)
         assert _names(db) == {"https://example.com/caf%C3%A9"}
+
+
+class TestAScrubbedWebFetchNameIsStoredAsDerived:
+    """A capture is stored under the name lookup derives, placeholders and all."""
+
+    _HTML = "<html><body><p>captured text for the page</p></body></html>"
+    _PAT = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"  # a made-up token shape
+
+    def _capture(self, db: Database, url: str) -> str:
+        from quarry.web_fetch_name import WebFetchName
+
+        name = WebFetchName.of(url)
+        job = ScrubbedIngestJob(
+            name=name,
+            content=self._HTML,
+            labels=TestEveryDedupPathAgrees._job("x").labels,
+            format_hint="html",
+            scrub_label="capture",
+            url_sourced=True,
+        )
+        ctx = cast("DaemonContext", SimpleNamespace(database=db, settings=Settings()))
+        with patched_embedder(FakeEmbeddingBackend(768)):
+            job.scrub_and_ingest(ctx)
+        return name
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://example.com/u/jdoe@example.com/profile",
+            f"https://{_PAT}.example.com/page",
+        ],
+        ids=["scrubbed-path", "scrubbed-host"],
+    )
+    def test_a_capture_is_found_by_the_name_lookup_derives(
+        self, db: Database, url: str
+    ) -> None:
+        name = self._capture(db, url)
+        assert "REDACTED" in name
+        assert _names(db) == {name}
+        assert LegacyUrlNames(db).stored_as(name, _COLLECTION) == name
+
+    def test_distinct_scrubbed_hosts_do_not_collide(self, db: Database) -> None:
+        first = self._capture(db, f"https://{self._PAT}.example.com/a")
+        second = self._capture(db, f"https://{self._PAT}.example.com/b")
+        assert first != second
+        assert _names(db) == {first, second}
+
+    def test_a_second_capture_of_the_same_page_is_still_one_document(
+        self, db: Database
+    ) -> None:
+        url = "https://example.com/u/jdoe@example.com/profile"
+        self._capture(db, url)
+        self._capture(db, url)
+        assert len(_names(db)) == 1

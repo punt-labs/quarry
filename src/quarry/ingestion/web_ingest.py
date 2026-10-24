@@ -51,7 +51,9 @@ class InlineIngest:
         The one derivation, shared by the store and by a create-if-absent check, so
         the check asks about the name that would be written.
         """
-        cleaned = DisplayName(name).stored(url_sourced=self.url_sourced)
+        # A page's name was derived once by its caller (HttpUrl.document_name, then
+        # scrubbed): reading it again would re-parse the scrubber's placeholders.
+        cleaned = name if self.url_sourced else DisplayName(name).stored()
         return (
             cleaned if self.content_scrubber is None else self.content_scrubber(cleaned)
         )

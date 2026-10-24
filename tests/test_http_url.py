@@ -414,4 +414,4 @@ class TestStoredHasOnlyTheCallersItIsMeantFor:
             and isinstance(node.value, ast.Name)
             and node.value.id == "HttpUrl"
         }
-        assert callers == {"display_name.py", "ingestion/legacy_url_names.py"}
+        assert callers == {"ingestion/legacy_url_names.py"}
