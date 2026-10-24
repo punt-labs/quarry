@@ -599,3 +599,45 @@ class TestACreateIfAbsentLabelChecksTheNameItStores:
             second = job.scrub_and_ingest(ctx)
         assert second["skipped"] == "exists"
         assert len(_names(db)) == 1
+
+
+class TestTheScrubbedNameIsTheStoredName:
+    def test_a_fragment_is_dropped_from_the_name_a_log_shows(self) -> None:
+        job = TestACreateIfAbsentLabelChecksTheNameItStores._remember(
+            "https://x.test/p#frag"
+        )
+        assert job.scrubbed_name() == "https://x.test/p"
+
+    def test_the_skip_result_and_the_log_name_the_same_document(
+        self, db: Database
+    ) -> None:
+        ctx = cast("DaemonContext", SimpleNamespace(database=db, settings=Settings()))
+        job = TestACreateIfAbsentLabelChecksTheNameItStores._remember(
+            "https://x.test/p#frag"
+        )
+        with patched_embedder(FakeEmbeddingBackend(768)):
+            job.scrub_and_ingest(ctx)
+            skipped = job.scrub_and_ingest(ctx)
+        assert skipped["document_name"] == job.scrubbed_name()
+
+
+class TestALabelOutlivesAPageOfTheSameName:
+    """End to end: a remembered html label survives a non-overwriting page capture."""
+
+    def test_the_label_is_still_stored_and_still_a_label(self, db: Database) -> None:
+        ctx = cast("DaemonContext", SimpleNamespace(database=db, settings=Settings()))
+        label = ScrubbedIngestJob(
+            name="https://example.com/p#frag",
+            content="<p>my own note about the page</p>",
+            labels=TestEveryDedupPathAgrees._job("x").labels,
+            format_hint="html",
+            scrub_label="remember",
+        )
+        page = TestEveryDedupPathAgrees._job("https://example.com/p")
+        with patched_embedder(FakeEmbeddingBackend(768)):
+            label.scrub_and_ingest(ctx)
+            result = page.scrub_and_ingest(ctx)
+        assert result["skipped"] == "exists"
+        assert db.catalog.document_exists("https://example.com/p", _COLLECTION)
+        rows = db.db.open_table("chunks").search().where("chunk_index = 0").to_list()
+        assert {row["document_path"] for row in rows} == {""}

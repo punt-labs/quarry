@@ -14,6 +14,8 @@ from quarry.ingestion.web_fetch import WebFetcher
 from quarry.scrub import scrub_and_log
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from quarry.daemon.context import DaemonContext
     from quarry.http_url import HttpUrl
     from quarry.ingestion.fetched_body import FetchedBody
@@ -51,6 +53,15 @@ class IngestLabels:
             summary=self.summary,
         )
 
+    @staticmethod
+    def stored_name(
+        name: str, scrub: Callable[[str], str], *, url_sourced: bool
+    ) -> str:
+        """Return the name an inline ingest stores *name* under; safe to log."""
+        return web_ingest.InlineIngest(
+            "", content_scrubber=scrub, url_sourced=url_sourced
+        ).stored_name(name)
+
     def holds(self, ctx: DaemonContext, name: str, *, url_sourced: bool) -> bool:
         """Return whether the target collection holds a document called *name*.
 
@@ -78,30 +89,27 @@ class CapturedBodyIngest:
 
     A fetch that fails or is refused, or a body that cannot be indexed, raises
     :class:`UnindexableContentError` with a URL-free reason; nothing is returned
-    for a failure, so no caller can report an empty success.  ``name_override`` is
-    empty for the primary URL route (the URL is the natural name); a capture
-    re-fetch sets it to the inline capture's friendly name so a non-HTML capture
-    keeps that name instead of falling back to the URL's stored name.
+    for a failure, so no caller can report an empty success.  The document is
+    named for the URL, and a capture re-fetch only happens for a page capture, which
+    the capture route has already matched to that name, so both branches write the
+    same document.
     """
 
-    __slots__ = ("_fetcher", "_labels", "_name_override", "_source")
+    __slots__ = ("_fetcher", "_labels", "_source")
 
     _source: HttpUrl
     _labels: IngestLabels
-    _name_override: str
     _fetcher: WebFetcher
 
     def __new__(
         cls,
         source: HttpUrl,
         labels: IngestLabels,
-        name_override: str = "",
         fetcher: WebFetcher = _DEFAULT_FETCHER,
     ) -> Self:
         self = super().__new__(cls)
         self._source = source
         self._labels = labels
-        self._name_override = name_override
         self._fetcher = fetcher
         return self
 
@@ -152,7 +160,7 @@ class CapturedBodyIngest:
             return dict(web_ingest.ingest_url(request, progress, context))
 
         content = CaptureMarker(body.media_type).render() + body.text
-        name = self._name_override or scrub(self._source.document_name)
+        name = scrub(self._source.document_name)
         inline = web_ingest.InlineIngest(
             content, format_hint="markdown", content_scrubber=scrub, url_sourced=True
         )

@@ -60,10 +60,23 @@ class _FirstPartyHandler(logging.Handler):
             f"{when} {record.levelname} {where}: message withheld: "
             f"redaction did not settle in {LogRedactor.PASSES} passes"
         )
+        line += self._detail(record, record.exc_info[0] if record.exc_info else None)
+        return self._fixed(line, "message withheld: redaction did not settle")
+
+    def _detail(
+        self, record: logging.LogRecord, exc_type: type[BaseException] | None
+    ) -> str:
+        """Return the exception's class and the message template, if there are any.
+
+        Both are code-authored; the template is kept only if it settles on its own.
+        """
+        parts = []
+        if exc_type is not None:
+            parts.append(exc_type.__name__)
         template = self._template(record)
         if template is not None:
-            line = f"{line} [{template}]"
-        return self._fixed(line, "message withheld: redaction did not settle")
+            parts.append(f"[{template}]")
+        return f" ({' '.join(parts)})" if parts else ""
 
     @staticmethod
     def _template(record: logging.LogRecord) -> str | None:
@@ -115,7 +128,8 @@ class _FirstPartyHandler(logging.Handler):
             settled = self._fixed(
                 f"--- Logging error --- {record.name} at "
                 f"{record.pathname}:{record.lineno}: report withheld: "
-                f"redaction did not settle in {LogRedactor.PASSES} passes",
+                f"redaction did not settle in {LogRedactor.PASSES} passes"
+                f"{self._detail(record, type(error))}",
                 "--- Logging error --- report withheld: redaction did not settle",
             )
             settled += "\n"

@@ -704,7 +704,7 @@ class TestInternationalizedUrl:
 
 
 class TestEveryBranchIsClassifiedOnce:
-    """HTTPError, timeout and unreachable go through FetchRefusedError too (S6-8)."""
+    """HTTPError, timeout and unreachable go through FetchRefusedError too."""
 
     _URL = "https://safe.example/sitemap.xml?token=SECRET"
 

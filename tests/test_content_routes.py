@@ -636,7 +636,7 @@ class TestUrlAdmission:
 
 
 class TestACaptureIsUrlSourcedOnlyWhenItIsAPageCapture:
-    """The route decides; the name alone never does (SF12-5, djb LOW-1)."""
+    """The route decides; the name alone never does."""
 
     _URL = "https://example.com/page"
 
@@ -661,6 +661,7 @@ class TestACaptureIsUrlSourcedOnlyWhenItIsAPageCapture:
     ) -> None:
         job = self._filed(http, tmp_path, document_name=self._URL, source_url=self._URL)
         assert job.inline.url_sourced
+        assert job.source_url is not None
 
     def test_a_transcript_with_a_url_shaped_name_is_not(
         self, http: TestClient, tmp_path: Path
@@ -678,3 +679,61 @@ class TestACaptureIsUrlSourcedOnlyWhenItIsAPageCapture:
             source_url=self._URL,
         )
         assert not job.inline.url_sourced
+
+    def test_a_capture_that_is_not_a_page_never_refetches(
+        self, http: TestClient, tmp_path: Path
+    ) -> None:
+        job = self._filed(
+            http,
+            tmp_path,
+            document_name="https://example.com/other",
+            source_url=self._URL,
+        )
+        assert job.source_url is None
+
+    def test_a_non_page_capture_with_empty_content_stores_a_label_without_a_fetch(
+        self, http: TestClient, tmp_path: Path
+    ) -> None:
+        job = self._filed(
+            http,
+            tmp_path,
+            document_name="https://example.com/other",
+            source_url=self._URL,
+            content="<html></html>",
+            format_hint="html",
+        )
+        with (
+            patch(
+                "quarry.ingestion.web_ingest.ingest_content", return_value={"chunks": 0}
+            ),
+            patch.object(CaptureIngestJob, "_refetch") as refetch,
+        ):
+            job._capture(MagicMock())  # pyright: ignore[reportPrivateUsage]
+        refetch.assert_not_called()
+
+    def test_the_mismatch_is_logged_once_without_the_name_or_the_url(
+        self, http: TestClient, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.INFO, logger="quarry.capture_naming"):
+            self._filed(
+                http,
+                tmp_path,
+                document_name="https://example.com/other",
+                source_url=self._URL,
+            )
+        messages = [
+            r.getMessage() for r in caplog.records if r.name == "quarry.capture_naming"
+        ]
+        assert messages == [
+            (
+                "capture: source_url given but document_name is not its page name; "
+                "stored as a label"
+            )
+        ]
+
+    def test_a_page_capture_logs_no_mismatch(
+        self, http: TestClient, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.INFO, logger="quarry.capture_naming"):
+            self._filed(http, tmp_path, document_name=self._URL, source_url=self._URL)
+        assert [r for r in caplog.records if r.name == "quarry.capture_naming"] == []

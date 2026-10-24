@@ -37,6 +37,7 @@ from quarry.fd_headroom import FdHeadroom
 from quarry.http_url import HttpUrl
 from quarry.ingestion.fetched_body import FetchedBody
 from quarry.results import SearchResult
+from quarry.web_fetch_name import WebFetchName
 from tests.url_names import with_query
 
 # Bound on how long fixture teardown waits for a background job to finish for
@@ -1962,7 +1963,7 @@ class TestCapture:
                 "/v1/capture",
                 json={
                     "content": "<html><body></body></html>",
-                    "document_name": "example.com/p",
+                    "document_name": "https://example.com/p",
                     "source_url": "https://example.com/p",
                     "summary": "see jdoe@example.com",
                     "format_hint": "html",
@@ -2035,7 +2036,7 @@ class TestCapture:
                 "/v1/capture",
                 json={
                     "content": "<html><body></body></html>",
-                    "document_name": "example.com/p",
+                    "document_name": "https://example.com/p",
                     "source_url": "https://example.com/p",
                     "format_hint": "html",
                 },
@@ -2085,7 +2086,7 @@ class TestCapture:
                 "/v1/capture",
                 json={
                     "content": "<html></html>",
-                    "document_name": "example.com/p",
+                    "document_name": WebFetchName.of(raw_url),
                     "source_url": raw_url,
                     "format_hint": "html",
                 },
@@ -2113,7 +2114,7 @@ class TestCapture:
                 "/v1/capture",
                 json={
                     "content": "real page text",
-                    "document_name": "example.com/p",
+                    "document_name": "https://example.com/p",
                     "source_url": "https://example.com/p",
                     "format_hint": "html",
                 },

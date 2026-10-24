@@ -32,10 +32,8 @@ def _labels() -> IngestLabels:
     )
 
 
-def _captured(
-    source: str = "https://x.test/page", name: str = ""
-) -> CapturedBodyIngest:
-    return CapturedBodyIngest(HttpUrl(source), _labels(), name)
+def _captured(source: str = "https://x.test/page") -> CapturedBodyIngest:
+    return CapturedBodyIngest(HttpUrl(source), _labels())
 
 
 def _ctx() -> DaemonContext:
@@ -79,19 +77,16 @@ class TestIngest:
         assert result == {"chunks": 1}
         assert ingest_url.call_args.args[0].prefetched_html == body.text
 
-    def test_text_is_stored_with_a_media_type_marker_and_the_override_name(
-        self,
-    ) -> None:
+    def test_text_is_stored_with_a_media_type_marker(self) -> None:
         body = FetchedBody(text="raw log", media_type="text/plain")
         with patch(
             "quarry.ingestion.web_ingest.ingest_content", return_value={"chunks": 1}
         ) as ingest_content:
-            _captured(name="WebFetch capture").ingest(_ctx(), body)
-        inline, name = ingest_content.call_args.args[:2]
+            _captured().ingest(_ctx(), body)
+        inline = ingest_content.call_args.args[0]
         assert inline.content == "<!-- media_type: text/plain -->\nraw log"
-        assert name == "WebFetch capture"
 
-    def test_text_without_an_override_is_named_by_the_redacted_url(self) -> None:
+    def test_text_is_named_by_the_redacted_url(self) -> None:
         body = FetchedBody(text="raw log", media_type="text/plain")
         with patch(
             "quarry.ingestion.web_ingest.ingest_content", return_value={"chunks": 1}

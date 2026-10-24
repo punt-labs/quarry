@@ -223,6 +223,13 @@
     "max_lcom": 1.0,
     "avg_lcom": 1.0
   },
+  "src/quarry/capture_naming.py": {
+    "efferent_coupling": 2.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
   "src/quarry/capture_url.py": {
     "efferent_coupling": 2.0,
     "public_names": 1.0,
@@ -598,8 +605,8 @@
     "efferent_coupling": 7.0,
     "public_names": 3.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.733,
-    "avg_lcom": 0.733
+    "max_lcom": 0.8,
+    "avg_lcom": 0.8
   },
   "src/quarry/daemon/routes/collections.py": {
     "avg_lcom": 1.0,
@@ -1490,6 +1497,13 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
+  "src/quarry/lock_pid_file.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
   "src/quarry/log_form.py": {
     "efferent_coupling": 0.0,
     "public_names": 1.0,
@@ -1501,8 +1515,8 @@
     "efferent_coupling": 1.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.9,
-    "avg_lcom": 0.9
+    "max_lcom": 0.933,
+    "avg_lcom": 0.933
   },
   "src/quarry/log_redactor.py": {
     "efferent_coupling": 2.0,
@@ -2009,7 +2023,7 @@
     "avg_lcom": 0.667
   },
   "src/quarry/sync_lock.py": {
-    "efferent_coupling": 0.0,
+    "efferent_coupling": 1.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,

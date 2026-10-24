@@ -649,7 +649,7 @@ class TestSessionStartTriggerRules(_ReachableDaemonEmptyCatalog):
 
 
 class TestSessionStartAutoRegisterRefusal:
-    """A registration the registry refuses is stated, not a hook crash (F4)."""
+    """A registration the registry refuses is stated, not a hook crash."""
 
     def test_a_refusal_is_logged_with_its_detail_and_stated_in_the_envelope(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
@@ -2442,7 +2442,7 @@ class TestCwdHardeningPreCompact:
 
 
 class TestSessionCoverageFailure:
-    """A coverage lookup that fails is logged by class and falls back to None (X1)."""
+    """A coverage lookup that fails is logged by class and falls back to None."""
 
     @pytest.mark.parametrize(
         "error",

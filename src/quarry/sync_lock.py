@@ -10,6 +10,8 @@ import sys
 from pathlib import Path
 from typing import Self, final
 
+from quarry.lock_pid_file import LockPidFile
+
 logger = logging.getLogger(__name__)
 
 
@@ -174,16 +176,8 @@ class SyncLock:
                 logger.error("session-start: failed to launch background sync: %s", exc)
                 return "failed"
 
-            # Record the PID for observability only — the flock the child
-            # inherited, not this content, is now the actual lock.  A short
-            # write is retried until the full PID lands, so a later human
-            # inspecting the file never sees a truncated or stale value.
             try:
-                os.ftruncate(fd, 0)
-                data = str(proc.pid).encode()
-                written = 0
-                while written < len(data):
-                    written += os.write(fd, data[written:])
+                LockPidFile(fd).record(proc.pid)
             except OSError as exc:
                 logger.warning(
                     "session-start: sync launched but pidfile write failed: %s", exc

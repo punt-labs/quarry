@@ -8,7 +8,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from quarry.api.capture_ingest import SESSION_ID_PREFIX_LEN
+from quarry.capture_naming import CaptureNaming
 from quarry.captures_collection import CapturesCollection
 from quarry.daemon.content_jobs import CaptureIngestJob, ScrubbedIngestJob
 from quarry.daemon.routes.content_group import ContentRouteGroup
@@ -48,9 +48,13 @@ class CaptureRoutes(ContentRouteGroup):
         content = self._require_content(body, "content", "capture")
         if isinstance(content, JSONResponse):
             return content
-        name = self._capture_name(body)
-        if isinstance(name, JSONResponse):
-            return name
+        name = CaptureNaming.name(
+            self._str_field(body, "document_name"), self._str_field(body, "session_id")
+        )
+        if name is None:
+            return JSONResponse(
+                {"error": "Missing document_name or session_id"}, status_code=400
+            )
         options = self._require_options(body)
         if isinstance(options, JSONResponse):
             return options
@@ -65,11 +69,11 @@ class CaptureRoutes(ContentRouteGroup):
         )
         # A page capture is named for the URL it came from; a transcript, or a
         # capture named for some other URL, is a label and never a page.
-        is_page = source is not None and name == WebFetchName.maybe(source_url)
+        is_page = CaptureNaming.is_page(name, source_url)
         inline = ScrubbedIngestJob(
             name, content, labels, format_hint, "capture", url_sourced=is_page
         )
-        return CaptureIngestJob(inline=inline, source_url=source)
+        return CaptureIngestJob(inline=inline, source_url=source if is_page else None)
 
     async def _collection_for_cwd(self, cwd: str) -> CapturesCollection:
         """Derive the ``<repo>-captures`` collection for *cwd* off the event loop.
@@ -79,23 +83,6 @@ class CaptureRoutes(ContentRouteGroup):
         """
         return await run_in_threadpool(
             CapturesCollection.for_registry_path, cwd, self.ctx.settings.registry_path
-        )
-
-    def _capture_name(self, body: dict[str, object]) -> str | JSONResponse:
-        """Derive the document name: explicit name, else ``session-<id[:8]>``.
-
-        Inputs are stripped and only accepted when non-empty, so a
-        whitespace-only ``document_name``/``session_id`` earns the 400 rather
-        than storing a blank-named document.
-        """
-        document_name = self._str_field(body, "document_name").strip()
-        if document_name:
-            return document_name
-        session_id = self._str_field(body, "session_id").strip()
-        if session_id:
-            return f"session-{session_id[:SESSION_ID_PREFIX_LEN]}"
-        return JSONResponse(
-            {"error": "Missing document_name or session_id"}, status_code=400
         )
 
     async def lookup(self, request: Request) -> JSONResponse:

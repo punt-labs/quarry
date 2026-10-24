@@ -370,7 +370,7 @@ class TestAReportThatDoesNotSettle:
         err = capsys.readouterr().err
         assert err == (
             "--- Logging error --- quarry.x at /src/quarry/caller.py:321: "
-            "report withheld: redaction did not settle in 8 passes\n"
+            "report withheld: redaction did not settle in 8 passes (TypeError)\n"
         )
 
     def test_a_call_site_that_will_not_settle_gives_a_line_with_no_fields(
@@ -380,3 +380,65 @@ class TestAReportThatDoesNotSettle:
         assert capsys.readouterr().err == (
             "--- Logging error --- report withheld: redaction did not settle\n"
         )
+
+
+@pytest.mark.usefixtures("poisoned")
+class TestTheWithheldLinesNameTheException:
+    @staticmethod
+    def _typed_error_record() -> logging.LogRecord:
+        try:
+            msg = "boom"
+            raise TypeError(msg)
+        except TypeError:
+            return logging.LogRecord(
+                "quarry.x",
+                logging.ERROR,
+                __file__,
+                1,
+                f"%s {_POISON}",
+                ("a",),
+                sys.exc_info(),
+            )
+
+    def test_a_record_with_an_exception_names_its_class(self) -> None:
+        handler = RedactingStreamHandler()
+        line = handler.format(self._typed_error_record())
+        assert "TypeError" in line
+        assert "boom" not in line
+
+    def test_a_record_without_one_names_none(self) -> None:
+        line = RedactingStreamHandler().format(
+            _record("quarry.x", logging.ERROR, "%s", _POISON)
+        )
+        assert "Error" not in line
+
+    def test_the_report_names_the_class_and_keeps_a_template_that_settles(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        record = logging.LogRecord(
+            "quarry.x", logging.WARNING, "/c.py", 3, f"n=%d {_POISON}", ("a",), None
+        )
+        RedactingStreamHandler(io.StringIO()).handle(record)
+        err = capsys.readouterr().err
+        assert "TypeError" in err
+        assert "report withheld" in err
+
+    def test_the_report_keeps_a_template_that_settles(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        real = LogRedactor._once  # pyright: ignore[reportPrivateUsage]
+
+        def once(text: str) -> str:
+            # Only the multi-line report fails; the one-line fixed text settles.
+            return (
+                text + "x" if text.startswith("--- Logging error ---\n") else real(text)
+            )
+
+        monkeypatch.setattr(LogRedactor, "_once", once)
+        record = logging.LogRecord(
+            "quarry.x", logging.WARNING, "/c.py", 3, "n=%d clean", ("a",), None
+        )
+        RedactingStreamHandler(io.StringIO()).handle(record)
+        err = capsys.readouterr().err
+        assert "TypeError" in err
+        assert "[n=%d clean]" in err

@@ -24,6 +24,7 @@ from starlette.testclient import TestClient
 
 from quarry.logging_config import LoggingConfig
 from quarry.url_safety import UrlSafetyCheck
+from quarry.web_fetch_name import WebFetchName
 from tests.inproc_daemon import InProcessDaemon
 
 if TYPE_CHECKING:
@@ -271,7 +272,7 @@ def test_capture_and_remember_and_lookup_never_leak_a_url_secret(
             {
                 "content": empty,
                 "cwd": str(tmp_path),
-                "document_name": f"doc-{n}",
+                "document_name": WebFetchName.maybe(source) or f"doc-{n}",
                 "format_hint": "html",
                 "source_url": source,
             },

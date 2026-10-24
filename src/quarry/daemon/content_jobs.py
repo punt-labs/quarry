@@ -133,8 +133,14 @@ class ScrubbedIngestJob:
         )
 
     def scrubbed_name(self) -> str:
-        """Return the document name as stored, safe to log."""
-        return self._scrubbed(self.name)
+        """Return the document name as stored, safe to log.
+
+        The one derivation the store uses, so a refusal, a re-fetch and a skip all
+        name the same document.
+        """
+        return self.labels.stored_name(
+            self.name, self._scrubbed, url_sourced=self.url_sourced
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,4 +208,4 @@ class CaptureIngestJob:
             "capture: %s inline extracted to zero chunks — re-fetching via daemon",
             self.inline.scrubbed_name(),
         )
-        return CapturedBodyIngest(source, self.inline.labels, self.inline.name).run(ctx)
+        return CapturedBodyIngest(source, self.inline.labels).run(ctx)

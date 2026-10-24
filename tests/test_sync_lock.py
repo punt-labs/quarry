@@ -216,6 +216,20 @@ class TestALaunchThatFails:
         assert fd is not None  # our fd was closed, so nothing holds the flock
         os.close(fd)
 
+    def test_a_write_that_makes_no_progress_is_a_warning_not_a_hang(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        lock = SyncLock(path=tmp_path / "sync.pid")
+        mock_proc = MagicMock()
+        mock_proc.pid = 4242
+        with (
+            patch.object(_subprocess, "Popen", return_value=mock_proc),
+            patch("os.write", return_value=0),
+            caplog.at_level("WARNING", logger="quarry.sync_lock"),
+        ):
+            assert lock.launch_background_sync() == "launched"
+        assert "pidfile write failed" in caplog.text
+
     def test_an_unexpected_error_releases_the_lock_and_propagates(
         self, tmp_path: Path
     ) -> None:
