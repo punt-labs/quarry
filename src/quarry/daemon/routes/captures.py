@@ -64,6 +64,10 @@ class CaptureRoutes(ContentRouteGroup):
         if isinstance(source, JSONResponse):
             return source
         collection = await self._collection_for_cwd(self._str_field(body, "cwd"))
+        # The resolved name carries the ``-captures`` suffix the request did not.
+        refused = self._reject_oversized({"collection": collection.name}, "capture")
+        if refused is not None:
+            return refused
         labels = self._labels(
             memory_type, body, overwrite=overwrite, collection=collection.name
         )

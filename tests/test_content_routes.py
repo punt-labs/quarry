@@ -6,6 +6,7 @@ import logging
 import re
 import time
 from http.client import HTTPMessage, HTTPResponse
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
@@ -525,9 +526,7 @@ class TestOversizedLabels:
     ) -> None:
         resp = http.post("/v1/ingest", json={"source": "https://e.test/" + self._BIG})
         assert resp.status_code == 400
-        assert resp.json() == {
-            "error": "row budget exceeded: source 8,208 bytes > 8,192"
-        }
+        assert resp.json() == {"error": "URL rejected: malformed URL"}
         assert len(daemon.ctx.tasks) == 0
 
     def test_an_oversized_label_is_logged_once_at_warning(
@@ -737,3 +736,71 @@ class TestACaptureIsUrlSourcedOnlyWhenItIsAPageCapture:
         with caplog.at_level(logging.INFO, logger="quarry.capture_naming"):
             self._filed(http, tmp_path, document_name=self._URL, source_url=self._URL)
         assert [r for r in caplog.records if r.name == "quarry.capture_naming"] == []
+
+
+class TestTheRoutesCheckTheNamesThatAreStored:
+    @staticmethod
+    def _submitted(http: TestClient, path: str, body: dict[str, object]) -> int:
+        with (
+            patch("quarry.url_admission.UrlAdmission.reject_reason", return_value=None),
+            patch(
+                "quarry.daemon.routes.base.RouteGroup.submit",
+                autospec=True,
+                return_value=JSONResponse({}),
+            ),
+        ):
+            return http.post(path, json=body).status_code
+
+    def test_a_long_query_with_a_short_stored_name_is_accepted(
+        self, http: TestClient
+    ) -> None:
+        source = "https://example.com/p?token=" + "x" * 7_000
+        assert self._submitted(http, "/v1/ingest", {"source": source}) == 200
+
+    def test_a_short_url_whose_stored_name_is_over_the_cap_is_refused(
+        self, http: TestClient
+    ) -> None:
+        # Percent-encoding makes the stored name longer than the URL as sent.
+        source = "https://example.com/" + "\u00e9" * 2_000
+        assert self._submitted(http, "/v1/ingest", {"source": source}) == 400
+
+    @pytest.mark.parametrize(
+        ("path", "body"),
+        [
+            ("/v1/remember", {"name": "n", "content": _CLEAN, "summary": ["a"]}),
+            ("/v1/remember", {"name": "n", "content": _CLEAN, "agent_handle": 5}),
+            ("/v1/learn", {"lesson": "short", "topic": {"a": 1}}),
+            ("/v1/ingest", {"source": "https://example.com/p", "summary": ["a"]}),
+            ("/v1/ingest", {"source": "https://example.com/p", "collection": 7}),
+        ],
+    )
+    def test_a_non_string_label_is_a_400(
+        self, http: TestClient, path: str, body: dict[str, object]
+    ) -> None:
+        assert self._submitted(http, path, body) == 400
+
+    def test_a_captures_name_over_the_cap_only_after_its_suffix_is_refused(
+        self, http: TestClient, tmp_path: Path
+    ) -> None:
+        name = SimpleNamespace(name="r" * 8_190 + "-captures")
+        with patch(
+            "quarry.daemon.routes.captures.CapturesCollection.for_registry_path",
+            return_value=name,
+        ):
+            status = self._submitted(
+                http,
+                "/v1/capture",
+                {"content": _CLEAN, "session_id": "abcd1234ef", "cwd": str(tmp_path)},
+            )
+        assert status == 400
+
+    def test_a_lessons_name_over_the_cap_only_after_its_suffix_is_refused(
+        self, http: TestClient
+    ) -> None:
+        name = SimpleNamespace(name="r" * 8_190 + "-lessons")
+        with patch(
+            "quarry.daemon.routes.ingestion.LessonsCollection.for_registry_path",
+            return_value=name,
+        ):
+            status = self._submitted(http, "/v1/learn", {"lesson": "short"})
+        assert status == 400
