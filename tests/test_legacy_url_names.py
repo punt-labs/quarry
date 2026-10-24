@@ -11,7 +11,7 @@ import logging
 from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
@@ -732,3 +732,119 @@ class TestAScrubbedWebFetchNameIsStoredAsDerived:
         self._capture(db, url)
         self._capture(db, url)
         assert len(_names(db)) == 1
+
+
+class TestTwinCleanupNeverFailsAStoredPage:
+    def test_a_failing_twin_delete_still_reports_the_page_stored(
+        self, db: Database, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from unittest.mock import patch
+
+        from quarry.db.chunk_store import ChunkStore
+
+        _store_as_stored_by_an_older_build(db, "https://example.com/café")
+        real = ChunkStore.delete_document
+
+        def flaky(self: ChunkStore, name: str, *a: Any, **k: Any) -> int:
+            if name == "https://example.com/café":
+                msg = "delete failed"
+                raise OSError(msg)
+            return real(self, name, *a, **k)
+
+        with (
+            patch.object(ChunkStore, "delete_document", flaky),
+            caplog.at_level(logging.ERROR),
+        ):
+            _store(db, "https://example.com/caf%C3%A9", overwrite=True)
+        assert "https://example.com/caf%C3%A9" in _names(db)
+        assert "https://example.com/café" in _names(db)  # the twin is still there
+        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert errors
+        assert "re-ingest with overwrite" in errors[0].getMessage()
+
+    def test_the_listing_cache_stays_consistent_after_a_failed_twin_delete(
+        self, db: Database
+    ) -> None:
+        from unittest.mock import patch
+
+        from quarry.db.chunk_store import ChunkStore
+
+        _store_as_stored_by_an_older_build(db, "https://example.com/café")
+        names = LegacyUrlNames(db)
+        assert names.aliases("https://example.com/caf%C3%A9", _COLLECTION)
+        real = ChunkStore.delete_document
+
+        def flaky(self: ChunkStore, name: str, *a: Any, **k: Any) -> int:
+            if name == "https://example.com/café":
+                msg = "delete failed"
+                raise OSError(msg)
+            return real(self, name, *a, **k)
+
+        with patch.object(ChunkStore, "delete_document", flaky):
+            names.drop_twins("https://example.com/caf%C3%A9", _COLLECTION)
+        # The twin is still stored, so the cache must still list it.
+        assert names.aliases("https://example.com/caf%C3%A9", _COLLECTION) == [
+            "https://example.com/café"
+        ]
+
+
+class TestAFailedUrlInsertLeavesNoPartialCopy:
+    def test_the_partial_write_is_removed_and_the_twin_survives(
+        self, db: Database
+    ) -> None:
+        from unittest.mock import patch
+
+        from quarry.ingestion.streaming import DocumentStreamer
+
+        _store_as_stored_by_an_older_build(db, "https://example.com/café")
+        real_insert = DocumentStreamer.insert
+
+        def partial_then_fail(
+            self: DocumentStreamer, chunks: Any, store: Any, name: str
+        ) -> int:
+            real_insert(self, chunks[:1], store, name)  # one window lands
+            msg = "second window failed"
+            raise RuntimeError(msg)
+
+        new = "https://example.com/caf%C3%A9"
+        body = "<p>" + "a sentence of text. " * 400 + "</p>"
+        with (
+            patch.object(DocumentStreamer, "insert", partial_then_fail),
+            pytest.raises(RuntimeError, match="second window"),
+        ):
+            ingest_content(
+                InlineIngest(body, format_hint="html", url_sourced=True),
+                new,
+                Progress(None),
+                IngestContext(db, Settings(), overwrite=True, collection=_COLLECTION),
+            )
+        assert new not in _names(db)
+        assert "https://example.com/café" in _names(db)
+
+    def test_a_label_is_not_cleaned_up_after_a_failed_insert(
+        self, db: Database
+    ) -> None:
+        from unittest.mock import patch
+
+        from quarry.ingestion.streaming import DocumentStreamer
+
+        real_insert = DocumentStreamer.insert
+
+        def partial_then_fail(
+            self: DocumentStreamer, chunks: Any, store: Any, name: str
+        ) -> int:
+            real_insert(self, chunks[:1], store, name)
+            msg = "boom"
+            raise RuntimeError(msg)
+
+        with (
+            patch.object(DocumentStreamer, "insert", partial_then_fail),
+            pytest.raises(RuntimeError),
+        ):
+            ingest_content(
+                InlineIngest("a sentence of text. " * 400),
+                "my-label",
+                Progress(None),
+                IngestContext(db, Settings(), overwrite=True, collection=_COLLECTION),
+            )
+        assert "my-label" in _names(db)  # only a URL-sourced page is cleaned up

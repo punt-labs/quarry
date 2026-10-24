@@ -169,14 +169,23 @@ class LegacyUrlNames:
         failed embed or write leaves the old copy in place.  A document someone
         named with a URL is a label and is never touched.
         """
-        twins = self.aliases(name, collection)
-        for legacy in twins:
+        for legacy in self.aliases(name, collection):
             logger.warning(
                 "replacing legacy-named document %s with %s",
                 DisplayName(legacy).redacted(),
                 DisplayName(name).redacted(),
             )
-            self._database.store.delete_document(
-                legacy, collection=collection, count=False
-            )
-        self.dropped(twins, collection)
+            try:
+                self._database.store.delete_document(
+                    legacy, collection=collection, count=False
+                )
+            except (OSError, RuntimeError):
+                # The page is stored; a twin that stays is a duplicate, not a loss.
+                logger.exception(
+                    "stored %s but could not delete its legacy-named twin %s; "
+                    "re-ingest with overwrite to replace it",
+                    DisplayName(name).redacted(),
+                    DisplayName(legacy).redacted(),
+                )
+                continue
+            self.dropped([legacy], collection)

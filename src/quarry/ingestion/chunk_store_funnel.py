@@ -106,6 +106,36 @@ class ChunkStoreFunnel:
             )
 
     @staticmethod
+    def _insert(chunks: list[Chunk], document_name: str, context: IngestContext) -> int:
+        """Embed and insert *chunks*; a failed page leaves no partial copy behind.
+
+        Any earlier copy under the name was deleted (overwrite) or the job was
+        skipped (create-if-absent), so what a failed URL-sourced insert removes is
+        only its own partial write.  A label keeps whatever landed, as before.
+        """
+        try:
+            return DocumentStreamer(context.settings).insert(
+                chunks, context.database.store, document_name
+            )
+        except Exception:
+            if context.url_sourced:
+                ChunkStoreFunnel._discard_partial(document_name, context)
+            raise
+
+    @staticmethod
+    def _discard_partial(document_name: str, context: IngestContext) -> None:
+        """Delete what a failed insert wrote under *document_name*; log a failure."""
+        try:
+            context.database.store.delete_document(
+                document_name, collection=context.collection, count=False
+            )
+        except (OSError, RuntimeError):
+            logger.exception(
+                "insert of %s failed and its partial copy could not be removed",
+                DisplayName(document_name).redacted(),
+            )
+
+    @staticmethod
     def _embed_and_store(
         chunks: list[Chunk],
         document_name: str,
@@ -116,11 +146,9 @@ class ChunkStoreFunnel:
         ChunkStoreFunnel._replace_prior(chunks, context)
         progress("Embedding + storing in bounded windows")
         t0 = time.perf_counter()
-        inserted = DocumentStreamer(context.settings).insert(
-            chunks, context.database.store, document_name
-        )
-        ChunkStoreFunnel._drop_twins(document_name, context)
+        inserted = ChunkStoreFunnel._insert(chunks, document_name, context)
         RunContext.note_stored(context, document_name)
+        ChunkStoreFunnel._drop_twins(document_name, context)
         logger.info(
             "pipeline: embedded + stored %d chunks in %.2fs",
             inserted,
