@@ -139,3 +139,41 @@ async def test_a_binary_body_behind_a_text_media_type_stores_nothing(
     assert daemon.ctx.database.store.count() == 0
     [record] = [r for r in caplog.records if r.levelno >= logging.WARNING]
     assert record.exc_info is None
+
+
+def _plain_job_for(url: str) -> IngestJob:
+    return IngestJob(
+        source=HttpUrl(url),
+        scrub=False,
+        labels=IngestLabels(
+            overwrite=False,
+            collection="x.test",
+            agent_handle="",
+            memory_type="",
+            summary="",
+        ),
+    )
+
+
+class TestSpoolingAUrlWithAQuery:
+    def test_a_query_is_never_written_and_the_job_is_marked_not_recoverable(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        job = _plain_job_for("https://x.test/a?token=SECRET#frag")
+        with caplog.at_level("WARNING"):
+            record = job.spool_record()
+        assert record is not None
+        assert record.kind == "ingest-unrecoverable"
+        blob = record.as_json()
+        assert "SECRET" not in blob
+        assert "token" not in blob
+        assert "not recoverable" in record.payload
+        assert "not recoverable" in caplog.text
+        assert "SECRET" not in caplog.text
+
+    def test_a_url_whose_stored_name_is_itself_is_spooled_as_fetched(self) -> None:
+        job = _plain_job_for("https://x.test/a/b")
+        record = job.spool_record()
+        assert record is not None
+        assert record.kind == "ingest"
+        assert record.payload == "https://x.test/a/b"

@@ -10,6 +10,7 @@ does.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -23,6 +24,9 @@ if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.tasks import TaskState
     from quarry.http_url import HttpUrl
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,14 +68,21 @@ class IngestJob:
         """Return a snapshot of the source URL; an ``ingest`` has no client copy.
 
         The source is the recoverable unit — re-issuing the ingest re-fetches it.
-        It is stored as given (a plain ingest already persists the URL verbatim),
-        so recovery has the exact URL to retry.
+        Only a URL whose stored name is the URL itself can be spooled, since the
+        query, fragment and parameters are never written to disk.  Any other URL
+        spools a record that says the job is not recoverable, and logs it.
         """
+        name = self.source.document_name
+        if name == self.source.fetch_url:
+            return SpoolRecord(
+                kind="ingest", collection=self.collection, name=name, payload=name
+            )
+        logger.warning("ingest of %s is not recoverable from the spool", self.source)
         return SpoolRecord(
-            kind="ingest",
+            kind="ingest-unrecoverable",
             collection=self.collection,
-            name=self.source.document_name,
-            payload=self.source.document_name,
+            name=name,
+            payload="not recoverable: the URL carries a query, fragment or parameters",
         )
 
     def _captured(self) -> CapturedBodyIngest:
