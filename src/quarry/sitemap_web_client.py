@@ -9,7 +9,7 @@ against the internal service.  Gating the flattened leaf URLs after the crawl
 is too late — the internal fetches already happened during recursion.
 
 :class:`GatedSitemapWebClient` closes that hole at USP's fetch boundary: it runs
-``UrlSafetyCheck`` on the initial URL and, through :data:`GUARDED_OPENER`, on
+``UrlAdmission`` on the initial URL and, through :data:`GUARDED_OPENER`, on
 every redirect hop, and refuses a blocked target fail-closed by returning a
 non-retryable error response (USP then skips the URL and does not recurse into
 it).  Passed to every USP entry point, it covers index recursion, robots.txt,
@@ -18,10 +18,9 @@ and sub-sitemaps at every depth.
 
 from __future__ import annotations
 
-import contextlib
 import urllib.request
 from dataclasses import dataclass
-from http.client import HTTPException
+from http import HTTPStatus
 from typing import TYPE_CHECKING, Self, final
 from urllib.error import HTTPError, URLError
 
@@ -32,12 +31,15 @@ from usp.web_client.abstract_client import (
     WebClientErrorResponse,
 )
 
-from quarry.ingestion.ssrf_redirect import GUARDED_OPENER, RedirectRejectedError
-from quarry.url_safety import UrlSafetyCheck
+from quarry.fetch_bug_record import FetchBugRecord
+from quarry.ingestion.fetch_refused import FetchRefusedError
+from quarry.ingestion.ssrf_redirect import GUARDED_OPENER
+from quarry.url_admission import UrlAdmission
 
 if TYPE_CHECKING:
     from http.client import HTTPMessage, HTTPResponse
 
+_USP_NOT_FOUND = f"{HTTPStatus.NOT_FOUND} {HTTPStatus.NOT_FOUND.phrase}"
 _USER_AGENT = "quarry-sitemap/1.0 (+https://github.com/punt-labs/quarry)"
 
 
@@ -76,12 +78,18 @@ class GatedSitemapWebClient(AbstractWebClient):
     # USP sets this after construction via set_max_response_data_length; None
     # until then, meaning "no cap".
     _max_bytes: int | None
+    _bugs: FetchBugRecord
 
     def __new__(cls, timeout: int = 30) -> Self:
         self = super().__new__(cls)
         self._timeout = timeout
         self._max_bytes = None
+        self._bugs = FetchBugRecord()
         return self
+
+    def take_bug(self) -> str:
+        """Return the class name of the bug a fetch hit, if any, and forget it."""
+        return self._bugs.take()
 
     def set_max_response_data_length(
         self, max_response_data_length: int | None
@@ -91,51 +99,57 @@ class GatedSitemapWebClient(AbstractWebClient):
     def get(self, url: str) -> AbstractWebClientResponse:
         """Fetch *url* only if it passes the SSRF gate at every hop.
 
-        Never raises: a blocked target, a blocked redirect hop, or a network
-        error is reported as a ``WebClientErrorResponse`` (the USP contract), so
+        Never raises a fetch failure (see :meth:`_get`).  Anything else it raises is
+        a bug: USP catches it and reports an invalid node, so it is recorded here,
+        whichever step of the fetch it came from, and re-raised unchanged.
+        """
+        try:
+            return self._get(url)
+        except Exception as exc:
+            self._bugs.record(exc, url, UrlAdmission.shown)
+            raise
+
+    def _get(self, url: str) -> AbstractWebClientResponse:
+        """Fetch *url* only if it passes the SSRF gate at every hop.
+
+        Never raises a fetch failure: a blocked target, a blocked redirect hop, or a
+        network error is reported as a ``WebClientErrorResponse`` (the USP contract), so
         USP skips the URL instead of fetching it.  SSRF blocks are non-retryable
         so an attacker-listed URL is never retried.
         """
-        reason = UrlSafetyCheck.reject_reason(url)
+        reason = UrlAdmission.reject_reason(url)
         if reason is not None:
-            return self._error(f"SSRF-blocked URL: {reason}", retryable=False)
+            return self._blocked(f"SSRF-blocked URL: {reason}", url)
         try:
             return self._fetch(url)
-        except RedirectRejectedError as exc:
-            return self._error(str(exc), retryable=False)
-        except HTTPError as exc:
-            # Capture everything USP reads (status code + message) into plain
-            # locals and BUILD the response BEFORE closing: HTTPError IS an open
-            # response holding a socket fd, and USP later logs response.message()
-            # -- a response built from captured values never lazily reads the
-            # now-closed fd.  5xx and 429 are transient (retry); other 4xx are
-            # permanent.  Then close the fd (or it leaks -> EMFILE -> starvation).
-            retryable = self._retryable_http(exc.code)
-            error = self._error(f"HTTP {exc.code}", retryable=retryable)
-            with contextlib.suppress(OSError, ValueError):
-                # A close failure must not break get()'s never-raises contract;
-                # the kernel still frees the fd regardless.
-                exc.close()
-            return error
-        except (TimeoutError, URLError) as exc:
-            return self._error(f"cannot reach {url}: {exc}", retryable=True)
-        except (OSError, HTTPException, ValueError) as exc:
-            # A body-read/transport failure (e.g. IncompleteRead) or a decode
-            # error must not escape: USP catches it in nested recursion, but the
-            # top-level discover_* path would propagate it. Fail closed — no
-            # connection to an internal address happens on this path either way.
-            return self._error(f"fetch failed for {url}: {exc}", retryable=False)
+        except FetchRefusedError.REFUSABLE as exc:
+            # Classified once by FetchRefusedError, which logs it with the redacted
+            # subject and closes an HTTPError's socket (or it leaks -> EMFILE).  Only
+            # whether USP may retry differs: a 5xx, a 429, a timeout and an
+            # unreachable host are transient; a policy rejection, a 4xx and the
+            # rest are not.  Any other exception is a bug and propagates, as on the
+            # URL ingest path.
+            FetchRefusedError.release(exc)  # before any step that could fault
+            retryable = self._is_transient(exc)
+            refusal = FetchRefusedError.from_transfer_failure(
+                exc, subject=UrlAdmission.shown(url), reported_by_caller=True
+            )
+            # USP demotes a 404 on a speculative well-known path only when the
+            # message is exactly its own "404 Not Found": it, not we, knows which
+            # fetches are speculative, so a 404 is reported in that form.
+            is_404 = isinstance(exc, HTTPError) and exc.code == HTTPStatus.NOT_FOUND
+            message = _USP_NOT_FOUND if is_404 else str(refusal)
+            return WebClientErrorResponse(message, retryable=retryable)
 
     def _fetch(self, url: str) -> AbstractWebClientResponse:
         """Open *url* through the guarded opener and gate the final URL."""
         request = urllib.request.Request(  # noqa: S310 — scheme + SSRF gated
-            url, headers={"User-Agent": _USER_AGENT}
+            UrlAdmission.fetch_form(url), headers={"User-Agent": _USER_AGENT}
         )
         with GUARDED_OPENER.open(request, timeout=self._timeout) as resp:
-            final = UrlSafetyCheck.reject_reason(resp.url)
+            final = UrlAdmission.reject_reason(resp.url)
             if final is not None:
-                reason = f"SSRF-blocked final URL: {final}"
-                return self._error(reason, retryable=False)
+                return self._blocked(f"SSRF-blocked final URL: {final}", resp.url)
             message = getattr(resp, "reason", None) or "OK"
             return _GatedSuccessResponse(
                 int(resp.status), message, resp.headers, self._read(resp), resp.url
@@ -148,11 +162,17 @@ class GatedSitemapWebClient(AbstractWebClient):
         return resp.read(self._max_bytes)
 
     @staticmethod
-    def _retryable_http(code: int) -> bool:
-        """Return whether an HTTP status is transient: 5xx or 429 (rate limit)."""
-        return code >= 500 or code == 429
+    def _is_transient(exc: Exception) -> bool:
+        """Return whether USP may retry after *exc*: 5xx, 429, a timeout, no route."""
+        if isinstance(exc, HTTPError):
+            return exc.code >= 500 or exc.code == 429
+        return isinstance(exc, TimeoutError | URLError)
 
     @staticmethod
-    def _error(message: str, *, retryable: bool) -> WebClientErrorResponse:
-        """Build a USP error response so USP skips (does not fetch) the URL."""
-        return WebClientErrorResponse(message=message, retryable=retryable)
+    def _blocked(reason: str, url: str) -> WebClientErrorResponse:
+        """Refuse *url* for a policy *reason*: never retried.
+
+        Our layer logs it once; USP also reports the failed request.
+        """
+        refusal = FetchRefusedError.policy(reason, subject=UrlAdmission.shown(url))
+        return WebClientErrorResponse(str(refusal), retryable=False)

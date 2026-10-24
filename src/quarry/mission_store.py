@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Final, Self, final
 import yaml
 
 from quarry.ethos_tree import EthosTree
+from quarry.failure_reason import FailureReason
 from quarry.mission_directory import MissionDirectory
 from quarry.path_guard import SealedTree, SealedTreeError
 
@@ -149,14 +150,13 @@ class MissionStore:
         for path in mission_dirs:
             mission_dir = MissionDirectory(path, guard=self._seal)
             if not mission_dir.has_contract():
-                logger.info(
-                    "missions: %s has no contract.yaml; skipped", mission_dir.path
-                )
+                logger.info("missions: %s has no contract.yaml; skipped", path)
                 continue
             try:
                 missions.append(self._load(mission_dir))
             except (OSError, yaml.YAMLError, ValueError) as exc:
-                errors.append(f"{mission_dir.path}: {exc}")
+                logger.warning("missions: %s failed to load: %s", path, exc)
+                errors.append(FailureReason.line(str(path), exc))
         return MissionScan(missions=tuple(missions), errors=tuple(errors))
 
     def _load(self, mission_dir: MissionDirectory) -> MissionRecord:

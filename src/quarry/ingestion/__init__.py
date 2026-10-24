@@ -7,8 +7,8 @@ from quarry.ingestion.backends import (
     get_embedding_backend,
     get_ocr_backend,
 )
-from quarry.ingestion.chunker import chunk_pages
 from quarry.ingestion.ocr_local import LocalOcrBackend
+from quarry.ingestion.page_chunker import PageChunker
 from quarry.ingestion.pdf_text_extractor import extract_text_pages
 from quarry.ingestion.pipeline import SUPPORTED_EXTENSIONS, ingest_document
 from quarry.ingestion.provider import PROVIDER_MODEL_MAP, ProviderSelection
@@ -24,9 +24,9 @@ __all__ = [
     "PROVIDER_MODEL_MAP",
     "SUPPORTED_EXTENSIONS",
     "LocalOcrBackend",
+    "PageChunker",
     "ProviderSelection",
     "SectionSplitter",
-    "chunk_pages",
     "clear_caches",
     "extract_text_pages",
     "get_embedding_backend",

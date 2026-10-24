@@ -15,9 +15,11 @@ import stat
 import sys
 import time
 from collections.abc import Callable, Iterator
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
+from urllib.error import URLError
 
 import numpy as np
 import pytest
@@ -32,8 +34,11 @@ from quarry.daemon.context import DaemonContext
 from quarry.daemon.server import DaemonServer, ServeConfig
 from quarry.daemon.tasks import TASK_TTL_SECONDS, TaskState
 from quarry.fd_headroom import FdHeadroom
-from quarry.ingestion.web_fetch import FetchedBody
+from quarry.http_url import HttpUrl
+from quarry.ingestion.fetched_body import FetchedBody
 from quarry.results import SearchResult
+from quarry.web_fetch_name import WebFetchName
+from tests.url_names import with_query
 
 # Bound on how long fixture teardown waits for a background job to finish for
 # real before giving up and force-cancelling it (see the ``client`` fixture).
@@ -1499,7 +1504,62 @@ class TestCapturesLookup:
         assert data == {
             "matched": True,
             "document_name": "https://example.com/docs",
+            "legacy": False,
         }
+
+    def test_a_legacy_named_document_matches_its_canonical_url(
+        self, client: TestClient
+    ) -> None:
+        with (
+            patch(
+                "quarry.captures_collection.CapturesCollection.for_registry_path",
+                return_value=CapturesCollection.for_repo("quarry"),
+            ),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.document_exists",
+                return_value=False,
+            ),
+            patch(
+                "quarry.db.name_prefix.NamePrefix.names",
+                return_value=["https://example.com/docs?utm=1"],
+            ),
+        ):
+            data = client.post(
+                "/v1/captures/lookup",
+                json={"url": "https://example.com/docs?utm=1", "cwd": "/repo"},
+            ).json()
+
+        # The canonical name of the URL asked about; the older stored name is
+        # never returned.
+        assert data == {
+            "matched": True,
+            "document_name": with_query("https://example.com/docs", "utm=1"),
+            "legacy": True,
+        }
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://u:SECRET@example.com/p?token=SECRET",
+            "http://example.com:99999/p",
+            "http://example.com/a b",
+            "http://u:SECRET@\uff03host.example/p",
+        ],
+        ids=["userinfo", "port", "space", "nfkc"],
+    )
+    def test_an_unstorable_url_is_no_match_not_a_500(
+        self, client: TestClient, caplog: pytest.LogCaptureFixture, url: str
+    ) -> None:
+        with (
+            caplog.at_level(logging.DEBUG),
+            patch("quarry.db.chunk_catalog.ChunkCatalog.document_exists") as exists,
+        ):
+            resp = client.post("/v1/captures/lookup", json={"url": url, "cwd": ""})
+
+        assert resp.status_code == 200
+        assert resp.json() == {"matched": False, "document_name": None, "legacy": False}
+        exists.assert_not_called()
+        assert "SECRET" not in caplog.text
 
     def test_no_match_returns_false_and_no_document_name(
         self, client: TestClient
@@ -1512,7 +1572,7 @@ class TestCapturesLookup:
                 "/v1/captures/lookup", json={"url": "https://example.com/x"}
             ).json()
 
-        assert data == {"matched": False, "document_name": None}
+        assert data == {"matched": False, "document_name": None, "legacy": False}
 
     def test_reads_url_and_cwd_and_derives_collection(self, client: TestClient) -> None:
         """The daemon derives ``<repo>-captures`` from ``cwd`` — same contract
@@ -1536,11 +1596,12 @@ class TestCapturesLookup:
         assert for_path.call_args[0][0] == "/projects/myproj"
         assert exists.call_args[0][1] == "myproj-captures"
 
-    def test_query_string_and_fragment_ignored_by_normalization(
+    def test_the_query_is_a_digest_and_the_fragment_is_dropped(
         self, client: TestClient
     ) -> None:
-        """A lookup URL with a query string still reaches the redacted document
-        name — the SAME normalization the write path applies."""
+        """A lookup URL reaches the redacted document name — the SAME
+        normalization the write path applies: the fragment is gone and the query
+        is only a digest of itself."""
         with (
             patch(
                 "quarry.captures_collection.CapturesCollection.for_registry_path",
@@ -1556,8 +1617,9 @@ class TestCapturesLookup:
                 json={"url": "https://x.test/guide?utm=1#frag"},
             ).json()
 
-        assert data["document_name"] == "https://x.test/guide"
-        assert exists.call_args[0][0] == "https://x.test/guide"
+        expected = with_query("https://x.test/guide", "utm=1")
+        assert data["document_name"] == expected
+        assert exists.call_args[0][0] == expected
 
     def test_trailing_slash_produces_a_different_document_name(
         self, client: TestClient
@@ -1579,17 +1641,18 @@ class TestCapturesLookup:
 
     def test_end_to_end_matches_a_real_stored_capture(self, tmp_path: Path) -> None:
         """No mocks on the catalog: a real chunk written under the derived
-        captures collection is found by a lookup with a differing query string."""
-        from quarry.capture_url import CaptureUrl
+        captures collection is found by a lookup with a differing fragment, and a
+        page that differs by query is a different document."""
         from quarry.db import ChunkStore
         from quarry.db.storage import get_db
+        from quarry.web_fetch_name import WebFetchName
         from tests.test_database import _make_chunk, _random_vectors
 
         settings = _mock_settings(tmp_path)
         ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         db = get_db(settings.lancedb_path)
-        stored_name = CaptureUrl.for_web_fetch("https://example.com/guide")
+        stored_name = WebFetchName.of("https://example.com/guide")
         ChunkStore(db).insert(
             [_make_chunk(document_name=stored_name, collection="default-captures")],
             _random_vectors(1),
@@ -1599,10 +1662,53 @@ class TestCapturesLookup:
         with TestClient(app, raise_server_exceptions=False) as tc:
             data = tc.post(
                 "/v1/captures/lookup",
+                json={"url": "https://example.com/guide#nav"},
+            ).json()
+            other = tc.post(
+                "/v1/captures/lookup",
                 json={"url": "https://example.com/guide?ref=nav"},
             ).json()
 
-        assert data == {"matched": True, "document_name": stored_name}
+        assert data == {
+            "matched": True,
+            "document_name": stored_name,
+            "legacy": False,
+        }
+        assert other == {"matched": False, "document_name": None, "legacy": False}
+
+    def test_end_to_end_flags_a_legacy_document_without_naming_it(
+        self, tmp_path: Path
+    ) -> None:
+        """The name the lookup returns is one ``show`` can find in the store."""
+        from quarry.db import ChunkStore
+        from quarry.db.storage import get_db
+        from tests.test_database import _make_chunk, _random_vectors
+
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        db = get_db(settings.lancedb_path)
+        legacy = "https://example.com/guide?ref=old"
+        fetched = replace(
+            _make_chunk(document_name=legacy, collection="default-captures"),
+            document_path=legacy,
+        )
+        ChunkStore(db).insert([fetched], _random_vectors(1))
+        app = build_app(ctx)
+
+        with TestClient(app, raise_server_exceptions=False) as tc:
+            data = tc.post(
+                "/v1/captures/lookup",
+                json={"url": "https://example.com/guide?ref=old"},
+            ).json()
+
+        assert data["matched"] is True
+        assert data["legacy"] is True
+        assert data["document_name"] == with_query(
+            "https://example.com/guide", "ref=old"
+        )
+        assert legacy not in str(data)
+        assert ctx.database.catalog.document_exists(legacy, "default-captures")
 
 
 class TestDeleteDocuments:
@@ -1809,7 +1915,7 @@ class TestCapture:
             data = _poll_task_done(tc, resp.json()["task_id"])
 
         assert data["status"] == "failed"
-        assert "scrub exploded" in data["error"]
+        assert data["error"] == "internal error: ValueError"
         store.assert_not_called()  # nothing stored
         delete.assert_not_called()  # AND the prior document is not deleted
 
@@ -1831,7 +1937,7 @@ class TestCapture:
         ) -> dict[str, object]:
             url_calls.append((request, context))
             return {
-                "document_name": request.url,  # type: ignore[attr-defined]
+                "document_name": request.url.document_name,  # type: ignore[attr-defined]
                 "collection": context.collection,  # type: ignore[attr-defined]
                 "chunks": 1,
             }
@@ -1857,7 +1963,7 @@ class TestCapture:
                 "/v1/capture",
                 json={
                     "content": "<html><body></body></html>",
-                    "document_name": "example.com/p",
+                    "document_name": "https://example.com/p",
                     "source_url": "https://example.com/p",
                     "summary": "see jdoe@example.com",
                     "format_hint": "html",
@@ -1869,7 +1975,7 @@ class TestCapture:
         assert data["results"]["chunks"] == 1  # the re-fetch indexed the page
         assert len(url_calls) == 1
         request, context = url_calls[0]
-        assert request.url == "https://example.com/p"  # type: ignore[attr-defined]
+        assert request.url == HttpUrl("https://example.com/p")  # type: ignore[attr-defined]
         assert context.collection == "default-captures"  # type: ignore[attr-defined]
         # The caller forwards the raw summary plus a content_scrubber; ingest_url
         # (the choke point) redacts summary+name — see test_pipeline's
@@ -1930,7 +2036,7 @@ class TestCapture:
                 "/v1/capture",
                 json={
                     "content": "<html><body></body></html>",
-                    "document_name": "example.com/p",
+                    "document_name": "https://example.com/p",
                     "source_url": "https://example.com/p",
                     "format_hint": "html",
                 },
@@ -1947,29 +2053,32 @@ class TestCapture:
         scrub = cast("Callable[[str], str]", inline.content_scrubber)  # type: ignore[attr-defined]
         assert "[REDACTED:email]" in scrub("reach user@example.com")
 
-    def test_refetch_fetch_body_failure_returns_zero_chunks_no_traceback(
+    def test_refetch_network_failure_fails_the_task_quietly_and_url_free(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """G4/bug-class 2: a network failure during refetch is a clean skip.
+        """A network failure during the re-fetch fails the task: nothing was stored.
 
-        Any of OSError/ValueError/TimeoutError from fetch_body must surface as
-        a WARN + zero-chunks return, not a stack trace in the daemon log.  The
-        WARN must not leak the raw source_url (userinfo/query can carry
-        secrets — CWE-532); the exception's ``str`` is dropped in favour of
-        its class name for the same reason.
+        The inline phase extracted zero chunks, so reporting ``completed`` would
+        claim a capture that does not exist.  The failure is a WARN with no
+        traceback, and neither it nor the task error leaks the raw source_url
+        (userinfo/query can carry secrets, CWE-532).
         """
         settings = _mock_settings(tmp_path)
         ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
         empty = {"document_name": "p", "collection": "default-captures", "chunks": 0}
-        raw_url = "https://user:pass@example.com/p?api_key=secret123"
+        raw_url = "https://example.com/p?api_key=secret123"
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
             patch("quarry.ingestion.web_ingest.ingest_content", return_value=empty),
             patch(
-                "quarry.ingestion.web_fetch.WebFetcher.fetch_body",
-                side_effect=OSError(f"boom fetching {raw_url}"),
+                "quarry.url_safety.socket_module.getaddrinfo",
+                return_value=[(2, 1, 6, "", ("93.184.216.34", 0))],
+            ),
+            patch(
+                "quarry.ingestion.opened_response.GUARDED_OPENER.open",
+                side_effect=URLError(f"boom fetching {raw_url}"),
             ),
             caplog.at_level(logging.WARNING),
         ):
@@ -1977,19 +2086,17 @@ class TestCapture:
                 "/v1/capture",
                 json={
                     "content": "<html></html>",
-                    "document_name": "example.com/p",
+                    "document_name": WebFetchName.of(raw_url),
                     "source_url": raw_url,
                     "format_hint": "html",
                 },
             )
             data = _poll_task_done(tc, resp.json()["task_id"])
 
-        assert data["status"] == "completed"
-        assert data["results"] == {"chunks": 0, "sections": 0}
-        assert "refetch" in caplog.text
+        assert data["status"] == "failed"
+        assert data["error"] == "fetch failed: cannot reach the host"
         assert "secret123" not in caplog.text
-        assert "user:pass" not in caplog.text
-        assert "OSError" in caplog.text
+        assert all(r.exc_info is None for r in caplog.records)
 
     def test_nonempty_extraction_does_not_refetch(self, tmp_path: Path) -> None:
         """A page that extracts to >=1 chunk stores inline and never re-fetches."""
@@ -2007,7 +2114,7 @@ class TestCapture:
                 "/v1/capture",
                 json={
                     "content": "real page text",
-                    "document_name": "example.com/p",
+                    "document_name": "https://example.com/p",
                     "source_url": "https://example.com/p",
                     "format_hint": "html",
                 },
@@ -2134,7 +2241,9 @@ class TestRemember:
         assert resp.status_code == 400
         assert "name" in resp.json()["error"].lower()
 
-    def test_scrubs_name_and_summary_not_just_content(self, tmp_path: Path) -> None:
+    def test_scrubs_name_and_summary_not_just_content(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """A secret in the free-form name or summary is redacted before store.
 
         The daemon forwards the raw name/summary and a content_scrubber; the
@@ -2142,6 +2251,7 @@ class TestRemember:
         patches the store boundary and asserts the REAL scrub ran end-to-end —
         the chunker copies name+summary onto every chunk, so content-only
         scrubbing would leak."""
+        from quarry.ingestion.page_chunker import ChunkLabels
         from quarry.ingestion.streaming import DocumentStreamer
 
         settings = _mock_settings(tmp_path)
@@ -2151,14 +2261,15 @@ class TestRemember:
         seen: dict[str, object] = {}
 
         def _capture_build_chunks(
-            _self: DocumentStreamer, pages: list[object], **kwargs: object
+            _self: DocumentStreamer, pages: list[object], labels: ChunkLabels
         ) -> list[object]:
-            seen.update(kwargs)
+            seen.update(asdict(labels))
             return []
 
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
             patch.object(DocumentStreamer, "build_chunks", _capture_build_chunks),
+            caplog.at_level(logging.WARNING),
         ):
             resp = tc.post(
                 "/v1/remember",
@@ -2170,8 +2281,10 @@ class TestRemember:
             )
             data = _poll_task_done(tc, resp.json()["task_id"])
 
-        assert "jdoe@example.com" not in str(data["results"]["document_name"])
-        assert "[REDACTED:email]" in str(data["results"]["document_name"])
+        # No chunks were built, so the task refuses; the log names the scrubbed name.
+        assert data["status"] == "failed"
+        assert "jdoe@example.com" not in caplog.text
+        assert "note [REDACTED:email]" in caplog.text
         assert "jdoe@example.com" not in str(seen["summary"])
         assert "[REDACTED:email]" in str(seen["summary"])
 
@@ -2204,7 +2317,7 @@ class TestRemember:
             task_id = resp.json()["task_id"]
             data = _poll_task_done(tc, task_id)
         assert data["status"] == "failed"
-        assert "bad content encoding" in data["error"]
+        assert data["error"] == "internal error: ValueError"
 
     def test_pipeline_os_error_marks_task_failed(self, tmp_path: Path) -> None:
         """ingest_content raising OSError marks the task as failed."""
@@ -2227,7 +2340,7 @@ class TestRemember:
             task_id = resp.json()["task_id"]
             data = _poll_task_done(tc, task_id)
         assert data["status"] == "failed"
-        assert "disk full" in data["error"]
+        assert data["error"] == "internal error: OSError"
 
     def test_rejects_oversized_body(self, client: TestClient) -> None:
         """Remember body > 50 MB must be rejected with HTTP 413."""
@@ -2401,7 +2514,7 @@ class TestIngest:
             }
 
         # scrub=True flows through IngestJob._ingest → WebFetcher.fetch_body →
-        # ingest_captured_body → ingest_url; patch fetch_body so no real HTTP fires.
+        # CapturedBodyIngest.ingest → ingest_url; patch fetch_body (no real HTTP).
         body = FetchedBody(text="<html><body>hi</body></html>", media_type="text/html")
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
@@ -2493,7 +2606,7 @@ class TestIngest:
         assert mock_ingest.call_count == 1
         args, _kwargs = mock_ingest.call_args
         source, _progress, context, _options = args
-        assert source == "https://example.com/docs"
+        assert source == HttpUrl("https://example.com/docs")
         assert context.overwrite is True
         assert context.collection == "mycol"
         assert context.agent_handle == "rmh"
@@ -2597,7 +2710,7 @@ class TestIngest:
             task_id = resp.json()["task_id"]
             data = _poll_task_done(tc, task_id)
         assert data["status"] == "failed"
-        assert "unsupported URL" in data["error"]
+        assert data["error"] == "internal error: ValueError"
 
     def test_pipeline_os_error_marks_task_failed(self, tmp_path: Path) -> None:
         """ingest_auto raising OSError marks the task as failed."""
@@ -2621,7 +2734,7 @@ class TestIngest:
             task_id = resp.json()["task_id"]
             data = _poll_task_done(tc, task_id)
         assert data["status"] == "failed"
-        assert "upstream refused connection" in data["error"]
+        assert data["error"] == "internal error: OSError"
 
     def test_rejects_oversized_body(self, client: TestClient) -> None:
         """Ingest body > 1 MB must be rejected with HTTP 413."""
@@ -3785,7 +3898,7 @@ class TestRunPurgeTask:
         ):
             asyncio.run(RegistrationLifecycle(ctx).run_purge(state, "docs"))
         assert state.status == "failed"
-        assert "purge boom" in state.error
+        assert state.error == "internal error: RuntimeError"
 
 
 class TestSubsumeTeardownForceScoping:
@@ -3931,7 +4044,7 @@ class TestSyncGenericFailure:
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "failed"
-        assert "embedder crashed" in data["error"]
+        assert data["error"] == "embedder crashed"
 
     def test_remember_runtime_error_marks_task_failed(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
@@ -3953,7 +4066,7 @@ class TestSyncGenericFailure:
             task_id = resp.json()["task_id"]
             data = _poll_task_done(tc, task_id)
         assert data["status"] == "failed"
-        assert "embedder crashed" in data["error"]
+        assert data["error"] == "internal error: RuntimeError"
 
     def test_ingest_runtime_error_marks_task_failed(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
@@ -3979,7 +4092,7 @@ class TestSyncGenericFailure:
             task_id = resp.json()["task_id"]
             data = _poll_task_done(tc, task_id)
         assert data["status"] == "failed"
-        assert "embedder crashed" in data["error"]
+        assert data["error"] == "internal error: RuntimeError"
 
 
 class TestUnifiedTaskPolling:

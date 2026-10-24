@@ -13,20 +13,18 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from starlette.concurrency import run_in_threadpool
 
-from quarry.daemon.ingest_jobs import IngestJob
+from quarry.daemon.captured_body_ingest import CapturedBodyIngest, IngestLabels
 from quarry.daemon.job_spool import SpoolRecord
-from quarry.daemon.tasks import task_terminal
+from quarry.daemon.refusal_aware_terminal import RefusalAwareTerminal
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.tasks import TaskState
-    from quarry.ingestion.ingest_context import MemoryType
+    from quarry.http_url import HttpUrl
     from quarry.ingestion.web_ingest import FormatHint
 
 logger = logging.getLogger(__name__)
@@ -62,20 +60,23 @@ class ScrubbedIngestJob:
 
     name: str
     content: str
-    collection: str
-    format_hint: str
-    overwrite: bool
+    labels: IngestLabels
+    format_hint: FormatHint
     scrub_label: str
-    agent_handle: str
-    memory_type: str
-    summary: str
+    # True only for a capture, whose name is a fetched URL's storage name; a
+    # ``remember`` or ``learn`` name is a label, whatever its format hint.
+    url_sourced: bool = False
+
+    @property
+    def collection(self) -> str:
+        """Return the collection this job writes (the queue routing key)."""
+        return self.labels.collection
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Scrub then ingest the content in a background thread, tracking state."""
-        with task_terminal(state):
-            result = await run_in_threadpool(self.scrub_and_ingest, ctx)
-            state.status = "completed"
-            state.results = dict(result)
+        terminal = RefusalAwareTerminal(state, self._stored_name)
+        with terminal.record():
+            terminal.complete(await run_in_threadpool(self.scrub_and_ingest, ctx))
 
     def spool_record(self) -> SpoolRecord | None:
         """Return a scrubbed snapshot; ``remember`` has no durable client copy.
@@ -101,65 +102,45 @@ class ScrubbedIngestJob:
         """Ingest with a scrubber, or skip an existing document when not overwriting.
 
         The pipeline redacts content AND metadata.  The existence check uses the
-        scrubbed name because that is the name the pipeline stores.
+        name the pipeline stores (:meth:`InlineIngest.stored_name`), computed once,
+        and a skip reports it, never the name as sent.
         """
-        if not self.overwrite and self._already_stored(ctx):
-            return {
-                "document_name": self.name,
-                "collection": self.collection,
-                "chunks": 0,
-                _SKIPPED: "exists",
-            }
-        from quarry.ingestion.ingest_context import (  # noqa: PLC0415
-            IngestContext,
-            Progress,
-        )
+        from quarry.ingestion.ingest_context import Progress  # noqa: PLC0415
         from quarry.ingestion.web_ingest import (  # noqa: PLC0415
             InlineIngest,
             ingest_content,
         )
 
+        inline = InlineIngest(
+            self.content,
+            format_hint=self.format_hint,
+            content_scrubber=self._scrubbed,
+            url_sourced=self.url_sourced,
+        )
+        stored = self._stored_name()
+        if not self.labels.overwrite and self.labels.holds(
+            ctx, stored, url_sourced=self.url_sourced
+        ):
+            return {
+                "document_name": stored,
+                "collection": self.collection,
+                "chunks": 0,
+                _SKIPPED: "exists",
+            }
         return dict(
-            ingest_content(
-                InlineIngest(
-                    self.content,
-                    # self.format_hint is a plain str from the CLI/HTTP boundary;
-                    # InlineIngest's field is the tightened FormatHint Literal.
-                    format_hint=cast("FormatHint", self.format_hint),
-                    content_scrubber=self._scrubbed,
-                ),
-                self.name,
-                Progress(None),
-                IngestContext(
-                    ctx.database,
-                    ctx.settings,
-                    overwrite=self.overwrite,
-                    collection=self.collection,
-                    agent_handle=self.agent_handle,
-                    # self.memory_type is a plain str carried from the daemon's
-                    # HTTP boundary (unvalidated beyond the reserved-value
-                    # reject); IngestContext's field is the tightened Literal.
-                    memory_type=cast("MemoryType", self.memory_type),
-                    summary=self.summary,
-                ),
-            )
+            ingest_content(inline, self.name, Progress(None), self.labels.context(ctx))
         )
 
-    def _already_stored(self, ctx: DaemonContext) -> bool:
-        """Return whether the collection already holds a document of this name."""
-        return ctx.database.catalog.document_exists(
-            self._scrubbed(self.name), self.collection
+    def scrubbed_name(self) -> str:
+        """Return the document name as stored, safe to log."""
+        return self._stored_name()
+
+    def _stored_name(self) -> str:
+        """Return the one derivation the store uses, so a refusal, a re-fetch and a
+        skip all name the same document."""
+        return self.labels.stored_name(
+            self.name, self._scrubbed, url_sourced=self.url_sourced
         )
-
-    @staticmethod
-    def is_stored(result: Mapping[str, object]) -> bool:
-        """Return whether the document is in the store after *result*.
-
-        True when chunks were written, or when the create-if-absent check found
-        it already there (``skipped: "exists"``). Only a result that is neither
-        — an extraction that produced nothing — leaves the store without it.
-        """
-        return bool(result.get("chunks")) or _SKIPPED in result
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,15 +152,14 @@ class CaptureIngestJob:
     extract to zero chunks; rather than silently index nothing, the daemon then
     re-fetches the *source URL* server-side (scrub on, same captures collection)
     so the page is captured instead of dropped.  That re-fetch is an SSRF sink,
-    so the capture route runs the ``UrlSafetyCheck`` gate on ``source_url`` at
-    the boundary before building this job — the job trusts an already-validated
-    URL and does not re-check.  A capture with no source URL (a compaction
-    transcript) simply stores what it has.  The re-fetch scrubs content and
-    summary, matching the inline phase.
+    so the capture route admits ``source_url`` through ``UrlAdmission``
+    (``_admit_url``) and carries an ``HttpUrl``; the job does not re-check.  A
+    capture with no source URL (a compaction transcript) simply stores what it
+    has.  The re-fetch scrubs content and summary, matching the inline phase.
     """
 
     inline: ScrubbedIngestJob
-    source_url: str
+    source_url: HttpUrl | None  # None: a transcript, nothing to re-fetch
 
     @property
     def collection(self) -> str:
@@ -196,10 +176,9 @@ class CaptureIngestJob:
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Ingest inline, re-fetching the source on empty, tracking task state."""
-        with task_terminal(state):
-            result = await run_in_threadpool(self._capture, ctx)
-            state.status = "completed"
-            state.results = dict(result)
+        terminal = RefusalAwareTerminal(state, self.inline.scrubbed_name)
+        with terminal.record():
+            terminal.complete(await run_in_threadpool(self._capture, ctx))
 
     def _capture(self, ctx: DaemonContext) -> dict[str, object]:
         """Scrub-ingest inline; on an empty extraction with a source URL, re-fetch.
@@ -210,38 +189,23 @@ class CaptureIngestJob:
         daemon holds (and then skip or rewrite it a second time).
         """
         result = self.inline.scrub_and_ingest(ctx)
-        if ScrubbedIngestJob.is_stored(result) or not self.source_url:
+        if RefusalAwareTerminal.is_stored(result) or self.source_url is None:
             return result
-        return self._refetch(ctx)
+        return self._refetch(ctx, self.source_url)
 
-    def _refetch(self, ctx: DaemonContext) -> dict[str, object]:
-        """Re-fetch source URL and delegate routing to :class:`IngestJob`.
+    def _refetch(self, ctx: DaemonContext, source: HttpUrl) -> dict[str, object]:
+        """Re-fetch the source URL and store the body by its media type.
 
-        A safety/network failure logs cleanly at WARN and returns an empty
-        result — never a traceback — because ``_capture`` already stored what
-        the inline phase had.  Failure handling delegates to
-        :meth:`IngestJob.safe_fetch_body` so both fetch paths share the same
-        redacted-log semantics (CWE-532).  A successful fetch flows through
-        the same HTML-vs-text routing :class:`IngestJob` uses for the primary
-        URL path (:meth:`IngestJob.ingest_captured_body`), so both paths
-        agree on the media-type contract instead of drifting.
+        Runs only when the inline phase stored nothing, so a refused media type,
+        a binary body, or a failed fetch raises its URL-free reason and the task
+        ends ``failed``: reporting ``completed`` would claim a capture that was
+        never stored; so does a re-fetch that also extracts no text.  A
+        successful fetch flows through the same HTML-vs-text routing the primary
+        URL path uses (:class:`CapturedBodyIngest`), so both agree on the
+        media-type contract instead of drifting.
         """
-        body = IngestJob.safe_fetch_body(self.source_url, "capture: refetch")
-        if body is None:
-            return {"chunks": 0, "sections": 0}
-
         logger.info(
-            "capture: %s inline extracted to zero chunks — re-fetching via daemon (%s)",
-            self.inline.name,
-            IngestJob.sanitize_media_type(body.media_type),
+            "capture: %s inline extracted to zero chunks — re-fetching via daemon",
+            self.inline.scrubbed_name(),
         )
-        return IngestJob(
-            source=self.source_url,
-            overwrite=self.inline.overwrite,
-            collection=self.inline.collection,
-            scrub=True,
-            agent_handle=self.inline.agent_handle,
-            memory_type=self.inline.memory_type,
-            summary=self.inline.summary,
-            document_name_override=self.inline.name,
-        ).ingest_captured_body(ctx, body)
+        return CapturedBodyIngest(source, self.inline.labels).run(ctx)

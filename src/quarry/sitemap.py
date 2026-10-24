@@ -8,13 +8,18 @@ error tolerance for malformed content.
 from __future__ import annotations
 
 import logging
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
 from fnmatch import fnmatch
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
-from quarry.sitemap_web_client import GatedSitemapWebClient
-from quarry.url_safety import UrlSafetyCheck
+from quarry.ingestion.sitemap_reader import SitemapReader
+from quarry.url_admission import UrlAdmission
+
+if TYPE_CHECKING:
+    from quarry.http_url import HttpUrl
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +53,7 @@ class SitemapDiscovery:
         return entries
 
     @staticmethod
-    def discover_pages(url: str) -> list[SitemapEntry]:
+    def discover_pages(url: HttpUrl) -> list[SitemapEntry]:
         """Discover all pages for a website via sitemap auto-discovery.
 
         Uses USP's ``sitemap_tree_for_homepage`` to probe robots.txt and
@@ -62,19 +67,12 @@ class SitemapDiscovery:
         Returns:
             Deduplicated list of all discovered pages.
         """
-        from usp.tree import sitemap_tree_for_homepage  # noqa: PLC0415
-
-        parsed = urlparse(url)
-        homepage = f"{parsed.scheme}://{parsed.netloc}/"
-
-        logger.info("Discovering sitemaps for %s", homepage)
-        tree = sitemap_tree_for_homepage(homepage, web_client=GatedSitemapWebClient())
-        entries = SitemapDiscovery._pages_to_entries(tree.all_pages())
-        logger.info("Discovered %d pages from %s", len(entries), homepage)
-        return entries
+        return SitemapDiscovery._pages_to_entries(
+            SitemapReader().discover(url.homepage)
+        )
 
     @staticmethod
-    def discover_urls(url: str) -> list[SitemapEntry]:
+    def discover_urls(url: HttpUrl) -> list[SitemapEntry]:
         """Fetch and parse a specific sitemap URL, recursing into indexes.
 
         Uses USP's ``SitemapFetcher`` for robust parsing of XML, RSS, Atom,
@@ -85,17 +83,12 @@ class SitemapDiscovery:
 
         Returns:
             Deduplicated flat list of all SitemapEntry found.
-        """
-        from usp.fetch_parse import SitemapFetcher  # noqa: PLC0415
 
-        logger.info("Fetching sitemap: %s", url)
-        fetcher = SitemapFetcher(
-            url=url, recursion_level=0, web_client=GatedSitemapWebClient()
-        )
-        sitemap = fetcher.sitemap()
-        entries = SitemapDiscovery._pages_to_entries(sitemap.all_pages())
-        logger.info("Parsed %d pages from %s", len(entries), url)
-        return entries
+        Raises:
+            FetchRefusedError: The sitemap could not be fetched or parsed, or the
+                parser rejected *url*.  The message names no URL.
+        """
+        return SitemapDiscovery._pages_to_entries(SitemapReader().read(url))
 
     @staticmethod
     def _matches(
@@ -107,7 +100,9 @@ class SitemapDiscovery:
 
         Exclude takes precedence over include; no patterns means match-all.
         """
-        path = urlparse(entry.loc).path
+        path = ""  # an unparseable entry has no path; the gate drops it
+        with suppress(ValueError):
+            path = urlparse(entry.loc).path
         if exclude and any(fnmatch(path, pat) for pat in exclude):
             return False
         return not (include and not any(fnmatch(path, pat) for pat in include))
@@ -128,8 +123,8 @@ class SitemapDiscovery:
         check the ingest route runs on the initial source -- and an unsafe or
         unresolvable URL is dropped and logged rather than fetched, so a public
         sitemap listing internal URLs triggers no internal fetch.  Complementary
-        to pinning the resolved IP (a separate follow-up): this gates each listed
-        URL, not the connection.
+        to pinning the resolved IP: this gates each listed URL, not the
+        connection.
 
         Fusing glob-filter, gate, and cap into one pass keeps the added work
         proportional to the result, not the sitemap: with *limit* > 0 the scan
@@ -143,9 +138,9 @@ class SitemapDiscovery:
         for entry in entries:
             if not SitemapDiscovery._matches(entry, include, exclude):
                 continue
-            reason = UrlSafetyCheck.reject_reason(entry.loc)
-            if reason is not None:
-                logger.warning("Dropping unsafe sitemap URL %s: %s", entry.loc, reason)
+            refusal = UrlAdmission.refusal(entry.loc)
+            if refusal is not None:
+                logger.warning("Dropping unsafe sitemap URL %s", refusal)
                 continue
             safe.append(entry)
             if limit > 0 and len(safe) >= limit:

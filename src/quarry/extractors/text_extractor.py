@@ -103,9 +103,7 @@ class TextExtractor:
         }
         sections = splitters.get(fmt, SectionSplitter.plain)().split(text)
 
-        logger.debug(
-            "Split %s into %d sections (%s)", document_name, len(sections), fmt
-        )
+        logger.debug("Split text into %d sections (%s)", len(sections), fmt)
         return sections_to_pages(
             sections, document_name, document_path, PageType.SECTION
         )

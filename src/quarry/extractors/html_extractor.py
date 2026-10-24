@@ -80,7 +80,7 @@ class HtmlExtractor:
             List of PageContent objects, one per section.  Empty list when the
             HTML contains no extractable content.
         """
-        logger.debug("Processing HTML: %s", document_name)
+        logger.debug("Processing HTML: %d characters", len(html))
 
         soup = BeautifulSoup(html, "html.parser")
 

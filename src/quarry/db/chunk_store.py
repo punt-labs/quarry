@@ -6,17 +6,17 @@ import logging
 import threading
 from typing import TYPE_CHECKING, Self
 
-from quarry._sql import escape_sql
-from quarry.db.chunk_table import ChunkTable, DocumentRef
+from quarry.db.chunk_table import ChunkTable
+from quarry.db.document_ref import CollectionRef, DocumentRef
 from quarry.db.schema import TABLE_NAME
-from quarry.types import LanceDB
+from quarry.display_name import DisplayName
 
 if TYPE_CHECKING:
     import numpy as np
     from numpy.typing import NDArray
 
     from quarry.models import Chunk
-    from quarry.types import LanceTable
+    from quarry.types import LanceDB, LanceTable
 
 logger = logging.getLogger(__name__)
 
@@ -83,16 +83,17 @@ class ChunkStore:
         table = self._open()
         if table is None:
             return 0
-        predicate = DocumentRef(document_name, collection).predicate()
-        if not count:
-            with _write_lock:
-                table.delete(predicate)
-            logger.info("Issued chunk delete for %s (counting disabled)", document_name)
-            return 0
-        deleted = table.count_rows(predicate)
+        predicate = DocumentRef(
+            document_name, CollectionRef.optional(collection)
+        ).predicate()
+        deleted = table.count_rows(predicate) if count else 0
         with _write_lock:
             table.delete(predicate)
-        logger.info("Deleted %d chunks for %s", deleted, document_name)
+        shown = DisplayName(document_name).redacted()
+        if count:
+            logger.info("Deleted %d chunks for %s", deleted, shown)
+        else:
+            logger.info("Issued chunk delete for %s (counting disabled)", shown)
         return deleted
 
     def delete_document_tail(self, ref: DocumentRef) -> int:
@@ -104,13 +105,11 @@ class ChunkStore:
         ``[0, w)``, making resume idempotent under repeated crashes. Returns the
         number of rows removed.
 
-        Raises ``ValueError`` if *ref* has no positive watermark — a tail delete
-        with ``min_chunk_index <= 0`` would drop the whole document; use
-        ``delete_document`` for that.
+        Raises ``ValueError`` if *ref* has no positive watermark (see
+        :meth:`DocumentRef.require_tail`); use ``delete_document`` to drop a whole
+        document.
         """
-        if ref.min_chunk_index <= 0:
-            msg = f"delete_document_tail needs a positive watermark, got {ref!r}"
-            raise ValueError(msg)
+        ref.require_tail()
         table = self._open()
         if table is None:
             return 0
@@ -121,7 +120,7 @@ class ChunkStore:
         logger.info(
             "Delete-tail removed %d chunks for %s (chunk_index >= %d)",
             deleted,
-            ref.document_name,
+            DisplayName(ref.document_name).redacted(),
             ref.min_chunk_index,
         )
         return deleted
@@ -133,7 +132,7 @@ class ChunkStore:
             return 0
         before = table.count_rows()
         with _write_lock:
-            table.delete(f"collection = '{escape_sql(collection)}'")
+            table.delete(CollectionRef(collection).clause())
         after = table.count_rows()
         deleted = before - after
         logger.info("Deleted %d chunks for collection %s", deleted, collection)
@@ -145,5 +144,5 @@ class ChunkStore:
         if table is None:
             return 0
         if collection_filter:
-            return table.count_rows(f"collection = '{escape_sql(collection_filter)}'")
+            return table.count_rows(CollectionRef(collection_filter).clause())
         return table.count_rows()

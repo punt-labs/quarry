@@ -15,8 +15,8 @@ from typing import Any
 
 import pytest
 
+import quarry.ingestion.opened_response as wf
 import quarry.ingestion.ssrf_redirect as sr
-import quarry.ingestion.web_fetch as wf
 import quarry.sitemap_web_client as swc
 from quarry.ingestion.ssrf_redirect import (
     GUARDED_OPENER,
@@ -168,6 +168,8 @@ class TestOpenerNeverOpensInternal:
         with pytest.raises(RedirectRejectedError, match="redirect target rejected"):
             opener.open(start)
         assert recorder.opened == [start]  # internal target never fetched
+        assert recorder.redirect is not None
+        assert recorder.redirect.closed  # the refused hop's response is released
 
     def test_safe_redirect_chain_is_followed(
         self, monkeypatch: pytest.MonkeyPatch
@@ -194,6 +196,7 @@ class _FakeResp:
         self.msg = "Found" if code == 302 else "OK"
         self._headers = headers
         self.url = url
+        self.closed = False
 
     def info(self) -> HTTPMessage:
         return self._headers
@@ -202,7 +205,7 @@ class _FakeResp:
         return b""
 
     def close(self) -> None:
-        return None
+        self.closed = True
 
     def geturl(self) -> str:
         return self.url
@@ -217,10 +220,12 @@ class _FakeResp:
 class _RecordingHandler(urllib.request.BaseHandler):
     """Intercept opens: 302 the start URL to *target*, record every URL opened."""
 
-    def __init__(self, start: str, target: str) -> None:
+    def __init__(self, start: str, target: str, code: int = 302) -> None:
         self._start = start
         self._target = target
+        self._code = code
         self.opened: list[str] = []
+        self.redirect: _FakeResp | None = None
 
     def _open(self, req: urllib.request.Request) -> _FakeResp:
         url = req.full_url
@@ -228,7 +233,8 @@ class _RecordingHandler(urllib.request.BaseHandler):
         headers = HTTPMessage()
         if url == self._start:
             headers["Location"] = self._target
-            return _FakeResp(302, headers, url)
+            self.redirect = _FakeResp(self._code, headers, url)
+            return self.redirect
         headers["Content-Type"] = "text/html"
         return _FakeResp(200, headers, url)
 
@@ -237,3 +243,69 @@ class _RecordingHandler(urllib.request.BaseHandler):
 
     def https_open(self, req: urllib.request.Request) -> _FakeResp:
         return self._open(req)
+
+
+_MALFORMED = ["http://[", "http://[::1", "//[x/", "http://\u2100.com"]
+
+
+def _guarded_opener(
+    recorder: urllib.request.BaseHandler,
+) -> urllib.request.OpenerDirector:
+    opener = urllib.request.OpenerDirector()
+    opener.add_handler(SsrfGuardedRedirectHandler())
+    opener.add_handler(urllib.request.HTTPErrorProcessor())
+    opener.add_handler(recorder)
+    return opener
+
+
+class TestAMalformedLocationIsARefusal:
+    @pytest.mark.parametrize("location", _MALFORMED)
+    @pytest.mark.parametrize("code", [301, 302, 303, 307, 308])
+    def test_the_hop_is_refused_before_anything_else_is_opened(
+        self, location: str, code: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        start = "https://public.example/start"
+        _resolve(monkeypatch, _PUBLIC)
+        recorder = _RecordingHandler(start, location, code)
+        with pytest.raises(RedirectRejectedError, match="malformed redirect target"):
+            _guarded_opener(recorder).open(start)
+        assert recorder.opened == [start]
+        assert recorder.redirect is not None
+        assert recorder.redirect.closed
+
+    @pytest.mark.parametrize("location", _MALFORMED)
+    def test_the_sitemap_path_answers_with_an_error_response_and_no_bug(
+        self, location: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from usp.web_client.abstract_client import WebClientErrorResponse
+
+        import quarry.sitemap_web_client as swc
+
+        start = "https://public.example/start"
+        _resolve(monkeypatch, _PUBLIC)
+        monkeypatch.setattr(
+            swc, "GUARDED_OPENER", _guarded_opener(_RecordingHandler(start, location))
+        )
+        client = swc.GatedSitemapWebClient()
+        response = client.get(start)
+        assert isinstance(response, WebClientErrorResponse)
+        assert response.message() == "malformed redirect target"
+        assert client.take_bug() == ""
+
+    @pytest.mark.parametrize("location", _MALFORMED)
+    def test_the_ingest_path_raises_a_refusal(
+        self, location: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import quarry.ingestion.opened_response as opened
+        from quarry.ingestion.fetch_refused import FetchRefusedError
+
+        start = "https://public.example/start"
+        _resolve(monkeypatch, _PUBLIC)
+        monkeypatch.setattr(
+            opened,
+            "GUARDED_OPENER",
+            _guarded_opener(_RecordingHandler(start, location)),
+        )
+        request = urllib.request.Request(start)
+        with pytest.raises(FetchRefusedError, match="malformed redirect target"):
+            opened.OpenedResponse.open(request, timeout=5, deadline=1e12)

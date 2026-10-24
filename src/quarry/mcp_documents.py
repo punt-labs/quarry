@@ -11,6 +11,7 @@ connection resolved per call.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.api import (
@@ -21,6 +22,7 @@ from quarry.api import (
     ShowRequest,
 )
 from quarry.client import HttpError, TargetResolver
+from quarry.collection_namer import CollectionNamer
 from quarry.formatting import format_document_detail
 from quarry.mcp_guard import ToolGuard
 
@@ -150,18 +152,15 @@ class DocumentTools:
 
         Args:
             directory: Absolute path to the directory.
-            collection: Collection name. Uses directory name if empty.
+            collection: Collection name. Uses the directory name, sanitized, if empty.
         """
-        from pathlib import Path  # noqa: PLC0415 — path leaf only, no engine
-
         # An empty directory would resolve to the cwd and silently register it.
         if err := self._reject_blank(directory, "directory"):
             return err
         resolved = Path(directory).expanduser().resolve()
-        col = collection or resolved.name or "root"
-        accepted = self._connect().register(
-            RegisterRequest(directory=str(resolved), collection=col)
-        )
+        col = collection or CollectionNamer.safe(resolved.name) or "root"
+        request = RegisterRequest(directory=str(resolved), collection=col)
+        accepted = self._connect().register(request)
         return f"▶  Registering {resolved} as {col!r} (task {accepted.task_id})"
 
     @ToolGuard.wrap

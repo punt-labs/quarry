@@ -128,7 +128,7 @@ class LoggingConfig:
                 },
                 "handlers": {
                     "file": {
-                        "class": "logging.handlers.RotatingFileHandler",
+                        "class": "quarry.log_redaction.RedactingFileHandler",
                         "filename": str(log_dir / log_file),
                         "maxBytes": cls._MAX_BYTES,
                         "backupCount": cls._BACKUP_COUNT,
@@ -137,7 +137,7 @@ class LoggingConfig:
                         "level": "INFO",
                     },
                     "stderr": {
-                        "class": "logging.StreamHandler",
+                        "class": "quarry.log_redaction.RedactingStreamHandler",
                         "stream": "ext://sys.stderr",
                         "formatter": "standard",
                         "level": effective_level,

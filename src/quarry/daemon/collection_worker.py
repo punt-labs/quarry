@@ -2,7 +2,7 @@
 
 A :class:`CollectionWorker` is the per-collection serialization the queue is
 built on: a single consumer coroutine draining one ``asyncio.Queue`` means only
-one ``progressive_insert`` caller per LanceDB collection is ever in flight —
+one ``DocumentStreamer.insert`` caller per LanceDB collection is ever in flight —
 the single-writer precondition DES-034's ingest primitives assume.  Each unit
 runs under the shared embed gate; its duration is bounded by the ingest work
 itself — the web fetch enforces a total deadline + size cap and the embed and

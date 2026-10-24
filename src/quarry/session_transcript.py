@@ -21,6 +21,7 @@ from quarry.ethos_handle import EthosConfig
 
 if TYPE_CHECKING:
     from quarry.artifacts import SessionArtifacts
+    from quarry.send_outcome import SendOutcome
     from quarry.transcript_reader import TranscriptReader
 
 logger = logging.getLogger(__name__)
@@ -48,15 +49,18 @@ class TranscriptSource:
 class TranscriptCaptureOutcome:
     """Report what a transcript capture attempted.
 
-    ``sent`` is whether the daemon accepted the wire payload; ``archived`` is
-    whether the raw JSONL is now durable on disk.  Callers rely on the split:
-    an unreachable daemon leaves ``archived=True, sent=False`` so
-    ``backfill-sessions`` can recover the transcript later.
+    ``sent`` is whether the daemon accepted the wire payload (``failure`` is the
+    trace label of a send that failed); ``archived`` is whether the raw JSONL is
+    now durable on disk.  Callers rely on the split: an unreachable daemon leaves
+    ``archived=True, sent=False`` so ``backfill-sessions`` can recover the
+    transcript later.
     """
 
     archived: bool
     sent: bool
     text_captured: bool
+    failure: str = ""
+    written: bool = False
 
 
 @final
@@ -133,18 +137,14 @@ class SessionTranscriptCapture:
         header = format_artifacts_header(artifacts)
         wire_text = f"{header}\n\n{raw_text}" if header else raw_text
 
-        if self._source.cwd:
-            iso_timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-            self._write_local_capture(
-                project_dir=Path(self._source.cwd),
-                timestamp=iso_timestamp,
-                artifacts=artifacts,
-                text=raw_text,
-            )
-
-        sent = self._send(wire_text)
+        written = self._write_local_capture(artifacts, raw_text)
+        send = self._send(wire_text, archived=archived)
         return TranscriptCaptureOutcome(
-            archived=archived, sent=sent, text_captured=True
+            archived=archived,
+            sent=bool(send),
+            text_captured=True,
+            failure=send.label,
+            written=written,
         )
 
     def _archive(self) -> bool:
@@ -159,30 +159,28 @@ class SessionTranscriptCapture:
             return False
         return True
 
-    def _write_local_capture(
-        self,
-        *,
-        project_dir: Path,
-        timestamp: str,
-        artifacts: SessionArtifacts,
-        text: str,
-    ) -> None:
-        """Write the scrubbed ``.md`` capture file next to the project."""
+    def _write_local_capture(self, artifacts: SessionArtifacts, text: str) -> bool:
+        """Write the scrubbed ``.md`` capture file; return whether one landed.
+
+        There is none to write when the hook has no working directory.
+        """
         from quarry.capture import CaptureRequest, CaptureWriter  # noqa: PLC0415
 
-        CaptureWriter().write(
+        if not self._source.cwd:
+            return False
+        return CaptureWriter().write(
             CaptureRequest(
-                project_dir=project_dir,
+                project_dir=Path(self._source.cwd),
                 session_id=self._source.session_id,
-                timestamp=timestamp,
+                timestamp=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 artifacts=artifacts,
                 text=text,
                 label=self._source.label,
             )
         )
 
-    def _send(self, wire_text: str) -> bool:
-        """Post the wire text to the daemon; return whether the send succeeded."""
+    def _send(self, wire_text: str, *, archived: bool) -> SendOutcome:
+        """Post the wire text to the daemon; return the send's outcome."""
         from quarry.api import CaptureIngestRequest  # noqa: PLC0415
 
         request = CaptureIngestRequest(
@@ -193,8 +191,8 @@ class SessionTranscriptCapture:
             summary=self._summary,
             format_hint="markdown",
         )
-        unreachable = (
-            f"{self._source.label}: daemon unreachable; transcript archived, "
-            "run backfill-sessions to index it"
+        note = "archived, run backfill-sessions to index it"
+        down = f"{self._source.label}: daemon unreachable; transcript " + (
+            note if archived else "could not be archived"
         )
-        return DaemonCaptureSender().send_capture(request, unreachable_log=unreachable)
+        return DaemonCaptureSender().send_capture(request, unreachable_log=down)

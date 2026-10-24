@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from quarry.client import QuarryConnectionError
+from quarry.client import HttpError, QuarryConnectionError
 from quarry.mcp_guard import ToolGuard
 
 if TYPE_CHECKING:
@@ -35,6 +35,39 @@ class TestWrap:
         record = next(r for r in caplog.records if r.name == "quarry.mcp_guard")
         assert "Error in tool" in record.getMessage()
         assert record.exc_info is not None  # the traceback travels with the log
+
+    def test_a_daemon_refusal_returns_its_message_with_one_quiet_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        @ToolGuard.wrap
+        def tool() -> str:
+            raise HttpError("binary content rejected: pdf header", 400, "")
+
+        with caplog.at_level("WARNING", logger="quarry.mcp_guard"):
+            result = tool()
+
+        assert result == "Error: binary content rejected: pdf header"
+        [record] = caplog.records
+        assert record.levelname == "WARNING"
+        assert (
+            record.getMessage() == "Error in tool: binary content rejected: pdf header"
+        )
+        assert record.exc_info is None
+
+    def test_a_daemon_fault_is_an_error_with_its_traceback(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        @ToolGuard.wrap
+        def tool() -> str:
+            raise HttpError("internal error", 500, "")
+
+        with caplog.at_level("WARNING", logger="quarry.mcp_guard"):
+            result = tool()
+
+        assert result == "Error: internal error"
+        [record] = caplog.records
+        assert record.levelname == "ERROR"
+        assert record.exc_info is not None
 
     def test_preserves_the_name_fastmcp_registers(self) -> None:
         @ToolGuard.wrap

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 import pytest
@@ -151,14 +152,15 @@ class TestScanErrors:
             "mission_id: m-2026-09-30-002\ncurrent_round: 1\n"
         )
         scan = _store(repo).scan()
-        assert any("worker" in e for e in scan.errors)
+        assert any(e.endswith(": internal error: ValueError") for e in scan.errors)
 
     def test_non_integer_round_is_collected(self, repo: Path) -> None:
         results = self._missions_dir(repo) / CLOSED_MISSION / "results.yaml"
         results.write_text("results:\n  - round: two\n")
         scan = _store(repo).scan()
         assert any(
-            CLOSED_MISSION in e and "round must be an integer" in e for e in scan.errors
+            CLOSED_MISSION in e and e.endswith("internal error: ValueError")
+            for e in scan.errors
         )
         assert [m.contract.mission_id for m in scan.missions] == [OPEN_MISSION]
 
@@ -167,14 +169,35 @@ class TestScanErrors:
             "- a\n"
         )
         scan = _store(repo).scan()
-        assert any("not a mapping" in e for e in scan.errors)
+        assert any(e.endswith(": internal error: ValueError") for e in scan.errors)
 
     def test_non_list_results_is_collected(self, repo: Path) -> None:
         (self._missions_dir(repo) / CLOSED_MISSION / "results.yaml").write_text(
             "results: nope\n"
         )
         scan = _store(repo).scan()
-        assert any("'results' is not a list" in e for e in scan.errors)
+        assert any(e.endswith(": internal error: ValueError") for e in scan.errors)
+
+    def test_the_detail_is_logged_for_the_operator(
+        self, repo: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        (self._missions_dir(repo) / CLOSED_MISSION / "results.yaml").write_text(
+            "results: nope\n"
+        )
+        with caplog.at_level(logging.WARNING, logger="quarry.mission_store"):
+            _store(repo).scan()
+        assert [r.levelno for r in caplog.records] == [logging.WARNING]
+        assert CLOSED_MISSION in caplog.text
+        assert "is not a list" in caplog.text
+
+    def test_an_error_line_never_carries_the_exception_message(
+        self, repo: Path
+    ) -> None:
+        (self._missions_dir(repo) / CLOSED_MISSION / "results.yaml").write_text(
+            "results: nope\n"
+        )
+        scan = _store(repo).scan()
+        assert not any("nope" in e or "is not a list" in e for e in scan.errors)
 
     def test_stray_files_in_the_tree_are_ignored(self, repo: Path) -> None:
         (self._missions_dir(repo) / "missions.jsonl").write_text("{}\n")

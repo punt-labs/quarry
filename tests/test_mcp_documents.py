@@ -11,6 +11,8 @@ before a connection is ever opened.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
+from unittest.mock import MagicMock
 
 from mcp.server.mcpserver import MCPServer
 
@@ -93,3 +95,18 @@ class TestInputValidation:
         result = DocumentTools(connect=_refuse).show("   ")
         assert result.startswith("Error:")
         assert "document_name" in result
+
+
+class TestTheDefaultCollectionName:
+    """The default is the sanitized leaf, the name the daemon will accept."""
+
+    def test_a_directory_with_a_space_registers_under_a_name_without_one(
+        self, tmp_path: Path
+    ) -> None:
+        directory = tmp_path / "My Notes"
+        directory.mkdir()
+        client = MagicMock()
+        client.register.return_value.task_id = "t1"
+        DocumentTools(connect=lambda: client).register_directory(str(directory))
+        [request] = client.register.call_args.args
+        assert request.collection == "My-Notes"

@@ -102,6 +102,8 @@ dev = [
     "pytest-cov>=6.0.0",
     "pytest-timeout>=2.3.0",
     "types-PyYAML>=6.0.0",
+    # Oracle property test for the log redactor (tests/test_log_redactor_oracle.py).
+    "hypothesis>=6.100",
     # Enforces the DES-031 I1 client/engine package boundary (make check-imports).
     "import-linter>=2.0",
 ]
@@ -196,7 +198,7 @@ ignore = [
 "src/quarry/mcp_documents.py" = ["FBT"]  # MCP tool boolean kwargs (keep_data, overwrite)
 "src/quarry/cli_captures.py" = ["FBT"]  # typer boolean CLI flags
 "src/quarry/cli_ingest.py" = ["FBT"]  # typer boolean CLI flags
-"src/quarry/cli_sync.py" = ["FBT"]  # typer boolean CLI flags
+"src/quarry/cli_directories.py" = ["FBT"]  # typer boolean CLI flags
 "src/quarry/cli_project.py" = ["FBT"]  # typer boolean CLI flags
 "src/quarry/cli_maintenance.py" = ["FBT"]  # typer boolean CLI flags
 "src/quarry/cli_remote.py" = ["FBT"]  # typer boolean CLI flags

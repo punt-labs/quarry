@@ -8,19 +8,18 @@ it was previously only reached transitively through ``ingest_document`` /
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
+
+import pytest
 
 from quarry.config import Settings
 from quarry.db import Database
+from quarry.db.row_budget import RowBudgetError
 from quarry.ingestion.chunk_store_funnel import _chunk_embed_store
 from quarry.ingestion.extracted_document import ExtractedDocument
 from quarry.ingestion.ingest_context import IngestContext, Progress
 from quarry.ingestion.ingest_stats import IngestStats
 from quarry.models import Chunk, PageContent, PageType
-
-if TYPE_CHECKING:
-    import pytest
 
 _PROGRESS = Progress(None)
 
@@ -71,8 +70,8 @@ class TestEmptyChunksFailClosed:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [],
         )
         deleted: list[str] = []
         monkeypatch.setattr(
@@ -103,8 +102,8 @@ class TestNonEmptyChunksStore:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [_chunk()],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [_chunk()],
         )
         calls: list[str] = []
 
@@ -129,8 +128,8 @@ class TestNonEmptyChunksStore:
 
     def test_no_overwrite_skips_delete(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [_chunk()],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [_chunk()],
         )
         monkeypatch.setattr(
             "quarry.db.chunk_store.ChunkStore.insert_records",
@@ -153,8 +152,8 @@ class TestStatsMergedIntoResult:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [],
         )
 
         stats = IngestStats(total_pages=1, text_pages=1, image_pages=0)
@@ -174,8 +173,8 @@ class TestProgressReporting:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [_chunk()],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [_chunk()],
         )
         monkeypatch.setattr(
             "quarry.db.chunk_store.ChunkStore.insert_records",
@@ -202,8 +201,8 @@ class TestDocumentNameRedaction:
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [_chunk()],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [_chunk()],
         )
         monkeypatch.setattr(
             "quarry.db.chunk_store.ChunkStore.insert_records",
@@ -224,7 +223,7 @@ class TestDocumentNameRedaction:
         # document_name itself is untouched -- identity/storage is unaffected.
         assert result["document_name"] == credentialed_name
         done = [m for m in messages if m.startswith("Done:")]
-        assert done == ["Done: 1 chunks indexed from https://example.com/page"]
+        assert done == ["Done: 1 chunks indexed from https://example.com/…(segments=1)"]
         assert "user:pass" not in caplog.text
         assert "token=abc123" not in caplog.text
         # Exact match, not a host substring check (CodeQL
@@ -232,14 +231,15 @@ class TestDocumentNameRedaction:
         # record rather than a fragment that could also match an unrelated
         # look-alike string.
         info_records = [r.getMessage() for r in caplog.records]
-        assert "Done: 1 chunks indexed from https://example.com/page" in info_records
+        expected = "Done: 1 chunks indexed from https://example.com/…(segments=1)"
+        assert expected in info_records
 
     def test_url_document_name_redacts_secrets_on_zero_chunks(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [],
         )
         credentialed_name = "https://user:pass@example.com/page?token=abc123"
 
@@ -255,7 +255,7 @@ class TestDocumentNameRedaction:
         warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
         assert warnings == [
             (
-                "pipeline: https://example.com/page produced zero chunks — "
+                "pipeline: https://example.com/…(segments=1) produced zero chunks — "
                 "keeping any prior document, storing nothing"
             )
         ]
@@ -267,8 +267,8 @@ class TestDocumentNameRedaction:
         must round-trip unchanged through the same redaction call.
         """
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [_chunk()],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [_chunk()],
         )
         monkeypatch.setattr(
             "quarry.db.chunk_store.ChunkStore.insert_records",
@@ -293,8 +293,8 @@ class TestDocumentNameRedaction:
         name whole, not hand it to CaptureUrl at all.
         """
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [_chunk()],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [_chunk()],
         )
         monkeypatch.setattr(
             "quarry.db.chunk_store.ChunkStore.insert_records",
@@ -315,12 +315,12 @@ class TestDocumentNameRedaction:
         raise ``ValueError`` from inside ``CaptureUrl.redacted`` -- after
         chunks are already stored, so the guard's http(s):// prefix check
         (which excludes this name; it has no scheme at all) and the
-        try/except fallback inside ``_display_name`` must both hold: this
+        try/except fallback inside ``DisplayName`` must both hold: this
         must never raise, and the display value is the name unchanged.
         """
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [_chunk()],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [_chunk()],
         )
         monkeypatch.setattr(
             "quarry.db.chunk_store.ChunkStore.insert_records",
@@ -333,3 +333,28 @@ class TestDocumentNameRedaction:
 
         done = [m for m in messages if m.startswith("Done:")]
         assert done == [f"Done: 1 chunks indexed from {name}"]
+
+
+class TestRefusedDocumentsAreNonDestructive:
+    """A violation found while chunking leaves the prior document untouched."""
+
+    def test_a_row_budget_violation_deletes_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def _violate(_self: object, _pages: object) -> list[Chunk]:
+            msg = "row budget exceeded: text 70,000 bytes > 65,536"
+            raise RowBudgetError(msg)
+
+        monkeypatch.setattr("quarry.ingestion.page_chunker.PageChunker.chunk", _violate)
+        deleted: list[str] = []
+        monkeypatch.setattr(
+            "quarry.db.chunk_store.ChunkStore.delete_document",
+            lambda _self, name, **_kw: deleted.append(name),
+        )
+
+        with pytest.raises(RowBudgetError):
+            _chunk_embed_store(
+                _extracted(), "doc.txt", _PROGRESS, _context(overwrite=True)
+            )
+
+        assert deleted == []

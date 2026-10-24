@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import csv
-import io
 import logging
 from pathlib import Path
 from typing import Self
 
+from quarry.extractors.sheet_tables import SheetTables
 from quarry.ingestion.text_splitter import read_text_with_fallback, sections_to_pages
-from quarry.latex_utils import LatexSerializer
 from quarry.models import PageContent, PageType
 
 logger = logging.getLogger(__name__)
@@ -66,9 +64,7 @@ class SpreadsheetExtractor:
             if not headers:
                 continue
             name = sheet_name if multi_sheet else None
-            sheet_sections = self._split_rows_to_sections(
-                headers, rows, name, self._max_chars
-            )
+            sheet_sections = SheetTables.sections(headers, rows, name, self._max_chars)
             sections.extend(sheet_sections)
 
         if not sections:
@@ -79,45 +75,6 @@ class SpreadsheetExtractor:
         return sections_to_pages(
             sections, resolved_name, document_path, PageType.SPREADSHEET
         )
-
-    @staticmethod
-    def _split_rows_to_sections(
-        headers: list[str],
-        rows: list[list[str]],
-        sheet_name: str | None,
-        max_chars: int,
-    ) -> list[str]:
-        """Split a large table into row-group sections with repeated headers."""
-        full = LatexSerializer.serialize_table(headers, rows, sheet_name)
-        if len(full) <= max_chars or len(rows) <= 1:
-            return [full] if full.strip() else []
-
-        sections: list[str] = []
-        current_rows: list[list[str]] = []
-
-        for row in rows:
-            candidate = [*current_rows, row]
-            block = LatexSerializer.serialize_table(headers, candidate, sheet_name)
-            if len(block) > max_chars and current_rows:
-                section = LatexSerializer.serialize_table(
-                    headers,
-                    current_rows,
-                    sheet_name,
-                )
-                sections.append(section)
-                current_rows = [row]
-            else:
-                current_rows.append(row)
-
-        if current_rows:
-            section = LatexSerializer.serialize_table(
-                headers,
-                current_rows,
-                sheet_name,
-            )
-            sections.append(section)
-
-        return sections
 
     @staticmethod
     def _read_xlsx(
@@ -153,8 +110,7 @@ class SpreadsheetExtractor:
     ) -> list[tuple[str, list[str], list[list[str]]]]:
         """Read a CSV file into a single ``(name, headers, rows)`` tuple."""
         text = read_text_with_fallback(file_path)
-        reader = csv.reader(io.StringIO(text))
-        all_rows = list(reader)
+        all_rows = SheetTables.parse_csv(text)
 
         if not all_rows:
             return []

@@ -82,8 +82,8 @@ def _mock_single_page_pipeline(
 
     _mock_ocr_backend_single(monkeypatch)
     monkeypatch.setattr(
-        "quarry.ingestion.streaming.chunk_pages",
-        lambda _pages, max_chars, overlap_chars, **_kw: chunks,
+        "quarry.ingestion.page_chunker.PageChunker.chunk",
+        lambda _self, _pages: chunks,
     )
     embedding_backend = MagicMock()
     embedding_backend.embed_texts.return_value = vectors
@@ -163,8 +163,8 @@ class TestIngestImageSinglePage:
             lambda _settings: backend,
         )
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [],
         )
 
         from quarry.ingestion.pipeline import ingest_document
@@ -206,8 +206,8 @@ class TestIngestImageSinglePage:
             lambda _settings: backend,
         )
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [],
         )
 
         from quarry.ingestion.pipeline import ingest_document
@@ -246,8 +246,8 @@ class TestIngestImageSinglePage:
             lambda _settings: backend,
         )
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [],
         )
 
         from quarry.ingestion.pipeline import ingest_document
@@ -329,8 +329,8 @@ class TestIngestImageMultiPage:
             lambda _settings: ocr_backend,
         )
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: chunks,
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: chunks,
         )
         embedding_backend = MagicMock()
         embedding_backend.embed_texts.return_value = vectors

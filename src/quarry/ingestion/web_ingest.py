@@ -6,23 +6,23 @@ import time
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal, final
 
-from quarry.capture_url import CaptureUrl
+from quarry.display_name import DisplayName
 from quarry.extractors.html_extractor import HtmlExtractor
-from quarry.extractors.text_extractor import TextExtractor
 from quarry.ingestion.chunk_store_funnel import _chunk_embed_store
 from quarry.ingestion.extracted_document import ExtractedDocument
 from quarry.ingestion.ingest_stats import IngestStats
+from quarry.ingestion.inline_pages import InlinePages
 from quarry.ingestion.web_fetch import WebFetcher
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from quarry.http_url import HttpUrl
     from quarry.ingestion.ingest_context import IngestContext, Progress
-    from quarry.models import PageContent
     from quarry.results import IngestResult
 
-# "auto" self-detects via TextExtractor; "html" is the one hint _extract_inline_pages
-# (below) intercepts before TextExtractor ever sees it, routing raw markup through
+# "auto" self-detects via TextExtractor; "html" is the one hint InlinePages
+# intercepts before TextExtractor ever sees it, routing raw markup through
 # HtmlExtractor instead. The rest pass straight through to
 # TextExtractor.extract_raw's own closed set.
 type FormatHint = Literal["auto", "plain", "markdown", "latex", "html"]
@@ -43,6 +43,18 @@ class InlineIngest:
     content: str
     format_hint: FormatHint = "auto"
     content_scrubber: Callable[[str], str] | None = None
+    url_sourced: bool = False
+
+    def stored_name(self, name: str) -> str:
+        """Return the name this ingest stores *name* under: cleaned, then scrubbed.
+
+        The one derivation, shared by the store and by a create-if-absent check, so
+        the check asks about the name that would be written.
+        """
+        cleaned = DisplayName(name).stored(url_sourced=self.url_sourced)
+        return (
+            cleaned if self.content_scrubber is None else self.content_scrubber(cleaned)
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,7 +67,7 @@ class UrlIngest:
     the daemon's empty-chunk capture re-fetch.
     """
 
-    url: str
+    url: HttpUrl
     document_name: str | None = None
     timeout: int = 30
     delay: float = 0.0
@@ -91,14 +103,18 @@ class WebIngest:
         # caller (daemon capture/remember, stdio MCP, backfill).  No caller can
         # forget it and no new surface can reintroduce the leak.  A plain ingest
         # (no scrubber) stores metadata byte-for-byte, unchanged.
-        document_name, summary = WebIngest._scrub_metadata(
+        document_name = inline.stored_name(document_name)
+        _, summary = WebIngest._scrub_metadata(
             document_name, context.summary, inline.content_scrubber
         )
 
-        progress("Processing: %s", document_name)
+        progress("Processing: %s", DisplayName(document_name).redacted())
 
-        pages = WebIngest._extract_inline_pages(
-            inline.content, document_name, inline.format_hint
+        pages = InlinePages.of(
+            inline.content,
+            document_name,
+            inline.format_hint,
+            url_sourced=inline.url_sourced,
         )
         if inline.content_scrubber is not None:
             pages = [
@@ -115,7 +131,10 @@ class WebIngest:
         # only once a replacement chunk set exists, so an empty extraction or an
         # extraction that chunks to nothing keeps the prior good document.
         return _chunk_embed_store(
-            extracted, document_name, progress, replace(context, summary=summary)
+            extracted,
+            document_name,
+            progress,
+            replace(context, summary=summary, url_sourced=inline.url_sourced),
         )
 
     @staticmethod
@@ -135,19 +154,16 @@ class WebIngest:
             Dict with ingestion results.
 
         Raises:
-            ValueError: If URL is invalid, unreachable, or returns non-HTML.
+            FetchRefusedError: The fetch failed or was refused.
+            UnsupportedContentError: The media type is not text.
+            RowBudgetError: A row exceeds the budget.
+            (All three are ``UnindexableContentError``.)
         """
-        # A capture (content_scrubber set) must not persist userinfo/query/fragment
-        # from the URL as document metadata; a plain ingest keeps the full URL.
-        meta_url = (
-            CaptureUrl(request.url).redacted(request.content_scrubber)
-            if request.content_scrubber is not None
-            else request.url
-        )
+        meta_url = WebIngest._meta_url(request)
         document_name = request.document_name or meta_url
         # Same choke point as ingest_content: a scrubbed URL ingest redacts the
-        # metadata the chunker copies onto every chunk.  CaptureUrl already
-        # stripped userinfo/query/fragment from meta_url; this second pass
+        # metadata the chunker copies onto every chunk.  HttpUrl already
+        # reduced meta_url to host, path and a query digest; this second pass
         # catches PII in an explicit document_name and in the summary, so no
         # caller has to scrub them itself.  Idempotent — a re-scrub of a redacted
         # value is a no-op.
@@ -168,19 +184,9 @@ class WebIngest:
                 jitter = time.monotonic_ns() % 1_000_000_000 / 1_000_000_000
                 time.sleep(request.delay + jitter)
 
-            # meta_url is deliberately the RAW url for a plain (unscrubbed)
-            # ingest -- it doubles as document_name/document_path, and a
-            # user-initiated `quarry ingest <url>` keeps its full identity
-            # (see the comment above). But that same unscrubbed meta_url is
-            # also what a sitemap/bulk-crawl worker builds for a
-            # program-discovered URL it never reviewed, and logging it
-            # verbatim here would leak a userinfo/query secret into
-            # quarry.log regardless of scrub status (CWE-532). The log line
-            # gets its own always-redacted form; metadata persistence
-            # (meta_url, document_name, document_path below) is unaffected.
-            progress(
-                "Fetching: %s", CaptureUrl(request.url).redacted(lambda text: text)
-            )
+            # str(request.url) is the log form: no path, query or fragment reaches
+            # quarry.log (CWE-532).
+            progress("Fetching: %s", request.url)
             html = WebFetcher(request.timeout).fetch(request.url)
             progress("Fetched %d characters", len(html))
 
@@ -201,29 +207,22 @@ class WebIngest:
         # only once a replacement chunk set exists, so an empty extraction — or an
         # extraction that chunks to nothing — keeps the prior good capture.
         return _chunk_embed_store(
-            extracted, document_name, progress, replace(context, summary=summary)
+            extracted,
+            document_name,
+            progress,
+            replace(context, summary=summary, url_sourced=True),
         )
 
     @staticmethod
-    def _extract_inline_pages(
-        content: str, document_name: str, format_hint: str
-    ) -> list[PageContent]:
-        """Split inline *content* into pages, routing ``html`` to the HTML extractor.
+    def _meta_url(request: UrlIngest) -> str:
+        """Return the stored name of the fetched URL, ``scheme://host[:port]/path``.
 
-        The inline path serves two callers: ``remember`` (text/markdown) and the
-        web-fetch ``capture`` (raw HTML).  ``TextExtractor`` handles the text
-        formats; a ``html`` hint hands the raw markup to ``HtmlExtractor`` so tags
-        become Markdown sections rather than being stored verbatim.  For a web-fetch
-        capture the document name IS the redacted source URL, so it doubles as the
-        stored ``document_path`` — keeping the page's source location on every chunk.
+        With a query it ends ``?q[sha256]=<digest>``; the raw query, the fragment and
+        the ``;params`` never become metadata.  A scrubbed ingest also scrubs the name.
         """
-        if format_hint == "html":
-            return HtmlExtractor().extract_from_html(
-                content, document_name, document_name
-            )
-        return TextExtractor().extract_raw(
-            content, document_name, format_hint=format_hint
-        )
+        name = request.url.document_name
+        scrub = request.content_scrubber
+        return name if scrub is None else scrub(name)
 
     @staticmethod
     def _scrub_metadata(
