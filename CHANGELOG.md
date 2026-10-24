@@ -121,7 +121,10 @@ across `transform`, `index`, and `connector`).
 - infra: log lines show a URL as `scheme://host[:port]/…(segments=N)`, never
   its path, whether quarry logs it or a library does. The full path is kept
   in the stored document name. Tracebacks in the log are indented, and a
-  record is capped at 64 KiB. A record the redactor cannot settle is
+  record is capped at 64 KiB. Punctuation after a URL in a log line is
+  kept. An HTTP error status is logged as one line without a traceback;
+  a sitemap-discovery 404 is logged at DEBUG. A record the redactor cannot
+  settle is
   replaced by one line naming its time, level, logger, and call site, with
   the message withheld.
 

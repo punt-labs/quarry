@@ -3320,7 +3320,9 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
        though a URL-shaped label is still cleaned of userinfo and query.
        There is no bulk rename migration.
      - `str()` is the log form, `scheme://host[:port]/…(segments=N)`. It
-       never carries the path. A heuristic cannot tell a slug from a
+       never carries the path. Punctuation that follows a URL in prose (`,
+       . : ; ' " >`, and a `)` or `]` that closes nothing opened inside the
+       URL) stays outside it and survives unchanged. A heuristic cannot tell a slug from a
        secret, so the path stays only in the stored name, where diagnosis
        needs it. The form is one whitespace-free token, so redacting
        already-redacted text leaves it unchanged.
@@ -3393,6 +3395,12 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
        template, the exception class, and message-free frames. It never
        echoes the record's arguments, and a broken stderr cannot raise out
        of it.
+     - **An HTTP status is an answer, not a fault.** A status response
+       logs one line, `fetch refused: HTTP <code> on <subject>`, with no
+       frames: INFO for 4xx, WARNING for 5xx, and DEBUG for a 4xx on a
+       sitemap-discovery probe, where a miss is the expected outcome. The
+       sitemap library's own per-probe warnings are capped at ERROR so a
+       miss is logged once.
      - **Unclassified failures stay diagnosable.** Their message-free
        frames are logged at WARNING, and a parser catch names only the
        parser's own exceptions, so a programming error is never reported as
