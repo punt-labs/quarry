@@ -146,7 +146,7 @@ class TestWebFetcher:
         mock_open.side_effect = URLError("Name or service not known")
         with pytest.raises(FetchRefusedError) as info:
             WebFetcher().fetch(HttpUrl("https://nonexistent.invalid"))
-        assert str(info.value) == "fetch failed: cannot reach the host (str)"
+        assert str(info.value) == "fetch failed: cannot reach the host"
 
     @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
     def test_custom_timeout_passed_through(self, mock_open: MagicMock) -> None:

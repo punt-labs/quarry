@@ -414,8 +414,7 @@ def test_a_real_sitemap_parser_failure_is_the_exact_refusal_and_leaves_no_secret
     _flush()
 
     assert str(info.value) == (
-        "fetch failed: sitemap could not be fetched or parsed: "
-        "fetch failed: cannot reach the host (str)"
+        "fetch failed: sitemap could not be fetched or parsed: cannot reach the host"
     )
     written = logfile.read_text()
     assert "safe.example" in written

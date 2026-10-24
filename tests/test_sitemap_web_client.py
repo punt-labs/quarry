@@ -620,7 +620,7 @@ class TestErrorMessagesAreUrlFree:
         monkeypatch.setattr(swc, "GUARDED_OPENER", _Opener())
         resp = GatedSitemapWebClient().get(self._URL)
         assert isinstance(resp, WebClientErrorResponse)
-        assert resp.message() == "fetch failed: cannot reach the host (str)"
+        assert resp.message() == "fetch failed: cannot reach the host"
 
     def test_a_transport_failure_is_reported_by_class(
         self, monkeypatch: pytest.MonkeyPatch
@@ -730,7 +730,7 @@ class TestEveryBranchIsClassifiedOnce:
             (TimeoutError("slow"), "fetch failed: timed out", True),
             (
                 URLError("dns"),
-                "fetch failed: cannot reach the host (str)",
+                "fetch failed: cannot reach the host",
                 True,
             ),
             (
@@ -876,3 +876,44 @@ class TestUspsGunzipWarningReachesTheLog:
             if r.name == "usp.helpers" and "Unable to gunzip" in r.getMessage()
         ]
         assert [r.levelno for r in gunzip] == [logging.WARNING]
+
+
+class _BuggyOpener(_FakeOpener):
+    """Serve the routes, but raise a bug (not a fetch failure) for one URL."""
+
+    def __init__(self, routes: dict[str, bytes], bug_url: str) -> None:
+        super().__init__(routes)
+        self._bug_url = bug_url
+
+    def open(
+        self, request: urllib.request.Request, timeout: float | None = None
+    ) -> _FakeResp:
+        if request.full_url == self._bug_url:
+            msg = "a bug"
+            raise ValueError(msg)
+        return super().open(request, timeout)
+
+
+class TestABugInASubSitemapFetchIsNotPartialSuccess:
+    def test_the_read_fails_with_an_error_record(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from quarry.http_url import HttpUrl
+        from quarry.ingestion.sitemap_reader import (
+            SitemapReader,
+            UnexpectedSitemapError,
+        )
+
+        index = "https://safe.example/index.xml"
+        good = "https://safe.example/good.xml"
+        bad = "https://safe.example/bad.xml"
+        routes = {
+            index: _index_xml(good, bad),
+            good: _urlset_xml("https://safe.example/page"),
+        }
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _BuggyOpener(routes, bad))
+        with caplog.at_level(logging.DEBUG), pytest.raises(UnexpectedSitemapError):
+            SitemapReader().read(HttpUrl(index))
+        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert any("unexpected error" in r.getMessage() for r in errors)

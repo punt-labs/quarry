@@ -122,7 +122,7 @@ async def test_a_plain_url_ingest_of_a_pdf_fails_end_to_end(
     [
         (
             URLError("Cannot reach http://u:p@h/?token=x"),
-            "fetch failed: cannot reach the host (str)",
+            "fetch failed: cannot reach the host",
         ),
         (HTTPError(_URL, 500, "boom", HTTPMessage(), None), "fetch failed: HTTP 500"),
         (TimeoutError("slow"), "fetch failed: timed out"),
@@ -189,7 +189,7 @@ async def test_a_capture_refetch_that_cannot_reach_the_host_fails_the_task(
         await _capture_job().run(daemon.ctx, state)
 
     _assert_quiet_and_url_free(state, caplog, subject="capture WebFetch page (task ")
-    assert state.error == "fetch failed: cannot reach the host (str)"
+    assert state.error == "fetch failed: cannot reach the host"
 
 
 async def test_a_url_resolving_to_a_private_address_fails_the_task(
@@ -529,3 +529,34 @@ async def test_a_refused_label_is_logged_under_its_stored_name(
     assert refusals
     assert "https://x.test/p" in refusals[0].getMessage()
     assert "#frag" not in refusals[0].getMessage()
+
+
+async def test_an_unexpected_sitemap_node_fails_the_task_as_an_internal_error(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    from usp.objects.page import SitemapPage
+    from usp.objects.sitemap import IndexXMLSitemap, InvalidSitemap, PagesXMLSitemap
+
+    daemon = InProcessDaemon(tmp_path)
+    state = TaskState(task_id="t-bug", kind="ingest")
+    bug = InvalidSitemap(
+        url="https://example.com/sub.xml",
+        reason="Unable to add sub-sitemap from URL https://example.com/sub.xml: boom",
+    )
+    index = IndexXMLSitemap(
+        url=_SITEMAP_URL,
+        sub_sitemaps=[
+            PagesXMLSitemap(
+                url="https://example.com/ok.xml",
+                pages=[SitemapPage(url="https://a.test/1")],
+            ),
+            bug,
+        ],
+    )
+
+    with caplog.at_level(logging.WARNING), patch(_FETCHER) as fetcher:
+        fetcher.return_value.sitemap.return_value = index
+        await _sitemap_job().run(daemon.ctx, state)
+
+    assert state.status == "failed"
+    assert state.error == "internal error: UnexpectedSitemapError"

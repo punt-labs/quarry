@@ -21,7 +21,7 @@ from usp.objects.sitemap import (
 
 from quarry.http_url import HttpUrl
 from quarry.ingestion.fetch_refused import FetchRefusedError
-from quarry.ingestion.sitemap_reader import SitemapReader
+from quarry.ingestion.sitemap_reader import SitemapReader, UnexpectedSitemapError
 
 _URL = "https://example.com/sitemap.xml?token=SECRET"
 _PARSER_REFUSAL = "fetch failed: sitemap URL not accepted by the parser"
@@ -184,77 +184,117 @@ class TestDiscover:
         ]
 
 
+_FETCH_URL = HttpUrl(_URL).fetch_url
+_PREFIX = f"Unable to fetch sitemap from {_FETCH_URL}: "
+
+
+def _root(reason: str) -> InvalidSitemap:
+    return InvalidSitemap(url=_FETCH_URL, reason=reason)
+
+
+def _ours(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [
+        r for r in caplog.records if r.getMessage().startswith("sitemap node failed")
+    ]
+
+
 class TestTheReaderSaysWhatWentWrong:
     @patch(_FETCHER)
-    def test_an_unreadable_sitemap_logs_what_failed_before_it_raises(
+    def test_an_unreadable_sitemap_logs_each_failed_node(
         self, fetcher: MagicMock, caplog: pytest.LogCaptureFixture
     ) -> None:
-        fetcher.return_value.sitemap.return_value = InvalidSitemap(
-            url="https://example.com/x.xml", reason="404 Not Found"
-        )
+        fetcher.return_value.sitemap.return_value = _root(_PREFIX + "HTTP 403")
         with caplog.at_level(logging.WARNING), pytest.raises(FetchRefusedError):
             SitemapReader().read(HttpUrl(_URL))
-        assert "1 of its nodes failed" in caplog.text
-        assert "SECRET" not in caplog.text
+        [record] = _ours(caplog)
+        assert "HTTP 403" in record.getMessage()
+        assert "SECRET" not in record.getMessage()
 
     @patch(_FETCHER)
-    def test_some_failed_sub_sitemaps_with_pages_log_one_warning_with_the_count(
+    def test_a_failed_sub_sitemap_is_logged_and_the_other_pages_kept(
         self, fetcher: MagicMock, caplog: pytest.LogCaptureFixture
     ) -> None:
+        forbidden = InvalidSitemap(
+            url="https://example.com/sub.xml",
+            reason="Unable to fetch sitemap from https://example.com/sub.xml: "
+            "fetch failed: HTTP 403",
+        )
         index = IndexXMLSitemap(
             url="https://example.com/i.xml",
-            sub_sitemaps=[_pages("https://a.test/1"), _invalid(), _invalid()],
+            sub_sitemaps=[_pages("https://a.test/1"), forbidden],
         )
         fetcher.return_value.sitemap.return_value = index
         with caplog.at_level(logging.WARNING):
             pages = SitemapReader().read(HttpUrl(_URL))
-        assert len(pages) == 1
-        [record] = [r for r in caplog.records if r.name.endswith("sitemap_reader")]
-        assert "2" in record.getMessage()
-        assert record.levelno == logging.WARNING
+        assert [p.url for p in pages] == ["https://a.test/1"]
+        [node] = _ours(caplog)
+        assert "HTTP 403" in node.getMessage()
+        assert "fetch failed" not in node.getMessage()
+        summary = [r for r in caplog.records if r.name.endswith("sitemap_reader")]
+        assert any("1 sub-sitemap(s)" in r.getMessage() for r in summary)
+
+    @patch(_FETCHER)
+    def test_an_unexpected_node_fails_the_read_even_when_pages_survive(
+        self, fetcher: MagicMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        bug = InvalidSitemap(
+            url="https://example.com/sub.xml",
+            reason="Unable to add sub-sitemap from URL https://example.com/sub.xml: "
+            "boom SECRET",
+        )
+        index = IndexXMLSitemap(
+            url="https://example.com/i.xml",
+            sub_sitemaps=[_pages("https://a.test/1"), bug],
+        )
+        fetcher.return_value.sitemap.return_value = index
+        with caplog.at_level(logging.WARNING), pytest.raises(UnexpectedSitemapError):
+            SitemapReader().read(HttpUrl(_URL))
+        [node] = _ours(caplog)
+        assert node.levelno == logging.ERROR
+        assert "SECRET" not in node.getMessage()
 
 
 class TestTheUnreadableErrorNamesItsCause:
-    _PREFIX = f"Unable to fetch sitemap from {HttpUrl(_URL).fetch_url}: "
-
     @patch(_FETCHER)
     def test_a_404_root_surfaces_in_the_log_and_the_exception(
         self, fetcher: MagicMock, caplog: pytest.LogCaptureFixture
     ) -> None:
-        fetcher.return_value.sitemap.return_value = InvalidSitemap(
-            url="https://example.com/s.xml", reason=self._PREFIX + "404 Not Found"
-        )
+        fetcher.return_value.sitemap.return_value = _root(_PREFIX + "404 Not Found")
         with caplog.at_level(logging.WARNING), pytest.raises(FetchRefusedError) as e:
             SitemapReader().read(HttpUrl(_URL))
         assert str(e.value) == f"{_UNREADABLE}: 404 Not Found"
-        ours = " ".join(
-            r.getMessage() for r in caplog.records if r.name.endswith("sitemap_reader")
-        )
-        assert "404 Not Found" in ours
-        assert "SECRET" not in ours
+        [record] = _ours(caplog)
+        assert "404 Not Found" in record.getMessage()
+        assert "SECRET" not in record.getMessage()
         assert "SECRET" not in str(e.value)
+
+    @patch(_FETCHER)
+    def test_a_stuttering_fetch_failed_is_stripped(self, fetcher: MagicMock) -> None:
+        fetcher.return_value.sitemap.return_value = _root(
+            _PREFIX + "fetch failed: timed out"
+        )
+        with pytest.raises(FetchRefusedError) as e:
+            SitemapReader().read(HttpUrl(_URL))
+        assert str(e.value) == f"{_UNREADABLE}: timed out"
 
     @patch(_FETCHER)
     def test_an_unrecognised_prefix_falls_back_to_the_fixed_text(
         self, fetcher: MagicMock, caplog: pytest.LogCaptureFixture
     ) -> None:
-        reason = f"No parsers support sitemap from {HttpUrl(_URL).fetch_url}"
-        fetcher.return_value.sitemap.return_value = InvalidSitemap(
-            url="https://example.com/s.xml", reason=reason
+        fetcher.return_value.sitemap.return_value = _root(
+            f"No parsers support sitemap from {_FETCH_URL}"
         )
         with caplog.at_level(logging.WARNING), pytest.raises(FetchRefusedError) as e:
             SitemapReader().read(HttpUrl(_URL))
         assert str(e.value) == _UNREADABLE
-        ours = " ".join(
-            r.getMessage() for r in caplog.records if r.name.endswith("sitemap_reader")
-        )
-        assert "SECRET" not in ours
+        [record] = _ours(caplog)
+        assert "parse failure" in record.getMessage()
+        assert "SECRET" not in record.getMessage()
 
     @patch(_FETCHER)
     def test_a_prefix_for_another_url_is_not_trusted(self, fetcher: MagicMock) -> None:
-        fetcher.return_value.sitemap.return_value = InvalidSitemap(
-            url="https://example.com/s.xml",
-            reason="Unable to fetch sitemap from https://other.test/?t=SECRET: boom",
+        fetcher.return_value.sitemap.return_value = _root(
+            "Unable to fetch sitemap from https://other.test/?t=SECRET: boom"
         )
         with pytest.raises(FetchRefusedError) as e:
             SitemapReader().read(HttpUrl(_URL))

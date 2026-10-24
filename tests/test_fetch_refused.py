@@ -49,7 +49,7 @@ class TestFromTransferFailure:
         )
         unreachable = URLError("dns http://h/?t=1")
         assert str(FetchRefusedError.from_transfer_failure(unreachable)) == (
-            "fetch failed: cannot reach the host (str)"
+            "fetch failed: cannot reach the host"
         )
 
     @pytest.mark.parametrize(

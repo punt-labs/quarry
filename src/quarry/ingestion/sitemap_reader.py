@@ -11,10 +11,10 @@ from usp.exceptions import (
     SitemapXMLParsingException,
     StripURLToHomepageException,
 )
-from usp.objects.sitemap import InvalidSitemap
 
 from quarry.failure_reason import FailureReason
 from quarry.ingestion.fetch_refused import FetchRefusedError
+from quarry.ingestion.sitemap_node_failure import NodeFailure
 from quarry.sitemap_web_client import GatedSitemapWebClient
 
 if TYPE_CHECKING:
@@ -37,6 +37,15 @@ _PARSER_FAILURES = (
 )
 _PARSER_REFUSAL = "fetch failed: sitemap URL not accepted by the parser"
 _UNREADABLE = "fetch failed: sitemap could not be fetched or parsed"
+_UNEXPECTED = "sitemap node failed unexpectedly"
+
+
+class UnexpectedSitemapError(RuntimeError):
+    """A sitemap node failed on a bug, not on the network or the document.
+
+    It is no refusal, so the task terminal records ``internal error:
+    UnexpectedSitemapError`` and the crawl does not report a partial success.
+    """
 
 
 @final
@@ -105,43 +114,31 @@ class SitemapReader:
                 FailureReason.frames(exc),
             )
             raise FetchRefusedError(_PARSER_REFUSAL) from None
-        invalid = [
-            node
-            for node in (sitemap, *sitemap.all_sitemaps())
-            if isinstance(node, InvalidSitemap)
-        ]
-        if invalid and not pages:
-            cause = self._cause(sitemap, url.fetch_url)
-            logger.warning(
-                "sitemap unreadable: %s: %s",
-                url,
-                cause or f"{len(invalid)} of its nodes failed",
-            )
-            raise FetchRefusedError(f"{_UNREADABLE}: {cause}" if cause else _UNREADABLE)
-        if invalid:
-            logger.warning(
-                "%d sub-sitemap(s) of %s could not be read; %d pages kept",
-                len(invalid),
-                url,
-                len(pages),
-            )
+        self._judge(NodeFailure.in_tree(sitemap), len(pages), url)
         if not pages:
             logger.warning("sitemap lists no pages: %s", url)
         logger.info("Parsed %d pages from %s", len(pages), url)
         return pages
 
     @staticmethod
-    def _cause(sitemap: object, fetch_url: str) -> str | None:
-        """Return why the root sitemap could not be fetched, or ``None``.
+    def _judge(failures: list[NodeFailure], page_count: int, url: HttpUrl) -> None:
+        """Log every failed node, and raise if the read cannot be trusted.
 
-        USP words that failure as ``Unable to fetch sitemap from <url>: <message>``,
-        and the message is one our fetch layer wrote, with no URL in it.  Only that
-        exact prefix is trusted: any other reason (a parse failure, say) embeds the
-        URL, so it is not used.
+        Raises:
+            UnexpectedSitemapError: A node failed on a bug, whatever pages survived.
+            FetchRefusedError: Nodes failed and no page was read.
         """
-        if not isinstance(sitemap, InvalidSitemap):
-            return None
-        prefix = f"Unable to fetch sitemap from {fetch_url}: "
-        if not sitemap.reason.startswith(prefix):
-            return None
-        return sitemap.reason[len(prefix) :] or None
+        for failure in failures:
+            failure.log(logger)
+        if any(failure.kind == "unexpected" for failure in failures):
+            raise UnexpectedSitemapError(_UNEXPECTED)
+        if failures and not page_count:
+            cause = failures[0].cause
+            raise FetchRefusedError(f"{_UNREADABLE}: {cause}" if cause else _UNREADABLE)
+        if failures:
+            logger.warning(
+                "%d sub-sitemap(s) of %s could not be read; %d pages kept",
+                len(failures),
+                url,
+                page_count,
+            )

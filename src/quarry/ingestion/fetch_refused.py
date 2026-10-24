@@ -121,5 +121,8 @@ class FetchRefusedError(UnindexableContentError):
         if isinstance(exc, TimeoutError) or isinstance(reason, TimeoutError):
             return "fetch failed: timed out"
         if isinstance(exc, URLError):
-            return f"fetch failed: cannot reach the host ({type(reason).__name__})"
+            named = type(reason).__name__ if isinstance(reason, BaseException) else ""
+            return "fetch failed: cannot reach the host" + (
+                f" ({named})" if named else ""
+            )
         return f"fetch failed: {type(exc).__name__}"

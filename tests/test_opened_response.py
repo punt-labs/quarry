@@ -51,7 +51,7 @@ def test_an_open_failure_is_a_url_free_refusal_without_a_cause() -> None:
     failure = URLError("refused https://example.com/p?token=SECRET")
     with patch(_OPEN, side_effect=failure), pytest.raises(FetchRefusedError) as info:
         OpenedResponse.open(Request("https://example.com/p"), 5, 1e12)
-    assert str(info.value) == "fetch failed: cannot reach the host (str)"
+    assert str(info.value) == "fetch failed: cannot reach the host"
     assert info.value.__cause__ is None
     assert info.value.__suppress_context__
 
