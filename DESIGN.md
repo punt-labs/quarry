@@ -3303,7 +3303,8 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
        URL ingest is, `remember` and `learn` are not, whatever their format
        hint. A `/capture` is URL-sourced only when its document name is
        the one its `source_url` derives, so a transcript or a mismatched
-       name is a label. A label's row records an empty `document_path`, so
+       name is a label, never re-fetched, and the demotion is logged at
+       INFO without the name. A label's row records an empty `document_path`, so
        it never lists as a page candidate. When both the stored document
        and the page being stored are URL-sourced, a store replaces the
        document under its former spelling, overwriting or not, and logs the
@@ -3354,8 +3355,8 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
        eight passes, and the oracle fails if any generated case needs more
        than seven. A record that has not settled at the bound fails
        closed: the handler writes one line from the time (in the handler's
-       own format), level, logger, call site, and the message template
-       when the template settles on its own, ending `message withheld:
+       own format), level, logger, call site, the exception class, and the
+       message template when the template settles on its own, ending `message withheld:
        redaction did not settle in 8 passes`. That line is itself
        redacted, and if it does not settle either, a constant line with no
        fields is written. `handleError` withholds its report the same way.
