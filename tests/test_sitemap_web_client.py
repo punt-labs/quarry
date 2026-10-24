@@ -27,6 +27,7 @@ from quarry.http_url import HttpUrl
 from quarry.ingestion.ssrf_redirect import SsrfGuardedRedirectHandler
 from quarry.sitemap import SitemapDiscovery
 from quarry.sitemap_web_client import GatedSitemapWebClient
+from quarry.url_admission import UrlAdmission
 
 _GETADDRINFO = "quarry.url_safety.socket_module.getaddrinfo"
 _PUBLIC = "93.184.216.34"
@@ -1040,3 +1041,74 @@ class TestDiscoverFollowsTheSameRule:
         ]
         assert nodes
         assert {r.levelno for r in nodes} == {logging.DEBUG}
+
+
+class TestABugAnywhereInGetIsRecorded:
+    def test_a_fault_while_classifying_a_refusal_is_a_bug_and_fails_the_read(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from quarry.http_url import HttpUrl
+        from quarry.ingestion.fetch_refused import FetchRefusedError
+        from quarry.ingestion.sitemap_reader import (
+            SitemapReader,
+            UnexpectedSitemapError,
+        )
+
+        index = "https://safe.example/index.xml"
+        good = "https://safe.example/good.xml"
+        forbidden = "https://safe.example/forbidden.xml"
+
+        class _ForbiddenOpener(_FakeOpener):
+            def open(
+                self, request: urllib.request.Request, timeout: float | None = None
+            ) -> _FakeResp:
+                if request.full_url == forbidden:
+                    raise HTTPError(forbidden, 403, "no", Message(), None)
+                return super().open(request, timeout)
+
+        routes = {
+            index: _index_xml(good, forbidden),
+            good: _urlset_xml("https://safe.example/page"),
+        }
+
+        def boom(*_a: Any, **_k: Any) -> Any:
+            msg = "classifier bug"
+            raise TypeError(msg)
+
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _ForbiddenOpener(routes))
+        monkeypatch.setattr(FetchRefusedError, "from_transfer_failure", boom)
+        client = GatedSitemapWebClient()
+        with pytest.raises(UnexpectedSitemapError) as e:
+            SitemapReader(client).read(HttpUrl(index))
+        assert e.value.reported_as == "TypeError"
+
+    def test_a_bug_in_the_admission_check_is_recorded_too(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def boom(_url: str) -> Any:
+            msg = "admission bug"
+            raise KeyError(msg)
+
+        monkeypatch.setattr(UrlAdmission, "reject_reason", staticmethod(boom))
+        client = GatedSitemapWebClient()
+        with pytest.raises(KeyError):
+            client.get("https://safe.example/x.xml")
+        assert client.take_bug() == "KeyError"
+
+    def test_a_fault_in_building_the_subject_does_not_replace_the_bug(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        url = "https://safe.example/bad.xml"
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _BuggyOpener({}, url))
+
+        def broken(_url: str) -> str:
+            msg = "shown fault"
+            raise RuntimeError(msg)
+
+        monkeypatch.setattr(UrlAdmission, "shown", staticmethod(broken))
+        client = GatedSitemapWebClient()
+        with pytest.raises(ValueError, match="kaboom-text"):
+            client.get(url)
+        assert client.take_bug() == "ValueError"

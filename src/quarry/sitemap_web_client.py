@@ -99,6 +99,19 @@ class GatedSitemapWebClient(AbstractWebClient):
     def get(self, url: str) -> AbstractWebClientResponse:
         """Fetch *url* only if it passes the SSRF gate at every hop.
 
+        Never raises a fetch failure (see :meth:`_get`).  Anything else it raises is
+        a bug: USP catches it and reports an invalid node, so it is recorded here,
+        whichever step of the fetch it came from, and re-raised unchanged.
+        """
+        try:
+            return self._get(url)
+        except Exception as exc:
+            self._bugs.record(exc, url, UrlAdmission.shown)
+            raise
+
+    def _get(self, url: str) -> AbstractWebClientResponse:
+        """Fetch *url* only if it passes the SSRF gate at every hop.
+
         Never raises a fetch failure: a blocked target, a blocked redirect hop, or a
         network error is reported as a ``WebClientErrorResponse`` (the USP contract), so
         USP skips the URL instead of fetching it.  SSRF blocks are non-retryable
@@ -126,11 +139,6 @@ class GatedSitemapWebClient(AbstractWebClient):
             is_404 = isinstance(exc, HTTPError) and exc.code == HTTPStatus.NOT_FOUND
             message = _USP_NOT_FOUND if is_404 else str(refusal)
             return WebClientErrorResponse(message, retryable=retryable)
-        except Exception as exc:
-            # Not a refusal, so a bug.  USP catches whatever this raises and reports
-            # it as an invalid node, so it is recorded here and re-raised unchanged.
-            self._bugs.record(exc, UrlAdmission.shown(url))
-            raise
 
     def _fetch(self, url: str) -> AbstractWebClientResponse:
         """Open *url* through the guarded opener and gate the final URL."""

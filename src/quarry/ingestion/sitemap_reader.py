@@ -56,7 +56,8 @@ class SitemapReader:
     Every fetch goes through :class:`GatedSitemapWebClient`, so each hop passes
     the SSRF gate.  URLs reach the log only in redacted form (CWE-532).  ``read``
     raises for a sitemap that could not be fetched or parsed instead of reading
-    as an empty crawl; ``discover`` treats an unreadable sitemap as absent.  Both
+    as an empty crawl; ``discover`` treats an unreadable sitemap as absent, but
+    never a fetch that hit a bug (:class:`UnexpectedSitemapError`).  Both
     turn a USP parser failure, whose message quotes the URL, into a URL-free
     :class:`FetchRefusedError`.
     """
@@ -76,6 +77,8 @@ class SitemapReader:
         Raises:
             FetchRefusedError: The parser rejected *homepage*.  An absent or
                 unreadable sitemap is not a failure here: the tree is just empty.
+            UnexpectedSitemapError: A fetch hit a bug; never treated as an absent
+                sitemap.
         """
         from usp.tree import sitemap_tree_for_homepage  # noqa: PLC0415
 

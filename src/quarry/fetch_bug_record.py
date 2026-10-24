@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
-from typing import Self, final
+from typing import TYPE_CHECKING, Self, final
 
 from quarry.failure_reason import FailureReason
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -29,9 +33,16 @@ class FetchBugRecord:
         self._first = ""
         return self
 
-    def record(self, exc: Exception, subject: str) -> None:
-        """Log *exc* against the redacted *subject* and remember its class."""
+    def record(self, exc: Exception, url: str, shown: Callable[[str], str]) -> None:
+        """Log *exc* against *url* as *shown* redacts it, and remember its class.
+
+        The class is remembered first, and a fault in *shown* falls back to a fixed
+        subject, so nothing can replace the bug being recorded.
+        """
         self._first = self._first or type(exc).__name__
+        subject = "(unknown url)"
+        with contextlib.suppress(Exception):
+            subject = shown(url)
         logger.error(
             "fetch hit a bug [%s]: %s\n%s",
             subject,
