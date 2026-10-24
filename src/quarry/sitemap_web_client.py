@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import urllib.request
 from dataclasses import dataclass
+from http import HTTPStatus
 from typing import TYPE_CHECKING, Self, final
 from urllib.error import HTTPError, URLError
 
@@ -37,6 +38,7 @@ from quarry.url_admission import UrlAdmission
 if TYPE_CHECKING:
     from http.client import HTTPMessage, HTTPResponse
 
+_USP_NOT_FOUND = f"{HTTPStatus.NOT_FOUND} {HTTPStatus.NOT_FOUND.phrase}"
 _USER_AGENT = "quarry-sitemap/1.0 (+https://github.com/punt-labs/quarry)"
 
 
@@ -97,7 +99,7 @@ class GatedSitemapWebClient(AbstractWebClient):
         """
         reason = UrlAdmission.reject_reason(url)
         if reason is not None:
-            return self._error(f"SSRF-blocked URL: {reason}", retryable=False)
+            return self._blocked(f"SSRF-blocked URL: {reason}", url)
         try:
             return self._fetch(url)
         except FetchRefusedError.REFUSABLE as exc:
@@ -109,9 +111,14 @@ class GatedSitemapWebClient(AbstractWebClient):
             # URL ingest path.
             retryable = self._is_transient(exc)
             refusal = FetchRefusedError.from_transfer_failure(
-                exc, subject=UrlAdmission.shown(url), is_probe=True
+                exc, subject=UrlAdmission.shown(url), reported_by_caller=True
             )
-            return self._error(str(refusal), retryable=retryable)
+            # USP demotes a 404 on a speculative well-known path only when the
+            # message is exactly its own "404 Not Found": it, not we, knows which
+            # fetches are speculative, so a 404 is reported in that form.
+            is_404 = isinstance(exc, HTTPError) and exc.code == HTTPStatus.NOT_FOUND
+            message = _USP_NOT_FOUND if is_404 else str(refusal)
+            return WebClientErrorResponse(message, retryable=retryable)
 
     def _fetch(self, url: str) -> AbstractWebClientResponse:
         """Open *url* through the guarded opener and gate the final URL."""
@@ -121,8 +128,7 @@ class GatedSitemapWebClient(AbstractWebClient):
         with GUARDED_OPENER.open(request, timeout=self._timeout) as resp:
             final = UrlAdmission.reject_reason(resp.url)
             if final is not None:
-                reason = f"SSRF-blocked final URL: {final}"
-                return self._error(reason, retryable=False)
+                return self._blocked(f"SSRF-blocked final URL: {final}", resp.url)
             message = getattr(resp, "reason", None) or "OK"
             return _GatedSuccessResponse(
                 int(resp.status), message, resp.headers, self._read(resp), resp.url
@@ -142,6 +148,7 @@ class GatedSitemapWebClient(AbstractWebClient):
         return isinstance(exc, TimeoutError | URLError)
 
     @staticmethod
-    def _error(message: str, *, retryable: bool) -> WebClientErrorResponse:
-        """Build a USP error response so USP skips (does not fetch) the URL."""
-        return WebClientErrorResponse(message=message, retryable=retryable)
+    def _blocked(reason: str, url: str) -> WebClientErrorResponse:
+        """Refuse *url* for a policy *reason*: logged once, never retried."""
+        refusal = FetchRefusedError.policy(reason, subject=UrlAdmission.shown(url))
+        return WebClientErrorResponse(str(refusal), retryable=False)

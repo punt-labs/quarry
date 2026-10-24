@@ -105,10 +105,22 @@ class SitemapReader:
                 FailureReason.frames(exc),
             )
             raise FetchRefusedError(_PARSER_REFUSAL) from None
-        failed = isinstance(sitemap, InvalidSitemap) or any(
-            isinstance(node, InvalidSitemap) for node in sitemap.all_sitemaps()
-        )
-        if failed and not pages:
+        invalid = [
+            node
+            for node in (sitemap, *sitemap.all_sitemaps())
+            if isinstance(node, InvalidSitemap)
+        ]
+        if invalid and not pages:
+            logger.warning(
+                "sitemap unreadable: %d of its nodes failed: %s", len(invalid), url
+            )
             raise FetchRefusedError(_UNREADABLE)
+        if invalid:
+            logger.warning(
+                "%d sub-sitemap(s) of %s could not be read; %d pages kept",
+                len(invalid),
+                url,
+                len(pages),
+            )
         logger.info("Parsed %d pages from %s", len(pages), url)
         return pages

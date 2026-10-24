@@ -182,3 +182,33 @@ class TestDiscover:
         assert [r.getMessage() for r in caplog.records] == [
             "Discovering sitemaps for https://example.com/…(segments=1)"
         ]
+
+
+class TestTheReaderSaysWhatWentWrong:
+    @patch(_FETCHER)
+    def test_an_unreadable_sitemap_logs_what_failed_before_it_raises(
+        self, fetcher: MagicMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        fetcher.return_value.sitemap.return_value = InvalidSitemap(
+            url="https://example.com/x.xml", reason="404 Not Found"
+        )
+        with caplog.at_level(logging.WARNING), pytest.raises(FetchRefusedError):
+            SitemapReader().read(HttpUrl(_URL))
+        assert "1 of its nodes failed" in caplog.text
+        assert "SECRET" not in caplog.text
+
+    @patch(_FETCHER)
+    def test_some_failed_sub_sitemaps_with_pages_log_one_warning_with_the_count(
+        self, fetcher: MagicMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        index = IndexXMLSitemap(
+            url="https://example.com/i.xml",
+            sub_sitemaps=[_pages("https://a.test/1"), _invalid(), _invalid()],
+        )
+        fetcher.return_value.sitemap.return_value = index
+        with caplog.at_level(logging.WARNING):
+            pages = SitemapReader().read(HttpUrl(_URL))
+        assert len(pages) == 1
+        [record] = [r for r in caplog.records if r.name.endswith("sitemap_reader")]
+        assert "2" in record.getMessage()
+        assert record.levelno == logging.WARNING

@@ -8,6 +8,7 @@ fetched — the bypass a leaf-only test would hide.
 from __future__ import annotations
 
 import io
+import logging
 import threading
 import urllib.request
 from collections.abc import Generator
@@ -325,7 +326,7 @@ class TestGatedClientGet:
         assert isinstance(resp, WebClientErrorResponse)
         # Readable with no "I/O operation on closed file" -- values were captured
         # before exc.close().
-        assert resp.message() == "fetch failed: HTTP 404"
+        assert resp.message() == "404 Not Found"
         assert resp.retryable() is False
 
     @pytest.mark.parametrize("code", [500, 503, 429])
@@ -723,7 +724,7 @@ class TestEveryBranchIsClassifiedOnce:
             ),
             (
                 HTTPError("https://safe.example/x", 404, "gone", HTTPMessage(), None),
-                "fetch failed: HTTP 404",
+                "404 Not Found",
                 False,
             ),
             (TimeoutError("slow"), "fetch failed: timed out", True),
@@ -764,3 +765,90 @@ class TestEveryBranchIsClassifiedOnce:
         assert "fetch refused" in record.getMessage()
         assert "https://safe.example/…(segments=1)" in record.getMessage()
         assert "SECRET" not in caplog.text
+
+
+class TestWhoDecidesHowLoudAProbeMissIs:
+    """USP knows which fetches are speculative; its ``quiet_404`` decides, not us."""
+
+    _HOME = "https://safe.example/"
+
+    @staticmethod
+    def _discover(monkeypatch: pytest.MonkeyPatch, routes: dict[str, bytes]) -> None:
+        from quarry.http_url import HttpUrl
+        from quarry.ingestion.sitemap_reader import SitemapReader
+
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _FakeOpener(routes))
+        SitemapReader().discover(HttpUrl("https://safe.example/"))
+
+    def test_a_well_known_path_miss_is_below_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.DEBUG):
+            self._discover(monkeypatch, {})
+        probes = [r for r in caplog.records if "robots.txt" not in r.getMessage()]
+        assert [r for r in probes if r.levelno >= logging.WARNING] == []
+
+    def test_only_the_robots_fetch_is_a_usp_warning_on_an_ordinary_miss(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # USP fetches robots.txt without quiet_404, so it reports that miss itself.
+        with caplog.at_level(logging.DEBUG):
+            self._discover(monkeypatch, {})
+        warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert [r.name for r in warnings] == ["usp.helpers"]
+        assert "robots.txt" in warnings[0].getMessage()
+
+    def test_a_listed_sub_sitemap_that_is_missing_is_a_usp_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        routes = {
+            "https://safe.example/robots.txt": (
+                b"Sitemap: https://safe.example/listed.xml\n"
+            )
+        }
+        with caplog.at_level(logging.DEBUG):
+            self._discover(monkeypatch, routes)
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert [r.name for r in warnings] == ["usp.helpers"]
+        assert "404 Not Found" in warnings[0].getMessage()
+
+    def test_our_own_layer_logs_a_sitemap_status_at_debug_only(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.DEBUG):
+            self._discover(monkeypatch, {})
+        ours = [r for r in caplog.records if r.name.endswith("fetch_refused")]
+        assert ours
+        assert {r.levelno for r in ours} == {logging.DEBUG}
+
+
+class TestAnSsrfBlockIsLoggedByOurLayer:
+    def test_a_blocked_entry_is_one_warning_from_the_fetch_layer(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setattr(_GETADDRINFO, lambda *a, **k: _addrinfo("10.0.0.9"))
+        with caplog.at_level(logging.DEBUG):
+            GatedSitemapWebClient().get("https://internal.example/x.xml?token=SECRET")
+        ours = [r for r in caplog.records if r.name.endswith("fetch_refused")]
+        assert [r.levelno for r in ours] == [logging.WARNING]
+        assert "SSRF-blocked URL" in ours[0].getMessage()
+        assert "SECRET" not in caplog.text
+
+    def test_a_blocked_final_url_after_a_redirect_is_logged_too(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        def resolve(host: str, *a: Any, **k: Any) -> Any:
+            return _addrinfo(
+                "10.0.0.9" if host == "internal.example" else "93.184.216.34"
+            )
+
+        monkeypatch.setattr(_GETADDRINFO, resolve)
+        monkeypatch.setattr(
+            swc, "GUARDED_OPENER", _LandingOpener("http://internal.example/x")
+        )
+        with caplog.at_level(logging.DEBUG):
+            GatedSitemapWebClient().get("https://safe.example/x.xml")
+        ours = [r for r in caplog.records if r.name.endswith("fetch_refused")]
+        assert [r.levelno for r in ours] == [logging.WARNING]
+        assert "SSRF-blocked final URL" in ours[0].getMessage()

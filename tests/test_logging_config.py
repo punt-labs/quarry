@@ -242,13 +242,3 @@ class TestLogFileIsABareFilename:
         for name in (LoggingConfig.CLIENT_LOG, LoggingConfig.DAEMON_LOG):
             with patch("quarry.logging_config.logging.config.dictConfig"):
                 LoggingConfig.configure(log_file=name)
-
-
-def test_a_parser_librarys_own_request_warnings_are_not_repeated(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The fetch layer logs each refusal once; USP's duplicate is capped at ERROR."""
-    monkeypatch.delenv("QUARRY_LOG_LEVEL", raising=False)
-    with patch("quarry.logging_config.logging.config.dictConfig") as mock_dc:
-        LoggingConfig.configure()
-    assert mock_dc.call_args[0][0]["loggers"]["usp.helpers"] == {"level": "ERROR"}

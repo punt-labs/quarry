@@ -201,21 +201,29 @@ class TestAStatusIsAnAnswerNotAFault:
             FetchRefusedError.from_transfer_failure(self._status(404))
         assert [r.getMessage() for r in caplog.records] == ["fetch refused: HTTP 404"]
 
-    def test_an_expected_probe_miss_is_debug(
+    def test_a_429_is_a_transient_fault_and_logs_a_warning(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         with caplog.at_level(logging.DEBUG):
+            FetchRefusedError.from_transfer_failure(self._status(429), subject="s")
+        assert [r.levelno for r in caplog.records] == [logging.WARNING]
+
+    @pytest.mark.parametrize("code", [404, 429, 503])
+    def test_a_status_the_caller_reports_itself_is_debug(
+        self, code: int, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.DEBUG):
             FetchRefusedError.from_transfer_failure(
-                self._status(404), subject="s", is_probe=True
+                self._status(code), subject="s", reported_by_caller=True
             )
         assert [r.levelno for r in caplog.records] == [logging.DEBUG]
 
-    def test_a_probe_that_hits_a_server_error_is_still_a_warning(
+    def test_a_transport_fault_is_a_warning_even_when_statuses_are_reported(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         with caplog.at_level(logging.DEBUG):
             FetchRefusedError.from_transfer_failure(
-                self._status(500), subject="s", is_probe=True
+                OSError("reset"), subject="s", reported_by_caller=True
             )
         assert [r.levelno for r in caplog.records] == [logging.WARNING]
 
@@ -228,3 +236,18 @@ class TestAStatusIsAnAnswerNotAFault:
             with caplog.at_level(logging.DEBUG):
                 FetchRefusedError.from_transfer_failure(exc, subject="s")
         assert 'File "' in caplog.text
+
+
+class TestAPolicyRefusal:
+    def test_it_logs_one_warning_with_the_subject_and_returns_the_reason(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.DEBUG):
+            refusal = FetchRefusedError.policy(
+                "SSRF-blocked URL: private address", subject="https://h.test/…"
+            )
+        assert str(refusal) == "SSRF-blocked URL: private address"
+        [record] = caplog.records
+        assert record.levelno == logging.WARNING
+        assert "https://h.test/…" in record.getMessage()
+        assert "private address" in record.getMessage()

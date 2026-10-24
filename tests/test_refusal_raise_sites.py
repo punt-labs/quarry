@@ -39,7 +39,7 @@ _ALLOWED: dict[str, int] = {
     "ingestion/page_splitter.py": 1,
     "ingestion/media_type_policy.py": 1,
     "ingestion/fetched_body.py": 3,
-    "ingestion/fetch_refused.py": 4,
+    "ingestion/fetch_refused.py": 5,
     "daemon/refusal_aware_terminal.py": 1,
     "extractors/sheet_tables.py": 0,
 }

@@ -15,6 +15,8 @@ from quarry.url_safety import UrlRejectedError
 
 logger = logging.getLogger(__name__)
 
+_TOO_MANY_REQUESTS = 429
+
 
 class FetchRefusedError(UnindexableContentError):
     """Raised when a fetch is refused or fails; the message is safe to log verbatim.
@@ -35,7 +37,7 @@ class FetchRefusedError(UnindexableContentError):
 
     @classmethod
     def from_transfer_failure(
-        cls, exc: Exception, *, subject: str = "", is_probe: bool = False
+        cls, exc: Exception, *, subject: str = "", reported_by_caller: bool = False
     ) -> Self:
         """Return the URL-free refusal for a failure while opening or reading.
 
@@ -49,19 +51,21 @@ class FetchRefusedError(UnindexableContentError):
         timeouts) and :class:`http.client.HTTPException` (``InvalidURL``,
         ``BadStatusLine``, ``IncompleteRead``, whose messages carry the URL path
         and query verbatim).  A transport failure reports only what kind it was.
-        Every refusal logs one line with the class and the caller's redacted
-        *subject* (``HttpUrl.shown``, never a path), and a transport failure
-        adds its message-free frames, so a fault stays diagnosable.  An HTTP status
-        is an answer, not a fault: one line, no frames, INFO for a 4xx and WARNING
-        for a 5xx, and DEBUG for a 4xx on a *is_probe* fetch, where a miss is the
-        expected outcome.  An :class:`HTTPError` holds an open socket, so it is
-        closed here, before the status is read out.
+        Every refusal logs one line naming what failed (the class, or the HTTP
+        status) and the caller's redacted *subject* (``HttpUrl.shown``, never a
+        path).  A transport failure adds its message-free frames, so a fault stays
+        diagnosable.  An HTTP status is an answer, not a fault: no frames, WARNING
+        for a 5xx or a 429 (a transient fault), INFO otherwise.  A caller whose
+        library reports each status itself (*reported_by_caller*) gets DEBUG for
+        every status, so one failure is not logged twice at WARNING.  An
+        :class:`HTTPError` holds an open socket, so it is closed here, before the
+        status is read out.
         """
         if isinstance(exc, HTTPError):
             code = cls._close(exc)
             on = f" on {subject}" if subject else ""
             logger.log(
-                cls._status_level(code, is_probe=is_probe),
+                cls._status_level(code, reported_by_caller=reported_by_caller),
                 "fetch refused: HTTP %d%s",
                 code,
                 on,
@@ -78,11 +82,27 @@ class FetchRefusedError(UnindexableContentError):
         return cls(cls._describe(exc))
 
     @staticmethod
-    def _status_level(code: int, *, is_probe: bool) -> int:
-        """Return the log level of an HTTP status: WARNING for a 5xx, else INFO."""
-        if code >= 500:
+    def _status_level(code: int, *, reported_by_caller: bool) -> int:
+        """Return the log level of an HTTP status.
+
+        DEBUG when the caller reports it itself, WARNING for a 5xx or a 429, else
+        INFO.
+        """
+        if reported_by_caller:
+            return logging.DEBUG
+        if code >= 500 or code == _TOO_MANY_REQUESTS:
             return logging.WARNING
-        return logging.DEBUG if is_probe else logging.INFO
+        return logging.INFO
+
+    @classmethod
+    def policy(cls, reason: str, *, subject: str) -> Self:
+        """Return the refusal for a fetch a policy blocked, and log it once.
+
+        *reason* names a rule and quotes nothing of the URL, so it is safe to log
+        and to hand back as the failure message; *subject* is the redacted URL.
+        """
+        logger.warning("fetch refused: %s [%s]", reason, subject)
+        return cls(reason)
 
     @staticmethod
     def _close(exc: HTTPError) -> int:
