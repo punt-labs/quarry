@@ -3221,9 +3221,12 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
      checking what is actually stored: the admitted URL's stored name rather
      than the raw URL (whose query becomes a short digest), and the final
      collection after any `-captures`, `-lessons`, or `memory-` derivation.
-   - A URL ingest spooled for recovery is written only when its stored name
-     is its fetchable URL; a URL with a query is spooled as unrecoverable,
-     since the raw query never reaches disk.
+   - A URL ingest aborted at shutdown is recoverable only when nothing was
+     dropped from it (no query, no `;params`); its stored name is spooled,
+     which fetches the same resource. A URL with a query is spooled with
+     `recoverable: false` and no URL text, since the raw query never
+     reaches disk, and the task says it must be re-run rather than that it
+     was spooled for recovery.
    - The budget is checked over the whole document before any overwrite-delete,
      so a violation never leaves a partial document.
    - Overlong sentences are hard-wrapped to `max_chars`.
@@ -3316,7 +3319,10 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
        and the page being stored are URL-sourced, a store replaces the
        document under its former spelling, overwriting or not, and logs the
        replacement at WARNING. The twins are dropped only after the new
-       document is stored, so a failed embed or write loses nothing. Two
+       document is stored, so a failed embed or write loses nothing; a
+       failed insert of a URL-sourced page also removes its own partial
+       write, and a failed twin delete is logged with its remedy
+       (re-ingest with overwrite) without failing the stored page. Two
        cases remain. A legacy name whose literal query is already
        `q[sha256]=<16 hex>` reads as a current-build name and spells only
        itself, so it sits beside its re-ingested copy; reading it the
@@ -3465,9 +3471,10 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
      (an earlier reach check mis-encoded paths and was removed). Backfill
      re-ingests a session whose transcript grew since it was stored. A
      capture's `ingestion_timestamp` is the instant the hook took its
-     snapshot (`captured_at`, validated: offset-aware, not in the future,
-     not before 2000), not the queue time, so a transcript written while
-     the capture waited in the queue still reads as grown. The
+     snapshot (`captured_at`: offset-aware, in range, not before 2000; a
+     future value from a skewed clock is clamped to now), not the queue
+     time, so a transcript written while the capture waited in the queue
+     still reads as grown. Backfill stamps its own read time the same way. The
      quarry archive is reported separately as saved or not. A fault on the
      background-sync lock, or any failure to start the sync process, is
      reported as a failed launch with a pointer to the log, never as
