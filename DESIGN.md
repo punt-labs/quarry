@@ -3188,7 +3188,8 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
      (65,536 characters), because small legitimate PDF pages can exceed the
      ratio. One 677-character page measured 0.341.
    - A refused payload or a failed fetch fails with a URL-free reason on every
-     surface (CLI, HTTP, MCP and task) and never logs a traceback. A refusal is
+     surface (CLI, HTTP, MCP, task, and the plugin, whose hooks and slash
+     commands reach the same daemon routes) and never logs a traceback. A refusal is
      always an exception; it is never an empty "completed" result.
    - A job that stores nothing fails as well. `RefusalAwareTerminal` is the one
      place that decides a task's terminal state: a plain ingest, bulk crawl,
@@ -3216,7 +3217,13 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
    - Label columns (`summary`, `document_name`, `document_path`, `collection`,
      `agent_handle`) have their own 8 KiB budget. `summary` is copied onto
      every chunk, so an unbounded label could recreate the overflow. The
-     content routes refuse an over-budget label with HTTP 400.
+     content routes refuse an over-budget or non-string label with HTTP 400,
+     checking what is actually stored: the admitted URL's stored name rather
+     than the raw URL (whose query becomes a short digest), and the final
+     collection after any `-captures`, `-lessons`, or `memory-` derivation.
+   - A URL ingest spooled for recovery is written only when its stored name
+     is its fetchable URL; a URL with a query is spooled as unrecoverable,
+     since the raw query never reaches disk.
    - The budget is checked over the whole document before any overwrite-delete,
      so a violation never leaves a partial document.
    - Overlong sentences are hard-wrapped to `max_chars`.
@@ -3308,7 +3315,13 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
        it never lists as a page candidate. When both the stored document
        and the page being stored are URL-sourced, a store replaces the
        document under its former spelling, overwriting or not, and logs the
-       replacement at WARNING. One case remains: a label an older build
+       replacement at WARNING. The twins are dropped only after the new
+       document is stored, so a failed embed or write loses nothing. Two
+       cases remain. A legacy name whose literal query is already
+       `q[sha256]=<16 hex>` reads as a current-build name and spells only
+       itself, so it sits beside its re-ingested copy; reading it the
+       other way would let a copied digest alias a different page. And a
+       label an older build
        stored with an html hint and a URL-shaped, non-canonical name is
        indistinguishable from a captured page in every stored column, so a
        later fetch of that page can replace it.
@@ -3450,7 +3463,11 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
      backfill-sessions` indexes missed sessions of registered directories;
      that conditional is true for every session, so no reach check is made
      (an earlier reach check mis-encoded paths and was removed). Backfill
-     re-ingests a session whose transcript grew since it was stored. The
+     re-ingests a session whose transcript grew since it was stored. A
+     capture's `ingestion_timestamp` is the instant the hook took its
+     snapshot (`captured_at`, validated: offset-aware, not in the future,
+     not before 2000), not the queue time, so a transcript written while
+     the capture waited in the queue still reads as grown. The
      quarry archive is reported separately as saved or not. A fault on the
      background-sync lock, or any failure to start the sync process, is
      reported as a failed launch with a pointer to the log, never as
