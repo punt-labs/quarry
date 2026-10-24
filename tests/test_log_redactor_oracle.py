@@ -255,6 +255,17 @@ def test_a_query_or_fragment_secret_holding_quotes_never_survives(
 
 @_PROFILE
 @given(
+    st.sampled_from(("GET /p", "host/p", "see h.example/a/b")),
+    _value_with_quotes,
+)
+def test_a_scheme_less_query_secret_never_survives(prefix: str, value: str) -> None:
+    shown = redacted(f"{prefix}?{value} end")
+    assert not set(shown) & set(_MARKER_CHARS), shown
+    assert redacted(shown) == shown
+
+
+@_PROFILE
+@given(
     st.sampled_from(_SCHEMES),
     _any_host,
     _secret,

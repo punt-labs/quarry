@@ -74,7 +74,7 @@ class LogRedactor:
     _USERINFO: ClassVar[re.Pattern[str]] = re.compile(
         r"(?<![^\s/@:'\"<>])[^\s/@:'\"<>]{0,2048}:[^\s/@'\"<>]{0,2048}@"
     )
-    _QUERY: ClassVar[re.Pattern[str]] = re.compile(r"\?[^\s'\"<>#]{1,2048}")
+    _QUERY: ClassVar[re.Pattern[str]] = re.compile(r"\?\S{1,2048}")
     _CONTROL: ClassVar[re.Pattern[str]] = re.compile(
         "[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u2028\u2029]"
     )
@@ -201,8 +201,7 @@ class LogRedactor:
         *outside* is the text of the token before the URL.  Prose after a query or
         a fragment is not kept as it stands, since it may be the end of a secret:
         only as many closers survive as *outside* has unmatched openers.  A ``:``
-        after a bare host
-        stays in the URL, where the host position is masked.
+        after a bare host stays in the URL, where the host position is masked.
         """
         core, tail = cls._peel(url)
         rest = core.partition("://")[2]

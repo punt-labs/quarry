@@ -618,6 +618,17 @@ class TestTheTailNeverRevealsAQueryOrAHostPosition:
     def test_a_quote_still_ends_the_url_in_the_path(self) -> None:
         assert redacted("say 'http://h/a' now") == "say 'http://h/…(segments=1)' now"
 
+    @pytest.mark.parametrize("char", ["'", '"', "<", ">", "#"])
+    @pytest.mark.parametrize("shape", ["GET /p?{}", "host/p?{}"])
+    def test_a_scheme_less_query_runs_to_whitespace(
+        self, char: str, shape: str
+    ) -> None:
+        shown = redacted(shape.format(f"a{char}bSECRET") + " end")
+        assert shown == shape.format("[query]") + " end"
+
+    def test_the_query_placeholder_is_not_matched_again(self) -> None:
+        assert redacted("GET /p?[query]") == "GET /p?[query]"
+
     def test_delimiters_after_a_fragment_are_dropped(self) -> None:
         assert redacted("http://h/p#ab.,;") == "http://h/…(segments=1)"
 

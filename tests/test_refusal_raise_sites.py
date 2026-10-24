@@ -352,7 +352,7 @@ class TestTheSweepSeesEveryShape:
 
 
 class TestTheSweepSeesTheHardShapes:
-    """The shapes djb found: splats, aliases, unnamed callees, forwarding, .args."""
+    """Splats, aliases, unnamed callees, forwarding and .args are all seen."""
 
     @staticmethod
     def _count(source: str) -> int:
