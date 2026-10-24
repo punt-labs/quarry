@@ -43,6 +43,9 @@ class SpoolRecord:
     collection: str
     name: str
     payload: str
+    # False when the job's own text could not be persisted (an ingest URL whose query
+    # was dropped): the file is then only a note, and recovery is by re-running it.
+    recoverable: bool = True
 
     def as_json(self) -> str:
         """Return the record as a one-object JSON document for the spool file."""
@@ -52,6 +55,7 @@ class SpoolRecord:
                 "collection": self.collection,
                 "name": self.name,
                 "payload": self.payload,
+                "recoverable": self.recoverable,
                 "spooled_at": time.time(),
             }
         )

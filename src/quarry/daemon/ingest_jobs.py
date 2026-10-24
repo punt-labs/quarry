@@ -68,21 +68,23 @@ class IngestJob:
         """Return a snapshot of the source URL; an ``ingest`` has no client copy.
 
         The source is the recoverable unit — re-issuing the ingest re-fetches it.
-        Only a URL whose stored name is the URL itself can be spooled, since the
-        query, fragment and parameters are never written to disk.  Any other URL
-        spools a record that says the job is not recoverable, and logs it.
+        A URL with no query and no ``;params`` fetches the same resource under its
+        stored name (host case, default port and encoding are equivalent), so that
+        name is spooled.  Otherwise the query is never written to disk: the record
+        says the job is not recoverable, and it is logged.
         """
         name = self.source.document_name
-        if name == self.source.fetch_url:
+        if not self.source.has_query_or_params:
             return SpoolRecord(
                 kind="ingest", collection=self.collection, name=name, payload=name
             )
         logger.warning("ingest of %s is not recoverable from the spool", self.source)
         return SpoolRecord(
-            kind="ingest-unrecoverable",
+            kind="ingest",
             collection=self.collection,
             name=name,
-            payload="not recoverable: the URL carries a query, fragment or parameters",
+            payload="not recoverable: the URL's query or parameters are never written",
+            recoverable=False,
         )
 
     def _captured(self) -> CapturedBodyIngest:

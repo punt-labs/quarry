@@ -188,6 +188,12 @@ class HttpUrl:
         return self._fetch_url
 
     @property
+    def has_query_or_params(self) -> bool:
+        """Return whether the URL carries a query or ``;params`` (a fragment is not)."""
+        parts = urlsplit(self._fetch_url)
+        return bool(parts.query) or ";" in parts.path
+
+    @property
     def host(self) -> str:
         """Return the lower-cased host, without brackets or port."""
         return self._host

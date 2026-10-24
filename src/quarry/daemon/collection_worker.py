@@ -155,6 +155,11 @@ class CollectionWorker:
         if record is None:
             return "daemon shut down before ingest completed"
         if spool.write(record):
+            if not record.recoverable:
+                return (
+                    "daemon shut down before ingest; URL not recoverable "
+                    "(query not persisted), re-run the ingest"
+                )
             return "daemon shut down before ingest; spooled for recovery"
         return (
             "daemon shut down before ingest; spool write failed, content not recovered"

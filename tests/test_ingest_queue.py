@@ -669,3 +669,46 @@ def test_same_collection_in_two_databases_runs_on_two_workers(
         assert ledger.peak == 2  # both inside the embed section -> distinct workers
 
     asyncio.run(_run())
+
+
+def test_an_unrecoverable_job_never_claims_to_be_spooled(tmp_path: Path) -> None:
+    """A URL job whose query was not persisted is told apart from a recoverable one."""
+
+    async def _run() -> None:
+        ledger = _Ledger()
+        queue = _make_queue(quarry_root=tmp_path)
+        gate = asyncio.Event()
+        a = _StubUnit("c", "a", ledger, gate=gate)
+        record = SpoolRecord(
+            "ingest", "c", "https://x.test/a", "note", recoverable=False
+        )
+        b = _StubUnit("c", "b", ledger, gate=gate, spool=record)
+        state_b = _state("b")
+        assert queue.try_submit(_rk("c"), a, _state("a"))
+        await asyncio.sleep(0.02)
+        assert queue.try_submit(_rk("c"), b, state_b)
+        await queue.aclose(drain_timeout=0.05)
+        assert state_b.status == "failed"
+        assert "spooled for recovery" not in state_b.error
+        assert "not recoverable" in state_b.error
+        assert "re-run the ingest" in state_b.error
+
+    asyncio.run(_run())
+
+
+def test_a_recoverable_job_still_says_it_was_spooled(tmp_path: Path) -> None:
+    async def _run() -> None:
+        ledger = _Ledger()
+        queue = _make_queue(quarry_root=tmp_path)
+        gate = asyncio.Event()
+        a = _StubUnit("c", "a", ledger, gate=gate)
+        record = SpoolRecord("ingest", "c", "https://x.test/a", "https://x.test/a")
+        b = _StubUnit("c", "b", ledger, gate=gate, spool=record)
+        state_b = _state("b")
+        assert queue.try_submit(_rk("c"), a, _state("a"))
+        await asyncio.sleep(0.02)
+        assert queue.try_submit(_rk("c"), b, state_b)
+        await queue.aclose(drain_timeout=0.05)
+        assert "spooled for recovery" in state_b.error
+
+    asyncio.run(_run())
