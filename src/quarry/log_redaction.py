@@ -66,7 +66,18 @@ class _FirstPartyHandler(logging.Handler):
     @staticmethod
     def _logged(record: logging.LogRecord) -> type[BaseException] | None:
         """Return the class of the exception the record carries, if any."""
-        return record.exc_info[0] if record.exc_info else None
+        info = record.exc_info
+        return info[0] if isinstance(info, tuple) else None
+
+    @staticmethod
+    def _classes(
+        logged: type[BaseException] | None, failure: type[BaseException] | None
+    ) -> str:
+        """Return ``X while logging Y``, or whichever class there is, or ``""``."""
+        if failure is not None and logged is not None:
+            return f"{failure.__name__} while logging {logged.__name__}"
+        named = failure or logged
+        return "" if named is None else named.__name__
 
     def _detail(
         self,
@@ -81,10 +92,8 @@ class _FirstPartyHandler(logging.Handler):
         if it settles on its own.
         """
         parts = []
-        if failure is not None and logged is not None:
-            parts.append(f"{failure.__name__} while logging {logged.__name__}")
-        elif (named := failure or logged) is not None:
-            parts.append(named.__name__)
+        if classes := self._classes(logged, failure):
+            parts.append(classes)
         template = self._template(record)
         if template is not None:
             parts.append(f"[{template}]")
@@ -127,7 +136,7 @@ class _FirstPartyHandler(logging.Handler):
         template = (
             record.msg if isinstance(record.msg, str) else type(record.msg).__name__
         )
-        who = f"{record.name}: {type(error).__name__}"
+        who = f"{record.name}: {self._classes(self._logged(record), type(error))}"
         where = f"at {record.pathname}:{record.lineno}: {template}"
         # Code-authored, but a path or template may hold a line break or a bidi
         # mark; the frames keep their own newlines.

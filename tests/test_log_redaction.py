@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import logging
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -464,3 +464,34 @@ class TestTheReportNamesBothClasses:
             )
         RedactingStreamHandler(io.StringIO()).handle(record)
         assert "TypeError while logging ValueError" in capsys.readouterr().err
+
+
+class TestTheSettledReportNamesBothClasses:
+    def test_a_report_that_settles_names_the_logged_class_too(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        try:
+            msg = "inner"
+            raise ValueError(msg)
+        except ValueError:
+            record = logging.LogRecord(
+                "quarry.x", logging.WARNING, "/c.py", 3, "n=%d", ("a",), sys.exc_info()
+            )
+        RedactingStreamHandler(io.StringIO()).handle(record)
+        assert "TypeError while logging ValueError" in capsys.readouterr().err
+
+    def test_a_record_with_a_true_exc_info_does_not_break_the_report(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        flag = True
+        record = logging.LogRecord(
+            "quarry.x",
+            logging.WARNING,
+            "/c.py",
+            3,
+            "n=%d",
+            ("a",),
+            cast("tuple[None, None, None]", flag),
+        )
+        RedactingStreamHandler(io.StringIO()).handle(record)
+        assert "TypeError" in capsys.readouterr().err
