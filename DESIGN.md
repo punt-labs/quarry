@@ -3322,8 +3322,10 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
      - `str()` is the log form, `scheme://host[:port]/…(segments=N)`. It
        never carries the path. Punctuation that follows a path-ending URL
        in prose (`, . : ;`, and a `)` or `]` that closes nothing opened
-       inside the URL) survives unchanged. After a query or fragment only
-       a closing bracket survives, so no character of a query value shows;
+       inside the URL) survives unchanged. A query or fragment runs to the
+       next whitespace, quotes and angle brackets included, and after it
+       only closing brackets matched by openers earlier in the same token
+       survive, so no character of a query value shows;
        a `:` after a bare host stays masked, since `host:` may be a
        truncated credential; and a URL with userinfo may lose its trailing
        punctuation, which over-redacts but never leaks. A heuristic cannot tell a slug from a
@@ -3406,7 +3408,10 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
        reports them itself and is the one component that knows which
        fetches are speculative: its well-known-path misses log at INFO,
        a failed listed sitemap at WARNING. An SSRF-blocked sitemap fetch
-       logs one WARNING from our layer.
+       logs one WARNING from our layer (the library also reports it). An
+       unreadable sitemap's refusal names its cause when the cause is text
+       our fetch layer wrote, and a readable sitemap that lists no pages
+       logs a WARNING before the crawl fails as storing nothing.
      - **Unclassified failures stay diagnosable.** Their message-free
        frames are logged at WARNING, and a parser catch names only the
        parser's own exceptions, so a programming error is never reported as
