@@ -495,3 +495,27 @@ class TestTheSettledReportNamesBothClasses:
         )
         RedactingStreamHandler(io.StringIO()).handle(record)
         assert "TypeError" in capsys.readouterr().err
+
+
+class TestAMalformedExcInfoDoesNotBreakTheReport:
+    @staticmethod
+    def _report(exc_info: object, capsys: pytest.CaptureFixture[str]) -> str:
+        record = logging.LogRecord(
+            "quarry.x",
+            logging.WARNING,
+            "/c.py",
+            3,
+            "n=%d",
+            ("a",),
+            cast("tuple[None, None, None]", exc_info),
+        )
+        RedactingStreamHandler(io.StringIO()).handle(record)
+        return capsys.readouterr().err
+
+    def test_an_empty_tuple(self, capsys: pytest.CaptureFixture[str]) -> None:
+        assert "TypeError" in self._report((), capsys)
+
+    def test_a_tuple_of_non_exception_classes(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert "TypeError" in self._report(("a", "b", "c"), capsys)

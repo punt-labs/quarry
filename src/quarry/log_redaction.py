@@ -8,7 +8,7 @@ import logging.handlers
 import sys
 import traceback
 from contextlib import suppress
-from typing import TextIO, final, override
+from typing import TextIO, cast, final, override
 
 from quarry.log_redactor import LogRedactor
 
@@ -66,8 +66,11 @@ class _FirstPartyHandler(logging.Handler):
     @staticmethod
     def _logged(record: logging.LogRecord) -> type[BaseException] | None:
         """Return the class of the exception the record carries, if any."""
-        info = record.exc_info
-        return info[0] if isinstance(info, tuple) else None
+        info: object = record.exc_info
+        first = cast("object", info[0]) if isinstance(info, tuple) and info else None
+        if isinstance(first, type) and issubclass(first, BaseException):
+            return first
+        return None
 
     @staticmethod
     def _classes(
