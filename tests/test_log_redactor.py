@@ -51,16 +51,18 @@ class TestRedact:
 
 
 def _seconds(text: str) -> float:
-    started = time.perf_counter()
+    started = time.process_time()
     redacted(text)
-    return time.perf_counter() - started
+    return time.process_time() - started
 
 
 class TestLinearTime:
     """A hostile line must not hang the handler (it runs under the lock and GIL).
 
-    Every case is checked as a scaling ratio, never an absolute time: four times
-    the input must take well under eight times as long.  The inputs are many
+    Time is this process's CPU time (``time.process_time``), not wall time, so a
+    loaded machine waiting for the CPU does not count against it.  Every case but
+    one is checked as a scaling ratio: four times the input must take well under
+    eight times as long.  The inputs are many
     tokens each UNDER the cap, because one token over it is truncated before any
     pattern runs and so proves nothing.
     """
@@ -132,9 +134,9 @@ class TestLinearTime:
             record = logging.LogRecord(
                 "quarry.x", logging.INFO, __file__, 1, "%s", (url * count,), None
             )
-            started = time.perf_counter()
+            started = time.process_time()
             handler.format(record)
-            return time.perf_counter() - started
+            return time.process_time() - started
 
         small = min(seconds(25) for _ in range(3))
         large = min(seconds(100) for _ in range(3))
