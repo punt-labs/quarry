@@ -283,6 +283,22 @@ def test_a_secret_ending_in_closers_with_no_opener_never_shows_them(
 
 
 @_PROFILE
+@given(
+    st.sampled_from(("h", "h.example", "[::1]")),
+    st.sampled_from(("", ":80", ":8080")),
+    st.text(alphabet=_MARKER_CHARS + "@=&", min_size=1, max_size=8).filter(
+        lambda text: any(c in _MARKER_CHARS for c in text)
+    ),
+)
+def test_a_scheme_less_host_port_query_holding_an_at_sign_never_survives(
+    host: str, port: str, value: str
+) -> None:
+    shown = redacted(f"GET {host}{port}?{value} end")
+    assert not set(shown) & set(_MARKER_CHARS), shown
+    assert redacted(shown) == shown
+
+
+@_PROFILE
 @given(st.sampled_from(_SCHEMES), _secret)
 def test_a_bare_label_before_a_colon_is_never_shown(scheme: str, label: str) -> None:
     shown = redacted(f"see {scheme}://{label}: and more")

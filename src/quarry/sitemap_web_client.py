@@ -31,6 +31,7 @@ from usp.web_client.abstract_client import (
     WebClientErrorResponse,
 )
 
+from quarry.fetch_bug_record import FetchBugRecord
 from quarry.ingestion.fetch_refused import FetchRefusedError
 from quarry.ingestion.ssrf_redirect import GUARDED_OPENER
 from quarry.url_admission import UrlAdmission
@@ -77,12 +78,18 @@ class GatedSitemapWebClient(AbstractWebClient):
     # USP sets this after construction via set_max_response_data_length; None
     # until then, meaning "no cap".
     _max_bytes: int | None
+    _bugs: FetchBugRecord
 
     def __new__(cls, timeout: int = 30) -> Self:
         self = super().__new__(cls)
         self._timeout = timeout
         self._max_bytes = None
+        self._bugs = FetchBugRecord()
         return self
+
+    def take_bug(self) -> str:
+        """Return the class name of the bug a fetch hit, if any, and forget it."""
+        return self._bugs.take()
 
     def set_max_response_data_length(
         self, max_response_data_length: int | None
@@ -119,6 +126,11 @@ class GatedSitemapWebClient(AbstractWebClient):
             is_404 = isinstance(exc, HTTPError) and exc.code == HTTPStatus.NOT_FOUND
             message = _USP_NOT_FOUND if is_404 else str(refusal)
             return WebClientErrorResponse(message, retryable=retryable)
+        except Exception as exc:
+            # Not a refusal, so a bug.  USP catches whatever this raises and reports
+            # it as an invalid node, so it is recorded here and re-raised unchanged.
+            self._bugs.record(exc, UrlAdmission.shown(url))
+            raise
 
     def _fetch(self, url: str) -> AbstractWebClientResponse:
         """Open *url* through the guarded opener and gate the final URL."""

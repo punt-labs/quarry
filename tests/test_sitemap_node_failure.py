@@ -29,8 +29,13 @@ class TestClassification:
 
     def test_an_unexpected_error_is_recognised_and_its_text_is_dropped(self) -> None:
         reason = f"Unable to add sub-sitemap from URL {_URL}: boom SECRET"
-        failure = NodeFailure.of(_node(reason))
+        failure = NodeFailure.of(_node(reason), bug="ValueError")
         assert (failure.kind, failure.cause) == ("unexpected", "")
+
+    def test_an_add_failure_without_a_recorded_bug_is_a_document_defect(self) -> None:
+        reason = f"Unable to add sub-sitemap from URL {_URL}: recursion SECRET"
+        failure = NodeFailure.of(_node(reason))
+        assert (failure.kind, failure.cause) == ("parse", "")
 
     @pytest.mark.parametrize(
         "reason",
@@ -75,7 +80,8 @@ class TestLogging:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         failure = NodeFailure.of(
-            _node(f"Unable to add sub-sitemap from URL {_URL}: boom SECRET")
+            _node(f"Unable to add sub-sitemap from URL {_URL}: boom SECRET"),
+            bug="ValueError",
         )
         with caplog.at_level(logging.DEBUG, logger="t.sitemap"):
             failure.log(logging.getLogger("t.sitemap"))

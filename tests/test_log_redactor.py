@@ -626,6 +626,25 @@ class TestTheTailNeverRevealsAQueryOrAHostPosition:
         shown = redacted(shape.format(f"a{char}bSECRET") + " end")
         assert shown == shape.format("[query]") + " end"
 
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "GET h:80?t=QQSE@CRETZZ]",
+            "h.example:8080?x@SECRET",
+            "GET [::1]:80?t=Q@SECRET",
+        ],
+    )
+    def test_a_query_after_host_and_port_is_masked_whole_even_with_an_at_sign(
+        self, text: str
+    ) -> None:
+        shown = redacted(text)
+        assert "SECRET" not in shown
+        assert "CRET" not in shown
+        assert "?[query]" in shown
+
+    def test_a_password_that_holds_a_question_mark_is_still_userinfo(self) -> None:
+        assert redacted("admin:Q?X@db.internal") == "[userinfo]@db.internal"
+
     def test_the_query_placeholder_is_not_matched_again(self) -> None:
         assert redacted("GET /p?[query]") == "GET /p?[query]"
 

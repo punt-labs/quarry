@@ -37,15 +37,20 @@ _PARSER_FAILURES = (
 )
 _PARSER_REFUSAL = "fetch failed: sitemap URL not accepted by the parser"
 _UNREADABLE = "fetch failed: sitemap could not be fetched or parsed"
-_UNEXPECTED = "sitemap node failed unexpectedly"
 
 
 class UnexpectedSitemapError(RuntimeError):
-    """A sitemap node failed on a bug, not on the network or the document.
+    """A sitemap fetch hit a bug, not a network failure or a document defect.
 
-    It is no refusal, so the task terminal records ``internal error:
-    UnexpectedSitemapError`` and the crawl does not report a partial success.
+    Raised with the class name of the bug the client recorded.  It is no refusal,
+    so the task terminal records ``internal error: <reported_as>`` (that class,
+    else ``sitemap``) and the crawl does not report a partial success.
     """
+
+    @property
+    def reported_as(self) -> str:
+        """Return the class name the task terminal reports, or ``sitemap``."""
+        return str(self.args[0]) if self.args and self.args[0] else "sitemap"
 
 
 @final
@@ -79,11 +84,12 @@ class SitemapReader:
         from usp.tree import sitemap_tree_for_homepage  # noqa: PLC0415
 
         logger.info("Discovering sitemaps for %s", homepage)
+        self._client.take_bug()
         try:
             tree = sitemap_tree_for_homepage(
                 homepage.fetch_url, web_client=self._client
             )
-            return list(tree.all_pages())
+            pages = list(tree.all_pages())
         except _PARSER_FAILURES as exc:
             logger.warning(
                 "sitemap parser failed: %s\n%s",
@@ -91,6 +97,12 @@ class SitemapReader:
                 FailureReason.frames(exc),
             )
             raise FetchRefusedError(_PARSER_REFUSAL) from None
+        bug = self._client.take_bug()
+        for failure in NodeFailure.in_tree(tree, bug=bug):
+            failure.log(logger, speculative=True)
+        if bug:
+            raise UnexpectedSitemapError(bug)
+        return pages
 
     def read(self, url: HttpUrl) -> list[SitemapPage]:
         """Return the pages of the sitemap at *url*, recursing into indexes.
@@ -102,6 +114,7 @@ class SitemapReader:
         from usp.fetch_parse import SitemapFetcher  # noqa: PLC0415
 
         logger.info("Fetching sitemap: %s", url)
+        self._client.take_bug()
         try:
             sitemap = SitemapFetcher(
                 url=url.fetch_url, recursion_level=0, web_client=self._client
@@ -114,26 +127,29 @@ class SitemapReader:
                 FailureReason.frames(exc),
             )
             raise FetchRefusedError(_PARSER_REFUSAL) from None
-        self._judge(NodeFailure.in_tree(sitemap), len(pages), url)
+        bug = self._client.take_bug()
+        self._judge(NodeFailure.in_tree(sitemap, bug=bug), len(pages), url, bug)
         if not pages:
             logger.warning("sitemap lists no pages: %s", url)
         logger.info("Parsed %d pages from %s", len(pages), url)
         return pages
 
     @staticmethod
-    def _judge(failures: list[NodeFailure], page_count: int, url: HttpUrl) -> None:
+    def _judge(
+        failures: list[NodeFailure], page_count: int, url: HttpUrl, bug: str
+    ) -> None:
         """Log every failed node, and raise if the read cannot be trusted.
 
         Raises:
-            UnexpectedSitemapError: A node failed on a bug, whatever pages survived.
+            UnexpectedSitemapError: The client recorded a bug, whatever pages survived.
             FetchRefusedError: Nodes failed and no page was read.
         """
         for failure in failures:
             failure.log(logger)
-        if any(failure.kind == "unexpected" for failure in failures):
-            raise UnexpectedSitemapError(_UNEXPECTED)
+        if bug:
+            raise UnexpectedSitemapError(bug)
         if failures and not page_count:
-            cause = failures[0].cause
+            cause = next((f.cause for f in failures if f.cause), "")
             raise FetchRefusedError(f"{_UNREADABLE}: {cause}" if cause else _UNREADABLE)
         if failures:
             logger.warning(

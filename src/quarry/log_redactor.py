@@ -167,10 +167,20 @@ class LogRedactor:
             return "[…]"
         if "://" in token:
             token = cls._SCHEME_URL.sub(cls._bare_url, token)
+        elif cls._is_host_query(token):
+            # ``host:port?...``: the query starts here, so an ``@`` inside it is no
+            # userinfo boundary and none of it may show.
+            return token.partition("?")[0] + "?[query]"
         # A password may hold "?" and "#", so userinfo goes before the query.
         if "@" in token:
             token = cls._USERINFO.sub("[userinfo]@", token)
         return cls._QUERY.sub("?[query]", token) if "?" in token else token
+
+    @staticmethod
+    def _is_host_query(token: str) -> bool:
+        """Return whether *token* is a bare host (and port) followed by a query."""
+        head, _, query = token.partition("?")
+        return bool(query) and bool(AuthorityMask.HOST.fullmatch(head))
 
     @staticmethod
     def _escape(match: re.Match[str]) -> str:

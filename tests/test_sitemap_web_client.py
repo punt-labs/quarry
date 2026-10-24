@@ -889,7 +889,7 @@ class _BuggyOpener(_FakeOpener):
         self, request: urllib.request.Request, timeout: float | None = None
     ) -> _FakeResp:
         if request.full_url == self._bug_url:
-            msg = "a bug"
+            msg = "kaboom-text"
             raise ValueError(msg)
         return super().open(request, timeout)
 
@@ -917,3 +917,121 @@ class TestABugInASubSitemapFetchIsNotPartialSuccess:
             SitemapReader().read(HttpUrl(index))
         errors = [r for r in caplog.records if r.levelno == logging.ERROR]
         assert any("unexpected error" in r.getMessage() for r in errors)
+
+
+class TestTheClientRecordsABugAndReRaises:
+    def test_it_records_the_class_logs_frames_without_the_message_and_re_raises(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        url = "https://safe.example/bad.xml?token=SECRET"
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _BuggyOpener({}, url))
+        client = GatedSitemapWebClient()
+        with (
+            caplog.at_level(logging.ERROR),
+            pytest.raises(ValueError, match="kaboom-text"),
+        ):
+            client.get(url)
+        assert client.take_bug() == "ValueError"
+        assert client.take_bug() == ""
+        [record] = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert "ValueError" in record.getMessage()
+        assert "File " in record.getMessage()
+        assert "kaboom-text" not in record.getMessage()
+        assert "SECRET" not in record.getMessage()
+
+    def test_a_refusal_is_not_a_bug(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _FakeOpener({}))
+        client = GatedSitemapWebClient()
+        client.get("https://safe.example/missing.xml")
+        assert client.take_bug() == ""
+
+
+class TestDocumentDefectsAreNotBugs:
+    @staticmethod
+    def _read(
+        monkeypatch: pytest.MonkeyPatch, routes: dict[str, bytes], index: str
+    ) -> list[str]:
+        from quarry.http_url import HttpUrl
+        from quarry.ingestion.sitemap_reader import SitemapReader
+
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _FakeOpener(routes))
+        return [p.url for p in SitemapReader().read(HttpUrl(index))]
+
+    def test_a_self_listing_index_keeps_the_other_pages_with_a_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        index = "https://safe.example/index.xml"
+        good = "https://safe.example/good.xml"
+        routes = {
+            index: _index_xml(index, good),
+            good: _urlset_xml("https://safe.example/page"),
+        }
+        with caplog.at_level(logging.DEBUG):
+            urls = self._read(monkeypatch, routes, index)
+        assert urls == ["https://safe.example/page"]
+        quarry = [r for r in caplog.records if r.name.startswith("quarry")]
+        assert not [r for r in quarry if r.levelno >= logging.ERROR]
+
+    def test_a_corrupt_gz_sub_sitemap_keeps_the_other_pages_with_a_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        index = "https://safe.example/index.xml"
+        good = "https://safe.example/good.xml"
+        bad = "https://safe.example/bad.xml.gz"
+        routes = {
+            index: _index_xml(good, bad),
+            good: _urlset_xml("https://safe.example/page"),
+            bad: b"\x1f\x8b\x08\x00 corrupt, not gzip",
+        }
+        with caplog.at_level(logging.DEBUG):
+            urls = self._read(monkeypatch, routes, index)
+        assert urls == ["https://safe.example/page"]
+        quarry = [r for r in caplog.records if r.name.startswith("quarry")]
+        assert not [r for r in quarry if r.levelno >= logging.ERROR]
+
+
+class TestDiscoverFollowsTheSameRule:
+    _ROBOTS = "https://safe.example/robots.txt"
+
+    @staticmethod
+    def _robots(*sitemaps: str) -> bytes:
+        return "".join(f"Sitemap: {url}\n" for url in sitemaps).encode()
+
+    def test_a_bug_in_a_listed_sub_sitemap_fails_discovery(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from quarry.http_url import HttpUrl
+        from quarry.ingestion.sitemap_reader import (
+            SitemapReader,
+            UnexpectedSitemapError,
+        )
+
+        bad = "https://safe.example/bad.xml"
+        routes = {self._ROBOTS: self._robots(bad)}
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _BuggyOpener(routes, bad))
+        with pytest.raises(UnexpectedSitemapError) as e:
+            SitemapReader().discover(HttpUrl("https://safe.example/"))
+        assert e.value.reported_as == "ValueError"
+
+    def test_a_listed_sub_sitemap_that_is_missing_is_debug(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from quarry.http_url import HttpUrl
+        from quarry.ingestion.sitemap_reader import SitemapReader
+
+        routes = {self._ROBOTS: self._robots("https://safe.example/missing.xml")}
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _FakeOpener(routes))
+        with caplog.at_level(logging.DEBUG):
+            SitemapReader().discover(HttpUrl("https://safe.example/"))
+        nodes = [
+            r
+            for r in caplog.records
+            if r.getMessage().startswith("sitemap node failed")
+        ]
+        assert nodes
+        assert {r.levelno for r in nodes} == {logging.DEBUG}

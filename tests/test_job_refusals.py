@@ -554,9 +554,16 @@ async def test_an_unexpected_sitemap_node_fails_the_task_as_an_internal_error(
         ],
     )
 
-    with caplog.at_level(logging.WARNING), patch(_FETCHER) as fetcher:
+    with (
+        caplog.at_level(logging.WARNING),
+        patch(_FETCHER) as fetcher,
+        patch(
+            "quarry.sitemap_web_client.GatedSitemapWebClient.take_bug",
+            return_value="ValueError",
+        ),
+    ):
         fetcher.return_value.sitemap.return_value = index
         await _sitemap_job().run(daemon.ctx, state)
 
     assert state.status == "failed"
-    assert state.error == "internal error: UnexpectedSitemapError"
+    assert state.error == "internal error: ValueError"

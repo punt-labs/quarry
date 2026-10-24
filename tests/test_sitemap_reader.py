@@ -51,6 +51,7 @@ class TestRead:
     def test_the_injected_client_does_the_fetching(self, fetcher: MagicMock) -> None:
         fetcher.return_value.sitemap.return_value = _pages()
         client = MagicMock()
+        client.take_bug.return_value = ""
         SitemapReader(client).read(HttpUrl(_URL))
         assert fetcher.call_args.kwargs["web_client"] is client
 
@@ -247,11 +248,62 @@ class TestTheReaderSaysWhatWentWrong:
             sub_sitemaps=[_pages("https://a.test/1"), bug],
         )
         fetcher.return_value.sitemap.return_value = index
-        with caplog.at_level(logging.WARNING), pytest.raises(UnexpectedSitemapError):
-            SitemapReader().read(HttpUrl(_URL))
+        client = MagicMock()
+        client.take_bug.return_value = "ValueError"
+        with (
+            caplog.at_level(logging.WARNING),
+            pytest.raises(UnexpectedSitemapError) as e,
+        ):
+            SitemapReader(client).read(HttpUrl(_URL))
+        assert e.value.reported_as == "ValueError"
         [node] = _ours(caplog)
         assert node.levelno == logging.ERROR
         assert "SECRET" not in node.getMessage()
+
+    @patch(_FETCHER)
+    def test_an_add_failure_with_no_recorded_bug_is_a_document_defect(
+        self, fetcher: MagicMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        loop = InvalidSitemap(
+            url="https://example.com/sub.xml",
+            reason="Unable to add sub-sitemap from URL https://example.com/sub.xml: "
+            "recursion",
+        )
+        index = IndexXMLSitemap(
+            url="https://example.com/i.xml",
+            sub_sitemaps=[_pages("https://a.test/1"), loop],
+        )
+        fetcher.return_value.sitemap.return_value = index
+        client = MagicMock()
+        client.take_bug.return_value = ""
+        with caplog.at_level(logging.WARNING):
+            pages = SitemapReader(client).read(HttpUrl(_URL))
+        assert [p.url for p in pages] == ["https://a.test/1"]
+        [node] = _ours(caplog)
+        assert node.levelno == logging.WARNING
+
+    @patch(_FETCHER)
+    def test_the_all_failed_message_uses_the_first_non_empty_cause(
+        self, fetcher: MagicMock
+    ) -> None:
+        parse = InvalidSitemap(url="https://example.com/a.xml", reason="No parsers")
+        forbidden = InvalidSitemap(
+            url="https://example.com/b.xml",
+            reason="Unable to fetch sitemap from https://example.com/b.xml: "
+            "fetch failed: HTTP 403",
+        )
+        fetcher.return_value.sitemap.return_value = IndexXMLSitemap(
+            url="https://example.com/i.xml", sub_sitemaps=[parse, forbidden]
+        )
+        client = MagicMock()
+        client.take_bug.return_value = ""
+        with pytest.raises(FetchRefusedError) as e:
+            SitemapReader(client).read(HttpUrl(_URL))
+        assert str(e.value) == f"{_UNREADABLE}: HTTP 403"
+
+    def test_the_terminal_name_is_the_recorded_class_or_sitemap(self) -> None:
+        assert UnexpectedSitemapError("ValueError").reported_as == "ValueError"
+        assert UnexpectedSitemapError().reported_as == "sitemap"
 
 
 class TestTheUnreadableErrorNamesItsCause:

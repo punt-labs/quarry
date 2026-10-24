@@ -39,7 +39,7 @@ class FailureReason:
         """Return a refusal's message, else ``internal error: <Class>``."""
         if isinstance(exc, RefusalError):
             return str(exc)
-        return f"internal error: {type(exc).__name__}"
+        return f"internal error: {getattr(exc, 'reported_as', type(exc).__name__)}"
 
     @staticmethod
     def frames(exc: BaseException) -> str:

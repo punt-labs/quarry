@@ -48,8 +48,9 @@ def task_terminal(state: TaskState) -> Generator[None]:
     """Record *state*'s terminal status when its background body exits.
 
     Cancellation is recorded and re-raised; any other exception is logged and recorded
-    as ``internal error: <Class>`` (see :class:`RefusalAwareTerminal`); a body that sets
-    no terminal status is marked failed, so no task is left in ``running``.
+    as ``internal error: <Class>`` (``reported_as`` when the exception names the class
+    of a bug caught elsewhere; see :class:`RefusalAwareTerminal`); a body that sets no
+    terminal status is marked failed, so no task is left in ``running``.
     """
     try:
         yield
@@ -60,7 +61,8 @@ def task_terminal(state: TaskState) -> Generator[None]:
     except Exception as exc:
         logger.exception("Background %s failed", state.kind)
         state.status = "failed"
-        state.error = f"internal error: {type(exc).__name__}"
+        name = getattr(exc, "reported_as", type(exc).__name__)
+        state.error = f"internal error: {name}"
     finally:
         if state.status == "running":
             state.status = "failed"
