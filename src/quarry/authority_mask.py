@@ -58,9 +58,6 @@ class AuthorityMask:
     # ``name:12``, which a gap may show is the start of a password, not host:port.
     _PORTLIKE: ClassVar[re.Pattern[str]] = re.compile(r"[^:@]+:\d{1,5}")
     _DIGITS_AT: ClassVar[re.Pattern[str]] = re.compile(r"\d+@")
-    # Prose that ends a sentence or closes a bracket after a host, never part of one.
-    # A ``:`` is not here: ``host:`` may be a password about to be continued.
-    _PROSE_END: ClassVar[str] = ".,;'\">)]"
     _EOL: ClassVar[int] = -1
     _STOPPED: ClassVar[int] = -2
 
@@ -243,7 +240,7 @@ class AuthorityMask:
         """
         at = text.rindex("@")
         tail = text[at + 1 :]
-        ends = not tail or bool(cls.HOST.fullmatch(tail.rstrip(cls._PROSE_END)))
+        ends = not tail or bool(cls.HOST.fullmatch(tail))
         if ends and not shaped and cls._is_email(text, at, line, pos):
             return 0, True
         return pos + at + 1, ends

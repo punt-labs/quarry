@@ -55,6 +55,9 @@ class LogRedactor:
     MAX_RECORD: ClassVar[int] = 64 * 1024
     PASSES: ClassVar[int] = 8
 
+    # Each closing bracket and the opener it pairs with.
+    _OPENERS: ClassVar[dict[str, str]] = {")": "(", "]": "["}
+
     _TOKEN: ClassVar[re.Pattern[str]] = re.compile(r"\S+")
     # The authority's userinfo runs to its last "@" before the first "/", "?" or "#"
     # whatever it holds (a quote or an angle bracket included), so a password never
@@ -191,24 +194,41 @@ class LogRedactor:
         inner = cls._SCHEME_URL.fullmatch(core)
         return cls._log_form(inner or match) + (tail if inner else "")
 
-    @staticmethod
-    def _split_tail(url: str) -> tuple[str, str]:
-        """Return *url* without its trailing delimiters, and those delimiters.
+    @classmethod
+    def _split_tail(cls, url: str) -> tuple[str, str]:
+        """Return *url* without its trailing delimiters, and what is kept of them.
 
-        The usual linkify rule: a run of ``, . : ; ' " >`` at the end is prose, and
-        so is a ``)`` or ``]`` that closes nothing opened inside the URL.
+        Prose after a query or a fragment is not kept as it stands, since it may be
+        the end of a secret: only the closers survive.  A ``:`` after a bare host
+        stays in the URL, where the host position is masked.
+        """
+        core, tail = cls._peel(url)
+        rest = core.partition("://")[2]
+        if ":" in tail and not any(char in rest for char in "/?#"):
+            return url, ""
+        if "?" in core or "#" in core:
+            return core, "".join(char for char in tail if char in cls._OPENERS)
+        return core, tail
+
+    @classmethod
+    def _peel(cls, url: str) -> tuple[str, str]:
+        """Split off the usual linkify tail: ``, . : ;`` and any unmatched closer.
+
+        A ``)`` or ``]`` is prose when it closes nothing opened inside the URL.
         """
         end = len(url)
-        while end:
-            last = url[end - 1]
-            opener = {")": "(", "]": "["}.get(last)
-            closes_nothing = opener is not None and url.count(last, 0, end) > url.count(
-                opener, 0, end
-            )
-            if last not in ".,:;'\">" and not closes_nothing:
-                break
+        while end and cls._is_prose(url, end):
             end -= 1
         return url[:end], url[end:]
+
+    @classmethod
+    def _is_prose(cls, url: str, end: int) -> bool:
+        """Return whether the character before *end* is prose after the URL."""
+        last = url[end - 1]
+        opener = cls._OPENERS.get(last)
+        if opener is None:
+            return last in ".,:;"
+        return url.count(last, 0, end) > url.count(opener, 0, end)
 
     @classmethod
     def _log_form(cls, match: re.Match[str]) -> str:

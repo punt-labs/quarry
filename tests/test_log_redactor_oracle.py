@@ -195,14 +195,11 @@ _DELIMITERS = ")].,:;>'\""
 
 @st.composite
 def _url_then_delimiters(draw: st.DrawFn) -> tuple[str, str]:
-    """Return a URL, with or without credentials, and a run of trailing delimiters."""
-    userinfo = draw(st.one_of(st.just(""), _userinfo().map(lambda u: u + "@")))
-    url = (
-        f"{draw(st.sampled_from(_SCHEMES))}://{userinfo}{draw(_any_host)}"
-        f"{draw(st.sampled_from(_TAILS))}"
-    )
-    # A ``:`` after credentials may be a password about to continue, so it is masked.
-    alphabet = _DELIMITERS if not userinfo else _DELIMITERS.replace(":", "")
+    """Return a URL with no userinfo, query or fragment, and trailing delimiters."""
+    path = draw(st.sampled_from(("", "/", "/p/q")))
+    url = f"{draw(st.sampled_from(_SCHEMES))}://{draw(_any_host)}{path}"
+    # A ``:`` after a bare host is a missing port, and the host is masked.
+    alphabet = _DELIMITERS if path else _DELIMITERS.replace(":", "")
     return url, draw(st.text(alphabet=alphabet, min_size=1, max_size=4))
 
 
@@ -212,6 +209,28 @@ def test_the_delimiters_after_a_url_survive_exactly(case: tuple[str, str]) -> No
     url, delimiters = case
     shown = redacted(f"see {url}{delimiters}")
     assert shown.endswith(delimiters), shown
+
+
+@_PROFILE
+@given(
+    st.sampled_from(_SCHEMES),
+    _any_host,
+    _secret,
+    st.text(alphabet=".,:;", min_size=1, max_size=4),
+    st.sampled_from(("?t=", "#")),
+)
+def test_a_secret_query_or_fragment_never_shows_the_delimiters_after_it(
+    scheme: str, host: str, secret: str, delimiters: str, opener: str
+) -> None:
+    shown = redacted(f"see {scheme}://{host}/p{opener}{secret}{delimiters}")
+    assert not set(shown) & set(_MARKER_CHARS), shown
+    assert not shown.endswith(tuple(delimiters)), shown
+
+
+@_PROFILE
+@given(st.sampled_from(_SCHEMES), _secret)
+def test_a_bare_label_before_a_colon_is_never_shown(scheme: str, label: str) -> None:
+    shown = redacted(f"see {scheme}://{label}: and more")
     assert not set(shown) & set(_MARKER_CHARS), shown
 
 

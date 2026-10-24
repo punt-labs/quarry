@@ -577,7 +577,7 @@ class TestPunctuationAfterAUrlStaysOutsideIt:
             ("<https://h/a>", "<https://h/…(segments=1)>"),
             ("said 'https://h/a'.", "said 'https://h/…(segments=1)'."),
             ("https://h/a;", "https://h/…(segments=1);"),
-            ("https://h/p?x=1).", "https://h/…(segments=1))."),
+            ("https://h/p?x=1).", "https://h/…(segments=1))"),
             ("https://h:8080.", "https://h:8080/…(segments=0)."),
         ],
         ids=[
@@ -601,3 +601,39 @@ class TestPunctuationAfterAUrlStaysOutsideIt:
         shown = redacted("https://u:SECRET@h/p).")
         assert "SECRET" not in shown
         assert shown == "https://h/…(segments=1))."
+
+
+class TestTheTailNeverRevealsAQueryOrAHostPosition:
+    def test_delimiters_after_a_query_are_dropped(self) -> None:
+        assert redacted("http://h/p?t=ab;;;;") == "http://h/…(segments=1)"
+
+    def test_delimiters_after_a_fragment_are_dropped(self) -> None:
+        assert redacted("http://h/p#ab.,;") == "http://h/…(segments=1)"
+
+    def test_a_closer_that_closes_a_bracket_outside_the_match_is_kept(self) -> None:
+        assert redacted("(see http://h/p?t=ab)") == "(see http://h/…(segments=1))"
+
+    def test_a_closer_is_kept_after_dropped_delimiters(self) -> None:
+        assert redacted("(see http://h/p?t=ab;.)") == "(see http://h/…(segments=1))"
+
+    @pytest.mark.parametrize(
+        "text", ["https://X:", "see https://X: ok", "https://abc:def:"]
+    )
+    def test_a_colon_after_a_bare_host_keeps_the_host_position_masked(
+        self, text: str
+    ) -> None:
+        assert "[host]" in redacted(text)
+
+    @pytest.mark.parametrize(
+        ("text", "shown"),
+        [
+            ("x https://user:pss@h.com: end", "x https://[userinfo]/…(segments=0)"),
+            # a credentialed URL's trailing punctuation is over-redacted, never kept
+            ("(w s s:/ /QQAAA.BBBZZ@-)", "(wss://[userinfo]/…(segments=0)"),
+            ("https://u:QQ;@h.", "https://h/…(segments=0)."),
+        ],
+    )
+    def test_credentials_before_punctuation_are_masked(
+        self, text: str, shown: str
+    ) -> None:
+        assert redacted(text) == shown
