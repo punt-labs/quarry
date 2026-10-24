@@ -124,6 +124,9 @@ class SessionTranscriptCapture:
             format_artifacts_header,
         )
 
+        # Taken before the transcript is read: anything written after this instant
+        # is newer than the capture, whatever the daemon does with it later.
+        snapshot = datetime.now(UTC)
         archived = self._archive()
 
         raw_text = self._reader.text()
@@ -138,7 +141,7 @@ class SessionTranscriptCapture:
         wire_text = f"{header}\n\n{raw_text}" if header else raw_text
 
         written = self._write_local_capture(artifacts, raw_text)
-        send = self._send(wire_text, archived=archived)
+        send = self._send(wire_text, archived=archived, snapshot=snapshot)
         return TranscriptCaptureOutcome(
             archived=archived,
             sent=bool(send),
@@ -179,7 +182,9 @@ class SessionTranscriptCapture:
             )
         )
 
-    def _send(self, wire_text: str, *, archived: bool) -> SendOutcome:
+    def _send(
+        self, wire_text: str, *, archived: bool, snapshot: datetime
+    ) -> SendOutcome:
         """Post the wire text to the daemon; return the send's outcome."""
         from quarry.api import CaptureIngestRequest  # noqa: PLC0415
 
@@ -190,6 +195,7 @@ class SessionTranscriptCapture:
             agent_handle=self._agent_handle,
             summary=self._summary,
             format_hint="markdown",
+            captured_at=snapshot.isoformat(),
         )
         note = "archived, run backfill-sessions to index it"
         down = f"{self._source.label}: daemon unreachable; transcript " + (

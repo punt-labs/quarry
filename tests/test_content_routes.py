@@ -804,3 +804,43 @@ class TestTheRoutesCheckTheNamesThatAreStored:
         ):
             status = self._submitted(http, "/v1/learn", {"lesson": "short"})
         assert status == 400
+
+
+class TestACaptureSnapshotTime:
+    @staticmethod
+    def _filed(http: TestClient, tmp_path: Path, **fields: str) -> tuple[int, object]:
+        body = {"content": "x", "session_id": "abcd1234ef", "cwd": str(tmp_path)}
+        with patch(
+            "quarry.daemon.routes.captures.CaptureRoutes.submit",
+            autospec=True,
+            return_value=JSONResponse({}),
+        ) as submit:
+            resp = http.post("/v1/capture", json={**body, **fields})
+        job = submit.call_args.args[1] if submit.call_args else None
+        return resp.status_code, job
+
+    def test_a_valid_instant_reaches_the_job(
+        self, http: TestClient, tmp_path: Path
+    ) -> None:
+        status, job = self._filed(http, tmp_path, captured_at="2026-01-02T03:04:05Z")
+        assert status == 200
+        assert isinstance(job, CaptureIngestJob)
+        assert job.inline.captured_at is not None
+        assert job.inline.captured_at.isoformat() == "2026-01-02T03:04:05+00:00"
+
+    def test_an_absent_instant_is_queue_time(
+        self, http: TestClient, tmp_path: Path
+    ) -> None:
+        _, job = self._filed(http, tmp_path)
+        assert isinstance(job, CaptureIngestJob)
+        assert job.inline.captured_at is None
+
+    @pytest.mark.parametrize(
+        "raw", ["yesterday", "2999-01-01T00:00:00Z", "1999-01-01T00:00:00Z"]
+    )
+    def test_a_bad_or_out_of_bounds_instant_is_a_400(
+        self, raw: str, http: TestClient, tmp_path: Path
+    ) -> None:
+        status, job = self._filed(http, tmp_path, captured_at=raw)
+        assert status == 400
+        assert job is None

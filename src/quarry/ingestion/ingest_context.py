@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Literal, Self, final
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from datetime import datetime
 
     from quarry.config import Settings
     from quarry.db import Database
@@ -66,4 +67,6 @@ class IngestContext:
     agent_handle: str = ""
     memory_type: MemoryType = ""
     summary: str = ""
-    url_sourced: bool = False  # a fetched URL's page, not a label or a file
+    url_sourced: bool = False
+    # The instant to record as ingestion time; ``None`` is the time of chunking.
+    ingested_at: datetime | None = None  # a fetched URL's page, not a label or a file

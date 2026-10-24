@@ -12,7 +12,7 @@ saw the name absent cannot both land.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from starlette.concurrency import run_in_threadpool
@@ -22,6 +22,8 @@ from quarry.daemon.job_spool import SpoolRecord
 from quarry.daemon.refusal_aware_terminal import RefusalAwareTerminal
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.tasks import TaskState
     from quarry.http_url import HttpUrl
@@ -66,6 +68,8 @@ class ScrubbedIngestJob:
     # True only for a capture, whose name is a fetched URL's storage name; a
     # ``remember`` or ``learn`` name is a label, whatever its format hint.
     url_sourced: bool = False
+    # When the hook read the snapshot this stores; ``None`` is the queue's own time.
+    captured_at: datetime | None = None
 
     @property
     def collection(self) -> str:
@@ -128,7 +132,12 @@ class ScrubbedIngestJob:
                 _SKIPPED: "exists",
             }
         return dict(
-            ingest_content(inline, self.name, Progress(None), self.labels.context(ctx))
+            ingest_content(
+                inline,
+                self.name,
+                Progress(None),
+                replace(self.labels.context(ctx), ingested_at=self.captured_at),
+            )
         )
 
     def scrubbed_name(self) -> str:
