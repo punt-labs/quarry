@@ -17,9 +17,10 @@ from __future__ import annotations
 import contextlib
 import ssl
 import urllib.request
-from typing import IO, TYPE_CHECKING, final
+from typing import IO, TYPE_CHECKING, NoReturn, final
 
 from quarry.ingestion.pinned_opener import PinnedHTTPHandler, PinnedHTTPSHandler
+from quarry.ingestion.redirect_location import RedirectLocation
 from quarry.url_admission import UrlAdmission
 
 if TYPE_CHECKING:
@@ -72,6 +73,24 @@ class SsrfGuardedRedirectHandler(urllib.request.HTTPRedirectHandler):
             opener.add_handler(handler)
         return opener
 
+    def http_error_302(
+        self,
+        req: urllib.request.Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: HTTPMessage,
+    ) -> urllib.request.Request | None:
+        """Refuse a redirect whose ``Location`` is malformed, then defer.
+
+        One handler serves every redirect code, as in the base class.
+        """
+        if RedirectLocation.is_malformed(req.full_url, headers):
+            self._refuse(fp, "malformed redirect target")
+        return super().http_error_302(req, fp, code, msg, headers)
+
+    http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
+
     def redirect_request(
         self,
         req: urllib.request.Request,
@@ -92,14 +111,21 @@ class SsrfGuardedRedirectHandler(urllib.request.HTTPRedirectHandler):
         """
         reason = UrlAdmission.reject_reason(newurl)
         if reason is not None:
-            # urllib's http_error_30x calls this BEFORE it reads/closes fp, so
-            # raising here would leak the intermediate 3xx response's fd on every
-            # blocked hop.  Close it first (Class-1 fd hygiene); a close failure
-            # must not mask the SSRF rejection, so it is suppressed.
-            with contextlib.suppress(OSError, ValueError):
-                fp.close()
-            raise RedirectRejectedError(f"redirect target rejected: {reason}")
+            self._refuse(fp, f"redirect target rejected: {reason}")
         return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+    @staticmethod
+    def _refuse(fp: IO[bytes], reason: str) -> NoReturn:
+        """Close the intermediate 3xx response, then refuse the hop with *reason*.
+
+        urllib's ``http_error_30x`` calls the gate BEFORE it reads or closes *fp*,
+        so raising without closing would leak that response's fd on every refused
+        hop (Class-1 fd hygiene).  A close failure must not mask the refusal, so it
+        is suppressed.
+        """
+        with contextlib.suppress(OSError, ValueError):
+            fp.close()
+        raise RedirectRejectedError(reason)
 
 
 # One shared opener for all server-side fetches: every redirect hop is gated and
