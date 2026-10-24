@@ -64,7 +64,7 @@ class AuthorityMask:
     # A plain host name or bracketed IP literal, optionally with a numeric port:
     # what an authority holds when it has no userinfo.
     HOST: ClassVar[re.Pattern[str]] = re.compile(
-        r"(?:[A-Za-z0-9.\-]+|\[[0-9A-Fa-f:.%a-z]+\])(?::\d{1,5})?"
+        r"(?:[A-Za-z0-9.\-]+|\[[0-9A-F:.%a-z]+\])(?::\d{1,5})?"
     )
     # LogRedactor escapes the control characters before this runs.  The ones that
     # are whitespace (tab apart) reach it as text, ``\x0b`` and the like, and

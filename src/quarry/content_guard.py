@@ -59,7 +59,7 @@ class BinaryContent:
     SAMPLE_WINDOW_CHARS: ClassVar[int] = 32 * 1024
     SOFT_EVIDENCE: ClassVar[int] = 4
 
-    _NONTEXT: ClassVar[re.Pattern[str]] = re.compile("[\x00-\x08\x0b\x0e-\x1f\ufffd]")
+    _NONTEXT: ClassVar[re.Pattern[str]] = re.compile(r"[\x00-\x08\x0b\x0e-\x1f\ufffd]")
     # Text-decoded forms of each signature: the raw bytes (latin-1) and the
     # U+FFFD form a lossy UTF-8 decode produces for the high bytes.
     _HARD: ClassVar[tuple[tuple[str, str], ...]] = (
