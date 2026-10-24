@@ -3322,8 +3322,9 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
      - `str()` is the log form, `scheme://host[:port]/…(segments=N)`. It
        never carries the path. Punctuation that follows a path-ending URL
        in prose (`, . : ;`, and a `)` or `]` that closes nothing opened
-       inside the URL) survives unchanged. A query or fragment runs to the
-       next whitespace, quotes and angle brackets included, and after it
+       inside the URL) survives unchanged. A query or fragment, with or
+       without a scheme before it, runs to the next whitespace, quotes and
+       angle brackets included, and after it
        only closing brackets matched by openers earlier in the same token
        survive, so no character of a query value shows;
        a `:` after a bare host stays masked, since `host:` may be a
@@ -3408,10 +3409,14 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
        reports them itself and is the one component that knows which
        fetches are speculative: its well-known-path misses log at INFO,
        a failed listed sitemap at WARNING. An SSRF-blocked sitemap fetch
-       logs one WARNING from our layer (the library also reports it). An
-       unreadable sitemap's refusal names its cause when the cause is text
-       our fetch layer wrote, and a readable sitemap that lists no pages
-       logs a WARNING before the crawl fails as storing nothing.
+       logs one WARNING from our layer (the library also reports it). Every
+       failed sitemap node logs one line naming its cause (a fetch-layer
+       status or refusal), a parse failure, or an unexpected error, never
+       the library's reason text. An unexpected error fails the task as an
+       internal error even when other nodes yielded pages, so a bug never
+       reads as partial success; an unreadable sitemap's refusal names its
+       cause; and a readable sitemap that lists no pages logs a WARNING
+       before the crawl fails as storing nothing.
      - **Unclassified failures stay diagnosable.** Their message-free
        frames are logged at WARNING, and a parser catch names only the
        parser's own exceptions, so a programming error is never reported as
