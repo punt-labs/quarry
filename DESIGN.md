@@ -3301,9 +3301,16 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
        per bulk run) at dedup and store time. Whether a store is URL-sourced
        is a fact of the route, carried on the ingest context: a capture or
        URL ingest is, `remember` and `learn` are not, whatever their format
-       hint. When both the stored document and the page being stored are
-       URL-sourced, a store replaces the document under its former
-       spelling, overwriting or not, and logs the replacement at WARNING.
+       hint. A `/capture` is URL-sourced only when its document name is
+       the one its `source_url` derives, so a transcript or a mismatched
+       name is a label. A label's row records an empty `document_path`, so
+       it never lists as a page candidate. When both the stored document
+       and the page being stored are URL-sourced, a store replaces the
+       document under its former spelling, overwriting or not, and logs the
+       replacement at WARNING. One case remains: a label an older build
+       stored with an html hint and a URL-shaped, non-canonical name is
+       indistinguishable from a captured page in every stored column, so a
+       later fetch of that page can replace it.
        A name this build wrote is canonical and spells only itself, so a
        copied digest cannot alias a different page; an older raw name is
        matched under either reading of a `?q[sha256]=` it happens to
@@ -3346,10 +3353,14 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
        changes nothing, which makes the result a fixed point. The bound is
        eight passes, and the oracle fails if any generated case needs more
        than seven. A record that has not settled at the bound fails
-       closed: the handler writes one fixed line built from the time,
-       level, logger, and call site, ending `message withheld: redaction
-       did not settle in 8 passes`. Redaction itself never logs, because a
-       log call from inside a handler can deadlock two handlers' locks.
+       closed: the handler writes one line from the time (in the handler's
+       own format), level, logger, call site, and the message template
+       when the template settles on its own, ending `message withheld:
+       redaction did not settle in 8 passes`. That line is itself
+       redacted, and if it does not settle either, a constant line with no
+       fields is written. `handleError` withholds its report the same way.
+       Redaction itself never logs, because a log call from inside a
+       handler can deadlock two handlers' locks.
      - **Known limits of the backstop.** The types are the guarantee and
        the redactor is a heuristic for third-party text, so these residual
        cases are accepted and pinned in the contract:
