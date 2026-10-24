@@ -154,26 +154,30 @@ class LegacyUrlNames:
         """Return whether *name*, or a legacy spelling of it, is stored."""
         return self.stored_as(name, collection) is not None
 
-    def replace_prior(
-        self, name: str, collection: str, *, overwrite: bool, url_sourced: bool
-    ) -> None:
-        """Delete what storing *name* in *collection* replaces.
+    def replace_prior(self, name: str, collection: str, *, overwrite: bool) -> None:
+        """Delete *name* from *collection* when *overwrite*, before the insert."""
+        if overwrite:
+            self._database.store.delete_document(
+                name, collection=collection, count=False
+            )
 
-        A legacy spelling of a URL goes whenever the page being stored was
-        fetched from a URL (*url_sourced*), overwriting or not: it is the same
-        page under a name this build no longer writes, and the new document must
-        not sit beside it.  *name* itself goes only when *overwrite*.  A document
-        that someone named with a URL is a label and is never touched.
+    def drop_twins(self, name: str, collection: str) -> None:
+        """Delete the legacy spellings of *name* once *name* is stored.
+
+        Called only for a page fetched from a URL, overwriting or not: a legacy
+        spelling is the same page under a name this build no longer writes, and
+        the new document must not sit beside it.  It runs after the insert, so a
+        failed embed or write leaves the old copy in place.  A document someone
+        named with a URL is a label and is never touched.
         """
-        twins = self.aliases(name, collection) if url_sourced else []
+        twins = self.aliases(name, collection)
         for legacy in twins:
             logger.warning(
                 "replacing legacy-named document %s with %s",
                 DisplayName(legacy).redacted(),
                 DisplayName(name).redacted(),
             )
-        for stale in [name, *twins] if overwrite else twins:
             self._database.store.delete_document(
-                stale, collection=collection, count=False
+                legacy, collection=collection, count=False
             )
         self.dropped(twins, collection)

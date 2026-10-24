@@ -641,3 +641,26 @@ class TestALabelOutlivesAPageOfTheSameName:
         assert db.catalog.document_exists("https://example.com/p", _COLLECTION)
         rows = db.db.open_table("chunks").search().where("chunk_index = 0").to_list()
         assert {row["document_path"] for row in rows} == {""}
+
+
+class TestAFailedInsertLeavesTheLegacyTwin:
+    @pytest.mark.parametrize("overwrite", [False, True])
+    def test_the_old_copy_survives_when_the_new_one_cannot_be_stored(
+        self, db: Database, *, overwrite: bool
+    ) -> None:
+        from unittest.mock import patch
+
+        from quarry.ingestion.streaming import DocumentStreamer
+
+        _store_as_stored_by_an_older_build(db, "https://example.com/café")
+        with (
+            patch.object(DocumentStreamer, "insert", side_effect=RuntimeError("embed")),
+            pytest.raises(RuntimeError),
+        ):
+            _store(db, "https://example.com/caf%C3%A9", overwrite=overwrite)
+        assert "https://example.com/café" in _names(db)
+
+    def test_the_twin_goes_once_the_new_copy_is_stored(self, db: Database) -> None:
+        _store_as_stored_by_an_older_build(db, "https://example.com/café")
+        _store(db, "https://example.com/caf%C3%A9", overwrite=True)
+        assert _names(db) == {"https://example.com/caf%C3%A9"}

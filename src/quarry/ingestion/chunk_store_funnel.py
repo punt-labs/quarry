@@ -82,19 +82,28 @@ class ChunkStoreFunnel:
     def _replace_prior(chunks: list[Chunk], context: IngestContext) -> None:
         """Delete what the document replaces: its earlier chunks, if overwriting.
 
-        A copy an older build stored under a former spelling of the same URL goes
-        too, overwriting or not, when this document was fetched from a URL, so a
-        re-ingest leaves one document, not two.  Every chunk of a document carries
-        its name.  Whether it was fetched from a URL is the caller's fact, carried on
-        the *context*, not read back from the document's path: a label that merely
-        looks like a URL is not a page.
+        Every chunk of a document carries its name.  A copy an older build stored
+        under a former spelling of the same URL is dropped later, by
+        :meth:`_drop_twins`, once the new document is stored.
         """
         RunContext.legacy_names_of(context).replace_prior(
             chunks[0].document_name,
             context.collection,
             overwrite=context.overwrite,
-            url_sourced=context.url_sourced,
         )
+
+    @staticmethod
+    def _drop_twins(document_name: str, context: IngestContext) -> None:
+        """Drop the legacy spellings of a stored page, so a re-ingest leaves one.
+
+        Whether the document was fetched from a URL is the caller's fact, carried
+        on the *context*, not read back from the document's path: a label that
+        merely looks like a URL is not a page.
+        """
+        if context.url_sourced:
+            RunContext.legacy_names_of(context).drop_twins(
+                document_name, context.collection
+            )
 
     @staticmethod
     def _embed_and_store(
@@ -103,13 +112,14 @@ class ChunkStoreFunnel:
         progress: Progress,
         context: IngestContext,
     ) -> int:
-        """Delete the prior document (if overwriting), then embed and store."""
+        """Delete the prior document (if overwriting), store, then drop legacy twins."""
         ChunkStoreFunnel._replace_prior(chunks, context)
         progress("Embedding + storing in bounded windows")
         t0 = time.perf_counter()
         inserted = DocumentStreamer(context.settings).insert(
             chunks, context.database.store, document_name
         )
+        ChunkStoreFunnel._drop_twins(document_name, context)
         RunContext.note_stored(context, document_name)
         logger.info(
             "pipeline: embedded + stored %d chunks in %.2fs",
