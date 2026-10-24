@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import logging
 from typing import TYPE_CHECKING, Self, final
 
@@ -12,6 +11,18 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
+
+# What a faulty redactor can raise: the common bases, since a blind ``Exception``
+# is not allowed and a fault here must still never replace the bug being recorded.
+_FAULTS = (
+    ArithmeticError,
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
 
 
 @final
@@ -40,9 +51,10 @@ class FetchBugRecord:
         subject, so nothing can replace the bug being recorded.
         """
         self._first = self._first or type(exc).__name__
-        subject = "(unknown url)"
-        with contextlib.suppress(Exception):
+        try:
             subject = shown(url)
+        except _FAULTS as fault:  # the bug being recorded must not be replaced
+            subject = f"(url not shown: {type(fault).__name__})"
         logger.error(
             "fetch hit a bug [%s]: %s\n%s",
             subject,

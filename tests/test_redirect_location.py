@@ -36,3 +36,9 @@ def test_no_location_is_not_malformed() -> None:
 
 def test_the_uri_header_is_read_when_there_is_no_location() -> None:
     assert RedirectLocation.is_malformed(_BASE, _headers(URI="http://["))
+
+
+def test_an_empty_location_is_read_as_cpython_reads_it() -> None:
+    # CPython takes the empty Location and never looks at URI.
+    headers = _headers(Location="", URI="http://[")
+    assert not RedirectLocation.is_malformed(_BASE, headers)

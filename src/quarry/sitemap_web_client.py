@@ -129,6 +129,7 @@ class GatedSitemapWebClient(AbstractWebClient):
             # unreachable host are transient; a policy rejection, a 4xx and the
             # rest are not.  Any other exception is a bug and propagates, as on the
             # URL ingest path.
+            FetchRefusedError.release(exc)  # before any step that could fault
             retryable = self._is_transient(exc)
             refusal = FetchRefusedError.from_transfer_failure(
                 exc, subject=UrlAdmission.shown(url), reported_by_caller=True

@@ -1097,7 +1097,7 @@ class TestABugAnywhereInGetIsRecorded:
         assert client.take_bug() == "KeyError"
 
     def test_a_fault_in_building_the_subject_does_not_replace_the_bug(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         url = "https://safe.example/bad.xml"
         monkeypatch.setattr(_GETADDRINFO, _resolver({}))
@@ -1109,6 +1109,43 @@ class TestABugAnywhereInGetIsRecorded:
 
         monkeypatch.setattr(UrlAdmission, "shown", staticmethod(broken))
         client = GatedSitemapWebClient()
-        with pytest.raises(ValueError, match="kaboom-text"):
+        with (
+            caplog.at_level(logging.ERROR),
+            pytest.raises(ValueError, match="kaboom-text"),
+        ):
             client.get(url)
         assert client.take_bug() == "ValueError"
+        [record] = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert "(url not shown: RuntimeError)" in record.getMessage()
+        assert "safe.example" not in record.getMessage()
+        assert "shown fault" not in record.getMessage()
+
+
+class TestAnHttpErrorSocketIsReleasedEvenWhenClassifyingFails:
+    def test_the_socket_is_closed_and_the_bug_recorded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from quarry.ingestion.fetch_refused import FetchRefusedError
+
+        url = "https://safe.example/forbidden.xml"
+        fp = io.BytesIO(b"")
+
+        class _Opener:
+            def open(self, request: Any, timeout: float | None = None) -> Any:
+                raise HTTPError(url, 403, "no", Message(), fp)
+
+        def boom(*_a: Any, **_k: Any) -> Any:
+            msg = "classifier bug"
+            raise TypeError(msg)
+
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _Opener())
+        monkeypatch.setattr(FetchRefusedError, "from_transfer_failure", boom)
+        client = GatedSitemapWebClient()
+        # The raised bug keeps the HTTPError alive (its context), so a close that
+        # only happened when the error was garbage collected would show here.
+        with pytest.raises(TypeError) as info:
+            client.get(url)
+        assert info.value.__context__ is not None
+        assert fp.closed
+        assert client.take_bug() == "TypeError"

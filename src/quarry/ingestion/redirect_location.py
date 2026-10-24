@@ -24,7 +24,8 @@ class RedirectLocation:
     @staticmethod
     def is_malformed(request_url: str, headers: HTTPMessage) -> bool:
         """Return whether the redirect target cannot be parsed."""
-        location = headers.get("location") or headers.get("uri")
+        # As CPython reads it: a present ``Location`` wins, even when empty.
+        location = headers["location"] if "location" in headers else headers.get("uri")
         if location is None:
             return False
         try:

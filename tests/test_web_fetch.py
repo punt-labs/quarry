@@ -363,11 +363,13 @@ class TestRedirectGate:
         monkeypatch.setattr(_GETADDRINFO, _resolver)
         handler = SsrfGuardedRedirectHandler()
         req = urllib.request.Request("https://public.example/start")
+        fp = io.BytesIO(b"")
         with pytest.raises(RedirectRejectedError, match="redirect target rejected"):
             handler.redirect_request(
-                req, io.BytesIO(b""), 302, "Found", HTTPMessage(), f"http://{host}/x"
+                req, fp, 302, "Found", HTTPMessage(), f"http://{host}/x"
             )
         assert host in seen  # the gate resolved the redirect target's host
+        assert fp.closed  # the refused hop's response is released
 
     def test_redirect_to_metadata_ip_is_refused_without_dns(
         self, monkeypatch: pytest.MonkeyPatch

@@ -107,12 +107,20 @@ class FetchRefusedError(UnindexableContentError):
         return cls(reason)
 
     @staticmethod
-    def _close(exc: HTTPError) -> int:
+    def release(exc: Exception) -> None:
+        """Close the socket an :class:`HTTPError` holds; any other *exc* holds none.
+
+        Idempotent, so a caller whose classification may fault releases it first.
+        """
+        if isinstance(exc, HTTPError):
+            with contextlib.suppress(OSError, ValueError):
+                exc.close()
+
+    @classmethod
+    def _close(cls, exc: HTTPError) -> int:
         """Close the socket an :class:`HTTPError` holds and return its status code."""
-        code = exc.code
-        with contextlib.suppress(OSError, ValueError):
-            exc.close()
-        return code
+        cls.release(exc)
+        return exc.code
 
     @staticmethod
     def _describe(exc: Exception) -> str:

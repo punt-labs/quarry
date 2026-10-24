@@ -251,3 +251,15 @@ class TestAPolicyRefusal:
         assert record.levelno == logging.WARNING
         assert "https://h.test/…" in record.getMessage()
         assert "private address" in record.getMessage()
+
+
+class TestRelease:
+    def test_an_http_error_socket_is_closed_and_closing_twice_is_harmless(self) -> None:
+        fp = io.BytesIO(b"")
+        exc = HTTPError("http://h/", 403, "no", HTTPMessage(), fp)
+        FetchRefusedError.release(exc)
+        FetchRefusedError.release(exc)
+        assert fp.closed
+
+    def test_any_other_exception_holds_no_socket(self) -> None:
+        FetchRefusedError.release(OSError("reset"))

@@ -50,8 +50,8 @@ def task_terminal(state: TaskState) -> Generator[None]:
     """Record *state*'s terminal status when its background body exits.
 
     Cancellation is recorded and re-raised; any other exception is logged and recorded
-    as ``internal error: <Class>`` (see :class:`RefusalAwareTerminal`); a body that sets
-    no terminal status is marked failed, so no task is left in ``running``.
+    as its own text when it is a refusal or a ``ReportedError``, else as ``internal
+    error: <Class>``; a body that sets no terminal status is marked failed.
     """
     try:
         yield

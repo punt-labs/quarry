@@ -168,6 +168,8 @@ class TestOpenerNeverOpensInternal:
         with pytest.raises(RedirectRejectedError, match="redirect target rejected"):
             opener.open(start)
         assert recorder.opened == [start]  # internal target never fetched
+        assert recorder.redirect is not None
+        assert recorder.redirect.closed  # the refused hop's response is released
 
     def test_safe_redirect_chain_is_followed(
         self, monkeypatch: pytest.MonkeyPatch
@@ -194,6 +196,7 @@ class _FakeResp:
         self.msg = "Found" if code == 302 else "OK"
         self._headers = headers
         self.url = url
+        self.closed = False
 
     def info(self) -> HTTPMessage:
         return self._headers
@@ -202,7 +205,7 @@ class _FakeResp:
         return b""
 
     def close(self) -> None:
-        return None
+        self.closed = True
 
     def geturl(self) -> str:
         return self.url
@@ -222,6 +225,7 @@ class _RecordingHandler(urllib.request.BaseHandler):
         self._target = target
         self._code = code
         self.opened: list[str] = []
+        self.redirect: _FakeResp | None = None
 
     def _open(self, req: urllib.request.Request) -> _FakeResp:
         url = req.full_url
@@ -229,7 +233,8 @@ class _RecordingHandler(urllib.request.BaseHandler):
         headers = HTTPMessage()
         if url == self._start:
             headers["Location"] = self._target
-            return _FakeResp(self._code, headers, url)
+            self.redirect = _FakeResp(self._code, headers, url)
+            return self.redirect
         headers["Content-Type"] = "text/html"
         return _FakeResp(200, headers, url)
 
@@ -265,6 +270,8 @@ class TestAMalformedLocationIsARefusal:
         with pytest.raises(RedirectRejectedError, match="malformed redirect target"):
             _guarded_opener(recorder).open(start)
         assert recorder.opened == [start]
+        assert recorder.redirect is not None
+        assert recorder.redirect.closed
 
     @pytest.mark.parametrize("location", _MALFORMED)
     def test_the_sitemap_path_answers_with_an_error_response_and_no_bug(
