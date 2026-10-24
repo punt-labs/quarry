@@ -60,19 +60,31 @@ class _FirstPartyHandler(logging.Handler):
             f"{when} {record.levelname} {where}: message withheld: "
             f"redaction did not settle in {LogRedactor.PASSES} passes"
         )
-        line += self._detail(record, record.exc_info[0] if record.exc_info else None)
+        line += self._detail(record, self._logged(record), None)
         return self._fixed(line, "message withheld: redaction did not settle")
 
-    def _detail(
-        self, record: logging.LogRecord, exc_type: type[BaseException] | None
-    ) -> str:
-        """Return the exception's class and the message template, if there are any.
+    @staticmethod
+    def _logged(record: logging.LogRecord) -> type[BaseException] | None:
+        """Return the class of the exception the record carries, if any."""
+        return record.exc_info[0] if record.exc_info else None
 
-        Both are code-authored; the template is kept only if it settles on its own.
+    def _detail(
+        self,
+        record: logging.LogRecord,
+        logged: type[BaseException] | None,
+        failure: type[BaseException] | None,
+    ) -> str:
+        """Return the exception classes and the message template, if there are any.
+
+        *logged* is the exception the record carries, *failure* the one that broke
+        the logging itself.  All of it is code-authored; the template is kept only
+        if it settles on its own.
         """
         parts = []
-        if exc_type is not None:
-            parts.append(exc_type.__name__)
+        if failure is not None and logged is not None:
+            parts.append(f"{failure.__name__} while logging {logged.__name__}")
+        elif (named := failure or logged) is not None:
+            parts.append(named.__name__)
         template = self._template(record)
         if template is not None:
             parts.append(f"[{template}]")
@@ -129,7 +141,7 @@ class _FirstPartyHandler(logging.Handler):
                 f"--- Logging error --- {record.name} at "
                 f"{record.pathname}:{record.lineno}: report withheld: "
                 f"redaction did not settle in {LogRedactor.PASSES} passes"
-                f"{self._detail(record, type(error))}",
+                f"{self._detail(record, self._logged(record), type(error))}",
                 "--- Logging error --- report withheld: redaction did not settle",
             )
             settled += "\n"

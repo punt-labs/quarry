@@ -19,8 +19,9 @@ class TestName:
         assert CaptureNaming.name("", "abcdef1234567890") == "session-abcdef12"
 
     @pytest.mark.parametrize(("name", "session"), [("", ""), ("  ", "\t")])
-    def test_nothing_usable_names_nothing(self, name: str, session: str) -> None:
-        assert CaptureNaming.name(name, session) is None
+    def test_nothing_usable_is_a_value_error(self, name: str, session: str) -> None:
+        with pytest.raises(ValueError, match="Missing document_name or session_id"):
+            CaptureNaming.name(name, session)
 
 
 class TestIsPage:

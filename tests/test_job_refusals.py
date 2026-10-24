@@ -487,3 +487,26 @@ async def test_a_scrubbed_ingest_of_an_empty_page_fails_the_task(
 
     _assert_quiet_and_url_free(state, caplog)
     assert state.error == "capture stored nothing: no text extracted"
+
+
+async def test_a_refused_label_is_logged_under_its_stored_name(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    daemon = InProcessDaemon(tmp_path)
+    state = TaskState(task_id="t-label", kind="remember")
+    pdf = "%PDF-1.5\n%" + "\ufffd" * 4 + "\n" + "x" * 400
+    job = ScrubbedIngestJob(
+        name="https://x.test/p#frag",
+        content=pdf,
+        format_hint="auto",
+        scrub_label="remember",
+        labels=_capture_job().inline.labels,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        await job.run(daemon.ctx, state)
+
+    refusals = [r for r in caplog.records if r.name.endswith("refusal_aware_terminal")]
+    assert refusals
+    assert "https://x.test/p" in refusals[0].getMessage()
+    assert "#frag" not in refusals[0].getMessage()

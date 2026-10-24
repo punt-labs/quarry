@@ -48,13 +48,13 @@ class CaptureRoutes(ContentRouteGroup):
         content = self._require_content(body, "content", "capture")
         if isinstance(content, JSONResponse):
             return content
-        name = CaptureNaming.name(
-            self._str_field(body, "document_name"), self._str_field(body, "session_id")
-        )
-        if name is None:
-            return JSONResponse(
-                {"error": "Missing document_name or session_id"}, status_code=400
+        try:
+            name = CaptureNaming.name(
+                self._str_field(body, "document_name"),
+                self._str_field(body, "session_id"),
             )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
         options = self._require_options(body)
         if isinstance(options, JSONResponse):
             return options

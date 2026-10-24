@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from functools import partial
 from typing import TYPE_CHECKING
 
 from starlette.concurrency import run_in_threadpool
@@ -75,7 +74,7 @@ class ScrubbedIngestJob:
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Scrub then ingest the content in a background thread, tracking state."""
-        terminal = RefusalAwareTerminal(state, partial(self._scrubbed, self.name))
+        terminal = RefusalAwareTerminal(state, self._stored_name)
         with terminal.record():
             terminal.complete(await run_in_threadpool(self.scrub_and_ingest, ctx))
 
@@ -118,7 +117,7 @@ class ScrubbedIngestJob:
             content_scrubber=self._scrubbed,
             url_sourced=self.url_sourced,
         )
-        stored = inline.stored_name(self.name)
+        stored = self._stored_name()
         if not self.labels.overwrite and self.labels.holds(
             ctx, stored, url_sourced=self.url_sourced
         ):
@@ -133,11 +132,12 @@ class ScrubbedIngestJob:
         )
 
     def scrubbed_name(self) -> str:
-        """Return the document name as stored, safe to log.
+        """Return the document name as stored, safe to log."""
+        return self._stored_name()
 
-        The one derivation the store uses, so a refusal, a re-fetch and a skip all
-        name the same document.
-        """
+    def _stored_name(self) -> str:
+        """Return the one derivation the store uses, so a refusal, a re-fetch and a
+        skip all name the same document."""
         return self.labels.stored_name(
             self.name, self._scrubbed, url_sourced=self.url_sourced
         )

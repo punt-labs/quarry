@@ -66,7 +66,7 @@ class TestSyncLockLaunchBackgroundSync:
 
         with (
             patch.object(_subprocess, "Popen", return_value=mock_proc),
-            patch("os.write", side_effect=OSError("disk full")),
+            patch("os.pwrite", side_effect=OSError("disk full")),
         ):
             # Sync launched despite write failure.
             assert lock.launch_background_sync() == "launched"
@@ -75,9 +75,9 @@ class TestSyncLockLaunchBackgroundSync:
     def test_short_write_is_retried_until_the_full_pid_lands(
         self, tmp_path: Path
     ) -> None:
-        """A partial os.write is retried with the remainder, never dropped.
+        """A partial write is retried with the remainder, never dropped.
 
-        Regression test: an unchecked ``os.write`` return count would let a
+        Regression test: an unchecked write return count would let a
         short write leave a truncated PID observable to a human inspecting
         the file. The fix must not solve that by unlinking the lockfile
         either -- Popen already succeeded, so a removed lock would let a
@@ -88,15 +88,15 @@ class TestSyncLockLaunchBackgroundSync:
         mock_proc = MagicMock()
         mock_proc.pid = 99999
         lock = SyncLock(path=lockfile)
-        real_write = os.write
+        real_write = os.pwrite
 
-        def one_byte_at_a_time(fd: int, data: bytes) -> int:
+        def one_byte_at_a_time(fd: int, data: bytes, offset: int) -> int:
             """Write only the first byte of *data*, simulating a short write."""
-            return real_write(fd, data[:1])
+            return real_write(fd, data[:1], offset)
 
         with (
             patch.object(_subprocess, "Popen", return_value=mock_proc),
-            patch("os.write", side_effect=one_byte_at_a_time),
+            patch("os.pwrite", side_effect=one_byte_at_a_time),
         ):
             assert lock.launch_background_sync() == "launched"
         assert lockfile.read_text() == "99999"
@@ -224,7 +224,7 @@ class TestALaunchThatFails:
         mock_proc.pid = 4242
         with (
             patch.object(_subprocess, "Popen", return_value=mock_proc),
-            patch("os.write", return_value=0),
+            patch("os.pwrite", return_value=0),
             caplog.at_level("WARNING", logger="quarry.sync_lock"),
         ):
             assert lock.launch_background_sync() == "launched"

@@ -18,18 +18,22 @@ class CaptureNaming:
     __slots__ = ()
 
     @staticmethod
-    def name(document_name: str, session_id: str) -> str | None:
-        """Return the explicit name, else ``session-<id[:8]>``, else ``None``.
+    def name(document_name: str, session_id: str) -> str:
+        """Return the explicit name, else ``session-<id[:8]>``.
 
         Inputs are stripped and only accepted when non-empty, so a
         whitespace-only ``document_name``/``session_id`` names nothing rather
         than storing a blank-named document.
+
+        Raises:
+            ValueError: Neither a name nor a session id was given.
         """
         if name := document_name.strip():
             return name
         if session := session_id.strip():
             return f"session-{session[:SESSION_ID_PREFIX_LEN]}"
-        return None
+        msg = "Missing document_name or session_id"
+        raise ValueError(msg)
 
     @staticmethod
     def is_page(name: str, source_url: str) -> bool:

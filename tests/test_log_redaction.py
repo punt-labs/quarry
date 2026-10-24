@@ -412,7 +412,7 @@ class TestTheWithheldLinesNameTheException:
         )
         assert "Error" not in line
 
-    def test_the_report_names_the_class_and_keeps_a_template_that_settles(
+    def test_the_report_names_the_class(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         record = logging.LogRecord(
@@ -442,3 +442,25 @@ class TestTheWithheldLinesNameTheException:
         err = capsys.readouterr().err
         assert "TypeError" in err
         assert "[n=%d clean]" in err
+
+
+@pytest.mark.usefixtures("poisoned")
+class TestTheReportNamesBothClasses:
+    def test_a_record_that_carried_an_exception_is_named_with_the_failure(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        try:
+            msg = "inner"
+            raise ValueError(msg)
+        except ValueError:
+            record = logging.LogRecord(
+                "quarry.x",
+                logging.WARNING,
+                "/c.py",
+                3,
+                f"n=%d {_POISON}",
+                ("a",),
+                sys.exc_info(),
+            )
+        RedactingStreamHandler(io.StringIO()).handle(record)
+        assert "TypeError while logging ValueError" in capsys.readouterr().err

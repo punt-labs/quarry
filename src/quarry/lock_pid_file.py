@@ -31,13 +31,15 @@ class LockPidFile:
 
         Raises:
             OSError: The file cannot be truncated or written, or a write makes no
-                progress.
+                progress.  A failed write may leave part of the pid on disk.
         """
         os.ftruncate(self._fd, 0)
         data = str(pid).encode()
         written = 0
         while written < len(data):
-            count = os.write(self._fd, data[written:])
+            # An explicit offset: the descriptor may be shared, and its position
+            # is not ours to assume.
+            count = os.pwrite(self._fd, data[written:], written)
             if count == 0:
                 raise OSError(errno.EIO, "short write")
             written += count

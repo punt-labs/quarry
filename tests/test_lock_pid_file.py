@@ -41,8 +41,8 @@ def test_a_short_write_is_retried_until_the_whole_pid_lands(
     lockfile: tuple[int, Path],
 ) -> None:
     fd, path = lockfile
-    real = os.write
-    with patch("os.write", side_effect=lambda f, data: real(f, data[:1])):
+    real = os.pwrite
+    with patch("os.pwrite", side_effect=lambda f, data, off: real(f, data[:1], off)):
         LockPidFile(fd).record(4242)
     assert path.read_text() == "4242"
 
@@ -51,6 +51,16 @@ def test_a_write_that_makes_no_progress_is_an_eio_error(
     lockfile: tuple[int, Path],
 ) -> None:
     fd, _ = lockfile
-    with patch("os.write", return_value=0), pytest.raises(OSError, match="short") as e:
+    with patch("os.pwrite", return_value=0), pytest.raises(OSError, match="short") as e:
         LockPidFile(fd).record(4242)
     assert e.value.errno == errno.EIO
+
+
+def test_a_second_record_replaces_a_longer_first_exactly(
+    lockfile: tuple[int, Path],
+) -> None:
+    fd, path = lockfile
+    record = LockPidFile(fd)
+    record.record(1234567)
+    record.record(89)
+    assert path.read_text() == "89"
