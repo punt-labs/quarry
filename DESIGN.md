@@ -3382,7 +3382,11 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
        - `?`, `#`, or `\` inside a URL's password, which ends the
          authority;
        - a `/` inside a password whose `scheme://` opener is broken by a
-         gap, which reads as the start of a path.
+         gap, which reads as the start of a path;
+       - a scheme-less `user:<digits>?rest@host`, which reads as a bare
+         `host:port` followed by a masked query, so the digits show. A
+         bare `host[:port]?query` is masked whole, which is the common
+         shape.
 
        Masking them would break the preservation property for ordinary
        log lines.
@@ -3409,12 +3413,18 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
        reports them itself and is the one component that knows which
        fetches are speculative: its well-known-path misses log at INFO,
        a failed listed sitemap at WARNING. An SSRF-blocked sitemap fetch
-       logs one WARNING from our layer (the library also reports it). Every
-       failed sitemap node logs one line naming its cause (a fetch-layer
-       status or refusal), a parse failure, or an unexpected error, never
-       the library's reason text. An unexpected error fails the task as an
-       internal error even when other nodes yielded pages, so a bug never
-       reads as partial success; an unreadable sitemap's refusal names its
+       logs one WARNING from our layer (the library also reports it). The
+       library swallows every exception raised while it adds a child
+       sitemap, bugs and document defects (self-listing indexes, corrupt
+       gzip) alike, so a bug is recorded where quarry can see it: the
+       sitemap client logs the class and message-free frames at ERROR and
+       re-raises. Every failed node logs one line naming its cause (a
+       fetch-layer status or refusal) or a parse failure, never the
+       library's reason text; discovery logs them at DEBUG, since its
+       misses are speculative. A recorded bug fails the task as `internal
+       error: <class>` even when other nodes yielded pages, so a bug never
+       reads as partial success, while a document defect keeps the good
+       pages; an unreadable sitemap's refusal names its
        cause; and a readable sitemap that lists no pages logs a WARNING
        before the crawl fails as storing nothing.
      - **Unclassified failures stay diagnosable.** Their message-free
