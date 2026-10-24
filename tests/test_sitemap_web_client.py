@@ -974,6 +974,8 @@ class TestDocumentDefectsAreNotBugs:
         assert urls == ["https://safe.example/page"]
         quarry = [r for r in caplog.records if r.name.startswith("quarry")]
         assert not [r for r in quarry if r.levelno >= logging.ERROR]
+        nodes = [r for r in quarry if r.getMessage().startswith("sitemap node failed")]
+        assert [r.levelno for r in nodes] == [logging.WARNING]
 
     def test_a_corrupt_gz_sub_sitemap_keeps_the_other_pages_with_a_warning(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
@@ -991,6 +993,9 @@ class TestDocumentDefectsAreNotBugs:
         assert urls == ["https://safe.example/page"]
         quarry = [r for r in caplog.records if r.name.startswith("quarry")]
         assert not [r for r in quarry if r.levelno >= logging.ERROR]
+        # USP treats the corrupt gzip as plain text, warns, and finds no pages in it.
+        gunzip = [r for r in caplog.records if "Unable to gunzip" in r.getMessage()]
+        assert [r.levelno for r in gunzip] == [logging.WARNING]
 
 
 class TestDiscoverFollowsTheSameRule:

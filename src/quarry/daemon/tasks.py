@@ -17,6 +17,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Self, final
 
+from quarry.failure_reason import FailureReason
+
 if TYPE_CHECKING:
     from collections.abc import Generator
 
@@ -48,9 +50,8 @@ def task_terminal(state: TaskState) -> Generator[None]:
     """Record *state*'s terminal status when its background body exits.
 
     Cancellation is recorded and re-raised; any other exception is logged and recorded
-    as ``internal error: <Class>`` (``reported_as`` when the exception names the class
-    of a bug caught elsewhere; see :class:`RefusalAwareTerminal`); a body that sets no
-    terminal status is marked failed, so no task is left in ``running``.
+    as ``internal error: <Class>`` (see :class:`RefusalAwareTerminal`); a body that sets
+    no terminal status is marked failed, so no task is left in ``running``.
     """
     try:
         yield
@@ -61,8 +62,7 @@ def task_terminal(state: TaskState) -> Generator[None]:
     except Exception as exc:
         logger.exception("Background %s failed", state.kind)
         state.status = "failed"
-        name = getattr(exc, "reported_as", type(exc).__name__)
-        state.error = f"internal error: {name}"
+        state.error = FailureReason.of(exc)
     finally:
         if state.status == "running":
             state.status = "failed"

@@ -7,6 +7,7 @@ import traceback
 from typing import ClassVar, final
 
 from quarry.refusal import RefusalError
+from quarry.reported_error import ReportedError
 
 
 @final
@@ -36,10 +37,15 @@ class FailureReason:
 
     @staticmethod
     def of(exc: Exception) -> str:
-        """Return a refusal's message, else ``internal error: <Class>``."""
+        """Return a refusal's message, else ``internal error: <Class>``.
+
+        A :class:`ReportedError` names the class of a bug caught elsewhere.
+        """
         if isinstance(exc, RefusalError):
             return str(exc)
-        return f"internal error: {getattr(exc, 'reported_as', type(exc).__name__)}"
+        if isinstance(exc, ReportedError):
+            return f"internal error: {exc.reported_as}"
+        return f"internal error: {type(exc).__name__}"
 
     @staticmethod
     def frames(exc: BaseException) -> str:

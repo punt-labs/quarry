@@ -15,6 +15,7 @@ from usp.exceptions import (
 from quarry.failure_reason import FailureReason
 from quarry.ingestion.fetch_refused import FetchRefusedError
 from quarry.ingestion.sitemap_node_failure import NodeFailure
+from quarry.reported_error import ReportedError
 from quarry.sitemap_web_client import GatedSitemapWebClient
 
 if TYPE_CHECKING:
@@ -39,18 +40,13 @@ _PARSER_REFUSAL = "fetch failed: sitemap URL not accepted by the parser"
 _UNREADABLE = "fetch failed: sitemap could not be fetched or parsed"
 
 
-class UnexpectedSitemapError(RuntimeError):
+class UnexpectedSitemapError(ReportedError):
     """A sitemap fetch hit a bug, not a network failure or a document defect.
 
     Raised with the class name of the bug the client recorded.  It is no refusal,
-    so the task terminal records ``internal error: <reported_as>`` (that class,
-    else ``sitemap``) and the crawl does not report a partial success.
+    so the task terminal records ``internal error: <reported_as>`` and the crawl
+    does not report a partial success.
     """
-
-    @property
-    def reported_as(self) -> str:
-        """Return the class name the task terminal reports, or ``sitemap``."""
-        return str(self.args[0]) if self.args and self.args[0] else "sitemap"
 
 
 @final
