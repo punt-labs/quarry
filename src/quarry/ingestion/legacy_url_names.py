@@ -7,7 +7,6 @@ import threading
 from typing import TYPE_CHECKING, Self, final
 from urllib.parse import urlsplit
 
-from quarry.db.name_prefix import NamePrefix
 from quarry.display_name import DisplayName
 from quarry.http_url import HttpUrl
 
@@ -125,7 +124,7 @@ class LegacyUrlNames:
         with self._lock:
             if key not in self._listed:
                 self._listed[key] = set(
-                    NamePrefix(self._database.db).names(prefix, collection)
+                    self._database.url_names.names(prefix, collection)
                 )
             return sorted(self._listed[key])
 

@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING
 import pytest
 
 from quarry.db import Database
-from quarry.db.name_prefix import NamePrefix
 from quarry.models import Chunk
 from tests.fakes import FakeEmbeddingBackend, patched_embedder
 
@@ -62,7 +61,7 @@ def _store(
 
 
 def _names(db: Database, prefix: str, collection: str = _COLLECTION) -> list[str]:
-    return NamePrefix(db.db).names(prefix, collection)
+    return db.url_names.names(prefix, collection)
 
 
 class TestNames:

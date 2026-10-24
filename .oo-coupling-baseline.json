@@ -798,11 +798,11 @@
     "avg_lcom": 1.0
   },
   "src/quarry/db/facade.py": {
-    "avg_lcom": 0.714,
+    "efferent_coupling": 9.0,
+    "public_names": 1.0,
     "circular_imports": 0.0,
-    "efferent_coupling": 8.0,
-    "max_lcom": 0.714,
-    "public_names": 1.0
+    "max_lcom": 0.722,
+    "avg_lcom": 0.722
   },
   "src/quarry/db/name_prefix.py": {
     "efferent_coupling": 2.0,
@@ -1274,7 +1274,7 @@
     "avg_lcom": 0.0
   },
   "src/quarry/ingestion/legacy_url_names.py": {
-    "efferent_coupling": 3.0,
+    "efferent_coupling": 2.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 0.583,
