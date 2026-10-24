@@ -3320,9 +3320,13 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
        though a URL-shaped label is still cleaned of userinfo and query.
        There is no bulk rename migration.
      - `str()` is the log form, `scheme://host[:port]/…(segments=N)`. It
-       never carries the path. Punctuation that follows a URL in prose (`,
-       . : ; ' " >`, and a `)` or `]` that closes nothing opened inside the
-       URL) stays outside it and survives unchanged. A heuristic cannot tell a slug from a
+       never carries the path. Punctuation that follows a path-ending URL
+       in prose (`, . : ;`, and a `)` or `]` that closes nothing opened
+       inside the URL) survives unchanged. After a query or fragment only
+       a closing bracket survives, so no character of a query value shows;
+       a `:` after a bare host stays masked, since `host:` may be a
+       truncated credential; and a URL with userinfo may lose its trailing
+       punctuation, which over-redacts but never leaks. A heuristic cannot tell a slug from a
        secret, so the path stays only in the stored name, where diagnosis
        needs it. The form is one whitespace-free token, so redacting
        already-redacted text leaves it unchanged.
@@ -3397,10 +3401,12 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
        of it.
      - **An HTTP status is an answer, not a fault.** A status response
        logs one line, `fetch refused: HTTP <code> on <subject>`, with no
-       frames: INFO for 4xx, WARNING for 5xx, and DEBUG for a 4xx on a
-       sitemap-discovery probe, where a miss is the expected outcome. The
-       sitemap library's own per-probe warnings are capped at ERROR so a
-       miss is logged once.
+       frames: INFO for 4xx, WARNING for 429 and 5xx. Sitemap fetches log
+       their status at DEBUG in our layer because the sitemap library
+       reports them itself and is the one component that knows which
+       fetches are speculative: its well-known-path misses log at INFO,
+       a failed listed sitemap at WARNING. An SSRF-blocked sitemap fetch
+       logs one WARNING from our layer.
      - **Unclassified failures stay diagnosable.** Their message-free
        frames are logged at WARNING, and a parser catch names only the
        parser's own exceptions, so a programming error is never reported as
