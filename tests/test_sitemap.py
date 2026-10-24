@@ -277,6 +277,7 @@ class TestIngestSitemapDedup:
         mock_list_docs.return_value = [
             {
                 "document_name": "https://example.com/page1",
+                "document_path": "https://example.com/page1",
                 "ingestion_timestamp": "2025-06-01T00:00:00+00:00",
             }
         ]
@@ -312,6 +313,7 @@ class TestIngestSitemapDedup:
         mock_list_docs.return_value = [
             {
                 "document_name": "https://example.com/page1",
+                "document_path": "https://example.com/page1",
                 "ingestion_timestamp": "2025-01-01T00:00:00+00:00",
             }
         ]
@@ -377,6 +379,7 @@ class TestIngestSitemapDedup:
         mock_list_docs.return_value = [
             {
                 "document_name": "https://example.com/page1",
+                "document_path": "https://example.com/page1",
                 "ingestion_timestamp": "2025-06-01T00:00:00+00:00",
             }
         ]
@@ -411,6 +414,7 @@ class TestIngestSitemapDedup:
         mock_list_docs.return_value = [
             {
                 "document_name": "https://example.com/page1",
+                "document_path": "https://example.com/page1",
                 "ingestion_timestamp": "2025-06-01T00:00:00+00:00",
             }
         ]

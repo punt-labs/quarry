@@ -148,6 +148,7 @@ class TestPartition:
             [
                 {
                     "document_name": "https://example.com/p",
+                    "document_path": "https://example.com/p",
                     "ingestion_timestamp": "2025-06-01T00:00:00+00:00",
                 }
             ],
@@ -171,6 +172,7 @@ class TestPartition:
             [
                 {
                     "document_name": "https://example.com/p",
+                    "document_path": "https://example.com/p",
                     "ingestion_timestamp": "2025-06-01T00:00:00+00:00",
                 }
             ],
@@ -197,6 +199,7 @@ class TestPartition:
             [
                 {
                     "document_name": "https://example.com/p",
+                    "document_path": "https://example.com/p",
                     "ingestion_timestamp": "not-a-timestamp",
                 }
             ],
@@ -227,6 +230,7 @@ class TestPartition:
             [
                 {
                     "document_name": "https://example.com/p",
+                    "document_path": "https://example.com/p",
                     "ingestion_timestamp": "2025-06-01T00:00:00+00:00",
                 }
             ],
@@ -254,6 +258,7 @@ class TestPartition:
             [
                 {
                     "document_name": "https://example.com/p",
+                    "document_path": "https://example.com/p",
                     "ingestion_timestamp": "2025-01-01T00:00:00+00:00",
                 }
             ],
@@ -581,6 +586,7 @@ def test_dedup_treats_a_legacy_named_document_as_the_existing_one() -> None:
     legacy = [
         {
             "document_name": "https://example.com/caf\u00e9?utm=1",
+            "document_path": "https://example.com/caf\u00e9?utm=1",
             "ingestion_timestamp": "2025-06-01T00:00:00+00:00",
         }
     ]
@@ -589,3 +595,51 @@ def test_dedup_treats_a_legacy_named_document_as_the_existing_one() -> None:
     ):
         to_ingest, skipped = SafeEntrySelector().partition([entry], _context())
     assert (to_ingest, skipped) == ([], 1)
+
+
+class TestDedupConsidersOnlyFetchedPages:
+    def test_a_label_named_like_a_page_does_not_hide_the_page(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A remembered label has no source path; it is not the page it is named for.
+        _existing_docs(
+            monkeypatch,
+            [
+                {
+                    "document_name": "https://example.com/p",
+                    "document_path": "",
+                    "ingestion_timestamp": "2025-06-01T00:00:00+00:00",
+                }
+            ],
+        )
+        entries = [
+            SitemapEntry(
+                loc="https://example.com/p", lastmod=datetime(2025, 1, 1, tzinfo=UTC)
+            )
+        ]
+
+        to_ingest, skipped = SafeEntrySelector().partition(entries, _context())
+
+        assert [url for url, _ in to_ingest] == [HttpUrl("https://example.com/p")]
+        assert skipped == 0
+
+    def test_a_fetched_page_still_dedups(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _existing_docs(
+            monkeypatch,
+            [
+                {
+                    "document_name": "https://example.com/p",
+                    "document_path": "https://example.com/p",
+                    "ingestion_timestamp": "2025-06-01T00:00:00+00:00",
+                }
+            ],
+        )
+        entries = [
+            SitemapEntry(
+                loc="https://example.com/p", lastmod=datetime(2025, 1, 1, tzinfo=UTC)
+            )
+        ]
+
+        _, skipped = SafeEntrySelector().partition(entries, _context())
+
+        assert skipped == 1

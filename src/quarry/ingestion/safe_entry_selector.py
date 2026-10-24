@@ -40,7 +40,9 @@ class SafeEntrySelector:
         """Split filtered entries into ``(to_ingest, skipped_count)`` via dedup.
 
         Dedup compares each entry's ``<lastmod>`` against the stored ingestion
-        timestamp of the same document in *context*'s collection.
+        timestamp of the same document in *context*'s collection.  Only a document
+        fetched from a URL (one with a source path) counts: a label named like a page
+        is not that page.
         """
         existing = context.database.catalog.list_documents(
             collection_filter=context.collection
@@ -48,6 +50,7 @@ class SafeEntrySelector:
         existing_timestamps = {
             LegacyUrlNames.canonical(doc["document_name"]): doc["ingestion_timestamp"]
             for doc in existing
+            if doc["document_path"]  # a label has no source; only a fetched page counts
         }
         to_ingest: list[tuple[HttpUrl, str | None]] = []
         skipped = 0
