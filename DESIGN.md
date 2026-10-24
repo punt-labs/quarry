@@ -3382,11 +3382,7 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
        - `?`, `#`, or `\` inside a URL's password, which ends the
          authority;
        - a `/` inside a password whose `scheme://` opener is broken by a
-         gap, which reads as the start of a path;
-       - a scheme-less `user:<digits>?rest@host`, which reads as a bare
-         `host:port` followed by a masked query, so the digits show. A
-         bare `host[:port]?query` is masked whole, which is the common
-         shape.
+         gap, which reads as the start of a path.
 
        Masking them would break the preservation property for ordinary
        log lines.
@@ -3416,9 +3412,11 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
        logs one WARNING from our layer (the library also reports it). The
        library swallows every exception raised while it adds a child
        sitemap, bugs and document defects (self-listing indexes, corrupt
-       gzip) alike, so a bug is recorded where quarry can see it: the
-       sitemap client logs the class and message-free frames at ERROR and
-       re-raises. Every failed node logs one line naming its cause (a
+       gzip) alike, so a bug is recorded where quarry can see it: any
+       exception the sitemap client's fetch raises is logged with its class
+       and message-free frames at ERROR and re-raised. A malformed redirect
+       `Location` is refused at the redirect layer before it can surface
+       as a bug. Every failed node logs one line naming its cause (a
        fetch-layer status or refusal) or a parse failure, never the
        library's reason text; discovery logs them at DEBUG, since its
        misses are speculative. A recorded bug fails the task as `internal
