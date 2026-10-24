@@ -24,6 +24,7 @@ from usp.web_client.abstract_client import WebClientErrorResponse
 
 import quarry.sitemap_web_client as swc
 from quarry.http_url import HttpUrl
+from quarry.ingestion.fetch_refused import FetchRefusedError
 from quarry.ingestion.ssrf_redirect import SsrfGuardedRedirectHandler
 from quarry.sitemap import SitemapDiscovery
 from quarry.sitemap_web_client import GatedSitemapWebClient
@@ -1125,8 +1126,6 @@ class TestAnHttpErrorSocketIsReleasedEvenWhenClassifyingFails:
     def test_the_socket_is_closed_and_the_bug_recorded(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from quarry.ingestion.fetch_refused import FetchRefusedError
-
         url = "https://safe.example/forbidden.xml"
         fp = io.BytesIO(b"")
 

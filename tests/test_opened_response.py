@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import io
+import urllib.request
 from http.client import HTTPMessage, HTTPResponse
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request
 
 import pytest
@@ -98,3 +100,47 @@ def test_a_refusal_logs_the_redacted_subject_never_the_path(
     assert "https://example.com/…(segments=1)" in caplog.text
     assert "SECRET" not in caplog.text
     assert "pw@" not in caplog.text
+
+
+class TestAnHttpErrorSocketIsReleasedBeforeClassifying:
+    @staticmethod
+    def _opener(fp: io.BytesIO) -> object:
+        class _Opener:
+            def open(self, request: object, timeout: float | None = None) -> object:
+                raise HTTPError("https://h.test/x", 403, "no", HTTPMessage(), fp)
+
+        return _Opener()
+
+    def test_open_closes_the_socket_when_the_subject_cannot_be_built(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fp = io.BytesIO(b"")
+        monkeypatch.setattr(
+            "quarry.ingestion.opened_response.GUARDED_OPENER", self._opener(fp)
+        )
+
+        def boom(_raw: str) -> str:
+            msg = "shown fault"
+            raise TypeError(msg)
+
+        monkeypatch.setattr("quarry.ingestion.opened_response.HttpUrl.shown", boom)
+        request = urllib.request.Request("https://h.test/x")
+        with pytest.raises(TypeError) as info:
+            OpenedResponse.open(request, timeout=5, deadline=1e12)
+        assert info.value.__context__ is not None
+        assert fp.closed
+
+    def test_from_transfer_failure_releases_first_whatever_follows(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fp = io.BytesIO(b"")
+        exc = HTTPError("https://h.test/x", 403, "no", HTTPMessage(), fp)
+
+        def boom(*_a: object, **_k: object) -> int:
+            msg = "level fault"
+            raise TypeError(msg)
+
+        monkeypatch.setattr(FetchRefusedError, "_status_level", staticmethod(boom))
+        with pytest.raises(TypeError):
+            FetchRefusedError.from_transfer_failure(exc, subject="s")
+        assert fp.closed

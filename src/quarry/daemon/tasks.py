@@ -50,8 +50,8 @@ def task_terminal(state: TaskState) -> Generator[None]:
     """Record *state*'s terminal status when its background body exits.
 
     Cancellation is recorded and re-raised; any other exception is logged and recorded
-    as its own text when it is a refusal or a ``ReportedError``, else as ``internal
-    error: <Class>``; a body that sets no terminal status is marked failed.
+    as ``FailureReason.of`` words it: a refusal's text, else ``internal error: <Class>``
+    (a ReportedError's carried class); a body that sets no terminal status fails.
     """
     try:
         yield

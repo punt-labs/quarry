@@ -52,6 +52,7 @@ class OpenedResponse:
         try:
             resp = GUARDED_OPENER.open(request, timeout=timeout)
         except FetchRefusedError.REFUSABLE as exc:
+            FetchRefusedError.release(exc)  # before any step that could fault
             raise FetchRefusedError.from_transfer_failure(
                 exc, subject=HttpUrl.shown(request.full_url)
             ) from None
@@ -108,6 +109,7 @@ class OpenedResponse:
                     raise FetchRefusedError(msg)
                 chunks.append(chunk)
         except FetchRefusedError.REFUSABLE as exc:
+            FetchRefusedError.release(exc)  # before any step that could fault
             raise FetchRefusedError.from_transfer_failure(
                 exc, subject=HttpUrl.shown(self._resp.url)
             ) from None

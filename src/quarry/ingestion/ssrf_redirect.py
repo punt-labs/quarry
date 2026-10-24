@@ -120,7 +120,7 @@ class SsrfGuardedRedirectHandler(urllib.request.HTTPRedirectHandler):
 
         urllib's ``http_error_30x`` calls the gate BEFORE it reads or closes *fp*,
         so raising without closing would leak that response's fd on every refused
-        hop (Class-1 fd hygiene).  A close failure must not mask the refusal, so it
+        hop.  A close failure must not mask the refusal, so it
         is suppressed.
         """
         with contextlib.suppress(OSError, ValueError):

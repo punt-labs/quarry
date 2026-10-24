@@ -12,12 +12,16 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# What a faulty redactor can raise: the common bases, since a blind ``Exception``
-# is not allowed and a fault here must still never replace the bug being recorded.
+# The common fault classes of a pure string redactor.  A blind ``Exception`` is not
+# allowed, so a fault outside this list is not caught here and would replace the
+# bug being recorded.
 _FAULTS = (
     ArithmeticError,
+    AssertionError,
     AttributeError,
+    ImportError,
     LookupError,
+    NameError,
     OSError,
     RuntimeError,
     TypeError,
@@ -47,13 +51,13 @@ class FetchBugRecord:
     def record(self, exc: Exception, url: str, shown: Callable[[str], str]) -> None:
         """Log *exc* against *url* as *shown* redacts it, and remember its class.
 
-        The class is remembered first, and a fault in *shown* falls back to a fixed
-        subject, so nothing can replace the bug being recorded.
+        The class is remembered first.  If *shown* raises one of the common fault
+        classes of a string redactor, the subject names that class instead.
         """
         self._first = self._first or type(exc).__name__
         try:
             subject = shown(url)
-        except _FAULTS as fault:  # the bug being recorded must not be replaced
+        except _FAULTS as fault:  # a redactor fault must not replace the bug
             subject = f"(url not shown: {type(fault).__name__})"
         logger.error(
             "fetch hit a bug [%s]: %s\n%s",

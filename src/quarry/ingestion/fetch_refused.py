@@ -61,8 +61,9 @@ class FetchRefusedError(UnindexableContentError):
         :class:`HTTPError` holds an open socket, so it is closed here, before the
         status is read out.
         """
+        cls.release(exc)
         if isinstance(exc, HTTPError):
-            code = cls._close(exc)
+            code = exc.code
             on = f" on {subject}" if subject else ""
             logger.log(
                 cls._status_level(code, reported_by_caller=reported_by_caller),
@@ -115,12 +116,6 @@ class FetchRefusedError(UnindexableContentError):
         if isinstance(exc, HTTPError):
             with contextlib.suppress(OSError, ValueError):
                 exc.close()
-
-    @classmethod
-    def _close(cls, exc: HTTPError) -> int:
-        """Close the socket an :class:`HTTPError` holds and return its status code."""
-        cls.release(exc)
-        return exc.code
 
     @staticmethod
     def _describe(exc: Exception) -> str:
