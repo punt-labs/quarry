@@ -97,10 +97,11 @@ class TestIsCurrent:
 
 class TestRecord:
     def test_a_session_just_stored_is_current(self, tmp_path: Path) -> None:
-        transcript = _transcript(tmp_path, modified=datetime.now(tz=UTC))
+        now = datetime.now(tz=UTC)
+        transcript = _transcript(tmp_path, modified=now - timedelta(seconds=1))
         sessions = StoredSessions([])
         assert not sessions.is_current(transcript)
-        sessions.record(transcript)
+        sessions.record(transcript, now)
         assert sessions.is_current(transcript)
 
 
@@ -126,3 +127,24 @@ class TestAnUnexaminableTranscript:
         assert "FileNotFoundError" in record.getMessage()
         assert "session-1e7aa08d" in record.getMessage()
         assert str(tmp_path) not in caplog.text
+
+
+class TestRecordStoresTheSnapshot:
+    def test_a_transcript_written_after_the_snapshot_is_not_current(
+        self, tmp_path: Path
+    ) -> None:
+        snapshot = datetime.now(UTC) - timedelta(minutes=5)
+        # Written after the read but before the store was recorded.
+        transcript = _transcript(tmp_path, modified=snapshot + timedelta(minutes=1))
+        stored = StoredSessions([])
+        stored.record(transcript, snapshot)
+        assert not stored.is_current(transcript)
+
+    def test_a_transcript_untouched_since_the_snapshot_is_current(
+        self, tmp_path: Path
+    ) -> None:
+        snapshot = datetime.now(UTC)
+        transcript = _transcript(tmp_path, modified=snapshot - timedelta(minutes=1))
+        stored = StoredSessions([])
+        stored.record(transcript, snapshot)
+        assert stored.is_current(transcript)

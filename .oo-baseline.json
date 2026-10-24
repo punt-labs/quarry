@@ -353,10 +353,10 @@
   "src/quarry/backfill.py": {
     "method_ratio": 0.857,
     "encapsulation_ratio": 1.0,
-    "avg_params": 1.43,
+    "avg_params": 1.57,
     "max_complexity": 4.0,
     "avg_complexity": 2.71,
-    "module_size": 186.0,
+    "module_size": 191.0,
     "classes_per_module": 5.0,
     "class_to_func_ratio": 0.833,
     "init_violations": 0.0,
@@ -3889,7 +3889,7 @@
   "src/quarry/stored_sessions.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 1.25,
+    "avg_params": 1.5,
     "max_complexity": 4.0,
     "avg_complexity": 2.5,
     "module_size": 70.0,

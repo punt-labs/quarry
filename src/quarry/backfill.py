@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
@@ -142,13 +143,16 @@ class _ProjectProcessor:
         if self._config.dry_run:
             self._tally_ingested()
             return
+        # Taken before the read: a write after this instant is newer than what is
+        # stored, whatever happens between the read and the store.
+        snapshot = datetime.now(UTC)
         text = TranscriptReader(transcript).text()
         if not text.strip():
             self._acc.skipped_empty += 1
             return
-        self._ingest(transcript, text)
+        self._ingest(transcript, text, snapshot)
 
-    def _ingest(self, transcript: Path, text: str) -> None:
+    def _ingest(self, transcript: Path, text: str, snapshot: datetime) -> None:
         """Write the capture file and ingest the transcript through the pipeline."""
         session = BackfillSession(transcript, self._mapping.project_path, text)
         session.write_capture_file()
@@ -171,13 +175,14 @@ class _ProjectProcessor:
                     self._runtime.settings,
                     overwrite=True,
                     collection=self._collection,
+                    ingested_at=snapshot,
                 ),
             )
         except Exception as exc:
             self._acc.errors.append(FailureReason.line(transcript.name, exc))
             logger.exception("backfill: failed to ingest %s", transcript.name)
             return
-        self._stored.record(transcript)
+        self._stored.record(transcript, snapshot)
         self._tally_ingested()
 
     def _tally_ingested(self) -> None:

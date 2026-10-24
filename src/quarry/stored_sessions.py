@@ -66,9 +66,9 @@ class StoredSessions:
             return False
         return modified <= stored
 
-    def record(self, transcript: Path) -> None:
-        """Note that *transcript* has just been stored, in full."""
-        self._stored[Transcript(transcript).document_name()] = datetime.now(tz=UTC)
+    def record(self, transcript: Path, snapshot: datetime) -> None:
+        """Note that *transcript* was stored from a read made at *snapshot*."""
+        self._stored[Transcript(transcript).document_name()] = snapshot
 
     @staticmethod
     def _parsed(name: str, raw: object) -> datetime | None:

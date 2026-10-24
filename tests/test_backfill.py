@@ -436,6 +436,36 @@ class TestBackfillSessions:
         assert stats.ingested == 1
         assert stats.skipped_existing == 0
 
+    def test_the_snapshot_is_taken_before_the_transcript_is_read(
+        self, tmp_path: Path
+    ) -> None:
+        """The stored time is when backfill read the transcript, not when it stored."""
+        from datetime import UTC, datetime
+
+        from quarry.backfill import backfill_sessions
+        from quarry.transcript_reader import TranscriptReader
+
+        env = _make_env(tmp_path)
+        settings = _make_settings(env["db_path"], env["registry_path"])
+        _setup_registry(env["registry_path"], str(env["real_project"]), "myproject")
+        read_at: list[datetime] = []
+        real_text = TranscriptReader.text
+
+        def timed_text(self: TranscriptReader) -> str:
+            read_at.append(datetime.now(UTC))
+            return real_text(self)
+
+        with (
+            patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", env["projects_dir"]),
+            patch.object(TranscriptReader, "text", timed_text),
+            patch("quarry.backfill.ingest_content") as mock_ingest,
+        ):
+            backfill_sessions(settings)
+
+        context = mock_ingest.call_args.args[3]
+        assert context.ingested_at is not None
+        assert context.ingested_at <= read_at[0]
+
     def test_an_ingest_failure_reports_the_class_not_the_message(
         self, tmp_path: Path
     ) -> None:
