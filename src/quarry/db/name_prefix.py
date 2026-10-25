@@ -25,8 +25,8 @@ class NamePrefix:
     (``remember``, ``learn``) has no such path and is a label, not a page.  One row
     is read per document, not one per chunk: the ingest funnel numbers a
     document's chunks as one contiguous sequence from zero, so every stored
-    document has a chunk 0.  The match ignores case; the caller decides what a
-    case difference means.
+    document has a chunk 0.  The match ignores case, in the name and in the
+    path's scheme; the caller decides what a case difference means.
     """
 
     __slots__ = ("_db",)
@@ -52,7 +52,8 @@ class NamePrefix:
             f"lower(document_name) LIKE '{self._pattern(prefix.lower())}%' ESCAPE '\\'"
             f" AND collection = '{escape_sql(collection)}'"
             " AND chunk_index = 0"
-            " AND (document_path LIKE 'http://%' OR document_path LIKE 'https://%')"
+            " AND (lower(document_path) LIKE 'http://%'"
+            " OR lower(document_path) LIKE 'https://%')"
         )
         query = self._db.open_table(TABLE_NAME).search().where(predicate)
         rows = query.limit(_SCAN_LIMIT).select(["document_name"]).to_list()

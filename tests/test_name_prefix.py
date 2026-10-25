@@ -90,6 +90,25 @@ class TestNames:
         _store(db, "https://h.test/b")
         assert _names(db, "https://h.test") == ["https://h.test/b"]
 
+    def test_an_upper_case_source_scheme_is_still_a_page(self, db: Database) -> None:
+        rows = [
+            Chunk(
+                document_name="https://h.test/a",
+                document_path="HTTPS://h.test/a",
+                collection=_COLLECTION,
+                page_number=1,
+                total_pages=1,
+                chunk_index=0,
+                text="body",
+                page_raw_text="body",
+                page_type="text",
+                source_format="inline",
+                ingestion_timestamp=datetime.now(tz=UTC),
+            )
+        ]
+        db.store.insert(rows, FakeEmbeddingBackend(768).embed_texts(["body"]))
+        assert _names(db, "https://h.test") == ["https://h.test/a"]
+
     def test_the_match_ignores_case(self, db: Database) -> None:
         _store(db, "https://Example.com/x")
         assert _names(db, "https://example.com") == ["https://Example.com/x"]

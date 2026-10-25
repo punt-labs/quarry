@@ -13,6 +13,7 @@ from quarry.http_url import HttpUrl
 
 if TYPE_CHECKING:
     from quarry.db.facade import Database
+    from quarry.ingestion.ingest_context import IngestContext
 
 logger = logging.getLogger(__name__)
 
@@ -154,23 +155,21 @@ class LegacyUrlNames:
         """Return whether *name*, or a legacy spelling of it, is stored."""
         return self.stored_as(name, collection) is not None
 
-    def replace_prior(
-        self, name: str, collection: str, *, overwrite: bool, url_sourced: bool
-    ) -> list[str]:
-        """Delete *name* when *overwrite*; return the legacy twins it replaces.
+    def replace_prior(self, name: str, context: IngestContext) -> list[str]:
+        """Delete *name* when *context* overwrites; return the twins it replaces.
 
         A legacy spelling of a URL is replaced whenever the page being stored was
-        fetched from a URL (*url_sourced*), overwriting or not: it is the same
+        fetched from a URL (``context.url_sourced``), overwriting or not: it is the same
         page under a name this build no longer writes, and the new document must
         not sit beside it.  The twins are only returned here; the caller drops
         them with :meth:`drop_legacy` once *name* is stored, so a store that
         fails leaves the old copy in place.  A document that someone named with a
         URL is a label and is never touched.
         """
-        twins = self.aliases(name, collection) if url_sourced else []
-        if overwrite:
+        twins = self.aliases(name, context.collection) if context.url_sourced else []
+        if context.overwrite:
             self._database.store.delete_document(
-                name, collection=collection, count=False
+                name, collection=context.collection, count=False
             )
         return twins
 

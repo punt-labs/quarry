@@ -92,10 +92,7 @@ class ChunkStoreFunnel:
         document's path: a label that merely looks like a URL is not a page.
         """
         return RunContext.legacy_names_of(context).replace_prior(
-            chunks[0].document_name,
-            context.collection,
-            overwrite=context.overwrite,
-            url_sourced=context.url_sourced,
+            chunks[0].document_name, context
         )
 
     @staticmethod

@@ -170,8 +170,7 @@ class LogRedactor:
             token = cls._SCHEME_URL.sub(cls._bare_url, token)
             # A character the path stops at (a quote, say) leaves a later
             # fragment outside the URL match, and a fragment can carry a token.
-            if "#" in token:
-                token = cls._FRAGMENT.sub("#[fragment]", token)
+            token = cls._FRAGMENT.sub("#[fragment]", token)
         elif cls._is_host_query(token):
             # ``host:port?...``: the query starts here, so an ``@`` inside it is no
             # userinfo boundary and none of it may show.  If one follows, the text
